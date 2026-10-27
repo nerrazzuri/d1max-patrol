@@ -278,6 +278,10 @@ class SiteApi:
         from d1max_site.routes import RouteStore
         self.routes = RouteStore(dispatcher.db, maps=maps, now_ms=self._now) \
             if dispatcher is not None else None
+        if self.routes is not None and maps is not None and zones is not None:
+            # W44 第三期:路线存之前逐段查走不走得通(跟机器人同一份规划,带禁行区)
+            from d1max_site.intercept_reach import InterceptReach
+            self.routes.reach = InterceptReach(dispatcher.db, maps, zones)
         self.zones = zones
         if zones is not None and getattr(dispatcher, "zones", None) is None:
             dispatcher.zones = zones

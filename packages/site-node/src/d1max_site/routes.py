@@ -45,6 +45,8 @@ NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 #: 同派遣器的上限(``dispatcher.MAX_PATROL_*``;这里复制一份是为了不倒着依赖派遣器,有测试对着)。
 MAX_WAYPOINTS = 500
 MAX_BYTES = 200_000
+#: 逐段查走不走得通最多查这么多段(每段一次规划;再多的不查,派单时狗自己会报)。
+MAX_SEGMENT_CHECKS = 100
 #: 编辑器能写的键;别的(``route`` 的 vendor_path 之类)不收。
 _EDITABLE = frozenset({"map_id", "map_version", "waypoints", "policy", "base_revision"})
 EXPORT_BUNDLE_ID = "site-routes"
@@ -113,6 +115,9 @@ class RouteStore:
         self.db = db
         self.maps = maps
         self._now = now_ms
+        #: W44 第三期:规划(``intercept_reach.InterceptReach``),存之前逐段查相邻两点走不走得通;
+        #: 没接(测试台子、没地图目录)不查。
+        self.reach: Any = None
 
     # ------------------------------------------------------------ 读
 
@@ -196,7 +201,26 @@ class RouteStore:
                 why = str(exc)
             if why:
                 errors.append({"index": i, "name": w.name, "problem": why})
+        errors += self._segments(map_id, version, waypoints, {e["index"] for e in errors})
         return errors
+
+    def _segments(self, map_id: str, version: str, waypoints: Any,
+                  bad: set[int]) -> list[dict[str, Any]]:
+        """相邻两点之间走不走得通(被墙、禁行区隔开):``{"index": None, "segment": [i, i+1]}``。
+        点本身有错的那一段不再查(一个错不报两遍);最多查 :data:`MAX_SEGMENT_CHECKS` 段。"""
+        if self.reach is None or len(waypoints) < 2:
+            return []
+        out: list[dict[str, Any]] = []
+        for i in range(min(len(waypoints) - 1, MAX_SEGMENT_CHECKS)):
+            if i in bad or i + 1 in bad:
+                continue
+            a, b = waypoints[i], waypoints[i + 1]
+            ok = self.reach.reachable(map_id, version, (a.pose.position.x, a.pose.position.y),
+                                      (b.pose.position.x, b.pose.position.y))
+            if ok is False:
+                out.append({"index": None, "name": f"{a.name}→{b.name}", "segment": [i, i + 1],
+                            "problem": f"{a.name} 到 {b.name} 走不通(被墙或禁行区隔开)"})
+        return out
 
     def _validate_route(self, route_id: str, body: dict[str, Any]) -> Mission:
         return self.build_mission(route_id, body)

@@ -82,6 +82,19 @@ class InterceptReach:
                 self._costmaps.pop(next(iter(self._costmaps)))
         return cm
 
+    def reachable(self, map_id: str, version: str, start: tuple[float, float],
+                  goal: tuple[float, float]) -> bool | None:
+        """W44 第三期(路线逐段查):走得通 True、走不通 False(被墙或禁行区隔开、点在图外)、
+        查不了 None(不认识的图、没有栅格)。"""
+        try:
+            self.maps.get(map_id, version)
+            cm = self._costmap(map_id, version)
+        except Exception:                                # noqa: BLE001 - 不认识的图、栅格坏了
+            return None
+        if cm is None:
+            return None
+        return self.path_m(map_id, version, start, goal) is not None
+
     def path_m(self, map_id: str, version: str, start: tuple[float, float],
                goal: tuple[float, float]) -> float | None:
         """W44:从 ``start`` 到 ``goal`` 按跟机器人同一份的规划要走多少米。
