@@ -30,7 +30,7 @@ beforeEach(() => {
     if (url.endsWith("/areas")) return Promise.resolve(json({ areas: [{ zone: "后花园", points: [[1, 1], [5, 1], [5, 5]] }] }));
     if (url.endsWith("/zones")) return Promise.resolve(json({ revision: 2, zones: [] }));
     if (url.startsWith("/api/routes")) return Promise.resolve(json({ routes: [{ id: "night", revision: 1, waypoints: [{ name: "a", x: 1, y: 1, yaw: 0 }, { name: "b", x: 4, y: 4, yaw: 0 }] }] }));
-    if (url.startsWith("/api/cameras")) return Promise.resolve(json({ cameras: [] }));
+    if (url.startsWith("/api/admin/cameras")) return Promise.resolve(json({ cameras: [] }));
     if (url.includes("/standby")) return Promise.resolve(json({ points: [{ name: "dock", x: 2, y: 2, yaw: 0, map_id: "home", map_version: "3" }] }));
     if (url.startsWith("/api/layout/history")) {
       return Promise.resolve(json({ history: [{ id: 9, kind: "zones", item: "", by: "alice", at_ms: 2, note: "" }, { id: 7, kind: "zones", item: "", by: "olga", at_ms: 1, note: "" }] }));

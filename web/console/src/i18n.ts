@@ -741,6 +741,13 @@ const en = {
   lyLatest: "Show the latest",
   lyDiscard: "Not saved yet. Discard the changes?",
   lyDiscardYes: "Discard",
+  lyDrawZone: "Draw a zone",
+  lyDrawDone: "Done drawing",
+  lyZonesHint: "Click around an area on the map to outline it. Robots use zones to tell where a person is; cameras report into a zone.",
+  lyZoneCams: "Cameras in this zone",
+  lyNoCams: "No cameras yet.",
+  lyZoneArming: "Set its arming times",
+  lyZoneReplace: "A zone with this name exists; it will be replaced by what you drew.",
 };
 
 type Key = keyof typeof en;
@@ -1481,6 +1488,13 @@ const zh: Partial<Record<Key, string>> = {
   lyLatest: "看最新的",
   lyDiscard: "还没保存，丢掉吗？",
   lyDiscardYes: "丢掉",
+  lyDrawZone: "画一个防区",
+  lyDrawDone: "画好了",
+  lyZonesHint: "在图上点几下把一块地圈起来。机器人靠防区说清楚人在哪；摄像头报的入侵也归到防区。",
+  lyZoneCams: "哪些摄像头归它管",
+  lyNoCams: "还没有摄像头。",
+  lyZoneArming: "去设它的布防时间",
+  lyZoneReplace: "已经有这个名字的防区，会换成刚画的这一块。",
 };
 
 export const DICTS: Record<Lang, Partial<Record<Key, string>>> = { en, zh };
