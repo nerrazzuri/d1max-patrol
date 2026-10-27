@@ -82,7 +82,10 @@ describe("布置外框", () => {
     expect(save.disabled).toBe(false);
     fireEvent.click(save);
     await waitFor(() => expect(posted.map((p) => p.url)).toContain("fake-save"));
-    await waitFor(() => expect(save.disabled).toBe(true));
+    await waitFor(() => expect((c.querySelector(".ly-save") as HTMLButtonElement).disabled).toBe(true));
+    // 存完标签按新数据重开:再改一次照样能存
+    fireEvent.click(btn(c, "改"));
+    expect((c.querySelector(".ly-save") as HTMLButtonElement).disabled).toBe(false);
   });
 
   it("切标签先问没存的", async () => {
