@@ -14,6 +14,7 @@ export interface Alert {
   count: number;
   acked_by: string;
   acked_ms: number | null;
+  resolved_by?: string;
   resolved_ms: number | null;
   shelved_by?: string;
   shelved_ms?: number | null;
