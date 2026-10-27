@@ -34,7 +34,7 @@ describe("离线的形状", () => {
     expect(svg.querySelector("g")!.getAttribute("fill")).toBe("none");
   });
 
-  it("值守页狗的状态:离线出离线形状,不是三角;急停还是菱形;正常没有形状", () => {
+  it("值守页机器人的状态:离线出离线形状,不是三角;急停还是菱形;正常没有形状", () => {
     expect(shapes(render(<StateText s="offline" />).container)).toEqual(["shape offline"]);
     cleanup();
     expect(shapes(render(<StateText s="estop" />).container)).toEqual(["shape P1"]);
@@ -42,7 +42,7 @@ describe("离线的形状", () => {
     expect(shapes(render(<StateText s="idle" />).container)).toEqual([]);
   });
 
-  it("离线那一条、跳转条上的离线狗:离线形状", () => {
+  it("离线那一条、跳转条上的离线机器人:离线形状", () => {
     const strip = render(<OfflineStrip u={unit("B", "offline")} onMap={() => {}} />).container;
     expect(shapes(strip)).toEqual(["shape offline"]);
     expect(strip.textContent).toContain("Offline");

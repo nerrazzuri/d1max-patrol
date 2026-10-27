@@ -55,7 +55,7 @@ void main() {
     await t.pumpWidget(const SizedBox());
   });
 
-  testWidgets('狗上重新开录了（点数变少）：从头取', (t) async {
+  testWidgets('机器人上重新开录了（点数变少）：从头取', (t) async {
     final api = FakeApi('admin', robotView: _view())
       ..trailReplies = [
         _trail([[0, 0], [1, 0], [2, 0]], 0, 3),
@@ -127,7 +127,7 @@ void main() {
     expect(api.trailSince.length, n);
   });
 
-  testWidgets('单狗页：管理员有「录包轨迹」；开始录包成功就打开轨迹页', (t) async {
+  testWidgets('单机器人页：管理员有「录包轨迹」；开始录包成功就打开轨迹页', (t) async {
     final api = FakeApi('admin', robotView: _view())..trailReplies = [_trail([], 0, 0)];
     await t.pumpWidget(MaterialApp(home: SiteRobotPage(api: api, robotId: 'A')));
     await t.pumpAndSettle();

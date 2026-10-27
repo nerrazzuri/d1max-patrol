@@ -136,16 +136,16 @@ void main() {
       final plain = FakeApi('guard');
       await t.pumpWidget(MaterialApp(home: Scaffold(body: SiteMapTab(api: plain))));
       await t.pumpAndSettle();
-      expect(inLegend('看到过、狗没走过'), findsNothing);
-      expect(inLegend('已抹掉（狗不去）'), findsNothing);
+      expect(inLegend('看到过、机器人没走过'), findsNothing);
+      expect(inLegend('已抹掉（机器人不去）'), findsNothing);
       final api = _Api('guard', extra: <String, dynamic>{'seen': true})
         ..zonesView = <String, dynamic>{...FakeApi('guard').zonesView, 'zones': <dynamic>[
           <String, dynamic>{'id': 'e1', 'kind': 'erase', 'label': '抹掉区', 'polygon': [[0, 0], [1, 0], [1, 1]]},
         ]};
       await t.pumpWidget(MaterialApp(home: Scaffold(body: SiteMapTab(key: UniqueKey(), api: api))));
       await t.pumpAndSettle();
-      expect(inLegend('看到过、狗没走过'), findsOneWidget);
-      expect(inLegend('已抹掉（狗不去）'), findsOneWidget);
+      expect(inLegend('看到过、机器人没走过'), findsOneWidget);
+      expect(inLegend('已抹掉（机器人不去）'), findsOneWidget);
       expect(inLegend('限速区'), findsNothing, reason: '抹掉区不是限速区');
       expect(inLegend('禁行区'), findsNothing);
       final painter = t.widget<CustomPaint>(find.byKey(SiteMapTab.zonesKey)).painter! as ZonesPainter;

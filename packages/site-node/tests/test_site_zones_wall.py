@@ -58,7 +58,7 @@ def test_加墙收紧免确认_删墙要确认_没确认前照守(tmp_path):
     z.put("m", "1", [], base_revision=2, by="a")
     assert not z.confirmed_current("m", "1"), "删墙是放宽:要确认"
     eff = z.effective("m", "1")
-    assert len(eff.hard()) == 1 and eff.hard()[0].wall is not None, "没确认前狗上照旧守着这堵墙"
+    assert len(eff.hard()) == 1 and eff.hard()[0].wall is not None, "没确认前机器人上照旧守着这堵墙"
 
 
 def test_挪墙_重新存墙线_多边形跟着变(tmp_path):

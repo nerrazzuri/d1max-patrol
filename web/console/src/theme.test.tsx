@@ -72,7 +72,7 @@ describe("主题跟着系统走(prefers-color-scheme)", () => {
 });
 
 describe("地图、时间轴、画面的颜色取当前这一套", () => {
-  it("地图的底、狗的颜色(正常绿、P1 红)跟着主题换", () => {
+  it("地图的底、机器人的颜色(正常绿、P1 红)跟着主题换", () => {
     applyTheme("light");
     expect(themeColor("mapBg")).toBe(mobile.color.light.surfaceVariant);
     expect(toneColor("idle")).toBe(mobile.color.light.success);
@@ -126,7 +126,7 @@ describe("状态的颜色(mobile.json usage;决策 64)", () => {
     for (const s of ["unknown", "P3", "", "whatever"]) expect(tone(s)).toBe("neutral");
   });
 
-  it("狗的状态字带上对应的颜色类(样式表按它上色):正常绿、离线红、急停红、说不清不上色", () => {
+  it("机器人的状态字带上对应的颜色类(样式表按它上色):正常绿、离线红、急停红、说不清不上色", () => {
     lang.value = "en";
     const cls = (el: Element) => el.querySelector(".state")!.className;
     expect(cls(render(<StateText s="idle" />).container)).toContain("tone-success");

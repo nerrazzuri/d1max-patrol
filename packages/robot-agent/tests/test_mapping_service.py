@@ -419,7 +419,7 @@ async def test_预览_边走边建还没第一张_有了带图_since_相同不�
     assert d["png"] == doc["png"] and d["seq"] == 3 and d["age_s"] == 4.3
     for k in ("run", "res", "origin", "width", "height", "pose", "trail", "frames", "dropped"):
         assert d[k] == doc[k], k
-    assert "written_at" not in d, "给的是多久没更新,不是狗的钟"
+    assert "written_at" not in d, "给的是多久没更新,不是机器人的钟"
     d = svc.preview(3)
     assert "png" not in d and d["seq"] == 3 and d["trail"] == doc["trail"], "没新图:说明照给"
     assert "png" in svc.preview(2)

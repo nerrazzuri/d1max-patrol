@@ -104,7 +104,7 @@ def selfcheck(home: Path, cfg: dict[str, Any], *, api_port: int = 8443, user: st
         soon, _ = run(["openssl", "x509", "-in", str(crt), "-noout", "-checkend",
                        str(CERT_WARN_DAYS * 86400)])
         if expired != 0:
-            add("FAIL", "站点证书", "已经过期(或者读不了):狗和手机都连不上")
+            add("FAIL", "站点证书", "已经过期(或者读不了):机器人和手机都连不上")
         elif soon != 0:
             add("WARN", "站点证书", f"不到 {CERT_WARN_DAYS} 天就到期")
         else:
@@ -117,7 +117,7 @@ def selfcheck(home: Path, cfg: dict[str, Any], *, api_port: int = 8443, user: st
         elif row["present"]:
             add("PASS", f"密钥 {row['name']}", f"{row['mode']} 指纹 {row['fingerprint']}")
     add("PASS", "发行公钥", "登记软件版本时会验签") if release_pub.is_file() else add(
-        "WARN", "发行公钥", f"没有 {release_pub}:登记不了要下发给狗的软件版本")
+        "WARN", "发行公钥", f"没有 {release_pub}:登记不了要下发给机器人的软件版本")
 
     # ---- 账号、备份、推送
     try:
@@ -160,8 +160,8 @@ def selfcheck(home: Path, cfg: dict[str, Any], *, api_port: int = 8443, user: st
             add("PASS", f"服务 {unit}", "在跑,开机自启")
     port = int(cfg.get("broker_port") or 8883)
     why = tcp("127.0.0.1", port)
-    add("FAIL", "狗连的端口", f"{port} 连不上:{why}") if why else add(
-        "PASS", "狗连的端口", f"{port} 开着")
+    add("FAIL", "机器人连的端口", f"{port} 连不上:{why}") if why else add(
+        "PASS", "机器人连的端口", f"{port} 开着")
     code, body = healthz(api_port, home / "ca" / "ca.crt")
     if code == 200 and isinstance(body, dict) and body.get("ok"):
         add("PASS", "探活", f"站点 {body.get('version') or ''} 回好")
@@ -170,8 +170,8 @@ def selfcheck(home: Path, cfg: dict[str, Any], *, api_port: int = 8443, user: st
     else:
         add("FAIL", "探活", f"站点回 {code}:要紧的体检项没过(值班台 System 页看是哪一项)")
     _, chrony = run(["systemctl", "is-active", "chrony"])
-    add("PASS", "对时服务", "chrony 在跑(狗跟这台主机对时)") if chrony == "active" else add(
-        "WARN", "对时服务", f"chrony {chrony or '没起'}:狗对不上时,命令会被当成过期的")
+    add("PASS", "对时服务", "chrony 在跑(机器人跟这台主机对时)") if chrony == "active" else add(
+        "WARN", "对时服务", f"chrony {chrony or '没起'}:机器人对不上时,命令会被当成过期的")
     try:
         free = disk_free(home)
         add("PASS" if free >= 0.15 else "WARN", "盘", f"还剩 {free:.0%}")

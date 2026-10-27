@@ -93,7 +93,7 @@ describe("recordings", () => {
     expect(nextSegment(rows, rec(9, 5))).toBeNull();
     expect(prevSegment(rows, rec(9, 5))).toBeNull();
   });
-  it("时间轴的横坐标是这一天的第几分钟,出界夹住;从告警去录像页带狗和前 10 秒", () => {
+  it("时间轴的横坐标是这一天的第几分钟,出界夹住;从告警去录像页带机器人和前 10 秒", () => {
     expect(minuteOf(day.since, day.since)).toBe(0);
     expect(minuteOf(day.since + 90_000, day.since)).toBe(1.5);
     expect(minuteOf(day.since - 5, day.since)).toBe(0);
@@ -138,7 +138,7 @@ describe("reports", () => {
     expect([csvCell("=1+1"), csvCell("+x"), csvCell("-x"), csvCell("@x")]).toEqual(["'=1+1", "'+x", "'-x", "'@x"]);
     expect(csvCell("=A1,B")).toBe(`"'=A1,B"`);
     expect([csvCell(-5), csvCell(0), csvCell(null), csvCell(undefined)]).toEqual(["-5", "0", "", ""]);
-    expect(csv(["a", "b"], [[1, "x,y"], ["狗", null]])).toBe('\uFEFFa,b\r\n1,"x,y"\r\n狗,\r\n');
+    expect(csv(["a", "b"], [[1, "x,y"], ["机器人", null]])).toBe('\uFEFFa,b\r\n1,"x,y"\r\n机器人,\r\n');
     expect(csv(["a"], [])).toBe("\uFEFFa\r\n");
   });
   it("时刻、文件名", () => {
@@ -207,10 +207,10 @@ describe("signed-in apps", () => {
 
 describe("model", () => {
   const robot: Robot = fx("site_robots").robots[0];
-  it("夹具里的狗:在线、急停没解除 → 急停", () => {
+  it("夹具里的机器人:在线、急停没解除 → 急停", () => {
     expect(robotState(robot, undefined, false)).toBe("estop");
   });
-  it("警笛在第 3 级;狗接受了才算开着,级别到了只算要求了;没装的说得出来(C-B2 外审 I1)", () => {
+  it("警笛在第 3 级;机器人接受了才算开着,级别到了只算要求了;没装的说得出来(C-B2 外审 I1)", () => {
     expect(SIREN_LEVEL).toBe(3);
     const all = ["siren", "speaker", "spotlight", "strobe"];
     expect(sirenState({ robot_id: "A", level: 1, active: ["strobe"], outputs: all })).toBe("off");
@@ -411,7 +411,7 @@ describe("App V2:手机扫码添加站点的二维码", () => {
 });
 
 describe("W40 热像相机", () => {
-  it("狗报了几路就几路;老狗不报当前后两路", () => {
+  it("机器人报了几路就几路;老机器人不报当前后两路", () => {
     const r = (tasks?: Record<string, Record<string, unknown>>) =>
       ({ robot_id: "A", active: true, fresh: true, revoked: false, held: null, capabilities: tasks ? { tasks } : null }) as Robot;
     expect(robotCams(r())).toEqual(["front", "back"]);

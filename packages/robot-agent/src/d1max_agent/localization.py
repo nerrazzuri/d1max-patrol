@@ -84,7 +84,7 @@ class OdomAnchor:
         self._last: tuple[float, float, float] | None = None
         #: 仿真里人设过位置:不再是「按原样」。
         self._moved = False
-        self.reason = "还没设位置:开机、换图之后要人给一次(或者说「狗在原点」)"
+        self.reason = "还没设位置:开机、换图之后要人给一次(或者说「机器人在原点」)"
 
     @property
     def source(self) -> str:

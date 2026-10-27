@@ -540,17 +540,17 @@ class _SiteRouteEditorPageState extends State<SiteRouteEditorPage> {
     try {
       robots = (await widget.api.robots()).where((r) => robotCan(r, 'patrol')).toList();
     } on SiteError catch (e) {
-      setState(() => _msg = tr('Robot list unavailable: ${e.message}', '拿不到狗的列表：${e.message}'));
+      setState(() => _msg = tr('Robot list unavailable: ${e.message}', '拿不到机器人的列表：${e.message}'));
       return;
     }
     if (!mounted) return;
     if (robots.isEmpty) {
-      setState(() => _msg = tr('No robot can patrol right now', '现在没有能巡检的狗'));
+      setState(() => _msg = tr('No robot can patrol right now', '现在没有能巡检的机器人'));
       return;
     }
     final id = await showDialog<String>(
         context: context,
-        builder: (c) => SimpleDialog(title: Text(tr('Send $_id to which robot', '把 $_id 派给哪台狗')), children: [
+        builder: (c) => SimpleDialog(title: Text(tr('Send $_id to which robot', '把 $_id 派给哪台机器人')), children: [
               for (final r in robots)
                 SimpleDialogOption(
                     key: Key('route-send-${r['robot_id']}'),
@@ -566,7 +566,7 @@ class _SiteRouteEditorPageState extends State<SiteRouteEditorPage> {
         setState(() => _msg = ack['result'] == 'accepted'
             ? tr('Patrol sent to $id', '已派 $id 去巡检')
             : tr('The robot did not accept: ${ack['result']} ${ack['reason'] ?? ''}',
-                '狗没接：${ack['result']} ${ack['reason'] ?? ''}'));
+                '机器人没接：${ack['result']} ${ack['reason'] ?? ''}'));
       }
     } on SiteError catch (e) {
       if (mounted) setState(() => _msg = tr('Refused: ${e.message}', '被拒：${e.message}'));
@@ -770,7 +770,7 @@ class _SiteRouteEditorPageState extends State<SiteRouteEditorPage> {
             if (_canSend && !_isNew)
               NwButton(
                   buttonKey: SiteRouteEditorPage.sendKey,
-                  label: tr('Send to a robot', '派给一只狗'),
+                  label: tr('Send to a robot', '派给一台机器人'),
                   icon: Icons.near_me_rounded,
                   variant: NwButtonVariant.outline,
                   onPressed: _dirty ? null : _send),

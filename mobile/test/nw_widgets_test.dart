@@ -10,7 +10,7 @@ import 'package:d1max_patrol/ui/nw/nw_widgets.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-const _long = '东门外第三号围墙拐角处的机器狗看见了一个没有授权的人正在靠近';
+const _long = '东门外第三号围墙拐角处的四足机器人看见了一个没有授权的人正在靠近';
 const _longEn = 'Unauthorized person approaching the third perimeter corner outside the East Gate';
 
 /// 三种主题：浅色、深色、不带（光秃秃的 MaterialApp）。
@@ -277,12 +277,12 @@ void main() {
       });
 
       testWidgets('[${b.name}] P1 卡片：软红底、正文色的字、2px 红框', (t) async {
-        await _pump(t, const NwCard(tone: NwTone.error, child: Text('狗看见人')), theme: nwTheme(b));
-        final m = t.widget<Material>(find.ancestor(of: find.text('狗看见人'), matching: find.byType(Material)).first);
+        await _pump(t, const NwCard(tone: NwTone.error, child: Text('机器人看见人')), theme: nwTheme(b));
+        final m = t.widget<Material>(find.ancestor(of: find.text('机器人看见人'), matching: find.byType(Material)).first);
         final side = (m.shape! as RoundedRectangleBorder).side;
         expect(m.color, c.errorSoft);
         expect((side.color, side.width), (c.errorFrame, 2.0));
-        final ctx = t.element(find.text('狗看见人'));
+        final ctx = t.element(find.text('机器人看见人'));
         expect(_contrast(DefaultTextStyle.of(ctx).style.color!, c.errorSoft), greaterThanOrEqualTo(4.5),
             reason: '缺省的字色压软红底');
         // 普通卡片：卡片底、1px 淡边
@@ -313,7 +313,7 @@ void main() {
         expect(t.widget<Icon>(find.byIcon(Icons.battery_unknown_rounded)).color, c.textSecondary);
       });
 
-      testWidgets('[${b.name}] 狗卡：有没处理的 P1 才是红框、警告图标；状态药丸按给的色调', (t) async {
+      testWidgets('[${b.name}] 机器人卡：有没处理的 P1 才是红框、警告图标；状态药丸按给的色调', (t) async {
         await _pump(t, const NwDogCard(id: 'D1-02', status: 'P1', tone: NwTone.error, activity: '东墙', battery: 42, p1: true),
             theme: nwTheme(b));
         Material card() =>

@@ -103,7 +103,7 @@ def cmd_init(home: Path, site_id: str, hostnames: list[str], broker_port: int) -
         raise SiteError(f"{home} 已经 init 过了")
     if (home / "ca").exists():
         raise SiteError(f"{home} 里有上一次 init 没做完留下的 ca/(没有 site.json)。确认这个站点"
-                        f"还没给任何狗签过证书之后,删掉 {home}/ca 再 init;签过的话别删,找人处理")
+                        f"还没给任何机器人签过证书之后,删掉 {home}/ca 再 init;签过的话别删,找人处理")
     home.mkdir(parents=True, exist_ok=True)
     os.chmod(home, 0o750)
     ca = SiteCA(home / "ca")
@@ -142,7 +142,7 @@ def cmd_fingerprint(home: Path) -> str:
 
 def _code_text(code: str) -> str:
     return ("开通码(一次性,用过、过期就作废;别贴到公开的地方):\n" + code +
-            "\n狗上:sudo /opt/d1max/bin/python -m d1max_patrol.cli provision --code '<上面那一行>'")
+            "\n机器人上:sudo /opt/d1max/bin/python -m d1max_patrol.cli provision --code '<上面那一行>'")
 
 
 def cmd_enroll_code(home: Path, robot_id: str, host: str | None, hours: float) -> str:
@@ -786,7 +786,7 @@ class Server:
         bbox = site_box(cfg, "backup") if backup_dir else None
         more = backup_dirs(home, encrypted=bbox is not None)
         if bbox is None and backup_dir:
-            log.error("备份没加密:CA 私钥不进备份,站点主机坏了狗要全部重登记"
+            log.error("备份没加密:CA 私钥不进备份,站点主机坏了机器人要全部重登记"
                       "(装机脚本会生成备份密钥)")
         self.backup = SiteBackup(self.db, self.evidence.root,
                                  Path(backup_dir) if backup_dir else None, now_ms=wall_ms,
@@ -834,14 +834,14 @@ class Server:
                                 alerts=loop_alerts)
         def 解不开(robot: str, run: str, rel: str, why: str) -> None:
             loop_alerts.raise_alert(kind="evidence_unopened", robot=robot,
-                                    title=f"狗封好的证据解不开:{run}/{rel}",
+                                    title=f"机器人封好的证据解不开:{run}/{rel}",
                                     detail=f"{why};封好的那份留在站点,配好证据私钥后 "
                                            "d1max-site evidence-open 补解")
         self.evidence.on_unopened = self.recordings.on_unopened = 解不开
         self.evidence_watch.alerts = self.alerts
         self.intake.on_refused = lambda robot, run, rel, why: loop_alerts.raise_alert(
             kind="upload_refused", robot=robot, title=f"站点不收 {run}/{rel}",
-            detail=f"{why}(那一趟留在狗上,不会自己删)")
+            detail=f"{why}(那一趟留在机器人上,不会自己删)")
         self.api = SiteApi(host=api_host, port=api_port, loop=self.loop,
                            dispatcher=self.dispatcher, accounts=self.accounts, tls=tls,
                            scheduler=self.scheduler, standby=self.standby,
@@ -899,7 +899,7 @@ class Server:
                 self.alerts.raise_alert(
                     kind="rtk", robot=SITE_ROBOT,
                     title=f"基站坐标跳了 {m:.2f} m",
-                    detail="基站要用固定坐标(自测平均每次重启都会漂);狗上的 RTK 核对会停用")
+                    detail="基站要用固定坐标(自测平均每次重启都会漂);机器人上的 RTK 核对会停用")
             self.rtk = RtcmRelay(rtcm_source, now_ms=wall_ms, publish=lambda b: self.loop.submit(
                 lambda: self.dispatcher.publish_rtcm(b)), on_base_moved=_base_moved)
         self.api.rtk = self.rtk
@@ -1070,10 +1070,10 @@ class Server:
             try:
                 added = await self.dispatcher.sync_robots()
                 if added:
-                    log.info("新登记的狗挂上了: %s", ", ".join(added))
+                    log.info("新登记的机器人挂上了: %s", ", ".join(added))
                 gone = await self.dispatcher.expire_zones()
                 if gone:
-                    log.info("临时区到期删了、发给狗: %s", ", ".join(gone))
+                    log.info("临时区到期删了、发给机器人: %s", ", ".join(gone))
                 sent = await self.dispatcher.sync_zones()
                 if sent:
                     log.info("补发区域给: %s", ", ".join(sent))
@@ -1149,7 +1149,7 @@ def build_parser() -> argparse.ArgumentParser:
     i = sub.add_parser("init", help="建站点目录:CA、站点证书、数据库、broker 配置")
     i.add_argument("--site-id", required=True)
     i.add_argument("--hostname", action="append", required=True,
-                   help="站点证书里的主机名或 IP(狗与手机用它连站点),可给多个")
+                   help="站点证书里的主机名或 IP(机器人与手机用它连站点),可给多个")
     i.add_argument("--broker-port", type=int, default=8883)
     sub.add_parser("fingerprint", help="打印站点服务证书的 SHA-256(手机添加站点时核对)")
     sc = sub.add_parser("selfcheck", help="装完自检(H6):逐条 PASS / WARN / FAIL,有 FAIL 退出码 1")
@@ -1160,28 +1160,28 @@ def build_parser() -> argparse.ArgumentParser:
     pc.add_argument("--url", required=True, help="手机要连的站点地址,https://主机:端口")
     pc.add_argument("--name", default=None,
                     help="手机上显示的站点名(缺省用 site.json 的 site_name / site_id)")
-    e = sub.add_parser("enroll", help="给一台狗签证书并登记")
+    e = sub.add_parser("enroll", help="给一台机器人签证书并登记")
     e.add_argument("robot_id")
     e.add_argument("--days", type=int, default=365)
     e.add_argument("--code", action="store_true",
-                   help="顺带出一个开通码(A4):狗上 d1max-patrol provision --code 一条命令开通")
-    e.add_argument("--host", default=None, help="开通码里狗连站点用的主机名(缺省第一个 --hostname)")
-    ec = sub.add_parser("enroll-code", help="给已登记的狗重新出一个开通码(A4,旧码作废)")
+                   help="顺带出一个开通码(A4):机器人上 d1max-patrol provision --code 一条命令开通")
+    e.add_argument("--host", default=None, help="开通码里机器人连站点用的主机名(缺省第一个 --hostname)")
+    ec = sub.add_parser("enroll-code", help="给已登记的机器人重新出一个开通码(A4,旧码作废)")
     ec.add_argument("robot_id")
-    ec.add_argument("--host", default=None, help="狗连站点用的主机名(缺省第一个 --hostname)")
+    ec.add_argument("--host", default=None, help="机器人连站点用的主机名(缺省第一个 --hostname)")
     ec.add_argument("--hours", type=float, default=24.0, help="多少小时内有效")
-    ra_ = sub.add_parser("robot-auto", help="让狗接自动派遣(排程、入侵、回充、自动回待命点)(W33)")
+    ra_ = sub.add_parser("robot-auto", help="让机器人接自动派遣(排程、入侵、回充、自动回待命点)(W33)")
     ra_.add_argument("robot_id")
     rm_ = sub.add_parser("robot-manual", help="设成只许手动派:站点不自己让它动(W33)")
     rm_.add_argument("robot_id")
     rm_.add_argument("--note", default="")
-    r = sub.add_parser("revoke", help="吊销一台狗(之后重启 d1max-mosquitto)")
+    r = sub.add_parser("revoke", help="吊销一台机器人(之后重启 d1max-mosquitto)")
     r.add_argument("robot_id")
     b = sub.add_parser("import-bundle", help="导入任务包,按名字并进站点的路线库")
     b.add_argument("bundle_dir", type=Path)
     eb = sub.add_parser("export-bundle", help="把站点的路线库导成任务包(备份、搬站点)")
     eb.add_argument("out_dir", type=Path)
-    ra = sub.add_parser("release-add", help="登记一个发布包(W00c5d):之后可以给狗装、切")
+    ra = sub.add_parser("release-add", help="登记一个发布包(W00c5d):之后可以给机器人装、切")
     ra.add_argument("dir", type=Path)
     ra.add_argument("--note", default="")
     mi = sub.add_parser("map-import", help="把一个目录里的地图文件登记成站点的一张图(W00c5d)")
@@ -1189,7 +1189,7 @@ def build_parser() -> argparse.ArgumentParser:
     mi.add_argument("--map-id", required=True)
     mi.add_argument("--version", required=True)
     mi.add_argument("--note", default="")
-    sb = sub.add_parser("standby", help="登记(或改)一台狗的待命点")
+    sb = sub.add_parser("standby", help="登记(或改)一台机器人的待命点")
     sb.add_argument("robot_id")
     sb.add_argument("name")
     sb.add_argument("--map", required=True, help="<map_id>:<version>")
@@ -1211,16 +1211,16 @@ def build_parser() -> argparse.ArgumentParser:
     pp.add_argument("--since", required=True,
                     help="开始(ISO 时刻,带时区,如 2026-10-08T21:00+08:00)")
     pp.add_argument("--until", required=True, help="结束(同上)")
-    pp.add_argument("--robot", default=None, help="只删这台狗的(不给就是所有狗)")
+    pp.add_argument("--robot", default=None, help="只删这台机器人的(不给就是所有机器人)")
     pp.add_argument("--reason", required=True, help="为什么删:谁要求的、哪一条请求(记审计)")
-    eo = sub.add_parser("evidence-open", help="狗封好、站点还没解开的照片、录像补解(W30b)")
+    eo = sub.add_parser("evidence-open", help="机器人封好、站点还没解开的照片、录像补解(W30b)")
     eo.add_argument("--key", default=None, help="证据私钥(缺省按 site.json / /etc/d1max-site)")
     bo = sub.add_parser("backup-open", help="把加密的备份解开到另一个目录(W30,恢复用)")
     bo.add_argument("src", help="备份目录(或其中的一部分)")
     bo.add_argument("dst", help="解到哪儿(要空目录)")
     bo.add_argument("--key", default="/etc/d1max-site/backup.key",
                     help="备份密钥(装机时离线另存的那一份)")
-    sub.add_parser("versions", help="站点、每只狗的版本、兼容级别、配不配(A7;狗的要站点在跑)")
+    sub.add_parser("versions", help="站点、每台机器人的版本、兼容级别、配不配(A7;机器人的要站点在跑)")
     ks = sub.add_parser("keys-status", help="站点密钥在不在、长度、权限、短指纹(A3)")
     ks.add_argument("--json", action="store_true")
     ke = sub.add_parser("keys-export", help="站点密钥打成一个口令加密的托管包,离线保管(A3)")
@@ -1305,10 +1305,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         elif args.cmd == "enroll":
             d = cmd_enroll(home, args.robot_id, args.days)
             ev = " evidence-pub.key" if (d / "evidence-pub.key").is_file() else ""
-            print(f"证书包: {d}\n拷到狗上: ca.crt robot.crt robot.key → /etc/d1max/tls/,"
+            print(f"证书包: {d}\n拷到机器人上: ca.crt robot.crt robot.key → /etc/d1max/tls/,"
                   f"registration.json{ev} → /etc/d1max/")
             if not ev:
-                print("注意:站点没配证据私钥,证书包里没有证据公钥 —— 狗上的照片、录像会明文存"
+                print("注意:站点没配证据私钥,证书包里没有证据公钥 —— 机器人上的照片、录像会明文存"
                       "(装机脚本会生成 /etc/d1max-site/evidence.key)")
             if args.code:
                 print(_code_text(cmd_enroll_code(home, args.robot_id, args.host, 24.0)))
@@ -1367,7 +1367,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         elif args.cmd == "versions":
             from d1max_site.compat import versions
             print(json.dumps(versions(None), ensure_ascii=False, indent=1))
-            print("(狗的版本要看正在跑的站点:管理员登录后 GET /api/versions)")
+            print("(机器人的版本要看正在跑的站点:管理员登录后 GET /api/versions)")
         elif args.cmd in ("keys-status", "keys-export", "keys-import"):
             return cmd_keys(home, args)
         elif args.cmd == "support-bundle":

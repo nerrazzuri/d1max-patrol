@@ -88,7 +88,7 @@ Future<void> _pump(WidgetTester t, Widget page, {ThemeData? theme}) async {
 
 void main() {
   group('地图栏', () {
-    testWidgets('狗报着的那张图当主体：画布、图上的狗、图例、底下这张图上的狗；右上进地图列表', (t) async {
+    testWidgets('机器人报着的那张图当主体：画布、图上的机器人、图例、底下这张图上的机器人；右上进地图列表', (t) async {
       _size(t);
       final api = _Api('guard')..robotsOverride = _robotsOn('8');
       await _pump(t, SiteMapTab(api: api));
@@ -163,14 +163,14 @@ void main() {
       await t.pumpWidget(Container());
     });
 
-    testWidgets('狗报的图站点上没有：摆站点上最新的那张，说清楚没有狗在这张图上，不把狗画上去', (t) async {
+    testWidgets('机器人报的图站点上没有：摆站点上最新的那张，说清楚没有机器人在这张图上，不把机器人画上去', (t) async {
       _size(t);
       final api = _Api('guard'); // 夹具里的狗报的是 estate-1:7，站点上只有 estate-1:8
       await _pump(t, SiteMapTab(api: api));
       expect(find.text('estate-1:8'), findsOneWidget);
       expect(find.byKey(SiteMapTab.canvasKey), findsOneWidget);
       expect(find.byKey(SiteMapTab.markerKey('A')), findsNothing, reason: '坐标系不是这张图的');
-      expect(find.textContaining('没有狗在这张图上'), findsOneWidget);
+      expect(find.textContaining('没有机器人在这张图上'), findsOneWidget);
       expect(find.descendant(of: find.byKey(SiteMapTab.robotKey('A')), matching: find.textContaining('estate-1:7')),
           findsOneWidget, reason: '它在哪张图上照实写');
       await t.pumpWidget(Container());
@@ -204,7 +204,7 @@ void main() {
       expect(find.textContaining('看不了'), findsOneWidget);
       expect(find.textContaining('没有栅格'), findsOneWidget);
       expect(find.byKey(SiteMapTab.canvasKey), findsNothing);
-      expect(find.byKey(SiteMapTab.robotKey('A')), findsOneWidget, reason: '狗的列表照样看');
+      expect(find.byKey(SiteMapTab.robotKey('A')), findsOneWidget, reason: '机器人的列表照样看');
       api.previewMissing = false;
       await t.tap(find.byKey(SiteMapTab.refreshKey));
       await t.pumpAndSettle();
@@ -212,7 +212,7 @@ void main() {
       await t.pumpWidget(Container());
     });
 
-    testWidgets('底下的狗点了进单狗页', (t) async {
+    testWidgets('底下的机器人点了进单机器人页', (t) async {
       _size(t);
       final api = _Api('guard')..robotsOverride = _robotsOn('8', online: false);
       await _pump(t, SiteMapTab(api: api));
@@ -224,7 +224,7 @@ void main() {
       await t.pumpWidget(Container());
     });
 
-    testWidgets('图例、图上的狗在浅色深色下都压在自己的底上（不靠栅格图的颜色）', (t) async {
+    testWidgets('图例、图上的机器人在浅色深色下都压在自己的底上（不靠栅格图的颜色）', (t) async {
       _size(t);
       for (final b in Brightness.values) {
         final c = b == Brightness.dark ? NwColors.dark : NwColors.light;
@@ -324,7 +324,7 @@ void main() {
       await t.pumpAndSettle();
     }
 
-    testWidgets('版本格子：站点、每只狗、每台登录着的客户端各一格', (t) async {
+    testWidgets('版本格子：站点、每台机器人、每台登录着的客户端各一格', (t) async {
       final api = FakeApi('admin');
       await health(t, api);
       final cards = t.widgetList<NwVersionCard>(find.byType(NwVersionCard)).toList();
@@ -342,7 +342,7 @@ void main() {
       await t.pumpWidget(Container());
     });
 
-    testWidgets('版本格子：狗太老、App 太老是橙色的小标；不清楚的不上色', (t) async {
+    testWidgets('版本格子：机器人太老、App 太老是橙色的小标；不清楚的不上色', (t) async {
       final api = FakeApi('admin')
         ..versionsBody = <String, dynamic>{
           'site': <String, dynamic>{'version': '2', 'min_app_level': 2},
@@ -360,12 +360,12 @@ void main() {
       expect(cards.map((c) => c.entity), ['站点', 'A', 'B', 'gina', 'alice']);
       final pills = t.widgetList<NwStatusPill>(find.byType(NwStatusPill)).toList();
       expect(pills.map((p) => (p.label, p.tone)), [
-        ('狗太老', NwTone.warning),
+        ('机器人太老', NwTone.warning),
         ('不清楚', NwTone.neutral),
         ('太老', NwTone.warning),
       ]);
       // 小标各在各的格子里
-      for (final (entity, label) in [('A', '狗太老'), ('B', '不清楚'), ('GINA', '太老')]) {
+      for (final (entity, label) in [('A', '机器人太老'), ('B', '不清楚'), ('GINA', '太老')]) {
         final card = t.getRect(find.widgetWithText(NwVersionCard, entity));
         expect(card.contains(t.getCenter(find.text(label))), isTrue, reason: '$entity $label');
       }

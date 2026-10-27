@@ -80,8 +80,8 @@ class _SiteStandbyPageState extends State<SiteStandbyPage> {
               '$what：${ackReasonText('${ack['reason'] ?? res}')}');
     } on SiteError catch (e) {
       msg = e.status == 409
-          ? tr('$what failed: ${ackReasonText(e.message.replaceFirst(RegExp(r'^狗没标[:：]'), ''))}',
-              '$what没成：${ackReasonText(e.message.replaceFirst(RegExp(r'^狗没标[:：]'), ''))}')
+          ? tr('$what failed: ${ackReasonText(e.message.replaceFirst(RegExp(r'^机器人没标[:：]'), ''))}',
+              '$what没成：${ackReasonText(e.message.replaceFirst(RegExp(r'^机器人没标[:：]'), ''))}')
           : tr('$what failed: $e', '$what没成：$e');
     }
     if (!mounted) return;
@@ -105,7 +105,7 @@ class _SiteStandbyPageState extends State<SiteStandbyPage> {
                 "Uses the robot's current position as a standby point (the origin is not "
                     'changed). The robot checks its localization first: it refuses if no position '
                     'is set or the error is large, and while a task is running.',
-                '用狗现在的位置当一个待命点（原点不动）。狗会先核定位：没设位置、偏差大就不设；'
+                '用机器人现在的位置当一个待命点（原点不动）。机器人会先核定位：没设位置、偏差大就不设；'
                     '在跑任务也不设。',
               )),
               TextField(
@@ -172,11 +172,11 @@ class _SiteStandbyPageState extends State<SiteStandbyPage> {
       builder: (c) => AlertDialog(
         scrollable: true,
         title: Text(tr("Set the robot's current position as the dock alignment point?",
-            '把狗现在的位置设成充电桩对准点？')),
+            '把机器人现在的位置设成充电桩对准点？')),
         content: Text(tr(
             'First lead the robot to about 1.5 m directly in front of the dock, facing it. After '
                 'that, when the battery falls below 30% it walks here by itself and docks to charge.',
-            '先把狗领到充电桩正前方约 1.5 米、头朝着桩。之后电量低于 30% 它会自己走到这儿对桩充电。')),
+            '先把机器人领到充电桩正前方约 1.5 米、头朝着桩。之后电量低于 30% 它会自己走到这儿对桩充电。')),
         actions: [
           TextButton(onPressed: () => Navigator.pop(c, false), child: Text(tr('Cancel', '取消'))),
           FilledButton(
@@ -236,7 +236,7 @@ class _SiteStandbyPageState extends State<SiteStandbyPage> {
                   tr(
                       'Origin (safe return and charging; one per map; change it with '
                           '"Mark origin here" on the robot page)',
-                      '原点（安全返航、回充；每张图一个，在狗页「在这儿标原点」改）'),
+                      '原点（安全返航、回充；每张图一个，在机器人页「在这儿标原点」改）'),
                   style: head,
                 ),
                 const SizedBox(height: Nw.s8),

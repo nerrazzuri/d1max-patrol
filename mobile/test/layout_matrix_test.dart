@@ -40,7 +40,7 @@ const _landscape = Size(800, 360);
 
 Alert _p1() => Alert.fromWire(<String, dynamic>{
       'key': 'A/dog_sees_person#1', 'level': 'P1', 'kind': 'dog_sees_person', 'robot': 'A',
-      'title': '狗看见人', 'detail': '前方 6.2 m', 'first_ms': 1800000000000, 'last_ms': 1800000000000,
+      'title': '机器人看见人', 'detail': '前方 6.2 m', 'first_ms': 1800000000000, 'last_ms': 1800000000000,
       'context': <String, dynamic>{'zone': 'East wall'}});
 
 /// 一页一行：名字 + 怎么造。每个组合现造一份（页面有状态，不能复用）。

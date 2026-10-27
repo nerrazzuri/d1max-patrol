@@ -228,7 +228,7 @@ def _nms(cands: list[Candidate]) -> list[Candidate]:
 def decide(cands: list[Candidate]) -> tuple[Candidate | None, str]:
     """认不认第一名:→ (认的那个, ""),或者 (None, 不认的原因)。"""
     if not cands:
-        return None, "图上没有能站狗的地方跟看到的对得上"
+        return None, "图上没有能站机器人的地方跟看到的对得上"
     best = cands[0]
     if best.fit < MIN_FIT:
         return None, (f"最像的 ({best.x:.1f}, {best.y:.1f}) 贴合度只有 {best.fit:.2f}"
@@ -315,7 +315,7 @@ class GlobalLoc:
         """感知最新一份墙那一层(狗身系):要新鲜、攒的时候狗没动、是 ``since`` 之后收到的。"""
         got = self.view.wall_scan(since=since) if self.view is not None else None
         if got is None:
-            raise GlobalLocError("没有新的点云(感知没连上、狗在动,或者刚动过)")
+            raise GlobalLocError("没有新的点云(感知没连上、机器人在动,或者刚动过)")
         return got
 
     async def locate(self, pts: list[tuple[float, float]]) -> list[Candidate]:

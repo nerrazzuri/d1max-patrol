@@ -492,7 +492,7 @@ List<NwLegendItem> mapBaseLegend(BuildContext context, {required bool plan, bool
                       color: plan
                           ? Color.fromARGB((_planSeenAlpha * 255).round(), 255, 255, 255)
                           : const Color.fromARGB(255, _rasterSeen, _rasterSeen, _rasterSeen)))),
-          label: tr('Seen, not mapped for the robot', '看到过、狗没走过')),
+          label: tr('Seen, not mapped for the robot', '看到过、机器人没走过')),
     NwLegendItem(
         swatch: plan
             ? Container(
@@ -513,7 +513,7 @@ NwLegendItem mapEraseLegend(BuildContext context) {
   return NwLegendItem(
       swatch: Container(
           width: 12, height: 10, decoration: BoxDecoration(border: Border.all(color: mapEraseStroke(c), width: 1))),
-      label: tr('Erased (robots never go there)', '已抹掉（狗不去）'));
+      label: tr('Erased (robots never go there)', '已抹掉（机器人不去）'));
 }
 
 /// 图例里「片区」那一样：跟图上画的一个底、一个边。

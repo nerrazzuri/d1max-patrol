@@ -88,7 +88,7 @@ async def _跑完(c, r, parts, limit=4000, each=None):
         if parts.engine.state in FINAL_STATES:
             return
     o = await r.odometry()
-    raise AssertionError(f"没跑完:{parts.engine.state} 狗在 ({o.x:.2f}, {o.y:.2f}) "
+    raise AssertionError(f"没跑完:{parts.engine.state} 机器人在 ({o.x:.2f}, {o.y:.2f}) "
                          f"导航 {parts.nav._status} 路 {parts.nav._path} "
                          f"区域 {parts.nav.zones} 电 {r._battery_pct}")
 

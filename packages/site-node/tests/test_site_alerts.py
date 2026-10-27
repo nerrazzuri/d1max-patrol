@@ -640,11 +640,11 @@ def test_对账S6_跑着任务丢定位归原来那两条_空闲的不另报_掉
 def test_对账S6_站点重启前报过_重启后不重复报_好了照样解决_写不进去下一拍再报(台, monkeypatch):
     from d1max_site.alert_sources import LOC_IDLE_P2_S
     c, db, desk, src, *_ = 台
-    desk.raise_alert(kind="loc_lost_idle", robot="B", title="空闲的狗定位不可信")
+    desk.raise_alert(kind="loc_lost_idle", robot="B", title="空闲的机器人定位不可信")
     src.seed("B", _status(loc_ok=False))                  # 站点重启时还丢着;停机期间好了
     src.on_status("B", _status())
     assert all(x.resolved_ms is not None for x in _空闲丢定位(desk)), "重启后第一份状态就好了也解决"
-    desk.raise_alert(kind="loc_lost_idle", robot="A", title="空闲的狗定位不可信")
+    desk.raise_alert(kind="loc_lost_idle", robot="A", title="空闲的机器人定位不可信")
     src.seed("A", _status(loc_ok=False))                  # 站点重启:读回库里的状态做种
     src.on_status("A", _status(loc_ok=False))
     c.ms += LOC_IDLE_P2_S * 1000

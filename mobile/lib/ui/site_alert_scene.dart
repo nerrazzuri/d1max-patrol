@@ -78,7 +78,7 @@ class SiteAlertScenePage extends StatefulWidget {
     marks.add(MapMark(label, (p['x'] as num).toDouble(), (p['y'] as num).toDouble(), color));
   }
 
-  add(pose, a.robot == 'site' ? tr('Robot', '狗') : tr('Robot ${a.robot}', '狗 ${a.robot}'), Colors.red);
+  add(pose, a.robot == 'site' ? tr('Robot', '机器人') : tr('Robot ${a.robot}', '机器人 ${a.robot}'), Colors.red);
   if (point is Map) add(point, tr('Intercept point ${point['name'] ?? ''}', '拦截点 ${point['name'] ?? ''}'), Colors.purple);
   if (marks.isEmpty) return null;
   return (mapId!, version!, marks);
@@ -293,9 +293,9 @@ class _SiteAlertScenePageState extends State<SiteAlertScenePage> {
         _msg = switch (sirenState(s)) {
           SirenState.on => '',
           SirenState.notFitted => tr('Level $sirenLevel is set, but this robot has no siren.',
-              '已到第 $sirenLevel 级，但这台狗没有警笛。'),
+              '已到第 $sirenLevel 级，但这台机器人没有警笛。'),
           _ => tr('Level $sirenLevel requested. The robot has not confirmed the siren yet.',
-              '已要求第 $sirenLevel 级，狗还没确认警笛开了。'),
+              '已要求第 $sirenLevel 级，机器人还没确认警笛开了。'),
         };
       });
     } on SiteError catch (e) {
@@ -346,7 +346,7 @@ class _SiteAlertScenePageState extends State<SiteAlertScenePage> {
     if (runs.isEmpty) {
       setState(() => _msg = tr(
           'The record for that task has not reached the site yet (it uploads after the robot arrives and takes photos)',
-          '那一趟的记录还没传到站点（狗到了、拍完会传上来）'));
+          '那一趟的记录还没传到站点（机器人到了、拍完会传上来）'));
       return;
     }
     await Navigator.push(
@@ -542,7 +542,7 @@ class _SiteAlertScenePageState extends State<SiteAlertScenePage> {
       second = switch (sirenState(d)) {
         SirenState.on => _big(SiteAlertScenePage.sirenKey, tr('Siren is on', '警笛已开'), null),
         SirenState.notFitted =>
-          _big(SiteAlertScenePage.sirenKey, tr('No siren on this robot', '这台狗没有警笛'), null),
+          _big(SiteAlertScenePage.sirenKey, tr('No siren on this robot', '这台机器人没有警笛'), null),
         SirenState.requested =>
           _big(SiteAlertScenePage.sirenKey, tr('Siren not confirmed. Retry', '警笛没确认，再试'), _siren),
         _ => _big(SiteAlertScenePage.sirenKey, sound, _siren),
@@ -663,7 +663,7 @@ class _SiteAlertScenePageState extends State<SiteAlertScenePage> {
                 'Robot last at: (${(pose['x'] as num).toStringAsFixed(1)}, '
                     '${(pose['y'] as num).toStringAsFixed(1)})  map ${pose['map_id']}:${pose['map_version']}'
                     '${pose['at_ms'] is num ? '  · reported ${_ago((pose['at_ms'] as num).toInt())}' : ''}',
-                '狗最后在：(${(pose['x'] as num).toStringAsFixed(1)}, '
+                '机器人最后在：(${(pose['x'] as num).toStringAsFixed(1)}, '
                     '${(pose['y'] as num).toStringAsFixed(1)})  图 ${pose['map_id']}:${pose['map_version']}'
                     '${pose['at_ms'] is num ? '  · ${_ago((pose['at_ms'] as num).toInt())}报的' : ''}'),
             style: small),

@@ -311,7 +311,7 @@ class _SiteRobotsPageState extends State<SiteRobotsPage> {
     return Scaffold(
       body: Column(children: [
         NwHeader(
-            overline: tr('Robot fleet', '狗'),
+            overline: tr('Robot fleet', '机器人'),
             title: tr('$title ($role)', '$title（$role）'),
             // 能退就给返回：从站点列表登录进来的，返回 = 离开站点（注销）
             leading: Navigator.canPop(context) ? const BackButton() : null,

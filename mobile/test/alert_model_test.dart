@@ -20,7 +20,7 @@ Map<String, dynamic> fullWire() => <String, dynamic>{
       'level': 'P1',
       'kind': 'stuck',
       'robot': 'C40221',
-      'title': '狗卡住了',
+      'title': '机器人卡住了',
       'detail': '在阀门间原地打转 3 分钟',
       'first_ms': 1757400000000,
       'last_ms': 1757400180000,
@@ -39,7 +39,7 @@ void main() {
     expect(a.level, 'P1');
     expect(a.kind, 'stuck');
     expect(a.robot, 'C40221');
-    expect(a.title, '狗卡住了');
+    expect(a.title, '机器人卡住了');
     expect(a.detail, '在阀门间原地打转 3 分钟');
     expect(a.firstMs, 1757400000000);
     expect(a.lastMs, 1757400180000);

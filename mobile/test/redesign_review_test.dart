@@ -22,7 +22,7 @@ Future<void> _robotPage(WidgetTester t, FakeApi api) async {
 }
 
 void main() {
-  group('I1 单狗页的叫停不看打开页面时的旧状态', () {
+  group('I1 单机器人页的叫停不看打开页面时的旧状态', () {
     for (final role in ['owner', 'guard', 'admin']) {
       testWidgets('$role：进来时空闲，之后被别处派走，不刷新直接按叫停：撤的是现在这一趟', (t) async {
         final api = FakeApi(role, robotView: _idle());
@@ -50,7 +50,7 @@ void main() {
     });
   });
 
-  group('I2 地图上「在线」跟狗列表一个口径', () {
+  group('I2 地图上「在线」跟机器人列表一个口径', () {
     Map<String, dynamic> robot({bool? fresh = true, bool revoked = false}) {
       final r = Map<String, dynamic>.of(
           (siteFixture('site_robots')['robots'] as List).cast<Map<String, dynamic>>().first);

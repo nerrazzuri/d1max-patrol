@@ -47,10 +47,10 @@ void main() {
     Map<String, dynamic> c(String d) => {'tasks': {'head': {'direction': d}}};
     expect(headText(null), '');
     expect(headText(c('head')), '');
-    expect(headText(c('tail')), '头尾：狗尾为前（后雷达没标定，不能自己走，遥控照常）');
+    expect(headText(c('tail')), '头尾：机器人尾为前（后雷达没标定，不能自己走，遥控照常）');
     expect(headText(c('unknown')), '头尾：不知道（不能自己走，遥控照常）');
     expect(headText({'tasks': {'head': {'direction': 'tail', 'autonomy': true}}}),
-        '头尾：狗尾为前（后雷达标过，照常自己走）');
+        '头尾：机器人尾为前（后雷达标过，照常自己走）');
   });
 
   test('避障说人话（W11）', () {
@@ -64,12 +64,12 @@ void main() {
     expect(obstaclesText(c({'state': 'lost', 'rear': false})), '避障：感知断了（不派会自己走的任务）');
   });
 
-  test('配了定位器的狗：设位置被拒的原因说人话（W09a）', () {
+  test('配了定位器的机器人：设位置被拒的原因说人话（W09a）', () {
     expect(ackReasonText('localizer_unavailable: 定位器没连上'), '定位器没连上或没回：定位器没连上');
     expect(ackReasonText('localizer_refused: 初值离地图太远'), '定位器没接这个位置：初值离地图太远');
   });
 
-  test('配了定位器的狗：定位状态按来源说人话（W09a）', () {
+  test('配了定位器的机器人：定位状态按来源说人话（W09a）', () {
     Map<String, dynamic> l(bool a, String reason, String source, [double s = 0.12]) =>
         {'localizer': 'bridge', 'anchored': a, 'reason': reason, 'source': source, 'sigma_m': s};
     expect(locText(l(false, '定位器没连上', 'localizer')), '定位：定位器还没给出位置 —— 定位器没连上');
@@ -93,7 +93,7 @@ void main() {
         contains('仿真'));
   });
 
-  testWidgets('单狗页显示定位状态', (t) async {
+  testWidgets('单机器人页显示定位状态', (t) async {
     final api = FakeApi('guard',
         robotView: _view({'anchored': false, 'reason': '还没设位置：开机之后要人给一次', 'source': 'odom_anchor'}));
     await t.pumpWidget(MaterialApp(home: SiteRobotPage(api: api, robotId: 'A')));
@@ -102,7 +102,7 @@ void main() {
     expect(find.textContaining('没设位置'), findsWidgets);
   });
 
-  testWidgets('狗在原点：一键设位置', (t) async {
+  testWidgets('机器人在原点：一键设位置', (t) async {
     final api = FakeApi('guard', robotView: _view({'anchored': false, 'reason': 'x'}));
     await t.pumpWidget(MaterialApp(home: SiteRobotPage(api: api, robotId: 'A')));
     await t.pumpAndSettle();
@@ -116,7 +116,7 @@ void main() {
     expect(api.calls, contains('relocalize A home'));
   });
 
-  testWidgets('狗在原点：确认框点「算了」不发', (t) async {
+  testWidgets('机器人在原点：确认框点「算了」不发', (t) async {
     final api = FakeApi('guard', robotView: _view({'anchored': false, 'reason': 'x'}));
     await t.pumpWidget(MaterialApp(home: SiteRobotPage(api: api, robotId: 'A')));
     await t.pumpAndSettle();
@@ -165,7 +165,7 @@ void main() {
     expect(find.byKey(const Key('btn-relocalize')), findsNothing);
   });
 
-  testWidgets('狗不支持设位置：没有按钮', (t) async {
+  testWidgets('机器人不支持设位置：没有按钮', (t) async {
     final guard = FakeApi('guard', robotView: _view(null, canReloc: false));
     await t.pumpWidget(MaterialApp(home: SiteRobotPage(api: guard, robotId: 'A')));
     await t.pumpAndSettle();
@@ -178,7 +178,7 @@ void main() {
     expect(ackReasonText('map_mismatch'), contains('图'));
   });
 
-  testWidgets('W41 让狗自己找：狗报了能力才有这一项；点了发 global', (t) async {
+  testWidgets('W41 让机器人自己找：机器人报了能力才有这一项；点了发 global', (t) async {
     final no = FakeApi('guard', robotView: _view({'anchored': false, 'reason': 'x'}));
     await t.pumpWidget(MaterialApp(home: SiteRobotPage(api: no, robotId: 'A')));
     await t.pumpAndSettle();

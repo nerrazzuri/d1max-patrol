@@ -414,7 +414,7 @@ class _SiteModeBarState extends State<SiteModeBar> {
         builder: (c) => AlertDialog(
               content: Text(tr(
                   'Switch to Home? Zones marked "disarmed in Home mode" stop dispatching robots and ringing.',
-                  '切到在家？标了「在家时撤防」的防区来了入侵就不派狗、不响铃了。')),
+                  '切到在家？标了「在家时撤防」的防区来了入侵就不派机器人、不响铃了。')),
               actions: [
                 TextButton(onPressed: () => Navigator.pop(c, false), child: Text(tr('Cancel', '算了'))),
                 FilledButton(

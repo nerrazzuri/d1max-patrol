@@ -168,7 +168,7 @@ class MappingService:
             raise MappingError(f"{full} 这个包已经在了,过一秒再来")
         if target is not None:
             if (self.maps_out / target[0] / target[1]).exists():
-                raise MappingError(f"{target[0]}:{target[1]} 狗上已经有一份在传了,换个版本号")
+                raise MappingError(f"{target[0]}:{target[1]} 机器人上已经有一份在传了,换个版本号")
             bag = Path(await self.orch.start_record(full, live_map_id=target[0]))
             try:
                 (bag / LIVE).write_text(json.dumps({"map_id": target[0], "version": target[1],
@@ -270,7 +270,7 @@ class MappingService:
         out = self.maps_out / map_id / version
         try:
             if out.exists():
-                raise MappingError(f"{map_id}:{version} 狗上已经有一份在传了,换个版本号")
+                raise MappingError(f"{map_id}:{version} 机器人上已经有一份在传了,换个版本号")
             try:
                 made, mode = Path(await self.orch.package(src, map_id)), "live"
                 self.last_fallback = ""
@@ -329,12 +329,12 @@ class MappingService:
         src = self.bags_root / bag
         with self.lock:                                   # 先占住,再查在不在:发件箱删包也拿这把锁
             if not (src / DONE).is_file():
-                raise MappingError(f"包 {bag} 不在狗上了(传完、放够天数就删了)或还没录完")
+                raise MappingError(f"包 {bag} 不在机器人上了(传完、放够天数就删了)或还没录完")
             self.held.add(bag)
         out = self.maps_out / map_id / version
         try:
             if out.exists():
-                raise MappingError(f"{map_id}:{version} 狗上已经有一份在传了,换个版本号")
+                raise MappingError(f"{map_id}:{version} 机器人上已经有一份在传了,换个版本号")
             made = Path(await self.orch.rebuild(src, map_id))   # 编排起建图前清掉上一次的产物
             # 挪文件、算几百 MB 的哈希放线程里:不卡住代理(心跳、命令)。
             ref = await asyncio.to_thread(self._settle, made, map_id, version, out)

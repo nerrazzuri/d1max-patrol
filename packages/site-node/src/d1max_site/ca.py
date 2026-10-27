@@ -160,7 +160,7 @@ class SiteCA:
         if not SAFE_ID.match(site_id or ""):
             raise CAError(f"site_id 只许 ASCII 字母、数字、. _ -: {site_id!r}")
         if self.ca_cert.exists() or self.ca_key.exists():
-            raise CAError(f"{self.root} 已经有 CA 了,不覆盖(换 CA 等于让所有狗失联)")
+            raise CAError(f"{self.root} 已经有 CA 了,不覆盖(换 CA 等于让所有机器人失联)")
         self.root.mkdir(parents=True, exist_ok=True)
         os.chmod(self.root, 0o700)
         (self.root / "newcerts").mkdir(exist_ok=True)

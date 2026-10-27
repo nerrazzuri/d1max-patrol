@@ -18,7 +18,7 @@ SITE = "estate-1"
 def test_ACL里狗侧条目与契约TopicAcl出自同一张表():
     acl = render_acl(SITE)
     pats = [ln.split() for ln in acl.splitlines() if ln.startswith("pattern ")]
-    assert {p[1] for p in pats} <= {"read", "write"}, "狗侧不许有 readwrite"
+    assert {p[1] for p in pats} <= {"read", "write"}, "机器人侧不许有 readwrite"
     writes = {p[2] for p in pats if p[1] == "write"}
     reads = {p[2] for p in pats if p[1] == "read"}
     t = Topics(site_id=SITE, robot_id="R")

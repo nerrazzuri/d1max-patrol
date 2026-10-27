@@ -169,7 +169,7 @@ def _targets(raw: Any) -> tuple[str, ...]:
         if not one or one != one.strip() or "\x00" in one:
             raise BundleError(
                 f"targets 里这一条不像个 SN: {one!r} —— 不许空、不许带首尾空白、"
-                "不许带 NUL。狗那头的 SN 是 clean_sn() 收拾过的,两边得对得上")
+                "不许带 NUL。机器人那头的 SN 是 clean_sn() 收拾过的,两边得对得上")
         if len(one) > MAX_SN_LEN:
             raise BundleError(f"targets 里这一条超过 {MAX_SN_LEN} 个字符: {one[:20]!r}...")
         if one in out:

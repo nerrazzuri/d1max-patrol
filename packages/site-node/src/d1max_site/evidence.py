@@ -437,7 +437,7 @@ def load_evidence_key(cfg: dict) -> bytes | None:
     from d1max_contract.evseal import SealError, load_private
     path = Path(cfg.get("evidence_key") or DEFAULT_EVIDENCE_KEY)
     if not path.is_file():
-        log.warning("没有证据私钥 %s:狗封好的照片、录像收齐了解不开(装机脚本会生成)", path)
+        log.warning("没有证据私钥 %s:机器人封好的照片、录像收齐了解不开(装机脚本会生成)", path)
         return None
     try:
         return load_private(path)
@@ -480,9 +480,9 @@ class EvidencePlainWatch:
                     if not self.alerts.has_open(rid, "evidence_seal_failed"):
                         self.alerts.raise_alert(
                             kind="evidence_seal_failed", robot=rid,
-                            title=f"狗上 {n} 个照片、录像封不上,扣着没传",
-                            detail="多半是狗上 openssl 坏了或者盘写不进(看代理日志);"
-                                   "狗每分钟重封一次,封上了自动传、这条告警自动解决")
+                            title=f"机器人上 {n} 个照片、录像封不上,扣着没传",
+                            detail="多半是机器人上 openssl 坏了或者盘写不进(看代理日志);"
+                                   "机器人每分钟重封一次,封上了自动传、这条告警自动解决")
                     with self.db.tx() as tx:
                         tx.execute("INSERT OR IGNORE INTO evidence_unsealed(robot_id, created_ms) "
                                    "VALUES (?,?)", (rid, self._now()))
@@ -512,9 +512,9 @@ class EvidencePlainWatch:
                     tx.execute("INSERT INTO evidence_plain(robot_id, created_ms) VALUES (?,?)",
                                (rid, now))
                     queue(tx, kind="evidence_plain", robot=rid,
-                          title="狗上的照片、录像没加密",
-                          detail="狗上没有站点的证据公钥(/etc/d1max/evidence-pub.key):照片、截图、"
-                                 "录像明文存在狗上。从证书包拷过去、重启代理",
+                          title="机器人上的照片、录像没加密",
+                          detail="机器人上没有站点的证据公钥(/etc/d1max/evidence-pub.key):照片、截图、"
+                                 "录像明文存在机器人上。从证书包拷过去、重启代理",
                           context={}, now_ms=now)
             elif ev["sealed"] is True and rid in seen:
                 with self.db.tx() as tx:

@@ -179,7 +179,7 @@ class _Feed:
                 camera=req.camera, url=req.url, passphrase=req.passphrase, ttl_ms=req.ttl_ms,
                 stop=True), timeout_s=self.hub.ttl_ms / 2000.0)
         except Exception:
-            log.debug("给狗发「停」没成", exc_info=True)
+            log.debug("给机器人发「停」没成", exc_info=True)
 
     def _detach_locked(self) -> subprocess.Popen[bytes] | None:
         """收掉这一代:推代次(续命令线程、收流线程下一圈自己退),把进程交出去在锁外 kill。"""
@@ -250,7 +250,7 @@ class _Feed:
             except (OSError, ValueError):
                 pass
             self.fail(gen, f"{self.robot_id} 的 {self.camera} 画面断了: "
-                           f"{_tail(errs) or '狗那头停了推流'}")
+                           f"{_tail(errs) or '机器人那头停了推流'}")
         except Exception as exc:
             log.exception("收流线程炸了")
             self.fail(gen, f"站点收流出错: {type(exc).__name__}: {exc}")
@@ -279,7 +279,7 @@ class _Feed:
                     with self._ready:
                         flowing = self._online_locked()
                     if first or not flowing:
-                        self.fail(gen, f"狗没接推流命令: {why}")
+                        self.fail(gen, f"机器人没接推流命令: {why}")
                         return
                     if "钟差" in why:
                         # 时间权威闸拒的(W09h):不是一时没回话,马上再续也是拒 —— 按正常节奏再试,
@@ -358,7 +358,7 @@ class _Feed:
                             if left <= 0:
                                 why = (f"{self.hub.first_frame_timeout_s:g} s 没等到"
                                        f" {self.robot_id} 的 {self.camera} 第一帧 ——"
-                                       f"狗不在线、相机不通,或者狗到站点的端口不通")
+                                       f"机器人不在线、相机不通,或者机器人到站点的端口不通")
                                 self._ready.release()
                                 try:
                                     self.fail(gen, why)   # 这一路收掉:下一个观众重新起
@@ -462,7 +462,7 @@ class VideoHub:
         with self._flock:
             f = self._feeds.get((robot_id, cam)) if isinstance(cam, str) else None
         if f is not None:
-            f.fail_if_port(port, f"狗推流失败: {scrub(str(e.data.get('reason', '')))}")
+            f.fail_if_port(port, f"机器人推流失败: {scrub(str(e.data.get('reason', '')))}")
 
     def _alloc_port(self) -> int | None:
         with self._plock:
@@ -502,7 +502,7 @@ def dispatcher_sender(dispatcher, loop) -> Callable[[str, VideoRequest], str]:
         except DispatchRefused as exc:
             return str(exc)
         except (DispatchTimeout, TimeoutError):
-            return "等狗的回执超时"
+            return "等机器人的回执超时"
         if ack.result is AckResult.ACCEPTED:
             return ""
         return f"{ack.result.value}: {ack.reason}"

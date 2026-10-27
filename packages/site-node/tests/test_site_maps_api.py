@@ -94,7 +94,7 @@ def test_录包与重建的命令到狗_重建的版本不许撞(站点):
                                                      "version": "10"}, token=alice)[0] == 409
     code, d = s.req("POST", "/api/robots/A/map_build", {"bag": "yard", "map_id": MAP[0],
                                                         "version": "9"}, token=alice)
-    assert code == 409 and "正在建" in d["error"], "已经让狗建 9 了(还没收齐):不许再派一次"
+    assert code == 409 and "正在建" in d["error"], "已经让机器人建 9 了(还没收齐):不许再派一次"
     assert s.req("POST", "/api/robots/A/map_build", {"bag": "yard", "map_id": "m" * 41,
                                                      "version": "1"}, token=alice)[0] == 400
     assert s.req("POST", "/api/robots/A/map_build", {"bag": "yard", "map_id": "m" * 40,
@@ -164,7 +164,7 @@ def test_图里没带原点_没标原点不下发_待命点不顶替(站点):
     _待命点(s, "12", 3.0)
     code, d = s.req("POST", "/api/robots/A/map", body, token=alice)
     assert code == 409 and d["reason"] == "no_home", "只有待命点:还是不下发"
-    assert not s.db.query("SELECT 1 FROM commands WHERE kind='map_activate'"), "没发给狗"
+    assert not s.db.query("SELECT 1 FROM commands WHERE kind='map_activate'"), "没发给机器人"
     assert s.req("POST", "/api/robots/A/map", body | {"without_home": 1}, token=alice)[0] == 400
     _原点(s, "12", 1.5)
     code, d = s.req("POST", "/api/robots/A/map", body, token=alice)
@@ -188,7 +188,7 @@ def test_新图明说没原点也下发_狗上没有原点_自己走的任务起
     code, d = s.req("POST", "/api/robots/A/map", body | {"without_home": True}, token=alice)
     assert code == 200 and d["ack"]["result"] == "accepted", d
     _等(lambda: _caps(s).tasks["patrol"]["map_version"] == "16", timeout=8)
-    assert s.agent.parts.home is None, "狗上没有原点"
+    assert s.agent.parts.home is None, "机器人上没有原点"
     target = {"schema": "1.0", "map_id": MAP[0], "map_version": "16", "frame_id": "map",
               "x": 1.0, "y": 0.0, "yaw": 0.0}
     code, g = s.req("POST", "/api/robots/A/goto", {"target": target}, token=alice)

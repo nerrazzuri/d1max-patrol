@@ -47,21 +47,21 @@ void main() {
     expect(api.calls.where((c) => c.startsWith('markHome')), isEmpty);
   });
 
-  testWidgets('保安、狗不支持：没有按钮', (t) async {
+  testWidgets('保安、机器人不支持：没有按钮', (t) async {
     final guard = FakeApi('guard', robotView: _view());
     await t.pumpWidget(MaterialApp(home: SiteRobotPage(api: guard, robotId: 'A')));
     await t.pumpAndSettle();
     expect(find.byKey(const Key('btn-mark-home')), findsNothing);
   });
 
-  testWidgets('狗不支持：没有按钮', (t) async {
+  testWidgets('机器人不支持：没有按钮', (t) async {
     final admin = FakeApi('admin', robotView: _view(can: false));
     await t.pumpWidget(MaterialApp(home: SiteRobotPage(api: admin, robotId: 'A')));
     await t.pumpAndSettle();
     expect(find.byKey(const Key('btn-mark-home')), findsNothing);
   });
 
-  testWidgets('狗拒了：原因说人话', (t) async {
+  testWidgets('机器人拒了：原因说人话', (t) async {
     final api = _RefuseApi();
     await t.pumpWidget(MaterialApp(home: SiteRobotPage(api: api, robotId: 'A')));
     await t.pumpAndSettle();
@@ -113,8 +113,8 @@ void main() {
     expect(find.textContaining('没标'), findsOneWidget);
   });
 
-  testWidgets('站点登记没成：说狗上已经换了、给坐标好手工登记', (t) async {
-    final api = _ErrApi(const SiteError(500, '狗上的原点已经换了,站点登记待命点没成:库写不进去',
+  testWidgets('站点登记没成：说机器人上已经换了、给坐标好手工登记', (t) async {
+    final api = _ErrApi(const SiteError(500, '机器人上的原点已经换了,站点登记待命点没成:库写不进去',
         body: <String, dynamic>{
           'data': <String, dynamic>{'map_id': 'm', 'map_version': '1', 'x': 4.2, 'y': 1.0, 'yaw': 0.5},
         }));
@@ -125,11 +125,11 @@ void main() {
     await t.tap(find.byKey(const Key('mark-home-go')));
     await t.pumpAndSettle();
     expect(find.textContaining('(4.2, 1.0)'), findsOneWidget);
-    expect(find.textContaining('没标'), findsNothing, reason: '狗上已经换了，不许说「没标」');
+    expect(find.textContaining('没标'), findsNothing, reason: '机器人上已经换了，不许说「没标」');
   });
 
-  testWidgets('等回话超时：照站点说的（狗可能已经标了）', (t) async {
-    final api = _ErrApi(const SiteError(504, '等狗回话超时:狗可能已经标了 —— 过一会儿刷新看看'));
+  testWidgets('等回话超时：照站点说的（机器人可能已经标了）', (t) async {
+    final api = _ErrApi(const SiteError(504, '等机器人回话超时:机器人可能已经标了 —— 过一会儿刷新看看'));
     await t.pumpWidget(MaterialApp(home: SiteRobotPage(api: api, robotId: 'A')));
     await t.pumpAndSettle();
     await t.tap(find.byKey(const Key('btn-mark-home')));
@@ -148,7 +148,7 @@ class _TakenApi extends FakeApi {
       {String name = '', bool replace = false}) async {
     if (!replace) {
       calls.add('markHome $robotId');
-      throw const SiteError(409, '待命点 home 登记在 other:9 上,狗现在用的是 m:1:换个名字,或者说明要替换',
+      throw const SiteError(409, '待命点 home 登记在 other:9 上,机器人现在用的是 m:1:换个名字,或者说明要替换',
           body: <String, dynamic>{
             'name_taken': <String, dynamic>{'map_id': 'other', 'map_version': '9'},
           });
@@ -171,5 +171,5 @@ class _RefuseApi extends FakeApi {
   @override
   Future<Map<String, dynamic>> markHome(String robotId,
           {String name = '', bool replace = false}) async =>
-      throw const SiteError(409, '狗没标:loc_poor: 位置偏差可能到 0.9 m');
+      throw const SiteError(409, '机器人没标:loc_poor: 位置偏差可能到 0.9 m');
 }

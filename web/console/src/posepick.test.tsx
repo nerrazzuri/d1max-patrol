@@ -60,7 +60,7 @@ it("选中 B(在 map-B 上):底图是 map-B,只画 B,不画 map-A 上的 A", asy
   expect(bots).toEqual(["B"]);
 });
 
-it("选中的狗没报图:底图退回第一只有图的狗的,没报图的狗不画在上面", async () => {
+it("选中的机器人没报图:底图退回第一只有图的机器人的,没报图的机器人不画在上面", async () => {
   mapFetch();
   const r = render(<MapPage units={[unit("A", "map-A"), unit("C", null)] as never} p1={[]} now={0}
     selected="C" role="admin" onSelect={() => {}} onVideo={() => {}} />);
@@ -105,7 +105,7 @@ it("在 map-A 给 A 选的点,换成 map-B / B 以后作废,发不出去", async
   expect(posted).toEqual([]);
 });
 
-it("确认框开着时换了狗:框跟着作废", async () => {
+it("确认框开着时换了机器人:框跟着作废", async () => {
   setFetch((async () => json({ ack: { result: "accepted" } })) as never);
   const r = render(<Harness robot="A" map={MA} />);
   fireEvent.click(r.getByText("pick"));
@@ -116,7 +116,7 @@ it("确认框开着时换了狗:框跟着作废", async () => {
   expect(document.querySelector("dialog")).toBeNull();
 });
 
-it("目标狗加载的不是底图那张:按钮灰、写明原因", async () => {
+it("目标机器人加载的不是底图那张:按钮灰、写明原因", async () => {
   setFetch((async () => json({ ack: { result: "accepted" } })) as never);
   const r = render(<Harness robot="B" map={MA} robotMap={MB} />);
   fireEvent.click(r.getByText("pick"));
@@ -135,7 +135,7 @@ it("设位置带上底图的图号、版本(站点核对)", async () => {
   await waitFor(() => expect(r.container.querySelector("[data-pose-msg]")?.textContent).toBe("Position set for A"));
 });
 
-it("狗拒了(HTTP 200 里 rejected):不说已设,写原因", async () => {
+it("机器人拒了(HTTP 200 里 rejected):不说已设,写原因", async () => {
   setFetch((async () => json({ command_id: "c1", ack: { command_id: "c1", result: "rejected", reason: "moving" } })) as never);
   const r = render(<Harness robot="A" map={MA} />);
   await pickAndConfirmSet(r);
@@ -155,7 +155,7 @@ it("去这里被拒(rejected)也不说已让去", async () => {
   expect(r.container.querySelector("[data-pose-msg]")?.textContent).not.toContain("Go-to sent");
 });
 
-it("回包回来时已经换了狗:不把结果说成新狗的", async () => {
+it("回包回来时已经换了机器人:不把结果说成新机器人的", async () => {
   let reply: (v: Response) => void = () => {};
   setFetch((() => new Promise<Response>((res) => { reply = res; })) as never);
   const r = render(<Harness robot="A" map={MA} />);
@@ -176,7 +176,7 @@ it("回执判定:只有 accepted 且命令号对得上才算", () => {
   expect(notAccepted(null)).not.toBeNull();
 });
 
-it("W41 自动找位置:狗报了能力才有按钮;确认后发 global、带底图;狗收下才说找到了", async () => {
+it("W41 自动找位置:机器人报了能力才有按钮;确认后发 global、带底图;机器人收下才说找到了", async () => {
   const sent: { url: string; body: unknown }[] = [];
   setFetch((async (url: unknown, init?: RequestInit) => {
     sent.push({ url: String(url), body: init?.body ? JSON.parse(String(init.body)) : null });
@@ -199,7 +199,7 @@ it("W41 自动找位置:狗报了能力才有按钮;确认后发 global、带底
   expect(sent[0].body).toEqual({ global: true, map_id: "map-A", map_version: "1" });
 });
 
-it("W41 自动找位置:狗认不出就把原因给人看", async () => {
+it("W41 自动找位置:机器人认不出就把原因给人看", async () => {
   setFetch((async () => json({ command_id: "c1", ack: { command_id: "c1", result: "rejected", reason: "not_found: 有两处差不多像" } })) as never);
   function H() {
     const pick = usePosePick({ meta, map: MA, robotId: "A", robotMap: MA, role: "admin", canFind: true });

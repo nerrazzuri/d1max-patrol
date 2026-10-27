@@ -53,7 +53,7 @@ class _SupervisionSwitchState extends State<SupervisionSwitch> with WidgetsBindi
         state == AppLifecycleState.detached) {
       _stop(tr(
           'App moved to the background, supervision released (the robot will stop)',
-          '切到后台了，监护已放（狗会停下）'));
+          '切到后台了，监护已放（机器人会停下）'));
     }
   }
 
@@ -71,7 +71,7 @@ class _SupervisionSwitchState extends State<SupervisionSwitch> with WidgetsBindi
       if (ack is Map && ack['result'] != 'accepted') {
         why = tr(
             'Robot did not accept supervision: ${ackReasonText('${ack['reason'] ?? ack['result']}')}',
-            '狗没接监护：${ackReasonText('${ack['reason'] ?? ack['result']}')}');
+            '机器人没接监护：${ackReasonText('${ack['reason'] ?? ack['result']}')}');
       }
     } catch (e) {
       why = tr('Supervision renewal failed: $e', '监护续不上：$e');
@@ -85,7 +85,7 @@ class _SupervisionSwitchState extends State<SupervisionSwitch> with WidgetsBindi
     }
     _failures++;
     if (_failures >= 2) {
-      _stop(tr('$why (the robot will stop)', '$why（狗会停下）'));
+      _stop(tr('$why (the robot will stop)', '$why（机器人会停下）'));
     } else if (mounted) {
       setState(() => _msg = tr('$why, retrying', '$why，再试一次'));
     }
@@ -154,7 +154,7 @@ class _SupervisionSwitchState extends State<SupervisionSwitch> with WidgetsBindi
                   'This robot runs dispatched tasks only under on-site supervision (obstacle avoidance is '
                   'not accepted yet). While this is on, the robot runs the tasks sent to it. Turning it '
                   'off, leaving this page or moving the app to the background stops it.',
-                  '这台狗要人现场监护才执行派单（避障还没验收）。开着的时候狗会执行下发的任务；'
+                  '这台机器人要人现场监护才执行派单（避障还没验收）。开着的时候机器人会执行下发的任务；'
                   '关掉、离开这一页、切到后台就停。'),
               style: NwText.bodySmall.copyWith(color: c.textSecondary)),
           value: _on,

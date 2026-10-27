@@ -88,12 +88,12 @@ class StopAllButton extends StatelessWidget {
           .where((r) => r['fresh'] == true && r['status'] is Map && (r['status'] as Map)['online'] == true)
           .toList();
     } on SiteError catch (e) {
-      onResult(tr("Can't reach the site: $e. Use the E-stop on each robot.", '连不上站点：$e。去按每台狗身上的急停。'));
+      onResult(tr("Can't reach the site: $e. Use the E-stop on each robot.", '连不上站点：$e。去按每台机器人身上的急停。'));
       return;
     }
     if (!context.mounted) return;
     if (robots.isEmpty) {
-      onResult(tr('No robots are online.', '没有在线的狗。'));
+      onResult(tr('No robots are online.', '没有在线的机器人。'));
       return;
     }
     final n = robots.length;
@@ -102,7 +102,7 @@ class StopAllButton extends StatelessWidget {
         builder: (c) => AlertDialog(
               content: Text(tr(
                   'Stop all $n robots now? Each one halts where it is until you resume it.',
-                  '现在让 $n 台狗全部急停？每台就地停住，直到你恢复它。')),
+                  '现在让 $n 台机器人全部急停？每台就地停住，直到你恢复它。')),
               actions: [
                 TextButton(onPressed: () => Navigator.pop(c, false), child: Text(tr('Cancel', '取消'))),
                 FilledButton(
@@ -122,7 +122,7 @@ class StopAllButton extends StatelessWidget {
         bad.add(tr("$id didn't stop: $e. Use the E-stop on the robot.", '$id 没停住：$e。去按它身上的急停。'));
       }
     }));
-    onResult(bad.isEmpty ? tr('Stopped $n robots.', '$n 台狗都停了。') : bad.join(' '));
+    onResult(bad.isEmpty ? tr('Stopped $n robots.', '$n 台机器人都停了。') : bad.join(' '));
   }
 
   static ButtonStyle _stopStyle(BuildContext context) {

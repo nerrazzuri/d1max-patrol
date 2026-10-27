@@ -194,7 +194,7 @@ async def test_到点超时判这个点失败(make_engine, nav):
     results = engine.snapshot.results
     assert [r.ok for r in results] == [False, False]
     assert "超时" in results[0].note
-    assert nav.stop_calls >= 2, "超时了要把导航停掉,不能让狗自己接着走"
+    assert nav.stop_calls >= 2, "超时了要把导航停掉,不能让机器人自己接着走"
 
 
 async def test_导航回失败也算这个点失败(make_engine, nav):
@@ -444,7 +444,7 @@ async def test_被挡住先等不立刻判这个点失败(make_engine, nav, cloc
     nav.emit(BLOCKED)
     await asyncio.sleep(0.05)
     assert engine.state is RunState.RUNNING
-    assert len(nav.goto_calls) == 1, "人从狗前面走过去要几秒,等一下比判失败划算"
+    assert len(nav.goto_calls) == 1, "人从机器人前面走过去要几秒,等一下比判失败划算"
     # 等超了才升级
     clock.offset = 30.0
     nav.emit(BLOCKED)

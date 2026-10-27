@@ -26,7 +26,7 @@ KIND = "d1max-site-inventory"
 
 #: 数哪些表(表名 → 给人看的名字)。顺序就是打印的顺序。
 TABLES: dict[str, str] = {
-    "robots": "登记的狗", "accounts": "账号", "cameras": "固定摄像头",
+    "robots": "登记的机器人", "accounts": "账号", "cameras": "固定摄像头",
     "incident_sources": "事件源", "zones": "防区", "zone_areas": "防区范围",
     "authorizations": "授权时段", "intercepts": "拦截点", "standby_points": "待命点",
     "homes": "原点", "chargers": "充电桩", "nav_zones": "禁行区",
@@ -95,7 +95,7 @@ def compare(before: dict[str, Any], after: dict[str, Any]) -> dict[str, Any]:
             add("same", name, str(after.get(key)))
         else:
             add("fail", name, f"原来 {before.get(key)},现在 {after.get(key)}:"
-                              "狗和手机认的是原来那个,都会连不上")
+                              "机器人和手机认的是原来那个,都会连不上")
     b_schema, a_schema = int(before.get("schema") or 0), int(after.get("schema") or 0)
     if a_schema < b_schema:
         add("fail", "库结构", f"原来 {b_schema},现在 {a_schema}:新主机上的程序比原来的老")

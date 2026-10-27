@@ -67,7 +67,7 @@ async def test_定位器不收_不报成功_退回原来那张_不重新下载(�
     why = failed[0]["data"]["reason"]
     assert "先验坏了" in why and "已退回原来的 m:2" in why
     assert len(_events(t, "map_activated")) == n_ok, "没有为这次换图发成功"
-    assert t.rt.loaded_map == ("m", "2") and keeper.active() == a, "狗还在原来那张"
+    assert t.rt.loaded_map == ("m", "2") and keeper.active() == a, "机器人还在原来那张"
     assert keeper.previous() is None, "失败的 3 不记成上一张"
     assert not keeper.dir_of(MapRef.from_wire(b)).exists(), "失败的新图清掉"
     # 退回原来那张时没有再去站点下载它

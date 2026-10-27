@@ -66,6 +66,6 @@ def test_吊销不存在的狗报错(reg):
 
 
 def test_注册表也只认安全字符(reg):
-    for bad in ("a\tb", "a=b", "狗", "a" * 65):
+    for bad in ("a\tb", "a=b", "机器人", "a" * 65):
         with pytest.raises(RegistryError):
             reg.enroll(bad, fingerprint="sha256:x", issued_at=T0, expires_at=T0 + 1)

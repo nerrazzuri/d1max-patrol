@@ -103,7 +103,7 @@ class InterceptReach:
         if cm.hard[g]:
             return Reach(problem=f"{name} 在障碍或禁行区里")
         if cm.lethal[g]:
-            return Reach(problem=f"{name} 离障碍太近,狗站不下(机身半径 0.52 m 加余量)")
+            return Reach(problem=f"{name} 离障碍太近,机器人站不下(机身半径 0.52 m 加余量)")
         starts = self.starts(map_id, version)
         if not starts:
             return Reach(note="这张图上还没有待命点、原点,没查从哪儿走得到")

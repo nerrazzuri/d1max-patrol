@@ -89,7 +89,7 @@ def test_恢复_一条命令_证书指纹不变_库完整_证据都在(站, tmp_
     capsys.readouterr()
     assert verify_home(new).ok
     assert site_main.main(["--home", str(new), "fingerprint"]) == fp_before
-    assert capsys.readouterr().out == before, "同一张站点证书:狗不用重登记、手机不用重加"
+    assert capsys.readouterr().out == before, "同一张站点证书:机器人不用重登记、手机不用重加"
     photo = new / "evidence" / "A" / "巡检一" / "20261009T010000Z" / "photos" / \
         "P1__front__20261009T010000Z.jpg"
     assert photo.read_bytes() == b"PHOTO"

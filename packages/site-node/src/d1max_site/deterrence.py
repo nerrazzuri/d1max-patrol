@@ -445,7 +445,7 @@ class DeterrenceDesk:
                     self._save_in(tx, new)
                     tx.execute("INSERT INTO pending_alerts(kind, robot, title, detail, context, "
                                "created_ms) VALUES (?,?,?,?,?,?)",
-                               ("deter_cornered", rid, "驱离中的狗无路可退,原地站定",
+                               ("deter_cornered", rid, "驱离中的机器人无路可退,原地站定",
                                 f"防区 {s.zone};" + (why or "四周都退不了"),
                                 json.dumps({"task_id": s.task_id}, ensure_ascii=False), now))
             except Exception:
@@ -499,7 +499,7 @@ class DeterrenceDesk:
             # 不另开一场盖掉它
             self.sessions[robot_id] = s
             log.info("%s 就地驱离(%s 开的,%s)", robot_id, by,
-                     f"先撤 {tid}" if running else "狗本来空着")
+                     f"先撤 {tid}" if running else "机器人本来空着")
             if s.withdraw:
                 await self._withdraw(s)                 # 先撤一次;没确认结束每拍接着撤(外审 1)
             await self._apply(s)                        # 人按的:L1 的灯马上开,不等下一拍
@@ -602,7 +602,7 @@ class DeterrenceDesk:
         task = c.status.task if c is not None and c.status is not None else None
         if task is not None and task.task_id not in (s.task_id, _standoff_id(s)) \
                 and task.state.value in ("running", "pending"):
-            return await self._end(rid, f"狗被派去干别的了({task.task_id})", go_back=False)
+            return await self._end(rid, f"机器人被派去干别的了({task.task_id})", go_back=False)
         if s.withdraw:
             await self._withdraw(s)                     # W33 外审:就地驱离要撤的那一趟还在跑
         await self._reconcile_persons(s)                # W24:按狗的当前人员状态对账
@@ -643,7 +643,7 @@ class DeterrenceDesk:
             return False
         ack = r.get("ack", {}) if isinstance(r, dict) else {}
         if ack.get("result") not in (None, "accepted"):
-            log.warning("%s 驱离的 %s 狗没做: %s", rid, payload.get("output"),
+            log.warning("%s 驱离的 %s 机器人没做: %s", rid, payload.get("output"),
                         ack.get("reason") or ack.get("result"))
             return False
         return True

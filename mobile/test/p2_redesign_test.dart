@@ -212,7 +212,7 @@ void main() {
       final api = FakeApi('guard');
       await _duty(t, api);
       expect(find.byType(NwHealthChip, skipOffstage: false), findsNWidgets(3));
-      expect(find.text('狗在线 1/1', skipOffstage: false), findsOneWidget);
+      expect(find.text('机器人在线 1/1', skipOffstage: false), findsOneWidget);
       expect(find.text('排程正常', skipOffstage: false), findsWidgets);
       expect(find.text('备份正常', skipOffstage: false), findsOneWidget);
       // 掉线、备份过期：标签是坏的那种；没开排程、没配备份的不摆（不许拿绿色冒充正常）
@@ -223,7 +223,7 @@ void main() {
       (site['backup'] as Map<String, dynamic>)['stale'] = true;
       await _duty(t, FakeApi('guard')..summaryBody = body);
       final chips = t.widgetList<NwHealthChip>(find.byType(NwHealthChip, skipOffstage: false)).toList();
-      expect(chips.map((c) => (c.label, c.bad)), [('狗在线 0/1', true), ('备份过期了', true)]);
+      expect(chips.map((c) => (c.label, c.bad)), [('机器人在线 0/1', true), ('备份过期了', true)]);
       await _duty(t, FakeApi('guard')..summaryError = const SiteError(500, '站点内部错误'));
       expect(find.byType(NwHealthChip, skipOffstage: false), findsNothing);
       expect(find.byKey(SiteWatchPage.summaryErrorKey, skipOffstage: false), findsOneWidget);
@@ -323,7 +323,7 @@ void main() {
     final t0 = DateTime(2026, 10, 11, 2, 14, 36).millisecondsSinceEpoch;
     Alert seen({bool acked = false, String level = 'P1'}) => Alert.fromWire(<String, dynamic>{
           'key': 'A/dog_sees_person#1', 'level': level, 'kind': 'dog_sees_person', 'robot': 'A',
-          'title': '狗看见人了:1 个人,最近 6.2 m', 'detail': '布防中', 'count': 3,
+          'title': '机器人看见人了:1 个人,最近 6.2 m', 'detail': '布防中', 'count': 3,
           'first_ms': t0, 'last_ms': t0 + 9000,
           'acked_by': acked ? 'night.guard' : '', 'acked_ms': acked ? t0 + 44000 : null,
           'context': <String, dynamic>{'zone': 'East wall', 'task_id': 'persons',

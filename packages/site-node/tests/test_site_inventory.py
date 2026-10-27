@@ -47,7 +47,7 @@ def test_真恢复一遍_指纹和数都一样_过(站, tmp_path, capsys):
     capsys.readouterr()
     assert site_main.main(["--home", str(new), "inventory", "--compare", str(rec)]) == 0
     shown = capsys.readouterr().out
-    assert "[一样] 站点证书指纹" in shown and "[一样] 登记的狗: 1" in shown
+    assert "[一样] 站点证书指纹" in shown and "[一样] 登记的机器人: 1" in shown
     assert shown.strip().endswith("结论:过。"), shown
 
 

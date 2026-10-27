@@ -255,7 +255,7 @@ class AgentRuntime:
             kept = self.homes.get(*loaded_map)
             if kept is not None:
                 parts.home = HomePoint(map_id=loaded_map[0], pose=Pose.from_xy_yaw(*kept),
-                                       marked_at_ms=now_ms(), note="W00c6f:狗上记着的原点")
+                                       marked_at_ms=now_ms(), note="W00c6f:机器人上记着的原点")
         # W00c6e:地图位姿来自里程锚定。仿真的里程就是真实位置(按原样);真狗开机要人给一次位置。
         if odom_identity is None:
             odom_identity = self.adapter_id.split("/")[0] == "sim"
@@ -582,7 +582,7 @@ class AgentRuntime:
             if missing:                   # 定位器要读的先验不在清单里:没校验过(内审小 1)
                 self._map_integrity_failed(MapIntegrityError(
                     f"正在用的图 {ref.map_id}:{ref.version} 没有定位先验({', '.join(missing)}),"
-                    "配了定位器的狗用不了"))
+                    "配了定位器的机器人用不了"))
                 return
         if self._locsrv is not None:                  # 配了定位器:换图不经 HAL(W09c 决定 6)
             self._switch_map(ref)
@@ -793,7 +793,7 @@ class AgentRuntime:
             return f"payload: {exc}"
         self._speed_cap = (None if req.max_speed_mps is None
                            else (req.max_speed_mps, self._mono_ms() + req.ttl_s * 1000))
-        log.info("全狗限速:%s", "取消" if req.max_speed_mps is None
+        log.info("全机器人限速:%s", "取消" if req.max_speed_mps is None
                  else f"{req.max_speed_mps} m/s,{req.ttl_s} 秒")
         self._apply_speed_cap()
         return ""
@@ -801,7 +801,7 @@ class AgentRuntime:
     def _apply_speed_cap(self) -> tuple:
         """到点就取消;交给导航。回能力里那一份的指纹(变了要重发)。"""
         if self._speed_cap is not None and self._mono_ms() >= self._speed_cap[1]:
-            log.info("全狗限速到点取消(站点没续)")
+            log.info("全机器人限速到点取消(站点没续)")
             self._speed_cap = None
         if self.parts is not None:
             self.parts.nav.speed_cap = math.inf if self._speed_cap is None else self._speed_cap[0]
@@ -864,9 +864,9 @@ class AgentRuntime:
             return "force: 翻倒、被抱起来后的安全处置还没做完(" + "、".join(sorted(
                 self.force.owed)) + "):做完之前不能动"
         if st == "flipped":
-            return "flipped: 狗翻倒了:扶起来、解除急停之后才能动"
+            return "flipped: 机器人翻倒了:扶起来、解除急停之后才能动"
         if st == "lifted":
-            return "lifted: 狗被抱起来了(腿上不承重):放回地上之后才能动"
+            return "lifted: 机器人被抱起来了(腿上不承重):放回地上之后才能动"
         return ""
 
     async def _watch_force(self) -> None:
@@ -956,7 +956,7 @@ class AgentRuntime:
         if self._on_dock is None:
             return "on_dock: 还不知道在不在充电桩上"
         if self._on_dock:
-            return "on_dock: 狗在充电桩上:先出桩(派对桩任务出桩)"
+            return "on_dock: 机器人在充电桩上:先出桩(派对桩任务出桩)"
         return ""
 
     async def _sense_dock(self) -> None:
@@ -1199,7 +1199,7 @@ class AgentRuntime:
             if p.get("global") is not True:
                 return "payload: global 只能是 true"
             if not self._global_ok():
-                return "unsupported: 这台狗不能自动找位置(要配避障和定位器)"
+                return "unsupported: 这台机器人不能自动找位置(要配避障和定位器)"
             got = await self._global_find()
             if isinstance(got, str):
                 return got
@@ -1374,7 +1374,7 @@ class AgentRuntime:
             if pts is not None:
                 break
         if pts is None or m is None:
-            log.info("点云套图核对:%s 秒内没等到狗停着的点云,这次不核", SCAN_CHECK_WAIT_S)
+            log.info("点云套图核对:%s 秒内没等到机器人停着的点云,这次不核", SCAN_CHECK_WAIT_S)
             return
         o = await self.hal.odometry()
         est = anchor.estimate((o.x, o.y, o.yaw)) if o.valid else None
@@ -1521,13 +1521,13 @@ class AgentRuntime:
                 missing = [n for n in PRIOR_FILES if n not in {f.name for f in ref.files}]
                 if missing:
                     raise MapInstallError(f"这一版没有定位先验({', '.join(missing)}),"
-                                          "配了定位器的狗用不了:换一版狗上建的图")
+                                          "配了定位器的机器人用不了:换一版机器人上建的图")
             dst = await asyncio.to_thread(self.maps.install, ref)
             waited = 0.0
             while not self._tasks_idle():
                 if waited >= SWITCH_WAIT_S:
                     self.maps.discard(ref)
-                    raise MapInstallError(f"等了 {SWITCH_WAIT_S:g} s 狗一直有任务:没换")
+                    raise MapInstallError(f"等了 {SWITCH_WAIT_S:g} s 机器人一直有任务:没换")
                 await asyncio.sleep(1.0)
                 waited += 1.0
             self._switching = True
@@ -1558,7 +1558,7 @@ class AgentRuntime:
                     rolled = await self._revert_map(old, old_prev, old_home)
                 if why:
                     tail = ("(已退回原来的 " + f"{old.map_id}:{old.version})" if rolled
-                            else "(退回原来的也没成,狗上现在的图见能力)") if old is not None \
+                            else "(退回原来的也没成,机器人上现在的图见能力)") if old is not None \
                         else "(原来没有别的图可退)"
                     raise MapInstallError(why + tail)
             finally:
@@ -1651,7 +1651,7 @@ class AgentRuntime:
             await self.mapper.build(bag, map_id, version)
             rays = getattr(self.mapper, "last_rays", "")
             if rays.startswith("synthetic"):
-                log.warning("建图的栅格用的是模拟射线(跟着狗走的人清不掉):%s", rays)
+                log.warning("建图的栅格用的是模拟射线(跟着机器人走的人清不掉):%s", rays)
             self.events.emit("map_built", base | ({"grid_rays": rays} if rays else {}))
         except Exception as exc:  # noqa: BLE001 - 重建失败:原因发给站点
             log.warning("重建没成(%s → %s:%s):%s", bag, map_id, version, exc)
@@ -1754,7 +1754,7 @@ class AgentRuntime:
         if tightens(cur, zs) or self._tasks_idle():
             await self._apply_zones(zs)
             return "", {"revision": zs.revision, "deferred": False}
-        log.info("区域修订 %d 是放宽:等狗空闲再换", zs.revision)
+        log.info("区域修订 %d 是放宽:等机器人空闲再换", zs.revision)
         self._zones_pending = zs
         if self.transport.connected:
             await self._publish_caps()                # 站点看得到「等着换」的那一版

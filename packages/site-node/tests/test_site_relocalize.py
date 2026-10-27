@@ -148,11 +148,11 @@ def test_W41_自动找位置_狗报了才发_不是true_400(站点):
     _能设(s)
     assert s.req("POST", "/api/robots/A/relocalize", {"global": 1}, token=gina)[0] == 400
     code, d = s.req("POST", "/api/robots/A/relocalize", {"global": True}, token=gina)
-    assert code == 409 and "自动找位置" in d["error"], "仿真狗没配避障和定位器:不能"
+    assert code == 409 and "自动找位置" in d["error"], "仿真机器人没配避障和定位器:不能"
     s.disp.clients["A"].capabilities.tasks["relocalize"]["global"] = True
     code, d = s.req("POST", "/api/robots/A/relocalize", {"global": True}, token=gina)
     assert code == 200, d
     [cmd] = [c for c in s.disp.commands("A") if c["kind"] == "relocalize"]
     assert cmd["payload"]["global"] is True and "x" not in cmd["payload"]
     assert d["ack"]["result"] == "rejected" and "不能自动找位置" in d["ack"]["reason"], \
-        "能力是测试里硬改的,狗其实没配:狗拒,回执原样回"
+        "能力是测试里硬改的,机器人其实没配:机器人拒,回执原样回"

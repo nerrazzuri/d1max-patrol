@@ -75,7 +75,7 @@ async def test_没认证的连接_开不了车_停车急停照收(tmp_path):
             await b.halt()
             await b.emergency_stop(True)
             assert sim.estop_software.value == "Stop", "急停按下去了"
-            assert sim.distance == 0.0 and sim.motion.value == "LieDown", "狗一下没动"
+            assert sim.distance == 0.0 and sim.motion.value == "LieDown", "机器人一下没动"
         finally:
             await b.close()
 

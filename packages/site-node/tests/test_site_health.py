@@ -64,7 +64,7 @@ def test_体检_盘紧_事件循环卡住_后台道卡住_证书快到期_都查
     assert not c["disk"]["ok"] and "5%" in c["disk"]["detail"]
     assert not c["loop"]["ok"] and "卡住" in c["loop"]["detail"]
     assert not c["lanes"]["ok"] and "推送" in c["lanes"]["detail"]
-    assert not c["certs"]["ok"] and "狗 A 的证书还有 10 天到期" in c["certs"]["detail"]
+    assert not c["certs"]["ok"] and "机器人 A 的证书还有 10 天到期" in c["certs"]["detail"]
     ok, body = t.h.healthz()
     assert not ok and set(body) == {"ok", "version"}, "探活不给细节"
 
@@ -133,7 +133,7 @@ def test_诊断包_不带密钥令牌库文件_日志打码(台, tmp_path):
     (t.home / "site.json").write_text(json.dumps({
         "site_id": "e", "push": {"app_key": "AK-123", "secret_file": "/etc/x"},
         "backup_key": "/etc/d1max-site/backup.key", "camera_password": "pw!"}))
-    t.desk.raise_alert(kind="dog_sees_person", robot="A", title="狗看见人了")
+    t.desk.raise_alert(kind="dog_sees_person", robot="A", title="机器人看见人了")
     hexs = "ab" * 32
 
     def 日志(unit, hours):
@@ -151,7 +151,7 @@ def test_诊断包_不带密钥令牌库文件_日志打码(台, tmp_path):
     cfg = json.loads(files["site.json"])
     assert cfg["push"]["app_key"] == "***" and cfg["push"]["secret_file"] == "/etc/x"
     assert not any(n.endswith((".db", ".key")) for n in names)
-    assert "狗看见人了" in files["alerts_7d.json"].decode()
+    assert "机器人看见人了" in files["alerts_7d.json"].decode()
 
 
 def test_打码规矩():

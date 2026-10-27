@@ -261,7 +261,7 @@ async def test_外审I2_首条没派成_补派时防区有授权_不派不占狗
     rows = {r["event_id"]: r for r in t.desk.list()}
     assert rows["e2"]["outcome"] == rows["e3"]["outcome"] == "authorized"
     assert "Gardener" in rows["e2"]["note"]
-    assert len(fake.calls) == 1, "补派没再叫狗"
+    assert len(fake.calls) == 1, "补派没再叫机器人"
 
 
 def _旧库(t, tmp_path):

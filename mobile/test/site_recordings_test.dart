@@ -95,7 +95,7 @@ void main() {
     expect(find.textContaining('这段时间没有录像'), findsOneWidget);
   });
 
-  testWidgets('告警现场页：狗的告警有「现场录像」，站点那一行的没有', (t) async {
+  testWidgets('告警现场页：机器人的告警有「现场录像」，站点那一行的没有', (t) async {
     await t.binding.setSurfaceSize(const Size(800, 360));
     addTearDown(() => t.binding.setSurfaceSize(null));
     final api = _api('guard');
@@ -115,7 +115,7 @@ void main() {
     expect(find.byKey(SiteAlertScenePage.videoKey), findsNothing);
   });
 
-  testWidgets('W40：狗报了热像，录像能按热像筛；老狗没有这一格', (t) async {
+  testWidgets('W40：机器人报了热像，录像能按热像筛；老机器人没有这一格', (t) async {
     final view = <String, dynamic>{
       ...siteFixture('site_robot'),
       'capabilities': <String, dynamic>{

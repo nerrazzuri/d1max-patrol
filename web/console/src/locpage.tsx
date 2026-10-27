@@ -34,10 +34,10 @@ export function LocHistoryPage({ robots, now }: { robots: string[]; now: number 
     <section class="locpage" aria-label={L("Localization history", "定位历史")}>
       <div class="panel-head">
         <h1>{L("Localization history", "定位历史")}</h1>
-        <span class="muted small push">{L("Each stretch where a robot said it was not localized or degraded", "狗自己说过「定位丢了 / 变差」的每一段")}</span>
+        <span class="muted small push">{L("Each stretch where a robot said it was not localized or degraded", "机器人自己说过「定位丢了 / 变差」的每一段")}</span>
       </div>
       <div class="filters">
-        <label>{L("Robot", "狗")}
+        <label>{L("Robot", "机器人")}
           <select value={robot} onChange={(e) => setRobot(e.currentTarget.value)}>
             <option value="">{L("All", "全部")}</option>
             {robots.map((r) => <option key={r} value={r}>{r}</option>)}
@@ -61,8 +61,8 @@ export function LocHistoryPage({ robots, now }: { robots: string[]; now: number 
       <table class="grid">
         <thead>
           <tr>
-            <th>{L("Started", "开始")}</th><th>{L("Duration", "时长")}</th><th>{L("Robot", "狗")}</th>
-            <th>{L("Kind", "种类")}</th><th>{L("Where", "地点")}</th><th>{L("Why (robot's words)", "原因(狗的原话)")}</th>
+            <th>{L("Started", "开始")}</th><th>{L("Duration", "时长")}</th><th>{L("Robot", "机器人")}</th>
+            <th>{L("Kind", "种类")}</th><th>{L("Where", "地点")}</th><th>{L("Why (robot's words)", "原因(机器人的原话)")}</th>
             <th>{L("Task", "任务")}</th><th>{L("Ended", "怎么结束的")}</th><th />
           </tr>
         </thead>

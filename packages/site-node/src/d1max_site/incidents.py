@@ -110,7 +110,7 @@ class IncidentDesk:
         # OPEN_INCIDENT_MS。落成失败,写明狗可能已在路上(它的终态事件照样回写 result)。
         with db.tx() as c:
             c.execute("UPDATE incidents SET outcome='dispatch_failed', "
-                      "note='站点重启时还在等回执:狗可能已在路上' WHERE outcome='dispatching'")
+                      "note='站点重启时还在等回执:机器人可能已在路上' WHERE outcome='dispatching'")
 
     # ------------------------------------------------------------ 登记
 
@@ -345,7 +345,7 @@ class IncidentDesk:
             else:
                 best.append((low, 1, 0.0, rid))
         if not best:
-            return None, ";".join(why) or "没有登记的狗"
+            return None, ";".join(why) or "没有登记的机器人"
         return sorted(best)[0][3], ""
 
     def _open_incident_robots(self) -> set[str]:
@@ -476,14 +476,14 @@ class IncidentDesk:
                 self._update(iid, outcome="dispatched", note="已出动")
             else:
                 self._update(iid, outcome="dispatch_failed",
-                             note=f"狗回 {r['ack']['result']}: {r['ack'].get('reason', '')}")
+                             note=f"机器人回 {r['ack']['result']}: {r['ack'].get('reason', '')}")
         except DispatchRefused as exc:
             self._update(iid, outcome="dispatch_failed", note=str(exc))
         except DispatchTimeout:
             self._update(iid, outcome="dispatched", note="回执超时:可能已在路上")
         except asyncio.CancelledError:
             # 站点收尾时取消(IncidentDesk.close):不许一直挂在 dispatching。
-            self._update(iid, outcome="dispatch_failed", note="站点收尾时取消:狗可能已在路上")
+            self._update(iid, outcome="dispatch_failed", note="站点收尾时取消:机器人可能已在路上")
             raise
         except Exception as exc:
             log.exception("事件 %s 派单炸了", row["event_id"])

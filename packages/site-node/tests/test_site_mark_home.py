@@ -142,7 +142,7 @@ def test_同名待命点在别的图上_409_明说替换才搬(站点):
                       default=False)
     code, d = s.req("POST", "/api/robots/A/home/here", {}, token=alice)
     assert code == 409 and d["name_taken"] == {"map_id": "other", "map_version": "9"}, (code, d)
-    assert not s.db.query("SELECT 1 FROM commands WHERE kind='mark_home'"), "没发给狗"
+    assert not s.db.query("SELECT 1 FROM commands WHERE kind='mark_home'"), "没发给机器人"
     [p] = s.stb_list("A")
     assert (p["map_id"], p["x"]) == ("other", 1.0)
     code, d = s.req("POST", "/api/robots/A/home/here", {"replace": True}, token=alice)
@@ -207,7 +207,7 @@ def test_补登记只认这台狗最新那条没被拒的标原点(站点):
     with s.db.tx() as c:
         c.execute("UPDATE commands SET ack_result='expired' WHERE command_id='c4'")
     stb._on_event("A", _标了(s, "mark_home-2", 2.5, 5))
-    assert stb.homes("A")[0]["x"] == 2.5, "3 被拒、4 过期:狗上是 2 那次的"
+    assert stb.homes("A")[0]["x"] == 2.5, "3 被拒、4 过期:机器人上是 2 那次的"
     stb._on_event("A", _标了(s, "mark_home-9", 9.0, 6))
     assert stb.homes("A")[0]["x"] == 2.5, "站点没发过的不认"
 
@@ -244,7 +244,7 @@ def test_W13a_在这儿设待命点_不动原点_老代理不发(站点, monkeyp
     assert code == 200 and d["standby"]["name"] == "gate" and d["standby"]["default"], d
     assert d["ack"]["data"]["target"] == "standby"
     assert s.api.standby.homes("A") == home_before, "站点上的原点不动"
-    assert s.agent.parts.home is agent_home, "狗上的原点不动"
+    assert s.agent.parts.home is agent_home, "机器人上的原点不动"
     assert {p["name"]: p["default"] for p in s.stb_list("A")} == {"dock": False, "gate": True}
     assert s.req("GET", "/api/robots/A/standby/here", token=alice)[0] == 405
     tasks = s.disp.clients["A"].capabilities.tasks
@@ -252,7 +252,7 @@ def test_W13a_在这儿设待命点_不动原点_老代理不发(站点, monkeyp
     code, d = s.req("POST", "/api/robots/A/standby/here", {"name": "x"}, token=alice)
     assert code == 409 and "老代理" in d["error"], d
     assert not s.db.query("SELECT 1 FROM commands WHERE kind='mark_home' AND payload LIKE "
-                          "'%\"x\"%'"), "没发给狗"
+                          "'%\"x\"%'"), "没发给机器人"
 
 
 def test_W13a_回指定的待命点(站点):
@@ -316,7 +316,7 @@ def test_W16_在这儿设拦截点_狗上什么都不改_老代理不发(站点,
     assert (i["name"], i["map_id"], i["map_version"]) == ("gate", caps["map_id"],
                                                            caps["map_version"])
     assert (i["x"], i["y"]) == (d["ack"]["data"]["x"], d["ack"]["data"]["y"])
-    assert s.agent.parts.home is agent_home, "狗上的原点不动"
+    assert s.agent.parts.home is agent_home, "机器人上的原点不动"
     assert s.req("GET", "/api/robots/A/intercept/here", token=alice)[0] == 405
     monkeypatch.setitem(s.disp.clients["A"].capabilities.tasks, "mark_home", {})
     code, d = s.req("POST", "/api/robots/A/intercept/here", {"name": "x"}, token=alice)

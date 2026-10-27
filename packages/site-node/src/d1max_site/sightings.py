@@ -124,7 +124,7 @@ class PersonWatch:
             tx.execute("INSERT INTO person_sightings(robot_id, started_ms, kind) "
                        "VALUES (?,?,'authorized')", (rid, now))
             queue(tx, kind="authorized_person", robot=rid, title=f"授权在场:{who}",
-                  detail=f"狗看见 {p.get('count', 1)} 个人;{who} 的授权"
+                  detail=f"机器人看见 {p.get('count', 1)} 个人;{who} 的授权"
                          + (f"(防区 {zone})" if zone else "(全站)") + "生效中,不报 P1",
                   context={"task_id": "persons", "authorized": who,
                            **({"zone": zone} if zone else {})}, now_ms=now)
@@ -135,7 +135,7 @@ class PersonWatch:
         补报;跟这一回的记录在同一个事务里改成 'p1'(报不出去的 pending 下一拍 flush 再报)。"""
         n = p.get("count", 1)
         near = p.get("nearest_m")
-        title = f"狗看见人了:{n} 个人" + (f",最近 {near} m" if near is not None else "")
+        title = f"机器人看见人了:{n} 个人" + (f",最近 {near} m" if near is not None else "")
         if lapsed:
             title += "(授权已不适用)"
         c = self.dispatcher.clients.get(rid)
@@ -149,6 +149,6 @@ class PersonWatch:
             tx.execute("INSERT INTO person_sightings(robot_id, started_ms, kind) VALUES (?,?,'p1') "
                        "ON CONFLICT(robot_id) DO UPDATE SET kind='p1'", (rid, now))
             queue(tx, kind="dog_sees_person", robot=rid, title=title,
-                  detail="布防中,狗不在驱离;看现场照片,要驱离就点「就地驱离」",
+                  detail="布防中,机器人不在驱离;看现场照片,要驱离就点「就地驱离」",
                   context=context, now_ms=now)
         log.info("%s 看见人了(布防中):%s", rid, title)

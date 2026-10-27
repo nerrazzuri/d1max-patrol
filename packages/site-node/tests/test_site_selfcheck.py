@@ -69,7 +69,7 @@ def test_装对了_没有FAIL没有WARN(装好的):
     assert [c for c in checks if c.level != "PASS"] == [], sc.render(checks)
     assert sc.render(checks).endswith("FAIL 0 条,WARN 0 条:能用了")
     names = set(_by(checks))
-    assert {"站点身份", "站点证书", "管理员", "备份", "推送", "读日志", "狗连的端口", "探活",
+    assert {"站点身份", "站点证书", "管理员", "备份", "推送", "读日志", "机器人连的端口", "探活",
             "对时服务", "盘", "服务 d1max-site", "服务 d1max-mosquitto", "发行公钥"} <= names
 
 
@@ -100,7 +100,7 @@ def test_探活_不通_回503_端口没开_都是FAIL(装好的):
     by = _by(_check(装好的, healthz=lambda p, ca: (200, {"ok": False})))
     assert by["探活"].level == "FAIL"
     by = _by(_check(装好的, tcp=lambda h, p: "refused"))
-    assert by["狗连的端口"].level == "FAIL" and "8883" in by["狗连的端口"].detail
+    assert by["机器人连的端口"].level == "FAIL" and "8883" in by["机器人连的端口"].detail
 
 
 def test_证书_过期FAIL_快到期WARN_没有FAIL(装好的):

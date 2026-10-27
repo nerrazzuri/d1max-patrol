@@ -145,7 +145,7 @@ class _SiteRobotPageState extends State<SiteRobotPage> {
   Future<void> _relocalize() async {
     final how = await showDialog<String>(
       context: context,
-      builder: (c) => SimpleDialog(title: Text(tr('Where is the robot now', '狗现在在哪')), children: [
+      builder: (c) => SimpleDialog(title: Text(tr('Where is the robot now', '机器人现在在哪')), children: [
         SimpleDialogOption(
             key: const Key('reloc-home'),
             onPressed: () => Navigator.pop(c, 'home'),
@@ -158,7 +158,7 @@ class _SiteRobotPageState extends State<SiteRobotPage> {
           SimpleDialogOption(
               key: const Key('reloc-find'),
               onPressed: () => Navigator.pop(c, 'find'),
-              child: Text(tr('Let it find itself (match the walls it sees)', '让狗自己找（拿看到的墙去套地图）'))),
+              child: Text(tr('Let it find itself (match the walls it sees)', '让机器人自己找（拿看到的墙去套地图）'))),
       ]),
     );
     if (how == null || !mounted) return;
@@ -172,11 +172,11 @@ class _SiteRobotPageState extends State<SiteRobotPage> {
       final sure = await showDialog<bool>(
         context: context,
         builder: (c) => AlertDialog(
-          title: Text(tr('Is the robot at the origin now?', '狗现在就在原点？')),
+          title: Text(tr('Is the robot at the origin now?', '机器人现在就在原点？')),
           content: Text(tr(
               'It must stand on the origin (dock), facing the same way as when the origin was marked. '
                   'If it is anywhere else, the robot will navigate from the wrong position.',
-              '要站在原点（充电桩）上、朝向跟标原点时一样。站在别处点了，狗会按错的位置走。')),
+              '要站在原点（充电桩）上、朝向跟标原点时一样。站在别处点了，机器人会按错的位置走。')),
           actions: [
             TextButton(onPressed: () => Navigator.pop(c, false), child: Text(tr('Cancel', '算了'))),
             FilledButton(
@@ -191,7 +191,7 @@ class _SiteRobotPageState extends State<SiteRobotPage> {
       return;
     }
     final got = await showFieldsDialog(context,
-        title: tr('Where is the robot on the map', '狗现在在地图上哪儿'),
+        title: tr('Where is the robot on the map', '机器人现在在地图上哪儿'),
         fields: [
           DialogField(tr('x (m)', 'x（米）'), key: const Key('reloc-x')),
           DialogField(tr('y (m)', 'y（米）'), key: const Key('reloc-y')),
@@ -229,7 +229,7 @@ class _SiteRobotPageState extends State<SiteRobotPage> {
                 'error is large, or while it is running a task or switching maps.',
             '把 ${widget.robotId} 在这张图上的原点（安全返航、回充用，名字叫 home）换成它现在的'
                 '位置？待命点不动（这张图上还没有待命点的话，顺手建一个默认的）。\n'
-                '狗会先核定位：没设位置、偏差大就不标；在跑任务、在换图也不标。')),
+                '机器人会先核定位：没设位置、偏差大就不标；在跑任务、在换图也不标。')),
         actions: [
           TextButton(onPressed: () => Navigator.pop(c, false), child: Text(tr('Cancel', '算了'))),
           FilledButton(
@@ -257,7 +257,7 @@ class _SiteRobotPageState extends State<SiteRobotPage> {
             content: Text(tr(
                 'Standby point home is registered on $where. Move it to the map the robot is using now '
                     '(it is removed from $where)?',
-                '待命点 home 现在登记在 $where 上。换到狗现在用的这张图上（$where 上就没有它了）？')),
+                '待命点 home 现在登记在 $where 上。换到机器人现在用的这张图上（$where 上就没有它了）？')),
             actions: [
               TextButton(onPressed: () => Navigator.pop(c, false), child: Text(tr('Cancel', '算了'))),
               FilledButton(
@@ -292,10 +292,10 @@ class _SiteRobotPageState extends State<SiteRobotPage> {
         final at = '${d['map_id']}:${d['map_version']}';
         final x = (d['x'] as num).toStringAsFixed(1), y = (d['y'] as num).toStringAsFixed(1);
         msg = tr("${e.message}: the robot's origin is at ($x, $y) on $at",
-            '${e.message}：狗上的原点在 $at 的 ($x, $y)');
+            '${e.message}：机器人上的原点在 $at 的 ($x, $y)');
       } else if (e.status == 409) {
         // 站点回的是「狗没标:<狗的原因>」：原因照拒收那一套说人话。
-        final why = ackReasonText(e.message.replaceFirst(RegExp(r'^狗没标[:：]'), ''));
+        final why = ackReasonText(e.message.replaceFirst(RegExp(r'^机器人没标[:：]'), ''));
         msg = tr('Not marked: $why', '没标：$why');
       } else {
         msg = e.toString(); // 504「狗可能已经标了」等：照站点说的

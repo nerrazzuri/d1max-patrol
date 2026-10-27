@@ -242,7 +242,7 @@ class ReleaseOps:
             victim = extra.pop(0)
             shutil.rmtree(self.layout.release_dir(victim), ignore_errors=True)
             names.remove(victim)
-            log.info("狗上版本太多,删掉 %s", victim)
+            log.info("机器人上版本太多,删掉 %s", victim)
 
     # ------------------------------------------------------------ 切、退
 

@@ -613,7 +613,7 @@ async def test_halt不排队_先停车再排队去中止任务(台子):
                         1, False)
         other = asyncio.create_task(rt._on_cmd(wrong))
         await asyncio.sleep(0.05)
-        assert len(stops) == 2, "别的狗的主题不认"
+        assert len(stops) == 2, "别的机器人的主题不认"
     await asyncio.gather(t, stale, other)
 
 

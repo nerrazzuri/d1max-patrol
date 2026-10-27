@@ -76,7 +76,7 @@ class ReleaseCatalog:
             try:
                 relsign.verify(raw, Path(self.pubkey))
             except relsign.SignError as exc:
-                raise ReleaseCatalogError(f"{name}:{exc}(狗上也会拒,不登记)") from exc
+                raise ReleaseCatalogError(f"{name}:{exc}(机器人上也会拒,不登记)") from exc
         # 商业化 A7:这一版代理的兼容级别站点配不配得上(太老的发下去会一直重传,太新的站点不认)
         from d1max_contract.compat import SITE_MAX_AGENT_LEVEL, SITE_MIN_AGENT_LEVEL
         lv = raw.get("compat_level", 1)

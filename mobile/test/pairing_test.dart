@@ -26,9 +26,9 @@ void main() {
     expect(b.fingerprint, 'cd' * 32);
   });
 
-  test('狗的开通码、别的二维码：说清楚不是站点的码', () {
+  test('机器人的开通码、别的二维码：说清楚不是站点的码', () {
     expect(() => decodePairing('D1MAX1.abcdef'),
-        throwsA(isA<PairingException>().having((e) => e.message, 'message', contains('狗的开通码'))));
+        throwsA(isA<PairingException>().having((e) => e.message, 'message', contains('机器人的开通码'))));
     expect(() => decodePairing('https://example.com/'),
         throwsA(isA<PairingException>().having((e) => e.message, 'message', contains('不是 Nexus Warden 站点'))));
     expect(() => decodePairing(''), throwsA(isA<PairingException>()));

@@ -87,7 +87,7 @@ def test_跟OpenSSL3互相认(tmp_path):
 
 def test_发布包签名_全程不碰openssl(tmp_path, monkeypatch):
     def 不许(*a, **k):
-        raise AssertionError("狗上的 openssl 不支持 Ed25519:不许调")
+        raise AssertionError("机器人上的 openssl 不支持 Ed25519:不许调")
     monkeypatch.setattr(subprocess, "run", 不许)
     k, pub = tmp_path / "k", tmp_path / "k.pub"
     relsign.keygen(k, pub)

@@ -181,7 +181,7 @@ async def test_狗尾为前开的会话_人眼里的往前是狗尾那头(tmp_pa
     c, r, t = await _会话(tmp_path, "tail")
     await _走(c, r, t, 10, frame=lambda: _帧9(c, vx=0.4))
     o = await r.odometry()
-    assert o.vx < -0.3 and o.x < -0.1, "机身系往后 = 往狗尾那头"
+    assert o.vx < -0.3 and o.x < -0.1, "机身系往后 = 往机器人尾那头"
     assert t.state is TaskState.RUNNING
 
 

@@ -60,7 +60,7 @@ def test_条件齐了_出签好的包和发行记录(world, capsys):
     pkgs = [p for p in out.iterdir() if p.is_dir()]
     assert len(pkgs) == 1
     assert relsign.check_package(pkgs[0], repo / "deploy/release-pub.pem") == ""
-    assert (pkgs[0] / "deploy/release-pub.pem").is_file(), "公钥要跟着包走,装机时装到狗上"
+    assert (pkgs[0] / "deploy/release-pub.pem").is_file(), "公钥要跟着包走,装机时装到机器人上"
     rec = json.loads((out / f"{pkgs[0].name}.release-record.json").read_text("utf-8"))
     manifest = json.loads((pkgs[0] / "release.json").read_text("utf-8"))
     assert rec["content_sha256"] == manifest["content_sha256"] and rec["version"] == "1.2.3"

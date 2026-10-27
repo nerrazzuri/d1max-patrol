@@ -223,7 +223,7 @@ class SiteScheduler:
         """回执(包括超时之后才到的):狗明确没收,那一行从 started 改成 dispatch_failed。"""
         if ack.result in (AckResult.ACCEPTED, AckResult.DUPLICATE):
             return
-        note = f"狗回 {ack.result.value}: {ack.reason}"
+        note = f"机器人回 {ack.result.value}: {ack.reason}"
         with self.db.tx() as c:
             cur = c.execute("UPDATE OR IGNORE schedule_runs SET outcome='dispatch_failed', "
                             "note=? WHERE task_id=? AND outcome='started'", (note, ack.task_id))
@@ -342,7 +342,7 @@ class SiteScheduler:
                 kinds.add(kind)
             else:
                 ok.append(rid)
-        return ok, taken, ";".join(why) or "没有登记的狗", kinds
+        return ok, taken, ";".join(why) or "没有登记的机器人", kinds
 
     def _site_busy(self) -> set[str]:
         if self.site_busy is None:

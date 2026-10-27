@@ -125,8 +125,8 @@ export function endText(how: string, ongoing: boolean): string {
     case "recovered": return L("recovered", "恢复了");
     case "became_lost": return L("became: not localized", "转成:定位丢了");
     case "became_degraded": return L("became: degraded", "转成:定位变差");
-    case "offline": return L("robot went offline (end time is not the recovery time)", "狗掉线了(结束时刻不是恢复的时刻)");
-    case "no_data": return L("no data from the robot (end time is not the recovery time)", "狗的数据断了(结束时刻不是恢复的时刻)");
+    case "offline": return L("robot went offline (end time is not the recovery time)", "机器人掉线了(结束时刻不是恢复的时刻)");
+    case "no_data": return L("no data from the robot (end time is not the recovery time)", "机器人的数据断了(结束时刻不是恢复的时刻)");
     case "site_restart": return L("site restarted (end time is not the recovery time)", "站点重启了(结束时刻不是恢复的时刻)");
     default: return how || "—";
   }

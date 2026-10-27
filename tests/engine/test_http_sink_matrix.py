@@ -50,7 +50,7 @@ _地址 = "http://console.example:8095"
 )
 
 中文sn的样例 = PutRequest(
-    sn="狗一号",
+    sn="机器人一号",
     run=样例.run,
     rel=样例.rel,
     offset=样例.offset,
@@ -227,7 +227,7 @@ class 故障:
     ),
     故障(
         名字="超时",
-        现场="狗在地下车库,4G 信号弱,30 秒内没等到回应",
+        现场="机器人在地下车库,4G 信号弱,30 秒内没等到回应",
         装opener=lambda: _抛的opener(TimeoutError("timed out")),
         预期="SinkError",
     ),
@@ -286,7 +286,7 @@ class 故障:
     ),
     故障(
         名字="系统调用被信号打断",
-        现场="狗上有别的进程发了信号,socket 的系统调用被 EINTR 打断",
+        现场="机器人上有别的进程发了信号,socket 的系统调用被 EINTR 打断",
         装opener=lambda: _抛的opener(InterruptedError(4, "Interrupted system call")),
         预期="SinkError",
         信息含="发不出去",
@@ -360,7 +360,7 @@ class 故障:
     ),
     故障(
         名字="401口令过期_body完好",
-        现场="口令轮换过没同步到狗上,服务器回 401 并带一句人话",
+        现场="口令轮换过没同步到机器人上,服务器回 401 并带一句人话",
         装opener=lambda: _抛的opener(
             _HTTPError(401, _json({"ok": False, "stored": 0, "sha256": "", "message": "口令不对"}))
         ),

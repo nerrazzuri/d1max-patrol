@@ -258,7 +258,7 @@ class RunViz:
                 if r.task_id:
                     ctx["task_id"] = r.task_id
                 self.alerts.raise_alert(
-                    kind="nav_blocked", robot=rid, title="狗被挡住了,一分钟还没走成",
+                    kind="nav_blocked", robot=rid, title="机器人被挡住了,一分钟还没走成",
                     detail=f"被挡 {(now - b.since_ms) // 1000} 秒:{b.reason or '没说原因'};"
                            "去看看路上是不是有东西,或者遥控把它挪开。能走了这条自己解决",
                     context=ctx)

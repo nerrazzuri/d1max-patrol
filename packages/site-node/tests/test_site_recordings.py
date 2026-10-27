@@ -198,7 +198,7 @@ def test_W18外审_几只狗钟差不同_盘紧按收齐先后删(库):
     s._disk_usage = usage
     assert s.prune() == (0, 1)
     [left] = s.list()
-    assert left["robot_id"] == "B", "先删的是先收齐的那段,不是狗钟最慢的那段"
+    assert left["robot_id"] == "B", "先删的是先收齐的那段,不是机器人钟最慢的那段"
 
 
 def test_W18外审_重传不刷新留存起点(库):

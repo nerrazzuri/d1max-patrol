@@ -53,12 +53,12 @@ class 假派遣:
 
     async def abort(self, rid, task_id, *, issued_by):
         if self.fail:
-            raise RuntimeError("狗不在线")
+            raise RuntimeError("机器人不在线")
         self.aborts.append((rid, task_id))
 
     async def speed_cap(self, rid, cap, *, issued_by):
         if self.fail:
-            raise RuntimeError("狗不在线")
+            raise RuntimeError("机器人不在线")
         self.caps.append((rid, cap.max_speed_mps))
         self.clients[rid].capabilities.tasks["speed_cap"] = (
             {"max_speed_mps": cap.max_speed_mps, "left_s": cap.ttl_s}
@@ -249,7 +249,7 @@ class 假待命:
             raise StandbyError(self.unsafe)
         if self.fail:
             self.fail -= 1
-            raise RuntimeError("狗没就绪")
+            raise RuntimeError("机器人没就绪")
         if self.reject:
             self.reject -= 1
             return {"ack": {"result": "rejected", "reason": "busy"}}
@@ -344,7 +344,7 @@ async def test_W29复查_回不得_意图作废_报没回待命点_不再派(台
     t = 台
     t.desk.standby = stb = 假待命()
     t.desk.alerts = AlertDesk(t.db, now_ms=t.clock)
-    stb.unsafe = "sched-1 只报了 1/3 个点到了,不知道狗停在哪,不回"
+    stb.unsafe = "sched-1 只报了 1/3 个点到了,不知道机器人停在哪,不回"
     t.disp.clients = {"A": _狗("sched-1")}
     t.desk.set_manual("storm", by="gina")
     await t.desk.tick()
@@ -354,7 +354,7 @@ async def test_W29复查_回不得_意图作废_报没回待命点_不再派(台
     assert stb.back == [] and not t.db.query("SELECT 1 FROM weather_returns")
     [a] = t.desk.alerts.open()
     assert a["kind"] == "standby_failed" and a["robot"] == "A"
-    assert "原地等" in a["detail"] and "不知道狗停在哪" in a["detail"]
+    assert "原地等" in a["detail"] and "不知道机器人停在哪" in a["detail"]
     assert a["context"]["task_id"] == "sched-1"
 
 

@@ -57,9 +57,9 @@ typedef _Row = ({String key, String output, String? side, String name});
 String deterReasonText(String r) => switch (r) {
       'busy' => tr('The speaker is playing something more urgent (incident, deterrence). Wait for it to finish',
           '喇叭正在放更要紧的（事件、驱离），等它放完'),
-      'unsupported' => tr('This output is not fitted on the robot', '狗上没接这一路'),
+      'unsupported' => tr('This output is not fitted on the robot', '机器人上没接这一路'),
       _ when r.startsWith('unsupported:') => tr('Not supported by the robot: ${r.substring(12).trim()}',
-          '狗上不支持：${r.substring(12).trim()}'),
+          '机器人上不支持：${r.substring(12).trim()}'),
       _ when r.startsWith('device:') =>
         tr('Device failed: ${r.substring(7).trim()}', '设备没做成：${r.substring(7).trim()}'),
       _ => ackReasonText(r),
@@ -144,7 +144,7 @@ class _SiteDeterPageState extends State<SiteDeterPage> {
               decoration: BoxDecoration(color: c.infoSoft, borderRadius: BorderRadius.circular(Nw.r8)),
               child: Text(_msg, key: SiteDeterPage.msgKey, style: NwText.bodyMedium.copyWith(color: c.text))),
         if (outs.isEmpty)
-          Text(tr('No payload fitted on this robot', '这只狗没接上装'),
+          Text(tr('No payload fitted on this robot', '这台机器人没接上装'),
               style: NwText.bodyLarge.copyWith(color: c.text)),
         for (final r in _rows)
           Padding(
@@ -200,7 +200,7 @@ class _SiteDeterPageState extends State<SiteDeterPage> {
               final narrow = box.maxWidth < 520;
               final name = Text(tr('Speaker: ', '喇叭：'), style: NwText.titleSmall.copyWith(color: c.text));
               final clip = _clips.isEmpty
-                  ? Text(tr('No recorded clips on the robot', '狗上没有录好的话术'),
+                  ? Text(tr('No recorded clips on the robot', '机器人上没有录好的话术'),
                       style: NwText.bodyMedium.copyWith(color: c.textSecondary))
                   : DropdownButton<String>(
                       key: const Key('deter-clip'),
@@ -252,7 +252,7 @@ class _SiteDeterPageState extends State<SiteDeterPage> {
                         maxLength: 300,
                         decoration: InputDecoration(
                             labelText: tr('Type a message (synthesized on the robot, then played)',
-                                '现打一段（狗上合成后放）')))),
+                                '现打一段（机器人上合成后放）')))),
                 const SizedBox(width: Nw.s8),
                 NwButton(
                     buttonKey: const Key('deter-say'),

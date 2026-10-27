@@ -146,7 +146,7 @@ def test_对账_门口画了禁行区_变成走不到_来了入侵不派_删了�
                                 "occurred_at": None, "detail": None})
     assert row["outcome"] == "unreachable" and "拦截点走不到" in row["note"]
     t.desk._publish(row)
-    assert [r["outcome"] for r in told] == ["unreachable"], "照样报「没狗去」"
+    assert [r["outcome"] for r in told] == ["unreachable"], "照样报「没机器人去」"
     t.zones.put("house", "wide", [], base_revision=1, by="alice")
     # 外审 R1(2026-10-15 下午):删禁行区是放宽,确认之前狗照样不过门 —— 拦截点照样走不到
     t.desk.recheck_intercepts()
@@ -212,7 +212,7 @@ async def test_外审2_首单没派成_补派前拦截点已经走不到_并进�
     rows = {r["event_id"]: r for r in t.desk.list()}
     assert rows["e2"]["outcome"] == "unreachable" and rows["e3"]["outcome"] == "unreachable"
     assert "门封了" in rows["e2"]["note"] and rows["e2"]["robot_id"] is None
-    assert sorted(r["event_id"] for r in told) == ["e2", "e3"], "照样报「没狗去」"
+    assert sorted(r["event_id"] for r in told) == ["e2", "e3"], "照样报「没机器人去」"
 
 
 def test_外审3_命令行设拦截点也查_墙里不收_走得到的收(tmp_path):

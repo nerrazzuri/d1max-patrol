@@ -403,7 +403,7 @@ void main() {
     await teardown(t, ctl, dog.stop);
   });
 
-  testWidgets('站点回 401：说重新登录（原因是令牌过期，不是狗坏了）', (WidgetTester t) async {
+  testWidgets('站点回 401：说重新登录（原因是令牌过期，不是机器人坏了）', (WidgetTester t) async {
     final FakeVideoDog dog = FakeVideoDog(status: 401, errorBody: '要登录');
     await t.runAsync(dog.start);
     final StreamController<VideoHealth> ctl = StreamController<VideoHealth>();
@@ -419,7 +419,7 @@ void main() {
     // 第 7 个人的手机要是每 2 秒敲一次、敲到天荒地老，站点还要一直应付它。
     // 屏幕也得说人话:站点说了原因(「已经 6 个人在看了」)就原样给人看。
     final FakeVideoDog dog =
-        FakeVideoDog(status: 503, errorBody: '这台狗已经 6 个人在看了,最多 6 个 —— 关掉一个再开');
+        FakeVideoDog(status: 503, errorBody: '这台机器人已经 6 个人在看了,最多 6 个 —— 关掉一个再开');
     await t.runAsync(dog.start);
     final StreamController<VideoHealth> ctl = StreamController<VideoHealth>();
     await t.pumpWidget(wrap(LiveVideo(
@@ -471,7 +471,7 @@ void main() {
     await teardown(t, ctl, dog.stop);
   });
 
-  testWidgets('接上了就把退避清回 2 秒，别拿着 16 秒去等一条好狗',
+  testWidgets('接上了就把退避清回 2 秒，别拿着 16 秒去等一条好机器人',
       (WidgetTester t) async {
     // **退避不清零的坏法是"恢复之后还在按 16 秒等"。** 一条时好时坏的热点
     // 上，每断一次都把等待翻一倍，而中间明明接上过、画面也出来过 —— 人看到
@@ -500,7 +500,7 @@ void main() {
       decodable += premise.add(_part(dog.boundary, _jpeg)).length;
     }
     expect(decodable, greaterThan(0),
-        reason: '假狗这一条连接上一帧都切不出来的话，下面量的就不是'
+        reason: '假机器人这一条连接上一帧都切不出来的话，下面量的就不是'
             '"接上过之后的退避"，而是"一次都没接上"');
 
     await t.runAsync(dog.start);
@@ -552,7 +552,7 @@ void main() {
     await t.pumpWidget(wrap(LiveVideo(
         baseUrl: dog.baseUrl, camera: 'front', health: second.stream)));
     await pumpUntil(t, () => dog.connections == 0 || dog.dropped.isNotEmpty,
-        '狗那头看见旧连接断掉');
+        '机器人那头看见旧连接断掉');
 
     expect(dog.connections, 0, reason: '旧连接还挂着就是在占 6 个观看名额之一');
     expect(dog.gets, 1, reason: '换的只是健康流，新那条还没说话，不该急着开新连接');

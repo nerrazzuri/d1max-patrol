@@ -190,7 +190,7 @@ async def test_W20外审_合并之后撤防_首单派失败_并进来的都不�
     assert rows["e1"]["outcome"] == "dispatch_failed"
     assert [rows[e]["outcome"] for e in ("e2", "e3")] == ["disarmed", "disarmed"]
     assert "撤防" in rows["e2"]["note"] and rows["e2"]["robot_id"] is None
-    assert not t.desk._open_incident_robots(), "撤防的不占着狗"
+    assert not t.desk._open_incident_robots(), "撤防的不占着机器人"
 
 
 async def test_W20外审_访客撤的是别的防区_首单派失败照样提升(事件台, monkeypatch):

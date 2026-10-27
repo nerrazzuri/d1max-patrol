@@ -310,7 +310,7 @@ def test_halt先收遥控再发_回执超时也已经收了(desk):
     s = k.open("A", _u("gina", "guard"))
 
     async def 超时(robot_id, *, issued_by):
-        raise TimeoutError("狗没回话")
+        raise TimeoutError("机器人没回话")
     d.halt = 超时
     with pytest.raises(TimeoutError):
         k.halt("A", _u("olga", "owner"))
@@ -343,7 +343,7 @@ def test_授予没等到回执_追发放租(desk):
     k, d = desk
 
     async def 超时(robot_id, **kw):
-        raise TimeoutError("狗没回话")
+        raise TimeoutError("机器人没回话")
     d.teleop_grant = 超时
     with pytest.raises(TeleopRefused) as e:
         k.open("A", _u("gina", "guard"))
@@ -428,4 +428,4 @@ def test_硬禁区_老狗不守_开遥控时就告诉手机(desk):
     d.status.task = None                                  # 狗那头上一趟停稳了
     caps.tasks["zones_set"] = {"rev": 1, "enforced": True, "teleop_hard": True}
     s = k.open("A", _u("gina", "guard"))
-    assert s.zone_told is None, "新狗自己守,自己会说"
+    assert s.zone_told is None, "新机器人自己守,自己会说"

@@ -38,13 +38,13 @@ String? teleopZoneText(Map<String, dynamic>? zg) {
     'blocked' => tr('Next to hard no-go zone "$name": the robot will not drive further in. Drive or turn away',
         '再往前会进硬禁区「$name」：不许往那边开，往外开、转开都行'),
     'inside' => tr('At or inside hard no-go zone "$name": only moves that lead out are allowed',
-        '狗在硬禁区「$name」边上或里面：只许往外开'),
+        '机器人在硬禁区「$name」边上或里面：只许往外开'),
     'untrusted' => tr(
         'Position not trusted: hard no-go zones (water, drops) cannot be checked. Speed limited to $v m/s, watch the video',
         '位置不可信：硬禁区（水体、落差）守不了，限速 $v m/s，看着画面开'),
     'unsupported' => tr(
         'This robot\'s software does not keep remote control out of hard no-go zones: watch the video and update the robot',
-        '这台狗的代理太老，遥控时不守硬禁区：看着画面开，升级代理'),
+        '这台机器人的代理太老，遥控时不守硬禁区：看着画面开，升级代理'),
     _ => null,
   };
 }
@@ -52,10 +52,10 @@ String? teleopZoneText(Map<String, dynamic>? zg) {
 /// 结束原因给人看的话。
 String teleopEndText(String reason) => switch (reason) {
       'released' => tr('You released control', '你放开了遥控'),
-      'disconnected' => tr('Remote control connection lost. The robot has stopped', '遥控连接断了，狗已经停下'),
+      'disconnected' => tr('Remote control connection lost. The robot has stopped', '遥控连接断了，机器人已经停下'),
       'taken_over' => tr('An admin took control', '管理员接管了遥控'),
       'halt' => tr('Someone pressed stop', '有人按了停车'),
-      'robot_offline' => tr('The robot went offline', '狗掉线了'),
+      'robot_offline' => tr('The robot went offline', '机器人掉线了'),
       'lease_lost' => tr('The control lease could not be renewed. Remote control ended', '续不上租约，遥控结束'),
       'logged_out' => tr('Your session has expired', '登录过期了'),
       _ => tr('Remote control ended ($reason)', '遥控结束（$reason）'),
@@ -119,7 +119,7 @@ class _SiteTeleopPageState extends State<SiteTeleopPage> with WidgetsBindingObse
         _clearKeys();
         _endLocally(tr(
             'The app went to the background. Remote control ended (robot stopped). Reopen this page to continue',
-            '切到后台了，遥控已结束（狗已停）。要接着开，重新进这一页'));
+            '切到后台了，遥控已结束（机器人已停）。要接着开，重新进这一页'));
     }
   }
 

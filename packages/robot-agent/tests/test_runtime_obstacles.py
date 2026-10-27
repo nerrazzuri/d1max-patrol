@@ -194,7 +194,7 @@ async def test_W41_墙层(tmp_path):
         w.write(encode(_wall(2)))
         await w.drain()
         await asyncio.sleep(0.05)
-        assert view.wall_scan() is None, "攒的时候狗在动:点是糊的,不用"
+        assert view.wall_scan() is None, "攒的时候机器人在动:点是糊的,不用"
         w.close()
     finally:
         await srv.close()

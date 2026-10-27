@@ -171,11 +171,11 @@ class TeleopDesk:
             # 狗可能收到了、可能没有:授予命令的有效期很短,再追一条放租,晚到的授予也起不来。
             self._end_row(row_id, "refused")
             self._release_async(robot_id, epoch)
-            raise TeleopRefused(502, f"狗没回话: {type(exc).__name__}") from exc
+            raise TeleopRefused(502, f"机器人没回话: {type(exc).__name__}") from exc
         ack = r.get("ack", {})
         if ack.get("result") != AckResult.ACCEPTED.value:
             self._end_row(row_id, "refused")
-            raise TeleopRefused(409, f"狗没接遥控: {ack.get('result')} {ack.get('reason', '')}")
+            raise TeleopRefused(409, f"机器人没接遥控: {ack.get('result')} {ack.get('reason', '')}")
         # 开的时候查过画面是有的:之后只在变了的时候告诉手机。
         s = Session(robot_id=robot_id, epoch=epoch, operator=name, max_vx=caps[0],
                     max_wz=caps[1], started_ms=self._now(), row_id=row_id, video_told=True,
@@ -393,7 +393,7 @@ class TeleopDesk:
         except _NoRelease:
             pass
         except Exception:
-            log.warning("放租发不出去(%s 代次 %d),狗那头租约到期自己停", s.robot_id, s.epoch,
+            log.warning("放租发不出去(%s 代次 %d),机器人那头租约到期自己停", s.robot_id, s.epoch,
                         exc_info=True)
         self._tell(s, {"kind": "ended", "reason": reason})
         if s.ws is not None:

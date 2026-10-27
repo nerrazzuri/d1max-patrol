@@ -144,7 +144,7 @@ class VideoPusher:
     def request(self, req: VideoRequest) -> str:
         """收下一条 ``video`` 命令。返回空串 = 收下;否则是拒绝原因。"""
         if req.camera not in self.cameras():
-            return f"unsupported: 这只狗没有 {req.camera} 这路相机"
+            return f"unsupported: 这台机器人没有 {req.camera} 这路相机"
         if req.stop:
             self._stop(req.camera)                    # 站点收流之前说停:安静地停,不报失败
             return ""

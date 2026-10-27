@@ -180,7 +180,7 @@ def test_升级前检查_没登记的版本_也能查_狗按槽里的自述比sc
     code, d = _查(s, alice, other)
     got = {c["name"]: c for c in d["checks"]}
     assert code == 200 and not got["schema"]["ok"] and "schema" in d["blocking"], d
-    assert [c["name"] for c in d["checks"]].count("schema") == 1, "狗报了就不再加站点那一份"
+    assert [c["name"] for c in d["checks"]].count("schema") == 1, "机器人报了就不再加站点那一份"
     code, d = s.req("POST", "/api/robots/A/release", {"action": "activate", "name": other},
                     token=alice)
     assert code == 200 and d["ack"]["reason"] == "schema_mismatch", d
@@ -242,7 +242,7 @@ def test_新版要的任务包schema比站点当前包高_清单不过_切也不
     assert code == 200 and not got["schema"]["ok"] and "schema" in d["blocking"], d
     assert d["ok"] is False
     assert [c["name"] for c in d["checks"]].count("schema") == 1, \
-        "登记过的版本:狗按槽里比过了,站点那一份不再重复"
+        "登记过的版本:机器人按槽里比过了,站点那一份不再重复"
     code, d = s.req("POST", "/api/robots/A/release", {"action": "activate", "name": NAME},
                     token=alice)
     assert code == 409 and "schema" in d["error"], d

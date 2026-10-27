@@ -404,7 +404,7 @@ void main() {
       (<String, dynamic>{'result': 'expired'}, 'expired'),
       (<String, dynamic>{}, '没回执结果'),
     ]) {
-      testWidgets('设位置狗没收下（$why）：不说已设（外审 W39-I3）', (t) async {
+      testWidgets('设位置机器人没收下（$why）：不说已设（外审 W39-I3）', (t) async {
         final api = Rot23Api('admin')..relocalizeAck = ack;
         final c = await pumpTab(t, api);
         await t.tapAt(c.global(2.5, -3.75));

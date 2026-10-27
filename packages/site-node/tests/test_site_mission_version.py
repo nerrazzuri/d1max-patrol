@@ -67,7 +67,7 @@ async def test_没绑版本的任务_不派_不拿狗的版本去补(台):
     await t.run(3)
     with pytest.raises(DispatchRefused, match="没写 map_version") as ei:
         await t.site.patrol("A", _任务(map_version=None), issued_by="alice")
-    assert "第 7 版" not in str(ei.value), "说的是没绑版本,不是拿狗的第 7 版去比"
+    assert "第 7 版" not in str(ei.value), "说的是没绑版本,不是拿机器人的第 7 版去比"
     assert not _patrols(t)
 
 
@@ -78,7 +78,7 @@ async def test_版本对得上照派_命令里是任务自己的版本_狗收下
     assert r["ack"]["result"] == "accepted", r
     [cmd] = _patrols(t)
     assert cmd["payload"]["map_version"] == "7"
-    assert cmd["payload"]["mission"]["map_version"] == "7", "任务里也带着,狗两样都核"
+    assert cmd["payload"]["mission"]["map_version"] == "7", "任务里也带着,机器人两样都核"
 
 
 async def test_站点以为狗是第7版_狗其实换成了第8版_狗拒收(台):

@@ -9,7 +9,7 @@ import 'site_page_test.dart' show FakeApi;
 import 'support/fake_site.dart';
 
 void main() {
-  testWidgets('这台狗在这张图上没有原点（W13a）：说后果，确认了才照样下发', (t) async {
+  testWidgets('这台机器人在这张图上没有原点（W13a）：说后果，确认了才照样下发', (t) async {
     final api = FakeApi('admin')..noHome = true;
     await t.pumpWidget(MaterialApp(home: SiteMapsPage(api: api)));
     await t.pumpAndSettle();
@@ -37,7 +37,7 @@ void main() {
     expect(find.textContaining('在下载、载入'), findsOneWidget);
   });
 
-  testWidgets('管理员点一张图、选狗、下发', (t) async {
+  testWidgets('管理员点一张图、选机器人、下发', (t) async {
     final api = FakeApi('admin');
     await t.pumpWidget(MaterialApp(home: SiteMapsPage(api: api)));
     await t.pumpAndSettle();
@@ -53,7 +53,7 @@ void main() {
     expect(find.textContaining('在下载、载入'), findsOneWidget);
   });
 
-  testWidgets('没报这种能力的狗不列、不显示按钮', (t) async {
+  testWidgets('没报这种能力的机器人不列、不显示按钮', (t) async {
     final api = FakeApi('admin');
     api.robotsOverride = [
       for (final r in (siteFixture('site_robots')['robots'] as List).cast<Map<String, dynamic>>())
@@ -65,7 +65,7 @@ void main() {
     await t.tap(find.byKey(SiteMapsPage.mapKey('estate-1', '8')));
     await t.pumpAndSettle();
     expect(find.byKey(const Key('pick-A')), findsNothing);
-    expect(find.textContaining('没有能换图的狗'), findsOneWidget);
+    expect(find.textContaining('没有能换图的机器人'), findsOneWidget);
     await t.tap(find.byKey(SiteMapsPage.bagKey('A', 'yard-0925')));
     await t.pumpAndSettle();
     expect(find.byKey(SiteMapsPage.versionKey), findsNothing);
@@ -110,7 +110,7 @@ void main() {
     expect(api.calls.where((c) => c.startsWith('map ')), isEmpty);
   });
 
-  testWidgets('单狗页：管理员有录包开始、停止；保安没有', (t) async {
+  testWidgets('单机器人页：管理员有录包开始、停止；保安没有', (t) async {
     final admin = FakeApi('admin');
     await t.pumpWidget(MaterialApp(home: SiteRobotPage(api: admin, robotId: 'A')));
     await t.pump();

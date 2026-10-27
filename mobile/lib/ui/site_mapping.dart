@@ -256,7 +256,7 @@ class _SiteMappingTrailPageState extends State<SiteMappingTrailPage> with Widget
   }
 
   String _trailStatus() {
-    if (!_asked) return _err.isNotEmpty ? _err : tr('Asking the robot…', '正在问狗……');
+    if (!_asked) return _err.isNotEmpty ? _err : tr('Asking the robot…', '正在问机器人……');
     final n = tr('${_pts.length} points logged', '已记 ${_pts.length} 个点');
     final span = TrailPainter.span(_pts);
     final size = span == null
@@ -276,7 +276,7 @@ class _SiteMappingTrailPageState extends State<SiteMappingTrailPage> with Widget
       if (_full)
         tr('Point limit reached, no more points are logged: the red dot is the last logged point, '
             'not where the robot is now',
-            '点数到上限了，后面的不再记：红点是记下的最后一点，不是狗现在的位置'),
+            '点数到上限了，后面的不再记：红点是记下的最后一点，不是机器人现在的位置'),
       if (_jumps > 0)
         tr('Odometry jumped $_jumps time(s) (motion controller restart or reset); '
             'the trail was joined at the jumps',
@@ -291,7 +291,7 @@ class _SiteMappingTrailPageState extends State<SiteMappingTrailPage> with Widget
       return _pvStarting
           ? tr('Recording is starting (takes 10–20 s). The image appears once it is up…',
               '开录正在起（要十几秒），起来了就有图……')
-          : tr('Asking the robot…', '正在问狗……');
+          : tr('Asking the robot…', '正在问机器人……');
     }
     final d = _pv;
     final tag = '${d['map_id']}:${d['version']}';
@@ -323,12 +323,12 @@ class _SiteMappingTrailPageState extends State<SiteMappingTrailPage> with Widget
       else if (rec && !_pvDone && _seq > 0 && age > _staleAfterS)
         tr('Preview not updated for ${age.toStringAsFixed(0)} s (the preview process on the robot '
             'may have stopped). Mapping is not affected',
-            '预览 ${age.toStringAsFixed(0)} 秒没更新（狗上的预览进程可能停了），建图不受影响'),
+            '预览 ${age.toStringAsFixed(0)} 秒没更新（机器人上的预览进程可能停了），建图不受影响'),
       if (pvErr.isNotEmpty)
         tr('Preview did not start: $pvErr (mapping is not affected; the map is still built after you stop)',
             '预览没起来：$pvErr（建图不受影响，停下后照样出图）'),
       if (d['too_big'] == true)
-        tr('Image too large, the robot did not send it (previous one below)', '图太大，狗没发（下面是上一张）'),
+        tr('Image too large, the robot did not send it (previous one below)', '图太大，机器人没发（下面是上一张）'),
       if (_err.isNotEmpty)
         _png != null
             ? tr('$_err (the image below is about $_staleS s old)', '$_err（下面是约 $_staleS 秒前的图）')
@@ -368,7 +368,7 @@ class _SiteMappingTrailPageState extends State<SiteMappingTrailPage> with Widget
           child: Text(
               tr('The green dot is where recording started, the red dot is where the robot is now. '
                   'Coordinates are the robot\'s own odometry (a new place has no map yet) and drift over distance.',
-                  '绿点是录包起点，红点是狗现在的位置；坐标是狗自己的里程（新地方还没有图），走远了会有些漂。'),
+                  '绿点是录包起点，红点是机器人现在的位置；坐标是机器人自己的里程（新地方还没有图），走远了会有些漂。'),
               style: NwText.bodySmall.copyWith(color: Nw.of(context).textSecondary)),
         ),
         Expanded(
@@ -440,7 +440,7 @@ class _SiteMappingTrailPageState extends State<SiteMappingTrailPage> with Widget
             tr('The blue line is the path covered, the green dot is the start, the red arrow is the '
                 'robot\'s position and heading. This is a preview during live mapping: its coordinates '
                 'do not match the built map. View the built map on the Maps page after you stop.',
-                '蓝线是走过的路，绿点是起点，红箭头是狗现在的位置和朝向。这是边走边建时的预览：'
+                '蓝线是走过的路，绿点是起点，红箭头是机器人现在的位置和朝向。这是边走边建时的预览：'
                 '坐标跟建好的图不通用，建好的图停下后在地图页看。'),
             style: NwText.bodySmall.copyWith(color: Nw.of(context).textSecondary)),
       ]),
@@ -772,7 +772,7 @@ class _SiteMapPreviewPageState extends State<SiteMapPreviewPage> {
         [..._zoneList, zone],
         (auto) => auto
             ? tr('Saved: revision $next (only tightens: stays confirmed, robots can still be sent out)',
-                '存好了：第 $next 版（只收紧：不用重新确认，照常派狗）')
+                '存好了：第 $next 版（只收紧：不用重新确认，照常派机器人）')
             : tr('Saved: revision $next (changes must be confirmed again)',
                 '存好了：第 $next 版（改过要重新确认）'));
   }
@@ -803,7 +803,7 @@ class _SiteMapPreviewPageState extends State<SiteMapPreviewPage> {
               content: Text(tr(
                   '${_zones?['confirm_text'] ?? ''}.\nThe map can be sent to robots only after you confirm.'
                       '${prop == null ? '' : '\nCopied from version ${prop['from_version']}: adopting the $picked ticked item(s) of $offered; the rest are dropped.'}',
-                  '${_zones?['confirm_text'] ?? ''}。\n确认之后这张图才能下发给狗。'
+                  '${_zones?['confirm_text'] ?? ''}。\n确认之后这张图才能下发给机器人。'
                       '${prop == null ? '' : '\n从第 ${prop['from_version']} 版带过来的 $offered 个里，采纳勾上的 $picked 个，没勾的不要了。'}')),
               actions: [
                 TextButton(
@@ -1028,7 +1028,7 @@ class _SiteMapPreviewPageState extends State<SiteMapPreviewPage> {
                 if (geo.seen)
                   Text(
                       tr('Faint floor: seen through doors or glass, not mapped for the robot (it never goes there)',
-                          '淡淡的地面：从门口、玻璃看到过，狗没走过（狗不去）'),
+                          '淡淡的地面：从门口、玻璃看到过，机器人没走过（机器人不去）'),
                       style: NwText.bodySmall.copyWith(color: Nw.of(context).textSecondary)),
                 const Divider(),
                 for (final p in homes)
@@ -1148,7 +1148,7 @@ class _SiteMapPreviewPageState extends State<SiteMapPreviewPage> {
                 key: SiteMapPreviewPage.deleteKey('${z['id']}'),
                 icon: const Icon(Icons.delete_outline),
                 tooltip: tr('Delete (relaxes limits: applied only when the robot is idle)',
-                    '删掉（放宽：狗空闲时才换上）'),
+                    '删掉（放宽：机器人空闲时才换上）'),
                 onPressed: _busy
                     ? null
                     : () {
@@ -1185,17 +1185,17 @@ class _SiteMapPreviewPageState extends State<SiteMapPreviewPage> {
         Text(
             tr('Adding or enlarging a zone, a lower limit or the hard mark takes effect at once. Deleting, '
                 'shrinking or raising a limit must be confirmed again before robots are sent out.',
-                '加禁行区、放大、调低限速、标硬禁区当场生效；删、缩、调高限速要重新确认才派狗。'),
+                '加禁行区、放大、调低限速、标硬禁区当场生效；删、缩、调高限速要重新确认才派机器人。'),
             style: NwText.bodySmall.copyWith(color: Nw.of(context).textSecondary)),
         Text(
             tr('Virtual wall: tap along the line (2 points or more). Robots do not cross it; it is stored as a '
                 '0.3 m wide no-go strip and follows the same rules as a no-go zone.',
-                '虚拟墙：沿着墙点（两个点以上）。狗不会穿过；存成 0.3 米宽的禁行带，规则跟禁行区一样。'),
+                '虚拟墙：沿着墙点（两个点以上）。机器人不会穿过；存成 0.3 米宽的禁行带，规则跟禁行区一样。'),
             style: NwText.bodySmall.copyWith(color: Nw.of(context).textSecondary)),
         Text(
             tr('Erase a region: robots never go there (like a no-go zone) and every map shows it as removed '
                 '(junk, glass reflections, places robots must not go).',
-                '抹掉一块：狗永远不去（跟禁行区一样），所有地图上都显示成抹掉了（建图时的杂物、玻璃反射、狗不该去的地方）。'),
+                '抹掉一块：机器人永远不去（跟禁行区一样），所有地图上都显示成抹掉了（建图时的杂物、玻璃反射、机器人不该去的地方）。'),
             style: NwText.bodySmall.copyWith(color: Nw.of(context).textSecondary)),
         if (!confirmed || prop != null) ...[
           Text('${_zones!['confirm_text'] ?? ''}',

@@ -295,7 +295,7 @@ async def test_外审2_真代理_出不了桩_排着的入侵任务不许起跑_
         failed = [e for e in ears.by["event"] if e["kind"] == "task_failed"
                   and e["data"]["task_id"] == "g1"]
         assert failed and "on_dock" in failed[0]["data"]["reason"], "排着的入侵任务不许起跑"
-        assert abs(dog.x) < 0.01, "狗没动"
+        assert abs(dog.x) < 0.01, "机器人没动"
         assert "hazard" in ears.by["capabilities"][-1]["tasks"]["dock"]
         await rt._on_cmd(_cmd("goto", {"target": target}, "g1b", c, priority=80))
         await broker.drain()

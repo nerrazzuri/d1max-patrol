@@ -192,7 +192,7 @@ def test_硬禁区_遥控开不进去_手机知道为什么(tmp_path):
         assert s.disp.clients["A"].capabilities.tasks["zones_set"]["teleop_hard"] is True
         ph = 手机(s, tok)
         g = ph.wait_kind("granted")
-        assert "zone_guard" not in g, "新狗自己守,开场不用提醒"
+        assert "zone_guard" not in g, "新机器人自己守,开场不用提醒"
         _推(ph, 0.5, seconds=5.0)
         o = _odom(s)
         assert o.x + 0.465 < 1.5 and o.x > 0.3, f"停在池边(机头 {o.x + 0.465:.2f})"
@@ -231,7 +231,7 @@ def test_站点到狗的帧断了_狗在帧有效期里自己停(站点):
     t0 = time.monotonic()
     _推(ph, 0.4, seconds=0.2)
     assert _等(lambda: _停了(s), timeout=3)
-    assert time.monotonic() - t0 < 1.0, "帧有效期 300 ms,狗要自己停"
+    assert time.monotonic() - t0 < 1.0, "帧有效期 300 ms,机器人要自己停"
     assert s.teleop.active("A") is not None, "租约还在:停下来的原因只能是帧有效期"
     ph.close()
 
@@ -315,7 +315,7 @@ def test_halt不走遥控连接_业主也能按_遥控跟着结束(站点):
         evs = s.req("GET", "/api/robots/A", token=tok)[1]["events"]
         return any(e["kind"] == "task_aborted" and (e.get("data") or {}).get("reason") == "halt"
                    for e in evs)
-    assert _等(_狗说是halt停的, timeout=5), "狗那头要是 halt 中止的遥控,不是放租结束的"
+    assert _等(_狗说是halt停的, timeout=5), "机器人那头要是 halt 中止的遥控,不是放租结束的"
     ph.close()
 
 
@@ -408,7 +408,7 @@ def test_halt接到了狗的停车上(站点):
         s.loop.call(s.agent.processor.halt_hook, timeout_s=5)
     finally:
         s.dog.stop = real
-    assert stops, "halt 要停到狗"
+    assert stops, "halt 要停到机器人"
 
 
 def test_授予命令的有效期很短_halt回执超时回504(站点):
@@ -429,7 +429,7 @@ def test_授予命令的有效期很短_halt回执超时回504(站点):
     ph.close()
 
     async def 超时(robot_id, **kw):
-        raise TimeoutError("狗没回话")
+        raise TimeoutError("机器人没回话")
     s.disp.halt = 超时
     code, d = s.req("POST", "/api/robots/A/halt", {}, token=tok)
     assert code == 504 and "急停" in d["error"], (code, d)

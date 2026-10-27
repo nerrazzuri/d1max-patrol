@@ -110,7 +110,7 @@ def test_robot_view里有running_每项match和依据(站点):
     v = s.disp.robot_view("A")["running"]
     assert v["legacy"] is False and v["problems"] == []
     assert v["zones"]["basis"] == "digest" and v["zones"]["match"] is True
-    assert v["map"]["match"] is None, "狗开机加载的图没有清单(命令行指定的):查不了,不挡"
+    assert v["map"]["match"] is None, "机器人开机加载的图没有清单(命令行指定的):查不了,不挡"
     assert v["mission"] is None
 
 

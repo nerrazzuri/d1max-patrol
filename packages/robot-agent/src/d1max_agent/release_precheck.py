@@ -114,7 +114,7 @@ def precheck(inputs: PrecheckInputs) -> tuple[PrecheckItem, ...]:
     if not i.installed:
         out.append(PrecheckItem("package", False, True, "没装,没得核", "package_corrupt"))
     elif i.skipped:
-        out.append(PrecheckItem("package", False, False, "狗在忙,槽里的包没核(空闲时再查)"))
+        out.append(PrecheckItem("package", False, False, "机器人在忙,槽里的包没核(空闲时再查)"))
     else:
         out.append(PrecheckItem("package", not i.package_error, True,
                                 "槽里的包跟自述的指纹对得上" if not i.package_error
@@ -137,7 +137,7 @@ def precheck(inputs: PrecheckInputs) -> tuple[PrecheckItem, ...]:
         if name in got:
             continue
         if i.skipped:
-            out.append(PrecheckItem(name, False, False, f"{label}:狗在忙,没问(空闲时再查)"))
+            out.append(PrecheckItem(name, False, False, f"{label}:机器人在忙,没问(空闲时再查)"))
         else:
             out.append(PrecheckItem(name, True, False,
                                     f"{label}还没部署,这一项现在不查(接上之后不健康就拦)"))

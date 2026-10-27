@@ -81,8 +81,8 @@ def test_去掉硬标记没确认_还按硬的守_同名换个名字(tmp_path):
     z.put("m", "1", [POND], base_revision=1, by="a")             # 同一个 id,不硬了
     eff = z.effective("m", "1")
     assert len(eff.hard()) == 1
-    assert len(_ids(eff)) == len(eff.zones), "id 不能重复(狗会整份拒)"
-    assert ZoneSet.from_wire(eff.to_wire()) == eff, "发给狗的要过契约校验"
+    assert len(_ids(eff)) == len(eff.zones), "id 不能重复(机器人会整份拒)"
+    assert ZoneSet.from_wire(eff.to_wire()) == eff, "发给机器人的要过契约校验"
 
 
 def test_调高限速没确认_按低的守(tmp_path):
@@ -112,7 +112,7 @@ def test_确认放宽_修订号加一_在生效的变成草稿(tmp_path):
     before = z.effective("m", "1")
     z.confirm("m", "1", revision=2, by="admin")
     cur = z.current("m", "1")
-    assert cur.revision == 3 and cur.zones == (), "内容变了要新修订号,狗只认更高的"
+    assert cur.revision == 3 and cur.zones == (), "内容变了要新修订号,机器人只认更高的"
     assert z.confirmed_current("m", "1")
     assert z.effective("m", "1") == cur and cur.revision > before.revision
 
@@ -133,7 +133,7 @@ def test_到期了的临时区_站点删的时候确认过的底里一起删_出
     before = z.effective("m", "1")
     assert len(before.hard()) == 2
     t[0] = 6000
-    assert z.effective("m", "1") == before, "同一个修订号内容不能自己变(狗不收、摘要对不上)"
+    assert z.effective("m", "1") == before, "同一个修订号内容不能自己变(机器人不收、摘要对不上)"
     assert [x.map_version for x in z.expire()] == ["1"], "到期由站点删:确认过的那一份里的也删"
     eff = z.effective("m", "1")
     assert eff.revision == before.revision + 1
@@ -178,8 +178,8 @@ def test_接口_删硬禁区没确认_狗上还守着_确认之后才没(站点)
     code, d = s.req("POST", ZP, {"zones": [], "base_revision": 1}, token=alice)
     assert code == 200 and d["auto_confirmed"] is False, d
     _等(lambda: _rev(s) == 2, timeout=8)
-    assert len(s.agent._hard_zones()) == 1, "没确认的删除不能到狗上"
-    assert len(s.agent.zonebook.get(*MAP).hard()) == 1, "落盘的也还有(狗重启照样守)"
+    assert len(s.agent._hard_zones()) == 1, "没确认的删除不能到机器人上"
+    assert len(s.agent.zonebook.get(*MAP).hard()) == 1, "落盘的也还有(机器人重启照样守)"
     # 补发也按在生效的那一份
     assert len(s.disp.zones.effective(*MAP).hard()) == 1
     code, d = s.req("POST", ZP + "/confirm", {"revision": 2, "confirm": True, "empty_ok": True},

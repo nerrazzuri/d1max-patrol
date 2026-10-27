@@ -371,7 +371,7 @@ async def test_别的狗的镜像盘也拦得住(tmp_path, sample_mission, fake_
     r = await _run(fake_nav, fake_device, sample_mission, tmp_path,
                    removable=disks, robot_sn="D1MAX-0001")
     assert [c.name for c in r.failures] == ["removable"]
-    assert "别的狗" in r.failures[0].detail
+    assert "别的机器人" in r.failures[0].detail
     assert "D1MAX-0002" in r.failures[0].detail, "得说清是哪块盘"
 
 

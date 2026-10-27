@@ -73,13 +73,13 @@ void main() {
     expect(find.text('gate'), findsOneWidget);
   });
 
-  testWidgets('狗不支持只标待命点（老代理）：没有「在这儿设」', (t) async {
+  testWidgets('机器人不支持只标待命点（老代理）：没有「在这儿设」', (t) async {
     await _open(t, _api('admin'), canMarkHere: false);
     expect(find.byKey(SiteStandbyPage.hereKey), findsNothing);
   });
 
-  testWidgets('狗拒了：说原因', (t) async {
-    final api = _api('admin')..standbyError = SiteError(409, '狗没标:moving');
+  testWidgets('机器人拒了：说原因', (t) async {
+    final api = _api('admin')..standbyError = SiteError(409, '机器人没标:moving');
     await _open(t, api);
     await t.tap(find.byKey(SiteStandbyPage.hereKey));
     await t.pumpAndSettle();
@@ -105,7 +105,7 @@ void main() {
     expect(find.text('gate'), findsNothing);
   });
 
-  testWidgets('单狗页有「待命点…」，点进去是这一页', (t) async {
+  testWidgets('单机器人页有「待命点…」，点进去是这一页', (t) async {
     await t.binding.setSurfaceSize(const Size(800, 360));
     addTearDown(() => t.binding.setSurfaceSize(null));
     final api = _api('guard');

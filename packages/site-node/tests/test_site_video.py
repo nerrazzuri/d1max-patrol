@@ -100,7 +100,7 @@ def test_两个观众只起一路_都走了之后站点收掉_狗也在有效期
     try:
         assert len(a.jpegs(2)) == 2 and len(b.jpegs(2)) == 2
         assert s.hub.feed("A", "front").starts == 1
-        assert s.pusher.starts == 1, "狗那头只推一份"
+        assert s.pusher.starts == 1, "机器人那头只推一份"
     finally:
         a.close()
         b.close()
@@ -155,7 +155,7 @@ def test_狗报推流失败_观众立刻拿到原因(tmp_path):
         _新鲜(s, tok)
         t0 = time.monotonic()
         code, d = s.req("GET", "/api/robots/A/video/front", token=tok)
-        assert code == 502 and "狗推流失败" in d["error"], d
+        assert code == 502 and "机器人推流失败" in d["error"], d
         assert time.monotonic() - t0 < 15, "不用干等第一帧超时"
     finally:
         s.close()
@@ -269,7 +269,7 @@ def test_第一帧超时_这一路收掉_下一个观众重新起(tmp_path):
         _新鲜(s, tok)
         assert s.req("GET", "/api/robots/A/video/front", token=tok)[0] == 504
         f = s.hub.feed("A", "front")
-        assert not f._running, "起不来的那一路不许留着,狗上的推流也不许一直被续"
+        assert not f._running, "起不来的那一路不许留着,机器人上的推流也不许一直被续"
         assert s.req("GET", "/api/robots/A/video/front", token=tok)[0] == 504
         assert f.starts == 2
     finally:
@@ -297,14 +297,14 @@ def test_续期偶尔失败一次不断画面(站点):
             calls.append(time.monotonic())
             if once["left"]:
                 once["left"] -= 1
-                return "等狗的回执超时"
+                return "等机器人的回执超时"
             return real(rid, req, **kw)
         s.hub._send = 抖一下
         t0 = time.monotonic()
         while time.monotonic() - t0 < 3.0:
             assert v.jpegs(1), "续期失败一次就把正在出画面的流收掉了"
         assert once["left"] == 0
-        assert calls[1] - calls[0] < 0.3, "续期没成要马上再续,不等满一轮(那样会跟狗那头有效期抢)"
+        assert calls[1] - calls[0] < 0.3, "续期没成要马上再续,不等满一轮(那样会跟机器人那头有效期抢)"
     finally:
         v.close()
 

@@ -35,9 +35,9 @@ def test_狗上补封旧照片_传上来_站点解开登记_跟原来一样_没�
     want = _照片(run)
     assert box.seal_leftovers(钥匙.sealer, lambda rel: rel.startswith("photos/")) == 2
     assert sorted(p.name for p in (run / "photos").iterdir()) == sorted(
-        n + ".d1e" for n in want), "狗上只剩封好的"
+        n + ".d1e" for n in want), "机器人上只剩封好的"
     _跑(box, 3)
-    assert not run.exists(), "站点确认了:狗上不留"
+    assert not run.exists(), "站点确认了:机器人上不留"
     got = 站点.store.run_dir("A", "巡检一", STAMP)
     assert _照片(got) == want, "站点解开成原名、原样"
     rows = 站点.store.runs(robot_id="A")
@@ -69,7 +69,7 @@ def test_站点没配私钥_封好的留着报P2_配好了补解(站点, ca, tmp
     want = _照片(run)
     box.seal_leftovers(钥匙.sealer, lambda rel: rel.startswith("photos/"))
     _跑(box, 3)
-    assert not run.exists(), "站点照样确认:狗那份删了,站点这份是唯一的"
+    assert not run.exists(), "站点照样确认:机器人那份删了,站点这份是唯一的"
     d = 站点.store.run_dir("A", "巡检一", STAMP) / "photos"
     assert sorted(p.name for p in d.iterdir()) == sorted(n + ".d1e" for n in want)
     assert len(got_unopened) == 2 and "没配证据私钥" in got_unopened[0][3]
@@ -213,7 +213,7 @@ def test_外审1_补封失败_明文扣着不传_这一趟不删_修好了重封
     s.broken = False
     clock[0] += 60_000
     _跑(box, 3)
-    assert not box.unsealed and not run.exists(), "补封上了、传完、站点确认、狗上删掉"
+    assert not box.unsealed and not run.exists(), "补封上了、传完、站点确认、机器人上删掉"
     assert _照片(got) == want
     box.close()
 

@@ -127,8 +127,8 @@ CREATE TABLE IF NOT EXISTS standby_points (
     is_default INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (robot_id, name)
 );
--- 原点(W13a,决策 16):安全返航、回充的语义,每台狗每张图的每个版本一个;待命点(上面那张表)是运营调度
--- 的语义,可以多个。站点下发地图时把原点发给狗(``map_activate.home``)。
+-- 原点(W13a,决策 16):安全返航、回充的语义,每台机器人每张图的每个版本一个;待命点(上面那张表)是运营调度
+-- 的语义,可以多个。站点下发地图时把原点发给机器人(``map_activate.home``)。
 CREATE TABLE IF NOT EXISTS homes (
     robot_id     TEXT NOT NULL,
     map_id       TEXT NOT NULL,
@@ -223,7 +223,7 @@ CREATE TABLE IF NOT EXISTS alerts (
     shelved_reason TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS alerts_last ON alerts(last_ms);
--- W21 复查:站点起来时按种类取每台狗最近一条事件(上装故障的全集),不扫整张事件表。
+-- W21 复查:站点起来时按种类取每台机器人最近一条事件(上装故障的全集),不扫整张事件表。
 CREATE INDEX IF NOT EXISTS events_kind ON events(kind, robot_id, received_at);
 CREATE TABLE IF NOT EXISTS teleop_leases (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -237,7 +237,7 @@ CREATE TABLE IF NOT EXISTS teleop_leases (
     takeover_reason TEXT,
     UNIQUE (robot_id, epoch)
 );
--- W00c5d(决策 8):狗传上来的运行记录。文件在 <站点目录>/evidence/<狗>/<任务>/<时刻>/ 下。
+-- W00c5d(决策 8):机器人传上来的运行记录。文件在 <站点目录>/evidence/<机器人>/<任务>/<时刻>/ 下。
 CREATE TABLE IF NOT EXISTS runs (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     robot_id   TEXT NOT NULL,
@@ -339,7 +339,7 @@ CREATE TABLE IF NOT EXISTS zone_arming (
     zone       TEXT PRIMARY KEY,
     home_armed INTEGER NOT NULL
 );
--- W22:正在进行的驱离(一台狗一场)。站点重启接着管;结束就删。
+-- W22:正在进行的驱离(一台机器人一场)。站点重启接着管;结束就删。
 CREATE TABLE IF NOT EXISTS deter_sessions (
     robot_id    TEXT PRIMARY KEY,
     incident_id INTEGER NOT NULL,
@@ -364,13 +364,13 @@ CREATE TABLE IF NOT EXISTS weather (
     auto_detail     TEXT NOT NULL DEFAULT '',
     auto_error      TEXT NOT NULL DEFAULT ''
 );
--- W29 外审:雷暴撤了巡检、要派回待命点的狗(派成了才删;狗在跑别的了就作废)。
+-- W29 外审:雷暴撤了巡检、要派回待命点的机器人(派成了才删;机器人在跑别的了就作废)。
 CREATE TABLE IF NOT EXISTS weather_returns (
     robot_id   TEXT PRIMARY KEY,
     task_id    TEXT NOT NULL,
     created_ms INTEGER NOT NULL
 );
--- W13:每台狗的桩前对准点(桩前约 1.5 m、正对桩)。
+-- W13:每台机器人的桩前对准点(桩前约 1.5 m、正对桩)。
 CREATE TABLE IF NOT EXISTS chargers (
     robot_id    TEXT PRIMARY KEY,
     map_id      TEXT NOT NULL,
@@ -381,7 +381,7 @@ CREATE TABLE IF NOT EXISTS chargers (
     set_ms      INTEGER NOT NULL,
     set_by      TEXT NOT NULL DEFAULT ''
 );
--- W13:每台狗这一轮回充走到哪一步了(goto / dock / resume 被打断 / cooldown 失败或人中止之后歇着)。
+-- W13:每台机器人这一轮回充走到哪一步了(goto / dock / resume 被打断 / cooldown 失败或人中止之后歇着)。
 CREATE TABLE IF NOT EXISTS charge_cycles (
     robot_id   TEXT PRIMARY KEY,
     state      TEXT NOT NULL,
@@ -390,19 +390,19 @@ CREATE TABLE IF NOT EXISTS charge_cycles (
     started_ms INTEGER NOT NULL,
     until_ms   INTEGER
 );
--- W13 外审:狗报「桩上危险」(运动锁住)报过 P1 的(一次挂一次;狗上摘了就删)。
--- W30b(决策 51):狗报证据没封(没装站点公钥)报过 P2 的(装好了删)。
+-- W13 外审:机器人报「桩上危险」(运动锁住)报过 P1 的(一次挂一次;机器人上摘了就删)。
+-- W30b(决策 51):机器人报证据没封(没装站点公钥)报过 P2 的(装好了删)。
 CREATE TABLE IF NOT EXISTS evidence_plain (
     robot_id   TEXT PRIMARY KEY,
     created_ms INTEGER NOT NULL
 );
--- W30b 复查 Minor:这一回「狗上证据封不上」已经报过的狗(人手动解决了、站点重启了都不重报;
--- 狗报件数回到 0 才删)。
+-- W30b 复查 Minor:这一回「机器人上证据封不上」已经报过的机器人(人手动解决了、站点重启了都不重报;
+-- 机器人报件数回到 0 才删)。
 CREATE TABLE IF NOT EXISTS evidence_unsealed (
     robot_id   TEXT PRIMARY KEY,
     created_ms INTEGER NOT NULL
 );
--- W26(决策 52):狗翻倒、被抱起来的这一回(报过 P1 了;狗报回 ok 删)。siren:1 = 布防中被抱起来、
+-- W26(决策 52):机器人翻倒、被抱起来的这一回(报过 P1 了;机器人报回 ok 删)。siren:1 = 布防中被抱起来、
 -- 警笛警灯还没开成(下一拍再发),2 = 开成了(45 秒内这几路归它,驱离不许关),0 = 不响、过点了。
 CREATE TABLE IF NOT EXISTS force_episodes (
     robot_id   TEXT PRIMARY KEY,
@@ -452,7 +452,7 @@ CREATE TABLE IF NOT EXISTS push_sent (
     sent_ms    INTEGER NOT NULL,
     PRIMARY KEY (outbox_id, reg_id)
 );
--- 商业化 A1:指标历史(每 5 分钟一笔,留 30 天):盘、狗在线、开着的告警、狗上待传的、事件循环延迟。
+-- 商业化 A1:指标历史(每 5 分钟一笔,留 30 天):盘、机器人在线、开着的告警、机器人上待传的、事件循环延迟。
 CREATE TABLE IF NOT EXISTS metrics (
     ts    INTEGER NOT NULL,
     key   TEXT NOT NULL,
@@ -482,26 +482,26 @@ CREATE TABLE IF NOT EXISTS authorizations (
     created_by TEXT NOT NULL DEFAULT '',
     created_ms INTEGER NOT NULL
 );
--- 商业化 A4:狗的开通码(一只狗一个;只记令牌的哈希;领过一次就作废)。
+-- 商业化 A4:机器人的开通码(一台机器人一个;只记令牌的哈希;领过一次就作废)。
 CREATE TABLE IF NOT EXISTS enroll_claims (
     robot_id   TEXT PRIMARY KEY,
     token_hash TEXT NOT NULL,
     created_ms INTEGER NOT NULL,
     expires_ms INTEGER NOT NULL,
     used_ms    INTEGER,
-    -- A 阶段外审 I1:出码时这只狗证书的指纹(这一代)。领的时候登记表和读到的证书都得是这一代。
+    -- A 阶段外审 I1:出码时这台机器人证书的指纹(这一代)。领的时候登记表和读到的证书都得是这一代。
     cert_fp    TEXT NOT NULL DEFAULT ''
 );
--- W33(决策 48):布防中狗没在驱离时看见人,这一回报过 P1 了(狗确认人走了删,再看见再报)。
+-- W33(决策 48):布防中机器人没在驱离时看见人,这一回报过 P1 了(机器人确认人走了删,再看见再报)。
 CREATE TABLE IF NOT EXISTS person_sightings (
     robot_id   TEXT PRIMARY KEY,
     started_ms INTEGER NOT NULL,
     -- B 阶段外审 I1:这一回记成了什么。'p1' = 报过 P1;'authorized' = 授权在场只记了 P3
-    -- (授权失效、狗走出授权区、位置说不清了而人还在,要补报一次 P1)。
+    -- (授权失效、机器人走出授权区、位置说不清了而人还在,要补报一次 P1)。
     kind       TEXT NOT NULL DEFAULT 'p1'
 );
--- W33(C40221 真机):只许手动派的狗。站点自己发起的动作(排程、入侵派遣、回充、任务完了自动回待命点)
--- 一律不派;人手动派的照常。新登记的狗默认在这里(管理员确认后才接自动派遣);没有这一行 = 接。
+-- W33(C40221 真机):只许手动派的机器人。站点自己发起的动作(排程、入侵派遣、回充、任务完了自动回待命点)
+-- 一律不派;人手动派的照常。新登记的机器人默认在这里(管理员确认后才接自动派遣);没有这一行 = 接。
 CREATE TABLE IF NOT EXISTS robot_service (
     robot_id TEXT PRIMARY KEY,
     by       TEXT NOT NULL,
@@ -575,7 +575,7 @@ CREATE TABLE IF NOT EXISTS route_store (
     updated_by  TEXT NOT NULL DEFAULT '',
     last_import TEXT NOT NULL DEFAULT ''
 );
--- 运营可视化(库 59):定位丢了 / 变差的每一段(loc_history.py)。有界:每台狗 500 段、全站 5000 段、
+-- 运营可视化(库 59):定位丢了 / 变差的每一段(loc_history.py)。有界:每台机器人 500 段、全站 5000 段、
 -- 90 天。end_ms 空 = 还没结束;end_how:recovered / became_* / offline / no_data / site_restart。
 CREATE TABLE IF NOT EXISTS loc_episodes (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,

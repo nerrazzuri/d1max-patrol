@@ -39,14 +39,14 @@ String checkLabel(String key) => switch (key) {
       'keys' => tr('Keys', '密钥'),
       'backup' => tr('Backup', '备份'),
       'push' => tr('Push notifications', '推送'),
-      'robots' => tr('Robots', '机器狗'),
+      'robots' => tr('Robots', '四足机器人'),
       _ => key,
     };
 
 /// 狗上的代理跟站点配不配。
 String verdictLabel(Object? v) => switch (v) {
       'ok' => tr('OK', '正常'),
-      'agent_too_old' => tr('Robot too old', '狗太老'),
+      'agent_too_old' => tr('Robot too old', '机器人太老'),
       'site_too_old' => tr('Site too old', '站点太老'),
       _ => tr('Unknown', '不清楚'),
     };
@@ -309,9 +309,9 @@ class _SiteHealthPageState extends State<SiteHealthPage> {
         NwGrid(minTile: _versionTile, children: [tile(tr('Site', '站点'), '${site['version'] ?? '?'}')]),
         nwGap16,
       ],
-      Text(tr('Robot software', '狗上的软件'), style: heading),
+      Text(tr('Robot software', '机器人上的软件'), style: heading),
       nwGap8,
-      if (robots.isEmpty) Text(tr('No robots.', '还没有狗。'), style: none),
+      if (robots.isEmpty) Text(tr('No robots.', '还没有机器人。'), style: none),
       NwGrid(minTile: _versionTile, children: [
         for (final r in robots)
           () {

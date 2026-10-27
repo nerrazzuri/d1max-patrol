@@ -107,12 +107,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--hal", choices=("sim", "d1max"), default="sim", help="品牌适配器")
     p.add_argument("--autonomy", choices=("supervised", "autonomous"), default=None,
                    help="自主级别(W00c6i):supervised = goto/巡检只在有人现场监护时才接;"
-                        "默认 --hal d1max 是 supervised、sim 是 autonomous。**真狗改成 autonomous "
+                        "默认 --hal d1max 是 supervised、sim 是 autonomous。**真机器人改成 autonomous "
                         "要等 W11 避障真机验收过了、用户同意**")
     p.add_argument("--localizer", choices=("anchor", "bridge"), default="anchor",
                    help="地图位姿从哪来(W09a):anchor = 里程锚定(人给一次位置);bridge = "
                         "本机定位桥上的定位器(W09b 的 ROS 节点,或 --sim-localizer)。"
-                        "**真狗在 W09b 的定位器验过之前不改**")
+                        "**真机器人在 W09b 的定位器验过之前不改**")
     p.add_argument("--loc-socket", type=Path, default=None,
                    help="本机定位桥的 Unix 套接字(默认 <store-dir>/loc.sock;只给代理这个账号)")
     p.add_argument("--sim-localizer", action="store_true",
@@ -120,11 +120,11 @@ def build_parser() -> argparse.ArgumentParser:
                         "(要 --hal sim --localizer bridge)")
     p.add_argument("--nav", choices=("straight", "planned"), default="straight",
                    help="导航后端(W10):straight = 直线桥(过渡期);planned = 在规划栅格上规划、"
-                        "守禁行区与限速区。**真狗在 W10 真机项验过之前不改**")
+                        "守禁行区与限速区。**真机器人在 W10 真机项验过之前不改**")
     p.add_argument("--obstacles", choices=("none", "bridge"), default="none",
                    help="局部避障(W11):bridge = 本机障碍桥上的感知节点(d1max-obstacles)给局部栅格,"
                         "规划后端每条速度命令先过守卫;要 --nav planned。"
-                        "**真狗在 W11 真机项验过之前不改**")
+                        "**真机器人在 W11 真机项验过之前不改**")
     p.add_argument("--obs-socket", type=Path, default=None,
                    help="本机障碍桥的 Unix 套接字(默认 <store-dir>/obs.sock)")
     p.add_argument("--persons", choices=("none", "bridge"), default="none",
@@ -142,7 +142,7 @@ def build_parser() -> argparse.ArgumentParser:
                     help="上装配置(JSON:relay.port/baud/slave/coils、audio.device/clips_dir/"
                          "tts_command);文件不在就是没装上装,能力全报 false")
     pl.add_argument("--sim-payload", action="store_true",
-                    help="仿真狗装上上装(警灯、警笛、聚光灯、喇叭;演示与测试用)")
+                    help="仿真机器人装上上装(警灯、警笛、聚光灯、喇叭;演示与测试用)")
     rk = p.add_argument_group("RTK(W09e;决策 21:自己的为主、厂家的可选)")
     rk.add_argument("--rtk", choices=("none", "own", "vendor"), default="none",
                     help="none = 不接;own = 我们自己的串口驱动(**要先停厂家的 sixents_gps_driver**,"
@@ -188,22 +188,22 @@ def build_parser() -> argparse.ArgumentParser:
                    help="设备健康(W40)里要查连不连得上的网络设备:名字=主机:端口,逗号隔开"
                         "(上装 V1.2 的路由器 router=192.168.10.1:80)。cameras.json 里的相机自动查")
     v.add_argument("--video-source", choices=("auto", "rtsp", "lavfi"), default="auto",
-                   help="画面与录像从哪来:auto(缺省)真狗拉相机 RTSP、仿真用测试图;"
+                   help="画面与录像从哪来:auto(缺省)真机器人拉相机 RTSP、仿真用测试图;"
                         "rtsp 仿真也拉真相机(不抢控制权验视频、录像);lavfi 测试图")
     v.add_argument("--video-transcode", action="store_true",
                    help="相机不是 H.264 时转成 H.264 再推(默认原样转封装,不占 CPU)")
     v.add_argument("--ffmpeg", default="ffmpeg", help="ffmpeg 可执行文件")
     v.add_argument("--evidence-pub", type=Path, default=Path("/etc/d1max/evidence-pub.key"),
-                   help="站点的证据公钥(W30b):有这个文件就把照片、截图、录像封着存(狗自己解不开);"
+                   help="站点的证据公钥(W30b):有这个文件就把照片、截图、录像封着存(机器人自己解不开);"
                         "没有就照旧明文(站点报 P2)")
     v.add_argument("--force-config", type=Path, default=Path("/etc/d1max/force.json"),
-                   help="异常受力检测的门槛(W26):真狗标定后写这个 JSON(只写要改的项);"
+                   help="异常受力检测的门槛(W26):真机器人标定后写这个 JSON(只写要改的项);"
                         "没有就用缺省(占位)")
     v.add_argument("--record", default="auto",
                    help="连续录像(W18):录哪几路相机,逗号分隔(front,back);none 不录;auto(缺省)"
-                        "真狗录 front,back、仿真不录。要 --outbox:片段从录像发件箱传站点")
+                        "真机器人录 front,back、仿真不录。要 --outbox:片段从录像发件箱传站点")
     v.add_argument("--record-max-gb", type=float, default=30.0,
-                   help="狗上攒着没传的录像最多多少(GB),超了删最旧的并报站点;默认 30")
+                   help="机器人上攒着没传的录像最多多少(GB),超了删最旧的并报站点;默认 30")
     p.add_argument("--registration", type=Path, required=True, help="站点签发的注册文件")
     p.add_argument("--store-dir", type=Path, required=True, help="幂等记录、事件簿、代次落盘的目录")
     p.add_argument("--runs-root", type=Path, default=None,
@@ -223,7 +223,7 @@ def build_parser() -> argparse.ArgumentParser:
     o.add_argument("--mapping", action="store_true",
                    help="开建图(W00c5d 第二部分:站点下 mapping/map_build);要本机有 ROS 2")
     o.add_argument("--intake", default=None,
-                   help="站点的狗专用接收口 https://host:port;"
+                   help="站点的机器人专用接收口 https://host:port;"
                         "mqtts 时默认 https://<broker 主机>:8444")
     p.add_argument("--map", type=_map_arg, required=True, help="已加载地图 <map_id>:<version>")
     p.add_argument("--home", type=_home_arg, default=None,
@@ -338,9 +338,9 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
             host = urlsplit(args.transport).hostname
             args.intake = f"https://{host}:{INTAKE_PORT}"
         if args.intake is not None and not args.intake.startswith("https://"):
-            p.error("--intake 只认 https://(狗的身份是 mTLS 证书)")
+            p.error("--intake 只认 https://(机器人的身份是 mTLS 证书)")
         if args.intake is not None and not all(given):
-            p.error("--intake 要带 --tls-ca、--tls-cert、--tls-key(狗的身份是证书)")
+            p.error("--intake 要带 --tls-ca、--tls-cert、--tls-key(机器人的身份是证书)")
     if args.sim_localizer and (args.hal != "sim" or args.localizer != "bridge"):
         p.error("--sim-localizer 要配 --hal sim --localizer bridge")
     d1max_only = [k for k in D1MAX_DEFAULTS if getattr(args, k) is not None]
@@ -624,7 +624,7 @@ def _sealer(args: argparse.Namespace) -> Any:
         except SealError as exc:
             log.error("证据公钥用不了(照旧明文存):%s", exc)
     else:
-        log.warning("没有证据公钥 %s:照片、截图、录像明文存在狗上(站点会报 P2)", path)
+        log.warning("没有证据公钥 %s:照片、截图、录像明文存在机器人上(站点会报 P2)", path)
     RunArchive.sealer = sealer
     return sealer
 
@@ -787,8 +787,8 @@ def clock_hint(exc: BaseException, *, now_ms: int) -> str:
                 getattr(e, "verify_code", None) in _CERT_TIME_ERRORS
                 or "not yet valid" in str(e) or "has expired" in str(e)):
             now = dt.datetime.fromtimestamp(now_ms / 1000, tz=dt.timezone.utc)
-            return (f"站点证书的有效期对不上:狗的钟可能不对(现在是 {now:%Y-%m-%d %H:%M} UTC)。"
-                    "狗该向站点主机对时(W09d:/etc/d1max/env 填好站点地址后重跑装机脚本,"
+            return (f"站点证书的有效期对不上:机器人的钟可能不对(现在是 {now:%Y-%m-%d %H:%M} UTC)。"
+                    "机器人该向站点主机对时(W09d:/etc/d1max/env 填好站点地址后重跑装机脚本,"
                     "timedatectl timesync-status 看)")
         e = e.__cause__ or e.__context__
     return ""

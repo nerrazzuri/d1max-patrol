@@ -44,7 +44,7 @@ final _t0 = DateTime(2026, 10, 11, 2, 14, 36).millisecondsSinceEpoch;
 Alert _p1({String? ackedBy, int? ackedMs, int? resolvedMs, String level = 'P1'}) =>
     Alert.fromWire(<String, dynamic>{
       'key': 'A/dog_sees_person#1', 'level': level, 'kind': 'dog_sees_person', 'robot': 'A',
-      'title': '狗看见人了:1 个人,最近 6.2 m', 'detail': '布防中', 'count': 1,
+      'title': '机器人看见人了:1 个人,最近 6.2 m', 'detail': '布防中', 'count': 1,
       'first_ms': _t0, 'last_ms': _t0,
       'acked_by': ackedBy ?? '', 'acked_ms': ackedMs, 'resolved_ms': resolvedMs,
       'context': <String, dynamic>{'zone': 'East wall',
@@ -117,11 +117,11 @@ void main() {
     test('tr 按当前语言取；告警标题英文按种类查词条，中文用站点原文，不认识的种类用站点原文', () {
       _english();
       expect(tr('Stop all', '全部急停'), 'Stop all');
-      expect(alertTitle('dog_sees_person', '狗看见人了:2 个人'), 'Person detected');
+      expect(alertTitle('dog_sees_person', '机器人看见人了:2 个人'), 'Person detected');
       expect(alertTitle('from_the_future', '新告警'), '新告警');
       appLang.value = AppLang.zh;
       expect(tr('Stop all', '全部急停'), '全部急停');
-      expect(alertTitle('dog_sees_person', '狗看见人了:2 个人'), '狗看见人了:2 个人');
+      expect(alertTitle('dog_sees_person', '机器人看见人了:2 个人'), '机器人看见人了:2 个人');
       expect(alertTitle('dog_sees_person', ''), isNotEmpty, reason: '站点没给标题：用词条里的中文');
     });
 
@@ -240,12 +240,12 @@ void main() {
       expect(t.widget<TextField>(find.byKey(const Key('site-fp'))).controller!.text, 'ab' * 32);
     });
 
-    testWidgets('扫到的不是站点的码（狗的开通码、别的二维码）：说出来，表单不动', (t) async {
+    testWidgets('扫到的不是站点的码（机器人的开通码、别的二维码）：说出来，表单不动', (t) async {
       var next = 'D1MAX1.abc';
       await open(t, scanner: (_) async => next);
       await t.tap(find.byKey(const Key('site-scan')));
       await t.pumpAndSettle();
-      expect(find.textContaining('狗的开通码'), findsOneWidget);
+      expect(find.textContaining('机器人的开通码'), findsOneWidget);
       expect(find.byKey(const Key('site-check-note')), findsNothing);
       expect(t.widget<TextField>(find.byKey(const Key('site-name'))).controller!.text, '');
       next = 'https://evil.example/login';
@@ -311,7 +311,7 @@ void main() {
       await t.pumpWidget(Container());
     });
 
-    testWidgets('在驱离：说到第几级、接下来多久升级；「开警笛」升到 3 级，狗接受了才写已开、灰掉', (t) async {
+    testWidgets('在驱离：说到第几级、接下来多久升级；「开警笛」升到 3 级，机器人接受了才写已开、灰掉', (t) async {
       final api = FakeApi('guard')..deterRows = [_session()];
       await _alarm(t, api, _p1());
       expect(find.textContaining('最近的人距 A 6.2 米。 驱离第 1 级。'), findsOneWidget);
@@ -394,7 +394,7 @@ void main() {
       await t.pumpWidget(Container());
     });
 
-    testWidgets('全部急停：先问；只对在线的狗发；哪台没停住说出来', (t) async {
+    testWidgets('全部急停：先问；只对在线的机器人发；哪台没停住说出来', (t) async {
       final api = FakeApi('guard');
       await _alarm(t, api, _p1());
       await t.tap(find.byKey(StopAllButton.buttonKey));
@@ -403,7 +403,7 @@ void main() {
       await t.tap(find.byKey(StopAllButton.confirmKey));
       await t.pumpAndSettle();
       expect(api.calls.where((c) => c.startsWith('halt')), ['halt A']);
-      expect(find.text('1 台狗都停了。'), findsOneWidget);
+      expect(find.text('1 台机器人都停了。'), findsOneWidget);
       await t.pumpWidget(Container());
     });
 
@@ -418,7 +418,7 @@ void main() {
   group('告警页：C-B2 外审（警笛等级、旧状态、迟到的回包）', () {
     const siren = SiteAlertScenePage.sirenKey;
 
-    test('警笛的状态：狗接受了才算开着；级别到了只算要求了；没装、说不清各说各的', () {
+    test('警笛的状态：机器人接受了才算开着；级别到了只算要求了；没装、说不清各说各的', () {
       SirenState of(Map<String, dynamic>? d) => SiteAlertScenePageSiren.of(d);
       expect(of(null), SirenState.unknown);
       expect(of(_session(level: 1)), SirenState.off);
@@ -446,7 +446,7 @@ void main() {
       await t.pumpWidget(Container());
     });
 
-    testWidgets('I1 狗没接受开警笛：不写已开，说还没确认，能再试；后来狗接受了才写已开', (t) async {
+    testWidgets('I1 机器人没接受开警笛：不写已开，说还没确认，能再试；后来机器人接受了才写已开', (t) async {
       final api = FakeApi('guard')
         ..deterRows = [_session()]
         ..deterDogRefuses = true;
@@ -456,7 +456,7 @@ void main() {
       expect(find.text('警笛已开'), findsNothing);
       expect(_btn(t, siren), '警笛没确认，再试');
       expect(_enabled(t, siren), isTrue);
-      expect(_text(t, SiteAlertScenePage.msgKey), contains('狗还没确认警笛开了'));
+      expect(_text(t, SiteAlertScenePage.msgKey), contains('机器人还没确认警笛开了'));
       api.deterDogRefuses = false;
       await t.tap(find.byKey(siren));
       await t.pumpAndSettle();
@@ -484,10 +484,10 @@ void main() {
       await t.pumpWidget(Container());
     });
 
-    testWidgets('I1 这台狗没装警笛：按钮说没有、按不了；老站点到了第 3 级也只说没确认', (t) async {
+    testWidgets('I1 这台机器人没装警笛：按钮说没有、按不了；老站点到了第 3 级也只说没确认', (t) async {
       final api = FakeApi('guard')..deterRows = [_session(outputs: ['speaker', 'strobe'])];
       await _alarm(t, api, _p1());
-      expect(_btn(t, siren), '这台狗没有警笛');
+      expect(_btn(t, siren), '这台机器人没有警笛');
       expect(_enabled(t, siren), isFalse);
       await t.pumpWidget(Container());
       final old = FakeApi('guard')..deterRows = [_session(level: 3, auto: false, active: null)];
