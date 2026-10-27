@@ -688,6 +688,10 @@ class Server:
         self.runviz.attach(self.dispatcher)
         self.loc_history = LocHistory(self.db, now_ms=wall_ms)
         self.loc_history.attach(self.dispatcher)
+        # W44:位置轨迹落库(录像页那一刻在哪、地图页多久没巡过)
+        from d1max_site.pose_track import PoseTrack
+        self.pose_track = PoseTrack(self.db)
+        self.pose_track.attach(self.dispatcher)
         # W00c6c:排程这一轮没跑,告诉值守的人。
         self.scheduler.on_outcome = self.alert_sources.on_schedule_outcome
         # W16:入侵有了去向(派出去了、没狗去)、事件源被限流,告诉值守的人。
@@ -908,6 +912,7 @@ class Server:
         self.api.recordings = self.recordings
         self.api.cctv = self.cctv
         self.api.runviz, self.api.loc_history = self.runviz, self.loc_history   # 运营可视化
+        self.api.pose_track = self.pose_track                                    # W44
         self.cctv.on_changed = self.api.drop_cctv_view   # 删了、改了:正在看的旧画面当场关
         self._stop = threading.Event()
         self._chores = threading.Thread(target=self._chore_loop, daemon=True,
@@ -997,6 +1002,9 @@ class Server:
                 # 静默死亡(W00c5a 内部评审)。
                 log.exception("排程没办成的告警记不下来")
 
+    def _pose_track_tick(self) -> None:
+        self.pose_track.tick(wall_ms())
+
     async def _alert_loop(self) -> None:
         """告警:每几秒看一次掉线、让 P1 未确认的升档。一拍炸了记下来、下一拍照走。
 
@@ -1011,6 +1019,7 @@ class Server:
             for what, part, meth in (("告警", "alert_sources", "step"),
                                      ("被挡告警", "runviz", "tick"),             # 运营可视化
                                      ("定位历史", "loc_history", "tick"),
+                                     ("轨迹清过期", "_pose_track_tick", "__call__"),  # W44
                                      ("入侵告警补报", "incidents", "retell"),    # W16 外审
                                      ("看见人", "sightings", "tick"),            # W33
                                      ("受力", "force", "reconcile"),             # W26
