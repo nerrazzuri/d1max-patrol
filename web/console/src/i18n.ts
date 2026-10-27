@@ -844,6 +844,14 @@ const en = {
   upSwitchCharging: "Switch while charging",
   upQueued: "{id} will switch next time it is charging and idle.",
   upUploaded: "Uploaded {name}.",
+  mapsWhen: "When you need this: furniture has moved a lot, or a robot keeps getting lost.",
+  rbTitle: "Rebuild the map, step by step",
+  rbStep1: "Put the robot at the starting point (by its standby point is fine).",
+  rbStep2: "On the phone app, start mapping and drive it slowly around the whole property, every room and path.",
+  rbStep3: "Finish on the phone; the site builds the new map. It appears below as a new version.",
+  rbStep4: "Open the new version: compare it with the old one; its zones, no-go areas, routes and standby points are carried over for you to check one by one.",
+  rbStep5: "Publish it to the robots (enter your password). If anything is wrong, roll back.",
+  rbDone: "Done, next",
 };
 
 type Key = keyof typeof en;
@@ -1687,6 +1695,14 @@ const zh: Partial<Record<Key, string>> = {
   upSwitchCharging: "等充电时换",
   upQueued: "{id} 下次在充电、空闲时换。",
   upUploaded: "已上传 {name}。",
+  mapsWhen: "什么时候用得上：家具挪动很多，或者机器人老是迷路。",
+  rbTitle: "重新建图（按步骤来）",
+  rbStep1: "把机器人放到起点（待命点旁边就行）。",
+  rbStep2: "在手机 App 上开始建图，遥控它慢慢把整个家走一圈，每个房间、每条路都走到。",
+  rbStep3: "在手机上结束建图，站点生成新地图，下面会多出新的一版。",
+  rbStep4: "打开新的一版：跟旧的对比一下；防区、禁行区、路线、待命点会从旧版带过来，一个个核对。",
+  rbStep5: "发布到机器人（再输一次密码）。有问题就退回旧版。",
+  rbDone: "做完了，下一步",
 };
 
 export const DICTS: Record<Lang, Partial<Record<Key, string>>> = { en, zh };

@@ -889,3 +889,12 @@ img.cam-live { width: 100%; max-height: 60vh; object-fit: contain; background: #
 .sys-row.bad b { color: var(--c-error); }
 .up-rel { display: flex; flex-direction: column; gap: 6px; padding: 8px 0; border-bottom: 1px solid var(--c-outline); }
 .up-robot { display: inline-flex; gap: 4px; align-items: center; margin-right: 12px; }
+
+/* W44 第四期:高级 → 地图 */
+.advmaps { display: flex; flex-direction: column; gap: 12px; }
+.advmaps .lead { margin: 0; }
+.rb-steps { margin: 8px 0 0; padding-left: 20px; display: flex; flex-direction: column; gap: 8px; }
+.rb-steps li { color: var(--c-textMuted); }
+.rb-steps li.now { color: var(--c-text); font-weight: 600; }
+.rb-steps li.done { color: var(--c-success); }
+.rb-steps li .btn { margin-left: 8px; }
