@@ -382,13 +382,15 @@ class MapAdmin:
         users = self._in_use().get((map_id, version), [])
         if users:
             who = "、".join(users)
-            raise AdminError(409, f"{map_id}:{version} 还有机器人在用({who}):先让它们换到别的版本再删",
+            raise AdminError(409, f"{map_id}:{version} 还有机器人在用({who}):"
+                                  "先让它们换到别的版本再删",
                              reason="in_use", robots=users)
         if rows[0]["version"] == version:
             raise AdminError(409, f"{map_id}:{version} 是 {map_id} 的最新一版,不能删(删旧的)",
                              reason="latest")
         if (map_id, version) in self._pending_targets():
-            raise AdminError(409, f"有机器人正在换到 {map_id}:{version},等换完再说", reason="pending")
+            raise AdminError(409, f"有机器人正在换到 {map_id}:{version},"
+                                  "等换完再说", reason="pending")
         back = [rid for rid in self.robot_ids()
                 if (t := self.rollback_target(rid)) is not None
                 and (t["map_id"], t["version"]) == (map_id, version)]

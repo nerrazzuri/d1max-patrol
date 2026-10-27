@@ -298,7 +298,8 @@ class SiteAlertSources:
         try:
             if not self.desk.has_open(rid, "loc_lost_idle"):
                 detail = (f"已经 {(now - m.loc_idle_since) // 60_000} 分钟多;"
-                          f"机器人说:{m.loc_reason or '没说为什么'}。到场设位置(手机单机器人页「设位置」),"
+                          f"机器人说:{m.loc_reason or '没说为什么'}。"
+                          "到场设位置(手机单机器人页「设位置」),"
                           "或者查定位器;好了这条自己解决")
                 self.desk.raise_alert(kind="loc_lost_idle", robot=rid,
                                       title="空闲的机器人定位不可信:派不了单", detail=detail[:300])
@@ -383,7 +384,8 @@ class SiteAlertSources:
             self.desk.raise_alert(kind="release_failed", robot=rid,
                                   title=f"新版 {d.get('from', '?')} 一直没坐实,上一版退不回去,"
                                         "机器人留在新版",
-                                  detail=f"开机守卫数了 {d.get('attempts', '?')} 次;看机器人到站点的"
+                                  detail=f"开机守卫数了 {d.get('attempts', '?')} 次;"
+                                         "看机器人到站点的"
                                          "网络、证书、站点地址")
         elif e.kind == "release_rolled_back":
             # 新版起不来,狗上的开机守卫退回了上一版(W00c5d 第三部分内部评审)。

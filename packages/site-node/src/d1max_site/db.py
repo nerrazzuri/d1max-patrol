@@ -127,7 +127,8 @@ CREATE TABLE IF NOT EXISTS standby_points (
     is_default INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (robot_id, name)
 );
--- 原点(W13a,决策 16):安全返航、回充的语义,每台机器人每张图的每个版本一个;待命点(上面那张表)是运营调度
+-- 原点(W13a,决策 16):安全返航、回充的语义,每台机器人每张图的每个版本一个;待命点(上面那张表)
+-- 是运营调度
 -- 的语义,可以多个。站点下发地图时把原点发给机器人(``map_activate.home``)。
 CREATE TABLE IF NOT EXISTS homes (
     robot_id     TEXT NOT NULL,
@@ -381,7 +382,9 @@ CREATE TABLE IF NOT EXISTS chargers (
     set_ms      INTEGER NOT NULL,
     set_by      TEXT NOT NULL DEFAULT ''
 );
--- W13:每台机器人这一轮回充走到哪一步了(goto / dock / resume 被打断 / cooldown 失败或人中止之后歇着)。
+-- W13:每台机器人这一轮回充走到哪一步了(goto / dock / resume 被打断 / cooldown 失败或人中止之后歇着)
+-- 。
+-- 
 CREATE TABLE IF NOT EXISTS charge_cycles (
     robot_id   TEXT PRIMARY KEY,
     state      TEXT NOT NULL,
@@ -402,7 +405,9 @@ CREATE TABLE IF NOT EXISTS evidence_unsealed (
     robot_id   TEXT PRIMARY KEY,
     created_ms INTEGER NOT NULL
 );
--- W26(决策 52):机器人翻倒、被抱起来的这一回(报过 P1 了;机器人报回 ok 删)。siren:1 = 布防中被抱起来、
+-- W26(决策 52):机器人翻倒、被抱起来的这一回(报过 P1 了;机器人报回 ok 删)。siren:
+-- 1 = 布防中被抱起来、
+-- 
 -- 警笛警灯还没开成(下一拍再发),2 = 开成了(45 秒内这几路归它,驱离不许关),0 = 不响、过点了。
 CREATE TABLE IF NOT EXISTS force_episodes (
     robot_id   TEXT PRIMARY KEY,
@@ -452,7 +457,9 @@ CREATE TABLE IF NOT EXISTS push_sent (
     sent_ms    INTEGER NOT NULL,
     PRIMARY KEY (outbox_id, reg_id)
 );
--- 商业化 A1:指标历史(每 5 分钟一笔,留 30 天):盘、机器人在线、开着的告警、机器人上待传的、事件循环延迟。
+-- 商业化 A1:指标历史(每 5 分钟一笔,留 30 天):盘、机器人在线、开着的告警、机器人上待传的、
+-- 事件循环延迟。
+-- 
 CREATE TABLE IF NOT EXISTS metrics (
     ts    INTEGER NOT NULL,
     key   TEXT NOT NULL,
@@ -500,7 +507,9 @@ CREATE TABLE IF NOT EXISTS person_sightings (
     -- (授权失效、机器人走出授权区、位置说不清了而人还在,要补报一次 P1)。
     kind       TEXT NOT NULL DEFAULT 'p1'
 );
--- W33(C40221 真机):只许手动派的机器人。站点自己发起的动作(排程、入侵派遣、回充、任务完了自动回待命点)
+-- W33(C40221 真机):只许手动派的机器人。站点自己发起的动作(排程、入侵派遣、回充、
+-- 任务完了自动回待命点)
+-- 
 -- 一律不派;人手动派的照常。新登记的机器人默认在这里(管理员确认后才接自动派遣);没有这一行 = 接。
 CREATE TABLE IF NOT EXISTS robot_service (
     robot_id TEXT PRIMARY KEY,

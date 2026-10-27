@@ -276,7 +276,8 @@ class ChargeDesk:
                 tx.execute("UPDATE charge_cycles SET state='cooldown', until_ms=? WHERE robot_id=?",
                            (now + COOLDOWN_MS, rid))
                 queue(tx, kind="charge_failed", robot=rid, title=f"自动回充没成:{what}失败",
-                      detail=(why or "看机器人的日志") + ";10 分钟后电量还低会再试,还不行请人去看桩",
+                      detail=(why or "看机器人的日志") + ";10 分钟后电量还低会再试,"
+                                                  "还不行请人去看桩",
                       context={"task_id": cyc["task_id"]}, now_ms=now)
             flush(self.db, self.alerts)
 

@@ -122,7 +122,8 @@ def _rollback(h: Any, adm: MapAdmin, user: Any) -> None:
     h._audit_target = rid
     target = adm.rollback_target(rid)
     if target is None:
-        raise AdminError(409, f"{rid} 没有可以退回的上一版(机器人上没留、命令账里也没有换过别的版本)",
+        raise AdminError(409, f"{rid} 没有可以退回的上一版(机器人上没留、"
+                              "命令账里也没有换过别的版本)",
                          reason="no_previous")
     ref = adm.ref(target["map_id"], target["version"])
     try:
