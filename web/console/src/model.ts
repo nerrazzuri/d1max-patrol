@@ -19,6 +19,10 @@ export interface Alert {
   shelved_ms?: number | null;
   shelved_until_ms?: number | null;
   shelved_reason?: string;
+  /** 给谁看(W44,站点 alert_audience):intrusion / fire / help / offline 给保安,owner 给业主。老站点没有。 */
+  audience?: string;
+  /** 结论(W44):intruder 确认有人 / false_alarm 误报 / handled 处理好了;空 = 没说。 */
+  verdict?: string;
   context?: {
     zone?: string;
     persons?: { count?: number; nearest_m?: number };
@@ -95,6 +99,16 @@ export interface Summary {
 
 export interface Mode {
   mode: "armed" | "home" | "visitor";
+  /** 访客模式到几点(站点 modes.view)。 */
+  until_ms?: number | null;
+}
+
+/** 给保安看的四类(W44,设计 §7)。 */
+export const GUARD_AUDIENCES = new Set(["intrusion", "fire", "help", "offline"]);
+
+/** 这条告警给不给保安看。老站点不报 audience 的一律算给保安(宁可多看)。 */
+export function forGuard(a: Alert): boolean {
+  return a.audience == null || GUARD_AUDIENCES.has(a.audience);
 }
 
 export type RobotState =

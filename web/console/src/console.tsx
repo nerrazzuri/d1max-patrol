@@ -1,58 +1,32 @@
-// 值班台外框(商业化 B1,B0 专业版):顶栏(页签、P1/P2 计数、模式、时钟、语言、Stop all)、页面
-// (Live 视频墙 / Map / Alarms)、Live 以外的页签顶上的全站 P1 条、底部常驻的报警队列。
+// 值班台外框(W44 第一期):外壳(shell.tsx 的顶栏、路由、主题)+ 站点数据 + 各页 + 共用的对话框。
+// 保安五页:值班、实况、地图、录像、报警记录(深色);管理各页(浅色)只有业主进得去。
 import { useEffect, useMemo, useState } from "preact/hooks";
 import { api, ApiError, enc } from "./api";
 import type { Me } from "./app";
 import type { Cam } from "./camera";
 import { hms, isStale, useNow, useSiteData } from "./data";
-import { Confirm, ShelveDialog } from "./dialogs";
-import { alertTitle, lang, t, type Key } from "./i18n";
-import { Icon, Shape } from "./icons";
-import { LangSwitch } from "./langswitch";
-import { AlarmTile, FullCamera, JumpStrip, OfflineStrip, RobotUnit, type UnitInfo } from "./live";
+import { Confirm } from "./dialogs";
+import { lang, t, type Key } from "./i18n";
+import { Shape } from "./icons";
+import { FullCamera, type UnitInfo } from "./live";
 import { LocHistoryPage } from "./locpage";
 import { RecordingsPage } from "./recpage";
 import { ReportsPage } from "./reportpage";
 import { MapPage } from "./mappage";
-import {
-  alarmState,
-  canArm,
-  canDispatch,
-  duration,
-  FELL_KINDS,
-  queue,
-  robotState,
-  SIREN_LEVEL,
-  wallOrder,
-  type Alert,
-  type Mode,
-  robotCams,
-} from "./model";
-import { AlarmQueue } from "./queue";
+import { FELL_KINDS, forGuard, queue, robotCams, robotState, type Alert, type Mode } from "./model";
+import { NoticesPage } from "./notices";
 import { RobotsAdminPage, SystemPage, UsersPage } from "./admin";
 import { MapManagePage } from "./mapmgmt";
 import { RoutesPage } from "./routepage";
 import { ListsPage, MapsZonesPage } from "./zonesadmin";
-
-type Page = "live" | "map" | "alarms" | "recordings" | "localization" | "reports" | "admin/robots" | "admin/zones" | "admin/maps" | "admin/routes" | "admin/users" | "admin/lists" | "admin/system";
-
-const PAGES: Page[] = ["live", "map", "alarms", "recordings", "localization", "reports", "admin/robots", "admin/zones", "admin/maps", "admin/routes", "admin/users", "admin/lists", "admin/system"];
-
-function readRoute(): { page: Page; robot: string | null; at: number | null } {
-  const h = typeof location === "undefined" ? "" : location.hash;
-  const [p, q] = h.replace(/^#\/?/, "").split("?");
-  const robot = new URLSearchParams(q ?? "").get("robot");
-  const at = Number(new URLSearchParams(q ?? "").get("t") ?? "");
-  return { page: (PAGES as string[]).includes(p) ? (p as Page) : "live", robot, at: at > 0 ? at : null };
-}
+import { AdminNav, isAdminPage, loadThemePref, readRoute, saveThemePref, schemeFor, TopBar, type Page, type ThemePref } from "./shell";
+import { pinScheme, systemIsDark } from "./theme";
 
 const TASK: Record<string, Key> = { patrol: "st_patrolling", goto: "st_patrolling", standby: "st_returning" };
 
 type Pending =
   | { kind: "mode"; mode: Mode["mode"] }
   | { kind: "stop" }
-  | { kind: "false"; a: Alert }
-  | { kind: "shelve"; a: Alert }
   | { kind: "cam"; robot: string; cam: Cam }
   | null;
 
@@ -62,7 +36,6 @@ export function Console({ me, onOut }: { me: Me; onOut: () => void }) {
   // B 阶段外审 I5:拿不到新数据时,旧的照显示但标明过期 —— 不能把旧的「在线、没有报警」当成现在
   const stale = isStale(conn, now);
   const [route, setRoute] = useState(readRoute);
-  const [qOpen, setQOpen] = useState(true);
   const [pending, setPending] = useState<Pending>(null);
   const [toast, setToast] = useState("");
   void lang.value; // 换语言整页重画
@@ -72,6 +45,11 @@ export function Console({ me, onOut }: { me: Me; onOut: () => void }) {
     window.addEventListener("hashchange", on);
     return () => window.removeEventListener("hashchange", on);
   }, []);
+  const [pref, setPref] = useState<ThemePref>(loadThemePref);
+  useEffect(() => {
+    pinScheme(schemeFor(route.page, pref, systemIsDark()));
+  }, [route.page, pref]);
+  useEffect(() => () => pinScheme(null), []);
   const go = (page: Page, robot?: string) => {
     location.hash = `#/${page}${robot ? `?robot=${encodeURIComponent(robot)}` : ""}`;
   };
@@ -90,9 +68,9 @@ export function Console({ me, onOut }: { me: Me; onOut: () => void }) {
   };
 
   const alerts = data?.alerts ?? [];
-  const { active, shelved } = queue(alerts, now);
+  const { active } = queue(alerts, now);
+  const guardAlarms = active.filter(forGuard).length;
   const p1 = active.filter((a) => a.level === "P1");
-  const p1Robots = new Set(p1.map((a) => a.robot));
   const fell = new Set(alerts.filter((a) => a.resolved_ms == null && FELL_KINDS.has(a.kind)).map((a) => a.robot));
   const units: UnitInfo[] = useMemo(() => {
     const deter = new Map((data?.deter ?? []).map((d) => [d.robot_id, d]));
@@ -107,8 +85,6 @@ export function Console({ me, onOut }: { me: Me; onOut: () => void }) {
           task: stale ? "" : kind && TASK[kind] ? t(TASK[kind]) : "", stale, deterUnknown };
       });
   }, [data, lang.value, stale]);
-  const { pinned, rest } = wallOrder(units.map((u) => u.robot), p1Robots);
-  const unitOf = (id: string) => units.find((u) => u.robot.robot_id === id)!;
   const online = units.filter((u) => u.state !== "offline");
 
   async function stopAll() {
@@ -122,16 +98,18 @@ export function Console({ me, onOut }: { me: Me; onOut: () => void }) {
   }
 
   const ack = (a: Alert) => act(() => api("POST", `/api/alerts/${enc(a.key)}/ack`, {}));
-  const firstP1 = p1[0];
+  const resolve = (a: Alert, verdict: string) => act(() => api("POST", `/api/alerts/${enc(a.key)}/resolve`, { verdict }));
+  const firstP1 = p1.find(forGuard);
+  const notices = alerts.filter((a) => a.resolved_ms == null && !forGuard(a)).length;
+  const admin = me.role === "admin";
 
-  // 有地图的页(地图、防区)整页一屏:地图只占顶栏和报警队列之间那一块,不被队列盖住(宽屏;窄屏照旧往下滚)
-  // 带地图的页整页一屏(地图撑满顶栏与报警队列之间):地图、防区、巡检路线
+  // 带地图的页整页一屏(地图撑满顶栏以下):地图、防区、巡检路线
   const fill = route.page === "map" || route.page === "admin/zones" || route.page === "admin/routes";
   return (
     <div class={fill ? "console fill" : "console"}>
-      <TopBar me={me} page={route.page} mode={data?.mode ?? null} p1={p1.length} p2={active.length - p1.length} stale={stale}
-        now={now} onPage={go} onMode={(m) => setPending({ kind: "mode", mode: m })}
-        onStop={() => setPending({ kind: "stop" })}
+      <TopBar me={me} page={route.page} mode={data?.mode ?? null} alarms={stale ? null : guardAlarms} now={now}
+        pref={pref} onPref={(p) => { saveThemePref(p); setPref(p); }}
+        onStop={() => setPending({ kind: "stop" })} onSay={say}
         onSignOut={async () => { try { await api("POST", "/api/logout", {}); } finally { onOut(); } }} />
       {stale && (
         <div class="stalebar" role="alert">
@@ -139,56 +117,23 @@ export function Console({ me, onOut }: { me: Me; onOut: () => void }) {
           {conn.okAt ? t("staleBanner", { t: hms(conn.okAt) }) : t("staleNever")}
         </div>
       )}
-      {route.page !== "live" && firstP1 && (
-        <div class={alarmState(firstP1, now) === "unacked" ? "p1bar flash" : "p1bar"} role="alert">
-          <span class="pri"><Shape kind="P1" />P1</span>
-          <span>{alertTitle(lang.value, firstP1.kind, firstP1.title)} · {firstP1.robot}</span>
-          <span class="push strong">{alarmState(firstP1, now) === "unacked" ? t("unackedFor", { d: duration(now - firstP1.first_ms) }) : ""}</span>
-          {alarmState(firstP1, now) === "unacked" && <button type="button" class="btn primary sm" onClick={() => ack(firstP1)}>{t("take")}</button>}
-          <button type="button" class="btn onsolid sm" onClick={() => go("live")}>{t("goToVideo")}</button>
-        </div>
-      )}
 
-      <main class="page" id="main">
-        {route.page === "live" && (
-          <>
-            {units.length > 4 && (
-              <JumpStrip units={[...pinned, ...rest].map((r) => unitOf(r.robot_id))} p1={p1Robots}
-                watching={online.length * 2} total={units.length * 2} />
-            )}
-            {units.length === 0 && data && <p class="empty">{t("noRobots")}</p>}
-            {pinned.map((r) => {
-              const a = p1.find((x) => x.robot === r.robot_id)!;
-              return (
-                <AlarmTile key={a.key} a={a} u={unitOf(r.robot_id)} role={me.role} now={now}
-                  onAck={() => ack(a)}
-                  onSiren={() => act(() => api("POST", `/api/deterrence/${enc(a.robot)}/level`, { level: SIREN_LEVEL }))}
-                  onFalse={() => setPending({ kind: "false", a })}
-                  onMap={() => go("map", a.robot)}
-                  onOpen={(cam) => setPending({ kind: "cam", robot: a.robot, cam })} />
-              );
-            })}
-            <div class="wall">
-              {rest.map((r) => {
-                const u = unitOf(r.robot_id);
-                return u.state === "offline"
-                  ? <OfflineStrip key={r.robot_id} u={u} onMap={() => go("map", r.robot_id)} />
-                  : <RobotUnit key={r.robot_id} u={u} now={now} onMap={() => go("map", r.robot_id)}
-                      onOpen={(cam) => setPending({ kind: "cam", robot: r.robot_id, cam })} />;
-              })}
-            </div>
-          </>
+      <main class="page" id="main" data-page={route.page}>
+        {(route.page === "duty" || route.page === "live" || route.page === "alarms") && <p class="empty">{t("pageSoon")}</p>}
+        {isAdminPage(route.page) && admin && <AdminNav page={route.page} notices={notices} />}
+        {route.page === "admin/notices" && admin && (
+          <NoticesPage alerts={alerts} mode={data?.mode ?? null} onAck={ack} onDone={(a) => resolve(a, "handled")}
+            onMode={(m) => setPending({ kind: "mode", mode: m })} />
         )}
-        {route.page.startsWith("admin/") && me.role === "admin" && <AdminNav page={route.page} />}
-        {route.page === "admin/users" && me.role === "admin" && <UsersPage me={me.name} say={say} />}
-        {route.page === "admin/robots" && me.role === "admin" && <RobotsAdminPage say={say} />}
-        {route.page === "admin/system" && me.role === "admin" && <SystemPage />}
-        {route.page === "admin/zones" && me.role === "admin" && <MapsZonesPage say={say} />}
-        {route.page === "admin/maps" && me.role === "admin" && <MapManagePage say={say} />}
-        {route.page === "admin/routes" && me.role === "admin" && <RoutesPage say={say} />}
-        {route.page === "admin/lists" && me.role === "admin" && <ListsPage say={say} />}
-        {route.page === "localization" && <LocHistoryPage robots={units.map((u) => u.robot.robot_id)} now={now} />}
-        {route.page === "reports" && <ReportsPage me={me} now={now} />}
+        {route.page === "admin/users" && admin && <UsersPage me={me.name} say={say} />}
+        {route.page === "admin/robots" && admin && <RobotsAdminPage say={say} />}
+        {route.page === "admin/system" && admin && <SystemPage />}
+        {route.page === "admin/zones" && admin && <MapsZonesPage say={say} />}
+        {route.page === "admin/maps" && admin && <MapManagePage say={say} />}
+        {route.page === "admin/routes" && admin && <RoutesPage say={say} />}
+        {route.page === "admin/lists" && admin && <ListsPage say={say} />}
+        {route.page === "admin/localization" && admin && <LocHistoryPage robots={units.map((u) => u.robot.robot_id)} now={now} />}
+        {route.page === "admin/reports" && admin && <ReportsPage me={me} now={now} />}
         {route.page === "recordings" && (
           <RecordingsPage key={`${route.robot ?? ""}@${route.at ?? ""}`} robots={units.map((u) => u.robot.robot_id)} role={me.role} now={now}
             camsOf={(id) => robotCams(units.find((u) => u.robot.robot_id === id)?.robot)}
@@ -197,16 +142,9 @@ export function Console({ me, onOut }: { me: Me; onOut: () => void }) {
         {route.page === "map" && (
           <MapPage units={units} p1={p1} now={now} role={me.role} selected={route.robot ?? firstP1?.robot ?? null}
             onSelect={(id) => go("map", id)}
-            onVideo={(id) => { go("live"); window.setTimeout(() => document.getElementById(`unit-${id}`)?.scrollIntoView(), 50); }} />
+            onVideo={(id) => go("duty", id)} />
         )}
       </main>
-
-      <AlarmQueue active={active} shelved={shelved} now={now} open={route.page === "alarms" || qOpen}
-        stale={stale ? (conn.okAt ? hms(conn.okAt) : "—") : null}
-        onToggle={() => setQOpen(!qOpen)} onAck={ack}
-        onShelve={(a) => setPending({ kind: "shelve", a })}
-        onUnshelve={(a) => act(() => api("POST", `/api/alerts/${enc(a.key)}/unshelve`, {}))}
-        onGo={(a) => { go("live"); window.setTimeout(() => document.getElementById(`unit-${a.robot}`)?.scrollIntoView(), 50); }} />
 
       {pending?.kind === "mode" && (
         <Confirm text={t(pending.mode === "armed" ? "modeArmConfirm" : pending.mode === "home" ? "modeHomeConfirm" : "modeVisitorConfirm")}
@@ -217,109 +155,9 @@ export function Console({ me, onOut }: { me: Me; onOut: () => void }) {
       {pending?.kind === "stop" && (
         <Confirm text={t("stopAllConfirm", { n: online.length })} yes={t("stopAll")} danger onNo={() => setPending(null)} onYes={stopAll} />
       )}
-      {pending?.kind === "false" && (
-        <Confirm text={t("falseAlarmConfirm")} yes={t("falseAlarmYes")} onNo={() => setPending(null)}
-          onYes={() => { const a = pending.a; setPending(null); void act(() => api("POST", `/api/alerts/${enc(a.key)}/resolve`, {})); }} />
-      )}
-      {pending?.kind === "shelve" && (
-        <ShelveDialog now={now} onClose={() => setPending(null)}
-          onShelve={(until, reason) => { const a = pending.a; setPending(null); void act(() => api("POST", `/api/alerts/${enc(a.key)}/shelve`, { until_ms: until, reason })); }} />
-      )}
       {pending?.kind === "cam" && <FullCamera robot={pending.robot} cam={pending.cam} now={now} onClose={() => setPending(null)}
         cams={robotCams(units.find((u) => u.robot.robot_id === pending.robot)?.robot)} />}
       <div class="toast" role="status" aria-live="polite">{toast}</div>
     </div>
-  );
-}
-
-function TopBar(props: {
-  me: Me;
-  page: Page;
-  mode: Mode | null;
-  p1: number;
-  p2: number;
-  stale: boolean;
-  now: number;
-  onPage: (p: Page) => void;
-  onMode: (m: Mode["mode"]) => void;
-  onStop: () => void;
-  onSignOut: () => void;
-}) {
-  const tabs: { id: Page | null; key: Key }[] = [
-    { id: "live", key: "tabLive" },
-    { id: "map", key: "tabMap" },
-    { id: "alarms", key: "tabAlarms" },
-    { id: "recordings", key: "tabRecordings" },
-    { id: "localization", key: "tabLocalization" },
-    { id: "reports", key: "tabReports" },
-  ];
-  // 管理组只给管理员(B0:值班组 + 管理组分开;保安看到的界面简单)。顶栏上只占一个「Admin」页签,
-  // 进去以后是第二排的子页签(顶栏一行放得下)。
-  const isAdminPage = props.page.startsWith("admin/");
-  const modes: Mode["mode"][] = ["armed", "home", "visitor"];
-  const modeKey: Record<Mode["mode"], Key> = { armed: "modeArmed", home: "modeHome", visitor: "modeVisitor" };
-  return (
-    <header class="topbar">
-      <a class="skip" href="#main">Skip to content</a>
-      <span class="wordmark">Nexus Warden</span>
-      <span class="site muted" title={props.me.site_name}>{props.me.site_name}</span>
-      <nav class="tabsnav" aria-label={t("mainNav")}>
-        {tabs.map((x) => <Tab key={x.key} x={x} page={props.page} />)}
-        {props.me.role === "admin" && (
-          <>
-            <span class="navsep" aria-hidden="true" />
-            <a href="#/admin/robots" aria-current={isAdminPage ? "page" : undefined}>{t("adminGroup")}</a>
-          </>
-        )}
-      </nav>
-      <span class="counts" aria-live="polite">
-        {props.stale ? <span class="muted">{t("stUnknown")}: ?</span> : props.p1 + props.p2 === 0 ? <span class="muted">{t("noActiveAlarms")}</span> : null}
-        {!props.stale && props.p1 > 0 && <span class="pri P1"><Shape kind="P1" />{props.p1}</span>}
-        {!props.stale && props.p2 > 0 && <span class="pri P2"><Shape kind="P2" />{props.p2}</span>}
-      </span>
-      {props.mode && (
-        <div class="seg push" role="group" aria-label={t("modeLabel")}>
-          {modes.map((m) => (
-            <button key={m} type="button" aria-pressed={props.mode?.mode === m}
-              disabled={!canArm(props.me.role) || props.mode?.mode === m} onClick={() => props.onMode(m)}>
-              {t(modeKey[m])}
-            </button>
-          ))}
-        </div>
-      )}
-      <span class={props.mode ? "clock mono" : "clock mono push"}>{new Date(props.now).toLocaleTimeString("en-GB", { hour12: false })}</span>
-      <LangSwitch />
-      <span class="who">{props.me.display_name || props.me.name}</span>
-      <button type="button" class="btn icon" aria-label={t("signOut")} title={t("signOut")} onClick={props.onSignOut}><Icon name="logout" /></button>
-      {(canDispatch(props.me.role) || props.me.role === "owner") && (
-        <button type="button" class="btn stop" onClick={props.onStop}><Icon name="octagon" />{t("stopAll")}</button>
-      )}
-    </header>
-  );
-}
-
-function Tab({ x, page }: { x: { id: Page | null; key: Key }; page: Page }) {
-  return x.id ? (
-    <a href={`#/${x.id}`} aria-current={page === x.id ? "page" : undefined}>{t(x.key)}</a>
-  ) : (
-    <span class="disabled" aria-disabled="true" title={t("comingSoon")}>{t(x.key)}</span>
-  );
-}
-
-const ADMIN: { id: Page | null; key: Key }[] = [
-  { id: "admin/robots", key: "tabRobotsAdmin" },
-  { id: "admin/zones", key: "tabMapsZones" },
-  { id: "admin/maps", key: "tabMapMgmt" },
-  { id: "admin/routes", key: "tabRoutes" },
-  { id: "admin/users", key: "tabUsers" },
-  { id: "admin/lists", key: "tabLists" },
-  { id: "admin/system", key: "tabSystem" },
-];
-
-function AdminNav({ page }: { page: Page }) {
-  return (
-    <nav class="subnav" aria-label={t("adminGroup")}>
-      {ADMIN.map((x) => <Tab key={x.key} x={x} page={page} />)}
-    </nav>
   );
 }
