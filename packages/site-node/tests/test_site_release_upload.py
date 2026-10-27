@@ -166,6 +166,9 @@ def test_接口_等充电时换是排队(站点, tmp_path):
     _签(d, s.key)
     tok = _登(s)
     assert _传(s, tok, _打包(d))[0] == 200
+    c = s.api.dispatcher.clients.get("A")
+    if c is not None and c.capabilities is not None:      # 报过能力的要有换版本(见下面实测那条)
+        c.capabilities.tasks["release_activate"] = {}
     code, got = s.req("POST", "/api/robots/A/release", {"action": "activate", "name": NAME,
                                                         "when": "charging"}, token=tok)
     assert code == 200 and got["queued"] is True
@@ -240,3 +243,42 @@ def test_外审R7_库64升上来排着的还在_有了编号(tmp_path):
     [r] = q.list()
     assert r["name"] == "r1" and r["id"] >= 1
     assert q.add("A", "r2", by="alice") > r["id"]
+
+
+# ---- 演示站点上实测查出:不支持换版本的机器人也收下排队,之后每 5 秒刷一段报错堆栈 ----
+
+def test_实测_不支持换版本的机器人_排队当场拒绝_说清楚(站点, tmp_path):
+    s = 站点
+    d = 做包(tmp_path)
+    _签(d, s.key)
+    tok = _登(s)
+    assert _传(s, tok, _打包(d))[0] == 200
+    s.api.dispatcher.clients["A"] = SimpleNamespace(
+        capabilities=SimpleNamespace(tasks={"patrol": {}}), status=None, telemetry=None)
+    body = {"action": "activate", "name": NAME, "when": "charging"}
+    code, got = s.req("POST", "/api/robots/A/release", body, token=tok)
+    assert code == 409 and got.get("unsupported") is True and "不支持" in got["error"]
+    assert s.api.release_queue.list() == []
+    # 报了这项能力的照常排
+    s.api.dispatcher.clients["A"].capabilities.tasks["release_activate"] = {}
+    assert s.req("POST", "/api/robots/A/release", body, token=tok)[0] == 200
+
+
+def test_实测_排着的发不出去_同一个原因只记一次_不刷堆栈(tmp_path, caplog):
+    import logging
+
+    from d1max_site.dispatcher import Unsupported
+
+    class 不支持(假派遣):
+        async def map_command(self, rid, kind, payload, *, issued_by):
+            raise Unsupported(f"{rid} 不支持 {kind}")
+    d = 不支持()
+    _狗(d)
+    q = ReleaseQueue(SiteDB(tmp_path / "s.db"), d, now_ms=lambda: 1, payload=lambda n: {"name": n})
+    q.add("A", NAME, by="alice")
+    with caplog.at_level(logging.WARNING, logger="d1max_site.release_queue"):
+        for _ in range(5):
+            asyncio.run(q.tick())
+    recs = [r for r in caplog.records if r.name == "d1max_site.release_queue"]
+    assert len(recs) == 1 and recs[0].exc_info is None and "不支持" in recs[0].getMessage()
+    assert len(q.list()) == 1                                  # 留着:代理升级了还能接着换

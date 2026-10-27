@@ -28,6 +28,8 @@ class ReleaseQueue:
         self.dispatcher = dispatcher
         self._now = now_ms
         self._payload = payload
+        #: 每台上一次发不出去的原因:同一个原因只记一次(演示站点实测:原来每一拍刷一段堆栈)
+        self._last_err: dict[str, str] = {}
 
     def add(self, robot_id: str, name: str, *, by: str) -> int:
         """排一个;这台原来排着的被盖掉。→ 这一次的编号。"""
@@ -68,9 +70,14 @@ class ReleaseQueue:
                 got = await self.dispatcher.map_command(
                     rid, "release_activate", self._payload(row["name"]),
                     issued_by=f"{row['by']}(排队)")
-            except Exception:
-                log.exception("%s 排队的升级 %s 没发出去,下一拍再试", rid, row["name"])
+            except Exception as exc:  # noqa: BLE001 - 什么原因都留着下一拍再试,只记一次
+                why = f"{type(exc).__name__}: {exc}"
+                if self._last_err.get(rid) != why:
+                    self._last_err[rid] = why
+                    log.warning("%s 排队的升级 %s 没发出去(%s),留着下一拍再试", rid, row["name"],
+                                why)
                 continue
+            self._last_err.pop(rid, None)
             if (got or {}).get("ack", {}).get("result") == "accepted":
                 self.done(rid, row["id"])
                 log.info("%s 充完电空闲了,换成 %s", rid, row["name"])

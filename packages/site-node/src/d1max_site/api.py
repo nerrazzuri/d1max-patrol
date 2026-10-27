@@ -2737,7 +2737,14 @@ class _Handler(TlsHandlerMixin):
                 if bad:
                     raise HttpError(409, bad[0]["detail"])
                 if d.get("when") == "charging":
-                    # W44 第四期:等充完电、空闲时再换(release_queue.py)
+                    # W44 第四期:等充完电、空闲时再换(release_queue.py)。报过能力、里面没有换版本
+                    # 的机器人当场拒绝(演示站点实测:原来照收,之后每一拍都发不出去);没报过的
+                    # (不在线)照收
+                    c = self.site.dispatcher.clients.get(robot_id)
+                    caps = getattr(c, "capabilities", None)
+                    if caps is not None and "release_activate" not in caps.tasks:
+                        raise HttpError(409, f"{robot_id} 不支持换版本(代理太老或没开发布槽)",
+                                        extra={"unsupported": True})
                     self.site.release_queue.add(robot_id, payload["name"], by=str(user))
                     self._audit_detail = {"action": "activate", "name": payload["name"],
                                           "when": "charging"}
