@@ -60,6 +60,10 @@ export interface RouteEmbed {
   registerSave: (fn: (() => Promise<void>) | null) => void;
 }
 
+/** 布置页里正在改的那条路线:标签重建(「看最新的」、退回历史)以后自动再打开,不退回列表(演示站点实测)。
+ *  自己点「返回」就清掉。 */
+let reopen: { map: string; id: string } | null = null;
+
 export function RoutesPage({ say, embed }: { say: Say; embed?: RouteEmbed }) {
   const [maps, setMaps] = useState<MapRow[]>(embed ? [embed.map] : []);
   const [selState, setSel] = useState<MapRow | null>(embed?.map ?? null);
@@ -128,7 +132,13 @@ export function RoutesPage({ say, embed }: { say: Say; embed?: RouteEmbed }) {
   // W44 第三期:两点之间走不通(站点逐段查,``segment: [i, i+1]``)
   const badSegs = problems.filter((p) => Array.isArray(p.segment)).map((p) => p.segment as [number, number]);
 
+  useEffect(() => {
+    if (!embed || draft || !view || !reopen || reopen.map !== mapKey) return;
+    const r = view.routes.find((x) => x.id === reopen?.id);
+    if (r) edit(r);
+  }, [view]);
   function edit(r: Route) {
+    if (embed) reopen = { map: mapKey, id: r.id };
     nextEdit();
     setDraft({ id: r.id, isNew: false, base: r.revision, points: r.waypoints, policy: r.policy, map: mapKey });
     setOrig(r);
@@ -270,6 +280,7 @@ export function RoutesPage({ say, embed }: { say: Say; embed?: RouteEmbed }) {
   });
   function back() {
     if (dirty && !window.confirm(rt("routeUnsaved"))) return;
+    reopen = null;
     nextEdit();
     setDraft(null);
     setOrig(undefined);

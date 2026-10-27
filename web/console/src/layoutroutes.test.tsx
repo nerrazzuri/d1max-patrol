@@ -83,4 +83,21 @@ describe("布置 → 巡逻路线", () => {
     expect(c.textContent).toContain("热像到货后开放");
     expect(c.querySelector(".panel-head")!.hasAttribute("hidden")).toBe(true);
   });
+
+  it("实测查出:点「看最新的」标签整个重建以后,刚才那条路线还开着(不退回列表)", async () => {
+    const first = render(<RoutesTab {...props()} />);
+    await waitFor(() => expect(first.container.querySelector('[data-route-row="night"]')).not.toBeNull());
+    fireEvent.click(first.container.querySelector('[data-route-row="night"]')!);
+    await waitFor(() => expect(first.container.querySelector("button.routeback")).not.toBeNull());
+    first.unmount();
+    const again = render(<RoutesTab {...props()} />);
+    await waitFor(() => expect(again.container.querySelector("button.routeback")).not.toBeNull());
+    expect(again.container.textContent).toContain("night");
+    // 自己点「返回」回到列表的,下次重建不再自动打开
+    fireEvent.click(again.container.querySelector("button.routeback")!);
+    again.unmount();
+    const third = render(<RoutesTab {...props()} />);
+    await waitFor(() => expect(third.container.querySelector('[data-route-row="night"]')).not.toBeNull());
+    expect(third.container.querySelector("button.routeback")).toBeNull();
+  });
 });
