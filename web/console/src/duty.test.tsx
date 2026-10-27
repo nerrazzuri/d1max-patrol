@@ -108,6 +108,36 @@ describe("值班页的报警横幅", () => {
   });
 });
 
+describe("值班页的地图", () => {
+  const META = { width: 100, height: 100, m_per_px: 0.05, left_x: 0, top_y: 5 };
+  const onMap = (state: RobotState = "patrolling") => unit("A", state, {
+    robot: { robot_id: "A", active: true, fresh: true, revoked: false, held: null, status: { online: true, last_seen: 0 },
+      loc: { pose: { x: 1, y: 1, yaw: 0 } }, capabilities: { tasks: { patrol: { map_id: "m", map_version: "1" } } } },
+  });
+  beforeEach(() => {
+    setFetch(((url: string, init?: RequestInit) => {
+      if (init?.method === "POST") return Promise.resolve(json({}));
+      if (url.endsWith("/preview")) return Promise.resolve(json(META));
+      if (url.endsWith("/areas")) return Promise.resolve(json({ areas: [] }));
+      return Promise.resolve(json({}, 404));
+    }) as typeof fetch);
+  });
+
+  it("平时只看,不进点图选位置", async () => {
+    const { container: c } = page([], [onMap()]);
+    await waitFor(() => expect(c.querySelector(".duty-map svg.map")).not.toBeNull());
+    expect(c.querySelector(".duty-map svg.map")!.classList.contains("drawing")).toBe(false);
+    expect(c.querySelector(".duty-map")!.textContent).not.toContain("点地图选一个位置");
+  });
+
+  it("点了帮它找位置才进点图选位置", async () => {
+    const { container: c } = page([alert({ kind: "loc_lost_paused", audience: "help", robot: "A", title: "A 迷路了" })], [onMap()]);
+    await waitFor(() => expect(c.querySelector(".duty-map svg.map")).not.toBeNull());
+    fireEvent.click(btn(c.querySelector(".banner")!, "帮它找位置")!);
+    await waitFor(() => expect(c.querySelector(".duty-map svg.map")!.classList.contains("drawing")).toBe(true));
+  });
+});
+
 describe("值班页的状态条", () => {
   it("数据过期_状态写未知", () => {
     const { container: c } = page([], [unit("A", "patrolling", { stale: true })]);
