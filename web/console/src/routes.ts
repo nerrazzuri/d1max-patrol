@@ -52,7 +52,7 @@ export interface RouteView {
 }
 
 /** 站点逐点校验没过时回的(400 的 errors)。index 为 null = 整条的问题。 */
-export interface PointProblem { index: number | null; name: string; problem: string }
+export interface PointProblem { index: number | null; name: string; problem: string; segment?: [number, number] }
 
 /** 编辑中的一条:isNew 的还没存过(base = 0)。 */
 export interface Draft {

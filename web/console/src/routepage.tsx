@@ -1,11 +1,13 @@
 // 巡检路线页(2026-10-14,管理员):选地图版本 → 图上看这一版上的路线(折线 + 带号的点)→ 点图加点、
 // 拖点改位置、拖圆形把手转朝向、调顺序、删点、设点上的动作 → 存(站点逐点校验,错的点标红)。
 // 每条路线下面是它的排程。站点存的路线、排程是唯一真理源;存的时候带 base_revision,别人改过的不会被盖掉。
+import type { FunctionComponent } from "preact";
 import { useCallback, useEffect, useRef, useState } from "preact/hooks";
 import { api, ApiError, enc } from "./api";
 import { Confirm } from "./dialogs";
 import { startDrag, clickGuard, swallowClick } from "./dragpt";
 import { t } from "./i18n";
+import type { OwnLayer } from "./layoutpage";
 import { MapCanvas } from "./mapcanvas";
 import { PoseMarker } from "./posemarker";
 import { toPx, type PreviewMeta } from "./mapview";
@@ -49,10 +51,21 @@ function errText(e: unknown): string {
 const same = (a: Draft | null, r: Route | undefined): boolean =>
   !!a && !!r && !a.isNew && JSON.stringify(a.points) === JSON.stringify(r.waypoints);
 
-export function RoutesPage({ say }: { say: Say }) {
-  const [maps, setMaps] = useState<MapRow[]>([]);
-  const [sel, setSel] = useState<MapRow | null>(null);
-  const [meta, setMeta] = useState<PreviewMeta | null>(null);
+/** 嵌进「布置」页(W44 第三期):图、地图版本、保存按钮都用外框的;不显示坐标数字(设计 §1:改路线不用看到坐标)。 */
+export interface RouteEmbed {
+  map: MapRow;
+  meta: PreviewMeta;
+  Map: FunctionComponent<OwnLayer>;
+  setDirty: (b: boolean) => void;
+  registerSave: (fn: (() => Promise<void>) | null) => void;
+}
+
+export function RoutesPage({ say, embed }: { say: Say; embed?: RouteEmbed }) {
+  const [maps, setMaps] = useState<MapRow[]>(embed ? [embed.map] : []);
+  const [selState, setSel] = useState<MapRow | null>(embed?.map ?? null);
+  const sel = embed ? embed.map : selState;
+  const [metaState, setMeta] = useState<PreviewMeta | null>(embed?.meta ?? null);
+  const meta = embed ? embed.meta : metaState;
   const [view, setView] = useState<RouteView | null>(null);
   const [draft, setDraft] = useState<Draft | null>(null);
   const [orig, setOrig] = useState<Route | undefined>(undefined);
@@ -76,6 +89,7 @@ export function RoutesPage({ say }: { say: Say }) {
   const nextEdit = () => { live.current = { ...live.current, gen: live.current.gen + 1 }; };
 
   useEffect(() => {
+    if (embed) return;
     api<{ maps: MapRow[] }>("GET", "/api/maps").then((d) => {
       setMaps(d.maps);
       setSel((s) => s ?? d.maps[d.maps.length - 1] ?? null);
@@ -99,8 +113,10 @@ export function RoutesPage({ say }: { say: Say }) {
     setView(null);
     if (!base) return;
     const tk = ticket();
-    api<PreviewMeta>("GET", `${base}/preview`).then((m) => { if (sameMap(tk)) setMeta(m); })
-      .catch(() => { if (sameMap(tk)) setMeta(null); });
+    if (!embed) {
+      api<PreviewMeta>("GET", `${base}/preview`).then((m) => { if (sameMap(tk)) setMeta(m); })
+        .catch(() => { if (sameMap(tk)) setMeta(null); });
+    }
     void load();
   }, [base]);
 
@@ -109,6 +125,8 @@ export function RoutesPage({ say }: { say: Say }) {
   const bad = new Map<number, string>();
   for (const p of problems) if (p.index !== null) bad.set(p.index, p.problem);
   const wholeProblems = problems.filter((p) => p.index === null);
+  // W44 第三期:两点之间走不通(站点逐段查,``segment: [i, i+1]``)
+  const badSegs = problems.filter((p) => Array.isArray(p.segment)).map((p) => p.segment as [number, number]);
 
   function edit(r: Route) {
     nextEdit();
@@ -139,7 +157,8 @@ export function RoutesPage({ say }: { say: Say }) {
     setPi(draft.points.length);
   }
 
-  async function save() {
+  /** ``strict``:失败了抛出去(嵌进布置页时外框按 409 说「刚才有人改过」)。 */
+  async function save(strict = false) {
     if (!draft || !sel) return;
     if (draft.map !== mapKey) {
       // 草稿不是在现在选的这张图上编的(外审 R2):不发,不然点会改绑到别的图上
@@ -168,6 +187,7 @@ export function RoutesPage({ say }: { say: Say }) {
         if (first) setPi(first.index);
       }
       say(errText(e));
+      if (strict) throw e;
     }
   }
   async function reloadRoute() {
@@ -241,6 +261,13 @@ export function RoutesPage({ say }: { say: Say }) {
   }
 
   const nameTaken = !!draft?.isNew && routes.some((r) => r.id === draft.id);
+  const canSave = !!draft && dirty && pts.length > 0 && NAME_RE.test(draft.id) && !nameTaken;
+  useEffect(() => { embed?.setDirty(dirty); }, [dirty]);
+  useEffect(() => {
+    if (!embed) return;
+    embed.registerSave(canSave ? () => save(true) : null);
+    return () => embed.registerSave(null);
+  });
   function back() {
     if (dirty && !window.confirm(rt("routeUnsaved"))) return;
     nextEdit();
@@ -254,10 +281,11 @@ export function RoutesPage({ say }: { say: Say }) {
   const selPoint = draft && pi !== null ? draft.points[pi] : undefined;
   const mySchedules = (view?.schedules ?? []).filter((s) => draft && !draft.isNew && s.mission === draft.id);
 
+  const MapLike = (embed ? embed.Map : MapCanvas) as FunctionComponent<Parameters<typeof MapCanvas>[0]>;
   return (
-    <div class="admin">
-      <section class="panel">
-        <div class="panel-head">
+    <div class={embed ? "routes-embed" : "admin"}>
+      <section class={embed ? undefined : "panel"}>
+        <div class="panel-head" hidden={!!embed}>
           <h1>{rt("routesTitle")}</h1>
           <label class="field-inline">{rt("routesMap")}
             <select value={sel ? `${sel.map_id}\u0000${sel.version}` : ""} onChange={(e) => {
@@ -274,12 +302,13 @@ export function RoutesPage({ say }: { say: Say }) {
         <div class="routesplit">
           <div class="routemap" ref={root} onClickCapture={(e) => swallowClick(guard.current, e)}>
             {!sel || !meta ? <p class="empty">{t("noMap")}</p> : (
-              <MapCanvas meta={meta} raster={`${base}/preview.png`} label={rt("routesTitle")}
+              <MapLike meta={meta} raster={`${base}/preview.png`} label={rt("routesTitle")}
                 drawing={!!draft} onPick={draft ? pick : undefined}
                 overlay={!draft && routes.length > 0 ? <p class="routepick-hint small" data-route-hint="1">{rt("routePickHint")}</p> : undefined}
                 world={<>
                   {others.map((r) => <polyline key={r.id} points={line(r.waypoints)} class="route-line other" data-route={r.id} />)}
                   {draft && pts.length > 1 && <polyline points={line(pts)} class="route-line" data-route={draft.id} />}
+                  {badSegs.map(([a, b]) => pts[a] && pts[b] && <polyline key={`seg${a}`} points={line([pts[a], pts[b]])} class="route-line bad-seg" data-bad-seg={a} />)}
                 </>}
                 marks={(s) => (
                   <>
@@ -381,11 +410,11 @@ export function RoutesPage({ say }: { say: Say }) {
                   <ul class="small bad">{[...bad].map(([i, why]) => <li key={i}>{i + 1}. {pts[i]?.name}: {why}</li>)}</ul>
                 )}
                 {selPoint && pi !== null ? (
-                  <PointForm p={selPoint} names={pts.map((x) => x.name)} idx={pi} onChange={(patch) => change(patchPoint(pts, pi, patch), true)}
+                  <PointForm p={selPoint} names={pts.map((x) => x.name)} idx={pi} plain={!!embed} onChange={(patch) => change(patchPoint(pts, pi, patch), true)}
                     onActions={(p2) => change(pts.map((x, k) => (k === pi ? p2 : x)), true)} />
                 ) : pts.length > 0 && <p class="muted small">{rt("pointSelectHint")}</p>}
                 <div class="row">
-                  <button type="button" class="btn primary" disabled={!dirty || pts.length === 0 || !NAME_RE.test(draft.id) || nameTaken} onClick={() => void save()}>{rt("routeSave")}</button>
+                  {!embed && <button type="button" class="btn primary" disabled={!canSave} onClick={() => void save()}>{rt("routeSave")}</button>}
                   <button type="button" class="btn" disabled={!dirty} onClick={() => (draft.isNew ? setDraft(null) : orig && edit(orig))}>{rt("routeDiscard")}</button>
                   {!draft.isNew && <button type="button" class="btn stop" onClick={() => setRemoving(true)}>{rt("routeDelete")}</button>}
                 </div>
@@ -404,8 +433,8 @@ export function RoutesPage({ say }: { say: Say }) {
   );
 }
 
-function PointForm({ p, idx, names, onChange, onActions }: {
-  p: RoutePoint; idx: number; names: string[];
+function PointForm({ p, idx, names, plain, onChange, onActions }: {
+  p: RoutePoint; idx: number; names: string[]; plain?: boolean;
   onChange: (patch: Partial<RoutePoint>) => void; onActions: (p: RoutePoint) => void;
 }) {
   const dup = names.some((n, k) => k !== idx && n === p.name);
@@ -415,7 +444,7 @@ function PointForm({ p, idx, names, onChange, onActions }: {
       <label class="field wide">{rt("pointName")}
         <input value={p.name} maxLength={64} aria-invalid={dup || !p.name.trim()} onInput={(e) => onChange({ name: e.currentTarget.value })} />
       </label>
-      <label class="field">{rt("pointX")}
+      {!plain && <><label class="field">{rt("pointX")}
         <input type="number" step="0.01" value={p.x} onInput={(e) => { const v = num(e.currentTarget.value); if (v !== null) onChange({ x: v }); }} />
       </label>
       <label class="field">{rt("pointY")}
@@ -423,13 +452,17 @@ function PointForm({ p, idx, names, onChange, onActions }: {
       </label>
       <label class="field">{rt("pointYaw")}
         <input type="number" step="1" value={degOf(p.yaw)} onInput={(e) => { const v = num(e.currentTarget.value); if (v !== null) onChange({ yaw: radOf(v) }); }} />
-      </label>
+      </label></>}
+      {plain && <p class="muted small wide">{rt("pointDragHint")}</p>}
       <label class="field">{rt("pointDwell")}
         <input type="number" min="0" step="1" value={dwellOf(p)} onInput={(e) => { const v = num(e.currentTarget.value); if (v !== null && v >= 0) onActions(setDwell(p, v)); }} />
       </label>
       <label class="wide"><input type="checkbox" checked={hasAction(p, "photo", "front")} onChange={() => onActions(toggleAction(p, { type: "photo", camera: "front" }))} /> {rt("pointPhotoFront")}</label>
       <label class="wide"><input type="checkbox" checked={hasAction(p, "photo", "back")} onChange={() => onActions(toggleAction(p, { type: "photo", camera: "back" }))} /> {rt("pointPhotoBack")}</label>
       <label class="wide"><input type="checkbox" checked={hasAction(p, "light")} onChange={() => onActions(toggleAction(p, { type: "light", on: true }))} /> {rt("pointLight")}</label>
+      {/* 设计 §2.4:拍热像、量温度要等热像实物接上(契约的拍照现在只认前、后两路) */}
+      <label class="wide muted" data-thermal="photo"><input type="checkbox" disabled /> {rt("pointThermal")} <span class="small">· {rt("thermalLater")}</span></label>
+      <label class="wide muted" data-thermal="temp"><input type="checkbox" disabled /> {rt("pointTemp")} <span class="small">· {rt("thermalLater")}</span></label>
       <label class="field wide">{rt("pointCheck")}
         <input value={p.check ?? ""} maxLength={500} onInput={(e) => { const v = e.currentTarget.value; const { check: _c, ...rest } = p; onActions(v ? { ...rest, check: v } : rest); }} />
       </label>
