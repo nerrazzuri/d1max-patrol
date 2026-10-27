@@ -134,7 +134,9 @@ export function CameraWell(props: { robot: string; cam: Cam; forceLive?: boolean
   const src = props.feed
     ? (nonce ? `${props.feed.src}${props.feed.src.includes("?") ? "&" : "?"}v=${nonce}` : props.feed.src)
     : `/api/robots/${enc(props.robot)}/video/${props.cam}?v=${nonce}`;
-  const status = broken ? t("reconnecting") : streaming ? t("live") : pausedAt ? t("pausedAt", { t: hms(pausedAt) }) : t("noFeed");
+  // 断过、重连了但第一帧还没到:还是「正在重连」,不写「实时」(真浏览器上查出来的)
+  const retrying = broken || (lostAt != null && !started);
+  const status = retrying ? t("reconnecting") : streaming ? t("live") : pausedAt ? t("pausedAt", { t: hms(pausedAt) }) : t("noFeed");
   const cls = `${streaming ? "well" : "well paused"}${lostAt != null ? " lostfeed" : ""}${props.variant ? ` ${props.variant}` : ""}`;
   return (
     <div ref={box} class={cls} title={!streaming ? t("pausedHint") : undefined}>
@@ -154,7 +156,7 @@ export function CameraWell(props: { robot: string; cam: Cam; forceLive?: boolean
         <span>{hms(streaming ? props.now : pausedAt ?? props.now)}</span>
       </div>
       <div class="osd bottom">
-        <span class="osd-status">{streaming && !broken && <span class="livedot" aria-hidden="true" />}{status}</span>
+        <span class="osd-status">{streaming && !retrying && <span class="livedot" aria-hidden="true" />}{props.feed ? `${label} · ` : ""}{status}</span>
         {props.onOpen && (
           <button type="button" class="osd-btn" onClick={props.onOpen} aria-label={`${t("fullScreen")}: ${label}`}>{t("fullScreen")}</button>
         )}

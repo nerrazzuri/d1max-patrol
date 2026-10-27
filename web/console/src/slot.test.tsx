@@ -130,6 +130,20 @@ describe("外审R6 报警现场断流", () => {
     expect(sceneImg(r.container)!.getAttribute("src")).toMatch(/^\/api\/cameras\/cam3\/live\?v=1$/);
   });
 
+  it("真浏览器查出来的:重连后第一帧没到之前,左下角写正在重连,不写实时;现场写摄像头名字", async () => {
+    const r = render(slot(Date.now()));
+    const osd = () => r.container.querySelector(".slot-main .osd.bottom")!.textContent;
+    expect(osd()).toContain("3 号 后花园");
+    fireEvent.load(sceneImg(r.container)!);
+    fireEvent.error(sceneImg(r.container)!);
+    await vi.advanceTimersByTimeAsync(3100);                     // 换了地址,还没出帧
+    expect(sceneImg(r.container)).not.toBeNull();
+    expect(osd()).toContain("正在重连");
+    expect(osd()).not.toContain("实时");
+    fireEvent.load(sceneImg(r.container)!);
+    expect(osd()).toContain("实时");
+  });
+
   it("一帧都没出就失败,也写断了、重连", async () => {
     const r = render(slot(Date.now()));
     fireEvent.error(sceneImg(r.container)!);
