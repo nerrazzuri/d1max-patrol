@@ -18,10 +18,7 @@ def _local() -> tzinfo:
 
 
 def site_tz(db: Any) -> tzinfo:
-    try:
-        rows = db.query("SELECT timezone FROM route_store WHERE id=1")
-    except Exception:
-        return _local()
+    rows = db.query("SELECT timezone FROM route_store WHERE id=1")
     name = rows[0]["timezone"] if rows else None
     if not name:
         return _local()
