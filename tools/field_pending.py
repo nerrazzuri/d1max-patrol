@@ -57,7 +57,7 @@ def items(path: Path = DOC) -> list[tuple[str, str, str, str]]:
         if m and not m.group(1).startswith("— 记数栏"):      # §6 末尾的记数栏不是测试项
             body = _clean(re.sub(r"〔结论：.+?〕|—— \*\*结论：.+?\*\*", "", line))
             body = re.sub(r"^(- \[[ xX]\] |\d+\. )", "", body)
-            n = re.match(r"^(\d+[a-z]{0,3}\.\d+[a-z]?|\d+\.\d+ \.\d+)\s*", body)
+            n = re.match(r"^(\d+\.\d+ \.\d+|\d+[a-z]{0,3}\.\d+[a-z]?)\s*", body)
             rid = n.group(1) if n else ""
             out.append((sec, rid, body[len(n.group(0)):] if n else body, m.group(1)))
     return out
