@@ -903,6 +903,7 @@ const en = {
   rsCamZone: "{z} (camera)",
   stillEvery: "One frame every {s} s",
   meStrokePts: "Points so far: {n}.",
+  atWhere: "at {w}",
 };
 
 type Key = keyof typeof en;
@@ -1805,6 +1806,7 @@ const zh: Partial<Record<Key, string>> = {
   rsCamZone: "{z}（摄像头）",
   stillEvery: "每 {s} 秒一张",
   meStrokePts: "已点 {n} 个点。",
+  atWhere: "在{w}",
 };
 
 export const DICTS: Record<Lang, Partial<Record<Key, string>>> = { en, zh };

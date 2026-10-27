@@ -48,6 +48,11 @@ function page(alerts: Alert[], units = [unit("A", "patrolling"), unit("B", "idle
 const btn = (c: Element, text: string) => Array.from(c.querySelectorAll("button")).find((b) => b.textContent?.includes(text)) as HTMLButtonElement | undefined;
 
 describe("值班页的报警横幅", () => {
+  it("实测查出:站点给的「在哪」(命名区域)写在横幅上", () => {
+    const { container: c } = page([alert({ kind: "stuck", audience: "help", robot: "A", title: "卡住了", context: { where: "车库" } as never })]);
+    expect(c.querySelector(".banner")!.textContent).toContain("在车库");
+  });
+
   it("确认有人发 intruder", async () => {
     const { container: c } = page([alert({})]);
     fireEvent.click(btn(c.querySelector(".banner")!, "确认有人")!);

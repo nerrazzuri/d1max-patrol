@@ -26,6 +26,8 @@ export interface Alert {
   verdict?: string;
   context?: {
     zone?: string;
+    /** 在哪(W44 第四期:命名区域,没命名用防区名;站点按机器人当时的位置算)。 */
+    where?: string;
     persons?: { count?: number; nearest_m?: number };
     pose?: { map_id: string; map_version: string; x: number; y: number };
   };

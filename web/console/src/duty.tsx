@@ -98,7 +98,7 @@ export function DutyPage(props: {
         <div class="banner" role="alert">
           <div class="banner-text">
             <b>{alertTitle(lang.value, top.kind, top.title)}</b>
-            <span>{[top.context?.zone, hm(top.first_ms)].filter(Boolean).join(" · ")}</span>
+            <span>{[top.context?.zone ?? (top.context?.where ? t("atWhere", { w: top.context.where }) : ""), hm(top.first_ms)].filter(Boolean).join(" · ")}</span>
             {top.acked_ms != null && top.acked_by && <span class="banner-who">{t("dutyTakenBy", { who: top.acked_by })}</span>}
             {alarms.length > 1 && <span class="banner-more">{t("dutyMore", { n: alarms.length - 1 })}</span>}
           </div>
