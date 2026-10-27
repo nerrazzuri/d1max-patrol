@@ -167,6 +167,15 @@ String scheduleWhen(Map<String, dynamic> e) {
 
 /// 布防模式说人话（W20）：`布防` / `在家` / `访客（到 21:30）`。
 String modeText(Map<String, dynamic> m) {
+  // W44 第二期：站点的布防时间表管着时，写「按时间表：布防 / 部分布防 / 撤防」，不按 mode 写成「在家」
+  if (m['source'] == 'schedule') {
+    final st = switch (m['state']) {
+      'armed' => tr('armed', '布防'),
+      'disarmed' => tr('disarmed', '撤防'),
+      _ => tr('partly armed', '部分布防'),
+    };
+    return tr('By schedule: $st', '按时间表：$st');
+  }
   final label = switch (m['mode']) {
     'armed' => tr('Armed', '布防'),
     'home' => tr('Home', '在家'),
