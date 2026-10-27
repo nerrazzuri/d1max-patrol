@@ -38,6 +38,8 @@ export function mapAreas(meta: PreviewMeta, sec: { zone: string; points: Pt[] }[
 }
 
 /** 地图本体(W44:值班页下半屏、地图页共用):底图、区域、机器人、报警圈、运行图层、点图「去这里 / 在这里设位置」。 */
+const NO_AREAS: { zone: string; points: Pt[] }[] = [];
+
 export function SiteMap(props: {
   units: UnitInfo[];
   /** 图上画报警圈的告警(带位置的)。 */
@@ -50,6 +52,8 @@ export function SiteMap(props: {
   hot?: Set<string>;
   /** 画不画「近 7 天定位出过问题的地方」(保安页不画,设计 §4.3)。 */
   episodes?: boolean;
+  /** 能不能点图「去这里 / 在这里设位置」(默认能;值班页只在「帮它找位置」时能)。 */
+  pick?: boolean;
   /** 浮在图左上角的一句提示(值班页「帮它找位置」时说怎么做)。 */
   hint?: string | null;
   /** 这张图上有名字的区域(值班页拿来算每台机器人在哪个防区)。 */
@@ -89,7 +93,8 @@ export function SiteMap(props: {
     return () => { live = false; };
   }, [key]);
   const meta = got.key === key ? got.meta : null;
-  const areas = got.key === key ? got.areas : [];
+  // 没载入时也用同一个空列表:每次给新的 [] 会让回报区域的效果每次渲染都触发,页面跟着重画,停不下来
+  const areas = got.key === key ? got.areas : NO_AREAS;
   const onAreas = props.onAreas;
   useEffect(() => {
     if (onAreas) onAreas(meta ? mapAreas(meta, areas) : []);
@@ -143,11 +148,12 @@ export function SiteMap(props: {
               const d = props.areaDecor?.(a.name);
               return { ...a, ...(d ? { label: d.label, tone: d.tone } : {}), ...(props.hot?.has(a.name) ? { hot: true } : {}) };
             })}
-            navZones={props.navZones} legend={legend} drawing={!!(props.onPickMap ?? pose.onPick)}
-            onPick={props.onPickMap ? (px, py) => { const [x, y] = pxToMap(meta, px, py); props.onPickMap!(x, y, which); } : pose.onPick}
+            navZones={props.navZones} legend={legend} drawing={!!(props.onPickMap ?? (props.pick === false ? undefined : pose.onPick))}
+            onPick={props.onPickMap ? (px, py) => { const [x, y] = pxToMap(meta, px, py); props.onPickMap!(x, y, which); }
+              : props.pick === false ? undefined : pose.onPick}
             world={<>{props.route !== false && <VizWorld meta={meta} robots={vizRobots} />}{props.extraWorld?.(meta, which)}</>}
             // 「去这里」浮在图的右上角(不在图下面另占一块);运行图层的图例并进底图图例那一行
-            overlay={<>{props.hint && <div class="map-hint" role="status">{props.hint}</div>}{!props.onPickMap && pose.panel}</>}
+            overlay={<>{props.hint && <div class="map-hint" role="status">{props.hint}</div>}{!props.onPickMap && props.pick !== false && pose.panel}</>}
             legendExtra={<RunLegendItems has={vizHas(vizRobots, eps)} />}
             // 区域名让开报警圈、狗(圆点 + 下面的编号)
             avoid={(s) => [
@@ -157,7 +163,7 @@ export function SiteMap(props: {
             ]}
             marks={(s) => (
               <>
-                {!props.onPickMap && pose.marks(s)}
+                {!props.onPickMap && props.pick !== false && pose.marks(s)}
                 {props.route !== false && vizMarks(s, meta, vizRobots, eps)}
                 {props.extraMarks?.(s, meta, which)}
                 {pins.map(({ a, px, py }) => {

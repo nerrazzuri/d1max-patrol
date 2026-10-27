@@ -140,7 +140,8 @@ export function DutyPage(props: {
         <div class="duty-map">
           <SiteMap units={props.units} p1={alarms.filter((a) => a.level === "P1")} now={props.now} role={props.role}
             selected={finding ?? selected ?? slots[0]?.robot ?? null} onSelect={setSelected} hot={hot} episodes={false}
-            hint={finding ? t("dutyFindHint", { id: finding }) : null} onAreas={setAreas} />
+            hint={finding ? t("dutyFindHint", { id: finding }) : null} pick={!!finding}
+            onAreas={(a) => setAreas((old) => (sameAreas(old, a) ? old : a))} />
           {finding && <p class="sr-only">{t("dutyFindHint", { id: finding })}</p>}
         </div>
       </div>
@@ -150,4 +151,9 @@ export function DutyPage(props: {
       )}
     </div>
   );
+}
+
+/** 区域换没换(名字和点一样就算没换,不重画)。 */
+function sameAreas(a: CanvasArea[], b: CanvasArea[]): boolean {
+  return a.length === b.length && a.every((x, i) => x.name === b[i].name && JSON.stringify(x.pts) === JSON.stringify(b[i].pts));
 }

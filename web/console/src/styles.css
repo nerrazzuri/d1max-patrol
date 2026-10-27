@@ -522,7 +522,8 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--c-primary); }
 .well .lost { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); max-width: 90%; padding: 8px 14px; border-radius: var(--r-r8);
   background: var(--c-scrim); color: var(--c-onScrim); font-size: 15px; font-weight: 600; text-align: center; }
 .well.main, .well.pip { aspect-ratio: auto; width: 100%; height: 100%; }
-.well.main .osd.bottom .osd-btn, .well.pip .osd { display: none; }
+/* 画面位、实况卡片顶上有状态栏:画面框自带的「A 前 时间」不显示;小窗里什么字都不写,断流只变灰 */
+.well.main .osd.top, .well.main .osd.bottom .osd-btn, .well.pip .osd, .well.pip .lost { display: none; }
 .slot { position: relative; min-height: 0; border-radius: var(--r-r12); overflow: hidden; background: var(--c-well); }
 .slot.alarm { box-shadow: 0 0 0 3px var(--c-error); }
 .slot-main { position: absolute; inset: 0; }
@@ -576,7 +577,7 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--c-primary); }
 @media (max-width: 900px) { .lw-grid { grid-template-columns: 1fr; grid-auto-rows: 260px; } }
 
 /* W44 地图页:右栏图层开关、今晚的事、过去看看、临时路线;图上的多久没巡过、待命点、事件旗、临时路线点 */
-.maprp { width: 380px; display: flex; flex-direction: column; gap: 10px; }
+.maprp { width: 380px; padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; }
 .maprp h3 { margin: 6px 0 0; font-size: 15px; font-weight: 600; color: var(--c-textSecondary); }
 .layers { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 10px; font-size: 14px; }
 .layers label { display: flex; align-items: center; gap: 8px; cursor: pointer; }
