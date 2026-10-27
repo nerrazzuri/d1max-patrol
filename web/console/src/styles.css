@@ -852,3 +852,6 @@ p.warn { color: var(--c-text); background: var(--c-warningSoft); padding: 8px 12
 .nogo-status { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border-radius: 8px; background: var(--c-surfaceVariant); }
 .nogo-status p { margin: 0; }
 .ok-text { color: var(--c-success); font-weight: 600; }
+.route-line.bad-seg { stroke: var(--c-error); stroke-dasharray: 6 4; stroke-width: 3; }
+.routes-embed .routesplit { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 16px; }
+@media (max-width: 1000px) { .routes-embed .routesplit { grid-template-columns: minmax(0, 1fr); } }
