@@ -167,8 +167,8 @@ class LocalizerCore:
         self._last: tuple[float, float, float, float] | None = None   # 上一帧:stamp, x, y, yaw
         self._last_match: float | None = None           # 最后一次真匹配的 stamp
         self._jumps: deque[float] = deque()
-        #: 近几秒每帧:stamp, 质量(不当证据的转身帧不进)。
-        self._lowq: deque[tuple[float, float]] = deque()
+        #: 近几秒每帧:stamp, 原始质量, 是不是不当证据的转身帧。
+        self._lowq: deque[tuple[float, float, bool]] = deque()
         self._jump_lost = False
         self._good: tuple[float, float, float] | None = None
         # 重定位
@@ -326,10 +326,10 @@ class LocalizerCore:
                 self._jumps.append(now)
         self._last = (e.stamp, x, y, yaw)
         self._reloc_good = self._reloc_good + 1 if (e.quality >= Q_GOOD and not jump) else 0
-        if not neutral:
-            # 不当证据的转身帧也不进窗口:进了会抬高中位数,把转身前站着的常态帧算成「低」
-            # (2026-10-28 turn-144620 合并回放:站着 0.87、转身 0.93 → σ 1.5 约 0.6 s)
-            self._lowq.append((e.stamp, quality))
+        # 不当证据的转身帧照样进窗口(占比的分母),只是不拿来定「常态」:拿来定会抬高中位数,把转身前
+        # 站着的常态帧算成「低」(2026-10-28 turn-144620 合并回放:站着 0.87、转身 0.93 → σ 1.5);
+        # 整个不进又让转身时夹着的烂帧凑不够数、或中位数被烂帧拉低(复查 N2)
+        self._lowq.append((e.stamp, e.quality, neutral))
         while self._lowq and e.stamp - self._lowq[0][0] > LOWQ_WINDOW_S:
             self._lowq.popleft()
         if e.quality >= Q_MATCH or self._last_match is None:
@@ -499,9 +499,10 @@ class LocalizerCore:
         if self._jumped_lately(now):
             s = max(s, SIGMA_JUMPED_M)
         if len(self._lowq) >= LOWQ_MIN_FRAMES:
-            qs = [q for _, q in self._lowq]
-            line = min(LOWQ_Q, statistics.median(qs) - LOWQ_DROP)
-            low_share = sum(q < line for q in qs) / len(qs)
+            usual = [q for _, q, n in self._lowq if not n]          # 常态只按当证据的帧定
+            line = min(LOWQ_Q, statistics.median(usual) - LOWQ_DROP) if usual else -math.inf
+            low_share = sum(q <= Q_BAD or (not n and q < line)
+                            for _, q, n in self._lowq) / len(self._lowq)
         else:
             low_share = 0.0
         if low_share >= LOWQ_SHARE:
