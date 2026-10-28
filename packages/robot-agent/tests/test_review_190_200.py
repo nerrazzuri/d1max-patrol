@@ -452,3 +452,26 @@ async def test_复查N4_被挡放弃这一段_不发不挡了_引擎还要重试
     await t.跑(40.0)
     assert NavStatus.FAILED in t.status
     assert "nav_unblocked" not in [k for k, _ in t.events]
+
+
+async def test_复查N4_放弃这一段以后_箱子挪走重试成功_补发不挡了(tmp_path):
+    import test_obstacle_avoid as ob
+
+    from d1max_patrol.protocol.nav_types import NavStatus, Pose
+    t = ob.台子(tmp_path, rear=True, cone=True)
+    await t.start(1.5, 4.0)
+    await t.nav.goto(Pose.from_xy_yaw(7.0, 4.0))
+    await t.跑(1.0)
+    t.world.dyn["box"] = (6.7, 3.6, 7.3, 4.4)
+    await t.跑(40.0)
+    assert NavStatus.FAILED in t.status
+    assert "nav_unblocked" not in [k for k, _ in t.events]
+    del t.world.dyn["box"]
+    for _ in range(310):                                             # 感知照常刷新,临时障碍过期
+        await t.一拍()
+    begin = len(t.status)
+    await t.nav.goto(Pose.from_xy_yaw(7.0, 4.0))
+    await t.跑(30.0)
+    assert NavStatus.SUCCEED in t.status[begin:]
+    kinds = [k for k, _ in t.events]
+    assert "nav_unblocked" in kinds[kinds.index("nav_blocked"):]
