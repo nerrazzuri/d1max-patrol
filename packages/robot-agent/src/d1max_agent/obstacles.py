@@ -16,7 +16,7 @@ from __future__ import annotations
 import math
 import time
 from collections import deque
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -297,17 +297,30 @@ class ObstacleGuard:
         v = abs(v)
         return v * self.latency + v * v / (2.0 * self.decel) + self.extra
 
-    def swept(self, vx: float, wz: float, v_meas: float) -> list[tuple[float, float]]:
+    def turn_span(self, wz: float, w_now: Sequence[float] = ()) -> tuple[float, float]:
+        """原地转这一拍机身朝向可能落到的范围(弧度,相对此刻;含 0)。外审 2026-10-29 R1:不光新命令
+        ``wz`` 转过去再刹停,**正在转的那股劲**(``w_now``:上一拍发的转速、里程实测转速)在延迟里接着
+        转、再刹停也算 —— 原来只查新命令那一侧,反向或减速时漏了还在执行的那一侧。"""
+        lo = hi = 0.0
+        for w in (wz, *w_now):
+            if abs(w) > 1e-6:
+                a = math.copysign(self.turn_reach(w), w)
+                lo, hi = min(lo, a), max(hi, a)
+        return lo, hi
+
+    def swept(self, vx: float, wz: float, v_meas: float,
+              w_now: Sequence[float] = ()) -> list[tuple[float, float]]:
         """这条命令扫过的机身区域里的采样点(此刻狗身系)。往前走:沿这条命令的圆弧推
         ``reach(max(实测, 命令))`` 米,每一步一个机身矩形(往后退就往后推);原地转(前进 ≈ 0、在转):
-        外接圆。"""
+        :meth:`turn_span` 那段扇形,过半圈查外接圆。"""
         hl, hw = self.body_len / 2 + self.margin, self.body_wid / 2 + self.margin
         pts: set[tuple[float, float]] = set()
         s = self.step
-        if abs(vx) < 1e-6 and abs(wz) > 1e-6 and self.turn_reach(wz) < math.pi:
-            # 扇形:外接圆里的采样点(跟整圈一样取格子中间),转过 0 → ±turn_reach 的某一刻落在机身
-            # 矩形里就算扫到;角步长让外接圆上相邻两刻不超过一格
-            th, r = self.turn_reach(wz), math.hypot(hl, hw)
+        lo, hi = self.turn_span(wz, w_now)
+        if abs(vx) < 1e-6 and abs(wz) > 1e-6 and hi - lo < math.pi:
+            # 扇形:外接圆里的采样点(跟整圈一样取格子中间),转到 lo → hi 的某一刻落在机身矩形里就算
+            # 扫到;角步长让外接圆上相邻两刻不超过一格
+            r = math.hypot(hl, hw)
             n = int(r / s) + 1
             g = (np.arange(-n, n) + 0.5) * s
             X, Y = np.meshgrid(g, g, indexing="ij")
@@ -315,10 +328,9 @@ class ObstacleGuard:
             keep = X * X + Y * Y <= r * r
             X, Y = X[keep], Y[keep]
             hit = np.zeros(len(X), dtype=bool)
-            k = max(1, int(math.ceil(th * r / s)))
-            sign = 1.0 if wz > 0 else -1.0
+            k = max(1, int(math.ceil((hi - lo) * r / s)))
             for i in range(k + 1):
-                a = sign * th * i / k                   # 机身转了 a:把点转回 −a 看在不在矩形里
+                a = lo + (hi - lo) * i / k              # 机身转了 a:把点转回 −a 看在不在矩形里
                 c, sn = math.cos(a), math.sin(a)
                 lx, ly = c * X + sn * Y, -sn * X + c * Y
                 hit |= (np.abs(lx) <= hl) & (np.abs(ly) <= hw)
@@ -377,13 +389,13 @@ class ObstacleGuard:
         return sorted(p for p in pts if abs(p[0]) > hl + 1e-9 or abs(p[1]) > hw + 1e-9)
 
     def check(self, vx: float, wz: float, v_meas: float, view: ObstacleView,
-              pose_now: tuple[float, float, float]) -> Verdict:
+              pose_now: tuple[float, float, float], *, w_now: Sequence[float] = ()) -> Verdict:
         if abs(vx) < 1e-6 and abs(wz) < 1e-6:
             return Verdict(True)                     # 原地等:不动就不会撞
         st = view.state()
         if st != "ok":
             return Verdict(False, f"障碍数据{_STATE_TEXT.get(st, st)}")
-        pts = self.swept(vx, wz, v_meas)
+        pts = self.swept(vx, wz, v_meas, w_now)
         hit, unknown = view.lookup(pts, pose_now)
         if not hit and not unknown:
             return Verdict(True)

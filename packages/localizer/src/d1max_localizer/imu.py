@@ -28,6 +28,9 @@ SNAP_DEG = 20.0
 WEAK_RATIO = 0.3
 #: 残差最小的两种直角装法至少差这么多(相对)才算分得出来。
 MIN_MARGIN = 0.02
+#: 外审 R3:另两根轴晃得少时,直角装法比自由拟合多出的残差超过「另两根轴的晃」这么大一份 = 数据明摆着
+#: 不是直角装法(真装歪了 20° 也有 12%),不硬吸;噪声把拟合带偏时,两者残差差不多。
+WEAK_EXCESS = 0.08
 
 
 @dataclass(frozen=True)
@@ -163,12 +166,25 @@ def fit_axes(w_body: Any, gyro: Any) -> AxesFit:
     if r2 - r1 < MIN_MARGIN * max(r1, 1e-12) + 1e-12:
         return AxesFit(False, "只转了朝向、机身几乎没晃:另两根轴定不下来(录一段走动的)",
                        yaw_corr=corr, frames=n)
+    if off > SNAP_DEG and weak:
+        free = float(np.sum((wb_c - g_c @ r.T) ** 2))
+        shake = float(np.sum(np.delete(wb_c, k, axis=1) ** 2))
+        if r1 - free > WEAK_EXCESS * shake:
+            return AxesFit(False, f"另两根轴晃得少,拟合值离最近的直角装法 {off:.1f}°、直角装法明显"
+                                  "对不上:定不下来(录一段走动的、上下坡或侧倾的)",
+                           yaw_corr=corr, frames=n)
     if off <= SNAP_DEG or weak:
         how = "另两根轴晃得少,按残差挑" if weak and off > SNAP_DEG else "吸到直角装法"
         return AxesFit(True, f"{how}(拟合值离它 {off:.1f}°)", ypr_from_matrix(best), True, off,
-                       corr, n)
+                       _corr(wb_c, g_c, best, k), n)
     return AxesFit(True, f"离最近的直角装法 {off:.1f}°,按拟合值", ypr_from_matrix(r), False, off,
                    corr, n)
+
+
+def _corr(wb_c: Any, g_c: Any, m: Any, k: int) -> float:
+    """外审 R3:报的相关系数按最后给出的装法算。"""
+    import numpy as np
+    return float(np.corrcoef(wb_c[:, k], (g_c @ m.T)[:, k])[0, 1])
 
 
 def body_rates(rows: Sequence[tuple[float, Sequence[float], Sequence[float]]]) -> tuple[Any, Any]:

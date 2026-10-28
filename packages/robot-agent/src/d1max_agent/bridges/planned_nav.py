@@ -215,6 +215,9 @@ class PlannedNavBackend(HalNavBackend):
         self._closed: list = []
         #: 最近一拍发出去的前进速度(回退检查按它和实测取大算刹车距离)。
         self._last_vx = 0.0
+        #: 外审 R1:最近一拍发出去的转速、里程实测的转速 —— 原地转的守卫把还在执行的那股转也查上。
+        self._last_wz = 0.0
+        self._w_meas = 0.0
         self._near_told = False
         #: 路长估计单用一个规划器(内审应修 7:不跟 goto、重规划抢同一个子进程)。
         self._hint_planner: Planner | None = None
@@ -512,6 +515,7 @@ class PlannedNavBackend(HalNavBackend):
 
     async def _send(self, vx: float, wz: float, dt_s: float) -> None:
         self._last_vx = vx
+        self._last_wz = wz
         self._note_sent(vx, wz)
         await super()._send(vx, wz, dt_s)
 
@@ -695,11 +699,16 @@ class PlannedNavBackend(HalNavBackend):
         self._stall_ref = None                           # 工单 29:不带到下一趟
         self._hit_reason = ""
         self._hit_at = -math.inf
+        if self._blocked_told and self._blocked_since is None and self.on_event is not None:
+            # 外审 R7:提前报过「终点被盖住」、后来没真被挡住就结束了(箱子挪走了、换了点):
+            # 站点那边的「被挡」要清掉
+            self.on_event("nav_unblocked", {"waited_s": 0.0, "detour": False})
         self._blocked_since = None
         self._blocked_told = False
         self._detoured = False
         self._goal_covered = False
         self._last_vx = 0.0
+        self._last_wz = 0.0
         self._path = None
         self._aligning = False
         self._replan_out = None
@@ -790,6 +799,14 @@ class PlannedNavBackend(HalNavBackend):
                 and "goal_blocked" in str(out[1]) and not self._goal_covered):
             log.warning("终点被障碍盖住(%s)", out[1])
             self._goal_covered = True
+            if not self._blocked_told:
+                # 外审 R7:重规划一说终点不可达就报(原来要等走到跟前被守卫挡住才报);后面真被挡住
+                # 不再重复报
+                self._blocked_told = True
+                if self.on_event is not None:
+                    self.on_event("nav_blocked", {"reason": f"终点被障碍盖住({out[1]})"[:200],
+                                                  "x": round(here.x, 2), "y": round(here.y, 2),
+                                                  "waited_s": 0.0})
         if out is not None and out[0] == "fail" and self._replan_kind == "preview":
             log.info("前面有新障碍,提前绕不过去:%s;沿原来的路走", out[1])
             out = None
@@ -961,9 +978,14 @@ class PlannedNavBackend(HalNavBackend):
 
     def _odom_seen(self, odom: Any) -> None:
         self._v_meas = float(getattr(odom, "vx", 0.0) or 0.0)
+        self._w_meas = float(getattr(odom, "wz", 0.0) or 0.0)
         self._odom_pose = (odom.x, odom.y, odom.yaw)
         if self.obstacles is not None:
             self.obstacles.note_odom(odom.x, odom.y, odom.yaw)
+
+    def _guard_check(self, vx: float, wz: float) -> Any:
+        return self.guard.check(vx, wz, self._v_meas, self.obstacles, self._odom_pose,
+                                w_now=(self._last_wz, self._w_meas))
 
     def _secs(self) -> float:
         """被挡计时、临时障碍的过期用单调钟(内审小:墙钟一对时就跳);没配避障就按后端的钟。"""
@@ -1008,11 +1030,11 @@ class PlannedNavBackend(HalNavBackend):
                                     self._now()))
             await self._fail(why)
             return
-        v = self.guard.check(vx, wz, self._v_meas, self.obstacles, self._odom_pose)
+        v = self._guard_check(vx, wz)
         if not v.ok and abs(vx) > 1e-6 and abs(wz) > 1e-6 and self._creep_from is None:
             # 边走边转的弧线被拦(W35:急弯的弧线往里扫出去一米,扫进机身侧面的盲带),原地转却通得过:
             # 先原地转正,转正了下一拍就是直走 —— 不为一条弧线原地等到放弃。发出去的那条照样过了守卫
-            turn = self.guard.check(0.0, wz, self._v_meas, self.obstacles, self._odom_pose)
+            turn = self._guard_check(0.0, wz)
             if turn.ok:
                 vx, v = 0.0, turn
         if v.ok and self._stalled():
@@ -1154,7 +1176,7 @@ class PlannedNavBackend(HalNavBackend):
         """往 ``way`` 那头(+1 行进方向往前、−1 往后退)直着挪 ``length``:守卫现看得清是空的、整段里
         雷达没看到挡(工单 14)、地图、临时障碍和区域也让走。"""
         vx = (self._dir or 1) * way * CREEP_V
-        return (self.guard.check(vx, 0.0, self._v_meas, self.obstacles, self._odom_pose).ok
+        return (self._guard_check(vx, 0.0).ok
                 and not self._creep_hits(vx, length)
                 and self._creep_clear(here, way, length))
 
