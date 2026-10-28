@@ -37,6 +37,7 @@ import asyncio
 import logging
 import math
 from collections.abc import Callable
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -94,8 +95,14 @@ CREEP_V = 0.2
 #:   1. 往前挪**顺路**(挪完离路径不超过 :data:`CREEP_OFF_PATH_M`、而且挪完离终点还有一段)→ 往前;
 #:   2. 不顺路就**往后退**一个机身长(后雷达看着、跟往前挪一样查地图和区域)—— 后雷达标过才过得了守卫;
 #:   3. 退不了,往前挪不会冲过终点(终点在身后、或者远在 1.3 m 之外)→ 还按老办法往前挪;
-#:   4. 都不行 → 原地等(到时候放弃)。
+#:   4. 终点就在前面 1.45 m 以内(工单 17,2026-10-28 E5:起点离 p1 1.4 m、身后是墙)→ 往前挪到点上为止
+#:      (挪 :data:`CREEP_MIN_M` 以上才算数);
+#:   5. 都不行 → 原地等(到时候放弃)。
+#: 不管往哪头挪,**整段**(挪的距离 + 刹车距离)里雷达真看到的挡、记下的临时障碍都要查(工单 14,
+#: 2026-10-28 C1:走着停下时箱子在机头前 0.45 m 上下,守卫按挪的速度只看 0.38 m,判「往前挪得了」,
+#: 每次往前挪、被挡、20 s 放弃;回原点时斜着往后退,退 0.2 m 就撞上身后的航空箱)。
 CREEP_OFF_PATH_M = 0.4
+CREEP_MIN_M = 0.2
 #: 同一段最多挪几次(往后退完又走回来、两侧还是看不见:不来回折腾)。
 MAX_CREEPS = 3
 #: 对朝向的时候被挪开(往后退)、或者定位一跳,离点超过到点容差 + 这么多 → 不算在对朝向了,重新走过去
@@ -190,6 +197,8 @@ class PlannedNavBackend(HalNavBackend):
         self._creep_from: tuple[float, float] | None = None
         #: 这次挪的方向:+1 顺着行进方向往前,−1 往后退(W41)。
         self._creep_way = 1
+        #: 这次挪多远(米;一般 :data:`CREEP_M`,终点就在前面时挪到点上为止)。
+        self._creep_len = CREEP_M
         self._crept = False
         #: 这一段挪了几次(W41,:data:`MAX_CREEPS`)。
         self._creeps = 0
@@ -788,7 +797,7 @@ class PlannedNavBackend(HalNavBackend):
         if self._creep_from is not None:
             moved = math.hypot(self._odom_pose[0] - self._creep_from[0],
                                self._odom_pose[1] - self._creep_from[1])
-            if moved < CREEP_M:
+            if moved < self._creep_len:
                 # 挪着看两侧(守卫照样查)
                 vx = (self._dir or 1) * self._creep_way * self._creep_speed(here, self._creep_way)
                 wz = 0.0
@@ -850,12 +859,12 @@ class PlannedNavBackend(HalNavBackend):
                                               "waited_s": round(waited, 1)})
         if (self._creep_from is None and not self._crept and self._creeps < MAX_CREEPS
                 and not v.hits and abs(wz) > 1e-6 and waited >= BLOCK_DETOUR_S):
-            way = self._pick_creep(here)
+            way, length = self._pick_creep(here)
             if way:
                 # 带转向(原地转、弧线)只被「看不见」挡住:往前挪 / 往后退一个机身长再接着走
-                self._creep_way = way
+                self._creep_way, self._creep_len = way, length
                 log.info("转向被看不见的格子挡住(机身两侧没看过):先%s %.1f m",
-                         self._creep_word(), CREEP_M)
+                         self._creep_word(), length)
                 self._creep_from = (self._odom_pose[0], self._odom_pose[1])
                 self._crept = True
                 self._creeps += 1
@@ -877,12 +886,22 @@ class PlannedNavBackend(HalNavBackend):
     def _creep_word(self) -> str:
         return "往前挪" if self._creep_way > 0 else "往后退"
 
-    def _can_creep(self, here: Any, way: int) -> bool:
-        """往 ``way`` 那头(+1 行进方向往前、−1 往后退)直着挪 :data:`CREEP_M`:守卫现看得清是空的、
-        地图和区域也让走。"""
-        return (self.guard.check((self._dir or 1) * way * CREEP_V, 0.0, self._v_meas,
-                                 self.obstacles, self._odom_pose).ok
-                and self._creep_clear(here, way))
+    def _can_creep(self, here: Any, way: int, length: float = CREEP_M) -> bool:
+        """往 ``way`` 那头(+1 行进方向往前、−1 往后退)直着挪 ``length``:守卫现看得清是空的、整段里
+        雷达没看到挡(工单 14)、地图、临时障碍和区域也让走。"""
+        vx = (self._dir or 1) * way * CREEP_V
+        return (self.guard.check(vx, 0.0, self._v_meas, self.obstacles, self._odom_pose).ok
+                and not self._creep_hits(vx, length)
+                and self._creep_clear(here, way, length))
+
+    def _creep_hits(self, vx: float, length: float) -> bool:
+        """挪的整段(``length`` + 刹车距离)扫过的机身里,雷达此刻看到的挡(看不见的不算:挪就是为了
+        去看;起步那一截守卫照样按看不见当挡)。"""
+        if self.obstacles is None or not hasattr(self.guard, "swept"):
+            return False
+        g = replace(self.guard, extra=self.guard.extra + length)
+        hit, _ = self.obstacles.lookup(g.swept(vx, 0.0, 0.0), self._odom_pose)
+        return bool(hit)
 
     def _creep_along(self, here: Any) -> float:
         """终点在往前挪那条线上有多远(米;负的 = 在身后)。"""
@@ -905,23 +924,27 @@ class PlannedNavBackend(HalNavBackend):
             best = min(best, math.hypot(x - ax - t * dx, y - ay - t * dy))
         return best
 
-    def _pick_creep(self, here: Any) -> int:
-        """挪的方向(W41,见 :data:`CREEP_OFF_PATH_M` 上面的说明):+1 往前、−1 往后退、0 不挪。对朝向的
-        时候不往前挪(挪了就不在点上了),往后退可以(退完重新走回来,两侧就看过了)。"""
+    def _pick_creep(self, here: Any) -> tuple[int, float]:
+        """挪的方向和距离(W41、工单 14/17,见 :data:`CREEP_OFF_PATH_M` 上面的说明):+1 往前、
+        −1 往后退、0 不挪。对朝向的时候不往前挪(挪了就不在点上了),往后退可以(退完重新走回来,
+        两侧就看过了)。"""
         along = self._creep_along(here) if self._target is not None else math.inf
         fwd = not self._aligning and self._can_creep(here, 1)
         if fwd and along >= CREEP_M + ARRIVE_TOL_M:
             h = _heading(here.yaw, self._dir or 1)
             if self._off_path(here.x + CREEP_M * math.cos(h),
                               here.y + CREEP_M * math.sin(h)) <= CREEP_OFF_PATH_M:
-                return 1                                 # 顺路:往前挪本来就是往终点走
+                return 1, CREEP_M                        # 顺路:往前挪本来就是往终点走
         if self._can_creep(here, -1):
-            return -1
+            return -1, CREEP_M
         if fwd and not (0.0 < along < CREEP_M + ARRIVE_TOL_M):
-            return 1                                     # 退不了、也不会冲过终点:老办法
-        return 0
+            return 1, CREEP_M                            # 退不了、也不会冲过终点:老办法
+        if (not self._aligning and CREEP_MIN_M <= along < CREEP_M + ARRIVE_TOL_M
+                and self._can_creep(here, 1, min(CREEP_M, along))):
+            return 1, min(CREEP_M, along)                # 工单 17:终点就在前面,挪到点上为止
+        return 0, 0.0
 
-    def _creep_clear(self, here: Any, way: int = 1) -> bool:
+    def _creep_clear(self, here: Any, way: int = 1, length: float = CREEP_M) -> bool:
         """往前挪那一段在地图上也得能走:机身(含余量)扫过的那一条不压地图里的挡、不出图,离禁行区
         够远(内审阻断 1:原来只看守卫,禁行区要等狗身中心压上去才停 —— 落差在真机验过之前只靠禁行区
         挡)。
@@ -951,9 +974,11 @@ class PlannedNavBackend(HalNavBackend):
                          int(math.floor((x - origin[0]) / res))))
             return out
         under = cells(0.0)
-        for i in range(1, int(math.ceil(CREEP_M / step)) + 1):
-            for r, k in cells(min(i * step, CREEP_M)) - under:
-                if not (0 <= r < rows and 0 <= k < cols) or blocked[r, k]:
+        now = self._secs()
+        temp = {k for k, t in self._temp.items() if t > now}     # 记下的临时障碍(工单 14)
+        for i in range(1, int(math.ceil(length / step)) + 1):
+            for r, k in cells(min(i * step, length)) - under:
+                if not (0 <= r < rows and 0 <= k < cols) or blocked[r, k] or (r, k) in temp:
                     return False
         # 区域的规矩一条不少(W35 外审 I2):禁行区,**加上限速低到这台狗守不住、规划当禁行的限速区**
         # (:meth:`_effective`)。改查没膨胀的图时只看了原始的禁行区,把后一类漏了 —— 人划的区雷达
@@ -962,7 +987,7 @@ class PlannedNavBackend(HalNavBackend):
         # (原来是中心线离 0.25 m,不加 σ)。
         pose = (here.x, here.y, here.yaw)
         need = zg.sigma_of(here) + BACKSTOP_MARGIN_M
-        poses = zg.sweep(*pose, CREEP_M + zg.stop_distance(CREEP_V), 0.0, heading=h)[1:]
+        poses = zg.sweep(*pose, length + zg.stop_distance(CREEP_V), 0.0, heading=h)[1:]
         for z in self._closed:
             c0 = zg.clearance(pose, z, need)
             if c0 <= 0.0 or any(c < need and c < c0 - 1e-3

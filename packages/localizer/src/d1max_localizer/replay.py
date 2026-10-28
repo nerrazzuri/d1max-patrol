@@ -180,18 +180,21 @@ View = list[tuple[float, bool, str, int | None]]
 
 
 def agent_view(msgs: Sequence[tuple[float, Any]], *,
-               odom: Sequence[tuple[float, tuple[float, float, float]]] = ()) -> View:
+               odom: Sequence[tuple[float, tuple[float, float, float]]] = (),
+               init: tuple[float, float, float] | None = None) -> View:
     """把报文流喂给代理的 ``BridgeLocalizer``(W09a 同一份代码),每条报文之后记一行:
     ``(时刻, 信不信, 为什么, 这条是位姿的话它的 stamp_ns)``。
     ``odom`` 是 ``[(时刻, (x, y, yaw))]``(录包里的里程替身);空的话不做交叉校验、不推算,也不核
-    锚(代理按「根本没有里程」起,对账 S1 之后真代理没有能核的锚不认跳过的)。"""
+    锚(代理按「根本没有里程」起,对账 S1 之后真代理没有能核的锚不认跳过的)。``init`` 给了:开头当人
+    在这里给了位置(跟现场一样,代理有锚可核;带里程时不给的话整段都「请重新设位置」)。"""
     from d1max_agent.bridge_localizer import BridgeLocalizer
 
-    return asyncio.run(_agent_view(BridgeLocalizer, msgs, odom))
+    return asyncio.run(_agent_view(BridgeLocalizer, msgs, odom, init))
 
 
 async def _agent_view(cls: Any, msgs: Sequence[tuple[float, Any]],
-                      odom: Sequence[tuple[float, tuple[float, float, float]]]) -> View:
+                      odom: Sequence[tuple[float, tuple[float, float, float]]],
+                      init: tuple[float, float, float] | None = None) -> View:
     clock = _Clock()
     clock.t = msgs[0][0] if msgs else 0.0
     agent = cls(monotonic=clock, odometry=bool(odom))
@@ -206,6 +209,11 @@ async def _agent_view(cls: Any, msgs: Sequence[tuple[float, Any]],
     await agent.prior_task
     out: View = []
     oi = 0
+    if init is not None and msgs:
+        while oi < len(odom) and odom[oi][0] <= msgs[0][0]:
+            agent.update(odom[oi][1], True)
+            oi += 1
+        await agent.relocalize(MAP_REF, init)
     for at, m in msgs:
         clock.t = at
         while oi < len(odom) and odom[oi][0] <= at:

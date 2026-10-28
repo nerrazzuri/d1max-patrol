@@ -182,3 +182,37 @@ def test_重定位后第一帧离得远_回放里照样模拟再请一次_不一
     view = replay.agent_view(msgs)
     m = replay.metrics(fr, msgs, view, FLAT)
     assert m["agent_trusted_share"] > 0.8
+
+
+def _里程(fr):
+    """里程替身:跟定位器一样沿 x 走(时刻按估计的时间戳,simulate 的到达时刻比它晚 40 ms)。"""
+    return [(f.stamp, (f.p[0], f.p[1], 0.0)) for f in fr]
+
+
+def test_带里程回放_开头当人给了初值_代理信():
+    """带里程时代理要先有一个能核的锚(对账 S1);原来 agent_view 不给,带里程整段都
+    「请重新设位置」。"""
+    fr = _frames()
+    msgs = replay.simulate(fr, FLAT, (0.0, 0.0, 0.0))
+    view = replay.agent_view(msgs, odom=_里程(fr), init=(0.0, 0.0, 0.0))
+    m = replay.metrics(fr, msgs, view, FLAT)
+    assert m["agent_trusted_share"] > 0.95, m["agent_untrusted"]
+
+
+def test_回放命令_带里程文件(tmp_path, capsys):
+    fr = _frames(n=100)
+    run = tmp_path / "run"
+    run.mkdir()
+    (run / "traj.tum").write_text("".join(f"{f.stamp} {f.p[0]} {f.p[1]} 0 0 0 0 1\n" for f in fr))
+    (run / "traces.csv").write_text('"icp_quality","time_onLidar","timestamp",\n'
+                                    + "".join(f"0.97,0.04,{f.stamp},\n" for f in fr))
+    prior = tmp_path / "prior"
+    prior.mkdir()
+    (prior / "frames.json").write_text(json.dumps(FLAT.to_json()))
+    odom = tmp_path / "odom.tum"
+    odom.write_text("".join(f"{t} {p[0]} {p[1]} 0 0 0 0 1\n" for t, p in _里程(fr)))
+    assert tools.main(["replay", "--bag", str(tmp_path / "bag"), "--prior", str(prior),
+                       "--init", "0,0,0", "--out", str(run), "--reuse",
+                       "--odom-tum", str(odom)]) == 0
+    m = json.loads((run / "metrics.json").read_text())
+    assert m["agent_trusted_share"] > 0.9, m["agent_untrusted"]
