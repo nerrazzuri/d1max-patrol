@@ -78,6 +78,11 @@ BLOCK_RETRY_S = 5.0
 BLOCK_GIVEUP_S = 20.0
 BLOCK_REPORT_S = 5.0
 TEMP_OBSTACLE_S = 30.0
+#: 绕障(2026-10-28 用户现场:身子没过完就往回转,转回来又看到方块):狗只看得到障碍朝它的那一面,
+#: 记临时障碍时沿视线往后补这么深(米)当占着;雷达看得见是空的格子不补(细杆子后面是空的)。
+SHADOW_M = 0.6
+#: 前后雷达在狗身上沿「前」的位置(米;SDK:±404.3 mm)。补背面时视线从挡的那一头的雷达出发。
+LIDAR_X_M = 0.4043
 #: 原地转、或者带转向的弧线被「看不见」挡住(机身两侧是两台半球雷达的盲带,刚起来、站久了没有
 #: 记忆;转向时机身角甩进去):前面看得清是空的,就笔直往前挪这么远(这么快)再接着走 —— 挪过一个
 #: 机身长,两侧就在刚才看过的范围里了。每次被挡最多挪一次。W34:2026-10-08 C40221 起步是弧线,
@@ -1110,11 +1115,44 @@ class PlannedNavBackend(HalNavBackend):
         _, res, origin = self._base
         c, s = math.cos(here.yaw), math.sin(here.yaw)
         self._temp = {k: t for k, t in self._temp.items() if t > now}
-        for px, py in hits:
+        for px, py in list(hits) + self._shadow(hits, res):
             mx, my = here.x + c * px - s * py, here.y + s * px + c * py
             self._temp[(int(math.floor((my - origin[1]) / res)),
                         int(math.floor((mx - origin[0]) / res)))] = now + TEMP_OBSTACLE_S
         self._invalidate()
+
+    def _shadow(self, hits: Any, res: float) -> list[tuple[float, float]]:
+        """挡住的点背后看不见的那一截(此刻狗身系):从挡的那一头的雷达沿视线穿过每个挡点、往后
+        :data:`SHADOW_M`;雷达(含记忆)看过是空的点不要,遇到看过是空的就停(后面看得穿)。"""
+        if not hits or self.obstacles is None:
+            return []
+        step = res / 2
+        n = max(1, int(round(SHADOW_M / step)))
+        cand: list[tuple[float, float]] = []
+        rays: list[int] = []
+        for i, (px, py) in enumerate(hits):
+            sx = LIDAR_X_M if px >= 0 else -LIDAR_X_M
+            dx, dy = px - sx, py
+            d = math.hypot(dx, dy)
+            if d < 1e-6:
+                continue
+            ux, uy = dx / d, dy / d
+            for k in range(1, n + 1):
+                cand.append((px + ux * step * k, py + uy * step * k))
+                rays.append(i)
+        if not cand:
+            return []
+        hit_i, unk_i = self.obstacles.lookup(cand, self._odom_pose)
+        ok = set(hit_i) | set(unk_i)
+        out, stopped = [], set()
+        for j, p in enumerate(cand):
+            if rays[j] in stopped:
+                continue
+            if j not in ok:
+                stopped.add(rays[j])                   # 看过是空的:这条视线后面看得穿,不再补
+                continue
+            out.append(p)
+        return out
 
     # ------------------------------------------------------------ 给引擎的路长估计
 

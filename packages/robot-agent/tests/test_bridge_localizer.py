@@ -256,11 +256,11 @@ async def test_稳定期里又跳一次_修正量还是从第一次跳之前算(
     loc.on_corrected = lambda d, human: got.append(d)
     loc.on_pose(_位姿(5.5, 5.0, 0.3, jump=True))
     loc.on_pose(_位姿(5.5, 5.0, 0.3))
-    loc.on_pose(_位姿(6.0, 5.5, 0.4, jump=True))          # 还没稳又跳
+    loc.on_pose(_位姿(5.6, 5.4, 0.4, jump=True))          # 还没稳又跳(离可信的 0.7 m,工单 27 线内)
     for _ in range(SETTLE_FIXES):
-        loc.on_pose(_位姿(6.0, 5.5, 0.4))
+        loc.on_pose(_位姿(5.6, 5.4, 0.4))
     [d] = got
-    assert _近(compose(d, (5.0, 5.0, 0.3)), (6.0, 5.5, 0.4), 1e-9), "从跳之前可信的那一帧算"
+    assert _近(compose(d, (5.0, 5.0, 0.3)), (5.6, 5.4, 0.4), 1e-9), "从跳之前可信的那一帧算"
 
 
 async def test_稳下来之后再跳_修正量从稳下来那一帧算_不重复挪():
@@ -920,8 +920,8 @@ async def test_外审I1_按给的锚稳下来之后_锚跟着可信的帧走_不
     r = [m for m in link.sent if isinstance(m, Relocalize)][-1]
     loc.on_pose(_位姿(2.5, 0.0, jump=True, reloc_id=r.req))
     _稳(loc, 2.5, 0.0)                                    # 离给的 2.5 m:认
-    loc.on_pose(_位姿(5.0, 0.0, jump=True))               # 以后再跳:跟 2.5 m 那儿比,不跟 0 比
-    _稳(loc, 5.0, 0.0)
+    loc.on_pose(_位姿(3.3, 0.0, jump=True))               # 以后再跳:跟 2.5 m 那儿比,不跟 0 比
+    _稳(loc, 3.3, 0.0)                                    # (离 0 差 3.3 > 3:钉在给的那儿就不认)
 
 
 # ---------------------------------------------------------------- W35 复查 R1:别的稳定轮不许放手
@@ -968,10 +968,10 @@ async def test_复查R1_收下了但那一帧没来定位器就断了_连回来�
     loc.on_connect()
     await loc.prior_task
     _稳(loc, 2.2, 0.0)                                    # 连回来:按给的锚核过
-    loc.on_pose(_位姿(4.9, 0.0, jump=True))               # 以后跟着可信的帧走(离 2.2 差 2.7)
-    _稳(loc, 4.9, 0.0)
-    loc.on_pose(_位姿(7.5, 0.0, jump=True))               # 离 4.9 差 2.6:认;还钉在 2 就差 5.5
-    _稳(loc, 7.5, 0.0)
+    # 以后跟着可信的帧走:每次 0.8 m(工单 27 线内)
+    for x in (3.0, 3.8, 4.6, 5.4):
+        loc.on_pose(_位姿(x, 0.0, jump=True))
+        _稳(loc, x, 0.0)                                  # 5.4 离给的 2.0 差 3.4:还钉在那儿就不认
 
 
 # ---------------------------------------------------------------- 对账 S1:没有能核的锚,跳过的不认
@@ -1313,3 +1313,37 @@ async def test_S6_σ偏大_在推算_算变差_好了过一阵才算回来_不�
     assert loc.ok(True) and loc.source == "dead_reckoning" and "推算" in loc.degraded(True)
     loc.on_pose(_位姿(0.1, 0.0, sigma=SIGMA_LOST_M + 0.1))
     assert not loc.ok(True) and loc.degraded(True) == "", "不可信不是「变差」:导航本来就停"
+
+
+# ------------------------------------------------------------ 工单 27(2026-10-28 背对玻璃锁错)
+
+
+async def test_工单27_站着不动_定位器跳到2米外稳住_按最后可信的位置核_不认():
+    """glass-160827 回放:狗背对玻璃站着、里程一点没动,定位器跳到 2 m 外(质量 0.98)稳住。最后可信的
+    位置按里程推过来很准,原来照「人给的位置」的 3 m 线核,2 m 就认了。"""
+    c, link, loc = await _就绪()
+    _稳(loc, 3.0, -2.0, 2.9)
+    loc.on_pose(_位姿(4.9, -0.8, 3.1, jump=True))
+    for _ in range(SETTLE_FIXES + 2):
+        loc.on_pose(_位姿(4.9, -0.8, 3.1))
+    assert not loc.ok(True) and "请重新设位置" in loc.why_not(True)
+
+
+async def test_工单27_正常的重新匹配修正_半米上下_照认():
+    c, link, loc = await _就绪()
+    _稳(loc, 3.0, -2.0, 2.9)
+    loc.on_pose(_位姿(3.5, -2.2, 2.9, jump=True))
+    _稳(loc, 3.5, -2.2, 2.9)
+
+
+async def test_工单27_丢定位后自动重定位_按最后可信的位置核_锁到4米外不认():
+    """引擎重置时按最后可信的位置(按里程推过来)请重定位:原来锚线按 σ 1.5 算成 4.5 m,玻璃外 3–4 m
+    的错解照认(锁到 2.4 m 外那种)。"""
+    c, link, loc = await _就绪()
+    _稳(loc, 3.0, -2.0, 2.9)
+    await loc.reset()
+    r = [m for m in link.sent if isinstance(m, Relocalize)][-1]
+    loc.on_pose(_位姿(5.4, -2.4, 2.9, jump=True, reloc_id=r.req))
+    for _ in range(SETTLE_FIXES + 2):
+        loc.on_pose(_位姿(5.4, -2.4, 2.9))
+    assert not loc.ok(True) and "请重新设位置" in loc.why_not(True)

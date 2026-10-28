@@ -1152,3 +1152,47 @@ async def test_工单25_原地转被身后真挡拦住_选往前挪(tmp_path):
     t.nav._next_detour = math.inf
     await t.nav._blocked(v, here, 0.1, 0.0, 1.0)
     assert t.nav._creep_from is not None and t.nav._creep_way == 1
+
+
+async def test_绕障_箱子很深_看不见的背面当占着_一次绕过去不放弃(tmp_path):
+    """2026-10-28 用户现场看到:绕障时身子还没过完就往回转,转回来又看到方块,一顿一顿;深一点的箱子
+    原来绕两回就放弃。狗只看得到朝它的那一面:记临时障碍时沿视线往后补 SHADOW_M(看得见是空的
+    不补)。"""
+    t = 台子(tmp_path, rear=True, cone=True)
+    await t.start(2.0, 4.0)
+    await t.nav.goto(Pose.from_xy_yaw(9.5, 4.0))
+    await t.跑(2.0)
+    t.world.dyn["box"] = (5.0, 3.6, 6.2, 4.4)                  # 宽 0.8、纵深 1.2
+    await _跑到头(t, 1500)
+    assert not t.crashed
+    assert NavStatus.SUCCEED in t.status, (t.status, t.nav.fail_reason)
+    assert len([d for k, d in t.events if k == "nav_blocked"]) <= 1
+
+
+def test_绕障_背面补格_看得见是空的不补(tmp_path):
+    """细杆子:雷达看得见它后面是空的,背面那几格不补(不然细杆子也被当成一堵墙)。"""
+    from types import SimpleNamespace
+
+    from d1max_agent.bridges.planned_nav import SHADOW_M
+    t = 台子(tmp_path, rear=True)
+    t.nav._odom_pose = (0.0, 0.0, 0.0)
+    v = ObstacleView(monotonic=lambda: 0.0, latency_s=0.0)
+    v.note_odom(0, 0, 0)
+    size = 40
+    occ = [(int(0.9 / 0.1 + size / 2), size // 2)]           # 正前方 0.9 m 一格
+    v.on_grid(_grid(cells_occ=occ, size=size))                 # 别处全看过、空
+    t.nav.obstacles = v
+    t.nav.load_grid(tmp_path)
+    here = SimpleNamespace(x=4.0, y=4.0, yaw=0.0)
+    t.nav._odom_pose = (0.0, 0.0, 0.0)
+    t.nav._remember([(0.95, 0.05)], here, 0.0)
+    assert len(t.nav._temp) == 1, "后面看得见是空的:只记那一格"
+    v2 = ObstacleView(monotonic=lambda: 0.0, latency_s=0.0)
+    v2.note_odom(0, 0, 0)
+    behind = {(int((0.9 + 0.1 * k) / 0.1 + size / 2), size // 2) for k in range(1, 8)}
+    known = [(r, c) for r in range(size) for c in range(size) if (r, c) not in behind]
+    v2.on_grid(_grid(cells_occ=occ, cells_known=known, size=size))
+    t.nav.obstacles = v2
+    t.nav._temp = {}
+    t.nav._remember([(0.95, 0.05)], here, 0.0)
+    assert len(t.nav._temp) >= int(SHADOW_M / 0.1) - 1, "后面看不见:沿视线补上"
