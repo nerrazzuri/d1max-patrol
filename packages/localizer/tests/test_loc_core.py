@@ -188,6 +188,23 @@ def test_站着质量稳在0点87_一转身质量反而好_站着那几帧不被
     assert max(p.sigma_xy for p in t.poses()[-20:]) <= 0.5
 
 
+@pytest.mark.parametrize("hz", [10, 20])
+def test_复查N2_转身时夹着四分之一的烂帧_好帧之间σ也不降(hz):
+    """复查 N2(2026-10-29):转身帧不进窗口以后,窗口里只剩烂帧 —— 10 Hz 不够 10 帧占比按 0 算,
+    20 Hz 全是 0.4、中位数 0.4、线 0.37,烂帧反倒不算低。转身帧照样进窗口当分母,只是不拿来定常态;
+    质量 ≤ 0.5 的一律算低。"""
+    t = 台()
+    t.c.t += RELOC_SETTLE_S
+    dt = 1.0 / hz
+    for _ in range(3 * hz):
+        t.step(0.0, 0.0, q=0.87, dt=dt)
+    yaw = 0.0
+    for i in range(1, 5 * hz + 2):
+        yaw += 0.7 * dt
+        t.step(0.0, 0.0, yaw, q=0.4 if i % 4 == 0 else 0.93, dt=dt)
+    assert t.poses()[-1].sigma_xy >= 1.0, "近 3 s 四分之一是烂帧:好帧之间也不能信"
+
+
 def test_原地转身_质量烂到0点5以下_照样涨():
     t = 台()
     t.c.t += RELOC_SETTLE_S
