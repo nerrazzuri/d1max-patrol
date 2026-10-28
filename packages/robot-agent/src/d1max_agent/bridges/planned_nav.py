@@ -106,6 +106,14 @@ CREEP_MIN_M = 0.2
 #: 工单 21:终点就在身后 :data:`CREEP_M` 以内、终点朝向跟现在差不超过这么多 → 直接往后退到
 #: 点上,不掉头。
 BACK_TO_GOAL_RAD = math.radians(45)
+#: 工单 28(2026-10-28 16:17:狗站着不动、任务一直 running、没有一行导航日志):一直在发运动命令,
+#: 里程这么久挪不到 :data:`STALL_M`、转不到 :data:`STALL_RAD` → 当被挡(计时、上报、挪、到时放弃)。
+#: 下游(运控、旁路的第二层许可门)把命令吞了,导航层原来不知道。
+STALL_S = 5.0
+STALL_M = 0.03
+STALL_RAD = 0.05
+#: 工单 20:终点只是在地图墙的膨胀圈里时,最多挪这么远去最近能站的点(米)。
+GOAL_SNAP_M = 0.35
 #: 同一段最多挪几次(往后退完又走回来、两侧还是看不见:不来回折腾)。
 MAX_CREEPS = 3
 #: 对朝向的时候被挪开(往后退)、或者定位一跳,离点超过到点容差 + 这么多 → 不算在对朝向了,重新走过去
@@ -202,6 +210,8 @@ class PlannedNavBackend(HalNavBackend):
         self._creep_way = 1
         #: 这次挪多远(米;一般 :data:`CREEP_M`,终点就在前面时挪到点上为止)。
         self._creep_len = CREEP_M
+        #: 工单 28:(开始数的时刻, 那时的里程位姿);发着运动命令、里程不动就一直不换。
+        self._stall_ref: tuple[float, tuple[float, float, float]] | None = None
         self._crept = False
         #: 这一段挪了几次(W41,:data:`MAX_CREEPS`)。
         self._creeps = 0
@@ -469,7 +479,38 @@ class PlannedNavBackend(HalNavBackend):
             s += DRIFT_XY_PER_M * math.hypot(goal.position.x - est.x, goal.position.y - est.y)
         return min(s, MAX_SIGMA_MARGIN_M)
 
-    async def _plan_from_here(self, pose: Pose, op: str) -> tuple[PlannedPath, Costmap]:
+    def _snap_goal(self, cm: Costmap, pose: Pose) -> Pose | None:
+        """工单 20:终点只是落在地图墙的膨胀圈里(本身不在墙、禁行区、临时障碍里,附近也没有临时障碍)→
+        :data:`GOAL_SNAP_M` 以内最近的能站的点(朝向不变);不然 ``None``。原点、待命点是狗站着标的,
+        贴着墙站得下,规划按外接圆膨胀就判「贴得太近」。临时障碍(绕障记的)附近不挪:那是 W41 的
+        「点前被挡」,照旧。"""
+        x, y = pose.position.x, pose.position.y
+        rc = cm.cell_of(x, y)
+        if rc is None or cm.hard[rc] or not cm.lethal[rc]:
+            return None
+        res = cm.res
+        reach = self.robot_radius_m + cmod.INFLATE_MARGIN_M + GOAL_SNAP_M
+        for (r, c) in self._temp:
+            if math.hypot(cm.origin[0] + (c + 0.5) * res - x,
+                          cm.origin[1] + (r + 0.5) * res - y) <= reach:
+                return None
+        n = int(math.ceil(GOAL_SNAP_M / res))
+        h, w = cm.lethal.shape
+        best = None
+        for dr in range(-n, n + 1):
+            for dc in range(-n, n + 1):
+                r, c = rc[0] + dr, rc[1] + dc
+                if not (0 <= r < h and 0 <= c < w) or cm.lethal[r, c]:
+                    continue
+                cx, cy = cm.origin[0] + (c + 0.5) * res, cm.origin[1] + (r + 0.5) * res
+                d = math.hypot(cx - x, cy - y)
+                if d <= GOAL_SNAP_M and (best is None or d < best[0]):
+                    best = (d, cx, cy)
+        if best is None:
+            return None
+        return Pose.from_xy_yaw(best[1], best[2], pose.yaw)
+
+    async def _plan_from_here(self, pose: Pose, op: str) -> tuple[PlannedPath, Costmap, Pose]:
         if self._base is None:
             raise NavRequestError(op, f"规划不了:{self.plan_problem}")
         if self.obstacles is not None:
@@ -488,15 +529,26 @@ class PlannedNavBackend(HalNavBackend):
         for _ in range(3):
             epoch = self._epoch
             cm = await self._costmap_async(self._margin(here, pose))
+            goal = pose
             try:
                 path = await self._planner.plan(cm, (here.x, here.y),
                                                 (pose.position.x, pose.position.y))
             except PlanError as exc:
                 if epoch != self._epoch:
                     continue                  # 规划期间图或区域换了:按新的再来
-                raise NavRequestError(op, f"规划失败({exc.reason}):{exc}") from None
+                snapped = self._snap_goal(cm, pose) if exc.reason == "goal_blocked" else None
+                if snapped is None:
+                    raise NavRequestError(op, f"规划失败({exc.reason}):{exc}") from None
+                log.info("%s:终点 (%.2f, %.2f) 贴着墙(膨胀圈里),改去最近能站的 (%.2f, %.2f)", op,
+                         pose.position.x, pose.position.y, snapped.position.x, snapped.position.y)
+                goal = snapped
+                try:
+                    path = await self._planner.plan(cm, (here.x, here.y),
+                                                    (goal.position.x, goal.position.y))
+                except PlanError as exc2:
+                    raise NavRequestError(op, f"规划失败({exc2.reason}):{exc2}") from None
             if epoch == self._epoch:
-                return path, cm
+                return path, cm, goal
         raise NavRequestError(op, "规划期间图或区域一直在换")
 
     async def goto(self, pose: Pose) -> None:
@@ -518,7 +570,7 @@ class PlannedNavBackend(HalNavBackend):
         gen = self._gen
         self._planning = True
         try:
-            path, cm = await self._plan_from_here(pose, op)
+            path, cm, pose = await self._plan_from_here(pose, op)
         finally:
             self._planning = False
         if gen != self._gen:
@@ -559,7 +611,7 @@ class PlannedNavBackend(HalNavBackend):
 
         async def run() -> None:
             try:
-                path, cm = await self._plan_from_here(target, "replan")
+                path, cm, _ = await self._plan_from_here(target, "replan")
             except NavRequestError as exc:
                 if gen == self._gen:
                     self._replan_out = ("fail", str(exc), 0)
@@ -826,6 +878,11 @@ class PlannedNavBackend(HalNavBackend):
             turn = self.guard.check(0.0, wz, self._v_meas, self.obstacles, self._odom_pose)
             if turn.ok:
                 vx, v = 0.0, turn
+        if v.ok and self._stalled(vx, wz):
+            from d1max_agent.obstacles import Verdict
+            await self._blocked(Verdict(False, f"发了运动命令、机器人 {STALL_S:.0f} 秒没动"
+                                        "(运控或第二层许可门没执行)"), here, dt_s, vx, wz)
+            return
         if v.ok:
             if self._blocked_since is not None and self._creep_from is None and abs(vx) > 1e-6:
                 # 真走起来才算「不挡了」。挪是这一回被挡的处置、原地转只是调方向,都不算(计时、报
@@ -843,6 +900,20 @@ class PlannedNavBackend(HalNavBackend):
             await self._send(vx, wz, dt_s)
             return
         await self._blocked(v, here, dt_s, vx, wz)
+
+    def _stalled(self, vx: float, wz: float) -> bool:
+        """工单 28:一直在发运动命令,里程 :data:`STALL_S` 秒挪不到 :data:`STALL_M`、转不到
+        :data:`STALL_RAD` → 真。不发命令(原地等)就重新数。"""
+        now, pose = self._secs(), self._odom_pose
+        if abs(vx) < 1e-6 and abs(wz) < 1e-6:
+            self._stall_ref = None
+            return False
+        ref = self._stall_ref
+        if (ref is None or math.hypot(pose[0] - ref[1][0], pose[1] - ref[1][1]) > STALL_M
+                or abs(_wrap(pose[2] - ref[1][2])) > STALL_RAD):
+            self._stall_ref = (now, pose)
+            return False
+        return now - ref[0] >= STALL_S
 
     async def _blocked(self, v: Any, here: Any, dt_s: float, vx: float = 0.0,
                        wz: float = 0.0) -> None:
@@ -867,10 +938,12 @@ class PlannedNavBackend(HalNavBackend):
                                               "y": round(here.y, 2),
                                               "waited_s": round(waited, 1)})
         if (self._creep_from is None and not self._crept and self._creeps < MAX_CREEPS
-                and not v.hits and abs(wz) > 1e-6 and waited >= BLOCK_DETOUR_S):
+                and (not v.hits or abs(vx) < 1e-6) and abs(wz) > 1e-6
+                and waited >= BLOCK_DETOUR_S):
+            # 工单 25:原地转扫到真挡(身后的墙、侧面的箱角)也挪 —— 挪的整段检查会拦挪向它的那头
             way, length = self._pick_creep(here)
             if way:
-                # 带转向(原地转、弧线)只被「看不见」挡住:往前挪 / 往后退一个机身长再接着走
+                # 带转向被挡(弧线只被看不见、原地转看不见或真挡):往前挪 / 往后退一段再接着走
                 self._creep_way, self._creep_len = way, length
                 log.info("转向被看不见的格子挡住(机身两侧没看过):先%s %.1f m",
                          self._creep_word(), length)
@@ -879,7 +952,9 @@ class PlannedNavBackend(HalNavBackend):
                 self._creeps += 1
                 return
         if self._creep_from is not None:
-            self._creep_from = None                     # 挪的时候前面也挡了:不挪了,接着等
+            self._creep_from = None                     # 挪的时候前面也挡了:不往这头挪了
+            if v.hits:
+                self._crept = False                     # 工单 26:被真挡截住,换个方向再挪(有上限)
         if now >= self._next_detour and v.hits and self._base is not None:
             self._next_detour = now + BLOCK_RETRY_S
             self._remember(v.hits, here, now)
@@ -942,6 +1017,9 @@ class PlannedNavBackend(HalNavBackend):
                 and abs(_wrap(self._target.yaw - here.yaw)) <= BACK_TO_GOAL_RAD
                 and self._can_creep(here, -1, min(CREEP_M, -along))):
             return -1, min(CREEP_M, -along)              # 工单 21:终点就在身后、朝向差不多:退过去
+        if (not self._aligning and CREEP_MIN_M <= along < CREEP_M + ARRIVE_TOL_M
+                and self._can_creep(here, 1, min(CREEP_M, along))):
+            return 1, min(CREEP_M, along)                # 工单 17/26:终点就在前面,先挪到点上
         fwd = not self._aligning and self._can_creep(here, 1)
         if fwd and along >= CREEP_M + ARRIVE_TOL_M:
             h = _heading(here.yaw, self._dir or 1)
@@ -953,9 +1031,6 @@ class PlannedNavBackend(HalNavBackend):
         near = -(CREEP_M + ARRIVE_TOL_M) < along < CREEP_M + ARRIVE_TOL_M
         if fwd and not near:
             return 1, CREEP_M                            # 退不了、终点不在近处:老办法
-        if (not self._aligning and CREEP_MIN_M <= along < CREEP_M + ARRIVE_TOL_M
-                and self._can_creep(here, 1, min(CREEP_M, along))):
-            return 1, min(CREEP_M, along)                # 工单 17:终点就在前面,挪到点上为止
         # 工单 23:挪满 CREEP_M 会够到挡、另一头也不行 → 挪短一点(往前不冲过终点)
         n = int(round((CREEP_M - CREEP_MIN_M) / 0.1))
         for length in (round(CREEP_M - 0.1 * i, 2) for i in range(1, n + 1)):

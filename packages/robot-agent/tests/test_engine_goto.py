@@ -294,3 +294,19 @@ async def test_停止一直确认不了_超时按失败收尾并再发一次停(
     await _跑(c, r, parts, t, 8)
     assert t.state is TaskState.FAILED and t.detail == {"reason": "stop_unconfirmed"}, t.detail
     assert stops, "收尾前再发一次停车"
+
+
+async def test_工单20_导航一派就拒_goal_blocked_任务记失败不记完成(台子, monkeypatch):
+    """2026-10-28 16:26 回待命点(原点在膨胀区里):同一秒两次 goal_blocked、狗没动,任务却记 DONE。"""
+    from d1max_patrol.backends.base import NavRequestError
+    c, r, parts, book = 台子
+
+    async def 拒(pose):
+        raise NavRequestError("goto", "规划失败(goal_blocked):终点在障碍、禁行区里或贴得太近")
+    monkeypatch.setattr(parts.nav, "goto", 拒)
+    t = EngineGotoTask(task_id="standby-1", target=_target(2.0, 0.0), max_speed_mps=0.8,
+                       parts=parts, events=book, now_ms=c, priority=-10)
+    await t.start()
+    await _跑(c, r, parts, t, 300)
+    assert t.state is TaskState.FAILED, (t.state, t.detail)
+    assert "goal_blocked" in t.detail.get("reason", ""), t.detail
