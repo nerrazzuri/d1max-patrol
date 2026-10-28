@@ -264,6 +264,8 @@ class PlannedNavBackend(HalNavBackend):
         #: 复查 N4:放弃过一段时报过的被挡,站点那边还没清(引擎接着重试同一个点);后面不挡了、做完、
         #: 停了补发 ``nav_unblocked``。
         self._unblock_owed = False
+        #: 欠着的那次是在哪儿(里程)放弃的:重试时里程离开这儿、真走起来了就清(复查 N4 残留)。
+        self._owed_at: tuple[float, float] | None = None
         #: 工单 16:空闲时已经报过在哪个禁行区里(出来了清掉,再进去再报)。
         self._idle_nogo: str | None = None
 
@@ -704,7 +706,9 @@ class PlannedNavBackend(HalNavBackend):
         self._hit_at = -math.inf
         if status is NavStatus.FAILED:
             # 放弃这一段:狗还挡在那儿、引擎接着重试同一个点 —— 站点那边的「被挡」留着,记下欠一次清
-            self._unblock_owed = self._unblock_owed or self._blocked_told
+            if self._blocked_told and not self._unblock_owed:
+                self._unblock_owed = True
+                self._owed_at = (self._odom_pose[0], self._odom_pose[1])
         elif (self._blocked_told or self._unblock_owed) and self.on_event is not None:
             # 外审 R7、复查 N4:报过被挡(提前看出终点被盖住,或真被挡住,或前一段放弃时)、这一段做完
             # 或停了,站点那边的「被挡」要清掉
@@ -1051,6 +1055,14 @@ class PlannedNavBackend(HalNavBackend):
                                         "(运控或第二层许可门没执行)"), here, dt_s, vx, wz)
             return
         if v.ok:
+            if (self._unblock_owed and self._blocked_since is None and abs(vx) > 1e-6
+                    and self._owed_at is not None
+                    and math.hypot(self._odom_pose[0] - self._owed_at[0],
+                                   self._odom_pose[1] - self._owed_at[1]) > STALL_M):
+                # 复查 N4 残留:前一段放弃时报的被挡,这一段没再被挡、真走起来了 —— 当场清,不等终点
+                if self.on_event is not None:
+                    self.on_event("nav_unblocked", {"waited_s": 0.0, "detour": False})
+                self._unblock_owed = False
             if (self._blocked_since is not None and self._creep_from is None and abs(vx) > 1e-6
                     and self._left_block_spot()):
                 # 真走起来才算「不挡了」:发了前进命令、**里程也离开了被挡的地方**(工单 29:发出去狗

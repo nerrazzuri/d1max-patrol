@@ -475,3 +475,28 @@ async def test_复查N4_放弃这一段以后_箱子挪走重试成功_补发不
     assert NavStatus.SUCCEED in t.status[begin:]
     kinds = [k for k, _ in t.events]
     assert "nav_unblocked" in kinds[kinds.index("nav_blocked"):]
+
+
+async def test_复查N4_放弃以后_改去别处一路畅通走起来了_当场补发不挡了(tmp_path):
+    import test_obstacle_avoid as ob
+
+    from d1max_patrol.protocol.nav_types import NavStatus, Pose
+    t = ob.台子(tmp_path, rear=True, cone=True)
+    await t.start(1.5, 4.0)
+    await t.nav.goto(Pose.from_xy_yaw(7.0, 4.0))
+    await t.跑(1.0)
+    t.world.dyn["box"] = (6.7, 3.6, 7.3, 4.4)
+    await t.跑(40.0)
+    assert NavStatus.FAILED in t.status
+    del t.world.dyn["box"]
+    for _ in range(310):
+        await t.一拍()
+    await t.nav.set_speed(0.08, 0.0, 1.5)
+    x = t.r.x
+    await t.nav.goto(Pose.from_xy_yaw(10.0, 4.0))
+    for _ in range(200):
+        await t.一拍()
+    assert t.r.x - x > 1.0 and t.status[-1] is NavStatus.ACTIVE
+    assert [k for k, _ in t.events].count("nav_unblocked") == 1, "走起来了就清,不等到终点"
+    await t.跑(70.0)
+    assert [k for k, _ in t.events].count("nav_unblocked") == 1, "终点不再重复清"
