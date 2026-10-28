@@ -498,10 +498,10 @@ export function NoiseDialog({ target, onClose, onDone }: {
     api<NoiseList>("GET", `${base}/noise`).then((d) => live && setList(d)).catch((e) => live && setErr(errText(e)));
     return () => { live = false; };
   }, [base]);
+  // 复查 N6:重置放在点「重试」那一下同步做;放在 effect 里,新底图加载得快会被后跑的 effect 盖掉
+  const retry = () => { setImgOk(false); setPreviewErr(""); setTries((t) => t + 1); };
   useEffect(() => {
     let live = true;
-    setPreviewErr("");
-    setImgOk(false);
     api<PreviewMeta>("GET", `${view}/preview`).then((m) => live && setMeta(m))
       .catch((e) => { if (live) { setMeta(null); setPreviewErr(errText(e)); } });
     return () => { live = false; };
@@ -525,7 +525,7 @@ export function NoiseDialog({ target, onClose, onDone }: {
       {previewErr && (
         <p class="error" role="alert">
           {tr(`Map preview unavailable (${previewErr}) — can't clean without seeing the spots.`, `地图预览拿不到(${previewErr}):看不到图就不能清。`)}{" "}
-          <button type="button" class="btn" data-noise-retry="1" onClick={() => setTries((t) => t + 1)}>{tr("Retry", "重试")}</button>
+          <button type="button" class="btn" data-noise-retry="1" onClick={retry}>{tr("Retry", "重试")}</button>
         </p>
       )}
       {!list && !err && <p class="muted">{tr("Looking for noise…", "正在找…")}</p>}
@@ -536,7 +536,7 @@ export function NoiseDialog({ target, onClose, onDone }: {
             `红圈:很小、四周 ${list.ring_m} 米都是空地的占用格(每处不超过 ${list.max_m2} 平方米)—— 多半是建图时有人走动留下的,会把规划的路封住。是真东西(比如细杆子)就点一下那个圈,留着它。`)}</p>
           {list.specks.length === 0 ? <p class="muted">{tr("No noise found in this version.", "这一版没找到噪点。")}</p> : meta && (
             <svg class="mm-noiseimg" viewBox={`0 0 ${meta.width} ${meta.height}`} role="img" aria-label={tr("Noise on the map", "图上的噪点")}>
-              <image href={`${view}/preview.png${tries ? `?try=${tries}` : ""}`} x={0} y={0} width={meta.width} height={meta.height}
+              <image key={tries} href={`${view}/preview.png${tries ? `?try=${tries}` : ""}`} x={0} y={0} width={meta.width} height={meta.height}
                 onLoad={() => setImgOk(true)}
                 onError={() => { setImgOk(false); setPreviewErr(tr("map image failed to load", "底图加载失败")); }} />
               {list.specks.map((s) => {

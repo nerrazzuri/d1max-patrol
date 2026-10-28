@@ -328,16 +328,29 @@ class GlobalLoc:
             raise GlobalLocError("没有新的点云(感知没连上、机器人在动,或者刚动过)")
         return got
 
-    def scan_ref(self) -> int | None:
-        """此刻这份点云的编号(复查 N1:匹配结果绑定参与匹配的那一份)。"""
-        return getattr(self.view, "wall_seq", None) if self.view is not None else None
+    def scan_ref(self) -> tuple[float, float, float] | None:
+        """此刻这份点云是狗在哪儿(里程)攒的 —— 匹配结果绑定它(复查 N1、N4:不按「是不是同一份点云」,
+        感知每秒来一份新的,狗站着也会被冤枉)。跟 :meth:`scan` 在同一拍里取。"""
+        return getattr(self.view, "wall_pose", None) if self.view is not None else None
 
-    def still_valid(self, ref: int | None) -> bool:
-        """``ref`` 那一份点云还能代表此刻:还是它(没来新的)、还新鲜、狗没挪过(外审 R3、复查 N1)。"""
-        if self.view is None:
+    def still_valid(self, ref: tuple[float, float, float] | None,
+                    odom: tuple[float, float, float] | None = None) -> bool:
+        """攒 ``ref`` 那份点云以后狗没挪过:导航这边最新的里程、调用方刚从狗上读到的里程(``odom``,
+        复查 N5:导航那边可能还没跟上)都离它不超过「静止」的线。"""
+        from d1max_agent.obstacles import WALL_STILL_M, WALL_STILL_RAD
+        if ref is None or self.view is None:
             return False
-        return (self.view.wall_scan() is not None
-                and getattr(self.view, "wall_seq", None) == ref)
+        odoms = getattr(self.view, "odom", None)
+        latest = odoms[-1][1] if odoms else None
+        for p in (latest, odom):
+            if p is None:
+                if p is latest:
+                    return False
+                continue
+            if (math.hypot(p[0] - ref[0], p[1] - ref[1]) > WALL_STILL_M
+                    or abs(_wrap(p[2] - ref[2])) > WALL_STILL_RAD):
+                return False
+        return True
 
     async def locate(self, pts: list[tuple[float, float]]) -> list[Candidate]:
         m = await self._matcher()

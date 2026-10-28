@@ -2,6 +2,7 @@
 // W40/W41 外审 R6(2026-10-28):清噪点时预览(元数据)拿不到,图和红圈都没有,「清掉 N 处」照样能点,
 // 一点就把默认选中的全清掉 —— 人工看图挑「细杆子留着」那一步被绕过。
 import { cleanup, fireEvent, render, waitFor } from "@testing-library/preact";
+import { h, render as rawRender } from "preact";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { setFetch } from "./api";
 import { lang } from "./i18n";
@@ -69,4 +70,31 @@ it("复查 N3:底图还没加载好不许清;底图加载失败、点重试要�
   expect(posts).toEqual([]);
   fireEvent.load(container.querySelector(".mm-noiseimg image")!);
   await waitFor(() => expect(btn().disabled).toBe(false));
+});
+
+it.each(["load", "error"])("复查 N6:点重试后新底图马上 %s(重置的 effect 还没跑),结果不被盖掉", async (ev) => {
+  // 用 Preact 原生 render(testing-library 的 render 会把 effect 立刻冲刷掉,复现不了这个时序)
+  setFetch((async (url: string) => (url.endsWith("/noise") ? json(LIST) : json(META))) as typeof fetch);
+  const host = document.createElement("div");
+  document.body.append(host);
+  try {
+    rawRender(h(NoiseDialog, { target: { map_id: "m", version: "1" }, onClose: () => {}, onDone: () => {} }), host);
+    for (let i = 0; !host.querySelector(".mm-noiseimg image") && i < 100; i++) await new Promise((r) => setTimeout(r, 0));
+    host.querySelector(".mm-noiseimg image")!.dispatchEvent(new Event("error"));
+    await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+    host.querySelector("[data-noise-retry]")!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+    expect(host.querySelector(".mm-noiseimg image")!.getAttribute("href")).toContain("?try=1");
+    host.querySelector(".mm-noiseimg image")!.dispatchEvent(new Event(ev));
+    await new Promise((r) => setTimeout(r, 100));
+    const btn = host.querySelector("[data-denoise]") as HTMLButtonElement;
+    if (ev === "load") expect(btn.disabled).toBe(false);
+    else {
+      expect(btn.disabled).toBe(true);
+      expect(host.querySelector("[data-noise-retry]")).not.toBeNull();   // 还能再试
+    }
+  } finally {
+    rawRender(null, host);
+    host.remove();
+  }
 });

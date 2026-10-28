@@ -19,11 +19,27 @@ TRUE = (3.0, 3.0, 0.4)
 
 
 class 假视图:
-    def __init__(self, pts):
+    """只给墙那一层;外审 R3 / 复查 N1、N5 要的「攒点云时狗在哪」「最新里程」跟着仿真狗走
+    (= 攒完没动)。"""
+
+    def __init__(self, pts, dog=None):
         self.pts = pts
+        self.dog = dog
 
     def wall_scan(self, *, since=-math.inf):
         return None if self.pts is None else list(self.pts)
+
+    def _here(self):
+        d = self.dog
+        return (d.x, d.y, d.yaw) if d is not None else None
+
+    @property
+    def wall_pose(self):
+        return self._here()
+
+    @property
+    def odom(self):
+        return [(0.0, self._here())] if self.dog is not None else []
 
 
 def _写图(d, occ):
@@ -41,7 +57,7 @@ async def 台(tmp_path):
     t.dog.teleport(*TRUE)
     occ, _ = _房间(extra=不对称)
     _写图(tmp_path / "map", occ)
-    t.view = 假视图(_扫(occ, *TRUE, noise=0.02))
+    t.view = 假视图(_扫(occ, *TRUE, noise=0.02), t.dog)
     t.rt.globalloc = GlobalLoc(t.view)
     t.rt.globalloc.set_map(("m", "1"), tmp_path / "map")
     t.occ = occ
