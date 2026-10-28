@@ -11,6 +11,7 @@ from d1max_localizer.core import (
     AUTO_RELOC_SIGMA_M,
     JUMP_LOST_N,
     NO_SCAN_S,
+    RELOC_CONFIRM_MIN_S,
     RELOC_SETTLE_S,
     SIGMA_JUMPED_M,
     STALL_S,
@@ -124,6 +125,72 @@ def test_σ随质量_刚重定位的时候不小于给的初值_慢慢降下来(
     t.step(0.0, 0.0, q=0.5)
     low = t.poses()[-1].sigma_xy
     assert 0.1 < mid < low and low >= 1.0, (mid, low)
+
+
+def _重定位(t, sigma=1.5):
+    assert t.core.relocalized(req=9, x=0.0, y=0.0, yaw=0.0, sigma=sigma, human=False)
+
+
+def test_重定位之后_连着匹配得好_5秒就按质量给_不死等30秒():
+    """2026-10-28 C40221:转身后自动重定位,MOLA 几秒就对上了,σ 照定时器 30 s 慢慢降,代理 20 s
+    不信、引擎 30 s 中止。按证据:满 RELOC_CONFIRM_MIN_S 且最近连着 RELOC_CONFIRM_FRAMES 帧都好
+    就放手。"""
+    t = 台()
+    t.c.t += RELOC_SETTLE_S
+    t.step(0.0, 0.0)
+    _重定位(t)
+    for _ in range(int(RELOC_CONFIRM_MIN_S * 10) - 5):
+        t.step(0.0, 0.0, q=0.95)
+    assert t.poses()[-1].sigma_xy > 1.0, "不到最短时间照旧按初值慢慢降"
+    for _ in range(10):
+        t.step(0.0, 0.0, q=0.95)
+    assert t.poses()[-1].sigma_xy == pytest.approx(0.1, abs=0.01)
+
+
+def test_重定位之后_中间有质量差的帧_照旧慢慢降():
+    t = 台()
+    t.c.t += RELOC_SETTLE_S
+    t.step(0.0, 0.0)
+    _重定位(t)
+    for i in range(int(RELOC_CONFIRM_MIN_S * 10) + 10):
+        t.step(0.0, 0.0, q=0.95 if i % 10 else 0.6)        # 每秒一帧质量差
+    assert t.poses()[-1].sigma_xy > 1.0
+
+
+def _原地转(t, n, rps, q):
+    yaw = 0.0
+    for _ in range(n):
+        yaw += rps * 0.1
+        t.step(0.0, 0.0, yaw, q=q)
+    return yaw
+
+
+def test_原地转身_质量掉到0点6多_σ不涨():
+    """2026-10-28 C40221:原地转时 ICP 质量掉到 0.6–0.8(机身在转、点云畸变),低质量帧占比一过线
+    σ 就 1.5,代理不信、引擎重置定位、30 s 中止。转的时候质量不当证据(跳变、跟里程核对照旧)。"""
+    t = 台()
+    t.c.t += RELOC_SETTLE_S
+    t.step(0.0, 0.0)
+    _原地转(t, 40, 0.8, 0.65)
+    assert max(p.sigma_xy for p in t.poses()[-40:]) <= 0.5
+
+
+def test_原地转身_质量烂到0点5以下_照样涨():
+    t = 台()
+    t.c.t += RELOC_SETTLE_S
+    t.step(0.0, 0.0)
+    _原地转(t, 20, 0.8, 0.4)
+    assert t.poses()[-1].sigma_xy >= 1.0
+
+
+def test_转完停下_质量还低_照样涨():
+    t = 台()
+    t.c.t += RELOC_SETTLE_S
+    t.step(0.0, 0.0)
+    yaw = _原地转(t, 20, 0.8, 0.95)
+    for _ in range(30):
+        t.step(0.0, 0.0, yaw, q=0.65)
+    assert t.poses()[-1].sigma_xy > 0.5
 
 
 def test_一帧挪得比狗能跑的还远_算跳_σ涨_5秒里跳3次丢定位_不跳了才恢复():

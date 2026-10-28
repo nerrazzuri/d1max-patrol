@@ -20,8 +20,9 @@
 7. σ_xy 不过 :data:`SIGMA_LOST_M`(推算时按走过的路涨)。
 
 **跟里程对不上**(交叉校验):这一帧跟上次跳变以来、:data:`XCHECK_WINDOW_S` 内收到的每一帧比,定位器
-的相对位移跟里程的相对位移差超过 :data:`XCHECK_M` + :data:`XCHECK_FRAC` × 这期间里程走过的路,或者
-朝向差超过 :data:`XCHECK_YAW_RAD`。按窗口比(不只比相邻两帧):定位器冻住(一直报同一个位置)、慢慢漂走
+的相对位移跟里程的相对位移差超过 :data:`XCHECK_M` + :data:`XCHECK_FRAC` × 这期间里程走过的路 +
+:data:`XCHECK_TURN_M_PER_RAD` × 这期间转过的角度(最多 :data:`XCHECK_TURN_MAX_M`),或者朝向差
+超过 :data:`XCHECK_YAW_RAD`。按窗口比(不只比相邻两帧):定位器冻住(一直报同一个位置)、慢慢漂走
 都抓得住。
 
 **位姿配里程**:定位器的时间戳跟代理的钟不是一个钟,但差是定的 —— 「收到时刻 − 时间戳」比近
@@ -104,6 +105,11 @@ XCHECK_M = 0.3
 XCHECK_FRAC = 0.2
 XCHECK_YAW_RAD = 0.3
 XCHECK_WINDOW_S = 5.0
+#: 原地转身放宽(2026-10-28 C40221):厂家里程原地转时平移一直报零,机身其实挪了 0.1–0.3 m(转轴不在
+#: 机身中心)—— 每转 1 弧度多允许这么多,最多多 :data:`XCHECK_TURN_MAX_M`(转身时真滑 0.6 m 以上
+#: 照样抓)。
+XCHECK_TURN_M_PER_RAD = 0.1
+XCHECK_TURN_MAX_M = 0.5
 #: 跳变之后稳下来的地方离「锚按里程推到现在」最多差这么多(见模块说明,W35)。3 m:人在地图上点位置
 #: 偏 2 m、朝向偏 45° 要能收敛回来(3d.9 的做法);点云重新匹配上的正常修正在 1 m 以内
 #: (2026-10-08 转圈那次 0.66 m、2026-10-13 雷达半挡 0.5 m)。
@@ -171,6 +177,7 @@ class _Odo:
     pose: tuple[float, float, float]
     epoch: int                                       # 里程段(断过、跳过就换一段)
     path: float                                      # 到这一刻里程累计走过的路(不算跳的那一下)
+    turned: float = 0.0                              # 到这一刻里程累计转过的角度(弧度,不分左右)
 
 
 @dataclass(frozen=True)
@@ -185,6 +192,7 @@ class _Fix:
     epoch: int                                       # 配上的那一段里程
     path: float                                      # 配上那一刻里程累计走过的路
     dr0: float                                       # 真匹配上之后到配上那一刻走过的路(它推算的)
+    turned: float = 0.0                              # 配上那一刻里程累计转过的角度
 
     @property
     def T(self) -> tuple[float, float, float] | None:
@@ -270,6 +278,7 @@ class BridgeLocalizer:
         self._odos: deque[_Odo] = deque()
         self._epoch = 0
         self._path = 0.0
+        self._turned = 0.0
 
     # ------------------------------------------------------------ 本机桥喂进来的
 
@@ -410,8 +419,10 @@ class BridgeLocalizer:
                 self._epoch += 1
             else:
                 self._path += d
+                self._turned += abs(_wrap(odom[2] - last[2]))
         now = self._now()
-        self._odos.append(_Odo(at=now, pose=odom, epoch=self._epoch, path=self._path))
+        self._odos.append(_Odo(at=now, pose=odom, epoch=self._epoch, path=self._path,
+                               turned=self._turned))
         while self._odos and now - self._odos[0].at > ODOM_KEEP_S:
             self._odos.popleft()
         a = self._anchor
@@ -651,14 +662,14 @@ class BridgeLocalizer:
         age = p.meas_age_ms / 1000
         s = self._odo_at(t_pair, PAIR_TOL_S)
         if s is None:
-            odom, epoch, path, dr0 = None, self._epoch, self._path, 0.0
+            odom, epoch, path, dr0, turned = None, self._epoch, self._path, 0.0, self._turned
         else:
-            odom, epoch, path = s.pose, s.epoch, s.path
+            odom, epoch, path, turned = s.pose, s.epoch, s.path, s.turned
             m = self._odo_at(t_pair - age, None) if age > 0 else s
             dr0 = max(0.0, path - m.path) if m is not None else 0.0
         return _Fix(pose=(p.x, p.y, p.yaw), sigma_xy=p.sigma_xy, sigma_yaw=p.sigma_yaw,
                     source=p.source, at=now, born=t_pair - age, odom=odom, epoch=epoch,
-                    path=path, dr0=dr0)
+                    path=path, dr0=dr0, turned=turned)
 
     def _trusted(self, f: _Fix) -> bool:
         # RTK 说它不对的时候不算「可信」:不然最后可信的位置一路跟着错的走,丢定位后的自动重定位
@@ -824,7 +835,8 @@ class BridgeLocalizer:
             rl = compose(inverse(old.pose), new.pose)
             ro = compose(inverse(old.odom), new.odom)
             gap = math.hypot(rl[0] - ro[0], rl[1] - ro[1])
-            if gap > XCHECK_M + XCHECK_FRAC * (new.path - old.path):
+            turn_allow = min(XCHECK_TURN_MAX_M, XCHECK_TURN_M_PER_RAD * (new.turned - old.turned))
+            if gap > XCHECK_M + XCHECK_FRAC * (new.path - old.path) + turn_allow:
                 return f"位移差 {gap:.2f} m"
             turn = abs(_wrap(rl[2] - ro[2]))
             if turn > XCHECK_YAW_RAD:

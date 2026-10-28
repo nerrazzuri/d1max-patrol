@@ -16,7 +16,9 @@
   :data:`Q_GOOD` 给 :data:`SIGMA_MIN_M`,往 :data:`Q_BAD` 线性涨到 :data:`SIGMA_BAD_M`(明显高于代理
   那条线:代理 σ 大于 1.0 m 才不信);:data:`JUMP_MEMORY_S` 里跳过 → :data:`SIGMA_JUMPED_M`(同样高于
   那条线);近 :data:`LOWQ_WINDOW_S` 里低质量帧占比过线 → :data:`SIGMA_BAD_M`;重定位之后从给的初值
-  开始、:data:`RELOC_SETTLE_S` 里线性降下来(探路:初值偏大时会带着偏差、质量分还很高地跑一阵)。
+  开始、:data:`RELOC_SETTLE_S` 里线性降下来(探路:初值偏大时会带着偏差、质量分还很高地跑一阵);
+  满 :data:`RELOC_CONFIRM_MIN_S`、最近连着 :data:`RELOC_CONFIRM_FRAMES` 帧都好就提前放手(代理那边
+  还有按锚核对兜着)。
 - **跳变**:相邻两帧挪得比狗能跑的还远、转得比能转的还快 → ``jump``;:data:`JUMP_WINDOW_S` 里跳
   :data:`JUMP_LOST_N` 次 → ``lost``「匹配在来回跳」,从最后一次跳起 :data:`JUMP_CLEAR_S` 不跳才恢复。
   重定位之后第一帧 ``jump`` + ``reloc_id``,离给的位置太远当 MOLA 没照办、再请。
@@ -69,6 +71,17 @@ JUMP_WINDOW_S = 5.0
 JUMP_LOST_N = 3
 JUMP_CLEAR_S = 5.0
 RELOC_SETTLE_S = 30.0
+#: 重定位之后按证据放手(2026-10-28 C40221:MOLA 几秒就对上了,σ 照定时器 30 s 才降到代理肯信,引擎
+#: 30 s 就中止):满这么多秒、而且最近连着 :data:`RELOC_CONFIRM_FRAMES` 帧质量 ≥ :data:`Q_GOOD`、
+#: 没跳,就不再按初值往下降,只按质量给。中间有一帧不好就重新数。
+RELOC_CONFIRM_MIN_S = 5.0
+#: 转身时质量不当证据(2026-10-28 C40221:原地转时 ICP 质量掉到 0.6–0.8 —— 机身在转、点云畸变 ——
+#: 低质量帧占比一过线 σ 就 1.5,代理不信、引擎重置、30 s 中止):相邻两帧转得比这快(弧度/秒),到停转后
+#: :data:`TURN_HOLD_S` 为止,质量在 :data:`Q_BAD` 以上的帧按「好」算、不进低质量占比。跳变、代理那边
+#: 跟里程的核对照旧。
+TURN_RPS = 0.3
+TURN_HOLD_S = 0.5
+RELOC_CONFIRM_FRAMES = 20
 #: 自动重定位(MOLA 重启之后按最后可信的位置)的初值 σ:高于代理那条线,稳定期里先不信(W09b 内审:
 #: 给 1.0 压线,重启 0.7 s 代理就信了)。
 AUTO_RELOC_SIGMA_M = SIGMA_BAD_M
@@ -93,6 +106,10 @@ RELOC_MAX_TRIES = 3
 #: MOLA 的重定位是异步生效的(2026-09-27 真 ROS 实跑):收下之后这么久里离给的位置远的帧先丢掉、
 #: 不算没照办。
 RELOC_APPLY_S = 1.0
+
+
+def _wrap(a: float) -> float:
+    return math.atan2(math.sin(a), math.cos(a))
 
 
 @dataclass(frozen=True)
@@ -152,6 +169,8 @@ class LocalizerCore:
         self._reloc_tag: tuple[int | None] | None = None   # 下一帧要带的 (reloc_id,)
         self._reloc_sigma = 0.0
         self._reloc_at = -1e18
+        self._reloc_good = 0                            # 重定位之后连着几帧好(按证据放手)
+        self._turn_until = -1e18                        # 估计时间戳:到这一刻还算在转身
         self._want_reloc = False
         self._queued = False
         self._expired = False
@@ -225,6 +244,7 @@ class LocalizerCore:
         self._good = (float(x), float(y), float(yaw))
         self._reloc_sigma = float(sigma)
         self._reloc_at = self._now()
+        self._reloc_good = 0
         self._jumps.clear()
         self._jump_lost = False
         log.info("重定位到 (%.2f, %.2f, %.2f),σ %.2f(%s)", x, y, yaw, sigma,
@@ -286,19 +306,26 @@ class LocalizerCore:
             return
         tag, self._reloc_tag = self._reloc_tag, None
         jump = tag is not None
+        if self._last is not None and e.stamp > self._last[0]:
+            if abs(_wrap(yaw - self._last[3])) / (e.stamp - self._last[0]) > TURN_RPS:
+                self._turn_until = e.stamp + TURN_HOLD_S
+        turning = e.stamp <= self._turn_until
+        # 转身时质量在 Q_BAD 以上不当证据(见 TURN_RPS)
+        quality = max(e.quality, Q_GOOD, LOWQ_Q) if turning and e.quality > Q_BAD else e.quality
         if not jump and self._last is not None:
             jump = self._jumped(e.stamp - self._last[0], x - self._last[1], y - self._last[2],
                                 yaw - self._last[3])
             if jump:
                 self._jumps.append(now)
         self._last = (e.stamp, x, y, yaw)
-        self._lowq.append((e.stamp, e.quality < LOWQ_Q))
+        self._reloc_good = self._reloc_good + 1 if (e.quality >= Q_GOOD and not jump) else 0
+        self._lowq.append((e.stamp, quality < LOWQ_Q))
         while e.stamp - self._lowq[0][0] > LOWQ_WINDOW_S:
             self._lowq.popleft()
         if e.quality >= Q_MATCH or self._last_match is None:
             self._last_match = e.stamp
         age_ms = 0 if e.quality >= Q_MATCH else round((e.stamp - self._last_match) * 1000)
-        sigma = self._sigma(e.quality, now)
+        sigma = self._sigma(quality, now)
         self._seq += 1
         self._out.append(Pose(
             seq=self._seq, stamp_ns=round(e.stamp * 1e9), map_id=self._map[0],
@@ -464,6 +491,8 @@ class LocalizerCore:
                 and sum(low for _, low in self._lowq) / len(self._lowq) >= LOWQ_SHARE):
             s = max(s, SIGMA_BAD_M)
         since = now - self._reloc_at
-        if 0 <= since < RELOC_SETTLE_S:
+        if since >= RELOC_CONFIRM_MIN_S and self._reloc_good >= RELOC_CONFIRM_FRAMES:
+            self._reloc_at = -1e18                      # 对上了:不再按初值往下降
+        elif 0 <= since < RELOC_SETTLE_S:
             s = max(s, self._reloc_sigma * (1.0 - since / RELOC_SETTLE_S))
         return s
