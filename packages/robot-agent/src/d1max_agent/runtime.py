@@ -883,11 +883,13 @@ class AgentRuntime:
         except HalUnsupported:
             s = None
         try:
-            standing = await self.hal.motion_status() in (MotionStatus.STANDING,
-                                                          MotionStatus.READY)
+            motion: MotionStatus | None = await self.hal.motion_status()
         except Exception:                         # noqa: BLE001 - 说不清就不进基线、不判抱起来
-            standing = False
-        found = self.force.feed(s, self._now(), standing=standing)
+            motion = None
+        standing = motion in (MotionStatus.STANDING, MotionStatus.READY)
+        # 工单 2:运控状态也给它(换姿势那几秒、趴着不判撞);读不到当「说不清」
+        found = self.force.feed(s, self._now(), standing=standing,
+                                motion=motion.value if motion is not None else "unknown")
         for f in found:
             log.warning("受力检测:%s %s", f.kind, f.data)
             self.events.emit(f"force_{f.kind}", f.data)

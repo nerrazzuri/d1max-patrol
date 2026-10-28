@@ -23,10 +23,10 @@ def _s(roll=0.0, pitch=0.0, shock=0.0, load=100.0, valid=True):
     return ImuSample(stamp_ms=0, roll=roll, pitch=pitch, shock_g=shock, load=load, valid=valid)
 
 
-def _喂(w, s, t0, secs, *, standing=True, dt=100):
+def _喂(w, s, t0, secs, *, standing=True, dt=100, motion=None):
     out = []
     for t in range(t0, t0 + int(secs * 1000), dt):
-        out += w.feed(s, t, standing=standing)
+        out += w.feed(s, t, standing=standing, **({"motion": motion} if motion else {}))
     return out, t0 + int(secs * 1000)
 
 
@@ -83,6 +83,56 @@ def test_撞了一下_过门槛报一次_30秒内不重报_翻着不报撞():
     _, t = _喂(w2, _s(roll=1.5), 0, 0.6)
     got, t = _喂(w2, _s(roll=1.5, shock=5.0), t, 40)
     assert not got, "翻倒了再磕碰:不另报撞"
+
+
+def test_工单2_换姿势那几秒不判撞_趴着不判撞():
+    """2026-10-28 11:29:16:我们自己发 lie,趴下那一秒报「被撞了一下(3.74 g)」。运控状态在立着(站着 /
+    能走)、趴着、说不清之间换了之后 posture_quiet_s 秒内不判,不是立着的时候也不判;给了运控状态的
+    「撞」先压 posture_quiet_s 秒,这期间换了姿势就不报(冲击在状态切过去**之前**那一下也挡得住)。"""
+    w = ForceWatch()
+    _, t = _喂(w, _s(), 0, 5.0, motion="ready")
+    got, t = _喂(w, _s(shock=1.8), t, 0.1, motion="standing")
+    assert not got, "先压着"
+    got, t = _喂(w, _s(), t, 3.1, motion="standing")
+    assert [f.kind for f in got] == ["bump"], "站着 / 能走算同一类(走着来回切不算换姿势);压够了报"
+    assert got[0].data["shock_g"] == 1.8
+    w = ForceWatch()
+    _, t = _喂(w, _s(), 0, 5.0, motion="ready")
+    got, t = _喂(w, _s(shock=3.74), t, 0.5, motion="lying")
+    assert not got, "趴下那一下"
+    got, t = _喂(w, _s(shock=2.0), t, 10.0, motion="lying")
+    assert not got, "趴着不判撞"
+    got, t = _喂(w, _s(shock=2.5), t, 2.9, motion="standing")
+    assert not got, "刚站起来那几秒"
+    got, t = _喂(w, _s(shock=2.0), t, 0.2, motion="ready")
+    got, t = _喂(w, _s(), t, 3.1, motion="ready")
+    assert [f.kind for f in got] == ["bump"], "站稳了照样判"
+
+
+def test_工单2_冲击在状态切到趴着之前_照样不报():
+    w = ForceWatch()
+    _, t = _喂(w, _s(), 0, 5.0, motion="ready")
+    got, t = _喂(w, _s(shock=3.74), t, 0.1, motion="ready")     # 状态还没切过去
+    got2, t = _喂(w, _s(), t, 1.0, motion="ready")
+    got3, t = _喂(w, _s(), t, 5.0, motion="lying")
+    assert not got + got2 + got3
+
+
+def test_工单2_不给运控状态_照旧马上判():
+    w = ForceWatch()
+    got, _ = _喂(w, _s(shock=2.0), 0, 0.1)
+    assert [f.kind for f in got] == ["bump"]
+
+
+def test_工单2_过1g的冲击都记一笔_带当时的运控状态(caplog):
+    """门槛还没标定(3r.2):每次过 1 g 都写日志,下回上狗就攒下数据,照着定 bump_g。"""
+    import logging
+    w = ForceWatch()
+    with caplog.at_level(logging.INFO, logger="d1max_agent.force"):
+        _喂(w, _s(shock=0.6), 0, 0.1, motion="ready")
+        _喂(w, _s(shock=1.2), 100, 0.1, motion="ready")
+    lines = [r.getMessage() for r in caplog.records]
+    assert len(lines) == 1 and "1.2" in lines[0] and "ready" in lines[0], lines
 
 
 def test_数据无效什么都不判_状态不变():
@@ -199,8 +249,24 @@ async def test_代理_撞了一下只报_任务照跑(狗):
     await 遥控(1)
     r.inject_imu(shock_g=2.2)
     await 走(0.2)
+    r.inject_imu(shock_g=0.0)
+    await 走(3.2)                                   # 工单 2:先压 3 s,没换姿势才报
     assert "force_bump" in 事件() and rt.force.state == "ok"
     assert rt.processor.current is not None and rt.processor.current.kind == "teleop"
+
+
+async def test_工单2_代理_趴着磕一下不报撞_运控状态传给受力检测(狗):
+    from d1max_contract.hal import MotionStatus
+    rt, r, 走, 遥控, 事件, 能力 = 狗
+    await 走(3)
+
+    async def 趴着():
+        return MotionStatus.LYING
+    r.motion_status = 趴着
+    await 走(0.5)
+    r.inject_imu(shock_g=3.74)
+    await 走(0.2)
+    assert "force_bump" not in 事件()
 
 
 async def test_代理_没有imu的狗不判_能力里不报(tmp_path):

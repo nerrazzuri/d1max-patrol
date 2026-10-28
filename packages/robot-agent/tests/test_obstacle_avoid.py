@@ -196,6 +196,8 @@ class 台子:
         self.view = ObstacleView(monotonic=self.c.s)
         self.nav.obstacles = self.view
         self.nav.guard = ObstacleGuard() if guard else _放行()
+        if not guard:
+            self.nav.preview = False             # 第一层整个关掉:提前绕(方案 2)也是第一层的
         self.per = 假感知(self.world, rear=rear, rear_cal=rear_cal, cone=cone)
         self.events: list = []
         self.nav.on_event = lambda k, d: self.events.append((k, d))
@@ -274,6 +276,7 @@ class _放行:
 
 async def test_路上突然有箱子_停在前面_等一会儿_绕过去(tmp_path):
     t = 台子(tmp_path)
+    t.nav.preview = False        # 测的是兜底(提前绕关掉、绕不过去、人突然走进来):停、等、绕
     await t.start(1.5, 4.0)
     await t.nav.goto(Pose.from_xy_yaw(10.0, 4.0))
     await t.跑(2.0)
@@ -305,6 +308,7 @@ async def test_通道整个堵死_等满20秒放弃_中间报一次被挡(tmp_pa
 
 async def test_挡的东西挪走了_接着走原来的路(tmp_path):
     t = 台子(tmp_path)
+    t.nav.preview = False        # 测的是兜底(提前绕关掉、绕不过去、人突然走进来):停、等、绕
     await t.start(1.5, 4.0)
     await t.nav.goto(Pose.from_xy_yaw(10.0, 4.0))
     await t.跑(2.0)
@@ -611,6 +615,7 @@ async def test_绕不过去_规划失败_接着等_不当场放弃(tmp_path):
 
 async def test_狗尾为前_后雷达标过_狗尾对着路倒着走_路上箱子照样停_绕过去(tmp_path):
     t = 台子(tmp_path, head="tail")
+    t.nav.preview = False        # 测的是兜底(提前绕关掉、绕不过去、人突然走进来):停、等、绕
     await t.start(1.5, 4.0, yaw=math.pi)                     # 狗尾朝 +x
     assert t.nav.travel() == -1
     await t.nav.goto(Pose.from_xy_yaw(10.0, 4.0, math.pi))
@@ -716,6 +721,7 @@ async def test_W35_现场视野_人挡了十几秒走开_马上接着走_不等�
     """3f.6 后半的回归(现场视野下:人挡一阵、走开,狗接着走)。这条在改之前就过 —— 现场那次「等满
     20 s」台式机上没复现出来,留着防退化。"""
     t = 台子(tmp_path, rear=True, cone=True)
+    t.nav.preview = False        # 测的是兜底(提前绕关掉、绕不过去、人突然走进来):停、等、绕
     await t.start(1.5, 4.0)
     await t.nav.goto(Pose.from_xy_yaw(10.0, 4.0))
     await t.跑(2.0)
@@ -1249,3 +1255,129 @@ async def test_原地转_转速低于真机门槛转不起来_1秒没转就提�
         if t.status and t.status[-1] is NavStatus.STANDBY:
             break
     assert NavStatus.SUCCEED in t.status, (t.status, t.nav.fail_reason)
+
+
+# ------------------------------------------------------------ 提前绕(方案 2,2026-10-28)
+
+
+async def _跑着看(t, n=1200):
+    """跑到头;记下进没进过「被挡」、最长原地不动了几拍(没到点之前)。"""
+    blocked, still, worst = False, 0, 0
+    goal = t.nav._target
+    for _ in range(n):
+        x0, y0, a0 = t.r.x, t.r.y, t.r.yaw
+        await t.一拍()
+        blocked |= t.nav._blocked_since is not None
+        near_goal = goal is not None and math.hypot(goal.position.x - t.r.x,
+                                                    goal.position.y - t.r.y) < 0.6
+        moved = math.hypot(t.r.x - x0, t.r.y - y0) > 1e-3 or abs(t.r.yaw - a0) > 1e-3
+        still = 0 if moved or near_goal else still + 1
+        worst = max(worst, still)
+        if t.status and t.status[-1] is NavStatus.STANDBY:
+            break
+    return blocked, worst
+
+
+async def test_提前绕_路上远处出现箱子_看见就改道_不停下来等(tmp_path):
+    """方案 2:原来走到箱子跟前守卫叫停、等 2 s 才记临时障碍绕;感知 4 m 内就看得见它,
+    路线前方被新东西压住就提前重规划,算新路的时候照样沿旧路走。"""
+    t = 台子(tmp_path, rear=True, cone=True)
+    await t.start(1.5, 4.0)
+    await t.nav.goto(Pose.from_xy_yaw(10.0, 4.0))
+    await t.跑(1.0)
+    t.world.dyn["box"] = (5.5, 3.6, 6.1, 4.4)
+    blocked, worst = await _跑着看(t)
+    assert not t.crashed
+    assert NavStatus.SUCCEED in t.status, (t.status, t.nav.fail_reason, t.events)
+    assert [d for k, d in t.events if k == "nav_replan" and d["why"] == "preview"], t.events
+    assert not blocked, "看见了就绕,不该走到跟前被挡"
+    assert worst <= 3, f"算新路的时候不停下来等(原地不动了 {worst} 拍)"
+
+
+async def test_提前绕_同一个箱子不反复改道(tmp_path):
+    t = 台子(tmp_path, rear=True, cone=True)
+    await t.start(1.5, 4.0)
+    await t.nav.goto(Pose.from_xy_yaw(10.0, 4.0))
+    await t.跑(1.0)
+    t.world.dyn["box"] = (5.5, 3.6, 6.1, 4.4)
+    await _跑着看(t)
+    n = len([d for k, d in t.events if k == "nav_replan" and d["why"] == "preview"])
+    assert 1 <= n <= 2, t.events
+
+
+async def test_提前绕_沿着墙走_墙本来就在图里_不改道(tmp_path):
+    t = 台子(tmp_path, rear=True, cone=True, walls=[(2.0, 4.8, 9.0, 5.2), (2.0, 2.8, 9.0, 3.2)])
+    await t.start(1.5, 4.0)
+    await t.nav.goto(Pose.from_xy_yaw(10.0, 4.0))
+    await _跑着看(t)
+    assert NavStatus.SUCCEED in t.status, (t.status, t.nav.fail_reason)
+    assert not [d for k, d in t.events if k == "nav_replan" and d["why"] == "preview"], t.events
+
+
+async def test_提前绕_箱子压在终点上_绕不过去_不当场失败_接着往前走(tmp_path):
+    t = 台子(tmp_path, rear=True, cone=True)
+    await t.start(1.5, 4.0)
+    await t.nav.goto(Pose.from_xy_yaw(7.0, 4.0))
+    await t.跑(1.0)
+    t.world.dyn["box"] = (6.7, 3.6, 7.3, 4.4)
+    x_at = None
+    for _ in range(40):
+        await t.一拍()
+        if x_at is None and [1 for k, d in t.events if k == "nav_replan" and d["why"] == "preview"]:
+            x_at = t.r.x
+    assert x_at is not None, t.events
+    assert NavStatus.FAILED not in t.status, (t.status, t.nav.fail_reason)
+    assert t.r.x > x_at + 0.3, "绕不过去也接着沿旧路走(到跟前由被挡那一套接手)"
+    assert not t.crashed
+
+
+async def test_提前绕_关掉了_照旧走到跟前停下再绕(tmp_path):
+    t = 台子(tmp_path, rear=True, cone=True)
+    t.nav.preview = False
+    await t.start(1.5, 4.0)
+    await t.nav.goto(Pose.from_xy_yaw(10.0, 4.0))
+    await t.跑(1.0)
+    t.world.dyn["box"] = (5.5, 3.6, 6.1, 4.4)
+    blocked, _ = await _跑着看(t)
+    assert NavStatus.SUCCEED in t.status and not t.crashed
+    assert blocked
+    assert not [d for k, d in t.events if k == "nav_replan" and d["why"] == "preview"]
+
+
+async def test_提前绕_狗尾为前倒着走_路上远处的箱子照样提前绕(tmp_path):
+    t = 台子(tmp_path, head="tail")
+    await t.start(1.5, 4.0, yaw=math.pi)
+    await t.nav.goto(Pose.from_xy_yaw(10.0, 4.0, math.pi))
+    await t.跑(1.0)
+    t.world.dyn["box"] = (5.5, 3.6, 6.1, 4.4)
+    blocked, worst = await _跑着看(t)
+    assert not t.crashed
+    assert NavStatus.SUCCEED in t.status, (t.status, t.nav.fail_reason, t.events)
+    assert [d for k, d in t.events if k == "nav_replan" and d["why"] == "preview"], t.events
+    assert not blocked and worst <= 3
+
+
+async def test_工单24_终点被箱子盖住_马上告诉值班员_放弃原因写清楚(tmp_path):
+    """2026-10-28 C1 第 1 次:方块压在 G1 上,每 5 s 重规划都 goal_blocked,等满 20 s 才放弃,没直接告诉
+    值班员「终点被障碍盖住」。"""
+    t = 台子(tmp_path, rear=True, cone=True)
+    await t.start(1.5, 4.0)
+    await t.nav.goto(Pose.from_xy_yaw(7.0, 4.0))
+    await t.跑(1.0)
+    t.world.dyn["box"] = (6.7, 3.6, 7.3, 4.4)
+    started = None
+    told = None
+    for i in range(400):
+        await t.一拍()
+        if started is None and t.nav._blocked_since is not None:
+            started = i
+        covered = [d for k, d in t.events if k == "nav_blocked" and "终点被障碍盖住" in d["reason"]]
+        if covered and told is None:
+            told = i
+        if t.status and t.status[-1] is NavStatus.STANDBY:
+            break
+    assert not t.crashed
+    assert started is not None and told is not None, t.events
+    assert told - started <= 30, f"被挡后 {(told - started) / 10:.1f} s 才说终点被盖住"
+    assert NavStatus.FAILED in t.status and "终点被障碍盖住" in (t.nav.fail_reason or ""), \
+        t.nav.fail_reason

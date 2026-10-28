@@ -119,6 +119,7 @@ void main() {
       expect(navText(<String, dynamic>{'blocked': {'for_s': 12, 'reason': '前方 0.4 m 有挡'}}), '被挡 12 秒：前方 0.4 m 有挡');
       expect(navText(<String, dynamic>{'blocked': {'for_s': 5, 'reason': ''}}), '被挡 5 秒：没说原因');
       expect(navText(<String, dynamic>{'replan': {'n': 2, 'why': 'detour'}}), '重规划 2 次（绕障）');
+      expect(navText(<String, dynamic>{'replan': {'n': 1, 'why': 'preview'}}), '重规划 1 次（前方有障碍，提前绕）');
       expect(navText(<String, dynamic>{'replan': {'n': 1, 'why': '???'}}), '重规划 1 次（偏离路径）');
       expect(
           navText(<String, dynamic>{

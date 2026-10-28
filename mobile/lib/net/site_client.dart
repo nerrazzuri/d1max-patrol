@@ -489,6 +489,7 @@ String navText(Map<String, dynamic>? nav) {
       'zones' => tr('zones changed', '区域换了'),
       'near_nogo' => tr('too close to a no-go zone', '离禁行区太近'),
       'detour' => tr('detouring around an obstacle', '绕障'),
+      'preview' => tr('obstacle seen ahead, going around early', '前方有障碍，提前绕'),
       _ => tr('off the route', '偏离路径'),
     };
     lines.add(tr('Re-planned $n× ($why)', '重规划 $n 次（$why）'));

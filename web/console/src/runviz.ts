@@ -198,6 +198,7 @@ export function replanText(r: ReplanInfo): string {
     zones: ["zones changed", "区域换了"],
     near_nogo: ["too close to a no-go zone", "离禁行区太近"],
     detour: ["detouring around an obstacle", "绕障"],
+    preview: ["obstacle seen ahead, going around early", "前方有障碍,提前绕"],
   };
   const [en, zh] = why[r.why] ?? why.off_route;
   return L("Re-planned {n}× ({w})", "重规划 {n} 次({w})", { n: r.n, w: lang.value === "zh" ? zh : en });

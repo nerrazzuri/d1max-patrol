@@ -113,6 +113,6 @@ async def test_被挡的事件带等了多久_绕障重规划带原因(tmp_path)
     assert 1 <= len(blocked) <= 3 and blocked[0]["waited_s"] >= 5.0
     assert blocked[0]["reason"] and "x" in blocked[0] and "y" in blocked[0]
     replans = [d for k, d in t.events if k == "nav_replan"]
-    assert replans and all(d["why"] in ("off_route", "zones", "near_nogo", "detour")
+    assert replans and all(d["why"] in ("off_route", "zones", "near_nogo", "detour", "preview")
                            for d in replans)
     assert any(d["why"] == "detour" for d in replans)

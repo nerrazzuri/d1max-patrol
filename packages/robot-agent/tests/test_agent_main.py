@@ -564,3 +564,16 @@ def test_W32_老版本加新参数还能起_起来以后报一条事件(tmp_path
 def test_W32_空的env参数什么都不带(tmp_path):
     a = _args(tmp_path, "--env-args=")
     assert a.skipped_env_args == [] and a.autonomy is None
+
+
+def test_提前绕_代理参数能关(tmp_path):
+    """方案 2 的现场开关:真机上表现不好,改 /etc/d1max/env 就能关,不用重新发版。"""
+    assert _args(tmp_path).nav_preview == "on"
+    for flag, want in (("on", True), ("off", False)):
+        (tmp_path / flag).mkdir()
+        a = agent_main.build(_args(tmp_path / flag, "--nav", "planned", "--nav-preview", flag))
+        try:
+            a.start()
+            assert a.parts.nav.preview is want
+        finally:
+            a.stop()
