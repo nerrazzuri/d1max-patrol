@@ -599,3 +599,13 @@ def test_MOLA_的重定位是异步生效的_头几帧还是旧位置_给它一�
     for _ in range(int(RELOC_APPLY_S * 10) + 2):           # 过了这阵还在旧位置:没照办
         t2.step(0.0, 0.0)
     assert t2.core.want_reloc() is not None
+
+
+def test_工单22_质量稳定在0点88_不算低质量():
+    """2026-10-28 C40221 朝 −168°:质量中位 0.886、100% 低于 0.9 → σ 一直 1.5、代理一直不信。稳定
+    不跳的 0.88 是好帧;比这几秒平常值明显低的才算低质量。"""
+    t = 台()
+    t.c.t += RELOC_SETTLE_S
+    for i in range(60):
+        t.step(0.0, 0.0, q=0.886 + (0.005 if i % 3 else -0.004))
+    assert t.poses()[-1].sigma_xy < 0.5

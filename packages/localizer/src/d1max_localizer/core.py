@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import logging
 import math
+import statistics
 from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -59,6 +60,10 @@ JUMP_MEMORY_S = 3.0
 #: 2 m 的两段,质量中位数照样 0.96,但低于 0.9 的帧占 17–25%;对得上的几段只占 0–6%。单帧质量看不出来,
 #: 窗口占比看得出来。**只拿一个跨次录包定的线**,真机再标。
 LOWQ_Q = 0.9
+#: 工单 22(2026-10-28 C40221 朝 −168°):质量稳稳地 0.88(中位 0.886、p05 0.881)→ 100% 低于 0.9、σ 一直
+#: 1.5,代理一直不信。低质量帧要**同时**比这几秒的中位数低出这么多:平稳的 0.88 是那个朝向的常态,
+#: 「平常 0.96、时不时掉下去」才是 09-27 那种错法。
+LOWQ_DROP = 0.03
 LOWQ_WINDOW_S = 3.0
 LOWQ_SHARE = 0.2
 LOWQ_MIN_FRAMES = 10
@@ -162,7 +167,7 @@ class LocalizerCore:
         self._last: tuple[float, float, float, float] | None = None   # 上一帧:stamp, x, y, yaw
         self._last_match: float | None = None           # 最后一次真匹配的 stamp
         self._jumps: deque[float] = deque()
-        self._lowq: deque[tuple[float, bool]] = deque()   # 近几秒每帧:stamp, 质量低不低
+        self._lowq: deque[tuple[float, float]] = deque()  # 近几秒每帧:stamp, 质量(转身时抬过的)
         self._jump_lost = False
         self._good: tuple[float, float, float] | None = None
         # 重定位
@@ -319,7 +324,7 @@ class LocalizerCore:
                 self._jumps.append(now)
         self._last = (e.stamp, x, y, yaw)
         self._reloc_good = self._reloc_good + 1 if (e.quality >= Q_GOOD and not jump) else 0
-        self._lowq.append((e.stamp, quality < LOWQ_Q))
+        self._lowq.append((e.stamp, quality))
         while e.stamp - self._lowq[0][0] > LOWQ_WINDOW_S:
             self._lowq.popleft()
         if e.quality >= Q_MATCH or self._last_match is None:
@@ -487,8 +492,13 @@ class LocalizerCore:
             s = SIGMA_MIN_M + (SIGMA_BAD_M - SIGMA_MIN_M) * (Q_GOOD - quality) / (Q_GOOD - Q_BAD)
         if self._jumped_lately(now):
             s = max(s, SIGMA_JUMPED_M)
-        if (len(self._lowq) >= LOWQ_MIN_FRAMES
-                and sum(low for _, low in self._lowq) / len(self._lowq) >= LOWQ_SHARE):
+        if len(self._lowq) >= LOWQ_MIN_FRAMES:
+            qs = [q for _, q in self._lowq]
+            line = min(LOWQ_Q, statistics.median(qs) - LOWQ_DROP)
+            low_share = sum(q < line for q in qs) / len(qs)
+        else:
+            low_share = 0.0
+        if low_share >= LOWQ_SHARE:
             s = max(s, SIGMA_BAD_M)
         since = now - self._reloc_at
         if since >= RELOC_CONFIRM_MIN_S and self._reloc_good >= RELOC_CONFIRM_FRAMES:

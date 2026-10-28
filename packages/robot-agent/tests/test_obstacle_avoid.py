@@ -73,7 +73,7 @@ def test_记忆_按里程挪_从新到旧_都没看见是未知():
     t[0] = 3.0
     assert v.state() == "lost"
     t[0] = 11.0
-    v.note_odom(0.0, 0.0, 0.0)
+    v.note_odom(2.0, 0.0, 0.0)                       # 在走(挪了窝;站着不动的见工单 21 那条)
     v.on_grid(_grid(seq=4))
     assert len(v.frames) == 1, "10 s 以前的帧丢掉"
 
@@ -142,7 +142,7 @@ def test_W34_现场视野_直行起得了步_转向扫进两侧盲带_前面真�
     v.on_grid(_现场视野())
     assert g.check(0.3, 0.0, 0.3, v, (0, 0, 0)).ok, "直行:扫过区都在前面看得见的锥里"
     turn = g.check(0.0, 0.4, 0.0, v, (0, 0, 0))
-    assert not turn.ok and not turn.hits and turn.unknown > 100, "原地转:机身角甩进盲带"
+    assert not turn.ok and not turn.hits and turn.unknown > 0, "原地转:机身角甩进盲带"
     arc = g.check(0.3, 0.3, 0.3, v, (0, 0, 0))
     assert not arc.ok and not arc.hits and arc.unknown, "弧线也是"
     blocked = ObstacleView(monotonic=lambda: 0.0)
@@ -290,10 +290,12 @@ async def test_通道整个堵死_等满20秒放弃_中间报一次被挡(tmp_pa
     await t.nav.goto(Pose.from_xy_yaw(10.0, 2.0))
     await t.跑(10.0)
     t.world.dyn["gate"] = (5.2, 5.0, 6.8, 7.95)                # 口子堵死
-    await t.跑(60.0)
+    # 工单 21(2026-10-28)之后:小转向只查扇形、站着记得两侧,狗会换方向试几回(每回真走了一段,
+    # 算新的一回被挡),不再原地一直等;最后照样放弃、不撞
+    await t.跑(120.0)
     assert not t.crashed
     assert t.status[-2:] == [NavStatus.FAILED, NavStatus.STANDBY], t.status
-    assert [k for k, _ in t.events].count("nav_blocked") == 1
+    assert 1 <= [k for k, _ in t.events].count("nav_blocked") <= 3
     assert ALG_NAV_BLOCKED not in t.algs
     # W34:任务失败原因写清楚是被挡(几处挡、几处看不见),不是笼统的「导航回了 Failed」
     assert t.nav.fail_reason.startswith("被挡 ") and "扫过区有挡" in t.nav.fail_reason, \
@@ -979,3 +981,98 @@ async def test_工单14_机头前045米有箱子_判往前挪不了_身后有挡
     here = SimpleNamespace(x=t.r.x, y=t.r.y, yaw=t.r.yaw, sigma_xy=0.05)
     assert not t.nav._can_creep(here, 1), "前面 0.45 m 有箱子"
     assert not t.nav._can_creep(here, -1), "身后 0.35 m 有箱子"
+
+
+# ------------------------------------------------------------ 2026-10-28 下午 工单 21 / 23
+
+
+def test_工单21_站着不动_两侧看过的记忆不过期_挪了窝照旧10秒():
+    """狗一停下超过 10 s 两侧就算没看过,之后哪怕转 5° 都要先挪。站着(含原地转)不过期,挪了窝照旧。"""
+    from d1max_agent.obstacles import MEMORY_STILL_S
+    t = [0.0]
+    v = ObstacleView(monotonic=lambda: t[0], latency_s=0.0)
+    v.note_odom(0.0, 0.0, 0.0)
+    v.on_grid(_grid())                                        # 全看过、全空
+    front_only = [(r, c) for r in range(12, 20) for c in range(20)]
+    for i in range(1, int(MEMORY_STILL_S) - 5):
+        t[0] = float(i)
+        v.note_odom(0.0, 0.0, 0.002 * i)                       # 站着,慢慢原地转一点
+        v.on_grid(_grid(cells_known=front_only, seq=i + 1))
+    _, unk = v.lookup([(0.0, 0.6)], (0.0, 0.0, 0.0))
+    assert unk == [], "站着不动:侧面那格还记得是空的"
+    t[0] += 1.0
+    v.note_odom(0.5, 0.0, 0.0)                                 # 挪了窝
+    v.on_grid(_grid(cells_known=front_only, seq=999))
+    _, unk = v.lookup([(-0.5, 0.6)], (0.5, 0.0, 0.0))
+    assert unk == [0], "挪了窝:10 s 以前的不算"
+
+
+def test_工单21_转一点点_只查转过去那一小块_不查整个外接圆():
+    """差 5° 也按整个外接圆查,侧后方看不见的格子把小转向拦住。按这一拍转过去再刹停的角度查。"""
+    g = ObstacleGuard()
+    v = ObstacleView(monotonic=lambda: 0.0)
+    v.note_odom(0, 0, 0)
+    size = 40
+    c = [(i - size / 2 + 0.5) * 0.1 for i in range(size)]
+    # 左后方 (-0.4, 0.4) 附近看不见(外接圆里、机身矩形外;左转一点扫不到),别处全看过、空
+    known = [(r, k) for r in range(size) for k in range(size)
+             if not (abs(c[r] + 0.4) < 0.1 and abs(c[k] - 0.4) < 0.1)]
+    v.on_grid(_grid(cells_known=known, size=size))
+    assert g.check(0.0, 0.17, 0.0, v, (0, 0, 0)).ok, "慢慢左转一点:扫不到那一格"
+    assert not g.check(0.0, 3.0, 0.0, v, (0, 0, 0)).ok, "转得快、刹车角度大:照样拦"
+
+
+async def test_工单21_终点就在身后06米_朝向一样_直接倒着退过去_不掉头(tmp_path):
+    """14:59 3ah.2:退完剩 0.6 m、终点朝向跟现在一样,代理坚持原地掉头,被两侧看不见拦住放弃。"""
+    t = 台子(tmp_path, rear=True, cone=True)
+    await t.start(4.0, 4.0, yaw=0.0)
+    await t.nav.goto(Pose.from_xy_yaw(3.4, 4.0, 0.0))
+    yaws = []
+    for _ in range(600):
+        await t.一拍()
+        yaws.append(abs(t.r.yaw))
+        if t.status and t.status[-1] is NavStatus.STANDBY:
+            break
+    assert not t.crashed
+    assert NavStatus.SUCCEED in t.status, (t.status, t.nav.fail_reason)
+    assert max(yaws) < math.radians(30), "没掉头"
+
+
+async def test_工单21_一段放弃了_临时障碍留着_下一段不从箱子上穿(tmp_path):
+    t = 台子(tmp_path)
+    await t.start(1.5, 4.0)
+    await t.nav.goto(Pose.from_xy_yaw(10.0, 4.0))
+    await t.跑(2.0)
+    t.world.dyn["box"] = (5.0, 3.5, 5.6, 4.5)
+    for _ in range(60):
+        await t.一拍()
+    assert t.nav._temp
+    await t.nav._enter_terminal(NavStatus.FAILED)
+    assert t.nav._temp, "放弃这一段:留着到自己过期"
+
+
+async def test_工单23_往前挪满13米会够到箱子_身后是墙_挪短一点(tmp_path):
+    """15:18 C1 第 3 次:起步两侧看不见,往前挪 1.3 m + 刹车够到方块(工单 14 的整段检查不让挪,
+    对),身后不到 1 m 是墙 → 一下没挪、2×20 s 放弃。挪短一点两侧也看过了。"""
+    from types import SimpleNamespace
+    t = 台子(tmp_path, rear=True, cone=True, walls=[(1.9, 0.0, 2.1, 8.0)])
+    t.world.dyn["box"] = (3.0 + 0.515 + 1.0, 3.75, 3.0 + 0.515 + 1.5, 4.25)
+    await t.start(3.0, 4.0, yaw=0.0)
+    for _ in range(5):
+        await t.一拍()
+    t.nav._target = Pose.from_xy_yaw(8.0, 6.0)
+    here = SimpleNamespace(x=t.r.x, y=t.r.y, yaw=t.r.yaw, sigma_xy=0.05)
+    way, length = t.nav._pick_creep(here)
+    assert way == 1 and 0.2 <= length < CREEP_M, (way, length)
+
+
+async def test_工单21_终点在身后06米_挑方向时选往后退到点上(tmp_path):
+    from types import SimpleNamespace
+    t = 台子(tmp_path, rear=True, cone=True)
+    await t.start(4.0, 4.0, yaw=0.0)
+    for _ in range(5):
+        await t.一拍()
+    t.nav._target = Pose.from_xy_yaw(3.4, 4.0, 0.0)
+    here = SimpleNamespace(x=t.r.x, y=t.r.y, yaw=t.r.yaw, sigma_xy=0.05)
+    way, length = t.nav._pick_creep(here)
+    assert way == -1 and abs(length - 0.6) < 0.1, (way, length)
