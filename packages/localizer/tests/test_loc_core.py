@@ -609,3 +609,10 @@ def test_工单22_质量稳定在0点88_不算低质量():
     for i in range(60):
         t.step(0.0, 0.0, q=0.886 + (0.005 if i % 3 else -0.004))
     assert t.poses()[-1].sigma_xy < 0.5
+
+
+def test_工单11_位姿里带_MOLA_原始的ICP质量():
+    t = 台()
+    t.step(0.0, 0.0, q=0.94)
+    [p] = t.poses()[-1:]
+    assert p.icp_quality == 0.94

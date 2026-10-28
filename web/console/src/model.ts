@@ -48,6 +48,7 @@ export interface Robot {
     source?: string;
     sigma_m?: number | null;
     quality?: number | null;
+    icp_quality?: number | null;
     reason?: string;
     degraded?: string;
     localizer?: string;

@@ -395,3 +395,29 @@ def test_外审I3_没有可信钥匙不登记_删掉最后一把也不放行_不
     _开发不验签(home)
     assert site_main.main(["--home", str(home), "release-add", str(pkg2)]) == 0
     assert "不验签" in capsys.readouterr().err
+
+
+def test_工单9_renew_换证书不断线_登记表跟着换_代次和手动派不变(home, capsys):
+    assert site_main.main(["--home", str(home), "enroll", "A", "--days", "30"]) == 0
+    db = SiteDB(home / "site.db")
+    reg = Registry(db, site_id="estate-1")
+    before = reg.get("A")
+    epoch = reg.control_epoch("A")
+    manual = reg.manual_only("A")
+    db.close()
+    capsys.readouterr()
+    assert site_main.main(["--home", str(home), "renew", "A", "--days", "365"]) == 0
+    out = capsys.readouterr().out
+    assert "robot.crt" in out and "registration.json" in out and "重启" in out
+    db = SiteDB(home / "site.db")
+    reg = Registry(db, site_id="estate-1")
+    after = reg.get("A")
+    assert after.fingerprint != before.fingerprint and not after.revoked
+    assert after.expires_at > before.expires_at + 300 * 86_400_000
+    assert reg.control_epoch("A") == epoch and reg.manual_only("A") == manual
+    db.close()
+    d = home / "ca" / "issued" / "A"
+    assert Registration.load(d / "registration.json").credential_fingerprint == after.fingerprint
+    assert site_main.main(["--home", str(home), "renew", "B"]) == 2, "没登记的不许续"
+    assert site_main.main(["--home", str(home), "revoke", "A"]) == 0
+    assert site_main.main(["--home", str(home), "renew", "A"]) == 2, "吊销了的不许续(重新 enroll)"

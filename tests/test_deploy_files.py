@@ -1202,7 +1202,7 @@ def test_卸载脚本删agent单元():
     # 没重跑过装机脚本的老机器上老服务还在:卸载照样要停、要删。定位器(W09b)先停,它连着代理。
     # zenoh 路由(A5)在吃话题的几个之后停
     assert ('for u in "$PERS_UNIT" "$OBS_UNIT" "$LOC_UNIT" "$MERGE_UNIT" "$ZENOH_UNIT" '
-            '"$MAIN_UNIT" "$LEGACY_UNIT" "$OLD_UNIT"; do') in text
+            '"$MAIN_UNIT" "$SIDE_UNIT" "$LEGACY_UNIT" "$OLD_UNIT"; do') in text
     assert 'rm_sys "$UNIT_DIR/$LEGACY_UNIT"' in text
 
 
@@ -1625,6 +1625,48 @@ def test_前后雷达合并的启动脚本与单元_只装不启用_卸载删干
     assert '"$OBS_UNIT" "$LOC_UNIT" "$MERGE_UNIT"' in 卸, "先停吃合并话题的定位器,再停合并"
 
 
+def test_工单7_旁路进程的单元与启动脚本_只装不启用_不刷起停上限_卸载删干净(tmp_path):
+    """2026-10-28:现场手写的 d1max-field-sidecar.service 缺 runs/ 目录、撞了 systemd 起停次数上限,
+    开机那几秒修好才抢到窗口。旁路程序要链厂商 SDK、在机器上编,包里不带:按 /etc/d1max/env 找。"""
+    import os
+    import subprocess
+    start = DEPLOY / "d1max-sidecar-start"
+    assert os.access(start, os.X_OK)
+    subprocess.run(["sh", "-n", str(start)], check=True)
+    单元 = (DEPLOY / "d1max-sidecar.service").read_text(encoding="utf-8")
+    assert "ExecStart=/opt/d1max/current/deploy/d1max-sidecar-start" in 单元
+    assert "StartLimitIntervalSec=0" in 单元 and "Restart=always" in 单元
+    assert "RestartPreventExitStatus=78" in 单元, "程序没编出来:别一直重启"
+    assert "EnvironmentFile=-/etc/d1max/env" in 单元 and "User=robot" in 单元
+    # 没编出来:一行说清楚、退 78
+    r = subprocess.run(["sh", str(start)], env={"PATH": "/usr/bin:/bin", "HOME": str(tmp_path),
+                                                 "D1MAX_SIDECAR_BIN": str(tmp_path / "没有")},
+                       capture_output=True, text=True, timeout=10)
+    assert r.returncode == 78 and "make" in r.stderr
+    # 编出来了:建好目录、按 env 拼参数
+    fake = tmp_path / "patrol_agent"
+    fake.write_text('#!/bin/sh\necho "$@" > "$HOME/args"\n')
+    fake.chmod(0o755)
+    r = subprocess.run(["sh", str(start)], env={"PATH": "/usr/bin:/bin", "HOME": str(tmp_path),
+                                                 "D1MAX_SIDECAR_BIN": str(fake),
+                                                 "D1MAX_SIDECAR_ROBOT": "192.168.168.168:8082"},
+                       capture_output=True, text=True, timeout=10)
+    assert r.returncode == 0, r.stderr
+    args = (tmp_path / "args").read_text().split()
+    assert args[:2] == ["192.168.168.168", "8082"]
+    assert args[args.index("--listen") + 1] == "127.0.0.1:8090"
+    fifo = Path(args[args.index("--fifo") + 1])
+    assert fifo.parent.is_dir(), "runs/ 目录先建好"
+    装 = (DEPLOY / "install.sh").read_text(encoding="utf-8")
+    assert "# @写盘 /etc/systemd/system/d1max-sidecar.service" in 装
+    assert 'install -m 0644 "$PKG/deploy/d1max-sidecar.service" /etc/systemd/system/' in 装
+    assert "enable d1max-sidecar" not in 装 and "systemctl start d1max-sidecar" not in 装
+    卸 = (DEPLOY / "uninstall.sh").read_text(encoding="utf-8")
+    assert "# @删除 /etc/systemd/system/d1max-sidecar.service" in 卸
+    assert 'rm_sys "$UNIT_DIR/$SIDE_UNIT"' in 卸 and 'rm_sys "$SIDE_WANTS_LINK"' in 卸
+    assert '"$MAIN_UNIT" "$SIDE_UNIT"' in 卸, "先停代理(它先停车),再停旁路"
+
+
 def _units(tmp_path, text):
     import subprocess
     f = tmp_path / "env"
@@ -1675,7 +1717,8 @@ def test_装机脚本_换算系数不对什么都不改就停():
 
 # ---------------------------------------------------------- 运行期系统件(决策 47)
 
-def _系统件检查(tmp_path: Path, *, ffmpeg: str | None, onnx: bool, groups: str) -> str:
+def _系统件检查(tmp_path: Path, *, ffmpeg: str | None, onnx: bool, groups: str,
+              pkg_wheels: Path | None = None) -> str:
     """把 install.sh 里「运行期要的系统件」那段原样抠出来,在 ``set -euo pipefail`` 下用假的
     ffmpeg / python3 / id 跑,回 stderr。"""
     import shutil
@@ -1696,7 +1739,11 @@ def _系统件检查(tmp_path: Path, *, ffmpeg: str | None, onnx: bool, groups: 
     假("id", f"echo '{groups}'")
     for 名 in ("tr", "cat", "grep"):
         (bin_ / 名).symlink_to(shutil.which(名))
-    r = subprocess.run(["/bin/bash", "-c", "set -euo pipefail\nRUN_USER=robot\n" + 段],
+    pre = f"PKG_WHEELS={pkg_wheels}\n" if pkg_wheels is not None else ""
+    for 名 in ("ls", "head"):
+        if not (bin_ / 名).exists():
+            (bin_ / 名).symlink_to(shutil.which(名))
+    r = subprocess.run(["/bin/bash", "-c", "set -euo pipefail\nRUN_USER=robot\n" + pre + 段],
                        env={"PATH": str(bin_)}, capture_output=True, text=True, timeout=30)
     assert r.returncode == 0, r.stderr
     return r.stderr
@@ -1733,3 +1780,17 @@ def test_感知和人员检测的启动脚本限numpy线程():
         text = (DEPLOY / 名).read_text(encoding="utf-8")
         assert "\nexport OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1\n" in text, 名
         assert text.index("OPENBLAS_NUM_THREADS") < text.index("exec /usr/bin/python3"), 名
+
+
+def test_工单6_缺_onnxruntime_包里带了轮子_提示给出能照抄的离线装法_自己不装(tmp_path):
+    """2026-10-28:10-26 清理重装把人员检测的 onnxruntime 清掉了,装机脚本只说「没有」,
+    现场现查装法。"""
+    w = tmp_path / "wheels"
+    w.mkdir()
+    (w / "onnxruntime_gpu-1.24.0-cp310-cp310-linux_aarch64.whl").write_bytes(b"x")
+    err = _系统件检查(tmp_path / "a", ffmpeg="srt", onnx=False, groups="robot dialout",
+                     pkg_wheels=w)
+    assert "python3 -m pip install --no-deps --no-index" in err
+    assert str(w / "onnxruntime_gpu-1.24.0-cp310-cp310-linux_aarch64.whl") in err
+    err = _系统件检查(tmp_path / "b", ffmpeg="srt", onnx=False, groups="robot dialout")
+    assert "装机清单" in err and "onnxruntime-gpu" in err, "包里没带:说去哪找、怎么装"

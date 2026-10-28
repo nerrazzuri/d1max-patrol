@@ -212,7 +212,9 @@ def test_旁路进程每处拿到控制权都走SetHeld_持有一变就广播hel
     assert "g_held.exchange(held) != held" in body and "Broadcast(HelloFrame())" in body
     assert "SetHeld(a.error_code == 0);" in src                       # 重抢的回执
     # SDK 报可用(W35:看回执)
-    assert "TakeConfirmed(*g_client, 5000).empty()) SetHeld(true);" in src
+    avail = src[src.index("void OnControlAvailable("):]
+    avail = avail[:avail.index("\n  }\n")]
+    assert "TakeConfirmed(*g_client, 5000).empty()) {" in avail and "SetHeld(true);" in avail
     hold = src[src.index("static Outcome DoHold() {"):]
     assert "SetHeld(true);" in hold[:hold.index("\n}\n")]
     # 连上时那帧也用同一个构造:握手帧只有一份写法

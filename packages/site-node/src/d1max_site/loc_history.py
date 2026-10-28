@@ -23,6 +23,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
@@ -46,10 +47,26 @@ CAUSE_MAX = 200
 LATER = ";后来:"
 
 
+_NUM = re.compile(r"\d+(?:\.\d+)?(?:→\d+(?:\.\d+)?)?")
+
+
 def _join(first: str, later: str) -> str:
-    """把后来的说法接在后面(重复的不接;太长了就不接)。"""
+    """把后来的说法接在后面(重复的不接;太长了就不接)。工单 13:跟最后那一段只是数字不一样
+    (σ 小步变)→ 不另接一段,数字合成「1.5→0.7」。"""
     if not later or later in first.split(LATER):
         return first
+    head, sep, last = first.rpartition(LATER)
+    if _NUM.sub("#", last) == _NUM.sub("#", later) and _NUM.search(later):
+        olds, news = _NUM.findall(last), _NUM.findall(later)
+        it = iter(zip(olds, news, strict=True))
+
+        def merge(_m: re.Match) -> str:
+            old, new = next(it)
+            start = old.split("→")[0]
+            return start if start == new else f"{start}→{new}"
+        merged = _NUM.sub(merge, last)
+        out = f"{head}{sep}{merged}"
+        return out if len(out) <= CAUSE_MAX else first
     out = f"{first}{LATER}{later}"
     return out if len(out) <= CAUSE_MAX else first
 

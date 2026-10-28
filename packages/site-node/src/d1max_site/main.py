@@ -193,6 +193,31 @@ def cmd_enroll(home: Path, robot_id: str, days: int) -> Path:
         db.close()
 
 
+def cmd_renew(home: Path, robot_id: str, days: int) -> Path:
+    """工单 9:续签证书。旧证书不吊销(到期前照样连得上);登记表换指纹和有效期。"""
+    cfg = _load(home)
+    ca = SiteCA(home / "ca")
+    db = SiteDB(home / "site.db")
+    try:
+        reg = Registry(db, site_id=cfg["site_id"])
+        cur = reg.get(robot_id)
+        if cur is None or cur.revoked:
+            raise SiteError(f"{robot_id} 没登记或已吊销:要 enroll,不是续签")
+        bundle = ca.renew_robot(robot_id, days=days, now_ms=wall_ms())
+        r = bundle.registration
+        reg.renew(robot_id, fingerprint=bundle.fingerprint, issued_at=r.issued_at,
+                  expires_at=r.expires_at)
+        from d1max_contract.evseal import public_key
+        from d1max_site.evidence import load_evidence_key
+        key = load_evidence_key(cfg)
+        if key is not None:
+            (bundle.dir / "evidence-pub.key").write_text(public_key(key).hex() + "\n",
+                                                         encoding="ascii")
+        return bundle.dir
+    finally:
+        db.close()
+
+
 #: 事件源密钥怎么用(W33:2026-10-08 C40221 现场照字面拿字符串算 HMAC,一直 401)。打在密钥**前面**:
 #: 密钥照旧是最后一行(脚本、测试按最后一行取)。
 _HEX_HINT = ("注意:下面是 64 位十六进制,算签名前先解码成 32 字节再当 HMAC-SHA256 的密钥"
@@ -1158,8 +1183,13 @@ def cmd_serve(home: Path, api_host: str, api_port: int, broker_url: str | None,
         except SourceError as exc:
             print(f"d1max-site 起不来: {exc}", file=sys.stderr, flush=True)
             return 2
-    srv = Server(home, api_host=api_host, api_port=api_port, broker_url=url,
-                 rtcm_source=rtcm_source)
+    try:
+        srv = Server(home, api_host=api_host, api_port=api_port, broker_url=url,
+                     rtcm_source=rtcm_source)
+    except ValueError as exc:
+        # 工单 3:site.json 写错(比如 video.fps 写成字符串)只打一行说明,不甩整段 Traceback
+        print(f"d1max-site 起不来:配置不对:{exc}", file=sys.stderr, flush=True)
+        return 2
     try:
         srv.start()
     except Exception as exc:  # noqa: BLE001 - 连不上 broker 之类:退 1,交给 systemd 重试
@@ -1207,6 +1237,9 @@ def build_parser() -> argparse.ArgumentParser:
                    help="顺带出一个开通码(A4):机器人上 d1max-patrol provision --code 一条命令开通")
     e.add_argument("--host", default=None, help="开通码里机器人连站点用的主机名(缺省第一个 "
                                                 "--hostname)")
+    rn = sub.add_parser("renew", help="续签机器人的证书(工单 9):旧证书不吊销,狗换上新的就切过去")
+    rn.add_argument("robot_id")
+    rn.add_argument("--days", type=int, default=365)
     ec = sub.add_parser("enroll-code", help="给已登记的机器人重新出一个开通码(A4,旧码作废)")
     ec.add_argument("robot_id")
     ec.add_argument("--host", default=None, help="机器人连站点用的主机名(缺省第一个 --hostname)")
@@ -1355,6 +1388,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                       "(装机脚本会生成 /etc/d1max-site/evidence.key)")
             if args.code:
                 print(_code_text(cmd_enroll_code(home, args.robot_id, args.host, 24.0)))
+        elif args.cmd == "renew":
+            d = cmd_renew(home, args.robot_id, args.days)
+            print(f"新证书包: {d}\n"
+                  f"拷到机器人上: robot.crt robot.key → /etc/d1max/tls/(ca.crt 没变),"
+                  f"registration.json → /etc/d1max/;然后重启代理(sudo systemctl restart "
+                  f"d1max-agent)。\n旧证书没吊销,到期之前照样连得上:换证书不断线。")
         elif args.cmd == "enroll-code":
             print(_code_text(cmd_enroll_code(home, args.robot_id, args.host, args.hours)))
         elif args.cmd in ("robot-auto", "robot-manual"):

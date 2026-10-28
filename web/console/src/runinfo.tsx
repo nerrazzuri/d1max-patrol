@@ -16,7 +16,10 @@ export function RunInfo({ robot }: { robot: Robot }) {
         <span class={cls} data-loc={st}>
           {st !== "ok" && st !== "unknown" && <Shape kind="P2" size={12} />}
           {locLine(loc)}
-          {typeof loc.quality === "number" && st !== "unset" && ` · ${L("quality", "质量")} ${loc.quality.toFixed(2)}`}
+          {/* 工单 11:定位器报了原始 ICP 匹配质量就显示它;老的只有 σ 换算的 quality */}
+          {st !== "unset" && (typeof loc.icp_quality === "number"
+            ? ` · ${L("match quality", "匹配质量")} ${loc.icp_quality.toFixed(2)}`
+            : typeof loc.quality === "number" && ` · ${L("quality", "质量")} ${loc.quality.toFixed(2)}`)}
         </span>
       )}
       {nav?.blocked && <span class="warn" data-nav="blocked"><Shape kind="P2" size={12} />{blockedText(nav.blocked)}</span>}

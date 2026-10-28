@@ -208,13 +208,24 @@ class SiteCA:
         os.chmod(out, 0o644)
 
     def issue_robot(self, robot_id: str, *, days: int, now_ms: int) -> RobotBundle:
-        site_id = self.site_id
-        check_robot_id(site_id, robot_id)
+        check_robot_id(self.site_id, robot_id)
         if robot_id in self._valid_subjects():
-            raise CAError(f"{robot_id} 已有一张有效证书;先 revoke 再重签")
+            raise CAError(f"{robot_id} 已有一张有效证书;先 revoke 再重签(要续期用 renew)")
+        return self._issue(robot_id, days=days, now_ms=now_ms)
+
+    def renew_robot(self, robot_id: str, *, days: int, now_ms: int) -> RobotBundle:
+        """工单 9:续签 —— 已有有效证书的狗再签一张,**旧的不吊销**(到期前照样连得上,狗换上新的
+        就切过去,不断线)。:meth:`revoke` 会把这台名下还有效的都吊掉。"""
+        check_robot_id(self.site_id, robot_id)
+        if robot_id not in self._valid_subjects():
+            raise CAError(f"{robot_id} 没有有效证书可续;要 enroll")
+        return self._issue(robot_id, days=days, now_ms=now_ms)
+
+    def _issue(self, robot_id: str, *, days: int, now_ms: int) -> RobotBundle:
+        site_id = self.site_id
         d = self.robot_dir(robot_id)
         if d.exists():
-            shutil.rmtree(d)                     # 上一张已吊销;旧证书留在 newcerts/ 备查
+            shutil.rmtree(d)                     # 上一张已吊销或续签换下;旧证书留在 newcerts/
         d.mkdir(parents=True)
         os.chmod(d, 0o700)
         self._genkey(d / "robot.key")
@@ -258,11 +269,24 @@ class SiteCA:
             robot_id in self._valid_subjects()
 
     def revoke(self, robot_id: str) -> None:
-        crt = self.robot_dir(robot_id) / "robot.crt"
-        if not crt.is_file() or robot_id not in self._valid_subjects():
+        """这台狗名下**所有**还有效的证书都吊掉(工单 9:续签之后旧的那张也还有效)。"""
+        serials = self._valid_serials(robot_id)
+        if not serials:
             raise CAError(f"{robot_id} 没有有效证书可吊销")
-        self._run("ca", "-batch", "-config", str(self._cnf), "-revoke", str(crt))
+        for serial in serials:
+            crt = self.root / "newcerts" / f"{serial}.pem"
+            if not crt.is_file():
+                raise CAError(f"{robot_id} 的证书 {serial} 在 newcerts/ 里找不到,吊销不了")
+            self._run("ca", "-batch", "-config", str(self._cnf), "-revoke", str(crt))
         self._gencrl()
+
+    def _valid_serials(self, robot_id: str) -> list[str]:
+        out = []
+        for line in (self.root / "index.txt").read_text().splitlines():
+            parts = line.split("\t")
+            if len(parts) >= 6 and parts[0] == "V" and f"CN={robot_id}" in parts[5].split("/"):
+                out.append(parts[3])
+        return out
 
     # ------------------------------------------------------------ 工具
 

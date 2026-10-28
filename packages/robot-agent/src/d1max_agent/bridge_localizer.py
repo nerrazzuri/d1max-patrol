@@ -267,6 +267,7 @@ class BridgeLocalizer:
         self._kept_at = -math.inf
         self._kept: tuple[tuple[str, str], _Fix, float, str] | None = self._load_keep()
         self._wrong_map = False
+        self._icp: float | None = None
         #: RTK 核对说定位器不对(W09e,``RtkCheck``;代理每拍写):非空就不可信。
         self.rtk_disagree = ""
         #: 点云套图说定位器锁错了(W41,``globalloc.judge``;代理写):非空就不可信。下一次请重定位、
@@ -319,6 +320,7 @@ class BridgeLocalizer:
             self._lags.clear()
         self._stamp = stamp
         self._wrong_map = False
+        self._icp = p.icp_quality                        # 工单 11:原始 ICP 质量照实往上报
         new = self._pair(p, now, stamp)
         prev, self._fix = self._fix, new
         if self._reloc is not None and p.reloc_id is not None and p.reloc_id >= self._reloc[0]:
@@ -543,6 +545,8 @@ class BridgeLocalizer:
         out = {"source": self.source, "anchored": self.anchored,
                "sigma_m": round(self.sigma_xy, 2), "reason": self.why_not(odom_ok),
                "localizer": "bridge"}
+        if self._icp is not None:
+            out["icp_quality"] = round(self._icp, 2)     # 工单 11(老定位器不报就不带)
         degraded = self.degraded(odom_ok)
         if degraded:
             out["degraded"] = degraded                   # 对账 S6:自动走限着速(老站点不认,不碍事)

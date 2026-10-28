@@ -199,3 +199,18 @@ def test_命令行导出诊断包(tmp_path, monkeypatch):
     assert site_main.main(["--home", str(home), "support-bundle", "--out", str(out)]) == 0
     with tarfile.open(out) as tar:
         assert any(n.endswith("site.json") for n in tar.getnames())
+
+
+def test_工单9_续签了还没换到狗上_按狗报的在用证书算到期_不提前消警(台):
+    """站点这边的证书包续签后换成新的(400 天),狗上还是旧的(10 天):要照狗报的算。"""
+    t = 台
+    caps = SimpleNamespace(tasks={"tls": {"expires_ms": NOW + 10 * DAY}})
+    t.h.dispatcher = SimpleNamespace(clients={"A": SimpleNamespace(capabilities=caps, status=None)})
+    c = t.h.checks()
+    assert not c["certs"]["ok"]
+    assert "机器人 A 在用的证书还有 10 天到期" in c["certs"]["detail"]
+    assert "新证书签好了" in c["certs"]["detail"], "站点这边已经续过:告诉人拷过去"
+    caps.tasks["tls"]["expires_ms"] = NOW + 400 * DAY                # 换上了
+    assert t.h.checks()["certs"]["ok"]
+    caps.tasks.pop("tls")                                             # 老代理不报:看站点的包
+    assert t.h.checks()["certs"]["ok"]

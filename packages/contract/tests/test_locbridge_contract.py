@@ -129,3 +129,15 @@ def test_W41_重定位带是不是人给的_缺省是人给的_不是布尔拒()
     assert parse(old).human is True, "老代理不带:当人给的(跟原来一样)"
     with _pt.raises(ContractError):
         parse(old.replace(b"}", b',"human":1}'))
+
+
+def test_工单11_位姿带原始ICP质量_可选_越界拒():
+    from d1max_contract.locbridge import Pose, encode, parse
+    kw = dict(seq=1, stamp_ns=1, map_id="m", map_version="1", x=0.0, y=0.0, yaw=0.0,
+              sigma_xy=0.1, sigma_yaw=0.02, source="scan_match")
+    assert Pose(**kw).icp_quality is None
+    p = Pose(**kw, icp_quality=0.94)
+    assert parse(encode(p)) == p
+    for bad in (1.5, -0.1, float("nan")):
+        with pytest.raises(ContractError):
+            Pose(**kw, icp_quality=bad)
