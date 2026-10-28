@@ -304,6 +304,41 @@ async def test_只转了朝向_跟里程对不上也当跳():
     assert "朝向差" in loc.why_not(True)
 
 
+def _原地转(c, loc, frames, yaw_to, xy_at):
+    """里程原地转(厂家里程原地转时平移报零),定位器朝向跟着转、位置按 ``xy_at(i)`` 给;每帧回 ok。"""
+    oks = []
+    for i in range(1, frames + 1):
+        c.t += 0.1
+        yaw = yaw_to * i / frames
+        loc.update((0.0, 0.0, yaw), True)
+        loc.on_pose(_位姿(*xy_at(i), yaw))
+        oks.append(loc.ok(True))
+    return oks
+
+
+async def test_原地转身_机身真挪了一点_不当跳():
+    """2026-10-28 C40221:原地转半圈,机身真挪了 0.3 m 上下,厂家里程平移一直报零 —— 原来按
+    「位移差 0.34 m」当跳、重定位、等 30 s,整趟中止。转过的角度要放宽。"""
+    c, link, loc = await _就绪()
+    _稳(loc, 0.0, 0.0, 0.0)
+    oks = _原地转(c, loc, 30, math.pi, lambda i: (0.35 * i / 30, 0.0))
+    assert all(oks), loc.why_not(True)
+
+
+async def test_原地转身_定位器滑了一米_照样当跳():
+    c, link, loc = await _就绪()
+    _稳(loc, 0.0, 0.0, 0.0)
+    _原地转(c, loc, 10, 1.0, lambda i: (0.0, 0.0) if i < 10 else (0.9, 0.0))
+    assert "对不上" in loc.why_not(True)
+
+
+async def test_原地转很多圈_放宽有上限():
+    c, link, loc = await _就绪()
+    _稳(loc, 0.0, 0.0, 0.0)
+    _原地转(c, loc, 40, 3 * math.pi, lambda i: (0.0, 0.0) if i < 40 else (0.9, 0.0))
+    assert "对不上" in loc.why_not(True)
+
+
 async def test_小的出入不算跳():
     c, link, loc = await _就绪()
     _稳(loc, 0.0, 0.0)
