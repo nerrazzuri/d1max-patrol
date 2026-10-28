@@ -758,6 +758,34 @@ class BridgeLocalizer:
         return (f"定位器稳住的地方跟{self._anchor_what}差 {bad},里程说机器人没这么动过:"
                 "请重新设位置")
 
+    def conflict_poses(self) -> tuple[tuple[float, float, float],
+                                      tuple[float, float, float]] | None:
+        """工单 10:稳住了但跟锚对不上时 → (定位器稳住的位置, 锚按里程推到现在的位置);
+        别的时候 None。"""
+        a = self._anchor
+        if not self._off_why or not self._win or a is None or a.odom is None:
+            return None
+        new = self._win[-1]
+        if new.odom is None or a.epoch != new.epoch:
+            return None
+        want = compose(a.T, new.odom)
+        return (new.pose[0], new.pose[1], new.pose[2]), (want[0], want[1], want[2])
+
+    def accept_localizer(self, why: str) -> bool:
+        """工单 10:点云套图核过 —— 定位器稳住的地方比锚像得多:锚换成它(按紧的线核),解开「对不上」,
+        下一帧接着稳下来。不在「对不上」里就什么都不做。"""
+        if not self._off_why or not self._win:
+            return False
+        f = self._win[-1]
+        self._anchor = f
+        self._anchor_m, self._anchor_yaw = ANCHOR_TRUSTED_M, ANCHOR_TRUSTED_YAW_RAD
+        self._anchor_what = "点云套图核过的位置"
+        self._anchor_hold = None
+        self._off_why = ""
+        log.warning("%s:信定位器稳住的位置", why)
+        self._save_keep()
+        return True
+
     # ------------------------------------------------------------ 锚记在盘上(对账 S1)
 
     def _save_keep(self, *, force: bool = True) -> None:

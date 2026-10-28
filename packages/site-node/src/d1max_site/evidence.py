@@ -315,8 +315,9 @@ class EvidenceStore:
                 summary = m.get("summary") if isinstance(m, dict) else None
                 if isinstance(summary, dict) and summary:
                     finished, result = 1, str(summary.get("result", ""))[:64]
-            except (OSError, ValueError):
-                log.warning("%s/%s/%s 的清单读不懂", robot_id, mission, stamp)
+            except (OSError, ValueError) as exc:
+                # 工单 24:原来没写为什么,现场查不了
+                log.warning("%s/%s/%s 的清单读不懂:%s", robot_id, mission, stamp, exc)
         size = sum(p.stat().st_size for p in run.rglob("*") if p.is_file())
         row = None
         with self.db.tx() as c:

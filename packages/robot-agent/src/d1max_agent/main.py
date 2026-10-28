@@ -491,7 +491,11 @@ def build(args: argparse.Namespace) -> Assembled:
                            invert_yaw=args.invert_yaw,
                            stopped_eps=args.stopped_eps, now_ms=wall_ms, payload=payload,
                            token_file=args.sidecar_token_file)
-            media = None                          # RTSP 取图归后面的工单
+            # 工单 18:到点拍照跟实时画面用同一套 RTSP 相机,每次 ffmpeg 抽一帧 JPEG
+            from d1max_agent.bridges.rtsp_media import rtsp_media
+            from d1max_agent.video_push import rtsp_source as _rtsp_source
+            media = rtsp_media(_rtsp_source(args.camera_host, extra_cameras(args)),
+                               now_ms=wall_ms, ffmpeg=args.ffmpeg)
         parts = build_engine(hal, runs_root=args.runs_root, now_ms=wall_ms, map_id=args.map[0],
                              home=args.home, media=media, nav_kind=args.nav,
                              robot_radius_m=args.robot_radius)

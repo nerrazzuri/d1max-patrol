@@ -377,8 +377,19 @@ class ObstacleGuard:
         hit, unknown = view.lookup(pts, pose_now)
         if not hit and not unknown:
             return Verdict(True)
-        return Verdict(False, f"扫过区有挡 {len(hit)} 处、看不见 {len(unknown)} 处",
-                       hits=tuple(pts[i] for i in hit), unknown=len(unknown))
+        hits = tuple(pts[i] for i in hit)
+        return Verdict(False, f"扫过区有挡 {len(hit)} 处、看不见 {len(unknown)} 处{_nearest(hits)}",
+                       hits=hits, unknown=len(unknown))
+
+
+def _nearest(hits: tuple[tuple[float, float], ...]) -> str:
+    """工单 24:最近那一处挡在机身的哪儿(狗身系:x 朝前、y 朝左),现场分得清是箱子、人还是噪点。"""
+    if not hits:
+        return ""
+    x, y = min(hits, key=lambda p: math.hypot(p[0], p[1]))
+    fb = f"前 {x:.1f} m" if x >= 0 else f"后 {-x:.1f} m"
+    lr = f"左 {y:.1f} m" if y >= 0 else f"右 {-y:.1f} m"
+    return f"(最近一处在机身{fb}、{lr})"
 
 
 _STATE_TEXT = {"stale": "不新鲜", "lost": "断了", "extrinsic_bad": "外参自检没过",

@@ -118,6 +118,8 @@ HOME_MAX_SIGMA_M = 0.5
 RTK_FIX_MAX_AGE_MS = 300
 #: W41:定位器稳下来以后,最多等这么久(秒)拿到一份狗停着的点云去核;点云套图连着自动请几次重定位。
 SCAN_CHECK_WAIT_S = 10.0
+#: 工单 10:对不上的两处点云核对,最多这么久核一次(秒)。
+CONFLICT_EVERY_S = 10.0
 SCAN_RELOC_MAX = 2
 
 #: 一条回执编码之后最多这么大(字节)。站点 broker 单包上限 262144(``max_packet_size``,超了狗被断开),
@@ -229,6 +231,9 @@ class AgentRuntime:
         self.globalloc: GlobalLoc | None = GlobalLoc(self.obs_view) \
             if self.obs_view is not None else None
         self._scan_job: asyncio.Task | None = None
+        #: 工单 10:人给的位置跟定位器稳住的地方对不上时,点云核对的后台活、下一次能核的时刻。
+        self._conflict_job: asyncio.Task | None = None
+        self._conflict_next = -math.inf
         #: 点云套图连着自动请了几次重定位(定位器又锁回错处就不再请,等人)。
         self._scan_relocs = 0
         #: 人员检测(W24,决策 39):检测节点经本机人员桥报帧,这里判有没有人、记事件。
@@ -1386,6 +1391,53 @@ class AgentRuntime:
                 return
             self._scan_job = loop.create_task(self._scan_check(self._mono()))
 
+    def _maybe_conflict_check(self) -> None:
+        """工单 10(2026-10-28 3z.18):设错位置后定位器自己回对了,代理却一直「对不上,请重新设位置」。
+        卡在对不上就拿点云在两处各套一次图(冷却 :data:`CONFLICT_EVERY_S` 秒)。"""
+        if not self._global_ok() or self._running(self._conflict_job):
+            return
+        if self._mono() < self._conflict_next or self.parts.nav.anchor.conflict_poses() is None:
+            return
+        self._conflict_next = self._mono() + CONFLICT_EVERY_S
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        self._conflict_job = loop.create_task(self._conflict_check())
+
+    async def _conflict_check(self) -> None:
+        from d1max_agent.globalloc import GLOBAL_SIGMA_M, GlobalLocError, resolve_conflict
+        anchor = self.parts.nav.anchor
+        m = self.loaded_map
+        poses = anchor.conflict_poses()
+        if poses is None or m is None:
+            return
+        try:
+            pts = self.globalloc.scan()
+            fit_loc, fit_given = await self.globalloc.fits(pts, list(poses))
+        except GlobalLocError as exc:
+            log.info("对不上的两处核不了:%s", exc)
+            return
+        if self.loaded_map != m or anchor.conflict_poses() is None:
+            return
+        trust = resolve_conflict(fit_loc, fit_given)
+        (lx, ly, _), (gx, gy, gyaw) = poses
+        log.warning("对不上的两处点云套图:定位器 (%.1f, %.1f) %.2f,"
+                    "人给的那处 (%.1f, %.1f) %.2f → %s",
+                    lx, ly, fit_loc, gx, gy, fit_given, trust or "说不准,等人")
+        data = {"map_id": m[0], "map_version": m[1], "trust": trust or "none",
+                "fit_localizer": round(fit_loc, 3), "fit_given": round(fit_given, 3),
+                "localizer": [round(lx, 2), round(ly, 2)], "given": [round(gx, 2), round(gy, 2)]}
+        if trust == "localizer":
+            anchor.accept_localizer(f"点云套图:定位器那处贴合度 {fit_loc:.2f}、"
+                                    f"人给的那处 {fit_given:.2f}")
+            self.events.emit("loc_conflict_resolved", data)
+        elif trust == "anchor":
+            self.events.emit("loc_conflict_resolved", data)
+            why = await anchor.relocalize(m, (gx, gy, gyaw), GLOBAL_SIGMA_M, human=False)
+            if why:
+                log.warning("按人给的那处请定位器重定位没成:%s", why)
+
     async def _scan_check(self, since: float) -> None:
         """定位器稳下来以后核一遍(W41):等一份「之后收到、狗没动」的点云(最多
         :data:`SCAN_CHECK_WAIT_S` 秒),按定位器给的位置算贴合度;对得上就算了;锁错了 —— 能认出
@@ -2299,6 +2351,7 @@ class AgentRuntime:
             self._went_offline = False
             await self._apply_offline_policy()
         await self._enforce_supervision()
+        self._maybe_conflict_check()
         if self._locsrv is not None:
             await self._locsrv.tick()            # 本机定位桥:心跳、定位器没声就当它断了
         if self._obs_srv is not None:

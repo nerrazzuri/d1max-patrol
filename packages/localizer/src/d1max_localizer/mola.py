@@ -76,7 +76,12 @@ class MolaRos:
         self._thread.start()
 
     def shutdown(self) -> None:
-        self._exec.shutdown()
+        """工单 1(2026-10-28 ``systemctl stop`` 偶尔 ``terminate called without an active
+        exception`` → ABRT、systemd 记 failed;台式机上 5 次复现 1 次):rclpy 在后台线程里转,原来
+        关了执行器就销毁节点、关 ROS、退出,那个线程还在 C++ 里没出来。先等它退出再收。"""
+        self._exec.shutdown(timeout_sec=2.0)
+        if self._thread.is_alive():
+            self._thread.join(timeout=3.0)
         self.node.destroy_node()
         if rclpy.ok():
             rclpy.shutdown()

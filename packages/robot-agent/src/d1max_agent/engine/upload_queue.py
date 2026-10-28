@@ -68,7 +68,7 @@ _EXACT: dict[str, int] = {
 #: 一次改写可能没来得及传),第一次见到 mtime 就从 0 重传一次;不在表上的只记
 #: mtime,不把整库照片重传一遍。**加一种改写型文件,必须同时进这里和 _EXACT。**
 REWRITTEN_IN_PLACE: frozenset[str] = frozenset(
-    {"report.md", "report.html", "findings.json", "review.json"})
+    {"report.md", "report.html", "findings.json", "review.json", "manifest.json"})
 
 
 def rewritten_in_place(key: str) -> bool:
@@ -244,9 +244,14 @@ class UploadQueue:
             self._write(QueueItem(key=key, priority=priority, size=size, mtime_ns=mtime_ns))
             return True
         if size > old.size:
-            # **长了就重新打开,哪怕它已经 done。** offset 原样留着接着传。
+            # **长了就重新打开,哪怕它已经 done。** 追加流(*.jsonl)offset 原样留着接着传;别的
+            # 文件长了又改过 = 整个重写了(manifest.json 开头写一版、收尾重写一版更长的):从 0 重传
+            # —— 工单 24(2026-10-28 E5「清单读不懂」:站点那份成了旧版前半截 + 新版后半截)。
+            rewrote = (not key.endswith(".jsonl") and mtime_ns and old.mtime_ns
+                       and mtime_ns != old.mtime_ns)
             self._write(QueueItem(**{**old.to_wire(), "size": size, "done": False,
-                                     "refused": False, "mtime_ns": mtime_ns or old.mtime_ns}))
+                                     "refused": False, "mtime_ns": mtime_ns or old.mtime_ns,
+                                     **({"offset": 0} if rewrote else {})}))
             return False
         if mtime_ns and old.mtime_ns and mtime_ns != old.mtime_ns:
             # **原地改写:从头来。** 之前传的那些字节对应的是旧内容,一个都不算数。

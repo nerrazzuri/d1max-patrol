@@ -21,7 +21,7 @@ const HEALTH_MS = 2000;
 
 /** 不是机器人的那一路(报警现场的固定摄像头):地址、名字、健康地址。 */
 export interface Feed { src: string; label: string; health: string }
-interface Health { online?: boolean; last_frame_age_ms?: number | null }
+interface Health { online?: boolean; last_frame_age_ms?: number | null; detail?: string | null }
 
 export function camLabel(robot: string, cam: Cam): string {
   return `${nameOf(robot)} ${t(cam)}`;
@@ -102,9 +102,11 @@ export function CameraWell(props: { robot: string; cam: Cam; forceLive?: boolean
     return () => window.clearTimeout(id);
   }, [noHealth, broken, lostAt, started]);
 
+  // 工单 5(2026-10-28):画面起不来时站点知道为什么(比如钟差太大、推流命令被拒),写出来
+  const [why, setWhy] = useState("");
   const healthUrl = props.feed ? props.feed.health : `/api/robots/${enc(props.robot)}/video/health`;
   useEffect(() => {
-    if (!streaming || broken || noHealth) return;
+    if (!streaming || noHealth) return;
     let stop = false;
     const id = window.setInterval(() => {
       api<Health & { cameras?: Record<string, Health> }>("GET", healthUrl)
@@ -113,6 +115,8 @@ export function CameraWell(props: { robot: string; cam: Cam; forceLive?: boolean
           misses.current = 0;
           const h = props.feed ? d : d.cameras?.[props.cam];
           if (!h) return;
+          setWhy(!h.online && h.detail ? String(h.detail) : "");
+          if (broken) return;                           // 断着:只为了拿原因
           const age = typeof h.last_frame_age_ms === "number" ? h.last_frame_age_ms : null;
           if (h.online) {
             if (started) setLostAt(null);               // 重连上了,站点也收到新帧了
@@ -123,7 +127,7 @@ export function CameraWell(props: { robot: string; cam: Cam; forceLive?: boolean
           }
         })
         .catch((e) => {
-          if (stop || !alive.current) return;
+          if (stop || !alive.current || broken) return;   // 断着时只为拿原因:问不着不算数
           if (e instanceof ApiError && e.status === 404) { setNoHealth(true); return; }
           misses.current += 1;
           if (misses.current >= 2) lose(Date.now());     // 连着问不通站点:画面不可能是实时的
@@ -166,6 +170,7 @@ export function CameraWell(props: { robot: string; cam: Cam; forceLive?: boolean
       {lostAt != null && (
         <div class="lost" role="status">
           {t("feedLost", { t: hms(lostAt), s: Math.max(0, Math.round((props.now - lostAt) / 1000)) })}
+          {why && <div class="lost-why">{why}</div>}
         </div>
       )}
       <div class="osd top">

@@ -127,3 +127,11 @@ def test_现场数据_C40221_20261026_跟现场脚本一致():
         assert best is not None, (name, why)
         assert math.hypot(best.x - x, best.y - y) < 0.2, (name, best)
         assert abs(math.remainder(best.yaw - math.radians(deg), 2 * math.pi)) < math.radians(3)
+
+
+def test_工单10_人给的跟定位器的冲突_按两处贴合度判信谁():
+    from d1max_agent.globalloc import TRUST_FIT, WRONG_GAP, resolve_conflict
+    assert resolve_conflict(TRUST_FIT + 0.1, 0.2) == "localizer"
+    assert resolve_conflict(0.2, TRUST_FIT + 0.1) == "anchor"
+    assert resolve_conflict(TRUST_FIT + 0.05, TRUST_FIT + 0.05 - WRONG_GAP / 2) == "", "差得不够"
+    assert resolve_conflict(TRUST_FIT - 0.05, 0.0) == "", "哪处都不够像:不下结论"

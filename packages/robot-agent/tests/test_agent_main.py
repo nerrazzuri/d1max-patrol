@@ -140,6 +140,9 @@ def test_hal_d1max_经仿真旁路跑通一条goto(tmp_path):
                      "--mps-per-unit", "1.2", "--radps-per-unit", "1.5", "--deadband", "0.25",
                      "--autonomy", "autonomous", "--sidecar-token-file", str(tok))
         a = agent_main.build(args)
+        # 工单 18:真狗到点拍照有取图源(跟实时画面同一套 RTSP 相机),不再是空的
+        from d1max_agent.bridges.rtsp_media import FfmpegCamera
+        assert isinstance(a.parts.engine._media.get("front"), FfmpegCamera)
         a.start()
         site = DispatchClient(MemoryTransport(a.broker, "site"), T, now_ms=agent_main.wall_ms)
         a.bridge.call(site.start)
