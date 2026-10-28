@@ -1229,6 +1229,7 @@ class AgentRuntime:
         if self._running(self._map_job) or self._switching:
             return "busy: 在换图"                 # 给的是这张图上的位置,换完就作废(W09a 内审应修 2)
         found: dict[str, Any] | None = None
+        scan_ref: Any = None
         if "global" in p:
             # W41:自动找位置 —— 拿此刻看到的墙那一层在整张图上套
             if p.get("global") is not True:
@@ -1238,7 +1239,7 @@ class AgentRuntime:
             got = await self._global_find()
             if isinstance(got, str):
                 return got
-            pose, found = got
+            pose, found, scan_ref = got
             source = "global"
         elif "at_home" in p:
             if p.get("at_home") is not True:
@@ -1268,6 +1269,9 @@ class AgentRuntime:
             return "odom_invalid"                 # 先说里程读不到:这时 stopped() 也答不上来
         if not await self.hal.stopped():
             return "moving"
+        if found is not None and not self.globalloc.still_valid(scan_ref):
+            # 复查 N1:读里程、问停没停的这会儿狗动了,或者来了新点云 —— 结果对的是刚才的位置
+            return "not_found: 找位置的这段时间机器人动了(或者点云换了),停稳了再试一次"
         loc = self.parts.nav.anchor
         if isinstance(loc, BridgeLocalizer):
             # 配了定位器(W09a):请它按人给的位置(初值)重定位;稳下来的时候修正量经 on_corrected
@@ -1297,20 +1301,23 @@ class AgentRuntime:
         return (self.globalloc is not None and self.globalloc.ready and self.parts is not None
                 and isinstance(self.parts.nav.anchor, BridgeLocalizer))
 
-    async def _global_find(self) -> str | tuple[tuple[float, float, float], dict[str, Any]]:
+    async def _global_find(self) -> str | tuple[tuple[float, float, float], dict[str, Any], Any]:
         """自动找位置(W41):→ 拒收原因,或者 (位姿, 回执里带的东西)。"""
         from d1max_agent.globalloc import GlobalLocError, decide
         try:
+            ref = self.globalloc.scan_ref()
             pts = self.globalloc.scan()
             cands = await self.globalloc.locate(pts)
-            self.globalloc.scan()          # 外审 R3:算的这段时间狗动了 → 点云作废(抛错)
         except GlobalLocError as exc:
             return f"not_found: {exc}"[:200]
+        if not self.globalloc.still_valid(ref):
+            # 外审 R3、复查 N1:算的这段时间狗动了,或者来了新点云 —— 结果对不上此刻
+            return "not_found: 找位置的这段时间机器人动了(或者点云换了),停稳了再试一次"
         best, why = decide(cands)
         top = [c.to_wire() for c in cands[:3]]
         if best is None:
             return f"not_found: {why}"[:200]
-        return (best.x, best.y, best.yaw), {"fit": round(best.fit, 3), "candidates": top}
+        return (best.x, best.y, best.yaw), {"fit": round(best.fit, 3), "candidates": top}, ref
 
     async def _mark_home(self, cmd: Command) -> str | tuple[str, dict[str, Any]]:
         """在当前位置标原点(W00c6f):用**此刻锚定后的地图位姿**当这张图上的原点。狗要停着、不在忙;定位

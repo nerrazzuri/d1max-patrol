@@ -80,3 +80,29 @@ def test_外审R7_粗分辨率的图_一格就超过005平方米的不当噪点(
     meta = parse_map_yaml(f"image: floor.pgm\nresolution: {res}\norigin: [0,0,0]\nnegate: 0\n"
                           "occupied_thresh: 0.65\nfree_thresh: 0.196\n")
     assert (len(find_specks(pgm, meta)) == 1) is 当噪点
+
+
+@pytest.mark.parametrize("情形", ["掉线时还收到带位置的遥测", "重启换了开机编号"])
+def test_复查N2_掉线期间不计时_重新上线或重启都从头数(tmp_path, 情形):
+    """复查 N2(2026-10-29):掉线标记还在时迟到的带位置遥测又开始计时;换了 boot_id 也接着旧的计时。"""
+    from dataclasses import replace
+    now, db, desk, src, _ = _台(tmp_path)
+    _远(src, now)
+    if 情形 == "掉线时还收到带位置的遥测":
+        now[0] += 1_000
+        src.on_status("A", _status(online=False))
+        now[0] += 1_000
+        _远(src, now)
+        assert src._m("A").nogo_clear_since is None, "掉线时不计"
+        now[0] += 8_000
+        src.on_status("A", _status())
+    else:
+        now[0] += 4_000
+        src.on_status("A", replace(_status(), boot_id="b2"))
+        now[0] += 1_000
+    _远(src, now)
+    assert _开着(desk), "恢复 / 重启后第一个位置就解决了"
+    now[0] += int(NOGO_CLEAR_S * 1000) + 100
+    _远(src, now)
+    assert not _开着(desk)
+    db.close()

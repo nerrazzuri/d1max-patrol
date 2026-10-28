@@ -491,6 +491,8 @@ export function NoiseDialog({ target, onClose, onDone }: {
   // 外审 R6:预览(元数据、底图)拿不到就不许清 —— 看不到图就挑不了「细杆子留着」
   const [previewErr, setPreviewErr] = useState("");
   const [tries, setTries] = useState(0);
+  // 复查 N3:底图(preview.png)真加载好了才算看得到;重试换个地址真的重拉
+  const [imgOk, setImgOk] = useState(false);
   useEffect(() => {
     let live = true;
     api<NoiseList>("GET", `${base}/noise`).then((d) => live && setList(d)).catch((e) => live && setErr(errText(e)));
@@ -499,6 +501,7 @@ export function NoiseDialog({ target, onClose, onDone }: {
   useEffect(() => {
     let live = true;
     setPreviewErr("");
+    setImgOk(false);
     api<PreviewMeta>("GET", `${view}/preview`).then((m) => live && setMeta(m))
       .catch((e) => { if (live) { setMeta(null); setPreviewErr(errText(e)); } });
     return () => { live = false; };
@@ -533,8 +536,9 @@ export function NoiseDialog({ target, onClose, onDone }: {
             `红圈:很小、四周 ${list.ring_m} 米都是空地的占用格(每处不超过 ${list.max_m2} 平方米)—— 多半是建图时有人走动留下的,会把规划的路封住。是真东西(比如细杆子)就点一下那个圈,留着它。`)}</p>
           {list.specks.length === 0 ? <p class="muted">{tr("No noise found in this version.", "这一版没找到噪点。")}</p> : meta && (
             <svg class="mm-noiseimg" viewBox={`0 0 ${meta.width} ${meta.height}`} role="img" aria-label={tr("Noise on the map", "图上的噪点")}>
-              <image href={`${view}/preview.png`} x={0} y={0} width={meta.width} height={meta.height}
-                onError={() => setPreviewErr(tr("map image failed to load", "底图加载失败"))} />
+              <image href={`${view}/preview.png${tries ? `?try=${tries}` : ""}`} x={0} y={0} width={meta.width} height={meta.height}
+                onLoad={() => setImgOk(true)}
+                onError={() => { setImgOk(false); setPreviewErr(tr("map image failed to load", "底图加载失败")); }} />
               {list.specks.map((s) => {
                 const p = toPx(meta, s.x, s.y);
                 const kept = skip.has(s.id);
@@ -548,7 +552,7 @@ export function NoiseDialog({ target, onClose, onDone }: {
       )}
       <div class="row end">
         <button type="button" class="btn" onClick={onClose}>{tr("Cancel", "取消")}</button>
-        <button type="button" class="btn primary" data-denoise="1" disabled={!list || n === 0 || busy || !meta || !!previewErr} onClick={() => void go()}>
+        <button type="button" class="btn primary" data-denoise="1" disabled={!list || n === 0 || busy || !meta || !imgOk || !!previewErr} onClick={() => void go()}>
           {tr(`Clean ${n} spots → save as a new version`, `清掉 ${n} 处,另存成新的一版`)}
         </button>
       </div>

@@ -8,6 +8,8 @@ import asyncio
 import math
 from types import SimpleNamespace as NS
 
+import pytest
+
 from d1max_agent.globalloc import Candidate, GlobalLoc, Matcher, Verdict
 from d1max_agent.obstacles import ObstacleView
 from d1max_agent.runtime import AgentRuntime
@@ -87,3 +89,91 @@ async def test_外审R3_收到静止点云以后又走了_不拿它自动找位�
     got = await rt._relocalize(NS(payload={"global": True}, task_id="global-stale"))
     assert isinstance(got, str) and "点云" in got, got
     assert not [r for r in link.sent if isinstance(r, Relocalize)], "旧点云不许发重定位"
+
+
+# ------------------------------------------------------------ 复查 N1(2026-10-29)
+
+_TRUE = (3.0, 3.0, 0.4)
+
+
+def _看墙(tmp_path):
+    from test_bridge_localizer import M
+    from test_globalloc import RES, _房间, _扫, 不对称
+    now = [98.0]
+    occ, free = _房间(extra=不对称)
+    view = ObstacleView(monotonic=lambda: now[0])
+    for i in range(21):
+        now[0] = 98 + 0.1 * i
+        view.note_odom(0.0, 0.0, 0.0)
+    view.on_wall(NS(points=lambda: _扫(occ, *_TRUE, noise=0.02)))
+    glob = GlobalLoc(view)
+    glob.set_map(M, tmp_path)
+    glob._m = (M, Matcher(occ, free, RES, (0.0, 0.0)))
+    return now, occ, view, glob
+
+
+def _走了又停(now, view, occ, *, new_scan):
+    from test_globalloc import _扫
+    for i in range(1, 7):
+        now[0] = 100 + 0.1 * i
+        view.note_odom(0.1 * i, 0.0, 0.0)
+    here = (_TRUE[0] + 0.6 * math.cos(_TRUE[2]), _TRUE[1] + 0.6 * math.sin(_TRUE[2]), _TRUE[2])
+    if new_scan:
+        for i in range(1, 17):
+            now[0] = 100.6 + 0.1 * i
+            view.note_odom(0.6, 0.0, 0.0)
+        view.on_wall(NS(points=lambda: _扫(occ, *here, noise=0.02)))
+    return here
+
+
+
+@pytest.mark.parametrize("窗口", ["匹配期间来了新点云", "最后读里程时动了"])
+async def test_复查N1_匹配结果绑定参与匹配的那份点云_提交前再核(tmp_path, 窗口):
+    from test_bridge_localizer import M, _就绪
+    now, occ, view, glob = _看墙(tmp_path)
+    c, link, loc = await _就绪()
+    rt = _rt(loc, M, lambda: now[0])
+    rt.globalloc = glob
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    async def odom_now():
+        return NS(valid=True, x=0.6, y=0.0, yaw=0.0)
+    rt.hal.odometry = odom_now
+    if 窗口 == "匹配期间来了新点云":
+        real = glob.locate
+
+        async def slow(pts):
+            entered.set()
+            await release.wait()
+            return await real(pts)
+        glob.locate = slow
+    else:
+        async def slow_odom():
+            entered.set()
+            await release.wait()
+            return NS(valid=True, x=0.6, y=0.0, yaw=0.0)
+        rt.hal.odometry = slow_odom
+    job = asyncio.create_task(rt._relocalize(NS(payload={"global": True}, task_id="n1")))
+    await asyncio.wait_for(entered.wait(), 5)
+    _走了又停(now, view, occ, new_scan=(窗口 == "匹配期间来了新点云"))
+    release.set()
+    got = await asyncio.wait_for(job, 5)
+    assert isinstance(got, str) and "not_found" in got, got
+    assert not [r for r in link.sent if isinstance(r, Relocalize)], "旧点云的结果不许提交"
+
+
+async def test_复查N1_走了以后收到新的静止点云_照样找得到(tmp_path):
+    from test_bridge_localizer import M, _就绪
+    now, occ, view, glob = _看墙(tmp_path)
+    here = _走了又停(now, view, occ, new_scan=True)
+    c, link, loc = await _就绪()
+    rt = _rt(loc, M, lambda: now[0])
+    rt.globalloc = glob
+
+    async def odom_now():
+        return NS(valid=True, x=0.6, y=0.0, yaw=0.0)
+    rt.hal.odometry = odom_now
+    got = await rt._relocalize(NS(payload={"global": True}, task_id="fresh"))
+    assert isinstance(got, tuple) and got[0] == "", got
+    r = [r for r in link.sent if isinstance(r, Relocalize)][-1]
+    assert math.hypot(r.x - here[0], r.y - here[1]) < 0.15

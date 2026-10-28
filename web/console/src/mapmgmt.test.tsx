@@ -344,6 +344,7 @@ describe("W41 清噪点", () => {
     await waitFor(() => getByLabelText("estate:1"));
     fireEvent.click(Array.from(getByLabelText("estate:1").querySelectorAll("button")).find((b) => b.textContent === "Clean noise…") as HTMLElement);
     await waitFor(() => expect(c.querySelectorAll("circle[data-speck]").length).toBe(3));
+    fireEvent.load(c.querySelector(".mm-noiseimg image")!);   // 复查 N3:底图加载好了才许清
     fireEvent.click(c.querySelector('circle[data-speck="2"]') as Element);
     expect(c.querySelector('circle[data-speck="2"]')!.getAttribute("data-kept")).toBe("1");
     const go = c.querySelector("[data-denoise]") as HTMLButtonElement;
@@ -361,7 +362,8 @@ describe("W41 清噪点", () => {
     const { container: c, getByLabelText } = mount();
     await waitFor(() => getByLabelText("estate:1"));
     fireEvent.click(Array.from(getByLabelText("estate:1").querySelectorAll("button")).find((b) => b.textContent === "Clean noise…") as HTMLElement);
-    await waitFor(() => expect(c.querySelector("[data-denoise]")).not.toBeNull());
+    await waitFor(() => expect(c.querySelector(".mm-noiseimg image")).not.toBeNull());
+    fireEvent.load(c.querySelector(".mm-noiseimg image")!);   // 复查 N3:底图加载好了才许清
     await waitFor(() => expect((c.querySelector("[data-denoise]") as HTMLButtonElement).disabled).toBe(false));
     fireEvent.click(c.querySelector("[data-denoise]") as HTMLElement);
     await waitFor(() => expect(c.querySelector('[role="alert"]')?.textContent).toContain("换了"));

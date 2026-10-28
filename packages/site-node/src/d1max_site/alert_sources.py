@@ -259,8 +259,10 @@ class SiteAlertSources:
             m.boot_id = s.boot_id
             m.fallen = False
             m.loc_quiet_until = self._now() + LOC_IDLE_BOOT_S * 1000   # 对账 S6:刚起来,宽限
+            m.nogo_clear_since = None                  # 复查 N2:重启过,离开禁行区从头数
         if m.offline:
             m.online_since = self._now()
+            m.nogo_clear_since = None                  # 复查 N2:刚回来,从新的可信位置数
         m.offline = False
         running = s.task is not None and s.task.state is TaskState.RUNNING
         m.running = running
@@ -600,8 +602,8 @@ class SiteAlertSources:
         (状态里 ``loc_ok`` 假)时报的位置不作数,重新计 —— 推算的位置可能离真位置很远。"""
         if self.nav_zones is None:
             return
-        if m.loc_bad:
-            m.nogo_clear_since = None
+        if m.loc_bad or m.offline:
+            m.nogo_clear_since = None                  # 复查 N2:掉线期间(迟到的遥测)不计
             return
         from d1max_contract.zones import distance_to_polygon, point_in_polygon
         try:

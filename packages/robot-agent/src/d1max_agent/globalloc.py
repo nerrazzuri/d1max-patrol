@@ -328,6 +328,17 @@ class GlobalLoc:
             raise GlobalLocError("没有新的点云(感知没连上、机器人在动,或者刚动过)")
         return got
 
+    def scan_ref(self) -> int | None:
+        """此刻这份点云的编号(复查 N1:匹配结果绑定参与匹配的那一份)。"""
+        return getattr(self.view, "wall_seq", None) if self.view is not None else None
+
+    def still_valid(self, ref: int | None) -> bool:
+        """``ref`` 那一份点云还能代表此刻:还是它(没来新的)、还新鲜、狗没挪过(外审 R3、复查 N1)。"""
+        if self.view is None:
+            return False
+        return (self.view.wall_scan() is not None
+                and getattr(self.view, "wall_seq", None) == ref)
+
     async def locate(self, pts: list[tuple[float, float]]) -> list[Candidate]:
         m = await self._matcher()
         return await asyncio.to_thread(m.search, pts)
