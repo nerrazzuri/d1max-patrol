@@ -399,3 +399,24 @@ def test_外审3_按时间段删除请求_解不开的录像段也删(tmp_path, 
     t = stamp_ms("20261009T010000Z")
     out = desk.purge(since_ms=t - 1000, until_ms=t + 1000)
     assert out["recordings"] == 1 and not list((tmp_path / "rec").rglob("*.d1e"))
+
+
+def test_工单8_没加密的报警被处理掉了_狗还是明文_隔一天再提醒(tmp_path):
+    """2026-10-28:清旧报警时把 evidence_plain 处理掉了,狗还是明文,站点之后再也不报。"""
+    db = SiteDB(tmp_path / "s.db")
+    clock = [NOW]
+    d = SimpleNamespace(clients={"A": _caps(False)})
+    w = EvidencePlainWatch(db, d, now_ms=lambda: clock[0])
+    w.alerts = 假告警台()
+    w.tick()
+    assert [a["kind"] for a in w.alerts.raised] == ["evidence_plain"]
+    w.alerts.raised.clear()                                 # 有人把它处理掉了
+    clock[0] += 3600_000
+    w.tick()
+    assert not w.alerts.raised, "一小时内不催"
+    clock[0] += 24 * 3600_000
+    w.tick()
+    assert [a["kind"] for a in w.alerts.raised] == ["evidence_plain"], "过了一天还没修:再提醒"
+    clock[0] += 24 * 3600_000
+    w.tick()
+    assert len(w.alerts.raised) == 1, "告警还开着:不重复报"

@@ -32,6 +32,7 @@ set -euo pipefail
 # @写盘 /etc/systemd/system/d1max-obstacles.service                       感知节点单元(W11;只装不 enable)
 # @写盘 /etc/systemd/system/d1max-persons.service                         人员检测节点单元(W24;只装不 enable)
 # @写盘 /etc/systemd/system/d1max-lidar-merge.service                     前后雷达合并单元(W09i;只装不 enable)
+# @写盘 /etc/systemd/system/d1max-sidecar.service                         运动控制旁路单元(工单 7;只装不 enable;程序在机器上编)
 # @写盘 /etc/systemd/system/d1max-zenohd.service                          自带算力板的 zenoh 路由(A5;只装不 enable;没填网关不起)
 # @写盘 /etc/systemd/timesyncd.conf.d/d1max.conf                          对时配置:向站点主机对时(W09d)
 # @写盘 /etc/chrony/conf.d/d1max.conf                                     对时归 chrony 管的狗:向站点主机对时(决策 61)
@@ -43,6 +44,7 @@ set -euo pipefail
 # @也删 /etc/systemd/system/multi-user.target.wants/d1max-persons.service 人员检测节点的自启链(同上)
 # @也删 /etc/systemd/system/multi-user.target.wants/d1max-lidar-merge.service 前后雷达合并的自启链(同上)
 # @也删 /etc/systemd/system/multi-user.target.wants/d1max-zenohd.service zenoh 路由的自启链(同上)
+# @也删 /etc/systemd/system/multi-user.target.wants/d1max-sidecar.service 运动控制旁路的自启链(同上)
 # @也删 /etc/systemd/system/d1max-bootguard.service 老的守卫单元
 # @也删 /etc/systemd/system/d1max-patrol.service 老服务(W00c5e 退役)
 # @也删 /etc/systemd/system/multi-user.target.wants/d1max-patrol.service 老服务的自启链
@@ -382,6 +384,11 @@ fi
 if [[ -f "$PKG/deploy/d1max-lidar-merge.service" ]]; then
   install -m 0644 "$PKG/deploy/d1max-lidar-merge.service" /etc/systemd/system/
 fi
+# 运动控制旁路单元(工单 7):同样**只装、不 enable** —— 旁路跑在哪台机器上按角色定,程序要链厂商 SDK、
+# 在那台机器上编(包里不带)。老包没带就跳过。
+if [[ -f "$PKG/deploy/d1max-sidecar.service" ]]; then
+  install -m 0644 "$PKG/deploy/d1max-sidecar.service" /etc/systemd/system/
+fi
 # zenoh 路由单元(商业化 A5):装在我们自己的算力板上时,从厂商 Orin(网关)拉雷达、相机话题。同样
 # **只装、不 enable**;`/etc/d1max/env` 里没填 D1MAX_GATEWAY(装在厂商 Orin 上)它自己就不起。老包没带就跳过。
 if [[ -f "$PKG/deploy/d1max-zenohd.service" ]]; then
@@ -495,6 +502,18 @@ elif [[ " $(ffmpeg -hide_banner -protocols 2>/dev/null | tr -s ' \n' ' ') " != *
 fi
 if ! python3 -c 'import onnxruntime' >/dev/null 2>&1; then
   echo "  提示: 系统 Python 里没有 onnxruntime,人员检测节点(W24)起不来;不开人员检测可以不管" >&2
+  # 工单 6(2026-10-28):只说「没有」现场要现查装法。只提示、不替系统装(决策 47)
+  ort=""
+  if [[ -n "${PKG_WHEELS:-}" ]]; then
+    ort="$(ls "$PKG_WHEELS"/onnxruntime_gpu-*.whl 2>/dev/null | head -n 1 || true)"
+  fi
+  if [[ -n "$ort" ]]; then
+    echo "        包里带了 $(basename "$ort"),要开人员检测就装(不带依赖、不动系统的 numpy):" >&2
+    pipc="python3 -m pip"                   # 拆开写:只是给人照抄的命令,脚本自己不装
+    echo "        sudo $pipc install --no-deps --no-index $ort" >&2
+  else
+    echo "        装法见装机清单「一」onnxruntime 那条(Jetson 版 onnxruntime-gpu 离线轮子)" >&2
+  fi
 fi
 if [[ " $(id -nG "$RUN_USER" 2>/dev/null) " != *" dialout "* ]]; then
   echo "  提示: $RUN_USER 不在 dialout 组,上装继电器板的串口打不开(W21);接了上装再:" >&2

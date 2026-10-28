@@ -108,3 +108,26 @@ def test_主机名里有逗号换行_拒绝(ca):
     for bad in ("a,DNS:evil", "a\nb", "a b", ""):
         with pytest.raises(CAError):
             ca.issue_server([bad])
+
+
+def test_工单9_续签_旧证书照样有效_吊销把新旧两张都吊掉(ca):
+    """2026-10-28:狗的证书约 11-07 到期。原来同一台只能「先吊销再重签」,吊销那一刻狗就连不上了。"""
+    old = ca.issue_robot("D1MAX-001", days=30, now_ms=NOW)
+    old_crt = (old.dir / "robot.crt").read_bytes()
+    with pytest.raises(CAError):
+        ca.renew_robot("D1MAX-002", days=365, now_ms=NOW)        # 没签过的不许续
+    new = ca.renew_robot("D1MAX-001", days=365, now_ms=NOW + 1)
+    assert new.fingerprint != old.fingerprint
+    assert new.registration.expires_at == NOW + 1 + 365 * 86_400_000
+    v = _ossl("verify", "-CAfile", str(ca.ca_cert), str(new.dir / "robot.crt"))
+    assert v.returncode == 0
+    keep = new.dir.parent / "old.crt"
+    keep.write_bytes(old_crt)
+    ok = _ossl("verify", "-crl_check", "-CAfile", str(ca.ca_cert), "-CRLfile", str(ca.crl),
+               str(keep))
+    assert ok.returncode == 0, "续签不吊销旧的:狗换证书之前照样连得上"
+    ca.revoke("D1MAX-001")
+    for crt in (keep, new.dir / "robot.crt"):
+        v = _ossl("verify", "-crl_check", "-CAfile", str(ca.ca_cert), "-CRLfile", str(ca.crl),
+                  str(crt))
+        assert v.returncode != 0, f"{crt.name} 还能用:吊销要把这台名下的都吊掉"

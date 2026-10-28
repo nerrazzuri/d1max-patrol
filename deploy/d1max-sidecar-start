@@ -1,0 +1,32 @@
+#!/bin/sh
+# d1max-sidecar 的启动脚本(工单 7,运动控制旁路 patrol_agent)。单元只指着
+# /opt/d1max/current/deploy/d1max-sidecar-start,参数归版本管。
+#
+# 旁路程序要链厂商 SDK,在跑它的那台机器上编(仓库 motion/:make ARCH=aarch64 patrol_agent),
+# 发布包里不带。现场值从 /etc/d1max/env 来(单元的 EnvironmentFile):
+#   D1MAX_SIDECAR_BIN=<程序>            缺省 /home/robot/d1max-motion/patrol_agent
+#   D1MAX_SIDECAR_ROBOT=<IP:端口>        厂家 SDK 的地址,缺省 192.168.168.168:8082(RK3588 有线口)
+#   D1MAX_SIDECAR_LISTEN=<HOST:端口>     代理连它的地址,缺省 127.0.0.1:8090(代理 --sidecar 同一个)
+#   D1MAX_SIDECAR_DIR=<目录>             FIFO、日志放这儿,缺省 ~/d1max-sidecar
+#   D1MAX_SIDECAR_ARGS=其余参数
+# 令牌照旧写 ~/.d1max/sidecar.token(代理的 --sidecar-token-file 缺省同一个)。
+set -eu
+bin="${D1MAX_SIDECAR_BIN:-/home/robot/d1max-motion/patrol_agent}"
+robot="${D1MAX_SIDECAR_ROBOT:-192.168.168.168:8082}"
+listen="${D1MAX_SIDECAR_LISTEN:-127.0.0.1:8090}"
+dir="${D1MAX_SIDECAR_DIR:-$HOME/d1max-sidecar}"
+if [ ! -x "$bin" ]; then
+  echo "d1max-sidecar: 没有旁路程序 $bin —— 先在这台机器上编(motion/:make ARCH=aarch64 patrol_agent)," \
+       "或者在 /etc/d1max/env 里给 D1MAX_SIDECAR_BIN" >&2
+  exit 78
+fi
+case "$robot" in
+  *:*) ;;
+  *) echo "d1max-sidecar: D1MAX_SIDECAR_ROBOT 要写成 IP:端口(现在是 $robot)" >&2; exit 78 ;;
+esac
+# 2026-10-28:现场手写的单元缺 runs/ 目录,FIFO 建不出来
+mkdir -p "$dir/runs"
+cd "$dir"
+# shellcheck disable=SC2086  # D1MAX_SIDECAR_ARGS 要按空白拆成几个参数
+exec "$bin" "${robot%:*}" "${robot##*:}" --listen "$listen" --fifo "$dir/runs/d1max-agent.fifo" \
+  ${D1MAX_SIDECAR_ARGS:-}

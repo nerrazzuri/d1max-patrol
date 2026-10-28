@@ -189,6 +189,14 @@ describe("每台机器人下面的定位和被挡", () => {
     expect(render(<RunInfo robot={robot("A", { loc: undefined, nav: undefined })} />).container.innerHTML).toBe("");
   });
 
+  it("工单 11:定位器报了原始匹配质量就显示它(不再只有 σ 换算的那个)", () => {
+    const r = robot("A", { loc: { ...robot("A").loc!, icp_quality: 0.94 } });
+    const { container: c } = render(<RunInfo robot={r} />);
+    const t = c.querySelector("[data-loc]")!.textContent!;
+    expect(t).toContain("match quality 0.94");
+    expect(t).not.toContain("0.88");
+  });
+
   it("说法:被挡没给原因、重规划各种原因、中文", () => {
     expect(blockedText({ ...VIZ.robots.A.blocked!, reason: "" })).toBe("Blocked 12 s: no reason given");
     expect(replanText({ why: "off_route", n: 2, at_ms: 0 })).toBe("Re-planned 2× (off the route)");

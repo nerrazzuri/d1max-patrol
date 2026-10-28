@@ -533,6 +533,8 @@ def build(args: argparse.Namespace) -> Assembled:
                                persons_socket=args.persons_socket,
                                persons_snapshots=args.persons_snapshots)
         runtime.evidence_sealed = sealer is not None   # W30b:能力里报,没封站点报 P2
+        if args.tls_cert:
+            runtime.tls_cert = Path(args.tls_cert)       # 工单 9:能力里报在用证书哪天到期
         if runtime.devices is not None:                 # W40:设备健康补上盘、网络设备
             from d1max_agent.devices import camera_links, parse_links
             runtime.devices.outbox = Path(args.outbox) if args.outbox is not None else None

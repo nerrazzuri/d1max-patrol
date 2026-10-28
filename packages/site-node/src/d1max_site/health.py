@@ -124,8 +124,22 @@ class HealthDesk:
             for d in sorted(issued.iterdir()):
                 crt = d / "robot.crt"
                 if crt.is_file() and d.name not in revoked:
-                    out.append((f"机器人 {d.name} 的证书", self._cert_end(crt)))
+                    end = self._cert_end(crt)
+                    used = self._in_use_end(d.name)
+                    if used is not None and (end is None or used < end):
+                        # 工单 9:续签后站点这边是新证书,狗上还是旧的 —— 按狗报的在用证书算
+                        out.append((f"机器人 {d.name} 在用的证书", used))
+                    else:
+                        out.append((f"机器人 {d.name} 的证书", end))
         return out
+
+    def _in_use_end(self, robot_id: str) -> int | None:
+        """狗报的它在用的证书哪天到期(能力 ``tls.expires_ms``;老代理不报)。"""
+        c = getattr(self.dispatcher, "clients", {}).get(robot_id) if self.dispatcher else None
+        caps = getattr(c, "capabilities", None)
+        tls = getattr(caps, "tasks", {}).get("tls") if caps is not None else None
+        v = tls.get("expires_ms") if isinstance(tls, dict) else None
+        return int(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else None
 
     def _has(self, table: str) -> bool:
         return bool(self.db.query("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
@@ -185,7 +199,10 @@ class HealthDesk:
             days = (end - now) / 86_400_000
             worst = days if worst is None else min(worst, days)
             if days < CERT_WARN_DAYS:
-                soon.append(f"{who}还有 {max(days, 0):.0f} 天到期")
+                renewed = "在用的证书" in who
+                soon.append(f"{who}还有 {max(days, 0):.0f} 天到期"
+                            + ("(新证书签好了,拷到狗上、重启代理)" if renewed else
+                               "(d1max-site renew 续签)" if who.startswith("机器人") else ""))
         out["certs"] = {"ok": not soon, "value": None if worst is None else round(worst, 1),
                         "detail": ";".join(soon)[:300] or (f"证书最近的还有 {worst:.0f} 天到期"
                                                           if worst is not None else "没有证书")}

@@ -57,6 +57,15 @@ class Registry:
                           "revoked=0, enrolled_at=? WHERE robot_id=?",
                           (fingerprint, issued_at, expires_at, now_ms or issued_at, robot_id))
 
+    def renew(self, robot_id: str, *, fingerprint: str, issued_at: int, expires_at: int) -> None:
+        """工单 9:续签 —— 换指纹和有效期;代次、只许手动派这些都不动。没登记、吊销了的不许续。"""
+        with self.db.tx() as c:
+            row = c.execute("SELECT revoked FROM robots WHERE robot_id=?", (robot_id,)).fetchone()
+            if row is None or row["revoked"]:
+                raise RegistryError(f"{robot_id} 没登记或已吊销:要 enroll,不是续签")
+            c.execute("UPDATE robots SET fingerprint=?, issued_at=?, expires_at=? WHERE robot_id=?",
+                      (fingerprint, issued_at, expires_at, robot_id))
+
     def manual_only(self, robot_id: str) -> dict | None:
         """只许手动派(W33):``{by, at_ms, note}``;接自动派遣 → ``None``。"""
         rows = self.db.query("SELECT by, at_ms, note FROM robot_service WHERE robot_id=?",

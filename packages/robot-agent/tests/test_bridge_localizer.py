@@ -1347,3 +1347,12 @@ async def test_工单27_丢定位后自动重定位_按最后可信的位置核_
     for _ in range(SETTLE_FIXES + 2):
         loc.on_pose(_位姿(5.4, -2.4, 2.9))
     assert not loc.ok(True) and "请重新设位置" in loc.why_not(True)
+
+
+async def test_工单11_上报的定位带原始ICP质量():
+    _, _, loc = await _就绪()
+    p = _位姿(3.0, 4.0)
+    loc.on_pose(Pose(**{**p.__dict__, "icp_quality": 0.937}))
+    assert loc.to_wire(True)["icp_quality"] == 0.94
+    loc.on_pose(_位姿(3.0, 4.0))
+    assert "icp_quality" not in loc.to_wire(True), "这一帧没报(老定位器):不带"

@@ -97,6 +97,8 @@ class Pose:
     #: 这一帧离定位器上一次真匹配过了多久(毫秒;真匹配的那一帧是 0)。定位器匹配不上、拿自己的里程
     #: 往前推的时候要照实说 —— 代理把它算进新鲜(W09a 内审阻断 1)。
     meas_age_ms: int = 0
+    #: MOLA 这一帧的原始 ICP 质量(0–1;工单 11:站点原来只看得到 σ 换算的 1−2σ)。老定位器不报。
+    icp_quality: float | None = None
 
     def __post_init__(self) -> None:
         _pos_int(self.seq, "seq")
@@ -114,6 +116,10 @@ class Pose:
             raise ContractError("定位桥:jump 要是 true/false")
         if self.reloc_id is not None:
             _pos_int(self.reloc_id, "reloc_id")
+        if self.icp_quality is not None:
+            _num(self.icp_quality, "icp_quality", nonneg=True)
+            if self.icp_quality > 1.0:
+                raise ContractError(f"定位桥:icp_quality 要在 0–1:{self.icp_quality!r}")
 
 
 @dataclass(frozen=True)

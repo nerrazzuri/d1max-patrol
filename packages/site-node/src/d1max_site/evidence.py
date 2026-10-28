@@ -446,9 +446,15 @@ def load_evidence_key(cfg: dict) -> bytes | None:
         return None
 
 
+#: 工单 8:「没加密」被人处理掉了、狗还是明文,隔这么久再提醒一次(毫秒)。
+PLAIN_REMIND_MS = 24 * 3600_000
+
+
 class EvidencePlainWatch:
     """狗报证据没封(能力 ``evidence.sealed`` 是假:没装站点公钥)→ 报 P2 ``evidence_plain``,一台一次
-    (``evidence_plain`` 表,跟待报告警同一个事务),装好了(报真)就清。W30b,决策 51。"""
+    (``evidence_plain`` 表,跟待报告警同一个事务),装好了(报真)就清。W30b,决策 51。
+    工单 8:告警被人处理掉了、狗还是明文 → 离上次报满 :data:`PLAIN_REMIND_MS` 再报
+    (告警还开着不重报)。"""
 
     def __init__(self, db, dispatcher: Any, *, now_ms: Callable[[], int]) -> None:
         self.db = db
@@ -498,7 +504,8 @@ class EvidencePlainWatch:
 
     def _plain(self) -> None:
         from d1max_site.pending_alerts import flush, queue
-        seen = {r["robot_id"] for r in self.db.query("SELECT robot_id FROM evidence_plain")}
+        seen = {r["robot_id"]: r["created_ms"]
+                for r in self.db.query("SELECT robot_id, created_ms FROM evidence_plain")}
         fresh = getattr(self.dispatcher, "_fresh", None)
         now = self._now()
         for rid, c in list(self.dispatcher.clients.items()):
@@ -507,10 +514,13 @@ class EvidencePlainWatch:
             ev = c.capabilities.tasks.get("evidence")
             if not isinstance(ev, dict) or not isinstance(ev.get("sealed"), bool):
                 continue                                  # 老代理不报:不说
-            if ev["sealed"] is False and rid not in seen:
+            again = (ev["sealed"] is False and rid in seen
+                     and now - (seen[rid] or 0) >= PLAIN_REMIND_MS and self.alerts is not None
+                     and not self.alerts.has_open(rid, "evidence_plain"))
+            if ev["sealed"] is False and (rid not in seen or again):
                 with self.db.tx() as tx:
-                    tx.execute("INSERT INTO evidence_plain(robot_id, created_ms) VALUES (?,?)",
-                               (rid, now))
+                    tx.execute("INSERT OR REPLACE INTO evidence_plain(robot_id, created_ms) "
+                               "VALUES (?,?)", (rid, now))
                     queue(tx, kind="evidence_plain", robot=rid,
                           title="机器人上的照片、录像没加密",
                           detail="机器人上没有站点的证据公钥(/etc/d1max/evidence-pub.key):照片、截图、"

@@ -525,6 +525,10 @@ async def _cmd_walk(backend, args) -> int:
 
 
 async def _cmd_speed(backend, args) -> int:
+    if args.x is not None and args.x <= 0:
+        # 工单 4 / W05:这条走厂家导航接口,速度 0 原样发过去不是停车 —— 本机就拒
+        print(f"速度要大于 0(给的是 {args.x:g});要停车用 d1max stop", file=sys.stderr)
+        return 2
     if args.x is None:
         speed = await backend.get_speed()
     else:

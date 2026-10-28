@@ -151,6 +151,8 @@ export interface LocView {
   reason?: string;
   degraded?: string;
   quality?: number | null;
+  /** 工单 11:MOLA 原始 ICP 质量(0–1;老定位器不报)。 */
+  icp_quality?: number | null;
   localizer?: string;
   pose?: { x: number; y: number; yaw: number } | null;
 }

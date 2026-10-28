@@ -431,8 +431,10 @@ class DataCb : public IDataCallback {
     // 自动重新 TakeControl —— 拿回来之后要一条新的 vel 才动。
     g_gate.OnControlLost();
     g_cancel_gen.fetch_add(1);
-    std::cout << "[!!] 控制权丢了。多半是上装收回去了(清单 #47)，"
-                 "这条会话大概率救不回来，要重启 RK3588 重抢开机窗口。\n";
+    // 工单 12(2026-10-28):手持遥控器接管时也走这里,对方松手后 OnControlAvailable 会自动拿回,
+    // 原来那句「救不回来、要重启」说重了。
+    std::cout << "[!!] 控制权被别的主控拿走了(手持遥控器或上装)。对方放开后会自动拿回;"
+                 "一直拿不回来才要重启 RK3588 重抢开机窗口(清单 #47)。\n";
     Broadcast("{\"t\":\"control_lost\",\"reason\":"
               "\"SDK OnControlLost(厂商未给原因)\"}");
   }
@@ -440,7 +442,10 @@ class DataCb : public IDataCallback {
   void OnControlAvailable(const ControlAvailableInfo&) override {
     std::cout << "[i] SDK 报告控制权可用，尝试重新 TakeControl\n";
     std::lock_guard<std::mutex> lk(g_sdk_mtx);
-    if (g_client && TakeConfirmed(*g_client, 5000).empty()) SetHeld(true);
+    if (g_client && TakeConfirmed(*g_client, 5000).empty()) {
+      SetHeld(true);
+      std::cout << "[i] 控制权拿回来了\n";
+    }
   }
 };
 

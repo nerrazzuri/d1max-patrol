@@ -417,3 +417,24 @@ def test_实测_取一张_回一张JPEG就结束_不占着连接(站点):
         conn.close()
         assert r.status == 200 and r.getheader("Content-Type") == "image/jpeg"
         assert body.startswith(b"\xff\xd8") and body.endswith(b"\xff\xd9")
+
+
+def test_工单3_site_json_写错_serve_只打一行说明_退出码2(tmp_path, monkeypatch, capsys):
+    """2026-10-28 3z.10:``"fps": "15"`` → 站点起不来,最后一行说清楚了,前面却是一整段 Traceback。"""
+    import json
+    import os
+
+    from d1max_site import main as site_main
+    monkeypatch.setattr(os, "geteuid", lambda: tmp_path.stat().st_uid)
+    home = tmp_path / "site"
+    assert site_main.main(["--home", str(home), "init", "--site-id", "e",
+                           "--hostname", "localhost"]) == 0
+    cfg = json.loads((home / "site.json").read_text())
+    cfg["video"] = {"fps": "15"}
+    (home / "site.json").write_text(json.dumps(cfg))
+    capsys.readouterr()
+    rc = site_main.main(["--home", str(home), "serve", "--api-port", "0"])
+    err = capsys.readouterr().err
+    assert rc == 2
+    assert "Traceback" not in err and "video.fps" in err
+    assert len([ln for ln in err.splitlines() if ln.strip()]) == 1, err

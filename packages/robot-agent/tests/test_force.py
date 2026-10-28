@@ -503,3 +503,23 @@ def test_A7_能力里报兼容级别(tmp_path):
     from types import SimpleNamespace
     rt.hal._b = SimpleNamespace(_hello=SimpleNamespace(proto=8))      # 真狗适配器握过手的样子
     assert rt._extra_tasks()["compat"] == {"level": AGENT_LEVEL, "sidecar_proto": 8}
+
+
+def test_工单9_能力里报在用的证书哪天到期(tmp_path):
+    """站点续签后自己那份是新的,狗上还是旧的:站点要照狗报的算到期(没报的老代理看站点那份)。"""
+    import subprocess
+    rt = AgentRuntime(transport=MemoryTransport(MemoryBroker(), "dog"), registration=REG,
+                      hal=SimRobot(now_ms=钟()), store_dir=tmp_path / "a", now_ms=钟(),
+                      loaded_map=("m", "1"), boot_id="b", home=Pose.from_xy_yaw(0, 0))
+    assert "tls" not in rt._extra_tasks()
+    crt = tmp_path / "robot.crt"
+    subprocess.run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "10",
+                    "-subj", "/CN=A", "-keyout", str(tmp_path / "k"), "-out", str(crt)],
+                   check=True, capture_output=True)
+    rt.tls_cert = crt
+    import time
+    got = rt._extra_tasks()["tls"]["expires_ms"]
+    assert abs(got - (time.time() + 10 * 86400) * 1000) < 3600_000
+    rt.tls_cert = tmp_path / "没有"
+    rt._tls_cache = None
+    assert "tls" not in rt._extra_tasks(), "读不了就不报(不报个假的)"

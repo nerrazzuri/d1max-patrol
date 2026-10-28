@@ -322,6 +322,9 @@ class AgentRuntime:
         self._dock_hazard = ""
         #: 证据加密(W30b):主程序设;``None`` = 不报(老的装配)。
         self.evidence_sealed: bool | None = None
+        #: 工单 9:本机在用的 mqtts 证书(main 填);能力里报它哪天到期,站点按它判「快到期」。
+        self.tls_cert: Path | None = None
+        self._tls_cache: tuple[Path, float, int | None] | None = None
         #: 异常受力检测(W26,决策 52):适配器报有 IMU 才判。门槛主程序按 ``--force-config`` 换。
         self.force: Any = None
         if self.hal.hal_capabilities().sensing.get("imu"):
@@ -626,6 +629,28 @@ class AgentRuntime:
     def _running(job: asyncio.Task | None) -> bool:
         return job is not None and not job.done()
 
+    def _tls_expires_ms(self) -> int | None:
+        """在用证书哪天到期(毫秒);读不了是 None。按文件修改时间缓存(换证书重启代理也会重读)。"""
+        p = self.tls_cert
+        if p is None:
+            return None
+        try:
+            mtime = Path(p).stat().st_mtime
+        except OSError:
+            return None
+        c = self._tls_cache
+        if c is not None and c[0] == Path(p) and c[1] == mtime:
+            return c[2]
+        end: int | None = None
+        try:
+            import ssl
+            info = ssl._ssl._test_decode_cert(str(p))    # type: ignore[attr-defined]
+            end = int(ssl.cert_time_to_seconds(info["notAfter"]) * 1000)
+        except Exception:                                  # noqa: BLE001 - 读不了就不报
+            log.warning("读不了本机证书 %s 的到期时间", p)
+        self._tls_cache = (Path(p), mtime, end)
+        return end
+
     def _tasks_idle(self) -> bool:
         cur = self.processor.current
         return (cur is None or cur.done) and not self.processor.pending
@@ -744,6 +769,9 @@ class AgentRuntime:
             out["evidence"] = {"sealed": self.evidence_sealed}   # W30b:没封站点报 P2
         if self.force is not None:
             out["force"] = self.force.caps()        # W26:翻倒、被抱起来(站点按它对账报 P1)
+        end = self._tls_expires_ms()
+        if end is not None:
+            out["tls"] = {"expires_ms": end}         # 工单 9:续签了没换上,站点照这个报
         # 商业化 A7:兼容级别、旁路进程的协议号(站点据此报「狗太老」「站点太老」)
         from d1max_contract.compat import AGENT_LEVEL
         compat: dict[str, Any] = {"level": AGENT_LEVEL}

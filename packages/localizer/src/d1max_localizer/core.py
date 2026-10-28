@@ -336,7 +336,8 @@ class LocalizerCore:
             seq=self._seq, stamp_ns=round(e.stamp * 1e9), map_id=self._map[0],
             map_version=self._map[1], x=x, y=y, yaw=yaw, sigma_xy=sigma,
             sigma_yaw=0.01 + 0.2 * sigma, source=self.source, jump=jump,
-            reloc_id=tag[0] if tag is not None else None, meas_age_ms=max(0, age_ms)))
+            reloc_id=tag[0] if tag is not None else None, meas_age_ms=max(0, age_ms),
+            icp_quality=min(1.0, max(0.0, round(e.quality, 3)))))
         if sigma <= TRUST_SIGMA_M and not self._jump_lost and not jump:
             self._good = (x, y, yaw)                     # 跳过之后 σ 给「不可信」,自然进不来
 

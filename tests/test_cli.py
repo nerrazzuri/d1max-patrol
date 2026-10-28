@@ -249,3 +249,15 @@ async def test_超时参数会传下去(sim, capsys):
     argv = ["--url", sim.url, "--timeout", "1", "goto", "--allow-vendor-nav", "5", "0"]
     assert await _amain(build_parser().parse_args(argv)) == 1
     assert "超时" in capsys.readouterr().err
+
+
+async def test_工单4_speed_0_本机就拒_提示用_stop_不发给厂家导航(sim, capsys):
+    """2026-10-28:``d1max speed 0`` 走厂家导航接口,速度 0 原样发过去(不是停车)。
+    W05 的约定是本机拒。"""
+    assert await run(sim, "speed") == 0
+    before = capsys.readouterr().out
+    assert await run(sim, "speed", "0") == 2
+    assert await run(sim, "speed", "-0.3") == 2
+    assert "stop" in capsys.readouterr().err
+    assert await run(sim, "speed") == 0
+    assert capsys.readouterr().out == before, "没发出去"
