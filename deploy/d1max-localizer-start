@@ -11,7 +11,9 @@
 #   D1MAX_LOC_PRIOR=<目录>   代理没给先验目录时(狗按 --map 载的图)用的先验:里面要有 prior.mm、frames.json
 #   D1MAX_LOC_ROS_DOMAIN=24  雷达话题在哪个 ROS domain(W08 过渡期:读厂商的 domain 24)
 #   D1MAX_LOC_RMW=rmw_zenoh_cpp  跟厂商那边一样的中间件
-#   D1MAX_LOC_ARGS=其余参数(比如 --lidar-topic /front_lidar)
+#   D1MAX_LOC_ARGS=其余参数(比如 --lidar-topic /front_lidar);好几个就整行带引号:
+#     D1MAX_LOC_ARGS="--lidar-topic /d1max/merged_lidar --imu-topic /front_lidar/imu --imu-ypr=-90,0,180"
+#     (接 IMU 当转速先验,工单 27;安装角用 d1max-loc imu-axes 从录包核,C40221 是 -90,0,180)
 set -eu
 here=$(cd "$(dirname "$0")/.." && pwd -P)
 # ROS 的 setup 脚本里有未定义变量,关掉 -u 再 source

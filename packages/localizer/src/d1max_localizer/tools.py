@@ -10,6 +10,8 @@
   「初值要多准」的表(手机「设位置」提示用)。
 - ``calibrate-rear --bag B --traj TRAJ.tum --out lidars.json``(W09i):前雷达建图轨迹当参照,标后雷达
   相对前雷达的外参;过了守门才写(``calibrated: true``)。要 ROS 的系统 Python。
+- ``imu-axes --bag B --traj OUT/traj.tum``(工单 27):用同一个录包的回放轨迹核 IMU 的安装角,打出
+  定位器要的 ``--imu-topic … --imu-ypr=…``;``replay``/``sweep`` 也收这两个参数,跟狗上一样接 IMU。
 - ``merge-bag --bag B --out B2``(W09i):照抄录包,另加前后雷达合并的话题 ``/d1max/merged_lidar``
   (``build --lidar-topic /d1max/merged_lidar`` 拿它建图);``--traj`` 给了就补两台之间的运动。
 """
@@ -26,6 +28,7 @@ from pathlib import Path
 from d1max_localizer import replay
 from d1max_localizer.backend import FRAMES_FILE
 from d1max_localizer.frames import Frames, calibrate
+from d1max_localizer.imu import ImuPrior, parse_ypr
 
 #: sweep 的偏差:(沿 x 的米, 沿 y 的米, 朝向的度)。
 SWEEP = ((0.5, 0.0, 0.0), (1.0, 0.0, 0.0), (2.0, 0.0, 0.0), (3.0, 0.0, 0.0), (0.0, 2.0, 0.0),
@@ -100,6 +103,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         r.add_argument("--lidar-topic", default="/front_lidar")
         r.add_argument("--only-first-n", type=int, default=None)
         r.add_argument("--skip-first-n", type=int, default=None)
+        r.add_argument("--imu-topic", default=None,
+                       help="接 IMU(跟狗上 d1max-localizer 同一个参数)")
+        r.add_argument("--imu-ypr", type=parse_ypr, default=None,
+                       help="IMU 安装角 yaw,pitch,roll(度;写成 --imu-ypr=-90,0,180)")
         if name == "replay":
             r.add_argument("--reference", type=Path, default=None, help="参考轨迹(TUM)")
             r.add_argument("--odom-tum", type=Path, default=None,
@@ -108,7 +115,19 @@ def main(argv: Sequence[str] | None = None) -> int:
             r.add_argument("--reference-other-frame", action="store_true",
                            help="参考轨迹不在先验的系里(独立建图):按时间配对后平面对齐")
         r.add_argument("--reuse", action="store_true", help="用 --out 里已有的 MOLA 输出,只重算")
+    ia = sub.add_parser("imu-axes", help="从录包核 IMU 的安装角(工单 27)")
+    ia.add_argument("--bag", type=Path, required=True)
+    ia.add_argument("--traj", type=Path, required=True,
+                    help="同一个录包的回放轨迹(replay 的 OUT/traj.tum;机身 = 点云系)")
+    ia.add_argument("--imu-topic", default="/front_lidar/imu")
     a = p.parse_args(argv)
+    if getattr(a, "imu_topic", None) is not None and a.cmd in ("replay", "sweep"):
+        if a.imu_ypr is None:
+            p.error("--imu-topic 要同时给 --imu-ypr")
+    a.imu = (ImuPrior(a.imu_topic, a.imu_ypr)
+             if a.cmd in ("replay", "sweep") and a.imu_topic else None)
+    if a.cmd == "imu-axes":
+        return _imu_axes(a)
     if a.cmd == "calibrate":
         return _calibrate(a)
     if a.cmd == "replay":
@@ -120,6 +139,17 @@ def main(argv: Sequence[str] | None = None) -> int:
     if a.cmd == "merge-bag":
         return _merge_bag(a)
     return _sweep(a)
+
+
+def _imu_axes(a: argparse.Namespace) -> int:
+    from d1max_localizer import imu
+    r = imu.fit_from_bag(a.bag, replay.read_tum(a.traj), topic=a.imu_topic)
+    print(f"{r.frames} 段配上了;{r.why}")
+    if not r.ok:
+        return 1
+    y, p, rr = (imu._num(v) for v in r.ypr)
+    print(f"相关 {r.yaw_corr:.2f}。定位器参数:--imu-topic {a.imu_topic} --imu-ypr={y},{p},{rr}")
+    return 0
 
 
 def _calibrate_rear(a: argparse.Namespace) -> int:
@@ -197,7 +227,7 @@ def _replay(a: argparse.Namespace) -> int:
     frames_cfg = Frames.load(a.prior / FRAMES_FILE)
     if not a.reuse:
         replay.run_mola(a.bag, a.prior, a.init, a.out, lidar_topic=a.lidar_topic,
-                        only_first_n=a.only_first_n, skip_first_n=a.skip_first_n)
+                        only_first_n=a.only_first_n, skip_first_n=a.skip_first_n, imu=a.imu)
     frames = replay.read_run(a.out)
     msgs = replay.simulate(frames, frames_cfg, a.init)
     odom = [(t, (p[0], p[1], math.atan2(2 * (q[3] * q[2] + q[0] * q[1]),
@@ -217,7 +247,7 @@ def _sweep(a: argparse.Namespace) -> int:
     base_dir = a.out / "base"
     if not a.reuse:
         replay.run_mola(a.bag, a.prior, a.init, base_dir, lidar_topic=a.lidar_topic,
-                        only_first_n=a.only_first_n, skip_first_n=a.skip_first_n)
+                        only_first_n=a.only_first_n, skip_first_n=a.skip_first_n, imu=a.imu)
     base = {round(f.stamp * 1000): frames_cfg.to_map2d(f.p, f.q)
             for f in replay.read_run(base_dir)}
     rows = []
@@ -227,7 +257,7 @@ def _sweep(a: argparse.Namespace) -> int:
         d = a.out / f"off_{dx:g}_{dy:g}_{dyaw:g}"
         if not a.reuse:
             replay.run_mola(a.bag, a.prior, init, d, lidar_topic=a.lidar_topic,
-                            only_first_n=a.only_first_n, skip_first_n=a.skip_first_n)
+                            only_first_n=a.only_first_n, skip_first_n=a.skip_first_n, imu=a.imu)
         rows.append(((dx, dy, dyaw), sweep_row(base, replay.read_run(d), frames_cfg)))
     md = ["# 初值要多准(以初值不偏那一趟为参考)", "",
           "| 偏差(x m, y m, 朝向°) | 最后 10% 的误差(m) | 对上没有 | 第一次对上用了(s) "
