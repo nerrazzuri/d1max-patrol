@@ -699,10 +699,11 @@ class PlannedNavBackend(HalNavBackend):
         self._stall_ref = None                           # 工单 29:不带到下一趟
         self._hit_reason = ""
         self._hit_at = -math.inf
-        if self._blocked_told and self._blocked_since is None and self.on_event is not None:
-            # 外审 R7:提前报过「终点被盖住」、后来没真被挡住就结束了(箱子挪走了、换了点):
-            # 站点那边的「被挡」要清掉
-            self.on_event("nav_unblocked", {"waited_s": 0.0, "detour": False})
+        if self._blocked_told and status is not NavStatus.FAILED and self.on_event is not None:
+            # 外审 R7、复查 N4:报过被挡(提前看出终点被盖住,或真被挡住)、这一段做完或停了,站点那边的
+            # 「被挡」要清掉。放弃这一段(FAILED)不清:狗还挡在那儿,引擎接着重试同一个点
+            waited = self._secs() - self._blocked_since if self._blocked_since is not None else 0.0
+            self.on_event("nav_unblocked", {"waited_s": round(waited, 1), "detour": self._detoured})
         self._blocked_since = None
         self._blocked_told = False
         self._detoured = False

@@ -288,6 +288,8 @@ class ObstacleGuard:
     #: 侧后方看不见的格子拦住)。角减速度、再留的角度待真机量;算出来过半圈就查整圈。
     ang_decel: float = 1.0                   # 弧度/秒²
     extra_rad: float = 0.2
+    #: 低于这个的实测 / 上一拍转速当没在转(里程转速的噪声)。
+    still_rps: float = 0.05
 
     def turn_reach(self, wz: float) -> float:
         w = abs(wz)
@@ -302,9 +304,15 @@ class ObstacleGuard:
         ``wz`` 转过去再刹停,**正在转的那股劲**(``w_now``:上一拍发的转速、里程实测转速)在延迟里接着
         转、再刹停也算 —— 原来只查新命令那一侧,反向或减速时漏了还在执行的那一侧。"""
         lo = hi = 0.0
-        for w in (wz, *w_now):
-            if abs(w) > 1e-6:
-                a = math.copysign(self.turn_reach(w), w)
+        if abs(wz) > 1e-6:
+            a = math.copysign(self.turn_reach(wz), wz)
+            lo, hi = min(lo, a), max(hi, a)
+        for w in w_now:
+            # 复查 N1:里程转速的噪声不算在转(原来 −0.001 也按整份余量查反向,对准被侧后看不见的挡死);
+            # 还在转的那股劲只按延迟里接着转、再刹停算,余量只加在新命令上
+            if abs(w) >= self.still_rps:
+                v = abs(w)
+                a = math.copysign(v * self.latency + v * v / (2.0 * self.ang_decel), w)
                 lo, hi = min(lo, a), max(hi, a)
         return lo, hi
 

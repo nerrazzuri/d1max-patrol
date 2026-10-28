@@ -88,6 +88,16 @@ def test_外审R3_另两根轴晃得少_但数据明摆着不是直角装法_不
         assert "晃" in r.why or "走动" in r.why
 
 
+def test_复查N5_真是直角装法_只是陀螺仪噪声大_不误拒():
+    """复查 N5:噪声 0.1 rad/s 时自由拟合被带偏 25.8°,直角装法残差比拟合值大的那点全是拟合噪声。"""
+    rng = np.random.default_rng(45)
+    t = np.arange(600) * 0.1
+    wb = np.column_stack([rng.normal(0, 0.02, 600), rng.normal(0, 0.02, 600),
+                          0.8 * np.sin(0.7 * t)])
+    r = imu.fit_axes(wb, wb + rng.normal(0, 0.1, wb.shape))
+    assert r.ok and r.ypr == (0.0, 0.0, 0.0), r
+
+
 def test_外审R3_吸到直角时_相关系数按最后给出的装法算():
     rng = np.random.default_rng(5)
     t = np.arange(600) * 0.1
