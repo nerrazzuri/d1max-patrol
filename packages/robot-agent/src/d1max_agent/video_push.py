@@ -24,7 +24,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import IO, Any
 
-from d1max_contract.video import VideoRequest, scrub, srt_push_url
+from d1max_contract.video import VideoRequest, scrub_tail, srt_push_url
 
 log = logging.getLogger(__name__)
 
@@ -111,7 +111,7 @@ def _tail(f: IO[bytes]) -> str:
     """stderr 的尾巴,**口令抹掉**:ffmpeg 报错会带出完整的推流地址。"""
     try:
         f.seek(0)
-        return scrub(f.read()[-_ERR_TAIL:].decode("utf-8", "replace").strip())
+        return scrub_tail(f.read(), _ERR_TAIL)          # 外审 R2:先打码再截
     except OSError:
         return ""
 

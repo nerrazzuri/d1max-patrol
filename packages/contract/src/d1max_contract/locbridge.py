@@ -212,8 +212,16 @@ _TYPES: dict[str, type] = {c.T: c for c in (Hello, Pose, State, Heartbeat, Reply
                                              Relocalize, Error)}
 
 
+#: 后来才加的字段 → 默认值:取默认值时不写进报文,老版本收到的跟以前一字不差(W40/W41 外审 R9:新代理的
+#: 人工重定位总带 ``human: true``,老定位器整条拒收)。不是默认值照写 —— 老的拒收,不悄悄理解错。
+_LATE_DEFAULTS: dict[str, Any] = {"human": True, "icp_quality": None}
+
+
 def encode(msg: Message) -> bytes:
-    return json.dumps({"t": msg.T, **asdict(msg)}, ensure_ascii=False,
+    d = {k: v for k, v in asdict(msg).items()
+         if not (k in _LATE_DEFAULTS and v == _LATE_DEFAULTS[k]
+                 and type(v) is type(_LATE_DEFAULTS[k]))}
+    return json.dumps({"t": msg.T, **d}, ensure_ascii=False,
                       separators=(",", ":")).encode("utf-8") + b"\n"
 
 

@@ -503,17 +503,28 @@ class Payload:
         self._known[coil] = on
 
     async def _reconcile(self, coil: str) -> None:
-        """期望跟确认过的不一样(或不明)就写一次。失败只记日志,下一拍再来。"""
+        """期望跟确认过的不一样(或不明)就写一次。失败只记日志,下一拍再来。
+        外审 R1:警灯的几路是一组(一个颜色可能要两路一起亮)—— 有一路**开**不成,整组撤掉「要开」、
+        接着关,不留半个颜色;旧颜色还有一路没关掉,新颜色那几路先不开。"""
         async with self._lock():
             want = self._want(coil)
             if self._known.get(coil) is want:
                 return
+            group = coil in self.cfg.strobe_coils
+            if want and group and any(
+                    self._known.get(c) is not False and not self._want(c)
+                    for c in self.cfg.strobe_coils if c != coil):
+                return                                 # 组里还有该关的没关掉:先不开这一路
             try:
                 await self._write(coil, want)
             except Exception as exc:                   # noqa: BLE001 - 下一拍重试
                 if not want:
                     log.warning("上装线圈 %s(%s)关不掉(接着关): %s", coil,
                                 self.cfg.role_of(coil), exc)
+                elif group:
+                    log.warning("警灯线圈 %s 开不了:整组撤掉、接着关: %s", coil, exc)
+                    for c in self.cfg.strobe_coils:
+                        self._until[c] = None
 
     async def _watch(self) -> None:
         while not self._closed:
@@ -574,7 +585,8 @@ class Payload:
                     await self._write(c, False)
                 except Exception as exc:               # noqa: BLE001 - 看护循环接着关
                     failed = failed or exc
-            for c in turn_on:
+            # 外审 R1:旧颜色有一路没关掉就不开新的(不然红关不掉再开绿 = 混成黄)
+            for c in (() if failed is not None else turn_on):
                 try:
                     await self._write(c, self._want(c))
                 except Exception as exc:               # noqa: BLE001 - 下面统一当「要关」

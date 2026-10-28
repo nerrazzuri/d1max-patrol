@@ -141,3 +141,35 @@ def test_工单11_位姿带原始ICP质量_可选_越界拒():
     for bad in (1.5, -0.1, float("nan")):
         with pytest.raises(ContractError):
             Pose(**kw, icp_quality=bad)
+
+
+def test_外审R9_后加的字段取默认值时不写进报文_老定位器照样认():
+    """W40/W41 外审 R9:新代理的人工重定位总带 ``human: true``,老定位器(6793485)整条拒收。"""
+    import json
+
+    from d1max_contract.locbridge import Pose, Relocalize, encode, parse
+    r = Relocalize(req=1, map_id="m", map_version="1", x=1.0, y=1.0, yaw=0.0, sigma_xy=0.5)
+    d = json.loads(encode(r))
+    assert "human" not in d and parse(encode(r)) == r
+    auto = Relocalize(req=2, map_id="m", map_version="1", x=1.0, y=1.0, yaw=0.0, sigma_xy=0.5,
+                      human=False)
+    assert json.loads(encode(auto))["human"] is False, "不是默认值照写(老的拒,不悄悄当成人给的)"
+    p = Pose(seq=1, stamp_ns=1, map_id="m", map_version="1", x=0.0, y=0.0, yaw=0.0,
+             sigma_xy=0.1, sigma_yaw=0.02, source="scan_match")
+    assert "icp_quality" not in json.loads(encode(p))
+    # 老定位器的解析器(真代码)认得新代理的人工重定位
+    import subprocess
+    import sys
+    import types
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[3]
+    try:
+        old = subprocess.check_output(["git", "-C", str(root), "show",
+                                       "6793485:packages/contract/src/d1max_contract/locbridge.py"])
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        pytest.skip("没有 git 历史")
+    mod = types.ModuleType("old_locbridge_6793485")
+    sys.modules[mod.__name__] = mod
+    exec(compile(old, "<old-locbridge>", "exec"), mod.__dict__)
+    got = mod.parse(encode(r))
+    assert (got.x, got.y) == (1.0, 1.0)

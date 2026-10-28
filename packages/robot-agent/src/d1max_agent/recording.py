@@ -146,8 +146,8 @@ class Recorder:
             return ""
         with contextlib.suppress(OSError, ValueError):
             s.err.seek(0)
-            from d1max_contract.video import scrub  # W40:热像的 RTSP 地址带口令
-            return scrub(s.err.read()[-_ERR_TAIL:].decode("utf-8", "replace").strip())
+            from d1max_contract.video import scrub_tail  # W40:热像的 RTSP 地址带口令;外审 R2
+            return scrub_tail(s.err.read(), _ERR_TAIL)
         return ""
 
     def _failed(self, camera: str, s: _Cam, why: str) -> None:

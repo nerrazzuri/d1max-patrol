@@ -238,6 +238,13 @@ class SiteAlertSources:
                 m.loc_idle_since, m.loc_idle_p2 = self._now(), False
             if m.running:
                 m.started = s.task.task_id
+        # 外审 R8:库里还挂着禁行区 P1(站点重启前报的):照样盯着它离开、够久自动解决(计时从现在的
+        # 新位置重新数)
+        try:
+            m.nogo = bool(self.desk.has_open(rid, "nogo"))
+        except Exception:
+            log.exception("%s 查有没有挂着的禁行区 P1 没成", rid)
+        m.nogo_clear_since = None
 
     # ------------------------------------------------------------ 状态
 
@@ -296,6 +303,8 @@ class SiteAlertSources:
                 log.exception("%s 定位好了,空闲丢定位那条解决不了,下一份状态再来", rid)
                 return
             m.loc_idle_p2 = False
+        if not ok:
+            m.nogo_clear_since = None                  # 外审 R5:不可信的那段不算「连着离开」
         m.loc_bad = not ok
 
     def _loc_idle_due(self, rid: str, m: _Mem) -> None:
@@ -353,6 +362,7 @@ class SiteAlertSources:
         # 掉线期间的事看不见:回来之后重新从它报的状态认起。跌倒的记忆也清掉(狗可能被扶起、重启)。
         m.estop = m.loc_lost_running = m.fallen = False
         m.loc_since = m.loc_idle_since = None              # 掉线不计(loc_bad 留着:回来好了照样解决)
+        m.nogo_clear_since = None                          # 外审 R5:掉线那段不算「连着离开」
         if m.online_since is not None and self._now() - m.online_since < OFFLINE_REARM_MS:
             log.info("%s 回来不到 %d s 又掉线:算同一次,不另起告警", rid, OFFLINE_REARM_MS // 1000)
             return
@@ -572,6 +582,8 @@ class SiteAlertSources:
             m.pose, m.pose_ms = t.pose.to_wire(), self._now()
             if m.nogo:
                 self._nogo_check(rid, m, t.pose)
+        else:
+            m.nogo_clear_since = None                  # 外审 R5:位置断了,从下一个可信位置重新数
         if isinstance(t.loc, dict):
             m.loc_reason = str(t.loc.get("reason") or "")[:200]   # 对账 S6:空闲丢定位的告警带上
         if abs(skew) > SKEW_ALARM_S and not m.skew:
@@ -599,6 +611,7 @@ class SiteAlertSources:
                         for z in zs.nogo()), default=float("inf"))
         except Exception:
             log.exception("%s 查禁行区没成", rid)
+            m.nogo_clear_since = None                  # 外审 R5:核不了连续性,重新数
             return
         now = self._now()
         if near < NOGO_CLEAR_M:

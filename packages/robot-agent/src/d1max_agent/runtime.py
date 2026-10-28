@@ -1303,6 +1303,7 @@ class AgentRuntime:
         try:
             pts = self.globalloc.scan()
             cands = await self.globalloc.locate(pts)
+            self.globalloc.scan()          # 外审 R3:算的这段时间狗动了 → 点云作废(抛错)
         except GlobalLocError as exc:
             return f"not_found: {exc}"[:200]
         best, why = decide(cands)
@@ -1412,14 +1413,15 @@ class AgentRuntime:
         poses = anchor.conflict_poses()
         if poses is None or m is None:
             return
+        gen = anchor.pose_gen
         try:
             pts = self.globalloc.scan()
             fit_loc, fit_given = await self.globalloc.fits(pts, list(poses))
         except GlobalLocError as exc:
             log.info("对不上的两处核不了:%s", exc)
             return
-        if self.loaded_map != m or anchor.conflict_poses() is None:
-            return
+        if self.loaded_map != m or anchor.conflict_poses() is None or anchor.pose_gen != gen:
+            return                                       # 外审 R4:这期间位置换过,结论作废
         trust = resolve_conflict(fit_loc, fit_given)
         (lx, ly, _), (gx, gy, gyaw) = poses
         log.warning("对不上的两处点云套图:定位器 (%.1f, %.1f) %.2f,"
@@ -1463,12 +1465,16 @@ class AgentRuntime:
         if est is None or (est.map_id, est.map_version) != m:
             return
         pose = (est.x, est.y, est.yaw)
+        gen = getattr(anchor, "pose_gen", None)
         try:
             v = await self.globalloc.check(pts, pose)
         except GlobalLocError as exc:
             log.info("点云套图核对不了:%s", exc)
             return
         if self.loaded_map != m:
+            return
+        if getattr(anchor, "pose_gen", None) != gen:
+            log.info("点云套图核对算完时位置已经换过(人设过位置或又重定位了):这次的结论作废")
             return
         if v.ok:
             log.info("点云套图核对:定位器给的 (%.2f, %.2f) 贴合度 %.2f,对得上", pose[0], pose[1],

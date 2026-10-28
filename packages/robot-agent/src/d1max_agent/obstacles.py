@@ -93,6 +93,7 @@ class ObstacleView:
     wall: Any = None
     wall_at: float = -math.inf
     wall_still: bool = False
+    wall_pose: tuple[float, float, float] | None = None
     #: 工单 21:狗最近一次挪窝(离上次站的地方超过 :data:`MEMORY_STILL_M`)的位置和时刻。
     _still_at: tuple[float, float] | None = None
     _still_since: float = -math.inf
@@ -153,12 +154,19 @@ class ObstacleView:
                  and math.hypot(b[0] - a[0], b[1] - a[1]) <= WALL_STILL_M
                  and abs(math.remainder(b[2] - a[2], 2 * math.pi)) <= WALL_STILL_RAD)
         self.wall, self.wall_at, self.wall_still = w.points(), now, still
+        self.wall_pose = b                               # 外审 R3:攒这份点云时狗在哪(里程)
 
     def wall_scan(self, *, since: float = -math.inf,
                   max_age: float = WALL_MAX_AGE_S) -> list[tuple[float, float]] | None:
         """最新一份墙那一层:新鲜、攒的时候狗没动、``since`` 之后收到的;不然 None。"""
         if self.wall is None or not self.wall_still or self.wall_at < since \
                 or self.monotonic() - self.wall_at > max_age:
+            return None
+        # 外审 R3:收到以后狗又走了(还在 2.5 s 有效期里)—— 点云对的是刚才那个位置,不能当现在的用
+        p, now_pose = self.wall_pose, (self.odom[-1][1] if self.odom else None)
+        if p is None or now_pose is None \
+                or math.hypot(now_pose[0] - p[0], now_pose[1] - p[1]) > WALL_STILL_M \
+                or abs(math.remainder(now_pose[2] - p[2], 2 * math.pi)) > WALL_STILL_RAD:
             return None
         return list(self.wall)
 

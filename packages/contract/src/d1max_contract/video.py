@@ -39,6 +39,17 @@ def scrub(text: str) -> str:
     return _SCRUB_RTSP.sub(r"\1***@", _SCRUB.sub(r"\1***", text))
 
 
+def scrub_tail(raw: bytes, n: int, *, window: int = 65536) -> str:
+    """报错输出的最后 ``n`` 个字,**先打码再截**(W40/W41 外审 R2:原来先截最后 300 字节再打码,截掉了
+    ``rtsp://`` 开头,口令认不出、原样进事件和日志)。只看最后 ``window`` 字节;窗口是从中间截的,
+    第一行可能是半截地址,扔掉。"""
+    part = raw[-window:]
+    if len(raw) > window:
+        nl = part.find(b"\n")
+        part = part[nl + 1:] if nl >= 0 else b""
+    return scrub(part.decode("utf-8", "replace")).strip()[-n:].strip()
+
+
 @dataclass(frozen=True)
 class VideoRequest:
     camera: str
