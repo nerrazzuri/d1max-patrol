@@ -31,8 +31,9 @@ MIN_MARGIN = 0.02
 #: 外审 R3:另两根轴晃得少时,直角装法比自由拟合多出的残差超过「另两根轴的晃」这么大一份 = 数据明摆着
 #: 不是直角装法(真装歪了 20° 也有 12%),不硬吸;噪声把拟合带偏时,两者残差差不多。
 WEAK_EXCESS = 0.08
-#: 复查 N5:多出的残差还得超过「噪声本身能拟合掉的」—— 自由拟合每个分量残差(≈ 噪声方差)的这么多倍
-#: (纯噪声带偏的约 1–10 倍,真装歪 20° 以上的 20 倍起;没噪声时无穷大)。
+#: 多出的残差超过自由拟合噪声方差(每个分量)的这么多倍,才算「直角装法明显对不上」;没超过 = 噪声大到
+#: 分不清是装歪了还是噪声(复查 N5 / N6:真装 0° 比值 9.6、真装 40° 比值 10.5,数据上分不开),
+#: 两种都拒答,只是原因写清楚。
 WEAK_EXCESS_NOISE = 15.0
 
 
@@ -172,10 +173,12 @@ def fit_axes(w_body: Any, gyro: Any) -> AxesFit:
     if off > SNAP_DEG and weak:
         free = float(np.sum((wb_c - g_c @ r.T) ** 2))
         shake = float(np.sum(np.delete(wb_c, k, axis=1) ** 2))
-        noise = free / (3 * n)
-        if r1 - free > max(WEAK_EXCESS * shake, WEAK_EXCESS_NOISE * noise):
-            return AxesFit(False, f"另两根轴晃得少,拟合值离最近的直角装法 {off:.1f}°、直角装法明显"
-                                  "对不上:定不下来(录一段走动的、上下坡或侧倾的)",
+        if r1 - free > WEAK_EXCESS * shake:
+            clear = r1 - free > WEAK_EXCESS_NOISE * free / (3 * n)
+            what = ("直角装法明显对不上" if clear else
+                    "陀螺仪噪声大,分不清是装歪了还是噪声")
+            return AxesFit(False, f"另两根轴晃得少,拟合值离最近的直角装法 {off:.1f}°、{what}:"
+                                  "定不下来(录一段走动的、上下坡或侧倾的)",
                            yaw_corr=corr, frames=n)
     if off <= SNAP_DEG or weak:
         how = "另两根轴晃得少,按残差挑" if weak and off > SNAP_DEG else "吸到直角装法"
