@@ -42,8 +42,9 @@ async def 台(tmp_path):
 
 
 async def test_定位器稳定地错了两米_RTK抓住_不可信_按RTK重定位_对回来解除(台):
-    """W09a 的已知限制:定位器自信地跳错、之后一直稳定地错,交叉校验(只跟里程比)抓不住。错得不到
-    3 m 的,跟锚比(W35)也放过 —— 靠 RTK。"""
+    """W09a 的已知限制:定位器自信地跳错、之后一直稳定地错,交叉校验(只跟里程比)抓不住。原来错得不到
+    3 m 的跟锚比(W35)也放过、全靠 RTK;工单 27 之后锚是最后可信的位置时按 1 m 核,2 m 代理自己就不认,
+    RTK 照样能把它请回来。"""
     t = 台
     await t.连()
     rtk = 假RTK(t.c)
@@ -51,7 +52,7 @@ async def test_定位器稳定地错了两米_RTK抓住_不可信_按RTK重定�
     t.rt._rtk_check.on_map(GEO)
     t.loc.jump(2.0, 0.0, flag=True)                      # 定位器报跳变、稳稳地错 2 m
     await t.拍(30)
-    assert _遥测(t.ears).loc["reason"] == "", "只看里程:它是可信的"
+    assert "请重新设位置" in _遥测(t.ears).loc["reason"], "工单 27:跟最后可信的位置差 2 m,不认"
     o = await t.dog.odometry()
     rtk.at = (o.x, o.y)                                   # RTK 说的是真话
     await t.拍(40)
@@ -111,7 +112,7 @@ async def test_RTK的解太旧_不拿来比(台):
     o = await t.dog.odometry()
     rtk.at = (o.x, o.y)
     await t.拍(40)
-    assert _遥测(t.ears).loc["reason"] == "" and not t.loc.relocs
+    assert not t.loc.relocs, "太旧的 RTK 解不拿来比、不按它重定位"
 
 
 async def test_没有配准_不核(台):

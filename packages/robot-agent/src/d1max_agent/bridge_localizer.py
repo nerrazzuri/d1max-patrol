@@ -115,10 +115,18 @@ XCHECK_TURN_MAX_M = 0.5
 #: (2026-10-08 转圈那次 0.66 m、2026-10-13 雷达半挡 0.5 m)。
 ANCHOR_M = 3.0
 ANCHOR_YAW_RAD = math.pi / 2
+#: 工单 27(2026-10-28 C40221 背对玻璃):锚是**最后可信的位置**(按里程推过来,很准)时的线 —— 正常的
+#: 重新匹配修正在 1 m 以内(见上);原来也按 3 m、90° 核,狗站着不动、定位器跳到 2 m 外、朝向错 60°
+#: 稳住也认了。人给的位置照旧 3 m、90°(人点得偏)。
+ANCHOR_TRUSTED_M = 1.0
+ANCHOR_TRUSTED_YAW_RAD = 0.5
 #: 里程朝向站着也在漂(2026-10-08 C40221:约 0.002 rad/s);锚放久了朝向那条线按这个放宽。
 ANCHOR_YAW_DRIFT_RPS = 0.005
 #: 锚是重定位给的位置(不是定位器出的一帧)时,它的 ``source``。
 GIVEN = "given"
+#: 锚是从最后可信的位置按里程推过来的(引擎重置时的自动重定位):朝向也准,
+#: 按 :data:`ANCHOR_TRUSTED_M` 核。
+TRUSTED = "trusted"
 #: 「比平常晚到多少」按近这么久里最小的「收到时刻 − 时间戳」算(秒)。
 LAG_WINDOW_S = 10.0
 #: 配里程:离那一刻最近的里程样本差过这么多就配不上(秒)。
@@ -238,6 +246,7 @@ class BridgeLocalizer:
         #: 重定位给的位置;``_anchor_m`` 是位置那条线,``_anchor_what`` 是给人看的叫法。
         self._anchor: _Fix | None = None
         self._anchor_m = ANCHOR_M
+        self._anchor_yaw = ANCHOR_YAW_RAD
         self._anchor_what = "最后可信的位置"
         #: 锚是哪一次重定位请求给的、还没有哪一帧按它稳下来过(请求号;没有是 ``None``)。这期间普通的
         #: 可信帧**不许**把锚盖掉(W35 外审 I1)。
@@ -383,6 +392,7 @@ class BridgeLocalizer:
         if map_ref != self._map:
             self._ref = self._good = self._anchor = None   # 别的图:旧位置不能当参照
             self._anchor_m, self._anchor_what = ANCHOR_M, "最后可信的位置"
+            self._anchor_yaw = ANCHOR_YAW_RAD
             self._anchor_hold = None
             self._unverified = False
             self.rtk_disagree = ""
@@ -391,6 +401,7 @@ class BridgeLocalizer:
             if kept is not None and map_ref is not None and kept[0] == map_ref:
                 # 代理重启前记下的锚(同一次开机、同一张图):只拿来核(对账 S1)
                 _, fix, self._anchor_m, what = kept
+                self._anchor_yaw = ANCHOR_YAW_RAD           # 盘上没记朝向线:按宽的
                 self._anchor = replace(fix, epoch=self._epoch, path=self._path)
                 self._anchor_what = f"代理重启前{what}"
                 self._kept_fix, self._kept_at = self._anchor, self._now()
@@ -544,7 +555,8 @@ class BridgeLocalizer:
         return SourceCheck("定位器", not why, why or "连着、定位可信")
 
     async def relocalize(self, map_ref: tuple[str, str], pose: tuple[float, float, float],
-                         sigma_xy: float = RELOC_SIGMA_M, *, human: bool = True) -> str:
+                         sigma_xy: float = RELOC_SIGMA_M, *, human: bool = True,
+                         trusted: bool = False) -> str:
         """请定位器按给的位姿(初值)重定位。收下回空串;否则回拒绝原因。收敛看之后的帧(带这次的
         ``reloc_id`` 那一帧按跳变稳下来)。
 
@@ -555,17 +567,25 @@ class BridgeLocalizer:
         重新核;下一帧可信的还会把刚换的锚盖成那个错解。没成(拒了、没回、没连上)就退回原来的锚;
         等回复的时候换了图,新图上不留这个锚。"""
         mine: list[int] = []
-        before = (self._anchor, self._anchor_m, self._anchor_what, self._anchor_hold)
+        before = (self._anchor, self._anchor_m, self._anchor_what, self._anchor_hold,
+                  self._anchor_yaw)
 
         def make(req: int) -> Relocalize:
             mine.append(req)
             self._reloc = (req, human)
             now = self._now()
             self._anchor = _Fix(pose=(float(pose[0]), float(pose[1]), float(pose[2])),
-                                sigma_xy=sigma_xy, sigma_yaw=0.0, source=GIVEN, at=now, born=now,
+                                sigma_xy=sigma_xy, sigma_yaw=0.0,
+                                source=TRUSTED if trusted else GIVEN, at=now, born=now,
                                 odom=self._odom, epoch=self._epoch, path=self._path, dr0=0.0)
-            self._anchor_m = max(ANCHOR_M, 3 * sigma_xy)
-            self._anchor_what = "人给的位置" if human else "重定位给的位置"
+            if trusted:
+                # 工单 27:从最后可信的位置按里程推过来的,位置、朝向都准:按紧的线核
+                self._anchor_m, self._anchor_yaw = ANCHOR_TRUSTED_M, ANCHOR_TRUSTED_YAW_RAD
+                self._anchor_what = "最后可信的位置(按里程推到现在)"
+            else:
+                self._anchor_m = max(ANCHOR_M, 3 * sigma_xy)
+                self._anchor_yaw = ANCHOR_YAW_RAD
+                self._anchor_what = "人给的位置" if human else "重定位给的位置"
             self._anchor_hold = req
             self._off_why = ""
             self.scan_disagree = ""                  # 新请了一次:点云套图的结论等它稳下来再核
@@ -576,7 +596,8 @@ class BridgeLocalizer:
             """这次没成:请求不等了;锚还是这次给的那个(没被换图清掉、没被更新的请求换掉)就退回去。"""
             self._forget_reloc(mine)
             if mine and self._anchor_hold == mine[0]:
-                self._anchor, self._anchor_m, self._anchor_what, self._anchor_hold = before
+                (self._anchor, self._anchor_m, self._anchor_what, self._anchor_hold,
+                 self._anchor_yaw) = before
                 self._off_why = ""
                 self._save_keep()
         try:
@@ -612,10 +633,10 @@ class BridgeLocalizer:
             log.info("丢定位后的重置:没有可信过的位置,等定位器自己找回来")
             return
         if g.odom is not None and self._odom is not None and g.epoch == self._epoch:
-            pose = compose(g.T, self._odom)
+            pose, trusted = compose(g.T, self._odom), True
         else:
-            pose = g.pose
-        why = await self.relocalize(m, pose, AUTO_RELOC_SIGMA_M, human=False)
+            pose, trusted = g.pose, False
+        why = await self.relocalize(m, pose, AUTO_RELOC_SIGMA_M, human=False, trusted=trusted)
         if why:
             log.warning("丢定位后请定位器在 (%.2f, %.2f) 附近重定位,没成:%s", pose[0], pose[1], why)
 
@@ -691,7 +712,9 @@ class BridgeLocalizer:
         if f.odom is None and a is not None and a.odom is not None and a.epoch == f.epoch:
             return                               # 这一帧没配上里程:留着同一段里能推的那个(对账 S1)
         self._anchor = f
-        self._anchor_m, self._anchor_what = ANCHOR_M, "最后可信的位置"
+        # 工单 27:最后可信的位置按里程推过来很准,按紧的线核
+        self._anchor_m, self._anchor_what = ANCHOR_TRUSTED_M, "最后可信的位置"
+        self._anchor_yaw = ANCHOR_TRUSTED_YAW_RAD
         self._save_keep(force=False)
 
     def _off_anchor(self, new: _Fix) -> str:
@@ -724,7 +747,7 @@ class BridgeLocalizer:
         turn = abs(_wrap(new.pose[2] - want[2]))
         if gap > self._anchor_m + XCHECK_FRAC * max(0.0, new.path - a.path):
             bad = f"{gap:.1f} m"
-        elif turn > ANCHOR_YAW_RAD + ANCHOR_YAW_DRIFT_RPS * max(0.0, new.at - a.at):
+        elif turn > self._anchor_yaw + ANCHOR_YAW_DRIFT_RPS * max(0.0, new.at - a.at):
             bad = f"朝向 {math.degrees(turn):.0f}°"
         else:
             return ""

@@ -216,3 +216,10 @@ def test_回放命令_带里程文件(tmp_path, capsys):
                        "--odom-tum", str(odom)]) == 0
     m = json.loads((run / "metrics.json").read_text())
     assert m["agent_trusted_share"] > 0.9, m["agent_untrusted"]
+
+
+def test_合并话题回放_机身系用前雷达系():
+    """合并的点云在前雷达系里(W09i):回放给 MOLA 的机身系要是 rslidar_head,原来只认 /front_lidar,
+    合并话题给成 base_link,录包里查不到,一帧都不处理(2026-10-28 台式机回放 glass-160827)。"""
+    assert replay._frame_of("/d1max/merged_lidar") == "rslidar_head"
+    assert replay._frame_of("/front_lidar") == "rslidar_head"

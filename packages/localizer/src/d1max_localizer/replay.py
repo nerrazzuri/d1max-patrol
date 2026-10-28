@@ -80,7 +80,8 @@ def run_mola(bag: Path, prior_dir: Path, init: tuple[float, float, float], out: 
 
 
 def _frame_of(topic: str) -> str:
-    return "rslidar_head" if topic == "/front_lidar" else "base_link"
+    from d1max_localizer.build import FRONT_FRAME_TOPICS
+    return "rslidar_head" if topic in FRONT_FRAME_TOPICS else "base_link"
 
 
 def _ypr_deg(q: Sequence[float]) -> tuple[float, float, float]:
