@@ -498,13 +498,16 @@ export function NoiseDialog({ target, onClose, onDone }: {
     api<NoiseList>("GET", `${base}/noise`).then((d) => live && setList(d)).catch((e) => live && setErr(errText(e)));
     return () => { live = false; };
   }, [base]);
-  // 复查 N6:重置放在点「重试」那一下同步做;放在 effect 里,新底图加载得快会被后跑的 effect 盖掉
-  const retry = () => { setImgOk(false); setPreviewErr(""); setTries((t) => t + 1); };
+  // 复查 N6:重置放在点「重试」那一下同步做;放在 effect 里,新底图加载得快会被后跑的 effect 盖掉。
+  // 复查 N7:请求代次也在那一下推进 —— 前一次的预览请求迟到(哪怕失败)只认最新那一代,不污染
+  const gen = useRef(0);
+  const retry = () => { gen.current += 1; setImgOk(false); setPreviewErr(""); setTries((t) => t + 1); };
   useEffect(() => {
-    let live = true;
-    api<PreviewMeta>("GET", `${view}/preview`).then((m) => live && setMeta(m))
-      .catch((e) => { if (live) { setMeta(null); setPreviewErr(errText(e)); } });
-    return () => { live = false; };
+    const mine = gen.current;
+    const current = () => mine === gen.current;
+    api<PreviewMeta>("GET", `${view}/preview`).then((m) => { if (current()) setMeta(m); })
+      .catch((e) => { if (current()) { setMeta(null); setPreviewErr(errText(e)); } });
+    return () => { if (mine === gen.current) gen.current += 1; };   // 换图、关掉:这一代作废
   }, [view, tries]);
   const n = list ? list.specks.filter((s) => !skip.has(s.id)).length : 0;
   const toggle = (id: number) => setSkip((cur) => { const next = new Set(cur); if (next.has(id)) next.delete(id); else next.add(id); return next; });

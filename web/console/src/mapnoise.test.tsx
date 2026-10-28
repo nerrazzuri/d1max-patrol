@@ -98,3 +98,41 @@ it.each(["load", "error"])("复查 N6:点重试后新底图马上 %s(重置的 e
     host.remove();
   }
 });
+
+it("复查 N7:连着重试两次,前一次的预览请求最后才回来、还是失败,不许把最新一次的成功盖掉", async () => {
+  let calls = 0;
+  let finishOld!: (v: Response) => void;
+  setFetch((async (url: string) => {
+    if (url.endsWith("/noise")) return json(LIST);
+    calls++;
+    if (calls === 2) return await new Promise<Response>((r) => { finishOld = r; });   // 第一次重试的那份:挂着
+    return json(META);
+  }) as typeof fetch);
+  const micro = async () => { for (let i = 0; i < 8; i++) await Promise.resolve(); };
+  const tick = () => new Promise((r) => setTimeout(r, 0));
+  const host = document.createElement("div");
+  document.body.append(host);
+  try {
+    rawRender(h(NoiseDialog, { target: { map_id: "m", version: "1" }, onClose: () => {}, onDone: () => {} }), host);
+    for (let i = 0; !host.querySelector(".mm-noiseimg image") && i < 100; i++) await tick();
+    host.querySelector(".mm-noiseimg image")!.dispatchEvent(new Event("error"));
+    await micro();
+    host.querySelector("[data-noise-retry]")!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    await micro();
+    for (let i = 0; calls < 2 && i < 100; i++) await tick();
+    host.querySelector(".mm-noiseimg image")!.dispatchEvent(new Event("error"));
+    await micro();
+    host.querySelector("[data-noise-retry]")!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    await micro();
+    finishOld(json({ error: "前一次的失败" }, 503));                                  // 迟到的旧失败
+    await micro();
+    for (let i = 0; (calls < 3 || !host.querySelector(".mm-noiseimg image")) && i < 100; i++) await tick();
+    host.querySelector(".mm-noiseimg image")!.dispatchEvent(new Event("load"));
+    await new Promise((r) => setTimeout(r, 100));
+    expect((host.querySelector("[data-denoise]") as HTMLButtonElement).disabled).toBe(false);
+    expect(host.querySelector("[role=alert]")).toBeNull();
+  } finally {
+    rawRender(null, host);
+    host.remove();
+  }
+});
