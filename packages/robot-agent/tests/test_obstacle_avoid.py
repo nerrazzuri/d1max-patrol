@@ -437,10 +437,11 @@ async def test_W34_现场视野_弧线被挡_前面真有东西_不往前挪(tmp
     assert not blind.nav._crept
 
 
-async def test_W34_转向被挡_有实打实的挡就不往前挪_只有看不见才挪(tmp_path):
-    """挡住转向的是看得见的东西(在转身扫过的那一圈里),不是盲带:往前挪解决不了,照旧记临时障碍、绕。"""
+async def test_W34_转向被挡_真挡在身后_往前挪开_只有看不见也挪(tmp_path):
+    """原来:挡住原地转的是看得见的东西就不挪。工单 25(2026-10-28 15:57 屁股贴墙):真挡在身后,往前
+    挪开正好躲开;挪的整段检查会拦挪向真挡的那一头。"""
     from d1max_agent.obstacles import Verdict
-    for hits, crept in (((( -0.52, 0.05),), False), ((), True)):
+    for hits, crept in (((( -0.52, 0.05),), True), ((), True)):
         t = 台子(tmp_path, rear=True, cone=True)
         await t.start(3.0, 4.0, yaw=0.0)
         await t.nav.goto(Pose.from_xy_yaw(1.0, 4.0))
@@ -452,7 +453,9 @@ async def test_W34_转向被挡_有实打实的挡就不往前挪_只有看不�
             t.c.ms += 100
             t._feed()                                        # 感知照常来(正前方看得清是空的)
             await t.nav._blocked(v, here, 0.1, 0.0, 0.4)
-        assert t.nav._crept is crept, hits
+            if t.nav._creep_from is not None:
+                break
+        assert t.nav._crept is crept, hits                    # 挪的方向见工单 25 那条(真墙)
 
 
 async def test_往前挪_前面是禁行区或墙就不挪_对朝向的时候不挪(tmp_path):
@@ -878,8 +881,8 @@ async def test_W41_离点只剩03米_转向被看不见挡住_不往前冲过头
         assert not t.crashed
         assert max(xs) < 5.3 + 0.3, (rear, max(xs))
         if rear:
+            # 工单 26(2026-10-28):终点就在前面,先挪到点上(原来先往后退一个机身长再走回来)
             assert NavStatus.SUCCEED in t.status, (t.status, t.nav.fail_reason)
-            assert min(xs) < 5.0 - 1.0, "往后退了"
         if NavStatus.SUCCEED in t.status:
             assert math.hypot(t.r.x - 5.3, t.r.y - 4.25) < 0.3, "记到了就在点上"
 
@@ -1076,3 +1079,76 @@ async def test_工单21_终点在身后06米_挑方向时选往后退到点上(t
     here = SimpleNamespace(x=t.r.x, y=t.r.y, yaw=t.r.yaw, sigma_xy=0.05)
     way, length = t.nav._pick_creep(here)
     assert way == -1 and abs(length - 0.6) < 0.1, (way, length)
+
+
+async def test_工单20_终点贴着墙在膨胀圈里_改去最近能站的点_墙里面照样拒(tmp_path):
+    """2026-10-28:原点 (−0.27, −0.30) 是狗站着标的,却在膨胀圈里 → 回原点、回待命点都 goal_blocked。
+    终点只是在地图墙的膨胀圈里(不在墙、禁行区里)→ 改去 0.35 m 以内最近能站的点。"""
+    t = 台子(tmp_path)                                         # 上边的墙面在 y 7.8
+    await t.start(2.0, 6.9)
+    await t.nav.goto(Pose.from_xy_yaw(5.0, 7.3))              # 侧面离墙 0.5 m:在膨胀圈里
+    await t.跑(60.0)
+    assert NavStatus.SUCCEED in t.status, (t.status, t.nav.fail_reason)
+    assert math.hypot(t.r.x - 5.0, t.r.y - 7.3) < 0.4 and not t.crashed
+    t2 = 台子(tmp_path, walls=[(6.0, 0.0, 6.4, 8.0)])
+    await t2.start(2.0, 4.0)
+    with pytest.raises(NavRequestError, match="goal_blocked"):
+        await t2.nav.goto(Pose.from_xy_yaw(6.2, 4.0))          # 在墙里
+
+
+# ------------------------------------------------------------ 2026-10-28 傍晚 工单 25 / 26 / 28
+
+
+async def test_工单26_终点就在前面09米_先挪到点上_不先往后退(tmp_path):
+    from types import SimpleNamespace
+    t = 台子(tmp_path, rear=True, cone=True)
+    await t.start(4.0, 4.0, yaw=0.0)
+    for _ in range(5):
+        await t.一拍()
+    t.nav._target = Pose.from_xy_yaw(4.9, 4.2, 0.0)
+    here = SimpleNamespace(x=t.r.x, y=t.r.y, yaw=t.r.yaw, sigma_xy=0.05)
+    way, length = t.nav._pick_creep(here)
+    assert way == 1 and abs(length - 0.9) < 0.1, (way, length)
+
+
+async def test_工单25_转身扫到身后的墙_前面是空的_往前挪开再转(tmp_path):
+    """15:57 起点屁股贴着身后的墙,路要先偏一点:转身扫过区有真挡 8 处 → 原来「有真挡就不挪」,
+    2×20 s 放弃。挪的整段检查会拦挪向真挡的那一头,另一头空就挪。"""
+    t = 台子(tmp_path, rear=True, cone=True, walls=[(2.85, 0.0, 3.0, 8.0)])
+    await t.start(3.6, 4.0, yaw=0.0)                           # 狗尾 3.135,离墙 0.135 m
+    await t.nav.goto(Pose.from_xy_yaw(7.0, 6.5))               # 要左转 36°
+    xs, _ = await _跑到头(t, 900)
+    assert not t.crashed
+    assert NavStatus.SUCCEED in t.status, (t.status, t.nav.fail_reason, t.events)
+
+
+async def test_工单28_发了速度命令狗不动_按被挡计时上报_到时放弃(tmp_path):
+    """16:17 回起点:狗站着不动、任务一直 running、代理没有一行导航日志,130 s 后人工叫停。下游(第二层
+    许可门、运控)把命令吞了也要知道:发了运动命令、里程几秒不动 → 进被挡流程。"""
+    t = 台子(tmp_path)
+    await t.start(2.0, 4.0)
+    await t.nav.goto(Pose.from_xy_yaw(8.0, 4.0))
+    await t.跑(2.0)
+    t.r.tick = lambda dt: None                                # 下游吞了命令:狗不动
+    await t.跑(40.0)
+    assert NavStatus.FAILED in t.status, (t.status, t.nav.fail_reason)
+    assert "没动" in t.nav.fail_reason, t.nav.fail_reason
+    assert [k for k, _ in t.events if k == "nav_blocked"], t.events
+
+
+async def test_工单25_原地转被身后真挡拦住_选往前挪(tmp_path):
+    from types import SimpleNamespace
+
+    from d1max_agent.bridges.planned_nav import BLOCK_DETOUR_S
+    t = 台子(tmp_path, rear=True, cone=True, walls=[(2.9, 0.0, 3.1, 8.0)])
+    await t.start(3.6, 4.0, yaw=0.0)                           # 狗尾 3.135,离墙 0.035 m
+    for _ in range(5):
+        await t.一拍()
+    t.nav._target = Pose.from_xy_yaw(7.0, 6.5)
+    here = SimpleNamespace(x=t.r.x, y=t.r.y, yaw=t.r.yaw, sigma_xy=0.05)
+    v = t.nav.guard.check(0.0, 1.0, 0.0, t.view, t.nav._odom_pose)
+    assert not v.ok and v.hits, v                              # 转身扫到身后的墙
+    t.nav._blocked_since = t.nav._secs() - BLOCK_DETOUR_S - 0.1
+    t.nav._next_detour = math.inf
+    await t.nav._blocked(v, here, 0.1, 0.0, 1.0)
+    assert t.nav._creep_from is not None and t.nav._creep_way == 1
