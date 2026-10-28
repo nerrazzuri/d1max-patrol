@@ -94,6 +94,7 @@ class ObstacleView:
     wall_at: float = -math.inf
     wall_still: bool = False
     wall_pose: tuple[float, float, float] | None = None
+    wall_seq: int = 0
     #: 工单 21:狗最近一次挪窝(离上次站的地方超过 :data:`MEMORY_STILL_M`)的位置和时刻。
     _still_at: tuple[float, float] | None = None
     _still_since: float = -math.inf
@@ -154,6 +155,7 @@ class ObstacleView:
                  and math.hypot(b[0] - a[0], b[1] - a[1]) <= WALL_STILL_M
                  and abs(math.remainder(b[2] - a[2], 2 * math.pi)) <= WALL_STILL_RAD)
         self.wall, self.wall_at, self.wall_still = w.points(), now, still
+        self.wall_seq += 1                               # 复查 N1:匹配结果按它绑定那一份点云
         self.wall_pose = b                               # 外审 R3:攒这份点云时狗在哪(里程)
 
     def wall_scan(self, *, since: float = -math.inf,

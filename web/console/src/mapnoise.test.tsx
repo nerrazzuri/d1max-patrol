@@ -33,12 +33,40 @@ it("预览拿不到:按钮不许点、写清楚原因;重试拿到了才许清",
   previewOk = true;
   fireEvent.click(container.querySelector("[data-noise-retry]") as HTMLButtonElement);
   await waitFor(() => expect(container.querySelector(".mm-noiseimg")).not.toBeNull());
-  expect((container.querySelector("[data-denoise]") as HTMLButtonElement).disabled).toBe(false);
+  fireEvent.load(container.querySelector(".mm-noiseimg image")!);
+  await waitFor(() => expect((container.querySelector("[data-denoise]") as HTMLButtonElement).disabled).toBe(false));
 });
 
 it("预览正常:图和红圈都在,能清", async () => {
   setFetch((async (url: string) => (url.endsWith("/noise") ? json(LIST) : json(META))) as typeof fetch);
   const { container } = render(<NoiseDialog target={{ map_id: "m", version: "1" }} onClose={() => {}} onDone={() => {}} />);
   await waitFor(() => expect(container.querySelectorAll("[data-speck]").length).toBe(2));
-  expect((container.querySelector("[data-denoise]") as HTMLButtonElement).disabled).toBe(false);
+  fireEvent.load(container.querySelector(".mm-noiseimg image")!);
+  await waitFor(() => expect((container.querySelector("[data-denoise]") as HTMLButtonElement).disabled).toBe(false));
+});
+
+it("复查 N3:底图还没加载好不许清;底图加载失败、点重试要真的重新拉图,拉到之前照样不许清", async () => {
+  const posts: unknown[] = [];
+  setFetch((async (url: string, init?: RequestInit) => {
+    if (url.endsWith("/noise")) return json(LIST);
+    if (url.endsWith("/preview")) return json(META);
+    if (url.endsWith("/denoise")) { posts.push(JSON.parse(String(init?.body))); return json({ version: "2", cleaned: 2, cells: 4, homes_copied: 0 }); }
+    throw new Error(url);
+  }) as typeof fetch);
+  const { container } = render(<NoiseDialog target={{ map_id: "m", version: "1" }} onClose={() => {}} onDone={() => {}} />);
+  await waitFor(() => expect(container.querySelector(".mm-noiseimg image")).not.toBeNull());
+  const btn = () => container.querySelector("[data-denoise]") as HTMLButtonElement;
+  expect(btn().disabled).toBe(true);                          // 元数据有了、底图还没好
+  const img = container.querySelector(".mm-noiseimg image")!;
+  const href0 = img.getAttribute("href");
+  fireEvent.error(img);
+  await waitFor(() => expect(container.querySelector("[data-noise-retry]")).not.toBeNull());
+  expect(btn().disabled).toBe(true);
+  fireEvent.click(container.querySelector("[data-noise-retry]") as HTMLButtonElement);
+  await waitFor(() => expect(container.querySelector(".mm-noiseimg image")!.getAttribute("href")).not.toBe(href0));
+  expect(btn().disabled).toBe(true);                          // 重拉的图还没到
+  fireEvent.click(btn());
+  expect(posts).toEqual([]);
+  fireEvent.load(container.querySelector(".mm-noiseimg image")!);
+  await waitFor(() => expect(btn().disabled).toBe(false));
 });
