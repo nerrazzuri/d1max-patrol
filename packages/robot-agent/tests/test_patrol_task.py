@@ -134,3 +134,35 @@ async def test_sim相机_带拍照动作的任务走得完_照片进归档(tmp_p
     shots = list((tmp_path / "runs").rglob("*.jpg"))
     assert shots and shots[0].read_bytes() == PLACEHOLDER_JPEG
     await parts.engine.aclose()
+
+
+async def test_工单20_点没到_证据清单里写结果failed_站点才不当成跑完了(台子, tmp_path, monkeypatch):
+    """2026-10-28 回待命点(一个点的巡检):两次 goal_blocked、点跳过,清单 ``summary`` 只写了引擎的
+    ``state: done``(「这趟跑到头了」),站点读的 ``result`` 没写 —— 现场看着像回去了。"""
+    import json
+
+    from d1max_patrol.backends.base import NavRequestError
+    c, r, parts, book = 台子
+
+    async def 拒(pose):
+        raise NavRequestError("goto", "规划失败(goal_blocked):终点在障碍、禁行区里或贴得太近")
+    monkeypatch.setattr(parts.nav, "goto", 拒)
+    t = PatrolTask(task_id="standby-1", mission=_任务((2.0, 0.0)), parts=parts, events=book,
+                   now_ms=c)
+    await t.start()
+    await _跑(c, r, parts, t, 300)
+    assert t.state is TaskState.FAILED, (t.state, t.detail)
+    [m] = list((tmp_path / "runs").rglob("manifest.json"))
+    s = json.loads(m.read_text())["summary"]
+    assert s["result"] == "failed" and s["succeeded"] == 0, s
+
+
+async def test_点都到了_清单结果done(台子, tmp_path):
+    import json
+    c, r, parts, book = 台子
+    t = PatrolTask(task_id="t1", mission=_任务((0.5, 0.0)), parts=parts, events=book, now_ms=c)
+    await t.start()
+    await _跑(c, r, parts, t, 600)
+    assert t.state is TaskState.DONE
+    [m] = list((tmp_path / "runs").rglob("manifest.json"))
+    assert json.loads(m.read_text())["summary"]["result"] == "done"
