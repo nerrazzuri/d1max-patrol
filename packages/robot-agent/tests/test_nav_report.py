@@ -109,7 +109,8 @@ async def test_被挡的事件带等了多久_绕障重规划带原因(tmp_path)
     t.world.dyn["gate"] = (5.2, 5.0, 6.8, 7.95)
     await t.跑(60.0)
     blocked = [d for k, d in t.events if k == "nav_blocked"]
-    assert len(blocked) == 1 and blocked[0]["waited_s"] >= 5.0
+    # 工单 21 之后狗会换方向试几回,每回真走了一段算新的一回被挡
+    assert 1 <= len(blocked) <= 3 and blocked[0]["waited_s"] >= 5.0
     assert blocked[0]["reason"] and "x" in blocked[0] and "y" in blocked[0]
     replans = [d for k, d in t.events if k == "nav_replan"]
     assert replans and all(d["why"] in ("off_route", "zones", "near_nogo", "detour")

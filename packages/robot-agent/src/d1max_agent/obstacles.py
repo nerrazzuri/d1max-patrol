@@ -28,6 +28,12 @@ from d1max_contract.obsbridge import Grid
 #: 被挡等了几秒再绕,5 s 不够(仿真里绕障转身就卡住)。取 10 s,真机调(人 10 s 内横着走进那条带的风险
 #: 写进已知限制)。
 MEMORY_S = 10.0
+#: 工单 21(2026-10-28 C40221 下午):狗一停下超过 10 s 两侧就算没看过,之后哪怕转 5° 都要先挪、挪不了
+#: 就原地等 20 s 放弃。狗站着没挪窝(离那一帧的位置不到 :data:`MEMORY_STILL_M`,原地转也算没挪)时,
+#: 那一帧留到这么久;挪了窝照旧 :data:`MEMORY_S`。(站着的时候人从正侧面走进盲带,本来就看不见 ——
+#: 原来的 10 s 也一样,写进已知限制。)
+MEMORY_STILL_S = 60.0
+MEMORY_STILL_M = 0.15
 FRESH_S = 0.3
 LOST_S = 2.0
 ODOM_KEEP_S = 12.0
@@ -87,11 +93,17 @@ class ObstacleView:
     wall: Any = None
     wall_at: float = -math.inf
     wall_still: bool = False
+    #: 工单 21:狗最近一次挪窝(离上次站的地方超过 :data:`MEMORY_STILL_M`)的位置和时刻。
+    _still_at: tuple[float, float] | None = None
+    _still_since: float = -math.inf
 
     # ------------------------------------------------------------ 喂进来
 
     def note_odom(self, x: float, y: float, yaw: float) -> None:
         now = self.monotonic()
+        if self._still_at is None or math.hypot(x - self._still_at[0],
+                                                y - self._still_at[1]) > MEMORY_STILL_M:
+            self._still_at, self._still_since = (float(x), float(y)), now     # 挪了窝
         self.odom.append((now, (float(x), float(y), float(yaw))))
         while self.odom and now - self.odom[0][0] > ODOM_KEEP_S:
             self.odom.popleft()
@@ -124,7 +136,11 @@ class ObstacleView:
                                       known=np.frombuffer(known, dtype=np.uint8),
                                       size=g.size, res=g.res,
                                       suspect=np.frombuffer(g.suspect_bits(), dtype=np.uint8)))
-        while self.frames and now - self.frames[-1].at > self.memory_s:
+        while self.frames:
+            f, age = self.frames[-1], now - self.frames[-1].at
+            if age <= self.memory_s or (age <= MEMORY_STILL_S
+                                        and self._still_since <= f.at + self.memory_s):
+                break                                   # 工单 21:它过期之前狗就站住了、一直没挪窝
             self.frames.pop()
 
     def on_wall(self, w: Any) -> None:
@@ -258,6 +274,14 @@ class ObstacleGuard:
     decel: float = 0.5                       # 刹车减速度(m/s²,待真机量)
     extra: float = 0.3                       # 再留这么多(米)
     step: float = 0.05                       # 扫过区的采样间距(米)
+    #: 原地转:按这一拍转过去再刹停的角度查扇形(工单 21:原来不管转多少都查整个外接圆,差 5° 也被
+    #: 侧后方看不见的格子拦住)。角减速度、再留的角度待真机量;算出来过半圈就查整圈。
+    ang_decel: float = 1.0                   # 弧度/秒²
+    extra_rad: float = 0.2
+
+    def turn_reach(self, wz: float) -> float:
+        w = abs(wz)
+        return w * self.latency + w * w / (2.0 * self.ang_decel) + self.extra_rad
 
     def reach(self, v: float) -> float:
         v = abs(v)
@@ -270,6 +294,27 @@ class ObstacleGuard:
         hl, hw = self.body_len / 2 + self.margin, self.body_wid / 2 + self.margin
         pts: set[tuple[float, float]] = set()
         s = self.step
+        if abs(vx) < 1e-6 and abs(wz) > 1e-6 and self.turn_reach(wz) < math.pi:
+            # 扇形:外接圆里的采样点(跟整圈一样取格子中间),转过 0 → ±turn_reach 的某一刻落在机身
+            # 矩形里就算扫到;角步长让外接圆上相邻两刻不超过一格
+            th, r = self.turn_reach(wz), math.hypot(hl, hw)
+            n = int(r / s) + 1
+            g = (np.arange(-n, n) + 0.5) * s
+            X, Y = np.meshgrid(g, g, indexing="ij")
+            X, Y = X.ravel(), Y.ravel()
+            keep = X * X + Y * Y <= r * r
+            X, Y = X[keep], Y[keep]
+            hit = np.zeros(len(X), dtype=bool)
+            k = max(1, int(math.ceil(th * r / s)))
+            sign = 1.0 if wz > 0 else -1.0
+            for i in range(k + 1):
+                a = sign * th * i / k                   # 机身转了 a:把点转回 −a 看在不在矩形里
+                c, sn = math.cos(a), math.sin(a)
+                lx, ly = c * X + sn * Y, -sn * X + c * Y
+                hit |= (np.abs(lx) <= hl) & (np.abs(ly) <= hw)
+            for x, y in zip(X[hit], Y[hit], strict=True):
+                pts.add((round(float(x), 3), round(float(y), 3)))
+            return self._outside_body(pts, hl, hw)
         if abs(vx) < 1e-6 and abs(wz) > 1e-6:
             r = math.hypot(hl, hw)
             n = int(r / s) + 1
