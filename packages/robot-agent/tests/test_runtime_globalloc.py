@@ -139,13 +139,19 @@ async def test_工单10_人给错了4米_定位器自己回对了_点云核出�
     await t.rt._on_cmd(_cmd("relocalize", {"x": TRUE[0] + 4.0, "y": TRUE[1], "yaw": TRUE[2]},
                             "r1", t.c))
     anchor = t.rt.parts.nav.anchor
-    stuck = False
+    said: list[str] = []
+    real_off = anchor._off_anchor
+
+    def off(new):
+        why = real_off(new)
+        said.append(why)
+        return why
+    anchor._off_anchor = off           # 记下判没判过「对不上」(核对可能同一拍就解开,事后看不到)
     for _ in range(60):
         await t.拍(1)
-        stuck = stuck or "请重新设位置" in anchor.why_not(True)
         if anchor.ok(True):
             break
-    assert stuck, "先是卡在对不上(原来的样子)"
+    assert any("请重新设位置" in w for w in said), "先是判了对不上(原来的样子)"
     assert anchor.ok(True), anchor.why_not(True)
     await t.拍(2)
     ev = _事件(t.ears, "loc_conflict_resolved")

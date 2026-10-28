@@ -268,6 +268,9 @@ class BridgeLocalizer:
         self._kept: tuple[tuple[str, str], _Fix, float, str] | None = self._load_keep()
         self._wrong_map = False
         self._icp: float | None = None
+        #: 外审 R4:位置代次 —— 每发一次重定位请求、换一次图加一。后台点云核对开始时记下,算完要动手
+        #: 之前核一遍,变了(人这期间设过位置)就作废,不许拿旧点云的结论盖掉新位置。
+        self.pose_gen = 0
         #: RTK 核对说定位器不对(W09e,``RtkCheck``;代理每拍写):非空就不可信。
         self.rtk_disagree = ""
         #: 点云套图说定位器锁错了(W41,``globalloc.judge``;代理写):非空就不可信。下一次请重定位、
@@ -392,6 +395,7 @@ class BridgeLocalizer:
         if map_ref == self._map and dir == self._dir and self._prior_ok == map_ref:
             return
         if map_ref != self._map:
+            self.pose_gen += 1                           # 外审 R4
             self._ref = self._good = self._anchor = None   # 别的图:旧位置不能当参照
             self._anchor_m, self._anchor_what = ANCHOR_M, "最后可信的位置"
             self._anchor_yaw = ANCHOR_YAW_RAD
@@ -577,6 +581,7 @@ class BridgeLocalizer:
         def make(req: int) -> Relocalize:
             mine.append(req)
             self._reloc = (req, human)
+            self.pose_gen += 1                           # 外审 R4:后台还没算完的核对作废
             now = self._now()
             self._anchor = _Fix(pose=(float(pose[0]), float(pose[1]), float(pose[2])),
                                 sigma_xy=sigma_xy, sigma_yaw=0.0,

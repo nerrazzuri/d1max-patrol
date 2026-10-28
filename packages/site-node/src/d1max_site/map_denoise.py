@@ -43,7 +43,10 @@ def find_specks(pgm: bytes, meta: dict[str, Any]) -> list[dict[str, Any]]:
     h, w = ranks.shape
     res = float(meta["resolution"])
     ox, oy = float(meta["origin"][0]), float(meta["origin"][1])
-    max_px = max(1, int(SPECK_MAX_M2 / (res * res)))
+    # 外审 R7:按实际面积算;一格就超过上限(粗分辨率的图)就不出候选,原来至少放一格
+    max_px = int(SPECK_MAX_M2 / (res * res) + 1e-9)
+    if max_px < 1:
+        return []
     ring = max(1, int(round(RING_M / res)))
     occ = ranks == 0
     label = np.zeros((h, w), dtype=np.int32)

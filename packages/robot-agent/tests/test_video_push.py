@@ -178,3 +178,16 @@ def test_站点说停_安静地停_不报失败(推):
         assert events == []
     finally:
         site.close()
+
+
+def test_外审R2_推流和录像的报错尾巴_长RTSP地址的口令也打码():
+    import io
+    from types import SimpleNamespace
+
+    from d1max_agent.recording import Recorder
+    from d1max_agent.video_push import _tail
+    secret = "REVIEW_FAKE_SECRET"
+    raw = f"rtsp://admin:{secret}@127.0.0.1:1/{'p' * 240}: Connection refused\n".encode()
+    assert secret not in _tail(io.BytesIO(raw))
+    rec = Recorder.__new__(Recorder)
+    assert secret not in rec._tail(SimpleNamespace(err=io.BytesIO(raw)))
