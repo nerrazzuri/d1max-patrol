@@ -102,6 +102,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         r.add_argument("--skip-first-n", type=int, default=None)
         if name == "replay":
             r.add_argument("--reference", type=Path, default=None, help="参考轨迹(TUM)")
+            r.add_argument("--odom-tum", type=Path, default=None,
+                           help="里程(TUM,时刻跟 MOLA 位姿同一个钟):代理做交叉校验;"
+                                "开头当人给了 --init")
             r.add_argument("--reference-other-frame", action="store_true",
                            help="参考轨迹不在先验的系里(独立建图):按时间配对后平面对齐")
         r.add_argument("--reuse", action="store_true", help="用 --out 里已有的 MOLA 输出,只重算")
@@ -197,7 +200,10 @@ def _replay(a: argparse.Namespace) -> int:
                         only_first_n=a.only_first_n, skip_first_n=a.skip_first_n)
     frames = replay.read_run(a.out)
     msgs = replay.simulate(frames, frames_cfg, a.init)
-    view = replay.agent_view(msgs)
+    odom = [(t, (p[0], p[1], math.atan2(2 * (q[3] * q[2] + q[0] * q[1]),
+                                       1 - 2 * (q[1] * q[1] + q[2] * q[2]))))
+            for t, p, q in replay.read_tum(a.odom_tum)] if a.odom_tum else []
+    view = replay.agent_view(msgs, odom=odom, init=a.init if odom else None)
     ref = replay.read_tum(a.reference) if a.reference else ()
     m = replay.metrics(frames, msgs, view, frames_cfg, reference=ref,
                        reference_same_frame=not a.reference_other_frame)

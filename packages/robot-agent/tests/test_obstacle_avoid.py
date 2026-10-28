@@ -914,3 +914,68 @@ async def test_W41_放弃时写清楚前面真有挡_不只写转身那次的有
     assert "两侧看不见" in why, why
     blocked = [d["reason"] for k, d in t.events if k == "nav_blocked"]
     assert blocked and "扫过区有挡 0 处" not in blocked[0], blocked
+
+
+async def _跑到头(t, n=1200):
+    xs, ys = [], []
+    for _ in range(n):
+        await t.一拍()
+        xs.append(t.r.x)
+        ys.append(t.r.y)
+        if t.status and t.status[-1] is NavStatus.STANDBY:
+            break
+    return xs, ys
+
+
+async def test_工单14_走着撞上箱子_终点在箱子后面_不往箱子那头挪_退一步再绕(tmp_path):
+    """2026-10-28 C40221 C1 第 4 次:正常速度走过去、守卫在机头前约 0.45 m 叫停;判「能不能往前挪」时
+    只按挪的速度查机头前 0.38 m,看不到箱子 → 每次都往前挪、被箱子挡、20 s 放弃,循环到中止。
+    挪之前要看完整一段(1.3 m + 刹车距离)里真有的挡。"""
+    t = 台子(tmp_path, rear=True, cone=True)
+    t.world.dyn["box"] = (5.4, 3.75, 5.9, 4.25)              # 约 50 cm 方块
+    await t.start(2.0, 4.0)
+    await t.nav.goto(Pose.from_xy_yaw(6.9, 4.0))              # 终点在方块后面 1 m
+    xs, _ = await _跑到头(t)
+    assert not t.crashed
+    assert NavStatus.SUCCEED in t.status, (t.status, t.nav.fail_reason, t.events)
+
+
+async def test_工单17_第一个点只在14米外_身后是墙_两侧没看过_挪到点上为止(tmp_path):
+    """2026-10-28 E5:起点离 p1 只有 1.4 m(往前挪 1.3 m 会冲过点),身后不到 1 m 是墙退不了 →
+    「看不见 116 处」原地等 20 s 放弃。离点近时往前挪到点上为止。"""
+    t = 台子(tmp_path, rear=True, cone=True, walls=[(1.9, 0.0, 2.1, 8.0)])
+    await t.start(3.0, 4.0, yaw=0.0)
+    goal = Pose.from_xy_yaw(4.3, 4.5, 0.0)
+    await t.nav.goto(goal)
+    xs, _ = await _跑到头(t)
+    assert not t.crashed
+    assert NavStatus.SUCCEED in t.status, (t.status, t.nav.fail_reason, t.events)
+    assert max(xs) < 4.3 + 0.3, "不冲过点"
+
+
+async def test_工单14_斜对着障碍_身后斜方向有挡_不往那头退(tmp_path):
+    """2026-10-28 回原点:狗朝 −137° 斜对玻璃,选「先往后退 1.3 m」,退 0.2 m 被身后的航空箱挡住、
+    定位重置、中止。往后退之前也要看完整一段里身后真有的挡。"""
+    t = 台子(tmp_path, rear=True, cone=True)
+    yaw = math.radians(45)
+    # 狗尾后面斜方向 0.3 m 外一个箱子(狗尾在中心后 0.465 m)
+    bx, by = 4.0 - math.cos(yaw) * 1.0, 4.0 - math.sin(yaw) * 1.0
+    t.world.dyn["case"] = (bx - 0.3, by - 0.3, bx + 0.3, by + 0.3)
+    await t.start(4.0, 4.0, yaw=yaw)
+    await t.nav.goto(Pose.from_xy_yaw(4.0, 1.5, -math.pi / 2))    # 要转身
+    await _跑到头(t, 600)
+    assert not t.crashed
+
+
+async def test_工单14_机头前045米有箱子_判往前挪不了_身后有挡也判退不了(tmp_path):
+    """守卫按挪的速度只看机头前 0.38 m,走着停下时箱子正好在 0.45 m 上下 —— 原来判「往前挪得了」。"""
+    from types import SimpleNamespace
+    t = 台子(tmp_path, rear=True, cone=True)
+    t.world.dyn["box"] = (4.0 + 0.465 + 0.45, 3.75, 4.0 + 0.465 + 0.95, 4.25)
+    t.world.dyn["back"] = (4.0 - 0.465 - 0.75, 3.75, 4.0 - 0.465 - 0.35, 4.25)
+    await t.start(4.0, 4.0, yaw=0.0)
+    for _ in range(5):
+        await t.一拍()
+    here = SimpleNamespace(x=t.r.x, y=t.r.y, yaw=t.r.yaw, sigma_xy=0.05)
+    assert not t.nav._can_creep(here, 1), "前面 0.45 m 有箱子"
+    assert not t.nav._can_creep(here, -1), "身后 0.35 m 有箱子"
