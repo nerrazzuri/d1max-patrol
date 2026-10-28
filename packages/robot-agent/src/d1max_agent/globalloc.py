@@ -282,6 +282,16 @@ def judge(fit_now: float, pose: tuple[float, float, float],
         f"({best.x:.1f}, {best.y:.1f}) 那里 {best.fit:.2f}:定位器多半锁错了,按那里重定位"))
 
 
+def resolve_conflict(fit_localizer: float, fit_given: float) -> str:
+    """工单 10:定位器稳住的地方跟锚(人给的位置按里程推到现在)对不上时,两处各套一次图的贴合度 →
+    ``"localizer"`` 信定位器、``"anchor"`` 信锚(定位器锁错了)、``""`` 说不准(照旧等人)。"""
+    if fit_localizer >= TRUST_FIT and fit_localizer - fit_given >= WRONG_GAP:
+        return "localizer"
+    if fit_given >= TRUST_FIT and fit_given - fit_localizer >= WRONG_GAP:
+        return "anchor"
+    return ""
+
+
 class GlobalLoc:
     """代理这头的全局重定位:收感知的 ``wall``(经 :class:`d1max_agent.obstacles.ObstacleView`),按
     正在用的图缓存 :class:`Matcher`(在线程里建、在线程里找)。"""
@@ -321,6 +331,12 @@ class GlobalLoc:
     async def locate(self, pts: list[tuple[float, float]]) -> list[Candidate]:
         m = await self._matcher()
         return await asyncio.to_thread(m.search, pts)
+
+    async def fits(self, pts: list[tuple[float, float]],
+                   poses: list[tuple[float, float, float]]) -> list[float]:
+        """几处位置各自的贴合度(工单 10)。"""
+        m = await self._matcher()
+        return await asyncio.to_thread(lambda: [m.fit(pts, p) for p in poses])
 
     async def check(self, pts: list[tuple[float, float]],
                     pose: tuple[float, float, float]) -> Verdict:

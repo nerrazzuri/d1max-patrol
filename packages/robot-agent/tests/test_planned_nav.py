@@ -477,6 +477,9 @@ async def test_空闲的狗被新禁行区圈在里面_也发事件(tmp_path):
                               "polygon": [[2, 2], [4, 2], [4, 4], [2, 4]]}))
     assert t.events and t.events[0][0] == "inside_nogo" and t.events[0][1]["idle"] is True
     assert t.status == []
+    for _ in range(3):
+        await t.一拍()
+    assert [k for k, _ in t.events] == ["inside_nogo"], "空闲每拍的检查不再报一遍(工单 16)"
 
 
 async def test_限速低于死区的限速区当禁行绕开(tmp_path):
@@ -717,3 +720,31 @@ async def test_S7_路不知道的禁行区_正对着冲过去_刹得住_机身�
             break
     assert nose < 7.0, f"机头进了沟({nose:.3f})"
     assert NavStatus.FAILED in t.status and NavStatus.SUCCEED not in t.status
+
+
+async def test_工单16_空闲时被遥控器开进禁行区_也报一次_出来再进去再报(tmp_path):
+    """2026-10-28 D3:旁路直接把狗开回 Z1 里,20 s 没有 P1;代理只在区域变了、或者自己跑任务时查。
+    手持遥控器同样绕开代理。空闲时也每拍查(有可信定位才查)。"""
+    t = 台子(tmp_path)
+    await t.start(6.0, 3.0)
+    await t.nav.set_zones(区域({"id": "bed", "kind": "nogo", "label": "花坛",
+                              "polygon": [[2, 2], [4, 2], [4, 4], [2, 4]]}))
+    assert not t.events
+    for _ in range(3):
+        await t.一拍()
+    t.r.teleport(3.0, 3.0, 0.0)                             # 遥控器开进去(不经代理)
+    for _ in range(5):
+        await t.一拍()
+    got = [d for k, d in t.events if k == "inside_nogo"]
+    assert len(got) == 1 and got[0]["idle"] is True and got[0]["zone"] == "bed", t.events
+    assert t.status == [], "空闲的不发导航状态"
+    for _ in range(5):
+        await t.一拍()
+    assert len([1 for k, _ in t.events if k == "inside_nogo"]) == 1, "在里面待着不重复报"
+    t.r.teleport(6.0, 3.0, 0.0)
+    for _ in range(3):
+        await t.一拍()
+    t.r.teleport(3.0, 3.0, 0.0)
+    for _ in range(3):
+        await t.一拍()
+    assert len([1 for k, _ in t.events if k == "inside_nogo"]) == 2, "出来再进去:再报"

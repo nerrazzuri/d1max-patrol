@@ -73,8 +73,8 @@ def test_撞了一下_过门槛报一次_30秒内不重报_翻着不报撞():
     w = ForceWatch()
     got, t = _喂(w, _s(shock=1.4), 0, 0.1)
     assert not got
-    got, t = _喂(w, _s(shock=2.0), t, 0.1)
-    assert [f.kind for f in got] == ["bump"] and got[0].data["shock_g"] == 2.0
+    got, t = _喂(w, _s(shock=3.2), t, 0.1)
+    assert [f.kind for f in got] == ["bump"] and got[0].data["shock_g"] == 3.2
     got, t = _喂(w, _s(shock=3.0), t, 29.0)
     assert not got, "30 秒内不重报"
     got, t = _喂(w, _s(shock=3.0), t, 1.1)
@@ -91,20 +91,20 @@ def test_工单2_换姿势那几秒不判撞_趴着不判撞():
     「撞」先压 posture_quiet_s 秒,这期间换了姿势就不报(冲击在状态切过去**之前**那一下也挡得住)。"""
     w = ForceWatch()
     _, t = _喂(w, _s(), 0, 5.0, motion="ready")
-    got, t = _喂(w, _s(shock=1.8), t, 0.1, motion="standing")
+    got, t = _喂(w, _s(shock=3.2), t, 0.1, motion="standing")
     assert not got, "先压着"
     got, t = _喂(w, _s(), t, 3.1, motion="standing")
     assert [f.kind for f in got] == ["bump"], "站着 / 能走算同一类(走着来回切不算换姿势);压够了报"
-    assert got[0].data["shock_g"] == 1.8
+    assert got[0].data["shock_g"] == 3.2
     w = ForceWatch()
     _, t = _喂(w, _s(), 0, 5.0, motion="ready")
     got, t = _喂(w, _s(shock=3.74), t, 0.5, motion="lying")
     assert not got, "趴下那一下"
-    got, t = _喂(w, _s(shock=2.0), t, 10.0, motion="lying")
+    got, t = _喂(w, _s(shock=3.5), t, 10.0, motion="lying")
     assert not got, "趴着不判撞"
-    got, t = _喂(w, _s(shock=2.5), t, 2.9, motion="standing")
+    got, t = _喂(w, _s(shock=3.5), t, 2.9, motion="standing")
     assert not got, "刚站起来那几秒"
-    got, t = _喂(w, _s(shock=2.0), t, 0.2, motion="ready")
+    got, t = _喂(w, _s(shock=3.2), t, 0.2, motion="ready")
     got, t = _喂(w, _s(), t, 3.1, motion="ready")
     assert [f.kind for f in got] == ["bump"], "站稳了照样判"
 
@@ -120,7 +120,7 @@ def test_工单2_冲击在状态切到趴着之前_照样不报():
 
 def test_工单2_不给运控状态_照旧马上判():
     w = ForceWatch()
-    got, _ = _喂(w, _s(shock=2.0), 0, 0.1)
+    got, _ = _喂(w, _s(shock=3.2), 0, 0.1)
     assert [f.kind for f in got] == ["bump"]
 
 
@@ -247,7 +247,7 @@ async def test_代理_撞了一下只报_任务照跑(狗):
     rt, r, 走, 遥控, 事件, 能力 = 狗
     await 走(3)
     await 遥控(1)
-    r.inject_imu(shock_g=2.2)
+    r.inject_imu(shock_g=3.5)
     await 走(0.2)
     r.inject_imu(shock_g=0.0)
     await 走(3.2)                                   # 工单 2:先压 3 s,没换姿势才报
@@ -523,3 +523,16 @@ def test_工单9_能力里报在用的证书哪天到期(tmp_path):
     rt.tls_cert = tmp_path / "没有"
     rt._tls_cache = None
     assert "tls" not in rt._extra_tasks(), "读不了就不报(不报个假的)"
+
+
+def test_工单2_门槛3g_现场那几次站着微调转身的误报都不报():
+    """用户 2026-10-28:狗平衡很好,不容易摔;真被推得挪了窝才算危险 —— 门槛调到 3 g。
+    现场误报:站着不动 1.59 g、走着 1.61 g、原地转 1.67 g;3 g 以上照报。"""
+    assert ForceConfig().bump_g == 3.0
+    for g in (1.59, 1.61, 1.67, 2.5, 2.9):
+        w = ForceWatch()
+        got, _ = _喂(w, _s(shock=g), 0, 0.1)
+        assert not got, g
+    w = ForceWatch()
+    got, _ = _喂(w, _s(shock=3.1), 0, 0.1)
+    assert [f.kind for f in got] == ["bump"]

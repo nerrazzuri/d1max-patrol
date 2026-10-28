@@ -87,6 +87,7 @@ async def test_命令_认不出_说原因_不请定位器(台):
 async def test_定位器自信地锁错了_核出来_按对的那处重定位(台):
     t = 台
     await t.连()
+    t.rt._conflict_next = math.inf      # 测的是稳下来后的点云核对(工单 10 的两处核对另有测试)
     t.loc.offset = [-3.0, 2.0, 0.0]                      # 定位器报到 3.6 m 外,还说可信
     await t.拍(15)
     await t.rt._scan_check(-math.inf)
@@ -114,6 +115,7 @@ async def test_锁错了又认不出对的那处_标不可信_等人设位置(�
     t.dog.teleport(5.0, 5.0, 0.3)
     t.view.pts = _扫(occ, 5.0, 5.0, 0.3)
     await t.连()
+    t.rt._conflict_next = math.inf      # 测的是全图也认不出那条路(工单 10 的两处核对另有测试)
     t.loc.offset = [-2.0, -1.5, 0.0]
     await t.拍(15)
     await t.rt._scan_check(-math.inf)
@@ -125,3 +127,27 @@ async def test_锁错了又认不出对的那处_标不可信_等人设位置(�
     await t.rt._on_cmd(_cmd("relocalize", {"x": 5.0, "y": 5.0, "yaw": 0.3}, "r1", t.c))
     await t.拍(2)
     assert anchor.scan_disagree == "", "人给了位置:点云套图的结论作废"
+
+
+async def test_工单10_人给错了4米_定位器自己回对了_点云核出来信定位器_不用等人(台):
+    """2026-10-28 3z.18:设错 3 m(超过核对的线)后代理一直「人给的位置跟定位器稳住的地方差
+    3.0 m:请重新设位置」,
+    定位器那边 σ 已回到 0.1。拿点云在两处各套一次图,哪处贴合度高信哪处。"""
+    t = 台
+    t.loc.reloc_basin_m = 10.0                       # 仿真:给错了定位器也能自己回到真实位置
+    await t.连()
+    await t.rt._on_cmd(_cmd("relocalize", {"x": TRUE[0] + 4.0, "y": TRUE[1], "yaw": TRUE[2]},
+                            "r1", t.c))
+    anchor = t.rt.parts.nav.anchor
+    stuck = False
+    for _ in range(60):
+        await t.拍(1)
+        stuck = stuck or "请重新设位置" in anchor.why_not(True)
+        if anchor.ok(True):
+            break
+    assert stuck, "先是卡在对不上(原来的样子)"
+    assert anchor.ok(True), anchor.why_not(True)
+    await t.拍(2)
+    ev = _事件(t.ears, "loc_conflict_resolved")
+    assert ev and ev[-1]["trust"] == "localizer" and ev[-1]["fit_localizer"] > ev[-1]["fit_given"]
+    assert t.loc.relocs[-1].human, "没替人另请重定位:信的是定位器现在的位置"

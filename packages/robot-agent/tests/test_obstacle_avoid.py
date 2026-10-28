@@ -1381,3 +1381,15 @@ async def test_工单24_终点被箱子盖住_马上告诉值班员_放弃原因
     assert told - started <= 30, f"被挡后 {(told - started) / 10:.1f} s 才说终点被盖住"
     assert NavStatus.FAILED in t.status and "终点被障碍盖住" in (t.nav.fail_reason or ""), \
         t.nav.fail_reason
+
+
+def test_工单24_被挡的原因写最近一处在机身哪儿_现场分得清是箱子还是噪点():
+    """2026-10-28 C1:「扫过区有挡 16 处」停住,用户说前面没东西、左边是航空箱;E5 往后退「身后有挡
+    6 处」原因没查。原因里带上最近那一处在机身的方位和距离。"""
+    g = ObstacleGuard()
+    v = _view_with([(30, 22), (32, 20)])                  # 40 格、0.1 m:x 1.05、y 0.25(左前)
+    r = g.check(0.6, 0.0, 0.6, v, (0, 0, 0))
+    assert not r.ok and "最近一处在机身前 1.0 m、左 0.3 m" in r.reason, r.reason
+    v2 = _view_with([(8, 18)])                            # x −1.15、y −0.15(右后)
+    r2 = g.check(-0.6, 0.0, 0.6, v2, (0, 0, 0))
+    assert not r2.ok and "最近一处在机身后 1.1 m、右 0.1 m" in r2.reason, r2.reason

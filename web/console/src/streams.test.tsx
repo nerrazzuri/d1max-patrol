@@ -73,3 +73,15 @@ describe("一页的长连路数", () => {
     expect(liveOf().length).toBe(2);
   });
 });
+
+describe("工单 5:画面起不来时写原因", () => {
+  it("站点说机器人没接推流命令(钟差):画面上写出来,不只是「正在重连」", async () => {
+    const why = "机器人没接推流命令: A 的钟差 +24 秒:这条命令的有效期 30 秒,对不上,先对时";
+    setFetch((() => Promise.resolve(new Response(JSON.stringify({ cameras: { front: { online: false, last_frame_age_ms: null, detail: why } } }),
+      { status: 200, headers: { "Content-Type": "application/json" } }))) as typeof fetch);
+    const { container: c } = render(<CameraWell robot="A" cam="front" now={0} forceLive />);
+    fireEvent.error(c.querySelector("img.feed")!);
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(c.textContent).toContain("钟差 +24 秒");
+  });
+});

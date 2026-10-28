@@ -347,3 +347,22 @@ def test_all_在另一个线程猛写的时候不炸(tmp_path: Path) -> None:
         sys.setswitchinterval(old)
         q.close()
     assert errors == []
+
+
+def test_工单24_清单整个重写变长了_从0重传_不接着旧的偏移拼(tmp_path: Path) -> None:
+    """2026-10-28 E5:站点报「清单读不懂」。manifest.json 开始时写一版(汇总空)、结束时整个重写一版
+    更长的;队列按「长了 = 追加」接着旧偏移传,站点那份成了旧版前半截 + 新版后半截。"""
+    q = UploadQueue(tmp_path / "queue.jsonl")
+    key = "run-a/manifest.json"
+    q.offer(key, PRIORITY_EVENTS, size=300, mtime_ns=1)
+    q.advance(key, offset=300)
+    q.finish(key)
+    q.offer(key, PRIORITY_EVENTS, size=420, mtime_ns=2)
+    item = q.get(key)
+    assert item.size == 420 and item.offset == 0 and not item.done
+    # 追加流照旧接着传
+    q.offer("run-a/events.jsonl", PRIORITY_EVENTS, size=100, mtime_ns=1)
+    q.advance("run-a/events.jsonl", offset=100)
+    q.offer("run-a/events.jsonl", PRIORITY_EVENTS, size=400, mtime_ns=2)
+    assert q.get("run-a/events.jsonl").offset == 100
+    q.close()

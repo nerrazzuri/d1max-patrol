@@ -258,6 +258,8 @@ class PlannedNavBackend(HalNavBackend):
         #: 工单 24:绕行 / 提前绕的重规划说终点不可达(临时障碍压在终点上)→ 马上告诉值班员、
         #: 放弃时写清楚。
         self._goal_covered = False
+        #: 工单 16:空闲时已经报过在哪个禁行区里(出来了清掉,再进去再报)。
+        self._idle_nogo: str | None = None
 
     # ------------------------------------------------------------ 图与区域
 
@@ -380,6 +382,7 @@ class PlannedNavBackend(HalNavBackend):
                     await self._inside_nogo(z, here)
                 else:
                     self._report_nogo(z, here, idle=True)
+                    self._idle_nogo = z.id               # 空闲时每拍那次检查别再报一遍
                 return
             # 离新区域太近(还没压上):核对期间原地等着(``_hold``),下面照常看路要不要重规划;
             # 每拍的回退检查接着管
@@ -420,6 +423,23 @@ class PlannedNavBackend(HalNavBackend):
         if self.on_event is not None:
             self.on_event("inside_nogo", {"zone": z.id, "label": z.label, "idle": idle,
                                           "x": round(here.x, 2), "y": round(here.y, 2)})
+
+    async def _idle(self, odom: Any) -> None:
+        """工单 16(2026-10-28 D3:旁路 / 手持遥控器把空闲的狗开进禁行区,20 s 没有 P1):空闲时也按
+        机身查在不在禁行区里;进去报一次(站点 P1),出来了忘掉、再进去再报。"""
+        if not self._boxes:
+            self._idle_nogo = None
+            return
+        here = self.anchor.estimate((odom.x, odom.y, odom.yaw))
+        if here is None:
+            return
+        verdict, z = self._backstop(here)
+        if verdict != "inside" or z is None:
+            self._idle_nogo = None
+            return
+        if self._idle_nogo != z.id:
+            self._idle_nogo = z.id
+            self._report_nogo(z, here, idle=True)
 
     async def _inside_nogo(self, z: Zone, here: Any) -> None:
         self._report_nogo(z, here)

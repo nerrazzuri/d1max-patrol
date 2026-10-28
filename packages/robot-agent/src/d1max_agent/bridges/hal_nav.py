@@ -303,6 +303,9 @@ class HalNavBackend(NavBackend):
             self._due = None
             self._set_status(nxt)
 
+    async def _idle(self, odom: Any) -> None:
+        """空闲(待命、定位可信)时每拍调一次;规划后端在这里查「被别人开进禁行区」(工单 16)。"""
+
     async def step(self, dt_s: float) -> None:
         """推进一拍:定时转移 + 定位质量 + 速度环。运行时每拍 ``await`` 一次。
 
@@ -321,6 +324,8 @@ class HalNavBackend(NavBackend):
             prev, self._loc = self._loc, loc
             self.emit(LocStatusEvent(loc, prev))
         if self._status is not NavStatus.ACTIVE:
+            if loc is not LocStatus.LOC_LOST and self._status is NavStatus.STANDBY:
+                await self._idle(odom)
             return
         d = self.travel()
         if not self._dir:

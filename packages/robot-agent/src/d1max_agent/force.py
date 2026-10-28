@@ -60,7 +60,9 @@ class ForceConfig:
     baseline_s: float = 10.0
     #: 基线至少要攒这么久的样本才算数。
     baseline_min_s: float = 2.0
-    bump_g: float = 1.5
+    #: 用户 2026-10-28 定 3 g:狗平衡很好不容易摔,站着微调、原地转 1.6–1.7 g 不该报;
+    #: 真被推得挪了窝才算。
+    bump_g: float = 3.0
     bump_cooldown_s: float = 30.0
     posture_quiet_s: float = 3.0
 
