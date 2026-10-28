@@ -92,8 +92,8 @@ async def test_收尾会把汇总写进manifest(make_engine, sample_mission):
     engine = make_engine()
     await run_to_end(engine, sample_mission)
     summary = read_manifest(engine.archive.path)["summary"]
-    assert summary == {"state": "DONE", "reason": "", "succeeded": 2,
-                       "failed": 0, "total": 2,
+    assert summary == {"state": "DONE", "result": "done", "reason": "",
+                       "succeeded": 2, "failed": 0, "total": 2,
                        "results": summary["results"]}
 
 
