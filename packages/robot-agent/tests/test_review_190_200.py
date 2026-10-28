@@ -48,6 +48,31 @@ def test_外审R1_正在往左快转_新命令往右慢转_左边那股劲扫到
     assert g.check(0.0, -0.32, 0.0, v, (0, 0, 0), w_now=(-0.3,)).ok
 
 
+def _左后看不见():
+    import test_obstacle_avoid as ob
+
+    from d1max_agent.obstacles import ObstacleView
+    n = 80
+    c = [(i - n / 2 + 0.5) * 0.05 for i in range(n)]
+    known = [(r, k) for r in range(n) for k in range(n)
+             if not (abs(c[r] + 0.4) < 0.1 and abs(c[k] - 0.4) < 0.1)]
+    v = ObstacleView(monotonic=lambda: 0.0)
+    v.note_odom(0, 0, 0)
+    v.on_grid(ob._grid(cells_known=known, size=n, res=0.05))
+    return v
+
+
+def test_复查N1_里程转速一点点反向噪声_不把反向那一侧也查上():
+    """复查 N1:里程报 −0.001 rad/s 的噪声,原来也按完整角余量(0.2 rad)查反向那一侧,左后一小块
+    看不见就把往左对准一直挡住。噪声以下的不算在转;还在转的那股劲只按延迟 + 刹停算,不再加余量。"""
+    from d1max_agent.obstacles import ObstacleGuard
+    g, v = ObstacleGuard(), _左后看不见()
+    assert g.check(0.0, 0.4, 0.0, v, (0, 0, 0)).ok
+    for w in ((0.0, -0.001), (0.0, -0.03), (-0.02, 0.0)):
+        assert g.check(0.0, 0.4, 0.0, v, (0, 0, 0), w_now=w).ok, w
+    assert not g.check(0.0, 0.4, 0.0, v, (0, 0, 0), w_now=(-1.0,)).ok      # 真在往右转:照样拦
+
+
 async def test_外审R1_导航把实测转速和上一拍发的转速都交给守卫():
     from d1max_agent.bridges.planned_nav import PlannedNavBackend
     seen = []
@@ -335,3 +360,95 @@ async def test_外审R7_提前报过终点被盖住_没真被挡就停了_站点
     kinds = [k for k, _ in t.events]
     assert kinds.count("nav_unblocked") == 1
     assert kinds.index("nav_unblocked") > kinds.index("nav_blocked")
+
+
+@pytest.mark.parametrize("bias", [0.0, -0.001])
+async def test_复查N1_里程转速带噪声_原地往左对准照样对得上(tmp_path, bias):
+    import dataclasses
+
+    import test_obstacle_avoid as ob
+
+    from d1max_patrol.protocol.nav_types import NavStatus, Pose
+    n = 80
+    c = [(i - n / 2 + 0.5) * 0.05 for i in range(n)]
+    known = [(r, k) for r in range(n) for k in range(n)
+             if not (abs(c[r] + 0.4) < 0.1 and abs(c[k] - 0.4) < 0.1)]
+
+    def 格():
+        return ob._grid(cells_known=known, cells_occ=[(26, 40)], size=n, res=0.05)
+    t = ob.台子(tmp_path, rear=True)
+    await t.start(3, 4)
+    t.view.frames.clear()
+    t.view.on_grid(格())
+    t._feed = lambda: t.view.on_grid(格())
+    original = t.r.odometry
+
+    async def 带噪声():
+        return dataclasses.replace(await original(), wz=bias)
+    t.r.odometry = 带噪声
+    await t.nav.goto(Pose.from_xy_yaw(3, 4, 0.2))
+    await t.跑(24)
+    assert NavStatus.SUCCEED in t.status and t.r.yaw > 0
+
+
+async def test_复查N3_取图源关的时候ffmpeg正在起_起来了也收掉(tmp_path):
+    from d1max_agent.bridges.rtsp_media import FfmpegCamera
+    from d1max_patrol.backends.base import MediaError
+    pid, ff = tmp_path / "pid", tmp_path / "ffmpeg"
+    ff.write_text(f"#!/bin/sh\necho $$ > {pid}\nexec sleep 30\n")
+    ff.chmod(0o755)
+    cam = FfmpegCamera([], now_ms=lambda: 0, ffmpeg=str(ff), timeout_s=10.0)
+    task = asyncio.create_task(cam.grab())
+    try:
+        await asyncio.sleep(0)                                       # 正卡在起进程那一步
+        assert not cam._procs
+        await cam.close()
+        with pytest.raises(MediaError):
+            await asyncio.wait_for(task, 3.0)
+        for _ in range(100):
+            if pid.exists() and pid.read_text().strip():
+                break
+            await asyncio.sleep(0.01)
+        if pid.exists() and pid.read_text().strip():
+            await asyncio.sleep(0.1)
+            assert not _活着(int(pid.read_text()))
+    finally:
+        task.cancel()
+        with contextlib.suppress(BaseException):
+            await task
+        if pid.exists() and pid.read_text().strip():
+            with contextlib.suppress(ProcessLookupError):
+                os.kill(int(pid.read_text()), signal.SIGKILL)
+
+
+async def test_复查N4_提前报过又真被挡住_停下这一段_站点那边的被挡清掉(tmp_path):
+    import test_obstacle_avoid as ob
+
+    from d1max_patrol.protocol.nav_types import Pose
+    t = ob.台子(tmp_path, rear=True, cone=True)
+    await t.start(1.5, 4.0)
+    await t.nav.goto(Pose.from_xy_yaw(7.0, 4.0))
+    await t.跑(1.0)
+    t.world.dyn["box"] = (6.7, 3.6, 7.3, 4.4)
+    for _ in range(150):
+        await t.一拍()
+        if t.nav._blocked_told and t.nav._blocked_since is not None:
+            break
+    assert t.nav._blocked_told and t.nav._blocked_since is not None
+    await t.nav.stop()
+    kinds = [k for k, _ in t.events]
+    assert kinds.count("nav_blocked") == 1 and kinds.count("nav_unblocked") == 1
+
+
+async def test_复查N4_被挡放弃这一段_不发不挡了_引擎还要重试同一个点(tmp_path):
+    import test_obstacle_avoid as ob
+
+    from d1max_patrol.protocol.nav_types import NavStatus, Pose
+    t = ob.台子(tmp_path, rear=True, cone=True)
+    await t.start(1.5, 4.0)
+    await t.nav.goto(Pose.from_xy_yaw(7.0, 4.0))
+    await t.跑(1.0)
+    t.world.dyn["box"] = (6.7, 3.6, 7.3, 4.4)
+    await t.跑(40.0)
+    assert NavStatus.FAILED in t.status
+    assert "nav_unblocked" not in [k for k, _ in t.events]

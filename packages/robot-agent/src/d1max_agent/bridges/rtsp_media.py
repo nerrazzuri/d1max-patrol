@@ -26,11 +26,14 @@ class FfmpegCamera(MediaSource):
         self._timeout = timeout_s
         #: 正在抽帧的 ffmpeg(外审 R6:关掉取图源时一并收掉)。
         self._procs: set[asyncio.subprocess.Process] = set()
+        #: 关了几回(复查 N3:关的时候正在起的 ffmpeg,起来以后发现关过了就收掉)。
+        self._closes = 0
 
     async def open(self) -> None:
         return None
 
     async def close(self) -> None:
+        self._closes += 1
         for proc in list(self._procs):
             await _reap(proc)
 
@@ -41,12 +44,16 @@ class FfmpegCamera(MediaSource):
         cmd = [self._ffmpeg, "-hide_banner", "-loglevel", "error", "-nostdin", *self._input,
                "-frames:v", "1", "-f", "image2", "-c:v", "mjpeg", "-q:v", "3", "pipe:1"]
         at = self._now()
+        closes = self._closes
         try:
             proc = await asyncio.create_subprocess_exec(
                 *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
                 start_new_session=True)
         except OSError as exc:
             raise MediaError(f"起不了 ffmpeg:{exc}") from exc
+        if self._closes != closes:
+            await _reap(proc)
+            raise MediaError("取图源关了")
         self._procs.add(proc)
         try:
             out, err = await asyncio.wait_for(proc.communicate(), self._timeout)
