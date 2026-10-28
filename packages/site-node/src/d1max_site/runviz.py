@@ -49,7 +49,7 @@ PATH_MAX = 128
 #: 任务在跑、被挡超过这么久(秒)报 P2。
 BLOCK_ALERT_S = 60
 #: 重规划原因 → 人话的键(界面按语言翻)。
-REPLAN_WHY = ("off_route", "zones", "near_nogo", "detour")
+REPLAN_WHY = ("off_route", "zones", "near_nogo", "detour", "preview")
 
 
 @dataclass

@@ -269,6 +269,8 @@ def test_重规划_记原因和次数_不认识的原因归成偏离_任务结�
     rv.on_event("A", _ev("nav_replan", why="zones", n=2))
     r = rv.nav_summary("A")["replan"]
     assert r["why"] == "zones" and r["n"] == 2
+    rv.on_event("A", _ev("nav_replan", why="preview", n=0))
+    assert rv.nav_summary("A")["replan"]["why"] == "preview", "提前绕(方案 2)认得"
     rv.on_event("A", _ev("nav_replan", why="???", n="x"))
     r = rv.nav_summary("A")["replan"]
     assert r["why"] == "off_route" and r["n"] == 0

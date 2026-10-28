@@ -126,6 +126,9 @@ def build_parser() -> argparse.ArgumentParser:
                    help="局部避障(W11):bridge = 本机障碍桥上的感知节点(d1max-obstacles)给局部栅格,"
                         "规划后端每条速度命令先过守卫;要 --nav planned。"
                         "**真机器人在 W11 真机项验过之前不改**")
+    p.add_argument("--nav-preview", choices=("on", "off"), default="on",
+                   help="提前绕(方案 2):沿路走时前面那段路上看到新障碍就提前重规划、不停车;"
+                        "off = 照旧走到跟前被挡、等 2 s 再绕(要 --nav planned、--obstacles bridge)")
     p.add_argument("--obs-socket", type=Path, default=None,
                    help="本机障碍桥的 Unix 套接字(默认 <store-dir>/obs.sock)")
     p.add_argument("--persons", choices=("none", "bridge"), default="none",
@@ -492,6 +495,8 @@ def build(args: argparse.Namespace) -> Assembled:
         parts = build_engine(hal, runs_root=args.runs_root, now_ms=wall_ms, map_id=args.map[0],
                              home=args.home, media=media, nav_kind=args.nav,
                              robot_radius_m=args.robot_radius)
+        if hasattr(parts.nav, "preview"):
+            parts.nav.preview = args.nav_preview == "on"
         transport = _make_transport(args.transport, registration.robot_id, broker,
                                     tls=(args.tls_ca, args.tls_cert, args.tls_key))
         from d1max_agent.video_push import VideoPusher, lavfi_source, rtsp_source

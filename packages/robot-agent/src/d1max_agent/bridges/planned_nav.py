@@ -28,7 +28,8 @@
   正对着禁行区走到拐点会慢下来(刹车距离的占位数是保守的,真机量,3e.12)。原地转不在这里管(规划按
   外接圆膨胀)。
 
-障碍、被挡、绕行不在这里(W11):这一版只看静态图 + 区域。
+障碍(W11 起):每条速度命令先过守卫;被挡原地等、记临时障碍、绕(``_blocked``);沿路走时看到前面
+路上有新障碍就提前绕、不停车(方案 2,``_preview``)。
 """
 
 from __future__ import annotations
@@ -115,6 +116,18 @@ BACK_TO_GOAL_RAD = math.radians(45)
 #: 里程这么久挪不到 :data:`STALL_M`、转不到 :data:`STALL_RAD` → 当被挡(计时、上报、挪、到时放弃)。
 #: 下游(运控、旁路的第二层许可门)把命令吞了,导航层原来不知道。
 STALL_S = 5.0
+#: 提前绕(方案 2,2026-10-28 用户现场:走到箱子跟前才停、等 2 s 才绕):沿路走的时候每隔
+#: :data:`PREVIEW_EVERY_S` 看一眼前面 :data:`PREVIEW_M` 那段路的走廊(机身半宽 + 余量 =
+#: :data:`PREVIEW_HALF_W_M`),雷达真看到的挡(看不见不算)有 :data:`PREVIEW_MIN_HITS` 处以上是**新的**
+#: (不在地图里 —— 离地图里的墙、柜子 :data:`PREVIEW_STATIC_M` 以内的不算,定位差几厘米不乱绕;
+#: 也不是已经记着的临时障碍)→ 记进临时障碍、后台重规划,**算的时候照样沿旧路走**;算不出来就接着
+#: 走旧路,到跟前由被挡那一套接手。提前绕过一次,隔 :data:`PREVIEW_COOLDOWN_S` 才再看(路线不来回摆)。
+PREVIEW_EVERY_S = 0.5
+PREVIEW_M = 3.0
+PREVIEW_HALF_W_M = 0.34
+PREVIEW_STATIC_M = 0.15
+PREVIEW_MIN_HITS = 2
+PREVIEW_COOLDOWN_S = 2.0
 #: 原地转:命令发了这么久(秒)朝向还没变过 :data:`TURN_KICK_RAD`,转速提到至少 :data:`TURN_KICK_RPS`。
 #: 2026-10-28 晚上小角度原地转正没转起来(多半转速低于真机能响应的;能力里没有转速死区,真机待量)。
 TURN_KICK_S = 1.0
@@ -238,6 +251,13 @@ class PlannedNavBackend(HalNavBackend):
         self._hit_at = -math.inf
         #: 临时障碍层:地图规划栅格的格 → 过期时刻(秒,后端的钟)。
         self._temp: dict[tuple[int, int], float] = {}
+        #: 提前绕(方案 2)开不开(代理参数 ``--nav-preview``,真机表现不好改配置就能关);下一次看前面
+        #: 那段路的时刻。
+        self.preview = True
+        self._next_preview = -math.inf
+        #: 工单 24:绕行 / 提前绕的重规划说终点不可达(临时障碍压在终点上)→ 马上告诉值班员、
+        #: 放弃时写清楚。
+        self._goal_covered = False
 
     # ------------------------------------------------------------ 图与区域
 
@@ -605,11 +625,11 @@ class PlannedNavBackend(HalNavBackend):
         return self._path.points if self._path is not None else None
 
     def _start_replan(self, *, detour: bool = False, why: str = "off_route",
-                      free: bool = False) -> None:
+                      free: bool = False, preview: bool = False) -> None:
         if self._replan is not None and not self._replan.done():
             return
-        self._replan_kind = "detour" if detour else ""
-        if detour or free:
+        self._replan_kind = "detour" if detour else "preview" if preview else ""
+        if detour or free or preview:
             pass                         # 绕障、挪完不算偏离重规划的次数(被挡另有 20 s 的账)
         elif self._replans >= MAX_REPLANS:
             self._replan_out = ("fail", f"重规划了 {MAX_REPLANS} 次还是走不上路径", 0)
@@ -618,7 +638,8 @@ class PlannedNavBackend(HalNavBackend):
             self._replans += 1
         if self.on_event is not None:
             # 运营可视化:站点据此在状态里写「重规划了几次、为什么」(why:
-            # off_route 偏离路径 / zones 区域换了 / near_nogo 离禁行区太近 / detour 绕障)
+            # off_route 偏离路径 / zones 区域换了 / near_nogo 离禁行区太近 / detour 绕障 /
+            # preview 前面路上看到新障碍、提前绕)
             self.on_event("nav_replan", {"why": "detour" if detour else why, "n": self._replans})
         gen = self._gen
         target = self._target
@@ -657,6 +678,7 @@ class PlannedNavBackend(HalNavBackend):
         self._blocked_since = None
         self._blocked_told = False
         self._detoured = False
+        self._goal_covered = False
         self._last_vx = 0.0
         self._path = None
         self._aligning = False
@@ -744,6 +766,13 @@ class PlannedNavBackend(HalNavBackend):
             return
         self._near_told = False
         out, self._replan_out = self._replan_out, None
+        if (out is not None and out[0] == "fail" and self._replan_kind in ("preview", "detour")
+                and "goal_blocked" in str(out[1]) and not self._goal_covered):
+            log.warning("终点被障碍盖住(%s)", out[1])
+            self._goal_covered = True
+        if out is not None and out[0] == "fail" and self._replan_kind == "preview":
+            log.info("前面有新障碍,提前绕不过去:%s;沿原来的路走", out[1])
+            out = None
         if out is not None:
             if out[0] == "fail":
                 if self._replan_kind == "detour":
@@ -763,8 +792,9 @@ class PlannedNavBackend(HalNavBackend):
             self.planned_length_m = self._path.length_m
             if self._replan_kind == "detour":
                 self._detoured = True
-        if self._replan is not None and not self._replan.done():
-            await self._send(0.0, 0.0, dt_s)            # 原地等新路径
+        if (self._replan is not None and not self._replan.done()
+                and self._replan_kind != "preview"):
+            await self._send(0.0, 0.0, dt_s)            # 原地等新路径(提前绕的照样沿旧路走)
             return
         if self._path is None or self._cm is None:
             await self._fail("没有路径")
@@ -800,6 +830,7 @@ class PlannedNavBackend(HalNavBackend):
             seg += 1                                     # 到了拐点:换下一段(对不准就原地转)
             proj = pts[seg]
         self._seg = seg
+        self._preview(here, seg, proj)
         look = self._lookahead(seg, proj)
         # 行进方向(W09i):狗尾为前时拿狗尾那头对着路走(朝向加 π)、往后退;到点对朝向仍按机身(拍照方向)
         d = self._dir or 1
@@ -815,6 +846,75 @@ class PlannedNavBackend(HalNavBackend):
         await self._move(vx, wz, dt_s, here)
 
     # ------------------------------------------------------------ 避障(W11)
+
+    def _preview(self, here: Any, seg: int, proj: tuple[float, float]) -> None:
+        """提前绕(方案 2,见 :data:`PREVIEW_M`):前面那段路的走廊里雷达看到新的挡 → 记临时障碍、
+        后台重规划(不停车)。"""
+        if (not self.preview or self.obstacles is None or self.guard is None
+                or self._base is None or self._path is None or self._creep_from is not None
+                or self._blocked_since is not None
+                or (self._replan is not None and not self._replan.done())):
+            return
+        now = self._secs()
+        if now < self._next_preview:
+            return
+        self._next_preview = now + PREVIEW_EVERY_S
+        if self.obstacles.state() != "ok":
+            return
+        world = self._corridor(seg, proj)
+        if not world:
+            return
+        c, s = math.cos(here.yaw), math.sin(here.yaw)
+        body = [(c * (x - here.x) + s * (y - here.y), -s * (x - here.x) + c * (y - here.y))
+                for x, y in world]
+        hit_i, _ = self.obstacles.lookup(body, self._odom_pose)
+        blocked, res, origin = self._base
+        k = max(1, int(math.ceil(PREVIEW_STATIC_M / res)))
+        h, w = blocked.shape
+        new = []
+        for i in hit_i:
+            r = int(math.floor((world[i][1] - origin[1]) / res))
+            q = int(math.floor((world[i][0] - origin[0]) / res))
+            if (r, q) in self._temp:
+                continue
+            if blocked[max(0, r - k):min(h, r + k + 1), max(0, q - k):min(w, q + k + 1)].any():
+                continue                                 # 地图里本来就有(墙、柜子):规划早躲开了
+            new.append(body[i])
+        if len(new) < PREVIEW_MIN_HITS:
+            return
+        far = min(math.hypot(*p) for p in new)
+        log.info("前面路上 %.1f m 处看到新障碍(%d 处):记下、提前绕", far, len(new))
+        self._next_preview = now + PREVIEW_COOLDOWN_S
+        self._remember(new, here, now)
+        self._start_replan(preview=True, why="preview")
+
+    def _corridor(self, seg: int, proj: tuple[float, float]) -> list[tuple[float, float]]:
+        """从此刻在路上的投影点往前 :data:`PREVIEW_M` 那段路,两边各 :data:`PREVIEW_HALF_W_M` 的
+        走廊上的采样点(地图坐标,0.1 m 一个)。"""
+        assert self._path is not None
+        pts = self._path.points
+        step = 0.1
+        lat = np.arange(-PREVIEW_HALF_W_M, PREVIEW_HALF_W_M + 1e-9, step)
+        out: list[tuple[float, float]] = []
+        left = PREVIEW_M
+        a = proj
+        i = seg
+        carry = 0.0
+        while i + 1 < len(pts) and left > 0:
+            b = pts[i + 1]
+            L = math.dist(a, b)
+            if L > 1e-9:
+                ux, uy = (b[0] - a[0]) / L, (b[1] - a[1]) / L
+                d = carry
+                while d <= min(L, left):
+                    cx, cy = a[0] + ux * d, a[1] + uy * d
+                    out += [(cx - uy * o, cy + ux * o) for o in lat]
+                    d += step
+                carry = d - L
+                left -= L
+            a = b
+            i += 1
+        return out
 
     def _near_cap(self, d: int) -> float:
         """近障降速(W12):前面最近的「挡」越近越慢;没配避障、前面没东西不限。"""
@@ -986,7 +1086,7 @@ class PlannedNavBackend(HalNavBackend):
             log.warning("被挡 %.0f s 还没走成:放弃这一段(%s)", waited, reason)
             await self._fail(f"被挡 {waited:.0f} 秒还没走成({reason})")
             return
-        if waited >= BLOCK_REPORT_S and not self._blocked_told:
+        if (waited >= BLOCK_REPORT_S or self._goal_covered) and not self._blocked_told:
             self._blocked_told = True
             if self.on_event is not None:
                 self.on_event("nav_blocked", {"reason": reason, "x": round(here.x, 2),
@@ -1017,7 +1117,12 @@ class PlannedNavBackend(HalNavBackend):
 
     def _block_reason(self, v: Any, now: float) -> str:
         """给值班员看的被挡原因(W41):最后一次查的是转身(只有看不见),而这一回早先前面真有挡 →
-        两样都写,不然「有挡 0 处」会让人以为前面是空的。"""
+        两样都写,不然「有挡 0 处」会让人以为前面是空的。终点被盖住了(工单 24)写在最前面。"""
+        if self._goal_covered:
+            return f"终点被障碍盖住({self._block_reason_plain(v, now)})"
+        return self._block_reason_plain(v, now)
+
+    def _block_reason_plain(self, v: Any, now: float) -> str:
         if v.hits or not self._hit_reason or now - self._hit_at > TEMP_OBSTACLE_S:
             return v.reason
         return f"{self._hit_reason};绕开要转身,机身两侧看不见 {v.unknown} 处"

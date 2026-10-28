@@ -11,6 +11,10 @@
   基线的一半以上稳 ``land_hold_s``)回 ``ok``。
 - **被撞**:``shock_g``(两次读之间加速度偏离 1 g 最大的那一下)超过 ``bump_g``。报站点 P2、任务照跑
   (门槛没标定前误报会多,决策 52);``bump_cooldown_s`` 内只报一次。翻倒、抱起来时不报撞。
+  工单 2(2026-10-28 我们自己发 lie,趴下那一秒报 3.74 g):运控状态在「立着」(站着 / 能走算一类)、
+  趴着、说不清之间换了之后 ``posture_quiet_s`` 秒内不判,不是立着的时候也不判;判出来的先压
+  ``posture_quiet_s`` 秒,这期间换了姿势就不报(冲击在状态切过去之前那一下也挡得住;报撞晚几秒)。
+  过 :data:`LOG_SHOCK_G` 的冲击都记一笔日志(带当时的运控状态),攒数据定 ``bump_g``(3r.2)。
 
 **落盘**(W26 外审 3):翻倒、抱起来的状态,抱起前的承重基线,还欠着没确认做成的安全动作
 (:attr:`ForceWatch.owed`),都写进代理存储目录的 ``force.json``。代理重启了照旧锁着、照旧补做,
@@ -38,6 +42,10 @@ from d1max_contract.hal import ImuSample
 log = logging.getLogger(__name__)
 
 OK, FLIPPED, LIFTED = "ok", "flipped", "lifted"
+#: 冲击过这么多(g)就记一笔日志(工单 2:攒真机数据定 ``bump_g``)。
+LOG_SHOCK_G = 1.0
+#: 运控状态 → 姿势类(「站着」「能走」走着会来回切,算同一类)。
+_POSTURE = {"standing": "up", "ready": "up", "lying": "down"}
 
 
 @dataclass(frozen=True)
@@ -54,6 +62,7 @@ class ForceConfig:
     baseline_min_s: float = 2.0
     bump_g: float = 1.5
     bump_cooldown_s: float = 30.0
+    posture_quiet_s: float = 3.0
 
     @classmethod
     def load(cls, path: Path | str | None) -> ForceConfig:
@@ -95,6 +104,11 @@ class ForceWatch:
         self._base: deque[tuple[int, float]] = deque()
         self._cand: tuple[str, int] | None = None        # (候选状态, 从什么时候起)
         self._bump_ms: int | None = None
+        #: 工单 2:上一拍的姿势类、最近一次换姿势的时刻。
+        self._posture: str | None = None
+        self._posture_ms: int | None = None
+        #: 压着没报的「撞」:(时刻, 数据)。
+        self._pending: tuple[int, dict[str, Any]] | None = None
         #: 门槛文件读不懂(照缺省判):能力里带上,站点报 P2。
         self.config_error = ""
         self._load()
@@ -165,9 +179,12 @@ class ForceWatch:
             self._cand = (want, now_ms)
         return now_ms - self._cand[1] >= hold_s * 1000
 
-    def feed(self, s: ImuSample | None, now_ms: int, *, standing: bool) -> list[Finding]:
+    def feed(self, s: ImuSample | None, now_ms: int, *, standing: bool,
+             motion: str | None = None) -> list[Finding]:
         """喂一拍。``standing``:运控说狗站着(站立、能收速度):只有站着时的承重进基线、才判抱起来。
+        ``motion``:运控状态(``MotionStatus`` 的值;不给 = 不按姿势挡撞,老的调用方)。
         回这一拍判出来的事(状态变了、撞了一下)。没数据、不新鲜:什么都不判,状态不变。"""
+        quiet = self._posture_quiet(motion, now_ms)
         if s is None or not s.valid:
             self._cand = None
             return []
@@ -204,13 +221,52 @@ class ForceWatch:
                     and s.load >= self._lift_base * 0.5
                 if self._hold("land" if back else None, now_ms, c.land_hold_s):
                     out.append(self._leave("landed", now_ms, info))
-        if self.state == OK and s.shock_g >= c.bump_g and not out and (
+        if s.shock_g >= LOG_SHOCK_G:
+            log.info("冲击 %.2f g(运控 %s%s)", s.shock_g, motion or "?",
+                     ",刚换过姿势,不判撞" if quiet else "")
+        if self.state == OK and s.shock_g >= c.bump_g and not out and not quiet \
+                and self._pending is None and (
                 self._bump_ms is None or now_ms - self._bump_ms >= c.bump_cooldown_s * 1000):
-            self._bump_ms = now_ms
-            out.append(Finding("bump", {**info, "shock_g": round(s.shock_g, 2)}))
+            data = {**info, "shock_g": round(s.shock_g, 2)}
+            if motion is None:                           # 老的调用方:不压
+                self._bump_ms = now_ms
+                out.append(Finding("bump", data))
+            else:
+                self._pending = (now_ms, data)
+        out += self._confirm(now_ms)
         return out
 
+    def _confirm(self, now_ms: int) -> list[Finding]:
+        """工单 2:压着的「撞」—— 这期间换了姿势、翻了、抱起来了就不报;压够了报。"""
+        p = self._pending
+        if p is None:
+            return []
+        if self.state != OK or (self._posture_ms is not None and self._posture_ms >= p[0]):
+            log.info("冲击 %.2f g 之后换了姿势(或翻了、抱起来了):不算撞", p[1]["shock_g"])
+            self._pending = None
+            return []
+        if now_ms - p[0] < self.cfg.posture_quiet_s * 1000:
+            return []
+        self._pending = None
+        self._bump_ms = p[0]
+        return [Finding("bump", p[1])]
+
     _lift_base: float | None = None
+
+    def _posture_quiet(self, motion: str | None, now_ms: int) -> bool:
+        """工单 2:这一拍要不要因为姿势挡掉「撞」—— 不是立着,或者换姿势还没过
+        ``posture_quiet_s``。"""
+        if motion is None:
+            return False
+        p = _POSTURE.get(motion, "unknown")
+        if p != self._posture:
+            if self._posture is not None:
+                self._posture_ms = now_ms
+            self._posture = p
+        if p != "up":
+            return True
+        return (self._posture_ms is not None
+                and now_ms - self._posture_ms < self.cfg.posture_quiet_s * 1000)
 
     def _enter(self, state: str, now_ms: int, info: dict[str, Any]) -> Finding:
         if state == LIFTED:

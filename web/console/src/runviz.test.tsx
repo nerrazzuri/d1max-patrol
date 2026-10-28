@@ -194,9 +194,11 @@ describe("每台机器人下面的定位和被挡", () => {
     expect(replanText({ why: "off_route", n: 2, at_ms: 0 })).toBe("Re-planned 2× (off the route)");
     expect(replanText({ why: "zones", n: 1, at_ms: 0 })).toContain("zones changed");
     expect(replanText({ why: "???", n: 1, at_ms: 0 })).toContain("off the route");
+    expect(replanText({ why: "preview", n: 1, at_ms: 0 })).toBe("Re-planned 1× (obstacle seen ahead, going around early)");
     lang.value = "zh";
     expect(blockedText(VIZ.robots.A.blocked!)).toBe("被挡 12 秒:前方 0.4 m 有挡");
     expect(replanText({ why: "near_nogo", n: 3, at_ms: 0 })).toBe("重规划 3 次(离禁行区太近)");
+    expect(replanText({ why: "preview", n: 1, at_ms: 0 })).toBe("重规划 1 次(前方有障碍,提前绕)");
   });
 });
 
