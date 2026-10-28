@@ -26,6 +26,8 @@ import signal
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
+from d1max_localizer.imu import ImuPrior
+
 log = logging.getLogger(__name__)
 
 #: 子进程往管道写也逐行(见模块说明);调用方给的环境里已有的不覆盖。
@@ -58,15 +60,18 @@ STABLE_S = 60.0
 KILL_AFTER_S = 5.0
 
 
-def mola_command(prior_mm: Path, *, lidar_topic: str = "/front_lidar") -> list[str]:
+def mola_command(prior_mm: Path, *, lidar_topic: str = "/front_lidar",
+                 imu: ImuPrior | None = None) -> list[str]:
     """MOLA 只定位的启动命令(参数 2026-09-27 在录包上用 ROS 跑通核过)。初值不在这里给:起来之后经
-    ``/relocalize_near_pose`` 给。"""
+    ``/relocalize_near_pose`` 给。``imu`` 给了就接 IMU 当转速先验(工单 27;安装角走环境变量,
+    见 :meth:`ImuPrior.env`)。"""
     return ["ros2", "launch", "mola_lidar_odometry", "ros2-lidar-odometry.launch.py",
             f"lidar_topic_name:={lidar_topic}", "use_rviz:=False", "use_mola_gui:=False",
             "start_mapping_enabled:=False", f"mola_initial_map_mm_file:={prior_mm}",
             "ignore_lidar_pose_from_tf:=True",
             # 直接发 map → base_link;默认按 REP105 要 odom → base_link,狗上没有就一直刷报错(实跑见)
-            "publish_localization_following_rep105:=False"]
+            "publish_localization_following_rep105:=False",
+            *(imu.launch_args() if imu else [])]
 
 
 class MolaSupervisor:

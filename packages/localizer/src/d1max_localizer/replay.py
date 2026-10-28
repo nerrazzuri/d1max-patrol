@@ -31,6 +31,7 @@ from d1max_contract.locbridge import Pose, Reply, State
 from d1max_localizer.backend import FRAMES_FILE, PRIOR_FILE
 from d1max_localizer.core import Estimate, LocalizerCore
 from d1max_localizer.frames import Frames, quat_to_mat
+from d1max_localizer.imu import ImuPrior
 
 MOLA_SHARE = Path("/opt/ros/humble/share/mola_lidar_odometry")
 MAP_REF = ("replay", "1")
@@ -41,8 +42,10 @@ MAP_REF = ("replay", "1")
 
 def mola_env_and_cmd(bag: Path, prior_dir: Path, init: tuple[float, float, float], out: Path, *,
                      lidar_topic: str = "/front_lidar", only_first_n: int | None = None,
-                     skip_first_n: int | None = None) -> tuple[dict[str, str], list[str]]:
-    """MOLA 命令行只定位的环境变量与命令(探路时用过的配方,见 W09b 设计稿)。"""
+                     skip_first_n: int | None = None,
+                     imu: ImuPrior | None = None) -> tuple[dict[str, str], list[str]]:
+    """MOLA 命令行只定位的环境变量与命令(探路时用过的配方,见 W09b 设计稿)。``imu`` 跟狗上的定位器
+    一样接(工单 27)。"""
     frames = Frames.load(prior_dir / FRAMES_FILE)
     p, q = frames.to_mola(*init)
     yaw, pitch, roll = _ypr_deg(q)
@@ -51,7 +54,8 @@ def mola_env_and_cmd(bag: Path, prior_dir: Path, init: tuple[float, float, float
            "MOLA_SAVE_DEBUG_TRACES": "true", "MOLA_DEBUG_TRACES_FILE": str(out / "traces.csv"),
            "MOLA_INITIAL_X": f"{p[0]:.4f}", "MOLA_INITIAL_Y": f"{p[1]:.4f}",
            "MOLA_INITIAL_Z": f"{p[2]:.4f}", "MOLA_INITIAL_YAW": f"{yaw:.3f}",
-           "MOLA_INITIAL_PITCH": f"{pitch:.3f}", "MOLA_INITIAL_ROLL": f"{roll:.3f}"}
+           "MOLA_INITIAL_PITCH": f"{pitch:.3f}", "MOLA_INITIAL_ROLL": f"{roll:.3f}",
+           **(imu.cli_env() if imu else {})}
     plugins = sorted(glob.glob("/opt/ros/humble/lib/**/libmola_metric_maps.so", recursive=True))
     cmd = ["mola-lidar-odometry-cli"]
     if plugins:

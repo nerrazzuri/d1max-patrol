@@ -12,15 +12,17 @@ import argparse
 import asyncio
 import contextlib
 import logging
+import os
 import signal
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
 from d1max_localizer.backend import MolaBackend
 from d1max_localizer.client import BridgeClient
 from d1max_localizer.core import LocalizerCore
+from d1max_localizer.imu import ImuPrior, parse_ypr
 from d1max_localizer.supervisor import MolaSupervisor, mola_command
 
 log = logging.getLogger("d1max_localizer")
@@ -37,8 +39,26 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
                    help="代理没给先验目录时(狗按启动参数载的图)用的先验目录:"
                         "里面要有 prior.mm、frames.json")
     p.add_argument("--lidar-topic", default="/front_lidar")
+    p.add_argument("--imu-topic", default=None,
+                   help="接 IMU 当 MOLA 的转速先验(工单 27),比如 /front_lidar/imu;"
+                        "要同时给 --imu-ypr")
+    p.add_argument("--imu-ypr", type=parse_ypr, default=None,
+                   help="IMU 在点云系里的安装角 yaw,pitch,roll(度;负数开头写成 --imu-ypr=-90,0,180;"
+                        "用 d1max-loc imu-axes 从录包核)")
     p.add_argument("--log-level", default="INFO")
-    return p.parse_args(argv)
+    a = p.parse_args(argv)
+    if (a.imu_topic is None) != (a.imu_ypr is None):
+        p.error("--imu-topic 和 --imu-ypr 要一起给")
+    a.imu = ImuPrior(a.imu_topic, a.imu_ypr) if a.imu_topic else None
+    return a
+
+
+def mola_env(args: argparse.Namespace, *, base: Mapping[str, str] | None = None
+             ) -> dict[str, str] | None:
+    """看管器起 MOLA 用的环境变量:接了 IMU 就在本进程的环境上加安装角;没接 = None(照抄本进程的)。"""
+    if args.imu is None:
+        return None
+    return {**(os.environ if base is None else base), **args.imu.env()}
 
 
 class Node:
@@ -53,8 +73,9 @@ class Node:
         self.ros = ros_factory(loop, lidar_topic=args.lidar_topic, on_scan=self.core.on_scan,
                                on_estimate=self._on_estimate)
         self.supervisor = MolaSupervisor(
-            command_for=command_for or (lambda prior: mola_command(prior,
-                                                                    lidar_topic=args.lidar_topic)),
+            command_for=command_for or (lambda prior: mola_command(
+                prior, lidar_topic=args.lidar_topic, imu=args.imu)),
+            env=mola_env(args),
             on_up=lambda: self.backend.on_up(), on_down=lambda why: self.backend.on_down(why))
         self.backend = MolaBackend(self.core, supervisor=self.supervisor,
                                    reloc_service=self.ros.relocalize,
