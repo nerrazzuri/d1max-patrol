@@ -177,3 +177,45 @@ async def test_复查N1_走了以后收到新的静止点云_照样找得到(tmp
     assert isinstance(got, tuple) and got[0] == "", got
     r = [r for r in link.sent if isinstance(r, Relocalize)][-1]
     assert math.hypot(r.x - here[0], r.y - here[1]) < 0.15
+
+
+# ------------------------------------------------------------ 第二轮复查 N4、N5(2026-10-29)
+
+
+async def test_复查N4_匹配期间来了新点云但狗没动_结果照样提交(tmp_path):
+    """N4:感知每秒一份点云,大图匹配要 1 s 多;原来要求「还是同一份点云」,狗站着也永远找不到。"""
+    from test_bridge_localizer import M, _就绪
+    from test_globalloc import _扫
+    now, occ, view, glob = _看墙(tmp_path)
+    c, link, loc = await _就绪()
+    rt = _rt(loc, M, lambda: now[0])
+    rt.globalloc = glob
+    real = glob.locate
+
+    async def slow(pts):
+        for i in range(1, 13):                           # 匹配的这 1.2 s:狗站着,来了一份新点云
+            now[0] = 100.0 + 0.1 * i
+            view.note_odom(0.0, 0.0, 0.0)
+        view.on_wall(NS(points=lambda: _扫(occ, *_TRUE, noise=0.02)))
+        return await real(pts)
+    glob.locate = slow
+    got = await rt._relocalize(NS(payload={"global": True}, task_id="n4"))
+    assert isinstance(got, tuple) and got[0] == "", got
+    r = [r for r in link.sent if isinstance(r, Relocalize)][-1]
+    assert math.hypot(r.x - _TRUE[0], r.y - _TRUE[1]) < 0.15
+
+
+@pytest.mark.parametrize("挪了", [0.06, 0.6])
+async def test_复查N5_最后读到的里程已经挪了_导航那边还没更新_照样拒(tmp_path, 挪了):
+    from test_bridge_localizer import M, _就绪
+    now, occ, view, glob = _看墙(tmp_path)
+    c, link, loc = await _就绪()
+    rt = _rt(loc, M, lambda: now[0])
+    rt.globalloc = glob
+
+    async def odom_moved():                              # 狗那边的里程挪了,ObstacleView 还没跟上
+        return NS(valid=True, x=挪了, y=0.0, yaw=0.0)
+    rt.hal.odometry = odom_moved
+    got = await rt._relocalize(NS(payload={"global": True}, task_id="n5"))
+    assert isinstance(got, str) and "not_found" in got, got
+    assert not [r for r in link.sent if isinstance(r, Relocalize)]

@@ -1269,9 +1269,13 @@ class AgentRuntime:
             return "odom_invalid"                 # 先说里程读不到:这时 stopped() 也答不上来
         if not await self.hal.stopped():
             return "moving"
-        if found is not None and not self.globalloc.still_valid(scan_ref):
-            # 复查 N1:读里程、问停没停的这会儿狗动了,或者来了新点云 —— 结果对的是刚才的位置
-            return "not_found: 找位置的这段时间机器人动了(或者点云换了),停稳了再试一次"
+        if found is not None:
+            # 复查 N1、N5:读里程、问停没停的这会儿狗动了 —— 拿**刚从狗上读到的**里程比(导航那边的
+            # 缓存可能还没跟上);问完停没停再读一次
+            o2 = await self.hal.odometry()
+            if not (o2.valid and self.globalloc.still_valid(scan_ref, (o.x, o.y, o.yaw))
+                    and self.globalloc.still_valid(scan_ref, (o2.x, o2.y, o2.yaw))):
+                return "not_found: 找位置的这段时间机器人动了,停稳了再试一次"
         loc = self.parts.nav.anchor
         if isinstance(loc, BridgeLocalizer):
             # 配了定位器(W09a):请它按人给的位置(初值)重定位;稳下来的时候修正量经 on_corrected
@@ -1311,8 +1315,8 @@ class AgentRuntime:
         except GlobalLocError as exc:
             return f"not_found: {exc}"[:200]
         if not self.globalloc.still_valid(ref):
-            # 外审 R3、复查 N1:算的这段时间狗动了,或者来了新点云 —— 结果对不上此刻
-            return "not_found: 找位置的这段时间机器人动了(或者点云换了),停稳了再试一次"
+            # 外审 R3、复查 N1:算的这段时间狗动了 —— 结果对不上此刻(来了新点云、狗没动不算,N4)
+            return "not_found: 找位置的这段时间机器人动了,停稳了再试一次"
         best, why = decide(cands)
         top = [c.to_wire() for c in cands[:3]]
         if best is None:
