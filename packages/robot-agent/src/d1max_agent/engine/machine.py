@@ -1034,12 +1034,23 @@ class MissionEngine(EventEmitter[RunSnapshot]):
                 await self._stop_nav_quietly()
             if live is not None:
                 succeeded = sum(1 for r in live.results if r.ok)
+                total = len(live.mission.waypoints) * live.mission.policy.loops
+                # ``result``:站点登记运行记录读的就是它(工单 20,2026-10-28:原来没写,只有引擎的
+                # ``state: done`` =「这趟跑到头了」,点全没到的回待命点看着像回去了)。点都到了才
+                # ``done``;中止 ``aborted``;有没到的(跳过的)``failed``
+                if self._state is RunState.ABORTED:
+                    result = "aborted"
+                elif succeeded == total and len(live.results) == total:
+                    result = "done"
+                else:
+                    result = "failed"
                 summary = {
                     "state": self._state.value,
+                    "result": result,
                     "reason": self._snapshot.reason,
                     "succeeded": succeeded,
                     "failed": len(live.results) - succeeded,
-                    "total": len(live.mission.waypoints) * live.mission.policy.loops,
+                    "total": total,
                     "results": [r.to_wire() for r in live.results],
                 }
                 broken = live.archive.failure_summary()

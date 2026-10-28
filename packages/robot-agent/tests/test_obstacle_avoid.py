@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import math
 
 import pytest
@@ -1196,3 +1197,55 @@ def test_绕障_背面补格_看得见是空的不补(tmp_path):
     t.nav._temp = {}
     t.nav._remember([(0.95, 0.05)], here, 0.0)
     assert len(t.nav._temp) >= int(SHADOW_M / 0.1) - 1, "后面看不见:沿视线补上"
+
+
+async def test_工单29_狗先卡了6秒又能动了_不自锁_照样走到(tmp_path):
+    """2026-10-28 晚上 385bb6d4:「发了命令不动」判了之后实际发零速 → 狗不动 → 下一拍想发的非零、
+    里程没变 → 又判 → 一直发零速,狗再也不动(C1 3/3)。按真发出去的命令数,判完重新数。"""
+    t = 台子(tmp_path)
+    await t.start(2.0, 4.0)
+    await t.nav.goto(Pose.from_xy_yaw(8.0, 4.0))
+    tick = t.r.tick
+    t.r.tick = lambda dt: None                                # 下游吞了命令:狗不动
+    await t.跑(6.5)
+    assert [k for k, _ in t.events if k == "nav_blocked"] or t.nav._blocked_since is not None
+    t.r.tick = tick                                           # 又能动了
+    xs, _ = await _跑到头(t, 600)
+    assert NavStatus.SUCCEED in t.status, (t.status, t.nav.fail_reason)
+
+
+async def test_工单29_上一趟判过没动_下一趟开头不马上又报(tmp_path):
+    """17:22:45 新 goto 0.4 s 就报「5 秒没动」:上一趟的计时没清。"""
+    t = 台子(tmp_path)
+    await t.start(2.0, 4.0)
+    await t.nav.goto(Pose.from_xy_yaw(8.0, 4.0))
+    tick = t.r.tick
+    t.r.tick = lambda dt: None
+    await t.跑(40.0)                                          # 卡死:放弃这一趟
+    assert NavStatus.FAILED in t.status
+    t.r.tick = tick
+    t.events.clear()
+    await t.nav.goto(Pose.from_xy_yaw(8.0, 4.0))
+    await t.跑(1.0)
+    assert not [d for k, d in t.events if k == "nav_blocked"], t.events
+    assert t.nav._blocked_since is None, "新的一趟开头不算被挡"
+
+
+async def test_原地转_转速低于真机门槛转不起来_1秒没转就提速(tmp_path):
+    """2026-10-28 晚上(工单 29 的起因):小角度原地转正发的转速太小,真机不响应(能力里没有转速死区,
+    导航按 0 算)。原地转的命令发了 1 s 朝向没变 → 提到至少 TURN_KICK_RPS。(避障放行:只看转速)"""
+    t = 台子(tmp_path, guard=False)
+    set_v = t.r.set_velocity
+
+    async def 门槛(cmd):                                      # 真机:转速 < 0.45 rad/s 不响应
+        if abs(cmd.vx) < 1e-6 and 0 < abs(cmd.wz) < 0.45:
+            cmd = dataclasses.replace(cmd, wz=0.0)
+        return await set_v(cmd)
+    t.r.set_velocity = 门槛
+    await t.start(3.0, 4.0, yaw=0.0)
+    await t.nav.goto(Pose.from_xy_yaw(3.0, 4.0, 0.2))        # 就在点上,差 0.2 rad(发 0.4 rad/s)
+    for _ in range(100):
+        await t.一拍()
+        if t.status and t.status[-1] is NavStatus.STANDBY:
+            break
+    assert NavStatus.SUCCEED in t.status, (t.status, t.nav.fail_reason)

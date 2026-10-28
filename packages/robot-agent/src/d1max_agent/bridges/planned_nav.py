@@ -115,6 +115,11 @@ BACK_TO_GOAL_RAD = math.radians(45)
 #: 里程这么久挪不到 :data:`STALL_M`、转不到 :data:`STALL_RAD` → 当被挡(计时、上报、挪、到时放弃)。
 #: 下游(运控、旁路的第二层许可门)把命令吞了,导航层原来不知道。
 STALL_S = 5.0
+#: 原地转:命令发了这么久(秒)朝向还没变过 :data:`TURN_KICK_RAD`,转速提到至少 :data:`TURN_KICK_RPS`。
+#: 2026-10-28 晚上小角度原地转正没转起来(多半转速低于真机能响应的;能力里没有转速死区,真机待量)。
+TURN_KICK_S = 1.0
+TURN_KICK_RAD = 0.02
+TURN_KICK_RPS = 0.5
 STALL_M = 0.03
 STALL_RAD = 0.05
 #: 工单 20:终点只是在地图墙的膨胀圈里时,最多挪这么远去最近能站的点(米)。
@@ -217,6 +222,10 @@ class PlannedNavBackend(HalNavBackend):
         self._creep_len = CREEP_M
         #: 工单 28:(开始数的时刻, 那时的里程位姿);发着运动命令、里程不动就一直不换。
         self._stall_ref: tuple[float, tuple[float, float, float]] | None = None
+        #: 原地转提速(工单 29 的起因):(开始数的时刻, 那时的朝向)。
+        self._kick_ref: tuple[float, float] | None = None
+        #: 这一回被挡开始时的里程位姿(工单 29:离开它才算不挡了)。
+        self._blocked_at: tuple[float, float, float] | None = None
         self._crept = False
         #: 这一段挪了几次(W41,:data:`MAX_CREEPS`)。
         self._creeps = 0
@@ -463,6 +472,7 @@ class PlannedNavBackend(HalNavBackend):
 
     async def _send(self, vx: float, wz: float, dt_s: float) -> None:
         self._last_vx = vx
+        self._note_sent(vx, wz)
         await super()._send(vx, wz, dt_s)
 
     # ------------------------------------------------------------ 规划
@@ -641,6 +651,7 @@ class PlannedNavBackend(HalNavBackend):
         self._crept = False
         self._creeps = 0
         self._after_creep = False
+        self._stall_ref = None                           # 工单 29:不带到下一趟
         self._hit_reason = ""
         self._hit_at = -math.inf
         self._blocked_since = None
@@ -852,6 +863,7 @@ class PlannedNavBackend(HalNavBackend):
     async def _move(self, vx: float, wz: float, dt_s: float, here: Any) -> None:
         """一条会动的命令:配了避障就先过守卫(W08 决定 8 第一层);挡了原地等、自己计时、自己绕,
         **不发 13330**;障碍数据断了太久发 13331(雷达掉线,引擎中止)。"""
+        wz = self._kick(vx, wz)
         if self.obstacles is None or self.guard is None:
             await self._send(vx, wz, dt_s)
             return
@@ -883,16 +895,18 @@ class PlannedNavBackend(HalNavBackend):
             turn = self.guard.check(0.0, wz, self._v_meas, self.obstacles, self._odom_pose)
             if turn.ok:
                 vx, v = 0.0, turn
-        if v.ok and self._stalled(vx, wz):
+        if v.ok and self._stalled():
             from d1max_agent.obstacles import Verdict
             await self._blocked(Verdict(False, f"发了运动命令、机器人 {STALL_S:.0f} 秒没动"
                                         "(运控或第二层许可门没执行)"), here, dt_s, vx, wz)
             return
         if v.ok:
-            if self._blocked_since is not None and self._creep_from is None and abs(vx) > 1e-6:
-                # 真走起来才算「不挡了」。挪是这一回被挡的处置、原地转只是调方向,都不算(计时、报
-                # 一次都照这一回算):工单 21 允许挪完再挪、小转向只查扇形之后,不然转一下、挪一下
-                # 20 s 就重新数,永远放弃不了、被挡报好几次
+            if (self._blocked_since is not None and self._creep_from is None and abs(vx) > 1e-6
+                    and self._left_block_spot()):
+                # 真走起来才算「不挡了」:发了前进命令、**里程也离开了被挡的地方**(工单 29:发出去狗
+                # 不动的不算)。挪是这一回被挡的处置、原地转只是调方向,都不算(计时、报一次都照这一回
+                # 算):工单 21 允许挪完再挪、小转向只查扇形之后,不然转一下、挪一下 20 s 就重新数,
+                # 永远放弃不了、被挡报好几次
                 waited = self._secs() - self._blocked_since
                 if self.on_event is not None and (self._blocked_told or self._detoured):
                     self.on_event("nav_unblocked", {"waited_s": round(waited, 1),
@@ -906,25 +920,61 @@ class PlannedNavBackend(HalNavBackend):
             return
         await self._blocked(v, here, dt_s, vx, wz)
 
-    def _stalled(self, vx: float, wz: float) -> bool:
-        """工单 28:一直在发运动命令,里程 :data:`STALL_S` 秒挪不到 :data:`STALL_M`、转不到
-        :data:`STALL_RAD` → 真。不发命令(原地等)就重新数。"""
+    def _kick(self, vx: float, wz: float) -> float:
+        """原地转发了 :data:`TURN_KICK_S` 秒、朝向没变(转速低于真机能响应的,能力里没有转速死区)→
+        转速提到至少 :data:`TURN_KICK_RPS`(不超过上限);转起来了、不是原地转就不提。提了的
+        照样过守卫。"""
+        now, yaw = self._secs(), self._odom_pose[2]
+        if abs(vx) > 1e-6 or abs(wz) < 1e-6:
+            self._kick_ref = None
+            return wz
+        ref = self._kick_ref
+        if ref is None or abs(_wrap(yaw - ref[1])) > TURN_KICK_RAD:
+            self._kick_ref = (now, yaw)
+            return wz
+        if now - ref[0] < TURN_KICK_S or abs(wz) >= TURN_KICK_RPS:
+            return wz
+        return math.copysign(min(TURN_KICK_RPS, self._wmax), wz)
+
+    def _left_block_spot(self) -> bool:
+        """里程离开被挡开始时的位置超过 :data:`STALL_M` 了没有(工单 29)。"""
+        a, p = self._blocked_at, self._odom_pose
+        return a is None or math.hypot(p[0] - a[0], p[1] - a[1]) > STALL_M
+
+    def _note_sent(self, vx: float, wz: float) -> None:
+        """工单 28/29:按**真发出去的**命令数「发了命令不动」。发的是零速、或者狗挪了 / 转了,
+        重新数。"""
         now, pose = self._secs(), self._odom_pose
+        ref = self._stall_ref
         if abs(vx) < 1e-6 and abs(wz) < 1e-6:
             self._stall_ref = None
-            return False
-        ref = self._stall_ref
-        if (ref is None or math.hypot(pose[0] - ref[1][0], pose[1] - ref[1][1]) > STALL_M
-                or abs(_wrap(pose[2] - ref[1][2])) > STALL_RAD):
+        elif (ref is None or math.hypot(pose[0] - ref[1][0], pose[1] - ref[1][1]) > STALL_M
+              or abs(_wrap(pose[2] - ref[1][2])) > STALL_RAD):
             self._stall_ref = (now, pose)
+
+    def _stalled(self) -> bool:
+        """工单 28:真发出去的运动命令连着 :data:`STALL_S` 秒、里程挪不到 :data:`STALL_M`、转不到
+        :data:`STALL_RAD` → 真,**并且重新数**(工单 29:原来判了之后一直判,被挡那一拍发零速、狗不动、
+        下一拍又判,狗再也没收到过运动命令)。"""
+        ref = self._stall_ref
+        if ref is None:
             return False
-        return now - ref[0] >= STALL_S
+        pose = self._odom_pose
+        if (math.hypot(pose[0] - ref[1][0], pose[1] - ref[1][1]) > STALL_M
+                or abs(_wrap(pose[2] - ref[1][2])) > STALL_RAD):
+            self._stall_ref = (self._secs(), pose)
+            return False
+        if self._secs() - ref[0] < STALL_S:
+            return False
+        self._stall_ref = None
+        return True
 
     async def _blocked(self, v: Any, here: Any, dt_s: float, vx: float = 0.0,
                        wz: float = 0.0) -> None:
         now = self._secs()
         if self._blocked_since is None:
             self._blocked_since = now
+            self._blocked_at = self._odom_pose
             self._next_detour = now + BLOCK_DETOUR_S
             log.info("被挡:%s", v.reason)
         if v.hits:
