@@ -1237,7 +1237,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="顺带出一个开通码(A4):机器人上 d1max-patrol provision --code 一条命令开通")
     e.add_argument("--host", default=None, help="开通码里机器人连站点用的主机名(缺省第一个 "
                                                 "--hostname)")
-    rn = sub.add_parser("renew", help="续签机器人的证书(工单 9):旧证书不吊销,机器人换上新的就切过去")
+    rn = sub.add_parser("renew", help="续签机器人的证书(工单 9):旧证书不吊销,"
+                                      "机器人换上新的就切过去")
     rn.add_argument("robot_id")
     rn.add_argument("--days", type=int, default=365)
     ec = sub.add_parser("enroll-code", help="给已登记的机器人重新出一个开通码(A4,旧码作废)")
