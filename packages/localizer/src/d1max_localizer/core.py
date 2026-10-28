@@ -167,7 +167,8 @@ class LocalizerCore:
         self._last: tuple[float, float, float, float] | None = None   # 上一帧:stamp, x, y, yaw
         self._last_match: float | None = None           # 最后一次真匹配的 stamp
         self._jumps: deque[float] = deque()
-        self._lowq: deque[tuple[float, float]] = deque()  # 近几秒每帧:stamp, 质量(转身时抬过的)
+        #: 近几秒每帧:stamp, 质量(不当证据的转身帧不进)。
+        self._lowq: deque[tuple[float, float]] = deque()
         self._jump_lost = False
         self._good: tuple[float, float, float] | None = None
         # 重定位
@@ -316,7 +317,8 @@ class LocalizerCore:
                 self._turn_until = e.stamp + TURN_HOLD_S
         turning = e.stamp <= self._turn_until
         # 转身时质量在 Q_BAD 以上不当证据(见 TURN_RPS)
-        quality = max(e.quality, Q_GOOD, LOWQ_Q) if turning and e.quality > Q_BAD else e.quality
+        neutral = turning and e.quality > Q_BAD
+        quality = max(e.quality, Q_GOOD, LOWQ_Q) if neutral else e.quality
         if not jump and self._last is not None:
             jump = self._jumped(e.stamp - self._last[0], x - self._last[1], y - self._last[2],
                                 yaw - self._last[3])
@@ -324,8 +326,11 @@ class LocalizerCore:
                 self._jumps.append(now)
         self._last = (e.stamp, x, y, yaw)
         self._reloc_good = self._reloc_good + 1 if (e.quality >= Q_GOOD and not jump) else 0
-        self._lowq.append((e.stamp, quality))
-        while e.stamp - self._lowq[0][0] > LOWQ_WINDOW_S:
+        if not neutral:
+            # 不当证据的转身帧也不进窗口:进了会抬高中位数,把转身前站着的常态帧算成「低」
+            # (2026-10-28 turn-144620 合并回放:站着 0.87、转身 0.93 → σ 1.5 约 0.6 s)
+            self._lowq.append((e.stamp, quality))
+        while self._lowq and e.stamp - self._lowq[0][0] > LOWQ_WINDOW_S:
             self._lowq.popleft()
         if e.quality >= Q_MATCH or self._last_match is None:
             self._last_match = e.stamp

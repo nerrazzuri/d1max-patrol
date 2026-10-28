@@ -175,6 +175,19 @@ def test_原地转身_质量掉到0点6多_σ不涨():
     assert max(p.sigma_xy for p in t.poses()[-40:]) <= 0.5
 
 
+def test_站着质量稳在0点87_一转身质量反而好_站着那几帧不被算成低质量():
+    """2026-10-28 turn-144620(3ah.1 那次)合并回放:站着时那个朝向稳在 0.87(常态),一转身质量 0.93,
+    转身帧又按 0.9 记进窗口,3 s 中位数抬到 0.91、线抬到 0.88 —— 站着那些 0.87 全成了「低」,σ 1.5
+    约 0.6 s。转身帧不当证据,就不进这个窗口。"""
+    t = 台()
+    t.c.t += RELOC_SETTLE_S
+    for _ in range(30):
+        t.step(0.0, 0.0, q=0.87)
+    assert t.poses()[-1].sigma_xy == pytest.approx(0.1, abs=0.01), "稳在 0.87 是常态"
+    _原地转(t, 20, 0.7, 0.93)
+    assert max(p.sigma_xy for p in t.poses()[-20:]) <= 0.5
+
+
 def test_原地转身_质量烂到0点5以下_照样涨():
     t = 台()
     t.c.t += RELOC_SETTLE_S
