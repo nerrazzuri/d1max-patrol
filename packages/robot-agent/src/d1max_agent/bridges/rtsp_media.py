@@ -10,6 +10,7 @@ import asyncio
 import contextlib
 from collections.abc import Callable, Sequence
 
+from d1max_contract.video import scrub
 from d1max_patrol.backends.base import Frame, MediaError, MediaSource
 
 #: 抽一帧最多等多久(秒):RTSP 建连 + 等一个关键帧。
@@ -23,12 +24,15 @@ class FfmpegCamera(MediaSource):
         self._now = now_ms
         self._ffmpeg = ffmpeg
         self._timeout = timeout_s
+        #: 正在抽帧的 ffmpeg(外审 R6:关掉取图源时一并收掉)。
+        self._procs: set[asyncio.subprocess.Process] = set()
 
     async def open(self) -> None:
         return None
 
     async def close(self) -> None:
-        return None
+        for proc in list(self._procs):
+            await _reap(proc)
 
     async def healthy(self) -> bool:
         return True
@@ -43,20 +47,32 @@ class FfmpegCamera(MediaSource):
                 start_new_session=True)
         except OSError as exc:
             raise MediaError(f"起不了 ffmpeg:{exc}") from exc
+        self._procs.add(proc)
         try:
             out, err = await asyncio.wait_for(proc.communicate(), self._timeout)
         except asyncio.TimeoutError:
-            with contextlib.suppress(ProcessLookupError):
-                proc.kill()
-            with contextlib.suppress(Exception):
-                await proc.wait()
+            await _reap(proc)
             raise MediaError(f"{self._timeout:g} 秒内没抽到画面(超时)") from None
+        except BaseException:
+            await _reap(proc)                        # 外审 R6:被取消也收掉,不留一个一直在拉流的
+            raise
+        finally:
+            self._procs.discard(proc)
         if proc.returncode != 0:
-            why = err.decode("utf-8", "replace").strip().splitlines()[-1:] or ["?"]
+            # 外审 R5:ffmpeg 报错带完整地址(含口令),先打码再截
+            why = scrub(err.decode("utf-8", "replace")).strip().splitlines()[-1:] or ["?"]
             raise MediaError(f"ffmpeg 退出码 {proc.returncode}:{why[0][:200]}")
         if not out.startswith(b"\xff\xd8"):
             raise MediaError("ffmpeg 给的不是 JPEG")
         return Frame(data=out, mime="image/jpeg", captured_at_ms=at)
+
+
+async def _reap(proc: asyncio.subprocess.Process) -> None:
+    if proc.returncode is None:
+        with contextlib.suppress(ProcessLookupError):
+            proc.kill()
+    with contextlib.suppress(Exception):
+        await asyncio.shield(proc.wait())
 
 
 def rtsp_media(source: Callable[[str], list[str]], *, now_ms: Callable[[], int],

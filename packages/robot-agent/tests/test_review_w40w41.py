@@ -47,7 +47,8 @@ async def test_外审R4_后台核对算完时人已经设了新位置_旧结果�
         await release.wait()
         return Verdict(False, 0.2, Candidate(3.0, 3.0, 0.0, 0.8), "旧点云的结论")
     rt = _rt(loc, M, c)
-    rt.globalloc = NS(view=NS(wall_scan=lambda **kw: [(1.0, 0.0)]), check=check)
+    rt.globalloc = NS(view=NS(wall_scan=lambda **kw: [(1.0, 0.0)]), check=check,
+                      scan_ref=lambda: (0.0, 0.0, 0.0), still_valid=lambda ref, odom=None: True)
     job = asyncio.create_task(rt._scan_check(-math.inf))
     await entered.wait()
     assert await rt._relocalize(NS(payload={"x": 6.0, "y": 6.0, "yaw": 0.0},

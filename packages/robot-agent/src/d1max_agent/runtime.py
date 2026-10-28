@@ -1426,6 +1426,7 @@ class AgentRuntime:
             return
         gen = anchor.pose_gen
         try:
+            ref = self.globalloc.scan_ref()
             pts = self.globalloc.scan()
             fit_loc, fit_given = await self.globalloc.fits(pts, list(poses))
         except GlobalLocError as exc:
@@ -1433,6 +1434,9 @@ class AgentRuntime:
             return
         if self.loaded_map != m or anchor.conflict_poses() is None or anchor.pose_gen != gen:
             return                                       # 外审 R4:这期间位置换过,结论作废
+        if not await self._still_since(ref):
+            log.info("对不上的两处核完时机器人动过了:这次的结论作废,过一会儿再核")
+            return
         trust = resolve_conflict(fit_loc, fit_given)
         (lx, ly, _), (gx, gy, gyaw) = poses
         log.warning("对不上的两处点云套图:定位器 (%.1f, %.1f) %.2f,"
@@ -1460,13 +1464,14 @@ class AgentRuntime:
         anchor = self.parts.nav.anchor
         m = self.loaded_map
         deadline = self._mono() + SCAN_CHECK_WAIT_S
-        pts = None
+        pts = ref = None
         while self._mono() < deadline:
             await asyncio.sleep(0.5)
             if self.loaded_map != m:
                 return
             pts = self.globalloc.view.wall_scan(since=since + 1.0)
             if pts is not None:
+                ref = self.globalloc.scan_ref()           # 同一拍取:攒这份点云时狗在哪
                 break
         if pts is None or m is None:
             log.info("点云套图核对:%s 秒内没等到机器人停着的点云,这次不核", SCAN_CHECK_WAIT_S)
@@ -1486,6 +1491,9 @@ class AgentRuntime:
             return
         if getattr(anchor, "pose_gen", None) != gen:
             log.info("点云套图核对算完时位置已经换过(人设过位置或又重定位了):这次的结论作废")
+            return
+        if not await self._still_since(ref):
+            log.info("点云套图核对算完时机器人动过了:这次的结论作废")
             return
         if v.ok:
             log.info("点云套图核对:定位器给的 (%.2f, %.2f) 贴合度 %.2f,对得上", pose[0], pose[1],
@@ -1507,6 +1515,18 @@ class AgentRuntime:
         anchor.scan_disagree = (v.reason if v.reloc is None else
                                 f"{v.reason};定位器又锁回去了,请重新设位置")[:200]
         self.events.emit("loc_wrong_solution", data | {"stuck": True})
+
+    async def _still_since(self, ref: Any) -> bool:
+        """后台点云核对算完、要提交之前:攒点云以后狗没挪过 —— 导航这边的里程、此刻从狗上读到的里程
+        都算(外审 2026-10-29 R4:两处核对、稳下来后的核对原来只看位置换没换过,狗走着也提交;
+        跟自动找位置同一套判法,复查 N1、N4、N5)。"""
+        if not self.globalloc.still_valid(ref):
+            return False
+        try:
+            o = await self.hal.odometry()
+        except Exception:                                # noqa: BLE001 - 读不到就当说不准
+            return False
+        return bool(o.valid) and self.globalloc.still_valid(ref, (o.x, o.y, o.yaw))
 
     async def _loc_health(self) -> Any:
         return self.parts.nav.anchor.health()

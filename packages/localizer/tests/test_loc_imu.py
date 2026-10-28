@@ -68,6 +68,41 @@ def test_几乎只转朝向_横向晃得少_照样挑对直角装法():
     assert np.allclose(imu.matrix_from_ypr(r.ypr), C40221, atol=1e-6)
 
 
+def _弱晃(true, seed=427):
+    """外审 R3:主要绕 z 左右转,另两根轴只晃 0.02 rad/s;陀螺仪按 ``true`` 装、不加噪声。"""
+    rng = np.random.default_rng(seed)
+    t = np.arange(600) * 0.1
+    wb = np.column_stack([rng.normal(0, 0.02, 600), rng.normal(0, 0.02, 600),
+                          0.8 * np.sin(0.7 * t)])
+    return wb, wb @ true
+
+
+def test_外审R3_另两根轴晃得少_但数据明摆着不是直角装法_不硬吸到直角():
+    true = imu.matrix_from_ypr((40.0, 0.0, 0.0))
+    wb, gyro = _弱晃(true)
+    r = imu.fit_axes(wb, gyro)
+    if r.ok:                                       # 要么按拟合值给对,要么拒答、让补录多轴的
+        assert imu._angle_deg(imu.matrix_from_ypr(r.ypr), true) < 5.0
+        assert not r.snapped
+    else:
+        assert "晃" in r.why or "走动" in r.why
+
+
+def test_外审R3_吸到直角时_相关系数按最后给出的装法算():
+    rng = np.random.default_rng(5)
+    t = np.arange(600) * 0.1
+    w_body = (0.8 * np.sin(t * 0.7))[:, None] * np.array([-1.0, 0.0, 0.0])
+    w_body += rng.normal(0, 0.02, w_body.shape) * np.array([0.0, 1.0, 1.0])
+    gyro = w_body @ C40221 + rng.normal(0, 0.02, w_body.shape)
+    r = imu.fit_axes(w_body, gyro)
+    assert r.ok and r.snapped
+    m = imu.matrix_from_ypr(r.ypr)
+    wb_c, g_c = w_body - w_body.mean(axis=0), gyro - gyro.mean(axis=0)
+    k = int(np.argmax(wb_c.std(axis=0)))
+    want = float(np.corrcoef(wb_c[:, k], (g_c @ m.T)[:, k])[0, 1])
+    assert r.yaw_corr == pytest.approx(want, abs=1e-9)
+
+
 def test_只转朝向_一点不晃_另两根轴定不下来():
     t = np.arange(600) * 0.1
     w_body = (0.8 * np.sin(t * 0.7))[:, None] * np.array([-1.0, 0.0, 0.0])

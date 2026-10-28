@@ -265,7 +265,7 @@ class BridgeLocalizer:
             self._keep = None                        # 分不出重开过机没有:不记
         self._kept_fix: _Fix | None = None
         self._kept_at = -math.inf
-        self._kept: tuple[tuple[str, str], _Fix, float, str] | None = self._load_keep()
+        self._kept: tuple[tuple[str, str], _Fix, float, float, str] | None = self._load_keep()
         self._wrong_map = False
         self._icp: float | None = None
         #: 外审 R4:位置代次 —— 每发一次重定位请求、换一次图加一。后台点云核对开始时记下,算完要动手
@@ -406,8 +406,7 @@ class BridgeLocalizer:
             kept, self._kept = self._kept, None
             if kept is not None and map_ref is not None and kept[0] == map_ref:
                 # 代理重启前记下的锚(同一次开机、同一张图):只拿来核(对账 S1)
-                _, fix, self._anchor_m, what = kept
-                self._anchor_yaw = ANCHOR_YAW_RAD           # 盘上没记朝向线:按宽的
+                _, fix, self._anchor_m, self._anchor_yaw, what = kept   # 外审 R2:朝向线也照旧
                 self._anchor = replace(fix, epoch=self._epoch, path=self._path)
                 self._anchor_what = f"代理重启前{what}"
                 self._kept_fix, self._kept_at = self._anchor, self._now()
@@ -815,7 +814,8 @@ class BridgeLocalizer:
             what = self._anchor_what.removeprefix("代理重启前")
             body = {"version": KEEP_VERSION, "boot_id": self._boot, "map": list(self._map),
                     "pose": list(a.pose), "odom": list(a.odom), "sigma_xy": a.sigma_xy,
-                    "source": a.source, "at": a.at, "anchor_m": self._anchor_m, "what": what}
+                    "source": a.source, "at": a.at, "anchor_m": self._anchor_m,
+                    "anchor_yaw": self._anchor_yaw, "what": what}
             tmp = self._keep.with_name(self._keep.name + ".tmp")
             tmp.write_text(json.dumps(body, ensure_ascii=False) + "\n", encoding="utf-8")
             os.replace(tmp, self._keep)                  # 不 fsync:断电就是重开机,本来就不用
@@ -823,8 +823,9 @@ class BridgeLocalizer:
         except OSError as exc:
             log.warning("锚写不进 %s:%s(代理重启后没有锚可核)", self._keep, exc)
 
-    def _load_keep(self) -> tuple[tuple[str, str], _Fix, float, str] | None:
-        """读回代理重启前记下的锚:(哪张图, 锚, 位置那条线, 叫法)。没有、别的开机、坏了都是 None。"""
+    def _load_keep(self) -> tuple[tuple[str, str], _Fix, float, float, str] | None:
+        """读回代理重启前记下的锚:(哪张图, 锚, 位置那条线, 朝向那条线, 叫法)。没有、别的开机、坏了
+        都是 None。"""
         if self._keep is None or not self._keep.exists():
             return None
         try:
@@ -841,12 +842,20 @@ class BridgeLocalizer:
             if not (isinstance(source, str) and isinstance(what, str)) or sigma < 0 \
                     or line <= 0 or at > self._now():
                 raise ValueError("source/what/sigma_xy/anchor_m/at")
+            if "anchor_yaw" in d:
+                yaw_line = _finite(d["anchor_yaw"])
+                if yaw_line <= 0:
+                    raise ValueError("anchor_yaw")
+            else:
+                # 外审 R2:老格式没记朝向线 —— 位置线是「最后可信的位置」那条就按它的朝向线,不放宽
+                yaw_line = (ANCHOR_TRUSTED_YAW_RAD if line <= ANCHOR_TRUSTED_M + 1e-9
+                            else ANCHOR_YAW_RAD)
         except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
             log.warning("盘上的锚读不懂,不用:%s", exc)
             return None
         fix = _Fix(pose=pose, sigma_xy=sigma, sigma_yaw=0.0, source=source, at=at, born=at,
                    odom=odom, epoch=0, path=0.0, dr0=0.0)
-        return (m[0], m[1]), fix, line, what
+        return (m[0], m[1]), fix, line, yaw_line, what
 
     def _send_prior(self) -> None:
         if not self._connected or self._map is None:
