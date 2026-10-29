@@ -241,8 +241,10 @@ class Nav2Bridge:
         self.known_ids: set[bytes] = set()
         #: 最近一次派出目标时的 /clock(毫秒):收下时刻早于它的目标号不算这个目标的(复查第六轮)。
         self.dispatch_ms = 0
-        #: 每个动作状态话题上次看到的发布者身份:换了实例就把旧的「在跑」清掉(复查第六轮)。
-        self.status_gids: dict[str, frozenset[bytes]] = {}
+        #: 连上代理时的「全部取消」还没都回话(复查第七轮):回话之前不派目标。
+        self.cleanup_pending = False
+        #: 每个取消服务:None = 还没发出去(服务没起来,之后补发);否则是那次请求的 future。
+        self.cleanup_futs: dict[int, Any] = {}
         #: 这个时刻(单调钟)以前不派目标:刚起来,补发的动作状态还没处理完(复查第五轮)。
         self.status_sync_until = 0.0
 
@@ -418,36 +420,55 @@ class Nav2Bridge:
 
     def _busy(self) -> bool:
         return (bool(self.goals) or bool(self.pending) or any(self.producing.values())
-                or self._mono() < self.status_sync_until)
+                or self._mono() < self.status_sync_until or self.cleanup_pending)
 
     def reap_gone_producers(self) -> None:
-        """复查第五、六轮:某个动作服务没了、或者换了一个实例(状态话题的发布者身份变了),旧实例不会再
-        出东西 —— 它记着的「在跑」清掉,不然 Nav2 重启以后新的空闲服务不发状态,
-        这条旧标记一直挡着新目标。
-        按身份比,不只看数量是不是 0(两次轮询之间旧的退、新的起,数量还是 1)。"""
+        """复查第五、七轮:某个动作服务**一个发布者都没有了**(谁也出不了东西),它记着的「在跑」清掉,
+        不然 Nav2 重启以后新的空闲服务不发状态,这条旧标记一直挡着新目标。
+        不按发布者身份变化清:状态跟身份没绑在一起,换了实例时「在跑」可能是新实例刚报的(第六轮那样
+        做被复查第七轮查出会提前派目标)。两次轮询之间旧的退、新的起而且新的空闲:旧标记留着,
+        排着的目标 5 秒后回拒(只影响能不能走,不会乱动)。"""
         cleared = False
         for name in PRODUCERS:
-            infos = self.node.get_publishers_info_by_topic(f"/{name}/_action/status")
-            gids = frozenset(bytes(i.endpoint_gid) for i in infos)
+            gone = not self.node.get_publishers_info_by_topic(f"/{name}/_action/status")
             with self._goal_lock:
-                before = self.status_gids.get(name)
-                self.status_gids[name] = gids
-                if self.producing.get(name) and before is not None and not (before & gids):
+                if self.producing.get(name) and gone:
                     self.producing[name] = False
                     cleared = True
         if cleared:
             self._dispatch_soon()
 
     def cancel_foreign(self) -> None:
-        """复查第六轮:跟代理连上时,把 Nav2 里的导航目标全部取消(空的目标号 = 全部)——
-        上一次(转接节点重启前、上一个代理)留下的,转接节点不认识,不能让它们接着出速度。"""
-        for c in self.cancel_clients:
-            if c.service_is_ready():
-                c.call_async(self._cancel_req())
+        """复查第六、七轮:跟代理连上时,把 Nav2 里的导航目标全部取消(空的目标号 = 全部)——
+        上一次(转接节点重启前、上一个代理)留下的,转接节点不认识,不能让它们接着出速度。
+        这是一个要做完的阶段:每个取消服务都回了话才放行第一个目标(不然新目标可能先被收下、又被这个
+        「全部取消」一起取消);服务还没起来的,每秒那一拍补发。"""
+        with self._goal_lock:
+            self.cleanup_pending = True
+            self.cleanup_futs = dict.fromkeys(range(len(self.cancel_clients)))
+        self.advance_cleanup()
+
+    def advance_cleanup(self) -> None:
+        if not self.cleanup_pending:
+            return
+        for i, c in enumerate(self.cancel_clients):
+            f = self.cleanup_futs.get(i)
+            if f is None and c.service_is_ready():
+                f = self.cleanup_futs[i] = c.call_async(self._cancel_req())
+                done_cb = getattr(f, "add_done_callback", None)
+                if done_cb is not None:          # 回了话马上接着走,不等每秒那一拍
+                    done_cb(lambda _f: self._soon(self.advance_cleanup))
+        with self._goal_lock:
+            left = [i for i, f in self.cleanup_futs.items() if f is None or not f.done()]
+            if not left:
+                self.cleanup_pending = False
+        if not left:
+            self._pump()
 
     def tick_once(self) -> None:
         """每秒一拍:就绪、清掉没了的生产端、排太久的回拒、派排着的(同步期过了要自己醒)。"""
         self.check_ready()
+        self.advance_cleanup()
         self.reap_gone_producers()
         self.expire_queued()
         self._pump()
@@ -491,11 +512,14 @@ class Nav2Bridge:
 
     def _dispatch_soon(self) -> None:
         """rclpy 线程里来的(结束、拒绝、动作状态):回事件循环那边派(跟收目标同一个线程)。"""
+        self._soon(self._pump)
+
+    def _soon(self, fn: Any) -> None:
         loop = getattr(self, "loop", None)
         if loop is not None:
-            loop.call_soon_threadsafe(self._pump)
+            loop.call_soon_threadsafe(fn)
         else:
-            self._pump()
+            fn()
 
     def expire_queued(self) -> None:
         with self._goal_lock:
@@ -623,6 +647,8 @@ class Nav2Bridge:
         self._poll_active()
         if self._mono() < self.status_sync_until:
             self._set_ready(False, "等 Nav2 的动作状态同步")
+        elif self.cleanup_pending:
+            self._set_ready(False, "等 Nav2 取消上一次留下的导航目标")
         elif not self.map_sent:
             self._set_ready(False, "还没收到地图")
         elif time.monotonic() - self._clock_wall > CLOCK_STALE_S:

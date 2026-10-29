@@ -508,31 +508,49 @@ def test_复查六_定时那一拍_同步期过了自己派排着的目标(monke
     assert len(futs) == 1
 
 
-def test_复查六_动作服务换了一个实例_旧的在跑清掉(monkeypatch):
-    """两次轮询之间旧的退了、新的起来了(数量还是 1):按发布者身份认出换了。"""
+def test_复查七_动作服务换了实例_新实例报的在跑不清_没发布者了才清(monkeypatch):
+    """状态跟发布者身份没绑在一起:发布者换了,「在跑」可能是新实例报的,不能按身份变化清掉
+    (复查第七轮 Important)。只有一个发布者都没有了(谁也出不了东西)才清。"""
     from types import SimpleNamespace as NS
     b, futs = _桥(monkeypatch)
     gids = {"/follow_path/_action/status": [b"A"]}
     b.node = NS(get_publishers_info_by_topic=lambda t: [NS(endpoint_gid=g)
                                                          for g in gids.get(t, [b"X"])])
-    b.reap_gone_producers()                                   # 记下现在是 A
+    b.reap_gone_producers()
+    gids["/follow_path/_action/status"] = [b"B"]              # 换成 B,B 已经报了在跑
     b._on_status("follow_path", _状态(2))
     b.on_goal({"goal_id": 5, "x": 1, "y": 2, "yaw": 0})
-    assert len(futs) == 0
-    b.reap_gone_producers()                                   # 还是 A:不动
-    assert b.producing["follow_path"] is True
-    gids["/follow_path/_action/status"] = [b"B"]              # 换成 B 了
+    b.reap_gone_producers()
+    assert b.producing["follow_path"] is True and len(futs) == 0
+    gids["/follow_path/_action/status"] = []
     b.reap_gone_producers()
     assert b.producing["follow_path"] is False and len(futs) == 1
 
 
-def test_复查六_跟代理连上就把Nav2里的导航目标全取消(monkeypatch):
-    """上一次留下的导航目标转接节点不认识:连上代理先全取消(空的目标号 = 全部)。"""
+
+
+def test_复查七_连上代理先全取消_都回了话才放行第一个目标_服务没起来就之后补发(monkeypatch):
+    """上一次留下的导航目标转接节点不认识:连上代理先全取消(空的目标号 = 全部)。取消回话之前不派,
+    免得新目标先被收下、又被这个「全部取消」一起取消(复查第七轮)。"""
     from types import SimpleNamespace as NS
-    b, _ = _桥(monkeypatch)
-    calls = []
-    b.cancel_clients = [NS(service_is_ready=lambda: True, call_async=calls.append),
-                        NS(service_is_ready=lambda: False, call_async=calls.append)]
+    b, futs = _桥(monkeypatch)
     b._cancel_req = lambda: "全部"
+    done = {"v": False}
+    sent = []
+    ready = {"thru": False}
+    b.cancel_clients = [
+        NS(service_is_ready=lambda: True,
+           call_async=lambda r: (sent.append(("nav", r)), NS(done=lambda: done["v"]))[1]),
+        NS(service_is_ready=lambda: ready["thru"],
+           call_async=lambda r: (sent.append(("thru", r)), NS(done=lambda: True))[1])]
     b.cancel_foreign()
-    assert calls == ["全部"]
+    assert sent == [("nav", "全部")]
+    b.on_goal({"goal_id": 5, "x": 1, "y": 2, "yaw": 0})
+    assert len(futs) == 0, "取消还没回话:不派"
+    b.advance_cleanup()
+    assert len(futs) == 0
+    done["v"] = True                                           # 第一个回话了
+    ready["thru"] = True                                       # 第二个服务这才起来
+    b.advance_cleanup()                                        # 补发第二个,它当场就回了
+    assert sent == [("nav", "全部"), ("thru", "全部")]
+    assert not b.cleanup_pending and len(futs) == 1
