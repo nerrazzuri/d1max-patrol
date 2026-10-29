@@ -256,3 +256,26 @@ describe("W44 复查 R5 健康请求静悄悄挂着", () => {
     expect(Object.values(inflight).every((n) => n === 0)).toBe(true);
   });
 });
+
+describe("W44 复查 N1 健康回了头、正文挂着", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date"] });
+  });
+  afterEach(() => vi.useRealTimers());
+
+  it("正文读到一半超时:算问不通,不当成功;两次就标断了", async () => {
+    setFetch(((_url: string, init?: RequestInit) => {
+      const body = new ReadableStream<Uint8Array>({
+        start(c) {
+          c.enqueue(new TextEncoder().encode('{"cameras":'));       // 只来了半截,接着挂住
+          init?.signal?.addEventListener("abort", () => c.error(new DOMException("aborted", "AbortError")));
+        },
+      });
+      return Promise.resolve(new Response(body, { status: 200, headers: { "Content-Type": "application/json" } }));
+    }) as typeof fetch);
+    const r = render(<VideoSlot u={unit()} now={Date.now()} pinned={false} onPin={() => {}} onZoom={() => {}} />);
+    fireEvent.load(r.container.querySelector(".slot-main img.feed")!);
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(r.container.querySelector(".slot-main .lost")).not.toBeNull();
+  });
+});

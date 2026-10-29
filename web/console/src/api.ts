@@ -45,8 +45,11 @@ export async function api<T = unknown>(method: "GET" | "POST", path: string, bod
   let data: unknown = {};
   try {
     data = await resp.json();
-  } catch {
-    data = {};
+  } catch (e) {
+    // 正文读到一半被取消、断网(W44 复查 N1):不是「回了个空的」,是没问成
+    if (opts.signal?.aborted) throw new ApiError(0, "aborted");
+    if (!(e instanceof SyntaxError)) throw new ApiError(0, "network");
+    data = {};                                       // 正文不是 JSON(老接口、空回包):照旧当空的
   }
   if (!resp.ok) {
     const msg = (data as { error?: string }).error ?? `HTTP ${resp.status}`;
