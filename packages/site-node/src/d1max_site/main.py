@@ -226,7 +226,9 @@ def cmd_vpn(home: Path, args: argparse.Namespace) -> None:
             if got["kind"] == "robot":
                 print("拷到机器人(3588)上:/etc/wireguard/d1max.conf(chmod 600),"
                       "sudo systemctl enable --now wg-quick@d1max;/etc/d1max/env 里 "
-                      "D1MAX_SITE_MQTT=mqtts://172.29.70.1:8883(走隧道)")
+                      "D1MAX_SITE_MQTT=mqtts://172.29.70.1:8883、D1MAX_SITE_NTP=172.29.70.1"
+                      "(走隧道)\n所有机器人都走隧道以后,site.json 的 video.srt_host 改成 "
+                      "172.29.70.1(画面也走隧道),重启站点")
             else:
                 print("手机:WireGuard 应用里导入这个文件(或者 qrencode -t ansiutf8 < 文件 扫码);"
                       "连上以后在手机应用里把站点地址设成 172.29.70.1")
