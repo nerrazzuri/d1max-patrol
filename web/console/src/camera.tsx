@@ -119,9 +119,9 @@ export function CameraWell(props: { robot: string; cam: Cam; forceLive?: boolean
       api<Health & { cameras?: Record<string, Health> }>("GET", healthUrl, undefined, { signal: ctrl.signal })
         .then((d) => {
           if (stop || !alive.current) return;
-          misses.current = 0;
           const h = props.feed ? d : d.cameras?.[props.cam];
           if (!h) return;
+          misses.current = 0;                           // 拿到这一路的健康才算问通了(复查 N1)
           setWhy(!h.online && h.detail ? String(h.detail) : "");
           if (broken) return;                           // 断着:只为了拿原因
           const age = typeof h.last_frame_age_ms === "number" ? h.last_frame_age_ms : null;
