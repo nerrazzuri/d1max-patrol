@@ -32,6 +32,9 @@ BLOCK_RATIO = 0.35
 ABS_MIN_DETAIL = 2.0
 BLOCK_AFTER = 5
 CLEAR_AFTER = 3
+#: 开机以来连着这么多次糊得没细节(低于 :data:`ABS_MIN_DETAIL`)、基线一直攒不起来:报一次「看不清」
+#: (外审 R9:开机前就被挡住的镜头原来永远停在「攒基线」)。
+BOOT_STUCK_N = 30
 GRAB_TIMEOUT_S = 15.0
 
 
@@ -85,6 +88,8 @@ class LensWatch:
         self._next = 0.0
         self._good: deque[float] = deque(maxlen=BASELINE_N)
         self._low = self._ok = 0
+        self._boot_low = 0
+        self._boot_blocked = False
         self.state = "clear"
         self.last: float | None = None
         self.error = ""
@@ -115,6 +120,12 @@ class LensWatch:
         if not low:
             self._good.append(d)
         if not enough:
+            self._boot_low = self._boot_low + 1 if d < ABS_MIN_DETAIL else 0
+            if self.state == "clear" and self._boot_low >= BOOT_STUCK_N:
+                self.state, self._boot_blocked = "blocked", True
+                log.warning("热像镜头开机以来一直糊(细节 %.1f),基线攒不起来:可能被挡了", d)
+                self.emit("thermal_lens_blocked", {"camera": self.camera, "detail": round(d, 2),
+                                                    "baseline": 0.0})
             return
         self._low, self._ok = (self._low + 1, 0) if low else (0, self._ok + 1)
         if self.state == "clear" and self._low >= BLOCK_AFTER:
@@ -123,13 +134,16 @@ class LensWatch:
             self.emit("thermal_lens_blocked", {"camera": self.camera, "detail": round(d, 2),
                                                 "baseline": round(self.baseline(), 2)})
         elif self.state == "blocked" and self._ok >= CLEAR_AFTER:
-            self.state = "clear"
+            self.state, self._boot_blocked = "clear", False
             log.info("热像镜头又看得清了")
             self.emit("thermal_lens_clear", {"camera": self.camera})
 
     def health(self) -> dict[str, Any]:
         from d1max_contract.devices import device
         did = f"lens:{self.camera}"
+        if self.state == "blocked" and self._boot_blocked:
+            return device(did, "degraded", "开机以来画面一直糊成一片:镜头可能被挡住了,"
+                                           "也可能一直对着没有细节的东西(这种时候检查不了镜头)")
         if self.state == "blocked":
             return device(did, "degraded", "镜头可能被挡住了(雨水、脏东西),画面糊成一片")
         if self.error:
