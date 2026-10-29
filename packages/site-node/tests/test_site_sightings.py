@@ -204,3 +204,45 @@ def test_外审R2_armed_now_给受力警报用(台):
     t.arming.set_mode("home", by="olga")              # 手动在家:老约定,不报
     _站在(t, 3, 4)
     assert t.w.armed_now("A") is False
+
+
+def _具名都撤防台(台, *, default_on=True):
+    """gate、house 此刻都撤防;「全部防区一样」那份(没画到的地方)按 default_on。"""
+    from datetime import timezone
+
+    from d1max_site.areas import AreaBook
+    from d1max_site.arming_schedule import ArmingSchedule
+    t = 台
+    sch = t.arming.schedule = ArmingSchedule(t.db, now_ms=lambda: t.ms[0], tz=lambda: timezone.utc)
+    slots = [{"zone": z, "day": 6, "start": "00:00", "end": "00:01"} for z in ("gate", "house")]
+    slots += [{"zone": "", "day": d, "start": "00:00", "end": "24:00" if default_on else "00:01"}
+              for d in range(7)]
+    sch.put({"enabled": True, "slots": slots}, by="olga")
+    areas = AreaBook(t.db, now_ms=lambda: t.ms[0])
+    areas.set("m", "1", "gate", [[0, 0], [10, 0], [10, 10], [0, 10]], by="olga")
+    areas.set("m", "1", "house", [[20, 0], [30, 0], [30, 10], [20, 10]], by="olga")
+    t.w.areas = areas
+    t.d.clients["A"].status.ready = SimpleNamespace(loc_ok=True)
+    t.d.telemetry_at, t.d.stale_ms = {"A": t.ms[0]}, 10_000
+    return t
+
+
+def test_外审复查R2_具名防区都撤防_没画到的地方还布防_整体算部分布防_站在外面看见人照报(台):
+    t = _具名都撤防台(台)
+    assert t.arming.view()["state"] == "partial", "默认区域还布防:不是全站撤防"
+    _站在(t, 50, 50)
+    assert t.w.armed_now("A") is True
+    t.d.persons("A", present=True, count=1)
+    t.w.tick()
+    assert [a["kind"] for a in t.w.alerts.raised] == ["dog_sees_person"]
+    _站在(t, 3, 4)                                     # 在撤防的门口:不报
+    assert t.w.armed_now("A") is False
+
+
+def test_外审复查R2_具名都撤防_定位说不清宁可报_全站都撤防才不报(台):
+    t = _具名都撤防台(台)
+    t.d.clients["A"].status.ready.loc_ok = False
+    assert t.w.armed_now("A") is True
+    t2 = _具名都撤防台(台, default_on=False)
+    assert t2.arming.view()["state"] == "disarmed"
+    assert t2.w.armed_now("A") is False, "全站都撤防:说不清也不报"

@@ -104,11 +104,17 @@ class ArmingDesk:
             "SELECT zone FROM zone_arming WHERE home_armed=0 ORDER BY zone")]
 
     def armed(self, zone: str) -> tuple[bool, str]:
-        """→ (这个防区现在布不布防, 当前模式)。"""
+        """→ (这个防区现在布不布防, 当前模式)。整个判断拿着同一把读锁(W44 复查 R1:读完「按不按时间表」
+        之后另一个线程关掉时间表,不能拼成「按时间表 + 没开」= 撤防)。"""
+        with self.db.snapshot():
+            return self._armed_locked(zone)
+
+    def _armed_locked(self, zone: str) -> tuple[bool, str]:
         r = self._effective(self._raw())
         if self._governed(r):
             assert self.schedule is not None
-            return bool(self.schedule.scheduled(zone, self._now())), "schedule"
+            on = self.schedule.scheduled(zone, self._now())
+            return on is not False, "schedule"          # None(锁里不该有)按布防:宁可报
         mode = r["mode"]
         if mode == "armed":
             return True, mode
@@ -126,7 +132,32 @@ class ArmingDesk:
             "SELECT zone FROM arming_slots WHERE zone<>'' ORDER BY zone")
         return [r["zone"] for r in rows]
 
+    def robot_armed(self, reliable: bool, zone: str | None) -> bool:
+        """机器人此刻所在的地方布不布防(看见人报不报、被抱起响不响警笛;W44 复查 R2)。
+
+        - 手动(不按时间表):老约定,只有「布防」模式才算(在家、访客一律不报)。
+        - 按时间表:各具名防区和「没画到的地方」(``''`` 那份)**全都**撤防才不报;不然位置可靠就按它
+          所在防区(不在任何防区里按 ``''`` 那份),位置说不清宁可报。
+        整个判断拿着同一把读锁(复查 R1)。"""
+        with self.db.snapshot():
+            r = self._effective(self._raw())
+            if not self._governed(r):
+                return r["mode"] == "armed"
+            assert self.schedule is not None
+            now = self._now()
+            parts = [self.schedule.scheduled(z, now) for z in self.known_zones()]
+            parts.append(self.schedule.scheduled("", now))
+            if all(p is False for p in parts):
+                return False
+            if not reliable:
+                return True
+            return self.schedule.scheduled(zone or "", now) is not False
+
     def view(self) -> dict[str, Any]:
+        with self.db.snapshot():
+            return self._view_locked()
+
+    def _view_locked(self) -> dict[str, Any]:
         r = self._effective(self._raw())
         now = self._now()
         governed = self._governed(r)
@@ -140,9 +171,15 @@ class ArmingDesk:
                 on = not (r["mode"] != "armed" and (
                     z in home_off or (r["mode"] == "visitor" and z in r["visitor_zones"])))
             zones.append({"zone": z, "home_armed": z not in home_off, "armed": on})
+        default_on: bool | None = None
+        if zones and governed:
+            # 没画进任何具名防区的地方按「全部防区一样」那份(W44 复查 R2):它也算一份
+            assert self.schedule is not None
+            default_on = self.schedule.scheduled("", now) is not False
         if zones:
-            n = sum(z["armed"] for z in zones)
-            state = "armed" if n == len(zones) else "disarmed" if n == 0 else "partial"
+            parts = [z["armed"] for z in zones] + ([default_on] if default_on is not None else [])
+            n = sum(parts)
+            state = "armed" if n == len(parts) else "disarmed" if n == 0 else "partial"
         elif governed:
             assert self.schedule is not None
             state = "armed" if self.schedule.scheduled(None, now) else "disarmed"
@@ -161,6 +198,7 @@ class ArmingDesk:
                 "set_by": r["set_by"], "set_ms": r["set_ms"], "zones": zones,
                 "source": "schedule" if governed else "manual", "state": state,
                 "manual_until_ms": None if governed else r.get("manual_until_ms"),
+                "default_armed": default_on,
                 "next_change_ms": nxt}
 
     # ------------------------------------------------------------ 改

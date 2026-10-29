@@ -360,3 +360,27 @@ def test_外审R1_读的时候看到的是同一份(台, monkeypatch):
     done[1].join(5)
     monkeypatch.undo()
     assert s.scheduled("gate", 台.clock()) is None      # 后来那次关掉了:整份关
+
+
+def test_外审复查R1_判这一处布不布防时插进一次关时间表_要么整份旧要么整份新(台, monkeypatch):
+    """开关读完、时间段还没读时另一个线程关掉时间表:原来拼出「按时间表 + 没开」= 撤防(被抱起警笛
+    整回不响)。现在整个判断拿着同一把读锁:关时间表等它判完。"""
+    import threading
+    s = 台.schedule
+    s.put({"enabled": True, "slots": [slot(0, "00:00", "24:00")]}, by="alice")
+    real = s.enabled
+    box = []
+
+    def 插一脚():
+        got = real()
+        if not box:
+            t = threading.Thread(target=lambda: s.put({"enabled": False, "slots": []}, by="bob"))
+            t.start()
+            t.join(0.3)
+            box.append(t)
+        return got
+    monkeypatch.setattr(s, "enabled", 插一脚)
+    assert 台.armed("gate") == (True, "schedule")       # 整份旧的:布防
+    box[0].join(5)
+    monkeypatch.undo()
+    assert 台.armed("gate") == (True, "armed")          # 整份新的:回到手动布防
