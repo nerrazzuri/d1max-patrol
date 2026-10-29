@@ -129,6 +129,7 @@ def test_外审R7_速度标上是哪个目标的(monkeypatch):
     b, futs = _桥(monkeypatch)
     b.on_goal({"goal_id": 5, "x": 1, "y": 2, "yaw": 0})
     futs[0].set_result(_Handle())
+    b._on_status("follow_path", _状态(2))                    # 这个目标的控制器开跑了
     b._mono = lambda: 1e9                     # 过了收下之后的屏障(复查 N3)
     b._on_cmd(NS(linear=NS(x=0.3, y=0.0), angular=NS(z=0.1)))
     assert b.sent[-1]["type"] == "cmd" and b.sent[-1]["goal_id"] == 5
@@ -199,6 +200,7 @@ def test_外审复查N3_新目标刚收下时排着队的旧速度不发(monkeyp
     b, futs = _桥(monkeypatch)
     b.on_goal({"goal_id": 5, "x": 1, "y": 2, "yaw": 0})
     futs[0].set_result(_Handle())
+    b._on_status("follow_path", _状态(2))
     b._on_cmd(NS(linear=NS(x=0.4, y=0.0), angular=NS(z=0.0)))   # 上一个目标排着队的那条
     assert not [m for m in b.sent if m["type"] == "cmd"]
     b._mono = lambda: 1e9                                        # 过了屏障
@@ -294,6 +296,8 @@ def test_复查三P4_脱困动作的速度单独一路_标上beh(monkeypatch):
     b, futs = _桥(monkeypatch)
     b.on_goal({"goal_id": 5, "x": 1, "y": 2, "yaw": 0})
     futs[0].set_result(_Handle())
+    b._on_status("follow_path", _状态(2))
+    b._on_status("backup", _状态(2))
     b._mono = lambda: 1e9
     b._on_beh(NS(linear=NS(x=-0.15, y=0.0), angular=NS(z=0.0)))
     b._on_cmd(NS(linear=NS(x=0.3, y=0.0), angular=NS(z=0.1)))
@@ -397,6 +401,69 @@ def test_复查四P2_规划状态只收到完成那一条_也认得出是新规�
     b.on_goal({"goal_id": 9, "x": 2, "y": 4, "yaw": 0})
     futs[0].set_result(_Handle())
     b._on_status("compute_path_to_pose", _状态(4, ids=[1]))       # 还是老的那份:不开
-    assert not b.plan_open
+    assert "plan" not in b.opened
     b._on_status("compute_path_to_pose", _状态(4, 4, ids=[1, 2]))  # 多了一个新号(已完成)
-    assert b.plan_open
+    assert "plan" in b.opened
+
+
+def test_复查五_控制器的速度_要派出以后控制器自己出现新目标才转(monkeypatch):
+    """Twist 不带目标号:派出新目标以后 follow_path 的状态里出现了新目标号(这个目标的控制器开跑了),
+    控制器的速度才转给代理;之前来的(老控制器晚到的)不转。"""
+    from types import SimpleNamespace as NS
+    b, futs = _桥(monkeypatch)
+    b._on_status("follow_path", _状态(5, ids=[1]))           # 老目标的,早结束了
+    b.on_goal({"goal_id": 5, "x": 1, "y": 2, "yaw": 0})
+    futs[0].set_result(_Handle())
+    b._mono = lambda: 1e9
+    b._on_cmd(NS(linear=NS(x=0.4, y=0.0), angular=NS(z=0.0)))
+    assert not [m for m in b.sent if m["type"] == "cmd"], "新控制器还没开跑"
+    b._on_status("follow_path", _状态(5, 2, ids=[1, 2]))
+    b._on_cmd(NS(linear=NS(x=0.3, y=0.0), angular=NS(z=0.0)))
+    assert [m["vx"] for m in b.sent if m["type"] == "cmd"] == [0.3]
+
+
+def test_复查五_脱困的速度_要这个目标的脱困动作开跑过才转(monkeypatch):
+    from types import SimpleNamespace as NS
+    b, futs = _桥(monkeypatch)
+    b.on_goal({"goal_id": 5, "x": 1, "y": 2, "yaw": 0})
+    futs[0].set_result(_Handle())
+    b._mono = lambda: 1e9
+    beh = NS(linear=NS(x=-0.15, y=0.0), angular=NS(z=0.0))
+    b._on_beh(beh)                                            # 老目标的 BackUp 晚到的
+    assert not [m for m in b.sent if m["type"] == "cmd"]
+    b._on_status("backup", _状态(2, ids=[7]))
+    b._on_beh(beh)
+    assert len([m for m in b.sent if m["type"] == "cmd"]) == 1
+    b._on_status("backup", _状态(4, ids=[7]))                # 状态先处理到「做完了」
+    b._on_beh(beh)                                            # 后面排着的几条后退照样转
+    assert len([m for m in b.sent if m["type"] == "cmd"]) == 2, \
+        "状态和速度两路在两个线程里处理:要求「还在跑」会丢合法的后退(终点贴墙 4/5 → 0/3)"
+
+
+def test_复查五_刚起来_动作状态没同步完之前不派目标_也不报就绪(monkeypatch):
+    b, futs = _桥(monkeypatch)
+    now = [100.0]
+    b._mono = lambda: now[0]
+    b.status_sync_until = 102.0
+    b.on_goal({"goal_id": 5, "x": 1, "y": 2, "yaw": 0})
+    assert len(futs) == 0
+    now[0] = 102.5
+    b._pump()
+    assert len(futs) == 1
+
+
+def test_复查五_某个动作服务没了_它的旧状态清掉_不一直挡着(monkeypatch):
+    from types import SimpleNamespace as NS
+    b, futs = _桥(monkeypatch)
+    b._on_status("follow_path", _状态(2))
+    counts = {"/follow_path/_action/status": 0}
+    b.node = NS(count_publishers=lambda t: counts.get(t, 1))
+    b.on_goal({"goal_id": 5, "x": 1, "y": 2, "yaw": 0})
+    assert len(futs) == 0
+    b.reap_gone_producers()
+    assert b.producing["follow_path"] is False and len(futs) == 1
+
+
+def test_复查五_assisted_teleop也算会出速度的动作():
+    from d1max_localizer.nav2bridge import PRODUCERS
+    assert "assisted_teleop" in PRODUCERS
