@@ -32,6 +32,8 @@ Nav2 一律 ``use_sim_time``,转接节点按代理送来的时刻发 ``/clock``�
 - ``cmd {t_ms, vx, vy, wz}``:Nav2 出的速度(机身系),``t_ms`` 是它那时候的 ``/clock``。
 - ``goal_state {goal_id, state, reason}``:
   ``accepted`` / ``succeeded`` / ``aborted`` / ``canceled`` / ``rejected``。
+- ``path {goal_id, pts}``:Nav2 这一次规划出的路径(地图系,抽稀到最多 :data:`MAX_PATH_PTS` 个点),
+  每次重规划发一次;站点地图上画。
 - ``hb {seq}``
 """
 
@@ -59,11 +61,14 @@ FIELDS: dict[str, tuple[set[str], set[str]]] = {
     "ready": ({"ok"}, {"reason"}),
     "cmd": ({"t_ms", "vx", "vy", "wz"}, set()),
     "goal_state": ({"goal_id", "state"}, {"reason"}),
+    "path": ({"goal_id", "pts"}, set()),
     "error": ({"reason"}, set()),
 }
 #: 只许代理发的、只许转接节点发的。
 FROM_AGENT = frozenset({"hello", "map", "tick", "grid", "goal", "cancel", "hb", "error"})
-FROM_BRIDGE = frozenset({"hello", "ready", "cmd", "goal_state", "hb", "error"})
+FROM_BRIDGE = frozenset({"hello", "ready", "cmd", "goal_state", "path", "hb", "error"})
+#: Nav2 规划出的路径最多带这么多点(转接节点抽稀;站点地图上画)。
+MAX_PATH_PTS = 256
 
 
 def _num(v: Any, what: str) -> float:
@@ -146,6 +151,16 @@ def check(msg: dict[str, Any]) -> dict[str, Any]:
                 _num(msg[k], k)
         if t == "goal_state" and msg["state"] not in GOAL_STATES:
             raise ContractError(f"Nav2 转接:state 要是 {'/'.join(GOAL_STATES)}")
+    elif t == "path":
+        _int(msg["goal_id"], "goal_id", lo=1)
+        pts = msg["pts"]
+        if not isinstance(pts, list) or len(pts) > MAX_PATH_PTS:
+            raise ContractError(f"Nav2 转接:path.pts 要是最多 {MAX_PATH_PTS} 个点")
+        for q in pts:
+            if not isinstance(q, list) or len(q) != 2:
+                raise ContractError("Nav2 转接:path 的点要是 [x, y]")
+            _num(q[0], "path.x")
+            _num(q[1], "path.y")
     elif t == "hb":
         _int(msg["seq"], "seq")
     elif t == "ready":

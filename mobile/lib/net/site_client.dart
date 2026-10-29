@@ -342,6 +342,7 @@ String deviceName(String id) {
     'fan' => tr('Fan $name', '风扇 $name'),
     'amp' => tr('Amplifier', '功放'),
     'lens' => tr('Thermal lens', '热像镜头'),
+    'nav2' => tr('Autonomous navigation (Nav2)', '自主导航（Nav2）'),
     'camera' => tr('Camera ${cameraName(name)}', '相机 ${cameraName(name)}'),
     'link' => name == 'router'
         ? tr('Router', '路由器')

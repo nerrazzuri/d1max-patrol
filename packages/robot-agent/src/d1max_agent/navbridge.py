@@ -54,6 +54,8 @@ class NavBridgeServer:
         #: 最近一条速度:``(收到的单调钟, t_ms, vx, vy, wz)``。
         self.cmd: tuple[float, int, float, float, float] | None = None
         self.goal_states: deque[dict[str, Any]] = deque(maxlen=64)
+        #: Nav2 最近一次规划出的路径:``(目标号, ((x, y), …))``。
+        self.plan: tuple[int, tuple[tuple[float, float], ...]] | None = None
 
     # ------------------------------------------------------------ 起停
 
@@ -149,6 +151,8 @@ class NavBridgeServer:
             self.cmd = (self._now(), m["t_ms"], m["vx"], m["vy"], m["wz"])
         elif t == "goal_state":
             self.goal_states.append(m)
+        elif t == "path":
+            self.plan = (m["goal_id"], tuple((float(x), float(y)) for x, y in m["pts"]))
         elif t == "error":
             log.warning("Nav2 转接节点报错:%s", m["reason"])
 

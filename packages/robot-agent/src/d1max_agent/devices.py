@@ -90,12 +90,15 @@ class DeviceHealth:
         self.board: Any = None
         #: 热像镜头被挡(W46,:class:`~d1max_agent.lens.LensWatch`)。
         self.lens: Any = None
+        #: Nav2 后端(W47):就绪没有(``health()``)。
+        self.nav2: Any = None
 
     def wanted(self) -> bool:
         """有没有东西可报(一样都没有就不往遥测里带)。"""
         return bool(callable(getattr(self.hal, "device_health", None)) or self.rtk is not None
                     or self.recorder is not None or self.outbox is not None or self.links
-                    or self.board is not None or self.lens is not None)
+                    or self.board is not None or self.lens is not None
+                    or self.nav2 is not None)
 
     async def refresh(self) -> list[dict[str, Any]]:
         out: list[dict[str, Any]] = []
@@ -121,6 +124,8 @@ class DeviceHealth:
                 log.exception("板子温度的设备健康读不出来")
         if self.lens is not None:
             out.append(self.lens.health())
+        if self.nav2 is not None:
+            out.append(self.nav2.health())
         if self.outbox is not None:
             out.append(self._disk())
         if self.links:

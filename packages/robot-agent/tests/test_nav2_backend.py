@@ -111,6 +111,12 @@ async def test_服务端_握手_补发地图_收就绪速度结果_断了就不�
         if srv.goal_states:
             break
         await asyncio.sleep(0.01)
+    await send({"type": "path", "goal_id": 1, "pts": [[0.0, 0.0], [1.0, 0.5]]})
+    for _ in range(50):
+        if srv.plan:
+            break
+        await asyncio.sleep(0.01)
+    assert srv.plan == (1, ((0.0, 0.0), (1.0, 0.5)))
     assert srv.ready and srv.cmd[1:] == (9, 0.3, 0.0, 0.1)
     assert srv.goal_states[0]["state"] == "succeeded"
     w.close()
@@ -423,3 +429,59 @@ async def test_看得清就快_限速送给Nav2(tmp_path):
         await t.一拍()
     sp = link.kinds("tick")[-1].get("speed")
     assert sp is not None and 0 < sp < 0.8, sp
+
+
+# ------------------------------------------------------------ 站点上看得见(路线、健康)
+
+
+async def test_走Nav2时_站点地图上画Nav2规划的路线(tmp_path):
+    link = 假转接()
+    link.plan = None
+    t = _台(tmp_path, link)
+    await t.start(1.5, 4.0)
+    await t.nav.goto(Pose.from_xy_yaw(6.0, 4.0))
+    gid = link.kinds("goal")[-1]["goal_id"]
+    assert t.nav.current_path() is None, "Nav2 还没规划出来"
+    link.plan = (gid - 1, ((0.0, 0.0), (1.0, 1.0)))
+    assert t.nav.current_path() is None, "别的目标的路线不算"
+    link.plan = (gid, ((1.5, 4.0), (3.0, 4.2), (6.0, 4.0)))
+    assert t.nav.current_path() == ((1.5, 4.0), (3.0, 4.2), (6.0, 4.0))
+    await t.nav.stop()
+    await t.跑(1.0)
+    assert t.nav.current_path() is None
+
+
+async def test_设备健康_Nav2就绪没有_为什么(tmp_path):
+    link = 假转接()
+    t = _台(tmp_path, link)
+    assert t.nav.health() == {"id": "nav2", "state": "online", "detail": "Nav2 就绪"}
+    link.ready, link.reason = False, "还在启动(生命周期没全部激活)"
+    h = t.nav.health()
+    assert h["state"] == "offline" and "还在启动" in h["detail"] and "退回" in h["detail"]
+    link.connected = False
+    assert "没连上" in t.nav.health()["detail"]
+
+
+def test_路径抽稀_头尾都留_最多256点():
+    from d1max_localizer.nav2bridge import decimate
+    pts = [(i * 0.05, 0.0) for i in range(2001)]           # 100 m、每 5 cm 一个点
+    out = decimate(pts)
+    assert out[0] == [0.0, 0.0] and out[-1] == [100.0, 0.0] and len(out) <= 256
+    assert decimate([(0, 0), (0.01, 0), (0.02, 0)]) == [[0.0, 0.0], [0.02, 0.0]]
+    assert decimate([]) == []
+
+
+async def test_运行时_nav2后端的设备健康里有Nav2一条(tmp_path):
+    from test_runtime import REG, 钟
+
+    from d1max_adapter_sim.robot import SimRobot
+    from d1max_agent.runtime import AgentRuntime
+    from d1max_contract.memory_broker import MemoryBroker, MemoryTransport
+    c = 钟()
+    rt = AgentRuntime(transport=MemoryTransport(MemoryBroker(), "dog"), registration=REG,
+                      hal=SimRobot(now_ms=c), store_dir=tmp_path / "a", now_ms=c,
+                      loaded_map=("m", "1"), home=Pose.from_xy_yaw(0, 0), nav="nav2",
+                      obstacles="bridge", monotonic=lambda: c.mono)
+    got = await rt.devices.refresh()
+    n = [d for d in got if d["id"] == "nav2"]
+    assert n and n[0]["state"] == "offline" and "没连上" in n[0]["detail"]

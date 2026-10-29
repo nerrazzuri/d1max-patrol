@@ -360,6 +360,8 @@ class AgentRuntime:
         #: 设备健康(W40):随遥测每 ``DEVICES_EVERY_MS`` 带一份(后台收,收好了下一拍带);
         #: 装机入口再补上发件箱那块盘、网络上的设备。
         self.devices: DeviceHealth | None = DeviceHealth(hal=hal, rtk=rtk, recorder=recorder)
+        if self._nav2_srv is not None:
+            self.devices.nav2 = parts.nav            # W47:设备健康里报 Nav2 就绪没有
         self._next_devices_ms = 0
         self._devices_task: asyncio.Task | None = None
         self._devices_ready = False
