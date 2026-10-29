@@ -202,7 +202,20 @@ class Nav2NavBackend(PlannedNavBackend):
         await super()._enter_terminal(status)
 
     def current_path(self) -> tuple[tuple[float, float], ...] | None:
-        return None if self._nav2_goal is not None else super().current_path()
+        """正在走的路线(站点地图上画):走 Nav2 的那一段是 Nav2 最近一次规划出的(转接节点抽稀过);
+        退回自己规划的那一段照旧。"""
+        if self._nav2_goal is None:
+            return super().current_path()
+        p = getattr(self.link, "plan", None)
+        return p[1] if p is not None and p[0] == self._nav2_goal else None
+
+    def health(self) -> dict[str, Any]:
+        """设备健康里的一条(``nav2``):Nav2 就绪没有;没就绪写清楚为什么、导航退回自己的规划。"""
+        from d1max_contract.devices import device
+        why = self.nav2_ready()
+        if not why:
+            return device("nav2", "online", "Nav2 就绪")
+        return device("nav2", "offline", f"{why};导航退回自己的规划")
 
     # ------------------------------------------------------------ 每拍
 

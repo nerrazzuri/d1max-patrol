@@ -10,6 +10,7 @@ void main() {
     expect(deviceName('fan:stir'), '风扇 stir');
     expect(deviceName('amp'), '功放');
     expect(deviceName('lens:thermal'), '热像镜头');
+    expect(deviceName('nav2'), '自主导航（Nav2）');
     appLang.value = AppLang.en;
     expect(deviceName('fan:stir'), 'Fan stir');
     appLang.value = AppLang.zh;

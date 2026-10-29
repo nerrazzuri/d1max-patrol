@@ -51,6 +51,7 @@ describe("诊断", () => {
     expect(deviceText("fan:stir")).toBe("风扇 stir");
     expect(deviceText("amp")).toBe("功放");
     expect(deviceText("lens:thermal")).toBe("热像镜头");
+    expect(deviceText("nav2")).toBe("自主导航（Nav2）");
   });
   it("打包日志是下载", () => {
     const { container: c } = render(<DiagPage />);

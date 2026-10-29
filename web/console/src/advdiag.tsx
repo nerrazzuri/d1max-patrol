@@ -26,6 +26,7 @@ export function deviceText(id: string): string {
   if (kind === "fan") return t("devFan", { n: name });
   if (kind === "amp") return t("devAmp");
   if (kind === "lens") return t("devLens");
+  if (kind === "nav2") return t("devNav2");
   return id;
 }
 

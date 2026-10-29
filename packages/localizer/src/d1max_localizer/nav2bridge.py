@@ -75,6 +75,23 @@ def grid_points(m: dict[str, Any], odom_now: tuple[float, float, float]
     return np.stack([bx[o], by[o]], axis=1), np.stack([bx[f], by[f]], axis=1)
 
 
+def decimate(pts: list[tuple[float, float]], step: float = 0.2,
+             most: int = 256) -> list[list[float]]:
+    """路径抽稀:相邻两点至少隔 ``step`` 米,头尾都留;还多就等间隔再挑,最多 ``most`` 个。"""
+    if not pts:
+        return []
+    out = [pts[0]]
+    for p in pts[1:-1]:
+        if math.dist(p, out[-1]) >= step:
+            out.append(p)
+    if len(pts) > 1:
+        out.append(pts[-1])
+    if len(out) > most:
+        k = (len(out) - 1) / (most - 1)
+        out = [out[round(i * k)] for i in range(most)]
+    return [[round(float(x), 3), round(float(y), 3)] for x, y in out]
+
+
 def occupancy(map_dir: Path, nogo: list[list[list[float]]]
               ) -> tuple[np.ndarray, float, tuple[float, float]]:
     """地图目录 → (占用 int8 栅格,行从下往上:0 空、100 挡;分辨率;原点)。禁行区烧成挡。"""
@@ -125,6 +142,10 @@ class Nav2Bridge:
             "/local_costmap/clear_entirely_local_costmap",
             "/global_costmap/clear_entirely_global_costmap")]
         self.node.create_subscription(Twist, "/cmd_vel", self._on_cmd, 10)
+        from nav_msgs.msg import Path as PathMsg
+        self.node.create_subscription(PathMsg, "/plan", self._on_plan, 5)
+        #: 正在走的目标号(Nav2 收下的最近那个);规划出的路径按它报。
+        self.active_gid: int | None = None
         from std_srvs.srv import Trigger
         self._trigger = Trigger
         #: Nav2 的生命周期管理器:全部节点激活了才算就绪(动作服务在不等于激活了,早发的目标会被拒)。
@@ -160,6 +181,13 @@ class Nav2Bridge:
             self.loop.call_soon_threadsafe(self.send, msg)
 
     # ------------------------------------------------------------ ROS 回调(rclpy 线程)
+
+    def _on_plan(self, msg: Any) -> None:
+        gid = self.active_gid
+        if gid is None:
+            return
+        pts = decimate([(p.pose.position.x, p.pose.position.y) for p in msg.poses])
+        self.send_threadsafe({"type": "path", "goal_id": gid, "pts": pts})
 
     def _on_cmd(self, t: Any) -> None:
         self.send_threadsafe({"type": "cmd", "t_ms": self.t_ms, "vx": float(t.linear.x),
@@ -282,12 +310,15 @@ class Nav2Bridge:
                                   "reason": "Nav2 不收这个目标"})
             return
         self.goals[gid] = h
+        self.active_gid = gid
         self.send_threadsafe({"type": "goal_state", "goal_id": gid, "state": "accepted"})
         h.get_result_async().add_done_callback(lambda f: self._done(gid, f))
 
     def _done(self, gid: int, fut: Any) -> None:
         from action_msgs.msg import GoalStatus
         self.goals.pop(gid, None)
+        if self.active_gid == gid:
+            self.active_gid = None
         try:
             status = fut.result().status
         except Exception as exc:                        # noqa: BLE001
