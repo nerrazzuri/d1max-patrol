@@ -47,6 +47,7 @@ def 台(tmp_path, monkeypatch):
     rt.maps = SimpleNamespace(dir_of=lambda ref: tmp_path / ref.version, home_of=lambda ref: None)
     rt.homes = SimpleNamespace(get=lambda *a: None)
     rt.zonebook = SimpleNamespace(get=lambda *a: None)
+    rt.routebook = SimpleNamespace(get=lambda *a: None)       # W48 路网也跟着几何版本走
     rt._rtk_check = SimpleNamespace(on_map=lambda *a: None)
     rt._load_geo = lambda *a: None
     rt._supported = lambda: set()
