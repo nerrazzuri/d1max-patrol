@@ -40,33 +40,20 @@ class PersonWatch:
         #: 告警台。站点主程序接上;没接就只落库(下一拍有了再报)。
         self.alerts: Any = None
 
-    def _armed_view(self) -> dict[str, Any] | None:
-        """这一拍的布防情况;读不出来、没接是 ``None``(当布防,宁可多报)。"""
-        if self.arming is None:
-            return None
-        try:
-            return self.arming.view()
-        except Exception:
-            log.exception("布防模式读不出来:当布防(宁可多报)")
-            return None
-
     def armed_now(self, rid: str) -> bool:
         """这台机器人此刻所在的地方布不布防(受力警报响不响警笛也问这里)。"""
-        return self._armed_for(rid, self._armed_view())
+        return self._armed_for(rid)
 
-    def _armed_for(self, rid: str, v: dict[str, Any] | None) -> bool:
-        """这台机器人这会儿看见人该不该报(见模块说明)。"""
-        if v is None:
+    def _armed_for(self, rid: str) -> bool:
+        """这台机器人这会儿看见人该不该报(见模块说明):布防台**一次**判完(W44 复查 R1、R2)。
+        读不出来、没接都当布防(宁可多报)。"""
+        if self.arming is None:
             return True
-        if v.get("source") != "schedule" or v.get("state") != "partial":
-            return v.get("mode") == "armed"
         reliable, zone = self._where(rid)
-        if not reliable:
-            return True
         try:
-            return bool(self.arming.armed(zone or "")[0])
+            return bool(self.arming.robot_armed(reliable, zone))
         except Exception:
-            log.exception("%s 所在防区布不布防读不出来:当布防(宁可多报)", rid)
+            log.exception("%s 所在的地方布不布防读不出来:当布防(宁可多报)", rid)
             return True
 
     def _persons(self, rid: str) -> dict[str, Any] | None:
@@ -84,7 +71,6 @@ class PersonWatch:
         # 这一回记成了什么(B 阶段外审 I1):'p1' 报过 P1;'authorized' 授权在场只记了 P3
         seen = {r["robot_id"]: r["kind"]
                 for r in self.db.query("SELECT robot_id, kind FROM person_sightings")}
-        v = self._armed_view()
         busy = set(getattr(self.deterrence, "sessions", {}) or {})
         now = self._now()
         for rid in list(self.dispatcher.clients):
@@ -95,7 +81,7 @@ class PersonWatch:
             if present is False and rid in seen:
                 with self.db.tx() as tx:                  # 人走了:这一回完了,再看见再报
                     tx.execute("DELETE FROM person_sightings WHERE robot_id=?", (rid,))
-            elif present is True and rid not in busy and self._armed_for(rid, v):
+            elif present is True and rid not in busy and self._armed_for(rid):
                 kind = seen.get(rid)
                 if kind == "p1":
                     continue                                  # 这一回报过 P1 了
