@@ -369,12 +369,20 @@ class Nav2NavBackend(PlannedNavBackend):
             # 外审 R7、复查 N3:别的目标的、转接节点那会儿没在走目标(没标号)的速度都不认
             await self._send(0.0, 0.0, dt_s)
             return
-        p = getattr(link, "plan", None)
-        if p is None or p[0] != self._nav2_goal:
-            # 复查 P1:这个目标自己的规划路线还没来 —— 控制器总是拿到新路线之后才出新目标的速度,
-            # 之前收到的不管标的是谁都可能是上一个目标的(0.2 秒屏障证明不了)
-            await self._send(0.0, 0.0, dt_s)
-            return
+        src = c[6] if len(c) > 6 else "ctl"
+        if src != "beh":
+            # 复查 P1:控制器的速度要等这个目标自己的规划路线来了、而且比路线**晚到**才认 —— 控制器
+            # 拿到新路线之后才出新目标的速度;路线之前收到(门槛打开前缓存着的)不管标的是谁都可能是
+            # 上一个目标的。脱困动作(BackUp,复查第三轮 P4)常在规划不出来时做,不等路线;
+            # 目标号照样要对。
+            p = getattr(link, "plan", None)
+            if p is None or p[0] != self._nav2_goal:
+                await self._send(0.0, 0.0, dt_s)
+                return
+            prx = getattr(link, "plan_rx", {}).get(self._nav2_goal)
+            if len(c) > 7 and prx is not None and c[7] < prx:
+                await self._send(0.0, 0.0, dt_s)
+                return
         _, _, vx, _vy, wz = c[:5]
         sign = 1 if vx >= 0 else -1
         if abs(vx) > 1e-6 and sign != moving:

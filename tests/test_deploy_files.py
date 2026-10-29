@@ -1886,3 +1886,19 @@ def test_persons启动脚本_跨板时带上连谁和密钥():
     want = '${D1MAX_PERSONS_CONNECT:+--connect} ${D1MAX_PERSONS_CONNECT:+"$D1MAX_PERSONS_CONNECT"}'
     assert want in text
     assert '${D1MAX_PERSONS_CONNECT:+"${D1MAX_PERSONS_KEY:-/etc/d1max/persons.key}"}' in text
+
+
+def test_复查三P4_自己起Nav2的节点_控制器和脱困各出一路_不起速度平滑器():
+    """bringup 的 navigation_launch.py 里 behavior_server 发 /cmd_vel(跟平滑器同一个话题),转接节点
+    订 /cmd_vel_nav 就收不到 BackUp。自己起:控制器 → /cmd_vel_nav,脱困 → /cmd_vel_behavior。"""
+    launch = (DEPLOY / "nav2" / "d1max_nav2.launch.py").read_text(encoding="utf-8")
+    code = launch.split('"""', 2)[2]
+    assert "navigation_launch.py" not in code and "nav2_bringup" not in code
+    assert '("cmd_vel", "cmd_vel_nav")' in launch and '("cmd_vel", "cmd_vel_behavior")' in launch
+    assert "velocity_smoother" not in code, "平滑器会把旧目标的速度拖进新目标"
+    assert "lifecycle_manager_navigation" in launch
+    for n in ("controller_server", "planner_server", "behavior_server", "bt_navigator"):
+        assert f'"{n}"' in launch
+    src = (ROOT / "packages" / "localizer" / "src" / "d1max_localizer" / "nav2bridge.py").read_text(
+        encoding="utf-8")
+    assert '"/cmd_vel_behavior"' in src and '"/cmd_vel_nav"' in src
