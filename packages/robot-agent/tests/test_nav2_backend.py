@@ -339,8 +339,9 @@ async def test_送给Nav2的速度按位置变化算_不信厂家里程报的速
 
 
 async def test_看不见的地方快了就慢下来_看得见的挡才停(tmp_path):
-    """2026-10-29 仿真:Nav2 1.0 m/s 时人从侧面(盲区)横穿,5 次撞 5 次 —— 「看不见的放行」快了不安全。
-    改成:扫过区里有看不见的格子、又快,就降到 UNKNOWN_SLOW_MPS;低速照旧放行(不回到 10-28 起不了步)。"""
+    """2026-10-29 仿真:Nav2 1.0 m/s 时人从侧面(盲区)横穿,5 次撞 5 次 ——
+    「看不见的放行」快了不安全。改成:扫过区里有看不见的格子、又快,就降到 UNKNOWN_SLOW_MPS;
+    低速照旧放行(不回到 10-28 起不了步)。"""
     from d1max_agent.bridges.nav2_nav import UNKNOWN_SLOW_MPS
     from d1max_agent.obstacles import Verdict
     link = 假转接()
