@@ -30,6 +30,8 @@ import time
 from typing import Any
 
 from d1max_patrol.protocol.agent_frames import (
+    LEGACY_MAX_FRACTION,
+    MAX_FORWARD_FRACTION,
     NOT_AUTHORIZED,
     PROTO_VERSION,
     AgentProtocolError,
@@ -99,7 +101,16 @@ class SimAgentServer:
         follows_head: bool = True,
         speed_level_want: int = 1,
         token: str | None = None,
+        max_fraction: float = LEGACY_MAX_FRACTION,
+        permit_mps_per_unit: float | None = None,
     ) -> None:
+        #: 同 ``patrol_agent --max-fraction``(W47):前进比例上限;超过 0.5 的只在开了许可门时放行。
+        if not LEGACY_MAX_FRACTION <= max_fraction <= MAX_FORWARD_FRACTION:
+            raise ValueError(f"max_fraction 要在 [0.5, 1.0],收到 {max_fraction}")
+        self.max_fraction = max_fraction
+        #: 同 ``--permit-mps-per-unit``:分档许可的 m/s 换比例
+        #: (缺省按档位:低速 1.1、中速 2.2、其余 3.3)。
+        self._permit_mps = permit_mps_per_unit
         #: 同 ``patrol_agent --token-file``(协议 9,S11):给了就要求每条连接先 ``auth``,没认证的连接
         #: 发运动命令回 ``not_authorized``;``None`` = 仿真不核令牌(hello 报 ``auth: false``,
         #: 老测试照旧)。
@@ -113,6 +124,8 @@ class SimAgentServer:
         self.require_clearance = require_clearance
         #: 净空许可分两头(W09i):[狗头那头, 狗尾那头] 到期时刻。
         self._clear_until = [-math.inf, -math.inf]
+        #: 分档许可(W47):两头各自的比例上限(最新的那条说了算)。
+        self._clear_cap = [0.0, 0.0]
         #: 同 ``patrol_agent --sdk-follows-head``:调过头尾之后 SDK 的「往前」(里程、速度)跟着变成
         #: 狗尾那头。仿真照这个约定报里程:调头那一刻里程的朝向跳 π(真机怎么跳是真机项)。
         self.follows_head = follows_head
@@ -262,7 +275,8 @@ class SimAgentServer:
     def _hello(self, held: bool) -> dict[str, Any]:
         return {"t": "hello", "proto": PROTO_VERSION, "auth": self.token is not None,
                 "sdk": self._sdk, "held": held, "robot": "sim://d1max",
-                "follows_head": self.follows_head, "speed_level_want": self.speed_level_want}
+                "follows_head": self.follows_head, "speed_level_want": self.speed_level_want,
+                "max_fraction": self.max_fraction}
 
     def _send(self, writer: asyncio.StreamWriter, obj: dict[str, Any]) -> None:
         with contextlib.suppress(ConnectionError, OSError, RuntimeError):
@@ -430,8 +444,21 @@ class SimAgentServer:
             if end not in ("head", "tail"):
                 raise _Rejected("end 要是 head 或 tail")
             i = 0 if end == "head" else 1
-            # 同 vel_gate.hpp 的 SetClearance:只往后延
-            self._clear_until[i] = max(self._clear_until[i], time.monotonic() + ms / 1000.0)
+            cap = LEGACY_MAX_FRACTION                     # 老许可:不带速度
+            if "vmax" in args:
+                vmax = args["vmax"]
+                if (isinstance(vmax, bool) or not isinstance(vmax, (int, float))
+                        or not math.isfinite(vmax) or not 0 <= vmax <= 5):
+                    raise _Rejected("vmax 要在 [0, 5] m/s 内")
+                cap = vmax / self._permit_mps_per_unit()
+            cap = max(0.0, min(cap, MAX_FORWARD_FRACTION))
+            until = time.monotonic() + ms / 1000.0
+            # 同 vel_gate.hpp 的 SetClearance:上限按最新的;没升时有效期只往后延,升了只到它自己的期限
+            if cap > self._clear_cap[i]:
+                self._clear_until[i] = until
+            else:
+                self._clear_until[i] = max(self._clear_until[i], until)
+            self._clear_cap[i] = cap
             return
         if cmd == "walk":
             self._need_control("walk")
@@ -441,6 +468,11 @@ class SimAgentServer:
             await self._walk(args, gen)
             return
         raise _Rejected(f"不认识的命令: {cmd}")
+
+    def _permit_mps_per_unit(self) -> float:
+        if self._permit_mps is not None:
+            return self._permit_mps
+        return {1: 1.1, 2: 2.2}.get(self.speed_level_want, 3.3)
 
     def _vel_unsafe(self) -> bool:
         """同 vel_gate.hpp:两路急停都**明确** Recover 才安全(Unknown 与 Stop 一样拒)。"""
@@ -466,8 +498,11 @@ class SimAgentServer:
             ttl = int(args.get("ttl_ms", 0))
         except (TypeError, ValueError) as exc:
             raise _Rejected(f"vel 参数不对: {exc}") from exc
-        if not all(math.isfinite(v) and abs(v) <= VEL_MAX for v in (fwd, lat, yaw)):
-            raise _Rejected(f"速度分量要在 ±{VEL_MAX} 内")
+        if not (all(math.isfinite(v) for v in (fwd, lat, yaw)) and fwd >= -VEL_MAX
+                and abs(lat) <= VEL_MAX and abs(yaw) <= VEL_MAX):
+            raise _Rejected(f"速度分量要在 ±{VEL_MAX} 内(前进见 --max-fraction)")
+        if fwd > self.max_fraction:
+            raise _Rejected("前进比例超过 --max-fraction")
         if not VEL_TTL_MIN_MS <= ttl <= VEL_TTL_MAX_MS:
             raise _Rejected(f"ttl_ms 要在 [{VEL_TTL_MIN_MS}, {VEL_TTL_MAX_MS}] 内")
         self._vel = (fwd, lat, yaw)
@@ -490,9 +525,13 @@ class SimAgentServer:
                 if self._speed_wrong():
                     fwd = lat = yaw = 0.0             # 同 vel_gate.hpp 的 Live:档位不对不走
                 lead = self._lead_end()
-                if self.require_clearance and fwd > 0 and (
-                        lead is None or time.monotonic() >= self._clear_until[lead]):
-                    fwd = 0.0                     # 同 vel_gate.hpp 的 Live:往前那头没有许可不许往前
+                if fwd > 0:
+                    if not self.require_clearance:
+                        fwd = min(fwd, LEGACY_MAX_FRACTION)   # 同 Live:没有第二层,老上限
+                    elif lead is None or time.monotonic() >= self._clear_until[lead]:
+                        fwd = 0.0                 # 同 vel_gate.hpp 的 Live:往前那头没有许可不许往前
+                    else:
+                        fwd = min(fwd, self._clear_cap[lead])  # 分档:许可说能多快就最多多快
                 if max(abs(fwd), abs(lat), abs(yaw)) < WALK_DEADBAND:
                     # 量太小只是原地蹭(清单 #37),不动;真机也不报错。
                     self.vx = self.vy = self.vyaw = 0.0

@@ -178,7 +178,9 @@ def build_parser() -> argparse.ArgumentParser:
                     help="换算系数不在 SDK 低速档的合理范围里也起(实测值、人核过;W12)")
     d1.add_argument("--deadband", type=float, default=None,
                     help="低于这个 m/s 拒,默认 0.2(#37:比例 0.11 几乎不动)")
-    d1.add_argument("--max-fraction", type=float, default=None, help="比例上限,默认 0.5")
+    d1.add_argument("--max-fraction", type=float, default=None,
+                    help="前进比例上限,默认 0.5;最多 1.0(超过 0.5 要旁路也给 "
+                         "--max-fraction 并开净空许可门)")
     d1.add_argument("--fwd-offset", type=float, default=None,
                     help="前进的比例死区:比例 = 它 + vx ÷ --mps-per-unit(此时那是直线的斜率);"
                          "默认 0 = 纯比例。C40221 实测 0.10、斜率 1.09(2026-10-08)")

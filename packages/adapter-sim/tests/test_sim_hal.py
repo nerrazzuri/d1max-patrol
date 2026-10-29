@@ -217,3 +217,24 @@ async def test_上装_开了带最长时间_到点算关_关就关(台子):
     with pytest.raises(ValueError):
         await r.sound("nope", 3.0)
     assert r.sound_clips() == ("warn-zh", "warn-en")
+
+
+async def test_分档许可_按vmax限前进_最新的说了算_老许可不限():
+    """W47:同 vel_gate.hpp 的分档许可(仿真狗按 m/s 直接夹)。"""
+    c = 钟()
+    r = SimRobot(now_ms=c, max_vx=1.0, max_wz=1.5, deadband_vx=0.05, stop_latency_s=0.2,
+                 require_clearance=True)
+    await _就绪(r)
+    r.clear(300, vmax=0.3)
+    await r.set_velocity(_v(vx=0.8, ttl_ms=1000))
+    _步(c, r)
+    assert r.speed[0] == pytest.approx(0.3)
+    r.clear(300, vmax=0.9)
+    _步(c, r)
+    assert r.speed[0] == pytest.approx(0.8)
+    r.clear(100, vmax=0.1)                       # 障碍近了:马上降
+    _步(c, r)
+    assert r.speed[0] == pytest.approx(0.1)
+    r.clear(300)                                 # 老许可:不带速度
+    _步(c, r)
+    assert r.speed[0] == pytest.approx(0.8)

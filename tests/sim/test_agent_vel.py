@@ -16,11 +16,11 @@ from tests.sim.test_agent_server import _client
 ROOT = Path(__file__).resolve().parents[2]
 
 
-def test_协议是v9_跟C加加旁路进程的常量一致():
+def test_协议是v10_跟C加加旁路进程的常量一致():
     src = (ROOT / "motion" / "patrol_agent.cpp").read_text(encoding="utf-8")
     m = re.search(r"static const int kProtoVersion = (\d+);", src)
-    # W12:state 带 speed_level、hello 带 speed_level_want;W26:imu 帧;S11:auth
-    assert m and int(m.group(1)) == PROTO_VERSION == 9
+    # W12:state 带 speed_level、hello 带 speed_level_want;W26:imu 帧;S11:auth;W47:分档许可
+    assert m and int(m.group(1)) == PROTO_VERSION == 10
 
 
 def test_CPP只收代理的运动命令_行为测试编译并通过(tmp_path):
@@ -381,3 +381,60 @@ async def test_速度档位_被换掉就不走_过一会儿自己设回去():
         assert (await client.call("vel", fwd=0.4, lat=0.0, yaw=0.0, ttl_ms=300)).ok
         await asyncio.sleep(0.15)
         assert sim.vx > 0 and sim.speed_level == 3
+
+
+# ---------------------------------------------------------------- W47 分档许可(协议 10)
+
+
+async def test_分档许可_hello报比例上限_按许可夹前进_最新的说了算():
+    """同 vel_gate.hpp 的分档许可:许可带 vmax(m/s),按 permit_mps_per_unit(低速档 1.1)
+    换成比例上限。"""
+    async with _client(require_clearance=True, max_fraction=1.0) as (sim, client):
+        hello = await client.recv()
+        assert hello.proto == 10 and hello.max_fraction == 1.0
+        assert (await client.call("stand", timeout_s=10)).ok
+        assert (await client.call("clear", ms=800, dist=0.9, vmax=0.33)).ok
+        assert (await client.call("vel", fwd=0.8, lat=0.0, yaw=0.0, ttl_ms=300)).ok
+        await asyncio.sleep(0.15)
+        assert abs(sim.vx - 0.3 * 1.2) < 1e-6, "按许可:0.33 m/s ÷ 1.1 = 比例 0.3"
+        assert (await client.call("clear", ms=800, dist=3.0, vmax=2.0)).ok
+        assert (await client.call("vel", fwd=0.8, lat=0.0, yaw=0.0, ttl_ms=300)).ok
+        await asyncio.sleep(0.15)
+        assert abs(sim.vx - 0.8 * 1.2) < 1e-6
+        assert (await client.call("clear", ms=100, dist=0.5, vmax=0.0)).ok   # 障碍近了:马上降
+        assert (await client.call("vel", fwd=0.8, lat=0.0, yaw=0.0, ttl_ms=300)).ok
+        await asyncio.sleep(0.15)
+        assert sim.vx == 0.0
+        for bad in (-1, 9, "x"):
+            assert not (await client.call("clear", ms=300, vmax=bad)).ok, bad
+
+
+async def test_比例上限_超过0点5要开许可门_后退还是0点5_默认老行为():
+    async with _client(max_fraction=1.0) as (sim, client):            # 没开许可门
+        await _站起(sim, client)
+        assert (await client.call("vel", fwd=0.8, lat=0.0, yaw=0.0, ttl_ms=300)).ok
+        await asyncio.sleep(0.15)
+        assert abs(sim.vx - 0.5 * 1.2) < 1e-6, "没有第二层:最多 0.5"
+        assert not (await client.call("vel", fwd=-0.6, lat=0.0, yaw=0.0, ttl_ms=300)).ok
+        assert not (await client.call("vel", fwd=0.3, lat=0.0, yaw=0.6, ttl_ms=300)).ok
+    async with _client() as (sim, client):
+        hello = await client.recv()
+        assert hello.max_fraction == 0.5
+        assert (await client.call("stand", timeout_s=10)).ok
+        assert not (await client.call("vel", fwd=0.6, lat=0.0, yaw=0.0, ttl_ms=300)).ok
+
+
+async def test_老许可不带vmax_按0点5算():
+    async with _client(require_clearance=True, max_fraction=1.0) as (sim, client):
+        await _站起(sim, client)
+        assert (await client.call("clear", ms=800, dist=2.0)).ok
+        assert (await client.call("vel", fwd=0.8, lat=0.0, yaw=0.0, ttl_ms=300)).ok
+        await asyncio.sleep(0.15)
+        assert abs(sim.vx - 0.5 * 1.2) < 1e-6
+
+
+def test_CPP的分档许可_参数与hello():
+    src = (ROOT / "motion" / "patrol_agent.cpp").read_text(encoding="utf-8")
+    assert "kProtoVersion = 10" in src and PROTO_VERSION == 10
+    assert '"--max-fraction"' in src and '"--permit-mps-per-unit"' in src
+    assert '\\"max_fraction\\":' in src and '"\\"vmax\\""' in src

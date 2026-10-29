@@ -13,6 +13,7 @@ import pytest
 np = pytest.importorskip("numpy")
 
 from d1max_localizer.obstacles import (  # noqa: E402
+    GRADED_CLEAR_PROTO,
     REFIT_EVERY,
     Config,
     LineClient,
@@ -25,6 +26,7 @@ from d1max_localizer.obstacles import (  # noqa: E402
     clear_distance,
     fit_ground,
     permit,
+    permit_vmax,
 )
 
 from d1max_contract.obsbridge import Grid, unpack_bits  # noqa: E402
@@ -580,3 +582,60 @@ def test_W41_墙那一层_攒一秒发一条wall_合契约_只要离地04到18�
     assert isinstance(w, Wall) and w.frames >= 10
     xs = [p for p in w.points()]
     assert xs and all(1.95 <= x <= 2.15 and abs(y) <= 1.05 for x, y in xs), xs[:5]
+
+
+# ------------------------------------------------------------ W47 分档许可(协议 10)
+
+def test_分档许可_空多远许多快_封顶最快():
+    """need(v) = v ×(有效期 + 帧龄)+ 刹停(v)+ 0.3;默认参数下 = v² + 0.7 v + 0.3。"""
+    cfg = Config()
+    assert cfg.max_v == pytest.approx(1.0)
+    assert permit_vmax(0.6, cfg) == pytest.approx(0.3, abs=1e-6)
+    assert permit_vmax(2.0, cfg) == pytest.approx(1.0, abs=1e-6)
+    assert permit_vmax(9.0, cfg) == pytest.approx(1.0), "封顶 max_v"
+    assert permit_vmax(0.3, cfg) == 0.0 and permit_vmax(0.1, cfg) == 0.0
+    for d in (0.45, 0.8, 1.3, 1.7):
+        v = permit_vmax(d, cfg)
+        need = v * (0.3 + cfg.frame_age) + cfg.stop_dist(v) + 0.3
+        assert need <= d + 1e-9, (d, v)
+
+
+def test_老许可门槛_还是按0点6算():
+    """老旁路进程(< 10)把任何许可当成「0.5 比例随便走」:只在够 0.6 m/s 刹停时才发。"""
+    cfg = Config()
+    need = 0.6 * (0.3 + 0.2) + cfg.stop_dist(0.6) + 0.3
+    assert permit(need + 0.01, cfg) == 300 and permit(need - 0.01, cfg) == 0
+
+
+def _分档(proto, box):
+    m = Mount.from_frames(AIRY)
+    side = 假对端()
+    per = Perception(m, sidecar=LineClient(lambda: side.a, None))
+    per.check = SelfCheck(frames=1)
+    side.b.sendall(f'{{"t":"hello","proto":{proto}}}\n'.encode())
+    per.on_front(到雷达系(m, 场景()), 10)              # 读到 hello
+    side.read()
+    side.lines.clear()
+    per.on_front(到雷达系(m, 场景(box=box)), 20)
+    return per, side.read()
+
+
+def test_旁路进程10号_近处也发许可_带vmax_太近不发():
+    per, cmds = _分档(GRADED_CLEAR_PROTO, ((1.4, 1.6), (-0.2, 0.2), 0.5))
+    assert per.sidecar_proto == GRADED_CLEAR_PROTO
+    assert len(cmds) == 1 and cmds[0]["cmd"] == "clear" and cmds[0]["ms"] == 300
+    d = cmds[0]["dist"]
+    assert d < 1.08, "这个距离老规矩不发"
+    assert 0 < cmds[0]["vmax"] <= permit_vmax(d) + 1e-9
+    assert cmds[0]["vmax"] < 0.6
+    _, far = _分档(GRADED_CLEAR_PROTO, ((3.6, 3.8), (-0.2, 0.2), 0.5))
+    assert far[0]["vmax"] >= 0.9
+    _, near = _分档(GRADED_CLEAR_PROTO, ((0.6, 0.8), (0.0, 0.3), 0.5))
+    assert near == [], "近到许不了一点速度:不发(前进置零)"
+
+
+def test_旁路进程9号_照旧不带vmax_近处不发():
+    _, cmds = _分档(9, ((1.4, 1.6), (-0.2, 0.2), 0.5))
+    assert cmds == []
+    _, far = _分档(9, ((3.6, 3.8), (-0.2, 0.2), 0.5))
+    assert len(far) == 1 and "vmax" not in far[0]

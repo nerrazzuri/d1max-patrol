@@ -44,6 +44,13 @@ PERMIT_MS = 300
 #: 旁路进程从协议 4 起认 ``clear``;6 起认 ``end``(狗尾那头的许可)。
 CLEAR_PROTO = 4
 TAIL_CLEAR_PROTO = 6
+#: 旁路进程从这一号起认分档许可(``clear`` 带 ``vmax``,W47):按许可夹前进速度。更老的把任何许可都当成
+#: 「0.5 比例随便走」—— 对它们照旧只在够 :data:`LEGACY_PERMIT_V` 刹停时才发、不带 ``vmax``。
+GRADED_CLEAR_PROTO = 10
+#: 老许可按这个速度算够不够(W08 第一版 ≤ 0.6 m/s)。
+LEGACY_PERMIT_V = 0.6
+#: 分档许可算出来比这还慢就不发(前进置零):这么慢狗只原地踏步(实测死区约 0.13 m/s)。
+MIN_PERMIT_V = 0.05
 #: 地面候选平面跟「上」最多差 45°(对着墙起来时别把墙当地面;外参歪 5–45° 照样查得出来)。
 MIN_UP_COS = math.cos(math.radians(45.0))
 SIDECAR = ("127.0.0.1", 8090)
@@ -92,7 +99,7 @@ class Config:
     #: 看见(未知,W29 外审 4)。
     #: 真的东西(杆子、人)竖着有好几线打到,不会只剩孤零零一个点。
     speckle: bool = True
-    max_v: float = 0.6                  # 最快(W08 第一版 ≤ 0.6 m/s)
+    max_v: float = 1.0                  # 分档许可最多许到这么快(W47;遥控器低速档满量程约 1.0)
     latency: float = 0.2                # 链路延迟(秒,待 W00d 量)
     decel: float = 0.5                  # 刹车减速度(m/s²,待真机量)
     frame_age: float = 0.2              # 一帧点云从扫到到算完(秒,待真机量)
@@ -373,11 +380,27 @@ def clear_distance(occ: bytes, known: bytes, cfg: Config = DEFAULT, *,
     return best
 
 
+def _need(v: float, cfg: Config) -> float:
+    """按 ``v`` 走要前面空多远:许可有效期里走的 + 这一帧的帧龄里走的 + 刹停 + 0.3 m(内审应修 2)。"""
+    return v * (PERMIT_MS / 1000.0 + cfg.frame_age) + cfg.stop_dist(v) + 0.3
+
+
 def permit(dist: float, cfg: Config = DEFAULT) -> int:
-    """许可有效期里最快速度走的 + 这一帧的帧龄里走的 + 刹停 + 0.3 m 都够,才给许可(毫秒);不够 0
-    (内审应修 2:原来只算刹停,0.3 m 余量被有效期、帧龄吃光)。"""
-    need = cfg.max_v * (PERMIT_MS / 1000.0 + cfg.frame_age) + cfg.stop_dist(cfg.max_v) + 0.3
-    return PERMIT_MS if dist >= need else 0
+    """老许可(给 < :data:`GRADED_CLEAR_PROTO` 的旁路进程):按 :data:`LEGACY_PERMIT_V` 都够才给(毫秒),
+    不够 0。"""
+    return PERMIT_MS if dist >= _need(LEGACY_PERMIT_V, cfg) else 0
+
+
+def permit_vmax(dist: float, cfg: Config = DEFAULT) -> float:
+    """分档许可(W47):前面空 ``dist`` 米最多许多快(m/s,封顶 ``cfg.max_v``;一点都许不了 0)。
+    ``_need`` 是 v 的二次式 a v² + b v + 0.3,解出来往下取。"""
+    a = 1.0 / (2.0 * cfg.decel)
+    b = PERMIT_MS / 1000.0 + cfg.frame_age + cfg.latency
+    c = 0.3 - dist
+    if c >= 0:
+        return 0.0
+    v = (-b + math.sqrt(b * b - 4.0 * a * c)) / (2.0 * a)
+    return max(0.0, min(v, cfg.max_v))
 
 
 # ------------------------------------------------------------ 发出去
@@ -602,19 +625,30 @@ class Perception:
         self.last_clear = clear_distance(occ, known, self.cfg)
         self.last_clear_tail = clear_distance(occ, known, self.cfg, end="tail")
         ok = self.check.check == "ok"
-        ms = permit(self.last_clear, self.cfg) if ok else 0
-        if self.sidecar is not None and ms:
-            self._cmd += 1
-            self.sidecar.send({"id": self._cmd, "cmd": "clear", "ms": ms,
-                               "dist": round(self.last_clear, 2)})
+        if ok:
+            self._send_permit(self.last_clear, None)
         # 狗尾那头:后雷达标过、这一帧用上了、旁路进程认 end(5 号会把它当成狗头的许可)
-        ms = permit(self.last_clear_tail, self.cfg) if ok and rear and self.rear_cal else 0
-        if (self.sidecar is not None and ms and self.sidecar_proto is not None
+        if (ok and rear and self.rear_cal and self.sidecar_proto is not None
                 and self.sidecar_proto >= TAIL_CLEAR_PROTO):
-            self._cmd += 1
-            self.sidecar.send({"id": self._cmd, "cmd": "clear", "ms": ms,
-                               "dist": round(self.last_clear_tail, 2), "end": "tail"})
+            self._send_permit(self.last_clear_tail, "tail")
         return grid
+
+    def _send_permit(self, dist: float, end: str | None) -> None:
+        """发一条净空许可。旁路进程 ≥ 10:分档(带 ``vmax``,近处也许慢慢走);更老的:老规矩。"""
+        if self.sidecar is None:
+            return
+        msg: dict[str, Any] = {"cmd": "clear", "ms": PERMIT_MS, "dist": round(dist, 2)}
+        if self.sidecar_proto is not None and self.sidecar_proto >= GRADED_CLEAR_PROTO:
+            v = permit_vmax(dist, self.cfg)
+            if v < MIN_PERMIT_V:
+                return
+            msg["vmax"] = math.floor(v * 100.0) / 100.0      # 往下取,不许多给
+        elif not permit(dist, self.cfg):
+            return
+        if end is not None:
+            msg["end"] = end
+        self._cmd += 1
+        self.sidecar.send({"id": self._cmd, **msg})
 
 
 def active_frames(maps_dir: Path) -> tuple[str, Path] | None:

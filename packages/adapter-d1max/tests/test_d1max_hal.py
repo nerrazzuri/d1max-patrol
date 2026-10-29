@@ -19,8 +19,8 @@ from d1max_sim.agent_server import SimAgentServer
 
 
 @contextlib.asynccontextmanager
-async def _台子(*, stand: bool = True, held: bool = True, **kw):
-    sim = SimAgentServer(port=0, held=held)
+async def _台子(*, stand: bool = True, held: bool = True, sim_kw: dict | None = None, **kw):
+    sim = SimAgentServer(port=0, held=held, **(sim_kw or {}))
     await sim.start()
     hal = D1MaxHal("127.0.0.1", sim.port, mps_per_unit=1.2, radps_per_unit=1.5,
                    deadband_mps=0.25, **kw)
@@ -70,7 +70,7 @@ def test_能力_控制权不可释放_没有横移_只有灯():
 
 def test_参数不合理当场拒():
     for bad in ({"mps_per_unit": 0.0}, {"radps_per_unit": -1.0}, {"deadband_mps": -0.1},
-                {"max_fraction": 0.0}, {"max_fraction": 0.6}, {"mps_per_unit": float("nan")},
+                {"max_fraction": 0.0}, {"max_fraction": 1.01}, {"mps_per_unit": float("nan")},
                 {"stopped_eps": 0.0}, {"fwd_offset": -0.01}, {"fwd_offset": 0.5},
                 {"fwd_offset": float("nan")}):
         with pytest.raises(ValueError):
@@ -516,3 +516,29 @@ async def test_W26复查3_软急停确认_要新鲜状态明确说开着_不知�
 
 async def _有状态(hal):
     return hal._b.last_state is not None
+
+
+# ---------------------------------------------------------------- W47 前进比例上限(协议 10)
+
+
+def test_比例上限最多给到1():
+    D1MaxHal("127.0.0.1", 1, max_fraction=1.0)
+    with pytest.raises(ValueError):
+        D1MaxHal("127.0.0.1", 1, max_fraction=1.01)
+
+
+async def test_比例上限给到1_旁路也报1才放_后退转向还是0点5():
+    async with _台子(max_fraction=1.0, sim_kw={"max_fraction": 1.0}) as (sim, hal):
+        assert math.isclose(hal.hal_capabilities().max_vx, 1.0 * 1.2)
+        got = await hal.set_velocity(_v(vx=1.0))
+        assert not got.clamped and math.isclose(_最后一条(sim, "vel")["fwd"], 1.0 / 1.2)
+        got = await hal.set_velocity(_v(vx=-1.0, wz=9.0))
+        assert got.clamped and math.isclose(got.applied_vx, -0.6), "后退还是 0.5 比例"
+        assert math.isclose(got.applied_wz, 0.75)
+        a = _最后一条(sim, "vel")
+        assert math.isclose(a["fwd"], -0.5) and math.isclose(a["yaw"], 0.5)
+    async with _台子(max_fraction=1.0) as (sim, hal):                 # 老旁路(报 0.5)
+        assert math.isclose(hal.hal_capabilities().max_vx, 0.5 * 1.2)
+        got = await hal.set_velocity(_v(vx=1.0))
+        assert got.clamped and math.isclose(got.applied_vx, 0.6)
+        assert math.isclose(_最后一条(sim, "vel")["fwd"], 0.5)

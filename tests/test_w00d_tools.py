@@ -14,6 +14,7 @@ from pathlib import Path
 import pytest
 
 from d1max_patrol.app.bridge import LoopBridge
+from d1max_patrol.protocol.agent_frames import PROTO_VERSION
 from d1max_patrol.protocol.agent_frames import MotionStatus as SdkMotion
 from d1max_sim.agent_server import SimAgentServer
 
@@ -64,7 +65,7 @@ def test_探针只读_报版本控制权姿态电量里程(仿真旁路, tmp_pat
     [log] = tmp_path.glob("w00d-probe-*.json")
     got = json.loads(log.read_text(encoding="utf-8"))
     assert rc == 0 and got["ok"], got
-    assert got["hello"]["proto"] == got["proto_want"] == 9 and got["held"] is True
+    assert got["hello"]["proto"] == got["proto_want"] == PROTO_VERSION and got["held"] is True
     assert got["sdk_motion"] == "LieDown" and got["hal_motion"] == "lying"
     assert got["battery"] == 71.0 and got["estop"] is False and got["odom"]["valid"]
     assert got["odom_hz"] > 5

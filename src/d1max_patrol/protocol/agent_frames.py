@@ -26,6 +26,7 @@ Unix socket,是因为 (a) 开发机是 Windows,UDS 在 ``asyncio`` 上不可用;
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any
@@ -65,7 +66,12 @@ from typing import Any
 #: 命令一律回 ``not_authorized``;``halt``、按下的 ``estop``、``clear`` 谁都能发(停车永远不挡)。
 #: 8 号及更老的代理不发 ``auth``,所以老代理(认 3–8)握手就拒 9 号;新代理照样认 3–8 的老旁路进程
 #: (它们不核令牌 —— 代理记一条警告:本机任何进程都能让狗动,重编 ``motion/patrol_agent``)。
-PROTO_VERSION = 9
+#:
+#: 10(W47 分档许可):``clear`` 可以带 ``vmax``(m/s,这一头空到能跑多快),旁路进程按它夹前进;
+#: ``hello`` 带 ``max_fraction``(旁路进程 ``--max-fraction``,前进比例上限 0.5–1.0;
+#: 超过 0.5 的只在开了净空许可门时放行)。后退、横移、转向一直 ±0.5。老旁路进程不报:按 0.5。
+#: 感知节点只对 ≥ 10 的发分档许可。
+PROTO_VERSION = 10
 #: 代理(``sidecar_device``)能配的最老的旁路进程:代理只用到 ``vel``(3),``clear`` 是感知节点发的
 #: (W11 内审应修 1:严格等于 4 的话,只推新版代理、旁路进程还是 3 号时整机不能动)。
 MIN_PROTO_VERSION = 3
@@ -73,6 +79,10 @@ MIN_PROTO_VERSION = 3
 NOT_AUTHORIZED = "not_authorized"
 #: 旁路进程从这一号起要令牌(``hello.auth``)。
 AUTH_PROTO_VERSION = 9
+#: 后退、横移、转向的比例上限,也是前进的老上限(``motion/vel_gate.hpp`` 的 ``kMaxFraction``)。
+LEGACY_MAX_FRACTION = 0.5
+#: 前进比例最多给到这(``vel_gate.hpp`` 的 ``kMaxForwardCeiling``)。
+MAX_FORWARD_FRACTION = 1.0
 
 
 class MotionStatus(str, Enum):
@@ -145,6 +155,8 @@ class Hello:
     speed_level_want: int | None = None
     #: 运动命令要不要先认证(9 号起报 ``true``;没报 = 老旁路进程,不核令牌)。
     auth: bool = False
+    #: 前进比例上限(10 号起报;没报、报的不像话 = 0.5,老行为)。
+    max_fraction: float = LEGACY_MAX_FRACTION
 
 
 @dataclass(frozen=True)
@@ -334,6 +346,15 @@ def _emergency(value: Any) -> EmergencyStatus:
     raise AgentProtocolError(f"急停字段既不是整数码也不是名字: {value!r}")
 
 
+def _max_fraction(v: Any) -> float:
+    """hello 的 ``max_fraction``:只认 [0.5, 1.0] 里的数,别的(没报、布尔、越界)一律按 0.5。"""
+    if isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v):
+        return LEGACY_MAX_FRACTION
+    if not LEGACY_MAX_FRACTION <= v <= MAX_FORWARD_FRACTION:
+        return LEGACY_MAX_FRACTION
+    return float(v)
+
+
 def decode_frame(line: str | bytes) -> Downstream:
     """解一条下行帧。看不懂的类型抛 ``AgentProtocolError``。"""
     obj = _load(line)
@@ -350,6 +371,7 @@ def decode_frame(line: str | bytes) -> Downstream:
             follows_head=obj.get("follows_head") is not False,
             speed_level_want=_int_or_none(obj.get("speed_level_want")),
             auth=obj.get("auth") is True,
+            max_fraction=_max_fraction(obj.get("max_fraction")),
         )
     if kind == "ack":
         ack_id = obj.get("id")

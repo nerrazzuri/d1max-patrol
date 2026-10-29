@@ -37,6 +37,7 @@ from d1max_patrol.backends.base import (
 )
 from d1max_patrol.protocol.agent_frames import (
     AUTH_PROTO_VERSION,
+    LEGACY_MAX_FRACTION,
     MIN_PROTO_VERSION,
     PROTO_VERSION,
     Ack,
@@ -172,6 +173,13 @@ class SidecarDeviceBackend(DeviceBackend):
     def hello(self) -> Hello | None:
         """旁路进程的自我介绍。没连上时是 None。"""
         return self._hello
+
+    @property
+    def max_forward_fraction(self) -> float:
+        """``vel`` 前进比例的上限:旁路进程 hello 报的(协议 10,``--max-fraction``);
+        没连上、老旁路 0.5。
+        后退、横移、转向一直 0.5。"""
+        return self._hello.max_fraction if self._hello is not None else LEGACY_MAX_FRACTION
 
     @property
     def authorized(self) -> bool:
@@ -520,8 +528,13 @@ class SidecarDeviceBackend(DeviceBackend):
         """
         await self._require_control("持续速度")
         for name, value in (("forward", forward), ("lateral", lateral), ("yaw", yaw)):
-            if not math.isfinite(value) or abs(value) > MAX_WALK_SPEED:
+            if not math.isfinite(value) or abs(value) > MAX_WALK_SPEED and name != "forward":
                 raise DeviceBackendError(f"{name} 要在 ±{MAX_WALK_SPEED} 内,收到 {value}")
+        top = self.max_forward_fraction
+        if not -MAX_WALK_SPEED <= forward <= top:
+            raise DeviceBackendError(
+                f"forward 要在 [-{MAX_WALK_SPEED}, {top}] 内(前进上限是旁路进程的 --max-fraction),"
+                f"收到 {forward}")
         if not VEL_TTL_MIN_MS <= ttl_ms <= VEL_TTL_MAX_MS:
             raise DeviceBackendError(
                 f"ttl_ms 要在 [{VEL_TTL_MIN_MS}, {VEL_TTL_MAX_MS}] 内,收到 {ttl_ms}")
