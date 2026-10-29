@@ -207,3 +207,17 @@ def route(net: RouteNet, start: tuple[float, float],
         if math.dist(p, start) >= DROP_NEAR_M and math.dist(p, goal) >= DROP_NEAR_M:
             out.append(p)
     return out
+
+
+def densify(pts: list[tuple[float, float]], step: float = 1.0) -> list[tuple[float, float]]:
+    """沿折线每段等分、每隔不超过 ``step`` 米一个点(原来的点都留着)。
+
+    给 Nav2 的途经点用:它离一个途经点 1.5 m 内就算经过、直奔下一个,点太稀就在拐角切掉一块;
+    加密以后跳过一个,下一个还在路上。"""
+    if len(pts) < 2:
+        return list(pts)
+    out = [pts[0]]
+    for (x0, y0), (x1, y1) in zip(pts, pts[1:], strict=False):
+        n = max(1, math.ceil(math.dist((x0, y0), (x1, y1)) / step - 1e-9))
+        out += [(x0 + (x1 - x0) * k / n, y0 + (y1 - y0) * k / n) for k in range(1, n + 1)]
+    return out

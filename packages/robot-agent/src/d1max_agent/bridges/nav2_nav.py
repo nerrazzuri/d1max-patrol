@@ -33,8 +33,9 @@ import numpy as np
 
 from d1max_agent.bridges.hal_nav import HalNavBackend
 from d1max_agent.bridges.planned_nav import PlannedNavBackend, _heading
+from d1max_contract.navbridge import MAX_VIA
 from d1max_contract.obsbridge import pack_bits
-from d1max_contract.routenet import route
+from d1max_contract.routenet import densify, route
 from d1max_contract.zones import ZoneSet, point_in_polygon, segments_cross
 from d1max_patrol.backends.base import NavRequestError
 from d1max_patrol.protocol.nav_types import NavStatus, Pose
@@ -43,6 +44,8 @@ log = logging.getLogger(__name__)
 
 #: Nav2 的速度这么久(秒)没更新就当没有,发零。
 CMD_FRESH_S = 0.4
+#: 交给 Nav2 的路网途经点沿路每隔多少米一个(W48)。
+VIA_STEP_M = 1.0
 #: 守卫拦住多久报一次「被挡」(秒);拦着的时候 Nav2 自己会等、退、重规划。
 GUARD_REPORT_S = 5.0
 #: 引擎按路长估超时:Nav2 不报路长,按直线距离乘这个。
@@ -201,7 +204,10 @@ class Nav2NavBackend(PlannedNavBackend):
         msg: dict[str, Any] = {"type": "goal", "goal_id": self._goal_id, "x": pose.position.x,
                                "y": pose.position.y, "yaw": pose.yaw}
         if via:
-            msg["via"] = [[x, y] for x, y in via]
+            # 沿路加密(每隔不到 1 m):Nav2 离途经点 1.5 m 内就算经过、直奔下一个,点稀了拐角切一块
+            seg = sum(math.dist(a, b) for a, b in zip(via, via[1:], strict=False))
+            dense = densify(via, step=max(VIA_STEP_M, seg / (MAX_VIA - 1)))
+            msg["via"] = [[round(x, 3), round(y, 3)] for x, y in dense]
         self.link.send(msg)
         if here is not None:
             pts = [(here.x, here.y), *via, goal_xy]

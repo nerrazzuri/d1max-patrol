@@ -780,5 +780,7 @@ async def test_W48_有路网_交给Nav2的目标带上路网上的途经点_没�
     await t.nav.goto(Pose.from_xy_yaw(6.0, 4.5, 0.0))
     g = link.kinds("goal")[-1]
     here = (t.r.x, t.r.y)
-    from d1max_contract.routenet import route
-    assert g["via"] == [list(p) for p in route(net, here, (6.0, 4.5))] and len(g["via"]) == 2
+    from d1max_contract.routenet import densify, route
+    want = densify(route(net, here, (6.0, 4.5)), step=1.0)
+    assert g["via"] == [[round(x, 3), round(y, 3)] for x, y in want] and len(g["via"]) > 2, \
+        "沿路每隔不到 1 m 一个途经点:Nav2 跳过一个(1.5 m 内算经过)下一个还在路上,不切角"

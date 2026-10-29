@@ -105,3 +105,12 @@ def test_从路上最近的那一点下路网():
 def test_起点终点对着同一条路_沿这条路走一段():
     via = route(_直路(), (3.0, 5.0), (9.0, 5.0))      # 直走 6×3 = 18;上路网 1×3 + 6 + 1×3 = 12
     assert via == [pytest.approx((3.0, 6.0)), pytest.approx((9.0, 6.0))]
+
+
+def test_沿路加密_每段每隔不到一米一个点_原来的点都在():
+    from d1max_contract.routenet import densify
+    pts = densify([(0.0, 0.0), (3.5, 0.0), (3.5, 1.0)], step=1.0)
+    assert pts[0] == (0.0, 0.0) and (3.5, 0.0) in pts and pts[-1] == (3.5, 1.0)
+    assert all(math.dist(a, b) <= 1.0 + 1e-9 for a, b in zip(pts, pts[1:], strict=False))
+    assert len(pts) == 6                                  # 0、0.875…3.5 四段 + 拐角上去一段
+    assert densify([], step=1.0) == [] and densify([(1.0, 2.0)], step=1.0) == [(1.0, 2.0)]
