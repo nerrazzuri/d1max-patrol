@@ -427,3 +427,51 @@ async def test_运营可视化_走的时候遥测带规划路径_收尾后不带
     ears.by["telemetry"].clear()
     await _跑(rt, broker, 20, r, c)
     assert ears.by["telemetry"] and all("nav" not in d for d in ears.by["telemetry"])
+
+
+# ---------------------------------------------------------------- W48 路网
+
+def _rn(rev, ver="2", nodes=(("A", 1, 1), ("B", 1, 5)), edges=(("A", "B"),)):
+    return {"route_net": {"map_id": "m", "map_version": ver, "revision": rev,
+                          "nodes": [{"id": i, "x": x, "y": y} for i, x, y in nodes],
+                          "edges": [list(e) for e in edges]}}
+
+
+async def test_下发路网_收下落盘_能力里报_旧的拒_别的版本拒_重启还在_换图换成那一版的(台):
+    broker, c, r, ears, rt, site, mk = 台
+    await _换图(rt, broker, site, c, ears)
+    await rt._on_cmd(_cmd("route_net_set", _rn(1), "r1", c))
+    await _跑(rt, broker, 2)
+    ack = ears.by["cmd/ack"][-1]
+    assert ack["result"] == "accepted" and ack["data"] == {"revision": 1}
+    assert rt.parts.nav.route_net.revision == 1
+    assert _caps(ears).tasks["route_net_set"] == {"rev": 1, "nodes": 2}
+    await rt._on_cmd(_cmd("route_net_set", _rn(1), "r1b", c))             # 同一份重发:收下
+    await _跑(rt, broker, 1)
+    assert ears.by["cmd/ack"][-1]["result"] == "accepted"
+    await rt._on_cmd(_cmd("route_net_set", _rn(1, nodes=(("A", 1, 1), ("B", 2, 5))), "r1c", c))
+    await _跑(rt, broker, 1)
+    assert ears.by["cmd/ack"][-1]["reason"] == "stale"
+    await rt._on_cmd(_cmd("route_net_set", _rn(0), "r0", c))
+    await _跑(rt, broker, 1)
+    assert ears.by["cmd/ack"][-1]["reason"] == "stale"
+    await rt._on_cmd(_cmd("route_net_set", _rn(2, ver="1"), "rv", c))
+    await _跑(rt, broker, 1)
+    assert ears.by["cmd/ack"][-1]["reason"] == "map_mismatch"
+    await rt._on_cmd(_cmd("route_net_set", {"route_net": {"map_id": "m"}}, "rb", c))
+    await _跑(rt, broker, 1)
+    assert ears.by["cmd/ack"][-1]["reason"].startswith("payload")
+    await rt.close()
+    rt2 = mk()
+    await rt2.start()
+    try:
+        for _ in range(50):
+            await _跑(rt2, broker, 2)
+            if rt2.parts.nav.plan_ok:
+                break
+        assert rt2.parts.nav.route_net is not None and rt2.parts.nav.route_net.revision == 1
+        await _换图(rt2, broker, site, c, ears, ver="3")
+        assert rt2.parts.nav.route_net is None, "换了图:那一版没有路网"
+        assert _caps(ears).tasks["route_net_set"]["rev"] == 0
+    finally:
+        await rt2.close()

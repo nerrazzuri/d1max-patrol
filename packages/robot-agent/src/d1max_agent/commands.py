@@ -54,7 +54,7 @@ log = logging.getLogger(__name__)
 MAP_KINDS = frozenset({"map_activate", "mapping", "map_build",
                        "release_install", "release_activate", "release_rollback",
                        "release_precheck", "outbox_retry", "relocalize", "mark_home",
-                       "zones_set"})
+                       "zones_set", "route_net_set"})
 
 #: 只读查询(W00c6g 建图进程日志、W00c6h 录包轨迹、W09f 建图预览):也交给 ``map_hook``,但**不进幂等
 #: 记录** —— 回执里带着上百 KB 的日志、轨迹每 2 s 查一次,记下来代理起来要全量重放;重投的再查一次
@@ -68,7 +68,7 @@ TaskFactory = Callable[[Command], Task]
 #: (比站点快过命令的有效期)时,判过期就是站点刚发的叫停一到就「过期」、狗不停车,站点却记成叫停了。
 #: 区域(W10 内审应修 8)也不判:修订号挡住旧的重放(旧修订拒),放宽的等狗空闲才换;狗的钟快了
 #: 判过期的话,收紧的禁行区就一直送不到正在跑巡检的狗。
-NEVER_EXPIRE = frozenset({"halt", "abort", "zones_set"})
+NEVER_EXPIRE = frozenset({"halt", "abort", "zones_set", "route_net_set"})
 
 class CommandProcessor:
     def __init__(self, *, registration: Registration, now_ms: Callable[[], int],

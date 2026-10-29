@@ -17,7 +17,7 @@ from typing import Any
 #: 58 路线库(站点存的路线、排程是唯一真理源);59 运营可视化:定位历史 loc_episodes(只加表);
 #: 60 区域「在生效的那一份」nav_zones.effective_body(外审 R1,2026-10-15);
 #: 61 W44:告警结论 alerts.verdict、交班留言 shift_notes、位置轨迹 pose_track(只加列、加表)。
-SCHEMA_VERSION = 65
+SCHEMA_VERSION = 66
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -671,6 +671,16 @@ CREATE TABLE IF NOT EXISTS release_queue (
     name     TEXT NOT NULL,
     by       TEXT NOT NULL,
     at_ms    INTEGER NOT NULL
+);
+-- W48(库 66):路网 —— 每个几何版本一份(点、双向连线),整份换、修订号加一。route_nets.py。
+CREATE TABLE IF NOT EXISTS route_nets (
+    map_id      TEXT NOT NULL,
+    map_version TEXT NOT NULL,
+    body        TEXT NOT NULL,
+    revision    INTEGER NOT NULL,
+    updated_ms  INTEGER NOT NULL,
+    updated_by  TEXT NOT NULL,
+    PRIMARY KEY (map_id, map_version)
 );
 -- 地图的显示设置(转角、底图、区域名、特殊地面),跟着版本走。map_display.py。
 CREATE TABLE IF NOT EXISTS map_display (

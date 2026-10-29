@@ -52,6 +52,7 @@ from d1max_agent.planning.astar import PlanError
 from d1max_agent.planning.costmap import Costmap, CostmapError
 from d1max_agent.planning.planner import PlannedPath, Planner
 from d1max_contract.hal import RobotHAL
+from d1max_contract.routenet import RouteNet, route
 from d1max_contract.zones import Zone, ZoneSet, distance_to_polygon
 from d1max_patrol.backends.base import (
     AlgErrorEvent,
@@ -189,6 +190,8 @@ class PlannedNavBackend(HalNavBackend):
         #: 规划不了的原因(没载规划栅格、栅格坏了);``None`` = 能规划。
         self.plan_problem: str | None = "没有规划栅格"
         self.zones: ZoneSet | None = None
+        #: 路网(W48):有就按它分段规划;运行时只给正在用的那一版的。
+        self.route_net: RouteNet | None = None
         self._cms: dict[int, Costmap] = {}
         #: 图或区域每换一次 +1:线程里算到一半的旧代价图不许写回缓存(换区域之后还拿旧图规划)。
         self._epoch = 0
@@ -371,6 +374,41 @@ class PlannedNavBackend(HalNavBackend):
 
     def nogo_at(self, x: float, y: float) -> Zone | None:
         return self.nogo_near(x, y, 0.0)
+
+    def set_route_net(self, net: RouteNet | None) -> None:
+        """换上一份路网(W48)。正在走的这一段不改;下一次规划(新目标、偏离、绕障)起按新的。"""
+        self.route_net = net
+
+    async def _plan_via(self, cm: Costmap, here: Any, goal: tuple[float, float],
+                        op: str) -> PlannedPath:
+        """规划到 ``goal``:有路网就先在路网上找路(:func:`d1max_contract.routenet.route`),
+        起点 → 途经点
+        → … → 终点一段一段规划、拼成一条(途经点只是路过);路网上某一段规划不出来(被挡死、画进了墙
+        里),这一次直接规划到终点、发 ``route_net_bypassed``。到终点那一段规划不出来照旧抛
+        (外面改点)。"""
+        start = (here.x, here.y)
+        via = route(self.route_net, start, goal) if self.route_net is not None else []
+        if via:
+            pts: list[tuple[float, float]] = []
+            prev = start
+            try:
+                for wp in via:
+                    leg = await self._planner.plan(cm, prev, wp)
+                    pts.extend(leg.points if not pts else leg.points[1:])
+                    prev = wp
+            except PlanError as exc:
+                log.warning("%s:路网上到 (%.1f, %.1f) 那一段规划不出来(%s):这一次直接走",
+                            op, prev[0], prev[1], exc.reason)
+                if self.on_event is not None:
+                    self.on_event("route_net_bypassed", {"reason": f"{exc.reason}: {exc}"[:200],
+                                                         "x": round(prev[0], 2),
+                                                         "y": round(prev[1], 2)})
+            else:
+                last = await self._planner.plan(cm, prev, goal)
+                pts.extend(last.points[1:])
+                log.info("%s:按路网走,途经 %d 个点", op, len(via))
+                return PlannedPath(tuple(pts))
+        return await self._planner.plan(cm, start, goal)
 
     async def set_zones(self, zs: ZoneSet | None) -> None:
         """换上一份区域(收紧还是放宽由运行时判;放宽的它等狗空闲再调)。正在走的:核对完之前原地等
@@ -595,8 +633,7 @@ class PlannedNavBackend(HalNavBackend):
             cm = await self._costmap_async(self._margin(here, pose))
             goal = pose
             try:
-                path = await self._planner.plan(cm, (here.x, here.y),
-                                                (pose.position.x, pose.position.y))
+                path = await self._plan_via(cm, here, (pose.position.x, pose.position.y), op)
             except PlanError as exc:
                 if epoch != self._epoch:
                     continue                  # 规划期间图或区域换了:按新的再来
@@ -607,8 +644,7 @@ class PlannedNavBackend(HalNavBackend):
                          pose.position.x, pose.position.y, snapped.position.x, snapped.position.y)
                 goal = snapped
                 try:
-                    path = await self._planner.plan(cm, (here.x, here.y),
-                                                    (goal.position.x, goal.position.y))
+                    path = await self._plan_via(cm, here, (goal.position.x, goal.position.y), op)
                 except PlanError as exc2:
                     raise NavRequestError(op, f"规划失败({exc2.reason}):{exc2}") from None
             if epoch == self._epoch:
