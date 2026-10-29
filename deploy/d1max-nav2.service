@@ -1,0 +1,24 @@
+[Unit]
+Description=D1 Max 的 Nav2(规划、局部避障、脱困;经转接节点跟代理说话;W47)
+# 装机脚本只装、不 enable:真狗在 W47 的真机项验过之前不起(代理也还用 --nav planned)。
+# 起用:sudo systemctl enable --now d1max-nav2,再在 /etc/d1max/env 里写 D1MAX_NAV=nav2。
+# Nav2 没就绪(没起、还在启动、挂了)的那一段,代理自动退回自己的规划导航。
+After=network-online.target d1max-agent.service
+Wants=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+# 跟代理同一个账号:Nav2 转接按对端进程的账号认(同定位桥、障碍桥)。
+User=robot
+WorkingDirectory=-/opt/d1max/current
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=-/etc/d1max/env
+ExecStart=/opt/d1max/current/deploy/d1max-nav2-start
+Restart=always
+RestartSec=5
+KillMode=mixed
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target

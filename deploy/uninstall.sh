@@ -60,6 +60,8 @@ set -euo pipefail
 # @删除 /etc/systemd/system/multi-user.target.wants/d1max-obstacles.service 感知节点的自启链(有人手工 enable 过的话)
 # @删除 /etc/systemd/system/d1max-persons.service                         人员检测节点单元(W24)
 # @删除 /etc/systemd/system/multi-user.target.wants/d1max-persons.service 人员检测节点的自启链(有人手工 enable 过的话)
+# @删除 /etc/systemd/system/d1max-nav2.service                            Nav2 单元(W47)
+# @删除 /etc/systemd/system/multi-user.target.wants/d1max-nav2.service    Nav2 单元的自启链(有人手工 enable 过的话)
 # @删除 /etc/systemd/system/d1max-lidar-merge.service                     前后雷达合并单元(W09i)
 # @删除 /etc/systemd/system/multi-user.target.wants/d1max-lidar-merge.service 前后雷达合并的自启链(有人手工 enable 过的话)
 # @删除 /etc/systemd/system/d1max-sidecar.service                         运动控制旁路单元(工单 7)
@@ -100,6 +102,8 @@ OBS_UNIT=d1max-obstacles.service
 OBS_WANTS_LINK=/etc/systemd/system/multi-user.target.wants/d1max-obstacles.service
 PERS_UNIT=d1max-persons.service
 PERS_WANTS_LINK=/etc/systemd/system/multi-user.target.wants/d1max-persons.service
+NAV2_UNIT=d1max-nav2.service
+NAV2_WANTS_LINK=/etc/systemd/system/multi-user.target.wants/d1max-nav2.service
 MERGE_UNIT=d1max-lidar-merge.service
 MERGE_WANTS_LINK=/etc/systemd/system/multi-user.target.wants/d1max-lidar-merge.service
 SIDE_UNIT=d1max-sidecar.service
@@ -398,7 +402,7 @@ stop_service() {
     return 0
   fi
   # 旁路排在代理后面:代理先停车、放下控制权,再停握着控制权的旁路(工单 7)
-  for u in "$PERS_UNIT" "$OBS_UNIT" "$LOC_UNIT" "$MERGE_UNIT" "$ZENOH_UNIT" "$MAIN_UNIT" "$SIDE_UNIT" "$LEGACY_UNIT" "$OLD_UNIT"; do
+  for u in "$NAV2_UNIT" "$PERS_UNIT" "$OBS_UNIT" "$LOC_UNIT" "$MERGE_UNIT" "$ZENOH_UNIT" "$MAIN_UNIT" "$SIDE_UNIT" "$LEGACY_UNIT" "$OLD_UNIT"; do
     if [ "$DO_IT" != 1 ]; then
       say "  [dry-run] 会 stop + disable $u"
       continue
@@ -416,6 +420,8 @@ stop_service() {
   rm_sys "$OBS_WANTS_LINK" "感知节点的自启链,没 enable 过就没有"
   rm_sys "$UNIT_DIR/$PERS_UNIT" "人员检测节点单元(W24)"
   rm_sys "$PERS_WANTS_LINK" "人员检测节点的自启链,没 enable 过就没有"
+  rm_sys "$UNIT_DIR/$NAV2_UNIT" "Nav2 单元(W47)"
+  rm_sys "$NAV2_WANTS_LINK" "Nav2 单元的自启链,没 enable 过就没有"
   rm_sys "$UNIT_DIR/$MERGE_UNIT" "前后雷达合并单元(W09i)"
   rm_sys "$MERGE_WANTS_LINK" "前后雷达合并的自启链,没 enable 过就没有"
   rm_sys "$UNIT_DIR/$ZENOH_UNIT" "zenoh 路由单元(A5)"

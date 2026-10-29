@@ -1,0 +1,19 @@
+{
+  "_说明": "W47 仿真基准的场景库。坐标米、角度度;世界左下角是原点,四周自带 0.1 m 厚的墙。walls 是地图里有的墙;boxes 是地图里没有、雷达才看得到的障碍([x0,y0,x1,y1],appear_s 几秒后出现,缺省 0 = 一开始就在);movers 是会动的([x0,y0,x1,y1] 起始位置 + 速度 vx、vy,从 t0 到 t1 秒在动)。expect: reach = 要到点;fail = 走不通,要体面地放弃(不撞)。jitter 是每次随机扰动的起点位置(米)、朝向(度)、障碍位置(米)。",
+  "defaults": {"world": [12.0, 8.0], "max_s": 120, "jitter": {"start_m": 0.15, "yaw_deg": 15, "box_m": 0.1}},
+  "scenarios": [
+    {"name": "open_straight", "note": "空地直线,当对照", "start": [1.5, 4.0, 0], "goal": [10.0, 4.0, 0], "expect": "reach"},
+    {"name": "c1_box", "note": "10-28 C1:路中间一个方块,一开始就看得见", "start": [1.5, 4.0, 0], "goal": [10.0, 4.0, 0], "boxes": [{"rect": [5.0, 3.6, 5.6, 4.4]}], "expect": "reach"},
+    {"name": "box_sudden", "note": "走到一半前面突然出现箱子", "start": [1.5, 4.0, 0], "goal": [10.0, 4.0, 0], "boxes": [{"rect": [5.0, 3.5, 5.6, 4.5], "appear_s": 2.0}], "expect": "reach"},
+    {"name": "deep_box", "note": "3ah.18:纵深 1.2 m 的障碍(两个箱子前后摆)", "start": [1.5, 4.0, 0], "goal": [10.0, 4.0, 0], "boxes": [{"rect": [5.0, 3.5, 6.2, 4.5]}], "expect": "reach"},
+    {"name": "wall_start", "note": "工单 25:屁股贴墙起步,终点在侧面", "start": [0.72, 2.0, 0], "goal": [2.5, 6.0, 90], "jitter": {"start_m": 0.03, "yaw_deg": 10, "box_m": 0}, "expect": "reach"},
+    {"name": "goal_behind", "note": "工单 21:终点在身后 0.9 m、朝向一样", "start": [5.0, 4.0, 0], "goal": [4.1, 4.0, 0], "expect": "reach"},
+    {"name": "goal_ahead_near", "note": "工单 26:终点在正前方 0.9 m", "start": [5.0, 4.0, 0], "goal": [5.9, 4.0, 0], "expect": "reach"},
+    {"name": "goal_near_wall", "note": "工单 20:终点贴墙(机头离墙约 0.2 m,在膨胀圈里但站得下)", "start": [6.0, 4.0, 0], "goal": [11.2, 4.0, 0], "expect": "reach"},
+    {"name": "corridor_120", "note": "1.2 m 宽、6 m 长的走廊(W08 的切换条件)", "start": [1.5, 4.0, 0], "goal": [10.5, 4.0, 0], "walls": [[3.0, 0.1, 9.0, 3.4], [3.0, 4.6, 9.0, 7.9]], "jitter": {"start_m": 0.1, "yaw_deg": 10, "box_m": 0}, "expect": "reach"},
+    {"name": "door_100", "note": "1.0 m 的门", "start": [2.0, 4.0, 0], "goal": [10.0, 4.0, 0], "walls": [[6.0, 0.1, 6.2, 3.5], [6.0, 4.5, 6.2, 7.9]], "jitter": {"start_m": 0.1, "yaw_deg": 10, "box_m": 0}, "expect": "reach"},
+    {"name": "door_085", "note": "0.85 m 的门(别墅室内门)", "start": [2.0, 4.0, 0], "goal": [10.0, 4.0, 0], "walls": [[6.0, 0.1, 6.2, 3.575], [6.0, 4.425, 6.2, 7.9]], "jitter": {"start_m": 0.1, "yaw_deg": 10, "box_m": 0}, "expect": "reach"},
+    {"name": "person_cross", "note": "人从侧面横穿路线", "start": [1.5, 4.0, 0], "goal": [10.0, 4.0, 0], "movers": [{"rect": [6.0, 0.6, 6.4, 1.0], "v": [0.0, 0.8], "t0": 3.0, "t1": 12.0}], "expect": "reach"},
+    {"name": "dead_end", "note": "路被整个堵死:要体面放弃、不撞", "start": [1.5, 4.0, 0], "goal": [10.0, 4.0, 0], "walls": [[5.8, 0.1, 6.2, 7.9]], "expect": "fail"}
+  ]
+}

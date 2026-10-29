@@ -31,6 +31,7 @@ set -euo pipefail
 # @写盘 /etc/systemd/system/d1max-localizer.service                       定位器单元(W09b;只装不 enable)
 # @写盘 /etc/systemd/system/d1max-obstacles.service                       感知节点单元(W11;只装不 enable)
 # @写盘 /etc/systemd/system/d1max-persons.service                         人员检测节点单元(W24;只装不 enable)
+# @写盘 /etc/systemd/system/d1max-nav2.service                            Nav2 + 转接节点单元(W47;只装不 enable)
 # @写盘 /etc/systemd/system/d1max-lidar-merge.service                     前后雷达合并单元(W09i;只装不 enable)
 # @写盘 /etc/systemd/system/d1max-sidecar.service                         运动控制旁路单元(工单 7;只装不 enable;程序在机器上编)
 # @写盘 /etc/systemd/system/d1max-zenohd.service                          自带算力板的 zenoh 路由(A5;只装不 enable;没填网关不起)
@@ -42,6 +43,7 @@ set -euo pipefail
 # @也删 /etc/systemd/system/multi-user.target.wants/d1max-localizer.service 定位器的自启链(装机只装不 enable;有人手工 enable 过才有)
 # @也删 /etc/systemd/system/multi-user.target.wants/d1max-obstacles.service 感知节点的自启链(同上)
 # @也删 /etc/systemd/system/multi-user.target.wants/d1max-persons.service 人员检测节点的自启链(同上)
+# @也删 /etc/systemd/system/multi-user.target.wants/d1max-nav2.service    Nav2 单元的自启链(同上)
 # @也删 /etc/systemd/system/multi-user.target.wants/d1max-lidar-merge.service 前后雷达合并的自启链(同上)
 # @也删 /etc/systemd/system/multi-user.target.wants/d1max-zenohd.service zenoh 路由的自启链(同上)
 # @也删 /etc/systemd/system/multi-user.target.wants/d1max-sidecar.service 运动控制旁路的自启链(同上)
@@ -379,6 +381,11 @@ fi
 if [[ -f "$PKG/deploy/d1max-persons.service" ]]; then
   install -m 0644 "$PKG/deploy/d1max-persons.service" /etc/systemd/system/
 fi
+# Nav2 单元(W47):同样**只装、不 enable** —— 真狗在 W47 的真机项验过之前不起。要 ROS 2 Humble 的 Nav2 包
+# (ros-humble-navigation2,离线装)。它不直接发速度:速度经代理过禁行区闸、守卫再给 HAL。老包没带就跳过。
+if [[ -f "$PKG/deploy/d1max-nav2.service" ]]; then
+  install -m 0644 "$PKG/deploy/d1max-nav2.service" /etc/systemd/system/
+fi
 # 前后雷达合并单元(W09i):同样**只装、不 enable** —— 后雷达外参在真机上标过、W09i 的真机项验过之前不起。
 # 它只读两台雷达、发合并话题,不碰代理、不碰旁路进程。老包没带就跳过。
 if [[ -f "$PKG/deploy/d1max-lidar-merge.service" ]]; then
@@ -713,6 +720,7 @@ fi
 systemctl try-restart d1max-localizer.service 2>/dev/null || true
 systemctl try-restart d1max-obstacles.service 2>/dev/null || true
 systemctl try-restart d1max-persons.service 2>/dev/null || true
+systemctl try-restart d1max-nav2.service 2>/dev/null || true
 systemctl try-restart d1max-lidar-merge.service 2>/dev/null || true
 systemctl try-restart d1max-zenohd.service 2>/dev/null || true
 # 这三个单元装机不替人 enable(真机验过才起用,做法写在各自单元文件开头:enable --now)。但 env 里

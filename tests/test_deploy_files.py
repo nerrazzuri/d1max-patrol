@@ -1201,8 +1201,8 @@ def test_卸载脚本删agent单元():
     assert 'rm_sys "$UNIT_DIR/$MAIN_UNIT"' in text and 'rm_sys "$WANTS_LINK"' in text
     # 没重跑过装机脚本的老机器上老服务还在:卸载照样要停、要删。定位器(W09b)先停,它连着代理。
     # zenoh 路由(A5)在吃话题的几个之后停
-    assert ('for u in "$PERS_UNIT" "$OBS_UNIT" "$LOC_UNIT" "$MERGE_UNIT" "$ZENOH_UNIT" '
-            '"$MAIN_UNIT" "$SIDE_UNIT" "$LEGACY_UNIT" "$OLD_UNIT"; do') in text
+    assert ('for u in "$NAV2_UNIT" "$PERS_UNIT" "$OBS_UNIT" "$LOC_UNIT" "$MERGE_UNIT" '
+            '"$ZENOH_UNIT" "$MAIN_UNIT" "$SIDE_UNIT" "$LEGACY_UNIT" "$OLD_UNIT"; do') in text
     assert 'rm_sys "$UNIT_DIR/$LEGACY_UNIT"' in text
 
 
@@ -1794,3 +1794,50 @@ def test_工单6_缺_onnxruntime_包里带了轮子_提示给出能照抄的离�
     assert str(w / "onnxruntime_gpu-1.24.0-cp310-cp310-linux_aarch64.whl") in err
     err = _系统件检查(tmp_path / "b", ffmpeg="srt", onnx=False, groups="robot dialout")
     assert "装机清单" in err and "onnxruntime-gpu" in err, "包里没带:说去哪找、怎么装"
+
+
+def test_W47_Nav2单元_单独ROS域_只装不起_卸载收干净():
+    """W47:我们的 Nav2 + 转接节点一个单元;单独 ROS 域、只在本机(厂家 navigo 也是 Nav2,话题名一样);
+    跟代理同一个账号;装机只装不 enable;卸载连自启链一起删、先停 Nav2 再停别的。"""
+    import os
+    import subprocess
+    start = DEPLOY / "d1max-nav2-start"
+    assert os.access(start, os.X_OK)
+    subprocess.run(["sh", "-n", str(start)], check=True)
+    text = start.read_text(encoding="utf-8")
+    assert '. /opt/ros/humble/setup.sh' in text
+    assert 'ROS_DOMAIN_ID="${D1MAX_NAV2_ROS_DOMAIN:-61}"' in text and "ROS_LOCALHOST_ONLY=1" in text
+    assert "socket:=/var/lib/d1max/agent/nav2.sock" in text
+    assert "$here/deploy/nav2/d1max_nav2.launch.py" in text
+    assert (DEPLOY / "nav2" / "params.yaml").is_file()
+    单元 = (DEPLOY / "d1max-nav2.service").read_text(encoding="utf-8")
+    assert "User=robot" in 单元 and "ExecStart=/opt/d1max/current/deploy/d1max-nav2-start" in 单元
+    装 = (DEPLOY / "install.sh").read_text(encoding="utf-8")
+    assert "# @写盘 /etc/systemd/system/d1max-nav2.service" in 装
+    assert 'install -m 0644 "$PKG/deploy/d1max-nav2.service" /etc/systemd/system/' in 装
+    assert "enable d1max-nav2" not in 装 and "systemctl start d1max-nav2" not in 装
+    assert "systemctl try-restart d1max-nav2.service" in 装
+    卸 = (DEPLOY / "uninstall.sh").read_text(encoding="utf-8")
+    assert "# @删除 /etc/systemd/system/d1max-nav2.service" in 卸
+    assert 'rm_sys "$UNIT_DIR/$NAV2_UNIT"' in 卸 and 'rm_sys "$NAV2_WANTS_LINK"' in 卸
+    assert '"$NAV2_UNIT" "$PERS_UNIT"' in 卸, "先停 Nav2(它在给代理出速度)"
+
+
+def test_W47_Nav2参数_没有YAML别名_机身是矩形_用Lattice和MPPI():
+    import yaml
+    text = (DEPLOY / "nav2" / "params.yaml").read_text(encoding="utf-8")
+    assert "&id" not in text and "*id" not in text, "ROS 的参数文件不认 YAML 别名"
+    d = yaml.safe_load(text)
+    for cm in ("local_costmap", "global_costmap"):
+        p = d[cm][cm]["ros__parameters"]
+        assert "robot_radius" not in p and "0.515" in p["footprint"]
+        assert p["use_sim_time"] is True
+        # 感知节点早把机身的点滤掉了;开着「脚下清空」,窄门里机身轮廓(带余量)一压上门框就把门框清掉,
+        # 门框又在两侧盲区里标不回来(2026-10-29 仿真里 0.85 m 门撞过一次)
+        assert p["obstacle_layer"]["footprint_clearing_enabled"] is False
+    cs = d["controller_server"]["ros__parameters"]
+    assert cs["FollowPath"]["plugin"] == "nav2_mppi_controller::MPPIController"
+    assert 1.0 / cs["controller_frequency"] <= cs["FollowPath"]["model_dt"] + 1e-9, \
+        "MPPI 要控制周期不大于 model_dt,不然 controller_server 起不来"
+    assert d["planner_server"]["ros__parameters"]["GridBased"]["plugin"] == \
+        "nav2_smac_planner/SmacPlannerLattice"

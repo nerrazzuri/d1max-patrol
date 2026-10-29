@@ -1,0 +1,25 @@
+#!/bin/sh
+# d1max-nav2 的启动脚本(W47,Nav2 + 转接节点)。启动参数归版本管,单元只指着
+# /opt/d1max/current/deploy/d1max-nav2-start。
+#
+# Nav2 和转接节点跑在 ROS 的系统 Python / ROS 2 Humble 里。**单独一个 ROS 域、只在本机**:厂家的导航
+# (navigo)也是 Nav2,话题名一样(/cmd_vel、/map、/tf、navigate_to_pose),同一个域就串了。我们的 Nav2
+# 要的东西(时钟、里程、map→odom、障碍栅格)全由代理经 /var/lib/d1max/agent/nav2.sock 送进来,用不着厂家
+# 域里的任何话题。跟代理同一个账号(转接按账号认)。
+#
+# 现场值从 /etc/d1max/env 来(单元的 EnvironmentFile):
+#   D1MAX_NAV2_ROS_DOMAIN=61         我们 Nav2 的 ROS 域(别跟厂家的 24、定位器的一样)
+#   D1MAX_NAV2_PARAMS=<路径>         换一份参数(空着 = 这一版带的 deploy/nav2/params.yaml)
+set -eu
+here=$(cd "$(dirname "$0")/.." && pwd -P)
+set +u
+. /opt/ros/humble/setup.sh
+set -u
+export ROS_DOMAIN_ID="${D1MAX_NAV2_ROS_DOMAIN:-61}"
+export ROS_LOCALHOST_ONLY=1
+export RMW_IMPLEMENTATION=rmw_fastrtps_cpp
+export OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1
+exec ros2 launch "$here/deploy/nav2/d1max_nav2.launch.py" \
+  "params_file:=${D1MAX_NAV2_PARAMS:-$here/deploy/nav2/params.yaml}" \
+  socket:=/var/lib/d1max/agent/nav2.sock \
+  "pythonpath:=$here/packages/localizer/src:$here/packages/contract/src"

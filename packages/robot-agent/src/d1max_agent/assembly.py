@@ -56,17 +56,22 @@ def build_engine(hal: RobotHAL, *, runs_root: Path, now_ms: Callable[[], int],
                  nav_kind: str = "straight", planner=None,
                  robot_radius_m: float | None = None) -> EngineParts:
     """``nav_kind``:``straight`` 直线桥(过渡期,默认);``planned`` 规划后端(W10)。"""
-    if nav_kind == "planned":
+    if nav_kind in ("planned", "nav2"):
         kw = {} if robot_radius_m is None else {"robot_radius_m": robot_radius_m}
-        nav: HalNavBackend = PlannedNavBackend(hal, now_ms=now_ms, map_id=map_id,
-                                               init_delay_s=init_delay_s,
-                                               terminal_hold_s=terminal_hold_s,
-                                               planner=planner, **kw)
+        cls = PlannedNavBackend
+        if nav_kind == "nav2":
+            # W47:规划、局部避障交给 Nav2;Nav2 没就绪的那一段退回 planned。转接服务端由运行时挂上
+            from d1max_agent.bridges.nav2_nav import Nav2NavBackend
+            cls = Nav2NavBackend
+        nav: HalNavBackend = cls(hal, now_ms=now_ms, map_id=map_id,
+                                 init_delay_s=init_delay_s,
+                                 terminal_hold_s=terminal_hold_s,
+                                 planner=planner, **kw)
     elif nav_kind == "straight":
         nav = HalNavBackend(hal, now_ms=now_ms, map_id=map_id, init_delay_s=init_delay_s,
                             terminal_hold_s=terminal_hold_s)
     else:
-        raise ValueError(f"导航后端只认 straight / planned,给的是 {nav_kind!r}")
+        raise ValueError(f"导航后端只认 straight / planned / nav2,给的是 {nav_kind!r}")
     home_point: HomePoint | None = None
     if home is not None:
         home_point = HomePoint(map_id=map_id, pose=home, marked_at_ms=now_ms(),
