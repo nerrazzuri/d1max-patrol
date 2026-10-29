@@ -265,3 +265,38 @@ def test_C2_老格式的当天日志_换一个文件接着记_不把列写乱(tm
     m.sample()
     new = log / f"board-{day:%Y%m%d}-v2.csv"
     assert new.exists() and "freqs_mhz" in new.read_text().splitlines()[0]
+
+
+def test_外审R2_过热时温度读不到_不当降温_保持上一级_读到低温才降(tmp_path):
+    m, t, temps, events, counters = _mon(tmp_path, soc=96)
+    t[0] += 10
+    _转(counters, 3000, 10)
+    m.sample()
+    assert m.level == "critical"
+    temps["soc"], temps["nvme"] = None, None                 # 温区、NVMe 都读不到了
+    for _ in range(3):
+        t[0] += 10
+        _转(counters, 3000, 10)
+        m.sample()
+        assert m.level == "critical", "没有降温的证据:保护不解除"
+    assert "读不到" in m.reason
+    b = {d["id"]: d for d in m.health()}["board"]
+    assert b["state"] == "offline" and "保持" in b["detail"]
+    temps["soc"], temps["nvme"] = 60, 50
+    t[0] += 10
+    _转(counters, 3000, 10)
+    m.sample()
+    assert m.level == "ok"
+    assert [d["level"] for k, d in events] == ["critical", "ok"]
+
+
+def test_外审R2_一直没有NVMe的板子_SoC降了照常降级(tmp_path):
+    m, t, temps, events, counters = _mon(tmp_path, soc=96, nvme=None)
+    t[0] += 10
+    _转(counters, 3000, 10)
+    m.sample()
+    temps["soc"] = 60
+    t[0] += 10
+    _转(counters, 3000, 10)
+    m.sample()
+    assert m.level == "ok"
