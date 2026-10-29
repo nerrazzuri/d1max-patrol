@@ -599,7 +599,7 @@ def test_V12配置_线圈起名_各路引用(tmp_path):
     ({"strobe": {"colors": {"Red": ["bcn_r", "bcn_g", "bcn_b"]}}}, "颜色名"),
     ({"strobe": {"colors": {"red": ["bcn_r", "bcn_g", "bcn_b"]}, "default": "pink"}}, "default"),
     ({"strobe": {"colors": {"red": ["bcn_r", "bcn_g", "bcn_b"]}, "blink_s": 0.1}}, "blink_s"),
-    ({"siren": {"clip": "siren", "coil": "amp"}}, "二选一"),
+    ({"siren": {"clip": "siren", "coil": "amp"}}, "同时归"),     # W46 起两样能一起配
     ({"siren": {"clip": "../x"}}, "siren.clip"),
 ])
 def test_V12配置_写错就拒(tmp_path, 改, 说):

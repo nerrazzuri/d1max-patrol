@@ -7,6 +7,8 @@
 断了片段攒在狗上,回来自动补传、补完清掉。没有「推流 ↔ 本地录」的切换,切换的那几秒不会丢。
 
 - **分片 mp4**(``frag_keyframe+empty_moov``):ffmpeg 被杀、断电,正写着的那段照样放得到断的地方。
+- **每 ``SYNC_S`` 秒 fsync 一次正在写的那段**(W46,上装 V2 随时可能断电):不然页缓存里可能压着半分钟,
+  断电最多丢几秒。fsync 在后台线程里做,不卡事件循环;上一轮还没做完就跳过这一轮。
 - **狗上有配额**:攒的(没传完的)超过 ``quota_bytes``,或者盘用到 ``WARN_RATIO``,删最旧的段,报一次
   ``recording_dropped``(站点出告警:断网太久,这段录像没了)。巡检归档优先于录像。
 - **录不了要让人知道**:ffmpeg 自己退了(相机不通、盘写不进)报一次 ``recording_failed``,隔一会儿重起;
@@ -24,6 +26,7 @@ import os
 import shutil
 import subprocess
 import tempfile
+import threading
 from collections.abc import Callable
 from pathlib import Path
 from typing import IO, Any
@@ -36,6 +39,8 @@ log = logging.getLogger(__name__)
 Source = Callable[[str], list[str]]
 
 SEGMENT_S = 60
+#: 正在写的段多久 fsync 一次(秒)。
+SYNC_S = 2.0
 #: ffmpeg 退了之后隔多久重起(秒)。
 RESTART_AFTER_S = 10.0
 _ERR_TAIL = 300
@@ -48,6 +53,21 @@ STAGING = ".rec"
 def video_classify(rel: str) -> int | None:
     """录像发件箱只传 ``video.mp4``(``Outbox(classify=…)``)。"""
     return 5 if rel in (VIDEO_FILE, VIDEO_SEALED) else None
+
+
+def fsync_files(paths: list[Path]) -> None:
+    """把这几个文件写进盘(页缓存里压着的)。文件没了、打不开就跳过。"""
+    for p in paths:
+        try:
+            fd = os.open(p, os.O_RDONLY)
+        except OSError:
+            continue
+        try:
+            os.fsync(fd)
+        except OSError as exc:
+            log.warning("录像段 fsync 不了:%s:%s", p.name, exc)
+        finally:
+            os.close(fd)
 
 
 class _Cam:
@@ -93,6 +113,12 @@ class Recorder:
         self._dropping = False
         #: 删掉了几段没传完的(看得见才查得到)。
         self.dropped = 0
+        #: 正在写的段交给谁 fsync(测试换掉);下一次几点做。
+        self._sync: Callable[[list[Path]], None] = self._sync_bg
+        self._sync_at = 0.0
+        self._sync_thread: threading.Thread | None = None
+        #: 暂停录的几路(W46:上装过热降负载时停热像)。停着不重起、不算录像断了。
+        self.held: set[str] = set()
 
     # ------------------------------------------------------------ 起停
 
@@ -159,8 +185,23 @@ class Recorder:
             self.emit("recording_failed", {"camera": camera, "reason": why[:300]})
 
     def camera_health(self) -> dict[str, str]:
-        """每一路录着没有(W40 设备健康):相机名 → 空串(在录)或断了的原因。"""
-        return {c: (s.why or "录像断了") if s.failed else "" for c, s in self._cams.items()}
+        """每一路录着没有(W40 设备健康):相机名 → 空串(在录,或者故意停着,见 :attr:`held`)
+        或断了的原因。"""
+        return {c: (s.why or "录像断了") if s.failed and c not in self.held else ""
+                for c, s in self._cams.items()}
+
+    def hold(self, cameras: set[str]) -> None:
+        """只停这几路(别的照录);空集合 = 都放开。停的那一路当场收掉 ffmpeg,写到一半的那段挪走。"""
+        new = {c for c in cameras if c in self._cams}
+        for c in new - self.held:
+            s = self._cams[c]
+            self._kill(s)
+            self._collect(c, include_newest=True)
+            s.failed, s.why, s.retry_at = False, "", 0.0
+            log.warning("%s 暂停录像(上装过热降负载)", c)
+        for c in self.held - new:
+            log.info("%s 接着录", c)
+        self.held = new
 
     # ------------------------------------------------------------ 每拍
 
@@ -171,6 +212,8 @@ class Recorder:
                 self._kill(s)
                 self._collect(c, include_newest=True)
                 self._failed(c, s, why)
+            if c in self.held:
+                continue
             if s.proc is None and self._mono() >= s.retry_at:
                 self._spawn(c)
             elif s.proc is not None:
@@ -178,7 +221,31 @@ class Recorder:
                     s.failed = False                     # 又切出新的一段:录回来了
                     log.info("%s 录像恢复", c)
                     self.emit("recording_ok", {"camera": c})
+        if self._mono() >= self._sync_at:
+            self._sync_at = self._mono() + SYNC_S
+            paths = self._writing()
+            if paths:
+                self._sync(paths)
         self._enforce_quota()
+
+    def _writing(self) -> list[Path]:
+        """每路 ffmpeg 活着的、正在写的那段(暂存里最新的)。"""
+        out = []
+        for c, s in self._cams.items():
+            if s.proc is None or s.proc.poll() is not None:
+                continue
+            with contextlib.suppress(OSError):
+                segs = sorted(p for p in (self.root / STAGING / c).iterdir() if p.suffix == ".mp4")
+                if segs:
+                    out.append(segs[-1])
+        return out
+
+    def _sync_bg(self, paths: list[Path]) -> None:
+        if self._sync_thread is not None and self._sync_thread.is_alive():
+            return                                       # 上一轮还没做完(盘慢):跳过这一轮
+        self._sync_thread = threading.Thread(target=fsync_files, args=(paths,),
+                                             name="rec-fsync", daemon=True)
+        self._sync_thread.start()
 
     def _collect(self, camera: str, *, include_newest: bool) -> int:
         """把写完了的段挪进发件箱。正在写的是最新那一段(ffmpeg 还活着时不动它)。回挪了几段。"""

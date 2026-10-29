@@ -356,3 +356,15 @@ def test_回家这一趟本身_低于中止线照样中止(ctx):
     c = replace(ctx, policy=Policy(battery_return_pct=25.0, battery_abort_pct=15.0,
                                     on_battery_low="continue"))
     assert battery_ruling(replace(c, battery_pct=14.0)).decision is Decision.ABORT
+
+
+# --------------------------------------------------------------------- 上装过热(W46,决策 74)
+
+
+def test_上装过热_危急才返航_别的级别照走():
+    from d1max_patrol.backends.base import OverheatEvent
+    ctx = SafetyContext(policy=Policy(), battery_pct=80.0)
+    r = rule(OverheatEvent("critical", "SoC 96 °C"), ctx)
+    assert r.decision is Decision.RETURN_HOME and "过热" in r.reason and "SoC 96" in r.reason
+    for lvl in ("ok", "warn", "shed"):
+        assert rule(OverheatEvent(lvl, "x"), ctx).decision is Decision.CONTINUE

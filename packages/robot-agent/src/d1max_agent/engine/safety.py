@@ -24,6 +24,7 @@ from d1max_patrol.backends.base import (
     Event,
     FaultEvent,
     LocStatusEvent,
+    OverheatEvent,
 )
 from d1max_patrol.protocol.nav_types import (
     ALG_LIDAR_DISCONNECTED,
@@ -142,6 +143,12 @@ def rule(event: Event | DeviceEvent, ctx: SafetyContext) -> Ruling:
         return _control_lost(event, ctx)
     if isinstance(event, BackendDisconnected):
         return _disconnected(ctx)
+    if isinstance(event, OverheatEvent):
+        if event.level == "critical":
+            # 决策 74:上装严重过热,结束这一趟、回家(回到出发的地方,一般是充电桩)。返航路上再来一次
+            # 不打断返航(``_apply`` 管)。
+            return Ruling(Decision.RETURN_HOME, f"上装严重过热({event.reason}),结束这一趟、回家")
+        return Ruling(Decision.CONTINUE, f"上装温度 {event.level},巡逻照走")
     return Ruling(Decision.CONTINUE, f"{type(event).__name__} 无对应规则,只记录")
 
 

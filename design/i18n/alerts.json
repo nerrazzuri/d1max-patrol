@@ -180,6 +180,18 @@
     "en": "Amplifier failed",
     "zh": "功放出故障"
   },
+  "board_hot": {
+    "en": "Payload running hot",
+    "zh": "上装温度偏高"
+  },
+  "board_overheat": {
+    "en": "Payload overheating, robot returned",
+    "zh": "上装严重过热，机器人回去了"
+  },
+  "lens_blocked": {
+    "en": "Thermal lens may be blocked",
+    "zh": "热像镜头可能被挡住了"
+  },
   "finding": {
     "en": "Inspection finding",
     "zh": "判读有异常"

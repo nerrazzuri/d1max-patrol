@@ -347,3 +347,19 @@ async def test_电量事件只在变化时发_不是每拍一条(台子):
         got.append(q.get_nowait())
     pcts = [e.percent for e in got if isinstance(e, BatteryEvent)]
     assert pcts == [pytest.approx(14.9, abs=0.01)]
+
+
+async def test_W46过热级别变了才发事件(台子):
+    from d1max_patrol.backends.base import OverheatEvent
+    c, r, nav, dev = 台子
+    lvl = ["ok", "主控板正常"]
+    dev.overheat = lambda: tuple(lvl)
+    q = dev.subscribe()
+    await _步(c, r, nav, 3, dev=dev)
+    lvl[:] = ["critical", "SoC 96 °C"]
+    await _步(c, r, nav, 3, dev=dev)
+    got = []
+    while not q.empty():
+        got.append(q.get_nowait())
+    hot = [(e.level, e.reason) for e in got if isinstance(e, OverheatEvent)]
+    assert hot == [("ok", "主控板正常"), ("critical", "SoC 96 °C")]

@@ -277,3 +277,33 @@ def test_隔离的不算积压_管理员让它再传一次就重新排上(tmp_pa
     assert pump.retry_refused() == 1
     assert box.queue.backlog() == 1
     box.close()
+
+
+def test_W46过热暂停上传_放开了接着传():
+    import time
+
+    from d1max_agent.outbox import OutboxPump
+
+    class 箱子:
+        runs_root = type("P", (), {"name": "x"})()
+
+        def __init__(self):
+            self.n = 0
+
+        def step(self, stop):
+            self.n += 1
+
+        def close(self):
+            pass
+    b = 箱子()
+    pump = OutboxPump(b, period_s=0.01)
+    pump.set_hold(True)
+    pump.start()
+    time.sleep(0.1)
+    assert b.n == 0, "暂停着:一拍都不走"
+    pump.set_hold(False)
+    end = time.monotonic() + 2
+    while b.n == 0 and time.monotonic() < end:
+        time.sleep(0.01)
+    assert b.n > 0
+    pump.stop()
