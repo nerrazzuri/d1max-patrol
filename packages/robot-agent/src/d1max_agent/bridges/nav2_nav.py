@@ -50,6 +50,10 @@ MIN_TRAVEL_MPS = 0.13
 MIN_TURN_RPS = 0.07
 #: 送给 Nav2 的实测速度按位置变化算,低通的系数(每拍新的占多少)。
 VEL_ALPHA = 0.5
+#: 扫过区里有看不见的格子(两侧盲区)时最快多快(米/秒)。看不见的不当挡(10-28 一串起不了步),
+#: 但快了不安全:2026-10-29 仿真里 1.0 m/s 时人从侧面横穿,5 次撞 5 次。降到这个速度,人一进前方
+#: 视野守卫就看得见、停得住。
+UNKNOWN_SLOW_MPS = 0.3
 #: 前进速度不到这个(米/秒)就当「原地转」,按地图上的墙核一道(:meth:`Nav2NavBackend._turn_hits_map`)。
 TURN_VX = 0.05
 
@@ -272,6 +276,10 @@ class Nav2NavBackend(PlannedNavBackend):
         if self.guard is not None and self.obstacles is not None and (abs(vx) > 1e-6
                                                                      or abs(wz) > 1e-6):
             v = self._guard_check(vx, wz)
+            if not v.ok and not v.hits and "障碍数据" not in v.reason \
+                    and abs(vx) > UNKNOWN_SLOW_MPS:
+                vx = math.copysign(UNKNOWN_SLOW_MPS, vx)      # 只有看不见的:快了就慢下来再查一遍
+                v = self._guard_check(vx, wz)
             if not v.ok and (v.hits or "障碍数据" in v.reason):
                 self._guarded(v, here)
                 await self._send(0.0, 0.0, dt_s)

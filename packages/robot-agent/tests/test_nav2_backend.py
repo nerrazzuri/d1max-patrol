@@ -336,3 +336,35 @@ async def test_送给Nav2的速度按位置变化算_不信厂家里程报的速
         await t.一拍()
     v = link.kinds("tick")[-1]["vel"][0]
     assert 0.25 < v < 0.5, v
+
+
+async def test_看不见的地方快了就慢下来_看得见的挡才停(tmp_path):
+    """2026-10-29 仿真:Nav2 1.0 m/s 时人从侧面(盲区)横穿,5 次撞 5 次 —— 「看不见的放行」快了不安全。
+    改成:扫过区里有看不见的格子、又快,就降到 UNKNOWN_SLOW_MPS;低速照旧放行(不回到 10-28 起不了步)。"""
+    from d1max_agent.bridges.nav2_nav import UNKNOWN_SLOW_MPS
+    from d1max_agent.obstacles import Verdict
+    link = 假转接()
+    t = _台(tmp_path, link)
+    await t.start(1.5, 4.0)
+    await t.nav.goto(Pose.from_xy_yaw(9.0, 4.0))
+    calls = []
+
+    def guard(vx, wz):
+        calls.append(vx)
+        if abs(vx) > UNKNOWN_SLOW_MPS + 1e-9:
+            return Verdict(False, "看不见 3 处", hits=(), unknown=3)
+        return Verdict(True)
+    t.nav._guard_check = guard
+    for _ in range(15):
+        link.now += 0.1
+        link.cmd = (link.now, 1, 0.9, 0.0, 0.0)
+        await t.一拍()
+    assert calls and calls[-1] == pytest.approx(UNKNOWN_SLOW_MPS), calls[-3:]
+    assert 0.2 < t.r.speed[0] <= UNKNOWN_SLOW_MPS + 1e-6, "慢下来、不停"
+    t.nav._guard_check = lambda vx, wz: Verdict(False, "扫过区有挡 2 处", hits=((1.0, 0.0),))
+    for _ in range(5):
+        link.now += 0.1
+        link.cmd = (link.now, 1, 0.9, 0.0, 0.0)
+        await t.一拍()
+    assert abs(t.r.speed[0]) < 0.05, "看得见的挡:停"
+

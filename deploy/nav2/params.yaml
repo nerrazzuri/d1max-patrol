@@ -2,7 +2,9 @@
 # 机身 0.93×0.48 m 矩形(每边 +5 cm);Smac Lattice 差速基元(能原地转、按轮廓查碰撞,窄门);MPPI(先 DiffDrive);
 # 局部代价地图也带静态地图层(地图上的墙永远在,不靠雷达记忆:2026-10-29 仿真里窄门里原地转扫到门框);
 # 障碍层吃代理经转接节点送来的两份点云(/d1max/obs_occ 标记、/d1max/obs_free 只清);一律 use_sim_time
-# (转接节点按代理的钟发 /clock)。真机参数先抄厂家导航(真机项 3aj.1)再调。
+# (转接节点按代理的钟发 /clock)。
+# 速度上限 0.6 m/s:仿真里 1.0 m/s 时两侧盲区来不及(人从侧面横穿、身边看不见的箱子旁原地转都撞过),
+# 0.6 几十次没撞;1.0 和 90 s 到位另议(W47 文档)。MPPI 已调到能稳定跑到上限(prune_distance、局部图大小、采样幅度)。真机参数先抄厂家导航(真机项 3aj.1)再调。
 bt_navigator:
   ros__parameters:
     use_sim_time: true
@@ -94,7 +96,7 @@ controller_server:
       time_steps: 56
       model_dt: 0.05
       batch_size: 1000
-      vx_std: 0.2
+      vx_std: 0.3
       vy_std: 0.2
       wz_std: 0.4
       vx_max: 0.6
@@ -102,7 +104,7 @@ controller_server:
       vy_max: 0.0
       wz_max: 1.0
       iteration_count: 1
-      prune_distance: 1.7
+      prune_distance: 3.0
       transform_tolerance: 0.5
       temperature: 0.3
       gamma: 0.015
@@ -155,7 +157,7 @@ controller_server:
       PathAlignCritic:
         enabled: true
         cost_power: 1
-        cost_weight: 14.0
+        cost_weight: 5.0
         max_path_occupancy_ratio: 0.05
         trajectory_point_step: 3
         threshold_to_consider: 0.5
@@ -184,8 +186,8 @@ local_costmap:
       robot_base_frame: base_link
       use_sim_time: true
       rolling_window: true
-      width: 6
-      height: 6
+      width: 10
+      height: 10
       resolution: 0.05
       plugins:
       - static_layer
@@ -381,7 +383,7 @@ velocity_smoother:
     - 0.0
     - -1.0
     max_accel:
-    - 0.6
+    - 0.8
     - 0.0
     - 1.5
     max_decel:
