@@ -100,7 +100,8 @@ async def test_服务端_握手_补发地图_收就绪速度结果_断了就不�
     await srv.start()
     srv.send({"type": "map", "req": 1, "map_id": "m", "map_version": "", "dir": "/d"})
     r, w, send, recv = await _client(短目录 / "nav2.sock")
-    await send({"type": "hello", "proto": 1, "name": "t"})
+    from d1max_contract.navbridge import PROTO
+    await send({"type": "hello", "proto": PROTO, "name": "t"})
     assert (await recv())["type"] == "hello"
     assert (await recv())["type"] == "map", "握手完补发最近一份地图"
     assert srv.connected and not srv.ready
@@ -117,7 +118,7 @@ async def test_服务端_握手_补发地图_收就绪速度结果_断了就不�
             break
         await asyncio.sleep(0.01)
     assert srv.plan == (1, ((0.0, 0.0), (1.0, 0.5)))
-    assert srv.ready and srv.cmd[1:] == (9, 0.3, 0.0, 0.1)
+    assert srv.ready and srv.cmd[1:] == (9, 0.3, 0.0, 0.1, None)
     assert srv.goal_states[0]["state"] == "succeeded"
     w.close()
     for _ in range(50):
@@ -485,3 +486,83 @@ async def test_运行时_nav2后端的设备健康里有Nav2一条(tmp_path):
     got = await rt.devices.refresh()
     n = [d for d in got if d["id"] == "nav2"]
     assert n and n[0]["state"] == "offline" and "没连上" in n[0]["detail"]
+
+
+# ---------------------------------------------------------------- W47 外审(R4–R7)
+
+async def test_外审R4_限速区的上限也管Nav2的速度_送给Nav2的也降(tmp_path):
+    from test_planned_nav import _区
+    link = 假转接()
+    t = _台(tmp_path, link, max_vx=1.0)
+    await t.start(5, 4)
+    await t.nav.set_zones(_区({"id": "children", "kind": "slow", "max_speed_mps": 0.2,
+                               "polygon": [[3, 2], [9, 2], [9, 6], [3, 6]]}))
+    await t.nav.goto(Pose.from_xy_yaw(8, 4))
+    for _ in range(15):
+        link.now += 0.1
+        link.cmd = (link.now, 1, 0.8, 0, 0)
+        await t.一拍()
+    assert t.nav._last_vx <= 0.2 + 1e-9 and t.r.speed[0] <= 0.2 + 1e-6
+    assert link.kinds("tick")[-1]["speed"] <= 0.3 + 1e-9      # 送给 Nav2 的不高于最低档
+
+
+async def test_外审R5_死区整形不越过任务限速_也不越过转速上限(tmp_path):
+    link = 假转接()
+    t = _台(tmp_path, link)
+    await t.start(1.5, 4)
+    await t.nav.set_speed(0.1)
+    await t.nav.goto(Pose.from_xy_yaw(6, 4))
+    for _ in range(15):
+        link.now += 0.1
+        link.cmd = (link.now, 1, 0.5, 0, 0)
+        await t.一拍()
+    assert abs(t.nav._last_vx) <= 0.1 + 1e-9, "限速低于死区:停下,不抬到死区"
+    link2 = 假转接()
+    t2 = _台(tmp_path, link2)
+    await t2.start(5, 4)
+    await t2.nav.set_speed(0.6, z=0.05)
+    await t2.nav.goto(Pose.from_xy_yaw(2, 4))
+    for _ in range(15):
+        link2.now += 0.1
+        link2.cmd = (link2.now, 1, 0, 0, 0.5)
+        await t2.一拍()
+    assert abs(t2.nav._last_wz) <= 0.05 + 1e-9
+
+
+async def test_外审R6_Nav2往后退时_禁行区提前刹按后退方向查(tmp_path):
+    from test_planned_nav import _区, _在
+    link = 假转接()
+    t = _台(tmp_path, link)
+    await t.start(5, 4)
+    await t.nav.set_zones(_区({"id": "pond", "kind": "nogo",
+                               "polygon": [[2, 0], [4.365, 0], [4.365, 8], [2, 8]]}))
+    await t.nav.goto(Pose.from_xy_yaw(8, 4))
+    t.nav._v_meas = -0.3
+    link.now = 0.0
+    link.cmd = (0.0, 1, -0.3, 0, 0)
+    await t.nav._drive(_在(5, 4), 0.1)
+    assert t.nav._last_vx > -0.2, "身后 17 cm 是禁行区:不许照 0.3 往后退"
+
+
+async def test_外审R7_旧目标晚到的速度_不驱动新目标(tmp_path):
+    link = 假转接()
+    t = _台(tmp_path, link)
+    await t.start(5, 4)
+    await t.nav.goto(Pose.from_xy_yaw(8, 4))
+    a = link.kinds("goal")[-1]["goal_id"]
+    await t.nav.stop()
+    for _ in range(8):
+        await t.一拍()
+    link.cmd = (link.now, 1, 0.4, 0, 0)                     # A 的速度晚到(老转接节点:不带目标号)
+    await t.nav.goto(Pose.from_xy_yaw(2, 4))               # B 在身后,还没收下、没出速度
+    for _ in range(4):
+        await t.一拍()
+    assert t.nav._last_vx <= 1e-9, "新目标还没有自己的速度:不动"
+    b = link.kinds("goal")[-1]["goal_id"]
+    link.cmd = (link.now, 1, 0.4, 0, 0, a)                  # 新转接节点:标了是 A 的
+    for _ in range(3):
+        await t.一拍()
+    assert t.nav._last_vx <= 1e-9
+    link.cmd = (link.now, 1, -0.3, 0, 0, b)                 # B 自己的:照走
+    await t.一拍()
+    assert t.nav._last_vx < -0.1

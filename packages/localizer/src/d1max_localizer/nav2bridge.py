@@ -144,8 +144,7 @@ class Nav2Bridge:
         self.node.create_subscription(Twist, "/cmd_vel", self._on_cmd, 10)
         from nav_msgs.msg import Path as PathMsg
         self.node.create_subscription(PathMsg, "/plan", self._on_plan, 5)
-        #: 正在走的目标号(Nav2 收下的最近那个);规划出的路径按它报。
-        self.active_gid: int | None = None
+        self._init_goal_book()
         from std_srvs.srv import Trigger
         self._trigger = Trigger
         #: Nav2 的生命周期管理器:全部节点激活了才算就绪(动作服务在不等于激活了,早发的目标会被拒)。
@@ -161,8 +160,29 @@ class Nav2Bridge:
         self.odom: tuple[float, float, float] | None = None
         self.map_sent = False
         self._ready: tuple[bool, str] | None = None
-        self.goals: dict[int, Any] = {}
         self._hb = 0
+
+    def _init_goal_book(self) -> None:
+        """目标账(外审 R8):``pending`` = 发给 Nav2、还没回收没收下的(值:代理是不是已经取消了);
+        ``goals`` = 收下了的;``active_gid`` = 正在走的(规划出的路径、速度按它标);``active_since_ms``
+        = 它收下时的 ``/clock``(早于这个时刻规划的路线不算它的,外审 R10)。rclpy 线程和事件循环都碰,
+        一把锁。"""
+        self._goal_lock = threading.Lock()
+        self.pending: dict[int, bool] = {}
+        self.goals: dict[int, Any] = {}
+        #: 正在走的目标号(Nav2 收下的最近那个);规划出的路径、速度按它报。
+        self.active_gid: int | None = None
+        self.active_since_ms = 0
+
+    def cancel_all(self) -> None:
+        """代理断了:它派的目标没人管了,全部取消;还没收下的记着,收下了马上取消(外审 R8)。"""
+        with self._goal_lock:
+            for h in list(self.goals.values()):
+                h.cancel_goal_async()
+            self.goals.clear()
+            for gid in self.pending:
+                self.pending[gid] = True
+            self.active_gid = None
 
     # ------------------------------------------------------------ 发给代理
 
@@ -186,12 +206,18 @@ class Nav2Bridge:
         gid = self.active_gid
         if gid is None:
             return
+        st = getattr(getattr(msg, "header", None), "stamp", None)
+        if st is not None:
+            at = int(st.sec) * 1000 + int(st.nanosec) // 1_000_000
+            if 0 < at < self.active_since_ms:
+                return                    # 外审 R10:收下这个目标以前规划的(上一个目标的),不标成它的
         pts = decimate([(p.pose.position.x, p.pose.position.y) for p in msg.poses])
         self.send_threadsafe({"type": "path", "goal_id": gid, "pts": pts})
 
     def _on_cmd(self, t: Any) -> None:
         self.send_threadsafe({"type": "cmd", "t_ms": self.t_ms, "vx": float(t.linear.x),
-                              "vy": float(t.linear.y), "wz": float(t.angular.z)})
+                              "vy": float(t.linear.y), "wz": float(t.angular.z),
+                              "goal_id": self.active_gid})      # 外审 R7:标上是哪个目标的
 
     # ------------------------------------------------------------ 收代理的
 
@@ -295,10 +321,14 @@ class Nav2Bridge:
             self.send({"type": "goal_state", "goal_id": gid, "state": "rejected",
                        "reason": "Nav2 的导航动作服务不在"})
             return
+        with self._goal_lock:
+            self.pending[gid] = False
         fut = self.nav.send_goal_async(goal)
         fut.add_done_callback(lambda f: self._accepted(gid, f))
 
     def _accepted(self, gid: int, fut: Any) -> None:
+        with self._goal_lock:
+            canceled = self.pending.pop(gid, False)
         try:
             h = fut.result()
         except Exception as exc:                        # noqa: BLE001
@@ -309,16 +339,26 @@ class Nav2Bridge:
             self.send_threadsafe({"type": "goal_state", "goal_id": gid, "state": "rejected",
                                   "reason": "Nav2 不收这个目标"})
             return
-        self.goals[gid] = h
-        self.active_gid = gid
+        with self._goal_lock:
+            self.goals[gid] = h
+            if canceled:
+                # 外审 R8:收下之前代理已经取消了(或者断了):马上取消,不当成在走的
+                h.cancel_goal_async()
+            else:
+                self.active_gid = gid
+                self.active_since_ms = self.t_ms
+        if canceled:
+            h.get_result_async().add_done_callback(lambda f: self._done(gid, f))
+            return
         self.send_threadsafe({"type": "goal_state", "goal_id": gid, "state": "accepted"})
         h.get_result_async().add_done_callback(lambda f: self._done(gid, f))
 
     def _done(self, gid: int, fut: Any) -> None:
         from action_msgs.msg import GoalStatus
-        self.goals.pop(gid, None)
-        if self.active_gid == gid:
-            self.active_gid = None
+        with self._goal_lock:
+            self.goals.pop(gid, None)
+            if self.active_gid == gid:
+                self.active_gid = None
         try:
             status = fut.result().status
         except Exception as exc:                        # noqa: BLE001
@@ -332,9 +372,13 @@ class Nav2Bridge:
                               "reason": why})
 
     def on_cancel(self, m: dict[str, Any]) -> None:
-        h = self.goals.get(m["goal_id"])
-        if h is not None:
-            h.cancel_goal_async()
+        gid = m["goal_id"]
+        with self._goal_lock:
+            h = self.goals.get(gid)
+            if h is not None:
+                h.cancel_goal_async()
+            elif gid in self.pending:
+                self.pending[gid] = True          # 外审 R8:还没收下,记着,收下了马上取消
 
     # ------------------------------------------------------------ 就绪
 
@@ -411,10 +455,8 @@ class Nav2Bridge:
                 self.writer = None
                 self.map_sent = False
                 # 代理断了:它派的目标没人管了,全部取消(不然 Nav2 还按旧目标出速度,重连的代理
-                # 收到旧目标的结果也会认错)
-                for h in list(self.goals.values()):
-                    h.cancel_goal_async()
-                self.goals.clear()
+                # 收到旧目标的结果也会认错);还没收下的收下了马上取消
+                self.cancel_all()
             await asyncio.sleep(RECONNECT_S)
 
     async def _ticker(self) -> None:

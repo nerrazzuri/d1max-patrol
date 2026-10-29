@@ -29,7 +29,8 @@ Nav2 一律 ``use_sim_time``,转接节点按代理送来的时刻发 ``/clock``�
 
 - ``hello {proto, name, version}``
 - ``ready {ok, reason}``:Nav2 各节点起来了、地图收下了才 ``ok``。
-- ``cmd {t_ms, vx, vy, wz}``:Nav2 出的速度(机身系),``t_ms`` 是它那时候的 ``/clock``。
+- ``cmd {t_ms, vx, vy, wz, goal_id?}``:Nav2 出的速度(机身系),``t_ms`` 是它那时候的 ``/clock``;
+  ``goal_id`` = 出这个速度时 Nav2 正在走的目标(协议 2,外审 R7:代理不拿别的目标的速度开车)。
 - ``goal_state {goal_id, state, reason}``:
   ``accepted`` / ``succeeded`` / ``aborted`` / ``canceled`` / ``rejected``。
 - ``path {goal_id, pts}``:Nav2 这一次规划出的路径(地图系,抽稀到最多 :data:`MAX_PATH_PTS` 个点),
@@ -45,7 +46,8 @@ from typing import Any
 
 from d1max_contract.errors import ContractError
 
-PROTO = 1
+#: 2(W47 外审 R7):``cmd`` 带 ``goal_id``。两头同一个发布包里,对不上握手就拒(代理退回自己的规划)。
+PROTO = 2
 MAX_LINE = 256 * 1024
 GOAL_STATES = ("accepted", "succeeded", "aborted", "canceled", "rejected")
 #: 每种报文必须有的字段(多出来的拒:加字段要升协议)。
@@ -59,7 +61,7 @@ FIELDS: dict[str, tuple[set[str], set[str]]] = {
     "cancel": ({"goal_id"}, set()),
     "hb": ({"seq"}, set()),
     "ready": ({"ok"}, {"reason"}),
-    "cmd": ({"t_ms", "vx", "vy", "wz"}, set()),
+    "cmd": ({"t_ms", "vx", "vy", "wz"}, {"goal_id"}),
     "goal_state": ({"goal_id", "state"}, {"reason"}),
     "path": ({"goal_id", "pts"}, set()),
     "error": ({"reason"}, set()),
@@ -168,6 +170,8 @@ def check(msg: dict[str, Any]) -> dict[str, Any]:
             raise ContractError("Nav2 转接:ready.ok 要是 true/false")
     elif t == "cmd":
         _int(msg["t_ms"], "t_ms")
+        if "goal_id" in msg and msg["goal_id"] is not None:
+            _int(msg["goal_id"], "goal_id")
         for k in ("vx", "vy", "wz"):
             _num(msg[k], k)
     for k in ("reason", "name", "version"):

@@ -148,7 +148,8 @@ class NavBridgeServer:
         if t == "ready":
             self.ready, self.reason = m["ok"], m.get("reason", "") or ("" if m["ok"] else "没就绪")
         elif t == "cmd":
-            self.cmd = (self._now(), m["t_ms"], m["vx"], m["vy"], m["wz"])
+            # 转接节点标了是哪个目标的(外审 R7);老的不标:None
+            self.cmd = (self._now(), m["t_ms"], m["vx"], m["vy"], m["wz"], m.get("goal_id"))
         elif t == "goal_state":
             self.goal_states.append(m)
         elif t == "path":
