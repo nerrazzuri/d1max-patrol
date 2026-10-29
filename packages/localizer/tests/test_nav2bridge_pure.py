@@ -97,11 +97,13 @@ def _桥(monkeypatch):
 _号 = iter(range(1, 1_000_000))
 
 
-def _状态(*codes, ids=None):
-    """一份动作状态列表;不给目标号就每项一个新号。"""
+def _状态(*codes, ids=None, at_ms=10**9):
+    """一份动作状态列表;不给目标号就每项一个新号;``at_ms`` 是 Nav2 收下它的时刻(仿真钟)。"""
     from types import SimpleNamespace as NS
     ids = ids or [next(_号) for _ in codes]
-    return NS(status_list=[NS(status=c, goal_info=NS(goal_id=NS(uuid=i.to_bytes(16, "big"))))
+    stamp = NS(sec=at_ms // 1000, nanosec=(at_ms % 1000) * 1_000_000)
+    return NS(status_list=[NS(status=c, goal_info=NS(goal_id=NS(uuid=i.to_bytes(16, "big")),
+                                                     stamp=stamp))
                            for c, i in zip(codes, ids, strict=True)])
 
 
@@ -455,11 +457,14 @@ def test_复查五_刚起来_动作状态没同步完之前不派目标_也不�
 def test_复查五_某个动作服务没了_它的旧状态清掉_不一直挡着(monkeypatch):
     from types import SimpleNamespace as NS
     b, futs = _桥(monkeypatch)
+    gids = {"/follow_path/_action/status": [b"A"]}
+    b.node = NS(get_publishers_info_by_topic=lambda t: [NS(endpoint_gid=g)
+                                                         for g in gids.get(t, [b"X"])])
+    b.reap_gone_producers()
     b._on_status("follow_path", _状态(2))
-    counts = {"/follow_path/_action/status": 0}
-    b.node = NS(count_publishers=lambda t: counts.get(t, 1))
     b.on_goal({"goal_id": 5, "x": 1, "y": 2, "yaw": 0})
     assert len(futs) == 0
+    gids["/follow_path/_action/status"] = []
     b.reap_gone_producers()
     assert b.producing["follow_path"] is False and len(futs) == 1
 
@@ -467,3 +472,67 @@ def test_复查五_某个动作服务没了_它的旧状态清掉_不一直挡�
 def test_复查五_assisted_teleop也算会出速度的动作():
     from d1max_localizer.nav2bridge import PRODUCERS
     assert "assisted_teleop" in PRODUCERS
+
+
+def test_复查六_派出以前就收下的目标号_晚到也不算这个目标的(monkeypatch):
+    """转接节点刚起来,Nav2 里还有上一次的 BackUp 在跑:它的状态在派出之后才第一次收到,
+    号是新见到的,可收下时刻早于派出 —— 不开门。"""
+    from types import SimpleNamespace as NS
+    b, futs = _桥(monkeypatch)
+    b.t_ms = 5000
+    b.on_goal({"goal_id": 5, "x": 1, "y": 2, "yaw": 0})
+    futs[0].set_result(_Handle())
+    b._mono = lambda: 1e9
+    beh = NS(linear=NS(x=-0.15, y=0.0), angular=NS(z=0.0))
+    b._on_status("backup", _状态(2, at_ms=1000))             # 老的,早就收下了
+    b._on_beh(beh)
+    assert not [m for m in b.sent if m["type"] == "cmd"]
+    b._on_status("follow_path", _状态(2, at_ms=4700))        # 派出前 0.3 s 收下的:也不算
+    assert "ctl" not in b.opened
+    b._on_status("backup", _状态(2, at_ms=4900))             # 余量 0.2 s 以内:算(钟差一拍)
+    b._on_beh(beh)
+    assert len([m for m in b.sent if m["type"] == "cmd"]) == 1
+
+
+def test_复查六_定时那一拍_同步期过了自己派排着的目标(monkeypatch):
+    b, futs = _桥(monkeypatch)
+    now = [100.0]
+    b._mono = lambda: now[0]
+    b.status_sync_until = 102.0
+    b.check_ready = lambda: None
+    b.node = __import__("types").SimpleNamespace(get_publishers_info_by_topic=lambda t: [])
+    b.on_goal({"goal_id": 5, "x": 1, "y": 2, "yaw": 0})
+    assert len(futs) == 0
+    now[0] = 102.5
+    b.tick_once()
+    assert len(futs) == 1
+
+
+def test_复查六_动作服务换了一个实例_旧的在跑清掉(monkeypatch):
+    """两次轮询之间旧的退了、新的起来了(数量还是 1):按发布者身份认出换了。"""
+    from types import SimpleNamespace as NS
+    b, futs = _桥(monkeypatch)
+    gids = {"/follow_path/_action/status": [b"A"]}
+    b.node = NS(get_publishers_info_by_topic=lambda t: [NS(endpoint_gid=g)
+                                                         for g in gids.get(t, [b"X"])])
+    b.reap_gone_producers()                                   # 记下现在是 A
+    b._on_status("follow_path", _状态(2))
+    b.on_goal({"goal_id": 5, "x": 1, "y": 2, "yaw": 0})
+    assert len(futs) == 0
+    b.reap_gone_producers()                                   # 还是 A:不动
+    assert b.producing["follow_path"] is True
+    gids["/follow_path/_action/status"] = [b"B"]              # 换成 B 了
+    b.reap_gone_producers()
+    assert b.producing["follow_path"] is False and len(futs) == 1
+
+
+def test_复查六_跟代理连上就把Nav2里的导航目标全取消(monkeypatch):
+    """上一次留下的导航目标转接节点不认识:连上代理先全取消(空的目标号 = 全部)。"""
+    from types import SimpleNamespace as NS
+    b, _ = _桥(monkeypatch)
+    calls = []
+    b.cancel_clients = [NS(service_is_ready=lambda: True, call_async=calls.append),
+                        NS(service_is_ready=lambda: False, call_async=calls.append)]
+    b._cancel_req = lambda: "全部"
+    b.cancel_foreign()
+    assert calls == ["全部"]
