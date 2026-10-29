@@ -771,6 +771,16 @@ _ADDED_COLUMNS = (
 
 
 
+#: 库 65 的升级队列(同 ``_DDL`` 里那张;迁移在事务里建它,不能走 ``executescript``)。
+_RELEASE_QUEUE_DDL = """CREATE TABLE release_queue (
+    id       INTEGER PRIMARY KEY AUTOINCREMENT,
+    robot_id TEXT NOT NULL UNIQUE,
+    name     TEXT NOT NULL,
+    by       TEXT NOT NULL,
+    at_ms    INTEGER NOT NULL
+)"""
+
+
 class SchemaTooNew(RuntimeError):
     """站点库是更新的站点程序写的(商业化 A7):老程序不开它。"""
 
@@ -839,17 +849,34 @@ class SiteDB:
                     "WHERE confirmed_rev = revision AND confirmed_body IS NULL")
             if row is not None and str(row[0]).isdigit() and int(row[0]) < 58:
                 self._migrate_routes()
-            rq = {r[1] for r in self._conn.execute("PRAGMA table_info(release_queue)")}
-            if "id" not in rq:
-                # 库 64 → 65(外审 R7):升级队列加不复用的编号。换一张表,排着的原样搬过去。
-                self._conn.execute("ALTER TABLE release_queue RENAME TO release_queue_64")
-                self._conn.executescript(_DDL)
-                self._conn.execute("INSERT INTO release_queue(robot_id, name, by, at_ms) "
-                                   "SELECT robot_id, name, by, at_ms FROM release_queue_64 "
-                                   "ORDER BY at_ms")
-                self._conn.execute("DROP TABLE release_queue_64")
+            self._migrate_release_queue()
             self._conn.execute("INSERT OR REPLACE INTO meta VALUES ('schema', ?)",
                                (str(SCHEMA_VERSION),))
+
+    def _migrate_release_queue(self) -> None:
+        """库 64 → 65(外审 R7):升级队列加不复用的编号,换一张表、排着的原样搬过去。
+
+        W44 复查 R3:改名、建表、搬、删旧表放在**一个事务**里(不用 ``executescript``:它先自己提交),
+        中途进程没了整个回滚,下次打开重来。复查之前的版本可能留下半截(新表建好、记成 65、旧行还在
+        ``release_queue_64``):打开时补搬过去(同一台已经有新的排队就留新的)再删旧表。"""
+        c = self._conn
+        rq = {r[1] for r in c.execute("PRAGMA table_info(release_queue)")}
+        old = c.execute("SELECT 1 FROM sqlite_master WHERE type='table' "
+                        "AND name='release_queue_64'").fetchone() is not None
+        if "id" in rq and not old:
+            return
+        c.execute("BEGIN IMMEDIATE")
+        try:
+            if "id" not in rq:
+                c.execute("ALTER TABLE release_queue RENAME TO release_queue_64")
+                c.execute(_RELEASE_QUEUE_DDL)
+            c.execute("INSERT OR IGNORE INTO release_queue(robot_id, name, by, at_ms) "
+                      "SELECT robot_id, name, by, at_ms FROM release_queue_64 ORDER BY at_ms")
+            c.execute("DROP TABLE release_queue_64")
+            c.execute("COMMIT")
+        except BaseException:
+            c.execute("ROLLBACK")
+            raise
 
     def _migrate_routes(self) -> None:
         """58:路线库成为唯一真理源。升上来时把**当前任务包**(``bundles.active = 1``)的任务、
