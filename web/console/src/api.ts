@@ -22,7 +22,9 @@ export function setFetch(f: Fetch): void {
 /** 401 时叫它(回登录页)。 */
 export const onUnauthorized: { cb: () => void } = { cb: () => {} };
 
-export async function api<T = unknown>(method: "GET" | "POST", path: string, body?: unknown): Promise<T> {
+/** ``signal``:调用方能取消(W44 复查 R5:画面健康请求超时、换画面、卸载时取消在途的)。 */
+export async function api<T = unknown>(method: "GET" | "POST", path: string, body?: unknown,
+                                       opts: { signal?: AbortSignal } = {}): Promise<T> {
   const headers: Record<string, string> = { Accept: "application/json" };
   if (method !== "GET") {
     headers["Content-Type"] = "application/json";
@@ -35,9 +37,10 @@ export async function api<T = unknown>(method: "GET" | "POST", path: string, bod
       headers,
       credentials: "same-origin",
       body: method === "GET" ? undefined : JSON.stringify(body ?? {}),
+      signal: opts.signal,
     });
   } catch {
-    throw new ApiError(0, "network");
+    throw new ApiError(0, opts.signal?.aborted ? "aborted" : "network");
   }
   let data: unknown = {};
   try {
