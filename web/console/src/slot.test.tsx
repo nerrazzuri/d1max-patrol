@@ -279,3 +279,21 @@ describe("W44 复查 N1 健康回了头、正文挂着", () => {
     expect(r.container.querySelector(".slot-main .lost")).not.toBeNull();
   });
 });
+
+describe("W44 复查 M3 401 正文读到一半断了", () => {
+  it("照样走登录过期,不改写成网络错误", async () => {
+    const { api, ApiError, onUnauthorized } = await import("./api");
+    const calls: number[] = [];
+    const prev = onUnauthorized.cb;
+    onUnauthorized.cb = () => { calls.push(1); };
+    setFetch((() => Promise.resolve(new Response(new ReadableStream<Uint8Array>({
+      start(c) { c.enqueue(new TextEncoder().encode('{"err')); c.error(new TypeError("network")); },
+    }), { status: 401, headers: { "Content-Type": "application/json" } }))) as typeof fetch);
+    let got: unknown = null;
+    try { await api("GET", "/api/robots"); } catch (e) { got = e; }
+    onUnauthorized.cb = prev;
+    expect(got).toBeInstanceOf(ApiError);
+    expect((got as InstanceType<typeof ApiError>).status).toBe(401);
+    expect(calls).toEqual([1]);
+  });
+});
