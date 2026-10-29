@@ -461,6 +461,8 @@ class Payload:
         self._run = run or asyncio.create_subprocess_exec
         #: 期望:开着到单调钟几点(None = 要关)。按线圈。
         self._until: dict[str, float | None] = {c: None for c in cfg.coils}
+        #: 回读继电器板失败的原因(外审 R3);空 = 最近一次读得回来。
+        self.relay_error = ""
         #: 板子确认过的状态;None = 不明(起来时、写失败之后)。
         self._known: dict[str, bool | None] = {c: None for c in cfg.coils}
         self._relay_lock: asyncio.Lock | None = None
@@ -593,7 +595,8 @@ class Payload:
 
     async def _readback(self) -> None:
         """读一遍线圈,跟确认过的对不上的改成「不明」(下一步 :meth:`_reconcile` 重新下发)。
-        读不出来不管:写的时候自然会报。"""
+        读不出来(外审 R3):板子掉电、断了 —— 全部确认值作废(期望跟缓存一样时原来就不写、也不报),
+        记下通信故障;通了按当时的意图重新下发。"""
         if self.relay is None or not self.cfg.coils:
             return
         nums = self.cfg.coils
@@ -602,8 +605,15 @@ class Payload:
             try:
                 bits = await asyncio.to_thread(self.relay.read_coils, lo,
                                                max(nums.values()) - lo + 1)
-            except Exception:                          # noqa: BLE001 - 写的时候会报
+            except Exception as exc:                   # noqa: BLE001 - 记故障,确认值作废
+                if not self.relay_error:
+                    log.warning("继电器板读不回来(掉电、断线?):%s;全部线圈按不明算,通了重新下发",
+                                exc)
+                self.relay_error = str(exc) or type(exc).__name__
+                for name in nums:
+                    self._known[name] = None
                 return
+            self.relay_error = ""
             for name, n in nums.items():
                 k = self._known.get(name)
                 if k is not None and n - lo < len(bits) and bits[n - lo] != k:
@@ -763,7 +773,10 @@ class Payload:
             unknown = [c for c in self.cfg.coils if self._known.get(c) is None]
             stuck = [c for c in self.cfg.coils
                      if self._known.get(c) is True and self._until.get(c) is None]
-            if len(unknown) == len(self.cfg.coils):
+            if self.relay_error:
+                out.append(device("relay", "error",
+                                  f"继电器板读不回来(掉电、断线?):{self.relay_error}"))
+            elif len(unknown) == len(self.cfg.coils):
                 out.append(device("relay", "offline",
                                   "继电器板一直没确认(串口、站号、板子供电?)"))
             elif unknown or stuck:

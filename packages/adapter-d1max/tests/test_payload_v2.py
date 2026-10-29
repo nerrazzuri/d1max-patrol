@@ -205,3 +205,43 @@ def test_V2配置样例_引脚没填就起不来_填了能读(tmp_path):
     c = PayloadConfig.load(tmp)
     assert c.coils == {"spot_l": 0, "spot_r": 1, "siren": 2, "beacon": 3}
     assert c.siren_coil and c.siren_clip and c.mute_line == 5
+
+
+async def test_外审R3_回读失败_确认值作废_报故障_通了按意图重新下发():
+    from d1max_adapter_d1max.payload import Payload, PayloadConfig
+
+    class 板:
+        def __init__(self):
+            self.online, self.on, self.writes = True, False, []
+
+        def write_coil(self, n, on):
+            if not self.online:
+                raise OSError("board disconnected")
+            self.on = on
+            self.writes.append((n, on))
+
+        def read_coils(self, lo, count):
+            if not self.online:
+                raise OSError("board disconnected")
+            return [self.on]
+
+        def close(self):
+            pass
+    relay = 板()
+    p = Payload(PayloadConfig(coils={"alarm": 0}, siren_coil="alarm"), relay=relay)
+    p._ensure_guard = lambda: None
+    await p.start()
+    await p.set("siren", True, 60)
+    relay.online, relay.on = False, False                 # 板子掉电、断了
+    await p._readback()
+    await p._reconcile("alarm")
+    assert p._known["alarm"] is None
+    assert p.problems() and "siren" in p.faults()
+    h = {d["id"]: d for d in p.health()}["relay"]
+    assert h["state"] != "online" and "读不回来" in h["detail"]
+    relay.online = True                                   # 通了:按「要响」重新合上
+    await p._readback()
+    await p._reconcile("alarm")
+    assert relay.on is True and p._known["alarm"] is True
+    assert {d["id"]: d for d in p.health()}["relay"]["state"] == "online"
+    await p.close()
