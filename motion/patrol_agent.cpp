@@ -731,12 +731,12 @@ static Outcome RunCommand(const std::string& cmd, const std::string& line,
         seq > 9e15)
       return Reject("src、seq 要是非负整数");
     const int e = end == "tail" ? velgate::kEndTail : velgate::kEndHead;
-    const uint64_t prev = g_gate.HolderConn(e);
     const auto now = std::chrono::steady_clock::now();
+    uint64_t prev = 0;
     const int got = g_gate.SetClearance(now + std::chrono::milliseconds(static_cast<int>(ms)), e,
-                                        cap, conn, static_cast<uint64_t>(seq), now);
+                                        cap, conn, static_cast<uint64_t>(seq), now, &prev);
     if (got == velgate::kPermitTookOver && prev > 0 && prev != conn) {
-      // 新连接接管了许可:旧的那条关掉,它缓冲里还没读的旧许可一起作废
+      // 新连接接管了许可(两头一起):旧的那条关掉;它在途、缓冲里还没读的旧许可本来也不认了
       std::lock_guard<std::mutex> lk(g_clients_mtx);
       auto it = g_conn_fd.find(prev);
       if (it != g_conn_fd.end()) {
