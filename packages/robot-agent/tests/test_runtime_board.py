@@ -176,3 +176,35 @@ async def test_热像镜头检测_后台取图不卡主循环_进设备健康_�
     await asyncio.sleep(0)
     assert lens.steps == 2
     assert any(d["id"] == "lens:thermal" for d in await rt.devices.refresh())
+
+
+async def test_外审R1_危急过热_正在退让的保持距离也收尾(tmp_path):
+    """保持距离不归引擎管:危急过热原来只拒新的,正在退的照退(10 秒挪 3 米)。现在运行时这一拍就让它收尾。"""
+    from test_standoff import 台
+    c = 钟()
+    dog = SimRobot(now_ms=c)
+    rt = AgentRuntime(transport=MemoryTransport(MemoryBroker(), "dog"), registration=REG,
+                      hal=dog, store_dir=tmp_path / "agent", now_ms=c, loaded_map=("m", "1"),
+                      home=Pose.from_xy_yaw(0, 0), monotonic=lambda: c.mono)
+    await rt.start()
+    try:
+        board = 假板子()
+        rt.attach_board(board)
+        t = 台(target=(0.0, 2.0))
+        t.task._hal = dog
+        rt.processor.current = t.task
+        await t.task.start()
+        await rt.step(0.1)
+        board.level, board.reason = "critical", "SoC 96 °C"
+        x0 = (await dog.odometry()).x
+        for _ in range(30):
+            c.ms += 100
+            c.mono += 0.1
+            t.t += 100
+            await rt.step(0.1)
+            dog.tick(0.1)
+        assert t.task.aborting or t.task.done
+        assert t.task.why == "overheat" or (t.task._ending and t.task._ending[1] == "overheat")
+        assert abs((await dog.odometry()).x - x0) < 0.8, "收尾:停下来,不再一路退"
+    finally:
+        await rt.close()

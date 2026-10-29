@@ -648,6 +648,15 @@ class AgentRuntime:
             await self.board.step()
         except Exception:                               # 读温度出毛病不许带走这一拍
             log.exception("板子温度这一拍炸了")
+        if self.board.level == "critical":
+            # 外审 R1:保持距离不归引擎管(引擎那边自己结束这一趟、回家),危急时这一拍就让它收尾(停下)
+            cur = self._standoff_task()
+            if cur is not None and not cur.aborting:
+                log.warning("上装严重过热:保持距离收尾(%s)", self.board.reason)
+                try:
+                    await cur.abort("overheat")
+                except Exception:
+                    log.exception("过热时让保持距离收尾没成")
         shed = self.board.level in ("shed", "critical")
         if shed == self._shedding:
             return
