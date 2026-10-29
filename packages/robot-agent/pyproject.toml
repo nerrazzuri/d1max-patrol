@@ -21,6 +21,7 @@ dependencies = [
 
 [project.scripts]
 d1max-agent = "d1max_agent.main:main"
+d1max-board-load = "d1max_agent.boardload:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
