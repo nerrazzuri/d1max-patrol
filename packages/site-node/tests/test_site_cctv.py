@@ -886,3 +886,44 @@ def test_实测_摄像头取一张(站点):
         assert resp.headers["Content-Type"] == "image/jpeg"
         assert resp.read() == b"\xff\xd8x\xff\xd9"
     v.close()
+
+
+def test_W44复查R4_两次当场同步交错_删掉的摄像头不会被旧的那次重新起来(tmp_path):
+    """改防区触发的同步 A 正在等旧订阅退出,这时删掉摄像头、触发同步 B。原来 B 先做完、A 回来拿着
+    等之前读的配置又把它起来(还能交入侵)。现在同步一次只做一个,停完旧的再读一次库才起新的。"""
+    import threading
+
+    from d1max_site import cctv_admin
+    db = SiteDB(tmp_path / "s.db")
+    body = {"name": "gate-cam", "zone": "old-gate", "onvif_url": "http://10.0.0.9",
+            "username": "admin", "password": "fake"}
+    cctv_admin.save(db, body, now_ms=1)
+    waiting, resume = threading.Event(), threading.Event()
+    reported: list[str] = []
+
+    class 卡住的订阅(cctv.CameraWatch):
+        def start(self):
+            pass
+
+        def join(self, timeout=None):
+            if self.cam.zone == "old-gate":
+                waiting.set()
+                resume.wait(5)
+            return True
+    mgr = cctv.CctvManager(db, report=lambda cam, ev: reported.append(cam.zone), now_ms=lambda: 1,
+                           watch_factory=卡住的订阅)
+    mgr.sync()
+    cctv_admin.save(db, body | {"edit": True, "zone": "new-gate"}, now_ms=1)
+    a = threading.Thread(target=mgr.sync)
+    a.start()
+    assert waiting.wait(5)
+    assert cctv_admin.remove(db, "gate-cam")
+    b = threading.Thread(target=mgr.sync)
+    b.start()
+    resume.set()
+    a.join(5)
+    b.join(5)
+    assert not a.is_alive() and not b.is_alive()
+    assert mgr.watches == {} and mgr.camera("gate-cam") is None
+    mgr.close()
+    db.close()
