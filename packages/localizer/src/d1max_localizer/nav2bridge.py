@@ -39,6 +39,11 @@ from d1max_contract.navbridge import PROTO  # 跟代理同一个协议号(不另
 log = logging.getLogger("d1max.nav2bridge")
 
 RECONNECT_S = 2.0
+#: 新目标收下之后这么久(秒)里收到的 /cmd_vel 不发(复查 N3):上一个目标的控制器排在队里的旧速度,
+#: 回调时再标上新目标号也证明不了是新目标的。控制器 20 Hz,队里的旧速度几拍就排完了。
+CMD_QUIET_S = 0.2
+#: 规划出的路线终点离目标超过这么远(米),不当成这个目标的路线(复查 N6:同一拍规划的旧路线)。
+PLAN_END_TOL_M = 1.0
 #: 时钟这么久(墙钟秒)没走就当代理没在送 tick:不就绪。
 CLOCK_STALE_S = 2.0
 #: 障碍点云里点的高度(米,在 Nav2 障碍层的 min/max 之间)。
@@ -174,6 +179,10 @@ class Nav2Bridge:
         #: 正在走的目标号(Nav2 收下的最近那个);规划出的路径、速度按它报。
         self.active_gid: int | None = None
         self.active_since_ms = 0
+        #: 每个目标的终点(复查 N6:核路线是不是它的)。
+        self.goal_xy: dict[int, tuple[float, float]] = {}
+        self._mono = time.monotonic
+        self._cmd_quiet_until = 0.0
 
     def cancel_all(self) -> None:
         """代理断了:它派的目标没人管了,全部取消;还没收下的记着,收下了马上取消(外审 R8)。"""
@@ -212,10 +221,17 @@ class Nav2Bridge:
             at = int(st.sec) * 1000 + int(st.nanosec) // 1_000_000
             if 0 < at < self.active_since_ms:
                 return                    # 外审 R10:收下这个目标以前规划的(上一个目标的),不标成它的
+        goal = self.goal_xy.get(gid)
+        if goal is not None and msg.poses:
+            end = msg.poses[-1].pose.position
+            if math.hypot(end.x - goal[0], end.y - goal[1]) > PLAN_END_TOL_M:
+                return                    # 复查 N6:终点不是这个目标的(同一拍规划的旧路线)
         pts = decimate([(p.pose.position.x, p.pose.position.y) for p in msg.poses])
         self.send_threadsafe({"type": "path", "goal_id": gid, "pts": pts})
 
     def _on_cmd(self, t: Any) -> None:
+        if self._mono() < self._cmd_quiet_until:
+            return                        # 复查 N3:新目标刚收下,队里可能还排着上一个的旧速度
         self.send_threadsafe({"type": "cmd", "t_ms": self.t_ms, "vx": float(t.linear.x),
                               "vy": float(t.linear.y), "wz": float(t.angular.z),
                               "goal_id": self.active_gid})      # 外审 R7:标上是哪个目标的
@@ -324,30 +340,34 @@ class Nav2Bridge:
             return
         with self._goal_lock:
             self.pending[gid] = False
+            self.goal_xy[gid] = (float(m["x"]), float(m["y"]))
         fut = self.nav.send_goal_async(goal)
         fut.add_done_callback(lambda f: self._accepted(gid, f))
 
     def _accepted(self, gid: int, fut: Any) -> None:
-        with self._goal_lock:
-            canceled = self.pending.pop(gid, False)
         try:
             h = fut.result()
+            why = "" if h.accepted else "Nav2 不收这个目标"
         except Exception as exc:                        # noqa: BLE001
-            self.send_threadsafe({"type": "goal_state", "goal_id": gid, "state": "rejected",
-                                  "reason": str(exc)[:200]})
-            return
-        if not h.accepted:
-            self.send_threadsafe({"type": "goal_state", "goal_id": gid, "state": "rejected",
-                                  "reason": "Nav2 不收这个目标"})
-            return
+            h, why = None, str(exc)[:200] or "Nav2 不收这个目标"
+        # 复查 N4:核取消、从 pending 挪到 goals 在同一段锁里做完(原来两段锁之间能插进取消)
         with self._goal_lock:
-            self.goals[gid] = h
-            if canceled:
-                # 外审 R8:收下之前代理已经取消了(或者断了):马上取消,不当成在走的
-                h.cancel_goal_async()
+            canceled = self.pending.pop(gid, False)
+            if h is not None and not why:
+                self.goals[gid] = h
+                if canceled:
+                    # 外审 R8:收下之前代理已经取消了(或者断了):马上取消,不当成在走的
+                    h.cancel_goal_async()
+                else:
+                    self.active_gid = gid
+                    self.active_since_ms = self.t_ms
+                    self._cmd_quiet_until = self._mono() + CMD_QUIET_S
             else:
-                self.active_gid = gid
-                self.active_since_ms = self.t_ms
+                self.goal_xy.pop(gid, None)
+        if why:
+            self.send_threadsafe({"type": "goal_state", "goal_id": gid, "state": "rejected",
+                                  "reason": why})
+            return
         if canceled:
             h.get_result_async().add_done_callback(lambda f: self._done(gid, f))
             return
@@ -358,6 +378,7 @@ class Nav2Bridge:
         from action_msgs.msg import GoalStatus
         with self._goal_lock:
             self.goals.pop(gid, None)
+            self.goal_xy.pop(gid, None)
             if self.active_gid == gid:
                 self.active_gid = None
         try:
@@ -378,6 +399,8 @@ class Nav2Bridge:
             h = self.goals.get(gid)
             if h is not None:
                 h.cancel_goal_async()
+                if self.active_gid == gid:
+                    self.active_gid = None    # 代理不要它了:之后的速度、路线不再标成它的
             elif gid in self.pending:
                 self.pending[gid] = True          # 外审 R8:还没收下,记着,收下了马上取消
 
