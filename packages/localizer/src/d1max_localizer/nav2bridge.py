@@ -44,6 +44,8 @@ RECONNECT_S = 2.0
 CMD_QUIET_S = 0.2
 #: 规划出的路线终点离目标超过这么远(米),不当成这个目标的路线(复查 N6:同一拍规划的旧路线)。
 PLAN_END_TOL_M = 0.4
+#: 新目标排着等上一个在 Nav2 里结束,最多等这么久(秒),过了回拒(复查第三轮 P1)。
+QUEUE_MAX_S = 5.0
 #: 时钟这么久(墙钟秒)没走就当代理没在送 tick:不就绪。
 CLOCK_STALE_S = 2.0
 #: 障碍点云里点的高度(米,在 Nav2 障碍层的 min/max 之间)。
@@ -147,10 +149,12 @@ class Nav2Bridge:
         self.clear = [self.node.create_client(ClearEntireCostmap, s) for s in (
             "/local_costmap/clear_entirely_local_costmap",
             "/global_costmap/clear_entirely_global_costmap")]
-        # 复查 P1:订控制器(和脱困行为)的原始输出 /cmd_vel_nav,不经速度平滑器 ——
+        # 复查 P1:订控制器的原始输出 /cmd_vel_nav,不经速度平滑器(不起它)——
         # 平滑器 OPEN_LOOP 会把上一个目标的速度慢慢衰减,目标换了它还在出旧方向的速度。
-        # 加减速由代理和机器人自己管。
+        # 加减速由代理和机器人自己管。复查第三轮 P4:脱困动作(BackUp 等)单独一路 /cmd_vel_behavior
+        # (d1max_nav2.launch.py 里接的),标上 beh:它常在规划不出来时做,代理不要求先有路线。
         self.node.create_subscription(Twist, "/cmd_vel_nav", self._on_cmd, 10)
+        self.node.create_subscription(Twist, "/cmd_vel_behavior", self._on_beh, 10)
         from nav_msgs.msg import Path as PathMsg
         self.node.create_subscription(PathMsg, "/plan", self._on_plan, 5)
         self._init_goal_book()
@@ -186,16 +190,24 @@ class Nav2Bridge:
         self.goal_xy: dict[int, tuple[float, float]] = {}
         self._mono = time.monotonic
         self._cmd_quiet_until = 0.0
+        #: 上一个目标在 Nav2 里结束(有终态结果)时的 ``/clock``:这个时刻及以前规划的路线不是新目标的
+        #: (复查第三轮 P2)。
+        self.last_end_ms = 0
+        #: 排着的新目标(上一个在 Nav2 里还没结束,复查第三轮 P1)和开始排的单调钟。
+        self.queued: dict[str, Any] | None = None
+        self.queued_at = 0.0
 
     def cancel_all(self) -> None:
         """代理断了:它派的目标没人管了,全部取消;还没收下的记着,收下了马上取消(外审 R8)。"""
         with self._goal_lock:
             for h in list(self.goals.values()):
                 h.cancel_goal_async()
-            self.goals.clear()
+            # 不清账:取消要等 Nav2 回终态结果(_done 里删);
+            # 新代理连上派的目标排着等它们结束(复查第三轮 P1)
             for gid in self.pending:
                 self.pending[gid] = True
             self.active_gid = None
+            self.queued = None                # 排着的也不发了(代理断了没人管它)
 
     # ------------------------------------------------------------ 发给代理
 
@@ -224,6 +236,8 @@ class Nav2Bridge:
             at = int(st.sec) * 1000 + int(st.nanosec) // 1_000_000
             if 0 < at < self.active_since_ms:
                 return                    # 外审 R10:收下这个目标以前规划的(上一个目标的),不标成它的
+            if 0 < at <= self.last_end_ms:
+                return                    # 复查第三轮 P2:上一个目标结束那一拍及以前规划的
         goal = self.goal_xy.get(gid)
         if goal is not None and msg.poses:
             end = msg.poses[-1].pose.position
@@ -232,12 +246,16 @@ class Nav2Bridge:
         pts = decimate([(p.pose.position.x, p.pose.position.y) for p in msg.poses])
         self.send_threadsafe({"type": "path", "goal_id": gid, "pts": pts})
 
-    def _on_cmd(self, t: Any) -> None:
+    def _on_cmd(self, t: Any, src: str = "ctl") -> None:
         if self._mono() < self._cmd_quiet_until:
             return                        # 复查 N3:新目标刚收下,队里可能还排着上一个的旧速度
         self.send_threadsafe({"type": "cmd", "t_ms": self.t_ms, "vx": float(t.linear.x),
                               "vy": float(t.linear.y), "wz": float(t.angular.z),
-                              "goal_id": self.active_gid})      # 外审 R7:标上是哪个目标的
+                              "goal_id": self.active_gid,       # 外审 R7:标上是哪个目标的
+                              "src": src})
+
+    def _on_beh(self, t: Any) -> None:
+        self._on_cmd(t, "beh")
 
     # ------------------------------------------------------------ 收代理的
 
@@ -326,6 +344,46 @@ class Nav2Bridge:
                 c.call_async(self._m["ClearEntireCostmap"].Request())
 
     def on_goal(self, m: dict[str, Any]) -> None:
+        """复查第三轮 P1:Nav2 的速度不带目标号,只有让上一个目标在 Nav2 里**结束**(收到终态结果 =
+        它的控制器、脱困都停了)再发下一个,之后来的速度才能当新目标的。上一个没结束就排着(只排最新的一个;
+        被顶掉的回拒),结束了马上发;排太久(:data:`QUEUE_MAX_S`)回拒。"""
+        with self._goal_lock:
+            busy = bool(self.goals) or bool(self.pending)
+            old = None
+            if busy:
+                old, self.queued, self.queued_at = self.queued, m, self._mono()
+        if busy:
+            if old is not None:
+                self.send({"type": "goal_state", "goal_id": old["goal_id"], "state": "rejected",
+                           "reason": "又来了一个新目标"})
+            return
+        self._send_goal(m)
+
+    def _dispatch_queued(self) -> None:
+        with self._goal_lock:
+            if self.goals or self.pending or self.queued is None:
+                return
+            m, self.queued = self.queued, None
+        self._send_goal(m)
+
+    def _dispatch_soon(self) -> None:
+        """rclpy 线程里结束的:回事件循环那边发(跟别的发目标同一个线程)。"""
+        loop = getattr(self, "loop", None)
+        if loop is not None:
+            loop.call_soon_threadsafe(self._dispatch_queued)
+        else:
+            self._dispatch_queued()
+
+    def expire_queued(self) -> None:
+        with self._goal_lock:
+            m = self.queued
+            if m is None or self._mono() - self.queued_at <= QUEUE_MAX_S:
+                return
+            self.queued = None
+        self.send({"type": "goal_state", "goal_id": m["goal_id"], "state": "rejected",
+                   "reason": f"上一个目标 Nav2 {QUEUE_MAX_S:g} 秒还没结束"})
+
+    def _send_goal(self, m: dict[str, Any]) -> None:
         from geometry_msgs.msg import PoseStamped
         gid = m["goal_id"]
         goal = self._m["NavigateToPose"].Goal()
@@ -370,6 +428,7 @@ class Nav2Bridge:
         if why:
             self.send_threadsafe({"type": "goal_state", "goal_id": gid, "state": "rejected",
                                   "reason": why})
+            self._dispatch_soon()
             return
         if canceled:
             h.get_result_async().add_done_callback(lambda f: self._done(gid, f))
@@ -384,20 +443,30 @@ class Nav2Bridge:
             self.goal_xy.pop(gid, None)
             if self.active_gid == gid:
                 self.active_gid = None
+            self.last_end_ms = max(self.last_end_ms, self.t_ms)
         try:
             status = fut.result().status
         except Exception as exc:                        # noqa: BLE001
             self.send_threadsafe({"type": "goal_state", "goal_id": gid, "state": "aborted",
                                   "reason": str(exc)[:200]})
+            self._dispatch_soon()
             return
         state = {GoalStatus.STATUS_SUCCEEDED: "succeeded",
                  GoalStatus.STATUS_CANCELED: "canceled"}.get(status, "aborted")
         why = "" if state != "aborted" else "Nav2 放弃了(规划不出、脱困都试过还走不动、超时)"
         self.send_threadsafe({"type": "goal_state", "goal_id": gid, "state": state,
                               "reason": why})
+        self._dispatch_soon()
 
     def on_cancel(self, m: dict[str, Any]) -> None:
         gid = m["goal_id"]
+        with self._goal_lock:
+            dropped = self.queued is not None and self.queued["goal_id"] == gid
+            if dropped:
+                self.queued = None
+        if dropped:
+            self.send({"type": "goal_state", "goal_id": gid, "state": "canceled", "reason": ""})
+            return
         with self._goal_lock:
             h = self.goals.get(gid)
             if h is not None:
@@ -491,6 +560,7 @@ class Nav2Bridge:
             self._hb += 1
             self.send({"type": "hb", "seq": self._hb})
             self.check_ready()
+            self.expire_queued()
             await asyncio.sleep(1.0)
 
 

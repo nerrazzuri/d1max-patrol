@@ -77,7 +77,7 @@ _NAV2: dict[str, Any] = {}
 
 
 async def _nav2_up() -> Any:
-    """起 Nav2(``navigation_launch.py`` + 我们的参数)和转接节点,等它们连上代理这头的服务端。"""
+    """起 Nav2(``deploy/nav2/d1max_nav2.launch.py`` + 我们的参数)和转接节点,等它们连上代理这头的服务端。"""
     if "link" in _NAV2:
         return _NAV2["link"]
     import os

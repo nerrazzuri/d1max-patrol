@@ -51,8 +51,12 @@ class NavBridgeServer:
         #: 转接节点说 Nav2 就绪了没有、为什么没有。
         self.ready = False
         self.reason = "Nav2 转接节点没连上"
-        #: 最近一条速度:``(收到的单调钟, t_ms, vx, vy, wz)``。
-        self.cmd: tuple[float, int, float, float, float] | None = None
+        #: 最近一条速度:``(收到的单调钟, t_ms, vx, vy, wz, goal_id, src, 到达号)``。
+        self.cmd: tuple[Any, ...] | None = None
+        #: 收到的报文按到达顺序编号(复查第三轮 P1:速度要比本目标的路线晚到才认)。
+        self._rx = 0
+        #: 每个目标第一条路线是第几条到的(只留最近几个)。
+        self.plan_rx: dict[int, int] = {}
         self.goal_states: deque[dict[str, Any]] = deque(maxlen=64)
         #: Nav2 最近一次规划出的路径:``(目标号, ((x, y), …))``。
         self.plan: tuple[int, tuple[tuple[float, float], ...]] | None = None
@@ -144,16 +148,22 @@ class NavBridgeServer:
 
     def _on(self, m: dict[str, Any]) -> None:
         self._heard = self._now()
+        self._rx += 1
         t = m["type"]
         if t == "ready":
             self.ready, self.reason = m["ok"], m.get("reason", "") or ("" if m["ok"] else "没就绪")
         elif t == "cmd":
             # 转接节点标了是哪个目标的(外审 R7);老的不标:None
-            self.cmd = (self._now(), m["t_ms"], m["vx"], m["vy"], m["wz"], m.get("goal_id"))
+            self.cmd = (self._now(), m["t_ms"], m["vx"], m["vy"], m["wz"], m.get("goal_id"),
+                        m.get("src", "ctl"), self._rx)
         elif t == "goal_state":
             self.goal_states.append(m)
         elif t == "path":
             self.plan = (m["goal_id"], tuple((float(x), float(y)) for x, y in m["pts"]))
+            if m["goal_id"] not in self.plan_rx:
+                self.plan_rx[m["goal_id"]] = self._rx
+                while len(self.plan_rx) > 16:
+                    self.plan_rx.pop(next(iter(self.plan_rx)))
         elif t == "error":
             log.warning("Nav2 转接节点报错:%s", m["reason"])
 

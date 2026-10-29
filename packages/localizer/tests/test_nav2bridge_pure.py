@@ -220,3 +220,76 @@ def test_外审复查P2_近处的旧路线_终点差0点8米也不认(monkeypatc
              poses=[NS(pose=NS(position=NS(x=x, y=4.0))) for x in (5.0, 3.5, 2.8)])
     b._on_plan(old)
     assert not [m for m in b.sent if m["type"] == "path"]
+
+
+def test_复查三P1_上一个目标在Nav2里没结束_新目标先排着_结束了才发(monkeypatch):
+    """Nav2 的速度不带目标号:让上一个目标在 Nav2 里真结束(有终态结果 = 老控制器停了)再发下一个。"""
+    b, futs = _桥(monkeypatch)
+    b.on_goal({"goal_id": 1, "x": 1, "y": 2, "yaw": 0})
+    h1 = _Handle()
+    futs[0].set_result(h1)
+    b.on_cancel({"goal_id": 1})
+    b.on_goal({"goal_id": 2, "x": 3, "y": 2, "yaw": 0})
+    assert len(futs) == 1, "上一个还没结束:排着"
+    import sys
+    from types import SimpleNamespace as NS
+    GoalStatus = NS(STATUS_SUCCEEDED=4, STATUS_CANCELED=5)
+    monkeypatch.setitem(sys.modules, "action_msgs.msg", NS(GoalStatus=GoalStatus))
+    b.t_ms = 500
+    h1.done[0](NS(result=lambda: NS(status=GoalStatus.STATUS_CANCELED)))
+    assert len(futs) == 2 and b.last_end_ms == 500, "结束了马上发"
+
+
+def test_复查三P1_排着的目标被取消了就不发_排太久回拒(monkeypatch):
+    b, futs = _桥(monkeypatch)
+    b.on_goal({"goal_id": 1, "x": 1, "y": 2, "yaw": 0})
+    futs[0].set_result(_Handle())
+    b.on_goal({"goal_id": 2, "x": 3, "y": 2, "yaw": 0})
+    b.on_cancel({"goal_id": 2})
+    assert b.queued is None and b.sent[-1] == {"type": "goal_state", "goal_id": 2,
+                                               "state": "canceled", "reason": ""}
+    b.on_goal({"goal_id": 3, "x": 3, "y": 2, "yaw": 0})
+    b._mono = lambda: 1e9
+    b.expire_queued()
+    assert b.queued is None and b.sent[-1]["goal_id"] == 3 and b.sent[-1]["state"] == "rejected"
+    assert len(futs) == 1
+
+
+def test_复查三P2_上一个目标结束那一刻及以前规划的路线_不标成新目标的(monkeypatch):
+    from types import SimpleNamespace as NS
+    b, futs = _桥(monkeypatch)
+    b.last_end_ms = 1000
+    b.t_ms = 1000
+    b.on_goal({"goal_id": 9, "x": 2, "y": 4, "yaw": 0})
+    futs[0].set_result(_Handle())
+
+    def plan(at_ms, end):
+        pose = NS(pose=NS(position=NS(x=end[0], y=end[1])))
+        return NS(header=NS(stamp=NS(sec=at_ms // 1000, nanosec=(at_ms % 1000) * 1_000_000)),
+                  poses=[pose])
+    b._on_plan(plan(1000, (2.3, 4)))                      # 同一拍、终点只差 0.3 m:旧的
+    assert not [m for m in b.sent if m["type"] == "path"]
+    b._on_plan(plan(1100, (2.0, 4)))
+    assert [m for m in b.sent if m["type"] == "path"][-1]["goal_id"] == 9
+
+
+def test_复查三P4_脱困动作的速度单独一路_标上beh(monkeypatch):
+    from types import SimpleNamespace as NS
+    b, futs = _桥(monkeypatch)
+    b.on_goal({"goal_id": 5, "x": 1, "y": 2, "yaw": 0})
+    futs[0].set_result(_Handle())
+    b._mono = lambda: 1e9
+    b._on_beh(NS(linear=NS(x=-0.15, y=0.0), angular=NS(z=0.0)))
+    b._on_cmd(NS(linear=NS(x=0.3, y=0.0), angular=NS(z=0.1)))
+    assert [m["src"] for m in b.sent if m["type"] == "cmd"] == ["beh", "ctl"]
+
+
+def test_复查三P1_代理断了重连_旧目标在Nav2里结束之前_新目标排着(monkeypatch):
+    b, futs = _桥(monkeypatch)
+    b.on_goal({"goal_id": 1, "x": 1, "y": 2, "yaw": 0})
+    h = _Handle()
+    futs[0].set_result(h)
+    b.cancel_all()
+    assert h.cancels == 1
+    b.on_goal({"goal_id": 2, "x": 3, "y": 2, "yaw": 0})
+    assert len(futs) == 1 and b.queued["goal_id"] == 2

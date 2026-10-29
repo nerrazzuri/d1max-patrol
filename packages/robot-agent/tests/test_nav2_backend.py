@@ -29,6 +29,7 @@ from d1max_patrol.protocol.nav_types import NavStatus, Pose
     {"type": "map", "req": 1, "map_id": "m", "map_version": "", "dir": "/x",
      "nogo": [[[0, 0], [1, 0], [1, 1]]], "speed": [{"poly": [[0, 0], [1, 0], [1, 1]], "mps": 0.3}]},
     {"type": "cmd", "t_ms": 3, "vx": 0.2, "vy": 0.0, "wz": -0.1},
+    {"type": "cmd", "t_ms": 3, "vx": -0.15, "vy": 0.0, "wz": 0.0, "goal_id": 4, "src": "beh"},
     {"type": "goal_state", "goal_id": 2, "state": "aborted", "reason": "x"},
 ])
 def test_契约_报文来回不变样(msg):
@@ -42,6 +43,7 @@ def test_契约_报文来回不变样(msg):
     {"type": "goal", "goal_id": 1, "x": float("nan"), "y": 2, "yaw": 0},
     {"type": "goal_state", "goal_id": 1, "state": "weird"},
     {"type": "cmd", "t_ms": 1, "vx": 0, "vy": 0, "wz": 0, "extra": 1},
+    {"type": "cmd", "t_ms": 1, "vx": 0, "vy": 0, "wz": 0, "src": "smoother"},
     {"type": "nope"},
     {"type": "map", "req": 1, "map_id": "m", "map_version": "", "dir": "/x",
      "speed": [{"poly": [[0, 0], [1, 0], [1, 1]], "mps": -1}]},
@@ -118,7 +120,7 @@ async def test_服务端_握手_补发地图_收就绪速度结果_断了就不�
             break
         await asyncio.sleep(0.01)
     assert srv.plan == (1, ((0.0, 0.0), (1.0, 0.5)))
-    assert srv.ready and srv.cmd[1:] == (9, 0.3, 0.0, 0.1, None)
+    assert srv.ready and srv.cmd[1:7] == (9, 0.3, 0.0, 0.1, None, "ctl")
     assert srv.goal_states[0]["state"] == "succeeded"
     w.close()
     for _ in range(50):
@@ -692,3 +694,59 @@ def test_外审复查P3_代理记的倒车比例跟Nav2参数一致():
     vmax = float(re.search(r"\n\s+vx_max:\s*([0-9.]+)", text).group(1))
     vmin = float(re.search(r"\n\s+vx_min:\s*(-?[0-9.]+)", text).group(1))
     assert MPPI_REVERSE_RATIO == pytest.approx(-vmin / vmax)
+
+
+async def test_复查三P1_路线门槛打开前缓存的速度作废_要比路线晚到的才认(tmp_path):
+    """Codex 第三轮:新目标的路线来了,门槛打开,之前缓存的(标的也是新目标的)旧速度不能拿来开车。"""
+    link = 假转接()
+    link.auto_plan = False
+    t = _台(tmp_path, link)
+    await t.start(5, 4)
+    await t.nav.goto(Pose.from_xy_yaw(2, 4))                    # 身后的目标
+    gid = link.kinds("goal")[-1]["goal_id"]
+    link.now += 0.1
+    link.cmd = (link.now, 1, 0.4, 0, 0, gid, "ctl", 1)          # 第 1 条到的:上一个目标残留的往前
+    link.plan, link.plan_rx = (gid, ((5.0, 4.0), (2.0, 4.0))), {gid: 2}   # 第 2 条到的:路线
+    for _ in range(6):                                         # 过了起步那几拍
+        link.now += 0.05
+        link.cmd = (link.now, *link.cmd[1:])                    # 还是那一条(没新速度来)
+        await t.一拍()
+    assert t.nav._status is NavStatus.ACTIVE
+    assert t.nav._last_vx <= 1e-9, "比路线早到的速度不认"
+    for rx in (3, 4, 5):
+        link.now += 0.1
+        link.cmd = (link.now, 1, -0.3, 0, 0, gid, "ctl", rx)
+        await t.一拍()
+    assert t.nav._last_vx < -0.1, "路线之后到的照用"
+
+
+async def test_复查三P4_脱困动作的速度不用等路线_目标号照样要对(tmp_path):
+    """BackUp 往往在规划不出来时才做(没有路线):标了 beh 的不过路线门槛;别的目标的照样不认。"""
+    link = 假转接()
+    link.auto_plan = False
+    t = _台(tmp_path, link)
+    await t.start(5, 4)
+    await t.nav.goto(Pose.from_xy_yaw(8, 4))
+    gid = link.kinds("goal")[-1]["goal_id"]
+    for rx in (1, 2, 3):
+        link.now += 0.1
+        link.cmd = (link.now, 1, -0.15, 0, 0, gid - 1, "beh", rx)   # 别的目标的脱困
+        await t.一拍()
+    assert t.nav._last_vx >= -1e-9
+    for rx in (4, 5, 6):
+        link.now += 0.1
+        link.cmd = (link.now, 1, -0.15, 0, 0, gid, "beh", rx)
+        await t.一拍()
+    assert t.nav._last_vx < -0.1
+
+
+def test_复查三_转接服务端_报文按到达编号_记下每个目标第一条路线是第几条到的():
+    from d1max_agent.navbridge import NavBridgeServer
+    s = NavBridgeServer("/nonexistent/nav2.sock")
+    s._on({"type": "cmd", "t_ms": 1, "vx": 0.1, "vy": 0, "wz": 0, "goal_id": 7, "src": "ctl"})
+    s._on({"type": "path", "goal_id": 7, "pts": [[0, 0], [1, 0]]})
+    s._on({"type": "path", "goal_id": 7, "pts": [[0, 0], [2, 0]]})     # 重规划:不挪第一条
+    s._on({"type": "cmd", "t_ms": 2, "vx": 0.2, "vy": 0, "wz": 0, "goal_id": 7, "src": "beh"})
+    assert s.plan_rx[7] == 2 and s.cmd[6:] == ("beh", 4)
+    s._on({"type": "cmd", "t_ms": 3, "vx": 0.2, "vy": 0, "wz": 0})       # 老转接节点:不带
+    assert s.cmd[6:] == ("ctl", 5)
