@@ -239,11 +239,12 @@ class 台子:
         while self._q and self._q[0][0] <= self.c.s() + 1e-9:
             self.view.on_grid(self._q.pop(0)[1])
         if self.r.require_clearance:
-            from d1max_localizer.obstacles import Config, permit
+            # W47:旁路进程 ≥ 10 的分档许可(同感知节点 _send_permit)
+            from d1max_localizer.obstacles import MIN_PERMIT_V, PERMIT_MS, Config, permit_vmax
             for end in ("head", "tail") if self.per.rear_cal else ("head",):
-                ms = permit(self.per.净空(g, end), Config())
-                if ms:
-                    self.r.clear(ms, end)
+                v = permit_vmax(self.per.净空(g, end), Config())
+                if v >= MIN_PERMIT_V:
+                    self.r.clear(PERMIT_MS, end, vmax=v)
 
     async def 一拍(self, dt=0.1):
         for _ in range(2000):

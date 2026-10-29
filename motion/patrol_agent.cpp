@@ -108,11 +108,26 @@ using namespace robot_sdk;
 // 9(S11):只收代理的运动命令。hello 带 "auth":true;每条连接先 {"cmd":"auth","token":…}(令牌在
 // --token-file),没认证的连接发运动命令一律拒(not_authorized);停车、按下急停、净空许可照收(见
 // cmd_auth.hpp)。8 号及更老的代理不发 auth —— 连上了也开不了车,所以握手就得拒(老代理认 3–8)。
-static const int kProtoVersion = 9;
+//
+// 10(W47 分档许可):clear 可以带 vmax(m/s,「这一头空到能跑多快」),旁路按 --permit-mps-per-unit 换成
+// 比例上限夹前进分量(不带 vmax 的老许可按 0.5);新参数 --max-fraction(0.5–1.0,默认 0.5):超过 0.5 的
+// 前进只在开了 --require-clearance 时放行。hello 带 max_fraction。感知节点只对 ≥ 10 的发分档许可(9 号会
+// 把任何许可都当成「0.5 随便走」,所以对老的照旧只在够 0.6 m/s 刹停时才发)。代理认 3–10。
+static const int kProtoVersion = 10;
 // 这一次起来的令牌(cmd_auth.hpp)。空 = 没写成令牌文件,谁都认证不了(停车照常)。
 static std::string g_token;
 static int g_speed_want = 1;
 static bool g_follows_head = true;
+// 分档许可:比例 1.0 在要的档位上**最多**多快(m/s;宁大勿小 —— 大了只会更慢)。<= 0 = 按档位取缺省:
+// 低速档 1.1(C40221 实测斜率 1.09)、中速 2.2、高速和不管档位 3.3。
+static double g_permit_mps = 0;
+
+static double PermitMpsPerUnit() {
+  if (g_permit_mps > 0) return g_permit_mps;
+  if (g_speed_want == 1) return 1.1;
+  if (g_speed_want == 2) return 2.2;
+  return 3.3;
+}
 
 // 一次 Move 在机器上维持约 1s(清单 #38)，靠 50ms 连续下发维持行走。
 static const int kMoveIntervalMs = 50;
@@ -292,6 +307,7 @@ static std::string HelloFrame() {
         << ",\"sdk\":\"0.1.1\",\"held\":" << (g_held.load() ? "true" : "false")
         << ",\"follows_head\":" << (g_follows_head ? "true" : "false")
         << ",\"speed_level_want\":" << g_speed_want
+        << ",\"max_fraction\":" << g_gate.MaxForward()
         << ",\"robot\":\"" << JsonEscape(g_robot_addr) << "\"}";
   return hello.str();
 }
@@ -697,9 +713,15 @@ static Outcome RunCommand(const std::string& cmd, const std::string& line,
     std::string end = "head";
     JsonField(line, "end", &end);
     if (end != "head" && end != "tail") return Reject("end 要是 head 或 tail");
+    double cap = velgate::kLegacyFraction;                 // 老许可:不带速度
+    if (line.find("\"vmax\"") != std::string::npos) {
+      const double vmax = JsonNumField(line, "vmax", -1.0);
+      if (!std::isfinite(vmax) || vmax < 0 || vmax > 5) return Reject("vmax 要在 [0, 5] m/s 内");
+      cap = vmax / PermitMpsPerUnit();
+    }
     g_gate.SetClearance(std::chrono::steady_clock::now() +
                             std::chrono::milliseconds(static_cast<int>(ms)),
-                        end == "tail" ? velgate::kEndTail : velgate::kEndHead);
+                        end == "tail" ? velgate::kEndTail : velgate::kEndHead, cap);
     return Outcome{};
   }
   if (cmd == "vel")
@@ -993,7 +1015,8 @@ int main(int argc, char** argv) {
   if (argc < 3) {
     std::cerr << "usage: " << argv[0]
               << " <ip> <port> [--listen HOST:PORT] [--fifo PATH] [--token-file PATH]"
-                 " [--require-clearance] [--sdk-follows-head 0|1] [--speed-level 0|1|2|3]\n"
+                 " [--require-clearance] [--sdk-follows-head 0|1] [--speed-level 0|1|2|3]"
+                 " [--max-fraction 0.5-1.0] [--permit-mps-per-unit M]\n"
               << "  例: " << argv[0]
               << " 192.168.168.168 8082 --listen 127.0.0.1:8090"
                  " --fifo runs/d1max-agent.fifo\n"
@@ -1037,6 +1060,21 @@ int main(int argc, char** argv) {
         return 2;
       }
       g_speed_want = std::atoi(v.c_str());
+    } else if (arg == "--max-fraction" && i + 1 < argc) {
+      char* e = nullptr;
+      const double v = std::strtod(argv[++i], &e);
+      if (e == nullptr || *e != '\0' || !g_gate.SetMaxForward(v)) {
+        std::cerr << "--max-fraction 要在 [0.5, 1.0] 内(超过 0.5 要配 --require-clearance 才放行)\n";
+        return 2;
+      }
+    } else if (arg == "--permit-mps-per-unit" && i + 1 < argc) {
+      char* e = nullptr;
+      g_permit_mps = std::strtod(argv[++i], &e);
+      if (e == nullptr || *e != '\0' || !std::isfinite(g_permit_mps) || g_permit_mps < 0.5 ||
+          g_permit_mps > 5) {
+        std::cerr << "--permit-mps-per-unit 要在 [0.5, 5] 内(比例 1.0 最多多少 m/s)\n";
+        return 2;
+      }
     } else {
       std::cerr << "未知参数: " << arg << "\n";
       return 2;

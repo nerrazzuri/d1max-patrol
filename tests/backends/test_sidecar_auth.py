@@ -48,12 +48,12 @@ async def _站起(sim: SimAgentServer, backend: SidecarDeviceBackend) -> None:
 
 
 async def test_协议9_hello说要令牌():
-    assert PROTO_VERSION == 9
+    assert PROTO_VERSION >= 9                    # 10(W47 分档许可)照样要令牌
     async with _sim() as sim:
         b = SidecarDeviceBackend("127.0.0.1", sim.port, ack_timeout_s=2.0)
         await b.connect()
         try:
-            assert b.hello.auth is True and b.hello.proto == 9
+            assert b.hello.auth is True and b.hello.proto == PROTO_VERSION
             assert not b.authorized, "没给令牌:只读"
         finally:
             await b.close()

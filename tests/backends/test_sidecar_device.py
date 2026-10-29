@@ -534,3 +534,22 @@ async def test_旁路进程还是3号_代理照样能连_2号不行(monkeypatch)
         finally:
             await backend.close()
             await sim.stop()
+
+
+async def test_vel前进上限跟旁路握手报的走_后退还是0点5():
+    """W47 协议 10:前进比例上限是旁路进程 ``--max-fraction``(hello 报);后退、横移、转向一直 0.5。"""
+    async with _pair(max_fraction=1.0) as (sim, backend):
+        assert backend.max_forward_fraction == 1.0
+        await backend.acquire_control()
+        await backend.stand()
+        await backend.vel(0.8, 0.0, 0.0, 300)
+        for fwd, lat in ((1.01, 0.0), (-0.6, 0.0), (0.3, 0.6)):
+            with pytest.raises(DeviceBackendError):
+                await backend.vel(fwd, lat, 0.0, 300)
+        assert [a["fwd"] for c, a in sim.commands if c == "vel"] == [0.8]
+    async with _pair() as (sim, backend):
+        assert backend.max_forward_fraction == 0.5
+        await backend.acquire_control()
+        await backend.stand()
+        with pytest.raises(DeviceBackendError):
+            await backend.vel(0.6, 0.0, 0.0, 300)

@@ -16,11 +16,17 @@
 //     任何运动 —— 代理按低速档的换算发的比例,换了档就快一倍;
 //     许可分两头(W09i):SDK 的「往前」走向哪一头,就要哪一头的许可 —— 狗头为前是狗头那头;狗尾为前
 //     时 SDK 跟着调头(默认,真机项核)是狗尾那头,不跟就还是狗头那头;头尾不知道:不放。
+//   - 分档许可(W47,协议 10):许可带「这一头空到能跑多快」(比例上限),前进分量按它夹;**最新的许可
+//     说了算**(障碍近了当拍就降),上限没升时有效期只往后延(晚到的同档许可不截短)。老许可不带速度,
+//     按 kLegacyFraction(0.5,老的全档)算。
+//   - 前进比例上限(SetMaxForward,旁路参数 --max-fraction,[0.5, 1.0],默认 0.5):超过 0.5 的前进**只在
+//     开了净空许可门时**放行(没有第二层就最多 0.5,跟老的一样)。后退、横移、转向一直是 0.5。
 // 作废 = 代次加一。目标记着登记时的代次,代次对不上就永远不再生效 —— 急停解除、重新站起
 // 、控制权拿回来都不会让旧目标复活;只有之后新登记的 vel 才算数。
 
 #pragma once
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -46,7 +52,9 @@ constexpr int kHeadTail = 2;
 constexpr int kEndHead = 0;
 constexpr int kEndTail = 1;
 
-constexpr double kMaxFraction = 0.5;
+constexpr double kMaxFraction = 0.5;       // 后退、横移、转向;前进的默认上限
+constexpr double kLegacyFraction = 0.5;    // 不带速度的老许可、没开许可门时前进最多这么快
+constexpr double kMaxForwardCeiling = 1.0;  // --max-fraction 最多给到这
 constexpr int kTtlMinMs = 50;
 constexpr int kTtlMaxMs = 1000;
 
@@ -62,12 +70,12 @@ class Gate {
   std::string Register(double fwd, double lat, double yaw, double ttl_ms, bool held,
                        Clock::time_point now) {
     if (!std::isfinite(fwd) || !std::isfinite(lat) || !std::isfinite(yaw) ||
-        std::fabs(fwd) > kMaxFraction || std::fabs(lat) > kMaxFraction ||
-        std::fabs(yaw) > kMaxFraction)
-      return "速度分量要在 ±0.5 内";
+        fwd < -kMaxFraction || std::fabs(lat) > kMaxFraction || std::fabs(yaw) > kMaxFraction)
+      return "速度分量要在 ±0.5 内(前进见 --max-fraction)";
     if (!std::isfinite(ttl_ms) || ttl_ms < kTtlMinMs || ttl_ms > kTtlMaxMs)
       return "ttl_ms 要在 [50, 1000] 内";
     std::lock_guard<std::mutex> lk(mtx_);
+    if (fwd > max_fwd_) return "前进比例超过 --max-fraction";
     if (!held) return "no_control";
     if (estop_latched_) return "急停生效中,拒绝动作";
     if (std::string why = UnsafeLocked(); !why.empty()) return why;
@@ -116,9 +124,14 @@ class Gate {
     if (speed_want_ > 0 && speed_level_ != speed_want_) return std::nullopt;  // 档位不对:不走
     if (!target_ || target_->epoch != epoch_ || now >= target_->until) return std::nullopt;
     Target t = *target_;
-    if (require_clearance_ && t.fwd > 0) {
-      const int lead = LeadEndLocked();
-      if (lead < 0 || now >= clear_until_[lead]) t.fwd = 0;  // 往前走向的那一头没有许可:不许往前
+    if (t.fwd > 0) {
+      if (require_clearance_) {
+        const int lead = LeadEndLocked();
+        if (lead < 0 || now >= clear_until_[lead]) t.fwd = 0;  // 往前走向的那一头没有许可:不许往前
+        else t.fwd = std::min(t.fwd, clear_cap_[lead]);        // 分档:许可说能多快就最多多快
+      } else {
+        t.fwd = std::min(t.fwd, kLegacyFraction);              // 没有第二层:老上限
+      }
     }
     return t;
   }
@@ -158,12 +171,30 @@ class Gate {
     follows_head_ = on;
   }
 
-  /// 感知节点的许可:「到 until 为止 end 那一头是空的」。只往后延,不往前缩(晚到的旧许可不会把新的
-  /// 截短)。
-  void SetClearance(Clock::time_point until, int end = kEndHead) {
+  /// 感知节点的许可:「到 until 为止 end 那一头空到能按比例 cap 往前走」(老许可不带速度:0.5)。
+  /// 上限按最新的这条(障碍近了当拍就降);上限没升时有效期只往后延,不往前缩(晚到的同档许可不截短;
+  /// 降了档的按老期限也安全 —— 老许可在更快的速度下都够);升了档的只到它自己的期限。
+  void SetClearance(Clock::time_point until, int end = kEndHead, double cap = kLegacyFraction) {
     if (end != kEndHead && end != kEndTail) return;
+    if (!std::isfinite(cap)) return;
+    cap = std::max(0.0, std::min(cap, kMaxForwardCeiling));
     std::lock_guard<std::mutex> lk(mtx_);
-    if (until > clear_until_[end]) clear_until_[end] = until;
+    if (cap > clear_cap_[end]) clear_until_[end] = until;
+    else if (until > clear_until_[end]) clear_until_[end] = until;
+    clear_cap_[end] = cap;
+  }
+
+  /// 前进比例上限(旁路参数 --max-fraction):只许 [0.5, 1.0]。超过 0.5 的那段要开许可门才放行。
+  bool SetMaxForward(double frac) {
+    if (!std::isfinite(frac) || frac < kMaxFraction || frac > kMaxForwardCeiling) return false;
+    std::lock_guard<std::mutex> lk(mtx_);
+    max_fwd_ = frac;
+    return true;
+  }
+
+  double MaxForward() {
+    std::lock_guard<std::mutex> lk(mtx_);
+    return max_fwd_;
   }
 
   /// 只给测试用:检查过了、还没登记时调(**锁还握着**)。测试在这里起一个线程去 halt,
@@ -208,6 +239,8 @@ class Gate {
   int speed_want_ = 0;
   int speed_level_ = 0;
   Clock::time_point clear_until_[2]{};
+  double clear_cap_[2]{0.0, 0.0};
+  double max_fwd_ = kMaxFraction;
 };
 
 /// 速度线程的一拍。Sdk 要有 ``int Gait(int)``(返回 0 = 成功)与 ``void Move(float, float, float)``。

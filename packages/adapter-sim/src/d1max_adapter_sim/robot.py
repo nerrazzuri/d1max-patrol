@@ -88,6 +88,8 @@ class SimRobot:
         self.require_clearance = require_clearance
         #: 净空许可分两头(W09i):往前走向的那一头(狗头为前是狗头、狗尾为前是狗尾)要那一头的许可。
         self._clear_until_ms = {"head": -1, "tail": -1}
+        #: 分档许可(W47):两头各自许到多快(m/s;老许可不带 = 不限)。最新的那条说了算。
+        self._clear_vmax: dict[str, float] = {"head": math.inf, "tail": math.inf}
         self._pending: list[tuple[int, float, float, int]] = []    # (生效时刻, vx, wz, 截止)
         self._gait_left_s: float | None = None
         self._stop_latency_s = stop_latency_s
@@ -200,6 +202,9 @@ class SimRobot:
                     self.head_direction not in ("head", "tail")
                     or now >= self._clear_until_ms[end]):
                 want_vx = 0.0                                    # 往前那头没有净空许可:不许往前
+            elif self.require_clearance and want_vx * lead > 0:
+                cap = self._clear_vmax[end]                      # 分档:许可说能多快就最多多快
+                want_vx = max(-cap, min(cap, want_vx))
             standing = self._vx == 0.0 and self._wz == 0.0
             if standing and (want_vx or want_wz) and self.gait_start_s > 0:
                 if self._gait_left_s is None:
@@ -287,9 +292,16 @@ class SimRobot:
         self._stopping_left_s = None
         return VelocityResult(vx, wz, clamped=clamped, rejected=False)
 
-    def clear(self, ms: int, end: str = "head") -> None:
-        """旁路进程的净空许可(W11 第二层):从现在起 ``ms`` 毫秒内 ``end`` 那一头是空的。"""
-        self._clear_until_ms[end] = max(self._clear_until_ms[end], self._now() + int(ms))
+    def clear(self, ms: int, end: str = "head", vmax: float | None = None) -> None:
+        """旁路进程的净空许可(W11 第二层):从现在起 ``ms`` 毫秒内 ``end`` 那一头是空的;``vmax``
+        (W47 分档)= 最多许多快(m/s)。同 ``vel_gate.hpp``:上限按最新的,没升时期限只往后延。"""
+        cap = math.inf if vmax is None else max(0.0, vmax)
+        until = self._now() + int(ms)
+        if cap > self._clear_vmax[end] or self._now() >= self._clear_until_ms[end]:
+            self._clear_until_ms[end] = until
+        else:
+            self._clear_until_ms[end] = max(self._clear_until_ms[end], until)
+        self._clear_vmax[end] = cap
 
     @property
     def speed(self) -> tuple[float, float]:

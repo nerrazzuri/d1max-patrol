@@ -57,7 +57,7 @@ from d1max_patrol.backends.sidecar_device import (
     VEL_TTL_MIN_MS,
     SidecarDeviceBackend,
 )
-from d1max_patrol.protocol.agent_frames import EmergencyStatus
+from d1max_patrol.protocol.agent_frames import MAX_FORWARD_FRACTION, EmergencyStatus
 from d1max_patrol.protocol.agent_frames import MotionStatus as SdkMotion
 
 ADAPTER_ID = "d1max/0.1.0"
@@ -119,10 +119,11 @@ class D1MaxHal:
                 raise ValueError(f"{name} 要是正数,收到 {v}")
         if not (math.isfinite(deadband_mps) and deadband_mps >= 0):
             raise ValueError(f"deadband_mps 不能是负数,收到 {deadband_mps}")
-        if not (math.isfinite(max_fraction) and 0 < max_fraction <= MAX_WALK_SPEED):
-            raise ValueError(f"max_fraction 要在 (0, {MAX_WALK_SPEED}],收到 {max_fraction}")
-        if not (math.isfinite(fwd_offset) and 0 <= fwd_offset < max_fraction):
-            raise ValueError(f"fwd_offset 要在 [0, max_fraction),收到 {fwd_offset}")
+        if not (math.isfinite(max_fraction) and 0 < max_fraction <= MAX_FORWARD_FRACTION):
+            raise ValueError(f"max_fraction 要在 (0, {MAX_FORWARD_FRACTION}],收到 {max_fraction}")
+        if not (math.isfinite(fwd_offset) and 0 <= fwd_offset < min(max_fraction, MAX_WALK_SPEED)):
+            raise ValueError(f"fwd_offset 要在 [0, min(max_fraction, {MAX_WALK_SPEED})),"
+                             f"收到 {fwd_offset}")
         self._b = backend or SidecarDeviceBackend(host, port, token_file=token_file)
         self._payload = payload
         self._payload_up = False
@@ -140,13 +141,27 @@ class D1MaxHal:
         #: 最近一条被接受的速度到什么时候(monotonic)还有效。有效期里不算停。
         self._vel_until: float | None = None
 
+    def _sdk_caps(self) -> tuple[float, float]:
+        """SDK 比例的(往前, 往后)上限。往前:自己配的 ``max_fraction`` 和旁路进程 ``--max-fraction``
+        (hello 报,W47 协议 10;老旁路 0.5)取小;往后、转向一直不过 0.5。"""
+        back = min(self._frac, MAX_WALK_SPEED)
+        top = getattr(self._b, "max_forward_fraction", MAX_WALK_SPEED)   # 没连上、测试替身:老上限
+        return min(self._frac, top), back
+
+    def _vx_range(self) -> tuple[float, float]:
+        """机身系前进速度(m/s)的(下限, 上限)。狗尾为前且 SDK 跟着调头时,机身往前是 SDK 的往后。"""
+        fwd, back = self._sdk_caps()
+        if self._sdk_sign() < 0:
+            fwd, back = back, fwd
+        return -(back - self._fwd0) * self._mps, (fwd - self._fwd0) * self._mps
+
     @property
     def max_vx(self) -> float:
-        return (self._frac - self._fwd0) * self._mps
+        return self._vx_range()[1]
 
     @property
     def max_wz(self) -> float:
-        return self._frac * self._radps
+        return min(self._frac, MAX_WALK_SPEED) * self._radps
 
     # ------------------------------------------------------------ 生命周期
 
@@ -243,11 +258,13 @@ class D1MaxHal:
             return _reject("no_lateral")
         if 0.0 < abs(cmd.vx) < self._deadband:
             return _reject("deadband")
-        vx, wz = _clamp(cmd.vx, self.max_vx), _clamp(cmd.wz, self.max_wz)
+        lo, hi = self._vx_range()
+        vx, wz = min(max(cmd.vx, lo), hi), _clamp(cmd.wz, self.max_wz)
         clamped = (vx != cmd.vx) or (wz != cmd.wz)
         # 换算后再夹一次:浮点误差也不许越过旁路进程的上限(它越界就拒)。
-        fwd = _clamp(self._sdk_sign() * self._fwd_fraction(vx), self._frac)
-        yaw = _clamp(self._yaw_sign * wz / self._radps, self._frac)
+        cap_fwd, cap_back = self._sdk_caps()
+        fwd = min(max(self._sdk_sign() * self._fwd_fraction(vx), -cap_back), cap_fwd)
+        yaw = _clamp(self._yaw_sign * wz / self._radps, min(self._frac, MAX_WALK_SPEED))
         ttl = min(max(int(cmd.ttl_ms), VEL_TTL_MIN_MS), VEL_TTL_MAX_MS)
         try:
             await self._b.vel(fwd, 0.0, yaw, ttl, timeout_s=VEL_ACK_TIMEOUT_S)
@@ -319,7 +336,7 @@ class D1MaxHal:
 
     def _sdk_sign(self) -> float:
         """SDK 的「往前」是机身的哪个方向:+1 狗头、-1 狗尾(狗尾为前且 SDK 跟着调头)。"""
-        st, hello = self._b.last_state, self._b.hello
+        st, hello = getattr(self._b, "last_state", None), getattr(self._b, "hello", None)
         follows = hello.follows_head if hello is not None else True
         return -1.0 if st is not None and st.head == "tail" and follows else 1.0
 

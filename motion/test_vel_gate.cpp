@@ -373,7 +373,58 @@ static void 速度档位_要了档位_档位不对就不走_对了才走() {
   CHECK(q.vel(0.3) == "" && q.gate.Live(true, q.now)->fwd == 0.3);
 }
 
+// W47 分档许可(协议 10):许可带「这一头空到能跑多快」(比例),旁路按它限前进;**最新的许可说了算**
+// (障碍近了马上降);同样的上限时有效期只往后延(老规矩)。
+static void 分档许可_按许可限前进_最新的说了算() {
+  Rig r;
+  CHECK(r.gate.SetMaxForward(1.0));
+  r.gate.RequireClearance(true);
+  r.gate.OnHead(1);
+  r.gate.SetClearance(r.now + std::chrono::milliseconds(300), velgate::kEndHead, 0.3);
+  CHECK(r.vel(0.8, 1000) == "");
+  CHECK(r.gate.Live(true, r.now)->fwd == 0.3);
+  r.gate.SetClearance(r.now + std::chrono::milliseconds(300), velgate::kEndHead, 0.9);
+  CHECK(r.gate.Live(true, r.now)->fwd == 0.8);                  // 许可比要的快:按要的
+  r.gate.SetClearance(r.now + std::chrono::milliseconds(200), velgate::kEndHead, 0.2);
+  CHECK(r.gate.Live(true, r.now)->fwd == 0.2);                  // 障碍近了:有效期短也马上降
+  CHECK(r.gate.Live(true, r.now + std::chrono::milliseconds(250))->fwd == 0.2);  // 降了的延到老的期限
+  CHECK(r.gate.Live(true, r.now + std::chrono::milliseconds(300))->fwd == 0);
+  r.gate.SetClearance(r.now + std::chrono::milliseconds(100), velgate::kEndHead, 0.9);
+  CHECK(r.gate.Live(true, r.now + std::chrono::milliseconds(150))->fwd == 0);  // 升了的只到它自己的期限
+  r.gate.SetClearance(r.now + std::chrono::milliseconds(300), velgate::kEndHead, 0.0);
+  CHECK(r.gate.Live(true, r.now)->fwd == 0);                    // 上限 0 = 不许往前
+  CHECK(r.gate.Register(-0.4, 0, 0.3, 300, true, r.now) == "");
+  auto t = r.gate.Live(true, r.now);
+  CHECK(t->fwd == -0.4 && t->yaw == 0.3);                       // 后退、转向不归它管
+}
+
+static void 比例上限_超过0点5要开第二层许可_后退横移转向还是0点5() {
+  Rig r;
+  CHECK(r.vel(0.6) != "");                                      // 默认上限 0.5:老行为
+  CHECK(!r.gate.SetMaxForward(1.2) && !r.gate.SetMaxForward(0.4));  // 只许 [0.5, 1.0]
+  CHECK(r.gate.SetMaxForward(1.0));
+  CHECK(r.vel(0.8) == "");
+  CHECK(r.gate.Live(true, r.now)->fwd == 0.5);                  // 没开第二层:最多 0.5
+  CHECK(r.gate.Register(-0.6, 0, 0, 300, true, r.now) != "");   // 后退还是 0.5
+  CHECK(r.gate.Register(0.3, 0.6, 0, 300, true, r.now) != "");
+  CHECK(r.gate.Register(0.3, 0, 0.6, 300, true, r.now) != "");
+  CHECK(r.gate.Register(1.01, 0, 0, 300, true, r.now) != "");
+}
+
+static void 老许可_不带速度_按0点5算() {
+  Rig r;
+  CHECK(r.gate.SetMaxForward(1.0));
+  r.gate.RequireClearance(true);
+  r.gate.OnHead(1);
+  r.gate.SetClearance(r.now + std::chrono::milliseconds(300));  // 老感知节点:没有速度
+  CHECK(r.vel(0.8, 1000) == "");
+  CHECK(r.gate.Live(true, r.now)->fwd == 0.5);
+}
+
 int main() {
+  分档许可_按许可限前进_最新的说了算();
+  比例上限_超过0点5要开第二层许可_后退横移转向还是0点5();
+  老许可_不带速度_按0点5算();
   速度档位_要了档位_档位不对就不走_对了才走();
   净空许可_开了门_调过头尾就不放行前进();
   净空许可分两头_往前走向哪头要哪头的许可();
