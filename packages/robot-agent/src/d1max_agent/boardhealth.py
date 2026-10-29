@@ -322,6 +322,8 @@ class BoardMonitor:
         self.soc: dict[str, float] = {}
         self.nvme: float | None = None
         self.sampled = False
+        #: 读到过 SoC / NVMe 温度没有(外审 R2:读到过、现在读不到 ≠ 降温了)。
+        self._had_soc = self._had_nvme = False
 
     def start(self) -> None:
         by_chip: dict[str, list[int]] = {}
@@ -397,6 +399,15 @@ class BoardMonitor:
         soc_max = max(self.soc.values()) if self.soc else None
         stopped = self.stopped()
         lvl, why = classify(soc_max, self.nvme, len(stopped), self.level, self.cfg.limits)
+        lost = [n for n, had, now in (("SoC", self._had_soc, soc_max), ("NVMe", self._had_nvme,
+                                                                         self.nvme))
+                if had and now is None]
+        self._had_soc = self._had_soc or soc_max is not None
+        self._had_nvme = self._had_nvme or self.nvme is not None
+        if lost and LEVELS.index(lvl) < LEVELS.index(self.level):
+            # 外审 R2:读到过的测点现在读不到,不是降温的证据 —— 保持上一级(保护不解除),等读到低温
+            lvl = self.level
+            why = f"读不到 {'、'.join(lost)} 温度,保持上一级;{why}"
         self.reason = why
         self.sampled = True
         self._log(soc_max, lvl)
@@ -443,7 +454,9 @@ class BoardMonitor:
         if not self.sampled:
             out.append(device("board", "offline", "还没读过温度"))
         elif not self.soc and self.nvme is None:
-            out.append(device("board", "offline", "读不到温度(温区、NVMe 都没有)"))
+            cn = {"warn": "警戒", "shed": "降负载", "critical": "严重过热"}.get(self.level)
+            held = f";保持「{cn}」的保护,等读到低温再解除" if cn else ""
+            out.append(device("board", "offline", f"读不到温度(温区、NVMe 都没有){held}"))
         else:
             state = {"ok": "online", "warn": "degraded"}.get(self.level, "error")
             name = {"ok": "", "warn": "警戒:", "shed": "过热,已降负载:",
