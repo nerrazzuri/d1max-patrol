@@ -784,3 +784,20 @@ async def test_W48_有路网_交给Nav2的目标带上路网上的途经点_没�
     want = densify(route(net, here, (6.0, 4.5)), step=1.0)
     assert g["via"] == [[round(x, 3), round(y, 3)] for x, y in want] and len(g["via"]) > 2, \
         "沿路每隔不到 1 m 一个途经点:Nav2 跳过一个(1.5 m 内算经过)下一个还在路上,不切角"
+
+
+async def test_W48复查M1_很长的路网_加密以后途经点也不超过协议上限(tmp_path):
+    """外审 W48-M1:按总长算间距、每段各自向上取整,点数可能超 500,报文编不出来。"""
+    from d1max_contract.navbridge import MAX_VIA
+    from d1max_contract.routenet import RouteNet
+    link = 假转接()
+    t = _台(tmp_path, link)
+    await t.start(1.5, 4.0)
+    # 300 个点、间距 1.6 m(总长约 478 m):每段都要切成两段,原来会出约 600 个途经点
+    nodes = [{"id": f"N{i}", "x": 1.5 + i * 1.6, "y": 4.3} for i in range(300)]
+    net = RouteNet.from_wire({"map_id": "m", "map_version": "", "revision": 1, "nodes": nodes,
+                              "edges": [[f"N{i}", f"N{i + 1}"] for i in range(299)]})
+    t.nav.set_route_net(net)
+    await t.nav.goto(Pose.from_xy_yaw(1.5 + 299 * 1.6, 4.0, 0.0))
+    g = link.kinds("goal")[-1]
+    assert 250 < len(g.get("via", [])) <= MAX_VIA

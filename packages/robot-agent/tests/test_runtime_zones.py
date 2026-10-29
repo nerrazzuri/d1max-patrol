@@ -475,3 +475,32 @@ async def test_下发路网_收下落盘_能力里报_旧的拒_别的版本拒_
         assert _caps(ears).tasks["route_net_set"]["rev"] == 0
     finally:
         await rt2.close()
+
+
+async def test_W48复查I1_路网落盘期间换了图_落完不装到新图上_换回来装的是盘上那份(台):
+    """外审 W48-I1:落盘等着的时候换了图,落完不能把 A 图的路网装到 B 图上(坐标系不一样)。"""
+    import threading
+    broker, c, r, ears, rt, site, mk = 台
+    await _换图(rt, broker, site, c, ears)                       # 在用 m:2
+    gate, entered = threading.Event(), threading.Event()
+    orig = rt.routebook.put
+
+    def slow(net):
+        entered.set()
+        gate.wait(5)
+        orig(net)
+    rt.routebook.put = slow
+    task = asyncio.ensure_future(rt._route_net_set(Command(
+        command_id="rx", task_id="t", kind="route_net_set", issued_at=c.ms,
+        expires_at=c.ms + 60_000, control_epoch=1, payload=_rn(3))))
+    for _ in range(200):
+        if entered.is_set():
+            break
+        await asyncio.sleep(0.01)
+    await _换图(rt, broker, site, c, ears, ver="3")             # 落盘还卡着,换到 m:3
+    gate.set()
+    got = await task
+    assert rt.loaded_map == ("m", "3") and rt.parts.nav.route_net is None, \
+        "A 图的路网不能装到 B 图上"
+    assert got == "map_mismatch"
+    assert rt.routebook.get("m", "2").revision == 3, "盘上 A 图那份照样记下"

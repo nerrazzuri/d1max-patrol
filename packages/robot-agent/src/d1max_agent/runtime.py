@@ -1920,7 +1920,8 @@ class AgentRuntime:
         # 区域跟着几何版本走(W10):换图就换成这一版记着的那份,等放宽的作废
         self._zones = self.zonebook.get(ref.map_id, ref.version)
         self._zones_pending = None
-        # 路网也跟着几何版本走(W48)
+        # 路网也跟着几何版本走(W48);换图代次:落盘等着的那次下发落完一看换过图就不装(外审 W48-I1)
+        self._route_net_gen = getattr(self, "_route_net_gen", 0) + 1
         self._route_net = self.routebook.get(ref.map_id, ref.version)
         if self._planned:
             self.parts.nav.set_route_net(self._route_net)
@@ -2020,10 +2021,22 @@ class AgentRuntime:
             return "stale"
         if cur is not None and net == cur:
             return "", {"revision": net.revision}
+        gen = getattr(self, "_route_net_gen", 0)
         try:
             await asyncio.to_thread(self.routebook.put, net)
         except OSError as exc:
             return f"store_failed: {exc}"[:200]
+        if getattr(self, "_route_net_gen", 0) != gen:
+            # 外审 W48-I1:落盘期间换过图。盘上照样记着那一版的(换回去时按它装),当前这张图不装;
+            # 换回原图的,换图时已经按盘上取过了
+            if self.loaded_map != (net.map_id, net.map_version):
+                return "map_mismatch"
+            self._route_net = self.routebook.get(net.map_id, net.map_version)
+            if self._planned:
+                self.parts.nav.set_route_net(self._route_net)
+            if self.transport.connected:
+                await self._publish_caps()
+            return "", {"revision": net.revision}
         self._route_net = net
         if self._planned:
             self.parts.nav.set_route_net(net)

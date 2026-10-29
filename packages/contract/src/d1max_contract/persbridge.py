@@ -24,6 +24,11 @@
 
 - 代理 → 检测节点 ``challenge {nonce}``:连上就发,检测节点的 ``hello`` 要带 ``mac``
   (:func:`hello_mac`:两边同一把共享密钥对 nonce 做 HMAC-SHA256)。认的是密钥,不是账号。
+- **双向认证**(协议 2,外审 P212-I1):检测节点的 ``hello`` 同时带自己的 ``nonce``;代理回的
+  ``hello`` 带 ``mac`` = :func:`agent_mac`。检测节点核对上之前不发截图、不收外参。之后两个方向的
+  每一行都封进 ``sealed {seq, body, mac}``(:func:`seal`):会话密钥(:func:`session_key`)由共享密钥
+  和两边的 nonce 派生,序号逐行递增 —— 改过的、重放的、换方向的都不认。**不加密**(用户 2026-10-30:
+  机器人内部网线只有厂家的板子和我们的板子,截图明文是记账的残留)。
 - 检测节点 → 代理 ``snap {name, jpeg_b64}``:截图本身(两块板不共用盘)。先发 ``snap``、再发引用它的
   ``persons``;代理存进截图目录,后面跟本机一样。
 - 代理 → 检测节点 ``frames {ref, frames}``:正在用的那张图的雷达外参(``frames.json`` 的内容),
@@ -44,7 +49,11 @@ from typing import Any, ClassVar
 
 from d1max_contract.errors import ContractError
 
-PROTO = 1
+#: 2(外审 P212-I1):跨板双向认证、逐行签名;本机套接字照旧不封。
+PROTO = 2
+#: :func:`seal` 的方向。
+TO_AGENT = "d2a"
+TO_DETECTOR = "a2d"
 MAX_LINE = 16 * 1024
 #: ``snap`` 这一种可以长到这么多(截图 JPEG 的 base64);别的报文还是 :data:`MAX_LINE`。
 MAX_SNAP_BYTES = 512 * 1024
@@ -116,14 +125,61 @@ def hello_mac(key: bytes, nonce: str, name: str) -> str:
     return hmac.new(key, f"d1max-persons|{nonce}|{name}".encode(), hashlib.sha256).hexdigest()
 
 
+def agent_mac(key: bytes, nonce_detector: str, nonce_agent: str) -> str:
+    """跨板握手的另一半:代理回的 ``hello`` 里的 ``mac``(证明代理也有密钥)。"""
+    return hmac.new(key, f"d1max-persons-agent|{nonce_detector}|{nonce_agent}".encode(),
+                    hashlib.sha256).hexdigest()
+
+
+def session_key(key: bytes, nonce_agent: str, nonce_detector: str) -> bytes:
+    """这一条连接的会话密钥(两边的 nonce 都是现给的:换一条连接就换一把)。"""
+    return hmac.new(key, f"d1max-persons-session|{nonce_agent}|{nonce_detector}".encode(),
+                    hashlib.sha256).digest()
+
+
+def seal(ks: bytes, direction: str, seq: int, line: bytes) -> bytes:
+    """一行报文封进 ``sealed {seq, body, mac}``。``direction`` 是 :data:`TO_AGENT` /
+    :data:`TO_DETECTOR`;``seq`` 从 1 起每行加一。"""
+    body = line.rstrip(b"\n").decode("utf-8")
+    mac = hmac.new(ks, f"{direction}|{seq}|{body}".encode(), hashlib.sha256).hexdigest()
+    return json.dumps({"t": "sealed", "seq": seq, "body": body, "mac": mac}, ensure_ascii=False,
+                      separators=(",", ":")).encode("utf-8") + b"\n"
+
+
+def unseal(ks: bytes, direction: str, line: bytes, last_seq: int) -> tuple[int, Message]:
+    """拆 :func:`seal` 封的一行 → ``(序号, 报文)``。签名不对、序号不比 ``last_seq`` 大、没封的都抛
+    ``ContractError``。"""
+    if len(line) > MAX_READ + 512:
+        raise ContractError(f"人员桥:一行太长({len(line)} 字节)")
+    try:
+        d = json.loads(line.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError) as exc:
+        raise ContractError(f"人员桥:不是 UTF-8 的 JSON:{exc}") from None
+    if not isinstance(d, dict) or d.get("t") != "sealed" or set(d) != {"t", "seq", "body", "mac"}:
+        raise ContractError("人员桥:跨板的每一行都要封好(sealed)")
+    seq, body, mac = d["seq"], d["body"], d["mac"]
+    if isinstance(seq, bool) or not isinstance(seq, int) or not isinstance(body, str) \
+            or not isinstance(mac, str):
+        raise ContractError("人员桥:sealed 的字段不对")
+    want = hmac.new(ks, f"{direction}|{seq}|{body}".encode(), hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(mac, want):
+        raise ContractError("人员桥:签名不对(被改过、或者不是这条连接的)")
+    if seq <= last_seq:
+        raise ContractError(f"人员桥:序号 {seq} 不比上一条 {last_seq} 大(重放?)")
+    return seq, parse(body.encode("utf-8"))
+
+
 @dataclass(frozen=True)
 class Hello:
     T: ClassVar[str] = "hello"
     proto: int
     name: str = ""
     version: str = ""
-    #: 跨板(TCP)时必带,见 :func:`hello_mac`;本机套接字空着。
+    #: 跨板(TCP)时必带,见 :func:`hello_mac`(检测节点发的)/ :func:`agent_mac`(代理回的);
+    #: 本机套接字空着。
     mac: str = ""
+    #: 跨板时检测节点给代理出的题(协议 2,双向认证);别的时候空着。
+    nonce: str = ""
 
     def __post_init__(self) -> None:
         _pos_int(self.proto, "proto")
@@ -131,6 +187,8 @@ class Hello:
         _text(self.version, "version", 64)
         if self.mac and (not isinstance(self.mac, str) or not _HEX.fullmatch(self.mac)):
             raise ContractError("人员桥:mac 要是小写十六进制")
+        if self.nonce and (not isinstance(self.nonce, str) or not _HEX.fullmatch(self.nonce)):
+            raise ContractError("人员桥:nonce 要是 32–128 位小写十六进制")
 
 
 @dataclass(frozen=True)

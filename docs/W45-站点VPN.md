@@ -32,7 +32,8 @@
 1. `sudo apt install wireguard-tools`
 2. `d1max-site vpn init --endpoint <家里的域名或公网 IP>`（打出站点公钥；家里没有固定公网 IP 就配一个动态域名）
 3. 家里的路由器：UDP 51820 → 站点主机。
-4. `d1max-site vpn server-conf > /tmp/d1max.conf && sudo install -m 600 /tmp/d1max.conf /etc/wireguard/d1max.conf && rm /tmp/d1max.conf && sudo systemctl enable --now wg-quick@d1max`
+4. `d1max-site vpn server-conf | sudo sh -c 'umask 077; cat > /etc/wireguard/d1max.conf' && sudo systemctl enable --now wg-quick@d1max`
+   - 用管道直接写进去，**不要**先重定向到 `/tmp` 之类的文件：那样文件按 umask 建（常是 0644），站点私钥和每个机器人、手机的预共享密钥会被别的账号读到（外审 V213-I1）。
 
 ### 每台机器人（RK3588）
 
