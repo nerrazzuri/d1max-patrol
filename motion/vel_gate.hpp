@@ -55,6 +55,10 @@ constexpr int kEndTail = 1;
 constexpr double kMaxFraction = 0.5;       // 后退、横移、转向;前进的默认上限
 constexpr double kLegacyFraction = 0.5;    // 不带速度的老许可、没开许可门时前进最多这么快
 constexpr double kMaxForwardCeiling = 1.0;  // --max-fraction 最多给到这
+// SetClearance 的结果:不认、收下、收下而且接管了(调用方关掉之前那条连接)。
+constexpr int kPermitRejected = 0;
+constexpr int kPermitAccepted = 1;
+constexpr int kPermitTookOver = 2;
 constexpr int kTtlMinMs = 50;
 constexpr int kTtlMaxMs = 1000;
 
@@ -175,26 +179,38 @@ class Gate {
   /// 上限按最新的这条(障碍近了当拍就降);上限没升时有效期只往后延,不往前缩(晚到的同档许可不截短;
   /// 降了档的按老期限也安全 —— 老许可在更快的速度下都够);升了档的只到它自己的期限。
   ///
-  /// 来源 ``src``(感知节点启动时刻,> 0)和帧序号 ``seq``(#208 首审 G1):这一头的许可还有效时,更旧来源的、
-  /// 同来源序号不更新的不认 —— 跨连接晚到的旧高档许可不许把新的低档顶掉;过期了谁的都认(感知重启、钟往回拨)。
-  /// ``src`` 0 = 老感知节点不带来源,照旧收。返回收没收。
-  bool SetClearance(Clock::time_point until, int end = kEndHead, double cap = kLegacyFraction,
-                    uint64_t src = 0, uint64_t seq = 0, Clock::time_point now = Clock::now()) {
-    if (end != kEndHead && end != kEndTail) return false;
-    if (!std::isfinite(cap)) return false;
+  /// **按连接认**(#208 首审 G1、复查 H1):``conn`` 是旁路给每条连上来的连接的递增号,``seq`` 是那条连接
+  /// 上感知节点的帧序号(老感知节点不带 = 0)。认的是最新那条发过许可的连接:更旧连接的永远不认(过期了也
+  /// 不认、不靠钟);同一条连接里带序号的要往上走;更新的连接发许可就接管(回 kPermitTookOver,调用方把旧的
+  /// 那条连接关掉,它缓冲里没读的旧许可一起作废)。``conn`` 0 = 不分连接(测试、老调用),照旧收。
+  int SetClearance(Clock::time_point until, int end = kEndHead, double cap = kLegacyFraction,
+                   uint64_t conn = 0, uint64_t seq = 0, Clock::time_point now = Clock::now()) {
+    (void)now;
+    if (end != kEndHead && end != kEndTail) return kPermitRejected;
+    if (!std::isfinite(cap)) return kPermitRejected;
     cap = std::max(0.0, std::min(cap, kMaxForwardCeiling));
     std::lock_guard<std::mutex> lk(mtx_);
-    if (src > 0) {
-      const bool live = now < clear_until_[end];
-      if (live && (src < clear_src_[end] || (src == clear_src_[end] && seq <= clear_seq_[end])))
-        return false;
-      clear_src_[end] = src;
-      clear_seq_[end] = seq;
+    int got = kPermitAccepted;
+    if (conn > 0) {
+      if (conn < clear_conn_[end]) return kPermitRejected;
+      if (conn == clear_conn_[end] && seq > 0 && seq <= clear_seq_[end]) return kPermitRejected;
+      if (conn > clear_conn_[end]) {
+        got = kPermitTookOver;
+        clear_conn_[end] = conn;
+        clear_seq_[end] = 0;
+      }
+      if (seq > 0) clear_seq_[end] = seq;
     }
     if (cap > clear_cap_[end]) clear_until_[end] = until;
     else if (until > clear_until_[end]) clear_until_[end] = until;
     clear_cap_[end] = cap;
-    return true;
+    return got;
+  }
+
+  /// 这一头现在认的是哪条连接的许可(0 = 还没有)。
+  uint64_t HolderConn(int end) {
+    std::lock_guard<std::mutex> lk(mtx_);
+    return (end == kEndHead || end == kEndTail) ? clear_conn_[end] : 0;
   }
 
   /// 前进比例上限(旁路参数 --max-fraction):只许 [0.5, 1.0]。超过 0.5 的那段要开许可门才放行。
@@ -253,7 +269,7 @@ class Gate {
   int speed_level_ = 0;
   Clock::time_point clear_until_[2]{};
   double clear_cap_[2]{0.0, 0.0};
-  uint64_t clear_src_[2]{0, 0};
+  uint64_t clear_conn_[2]{0, 0};
   uint64_t clear_seq_[2]{0, 0};
   double max_fwd_ = kMaxFraction;
 };

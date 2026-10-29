@@ -49,6 +49,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <map>
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
@@ -238,6 +239,10 @@ static int64_t NowMs() {
 
 static std::mutex g_clients_mtx;
 static std::vector<int> g_clients;
+// 每条连上来的连接一个递增号(#208 复查 H1:净空许可按连接认,新连接发许可就接管、关掉旧的)。
+// g_conn_fd 跟 g_clients 用同一把锁。
+static std::atomic<uint64_t> g_conn_seq{0};
+static std::map<uint64_t, int> g_conn_fd;
 // 写 socket 串行化。命令回执(读线程/工作线程)和遥测广播(SDK 回调线程)
 // 会同时往同一个 fd 写，不锁的话两行字节会交错，Python 那头整帧解不开。
 static std::mutex g_send_mtx;
@@ -693,7 +698,7 @@ static Outcome DoShutdown() {
 /// 执行一条 JSONL 命令。cmd 已经解出来了，其余字段现从 line 里取。
 /// stop 只给 walk 用，见 DoWalk。
 static Outcome RunCommand(const std::string& cmd, const std::string& line,
-                          const std::function<bool()>& stop) {
+                          const std::function<bool()>& stop, uint64_t conn = 0) {
   if (cmd == "hold") return DoHold();
   if (cmd == "shutdown") return DoShutdown();
   if (cmd == "halt") return DoHalt();
@@ -719,16 +724,27 @@ static Outcome RunCommand(const std::string& cmd, const std::string& line,
       if (!std::isfinite(vmax) || vmax < 0 || vmax > 5) return Reject("vmax 要在 [0, 5] m/s 内");
       cap = vmax / PermitMpsPerUnit();
     }
-    // #208 首审 G1:来源(感知节点启动时刻)、帧序号;不带 = 老感知节点
+    // #208 首审 G1、复查 H1:按连接认(conn 是这条连接的号);seq 是感知节点的帧序号,不带 = 老感知节点。
+    // src(感知进程启动时刻)只记着,不拿来排先后 —— 钟会往回拨。
     const double src = JsonNumField(line, "src", 0.0), seq = JsonNumField(line, "seq", 0.0);
     if (!std::isfinite(src) || !std::isfinite(seq) || src < 0 || seq < 0 || src > 9e15 ||
         seq > 9e15)
       return Reject("src、seq 要是非负整数");
+    const int e = end == "tail" ? velgate::kEndTail : velgate::kEndHead;
+    const uint64_t prev = g_gate.HolderConn(e);
     const auto now = std::chrono::steady_clock::now();
-    g_gate.SetClearance(now + std::chrono::milliseconds(static_cast<int>(ms)),
-                        end == "tail" ? velgate::kEndTail : velgate::kEndHead, cap,
-                        static_cast<uint64_t>(src), static_cast<uint64_t>(seq), now);
-    return Outcome{};                     // 旧的不认也回 ok:感知节点不用管,下一帧照发
+    const int got = g_gate.SetClearance(now + std::chrono::milliseconds(static_cast<int>(ms)), e,
+                                        cap, conn, static_cast<uint64_t>(seq), now);
+    if (got == velgate::kPermitTookOver && prev > 0 && prev != conn) {
+      // 新连接接管了许可:旧的那条关掉,它缓冲里还没读的旧许可一起作废
+      std::lock_guard<std::mutex> lk(g_clients_mtx);
+      auto it = g_conn_fd.find(prev);
+      if (it != g_conn_fd.end()) {
+        std::cout << "[CLEAR] 连接 " << conn << " 接管净空许可,关掉旧的连接 " << prev << "\n";
+        ::shutdown(it->second, SHUT_RDWR);
+      }
+    }
+    return Outcome{};                     // 不认的也回 ok:感知节点不用管,下一帧照发
   }
   if (cmd == "vel")
     return DoVel(JsonNumField(line, "fwd", 0.0), JsonNumField(line, "lat", 0.0),
@@ -811,9 +827,11 @@ static void ConnWorker(Conn* conn) {
 }
 
 static void ServeClient(int fd) {
+  const uint64_t my_conn = ++g_conn_seq;
   {
     std::lock_guard<std::mutex> lk(g_clients_mtx);
     g_clients.push_back(fd);
+    g_conn_fd[my_conn] = fd;
   }
   SendTo(fd, HelloFrame());
   // 立刻补一帧状态：客户端刚连上就该能读到电量和运动状态，不必干等到
@@ -865,7 +883,7 @@ static void ServeClient(int fd) {
         continue;
       }
       if (IsUrgent(cmd)) {
-        SendTo(fd, AckFrame(id, RunCommand(cmd, line, [] { return false; })));
+        SendTo(fd, AckFrame(id, RunCommand(cmd, line, [] { return false; }, my_conn)));
         continue;
       }
       {
@@ -885,6 +903,7 @@ static void ServeClient(int fd) {
 
   {
     std::lock_guard<std::mutex> lk(g_clients_mtx);
+    g_conn_fd.erase(my_conn);
     for (size_t i = 0; i < g_clients.size(); ++i) {
       if (g_clients[i] == fd) {
         g_clients.erase(g_clients.begin() + static_cast<long>(i));

@@ -450,14 +450,24 @@ async def test_G2_仿真旁路的许可换算_实际速度不超过许可():
         assert 0 < sim.vx <= 0.55 + 1e-9
 
 
-async def test_G1_晚到的旧高档许可不把新的低档顶掉():
+async def test_H1_许可按连接认_旧连接的过期了也不认_新连接接管并关掉旧的():
+    """#208 首审 G1、复查 H1:同 vel_gate.hpp 的 SetClearance(按连接)。"""
+    from tests.sim.test_agent_server import _RawClient
     async with _client(require_clearance=True, max_fraction=1.0) as (sim, client):
         await _站起(sim, client)
-        assert (await client.call("clear", ms=800, vmax=0.24, src=5, seq=2)).ok
-        assert (await client.call("clear", ms=800, vmax=1.2, src=5, seq=1)).ok      # 回 ok,不认
-        assert (await client.call("clear", ms=800, vmax=1.2, src=4, seq=9)).ok
-        assert (await client.call("vel", fwd=0.9, lat=0.0, yaw=0.0, ttl_ms=300)).ok
-        await asyncio.sleep(0.15)
-        assert abs(sim.vx - 0.24) < 1e-6
+        assert (await client.call("clear", ms=300, vmax=1.2, seq=5)).ok     # 旧连接先给过
+        # 同一条连接的旧帧:回 ok、不认
+        assert (await client.call("clear", ms=300, vmax=1.2, seq=4)).ok
+        assert sim._clear_seq[0] == 5
+        r2, w2 = await asyncio.open_connection("127.0.0.1", sim.port)
+        new = _RawClient(r2, w2)
+        await new.recv()                                                    # hello
+        assert (await new.call("clear", ms=300, vmax=0.24, seq=1)).ok       # 新连接接管
+        assert sim._clear_conn[0] == 2 and abs(sim._clear_cap[0] - 0.2) < 1e-9
+        await asyncio.wait_for(client._reader.read(), 2)                   # 旧连接被关掉:读到底
+        assert client._reader.at_eof()
+        await asyncio.sleep(0.4)                                            # 过期了
+        assert sim._clear_conn[0] == 2, "旧连接已经关了:它的许可复活不了"
         for bad in ({"src": -1}, {"seq": "x"}):
-            assert not (await client.call("clear", ms=300, vmax=0.2, **bad)).ok, bad
+            assert not (await new.call("clear", ms=300, vmax=0.2, **bad)).ok, bad
+        await new.close()

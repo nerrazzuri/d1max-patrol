@@ -73,6 +73,9 @@ STATIC_NEAR_M = 0.2
 FRONT_BLIND_M = 0.5
 #: 停下来以后离前方第一处挡或看不见的地方至少还留多少(米)。
 CLEAR_MARGIN_M = 0.3
+#: MPPI 倒车上限跟前进上限之比(``deploy/nav2/params.yaml`` 的 ``-vx_min / vx_max``,测试核着)。
+#: MPPI 收到限速时按同一比例缩倒车上限(复查 P3):限速 0.2 时它最多倒 0.06,低于死区。
+MPPI_REVERSE_RATIO = 0.3
 #: 前进速度不到这个(米/秒)就当「原地转」,按地图上的墙核一道(:meth:`Nav2NavBackend._turn_hits_map`)。
 TURN_VX = 0.05
 
@@ -120,6 +123,8 @@ class Nav2NavBackend(PlannedNavBackend):
         self._travel_sign: int | None = None
         #: 这一拍限速区的上限(外审 R4;送给 Nav2 的 ``speed`` 也按它)。
         self._slow = math.inf
+        #: 上一拍送给 Nav2 的限速(复查 P3:MPPI 按它缩倒车上限)。
+        self._nav2_speed = V_BASE
 
     # ------------------------------------------------------------ 图与区域 → 转接节点
 
@@ -301,6 +306,9 @@ class Nav2NavBackend(PlannedNavBackend):
             return
         self.link.tick()
         self._t_ms = max(self._t_ms + 1, int(self._now()))
+        # 复查 N2:按实际许的发(不再垫到最低档 0.3);0 在 Nav2 里是「不限」,所以垫到能走起来的最低速度
+        self._nav2_speed = round(max(min(getattr(self, "_vis", V_BASE), self._vlim(),
+                                         self._slow), MIN_TRAVEL_MPS), 3)
         ox, oy, oyaw = self._odom_pose
         est = self.anchor.estimate((ox, oy, oyaw)) if self.anchor.ok(self.odom_ok) else None
         mo = None if est is None else _compose_map_odom(est, (ox, oy, oyaw))
@@ -308,8 +316,7 @@ class Nav2NavBackend(PlannedNavBackend):
                         "vel": self._pose_vel(ox, oy, oyaw), "map_odom": mo,
                         # 复查 N2:按实际许的发(不再垫到最低档 0.3);0 在 Nav2 里是「不限」,所以
                         # 垫到能走起来的最低速度(再低代理这边也会停)
-                        "speed": round(max(min(getattr(self, "_vis", V_BASE), self._vlim(),
-                                               self._slow), MIN_TRAVEL_MPS), 3)})
+                        "speed": self._nav2_speed})
         view = self.obstacles
         frames = getattr(view, "frames", None)
         if frames:
@@ -362,6 +369,12 @@ class Nav2NavBackend(PlannedNavBackend):
             # 外审 R7、复查 N3:别的目标的、转接节点那会儿没在走目标(没标号)的速度都不认
             await self._send(0.0, 0.0, dt_s)
             return
+        p = getattr(link, "plan", None)
+        if p is None or p[0] != self._nav2_goal:
+            # 复查 P1:这个目标自己的规划路线还没来 —— 控制器总是拿到新路线之后才出新目标的速度,
+            # 之前收到的不管标的是谁都可能是上一个目标的(0.2 秒屏障证明不了)
+            await self._send(0.0, 0.0, dt_s)
+            return
         _, _, vx, _vy, wz = c[:5]
         sign = 1 if vx >= 0 else -1
         if abs(vx) > 1e-6 and sign != moving:
@@ -377,7 +390,7 @@ class Nav2NavBackend(PlannedNavBackend):
         cap = min(self._vlim(), self._zone_cap_to(here, sign), self._vis, self._slow)
         vx = max(-cap, min(cap, vx))
         wz = max(-self._wmax, min(self._wmax, wz))
-        vx, wz = self._deband(vx, wz)
+        vx, wz = self._deband(vx, wz, rev_max=MPPI_REVERSE_RATIO * self._nav2_speed)
         # 外审 R5:整形抬到死区以后又超了上限(限速比死区还低)—— 走不了这么慢,停,不往上抬
         if abs(vx) > cap + 1e-9:
             vx = 0.0
@@ -406,12 +419,18 @@ class Nav2NavBackend(PlannedNavBackend):
         self._guard_since, self._guard_told = None, False
         await self._send(vx, wz, dt_s)
 
-    def _deband(self, vx: float, wz: float) -> tuple[float, float]:
+    def _deband(self, vx: float, wz: float, *,
+                rev_max: float = math.inf) -> tuple[float, float]:
         """运控有死区(低于它的前进速度 HAL 直接拒、转速发了也不转):Nav2 起步、收尾时会发很小的速度。
-        低于死区一半的当 0,另一半抬到死区。"""
+        低于死区一半的当 0,另一半抬到死区。
+
+        复查 P3:``rev_max`` = MPPI 这会儿最多倒多快(限速 × :data:`MPPI_REVERSE_RATIO`)。
+        它被限速压到死区以下时,门槛改成它的一半 —— Nav2 要的倒车照最小能走的倒车执行
+        (抬上去以后超了上限的,外面照样停)。"""
         db = max(float(getattr(self._caps, "deadband_vx", 0.0) or 0.0), MIN_TRAVEL_MPS)
         if 0.0 < abs(vx) < db:
-            vx = 0.0 if abs(vx) < db / 2 else math.copysign(db, vx)
+            thr = db / 2 if vx > 0 else min(db / 2, rev_max / 2)
+            vx = 0.0 if abs(vx) < thr else math.copysign(db, vx)
         dbw = max(float(getattr(self._caps, "deadband_wz", 0.0) or 0.0), MIN_TURN_RPS)
         if 0.0 < abs(wz) < dbw:
             wz = 0.0 if abs(wz) < dbw / 2 else math.copysign(dbw, wz)

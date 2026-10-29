@@ -43,7 +43,7 @@ RECONNECT_S = 2.0
 #: 回调时再标上新目标号也证明不了是新目标的。控制器 20 Hz,队里的旧速度几拍就排完了。
 CMD_QUIET_S = 0.2
 #: 规划出的路线终点离目标超过这么远(米),不当成这个目标的路线(复查 N6:同一拍规划的旧路线)。
-PLAN_END_TOL_M = 1.0
+PLAN_END_TOL_M = 0.4
 #: 时钟这么久(墙钟秒)没走就当代理没在送 tick:不就绪。
 CLOCK_STALE_S = 2.0
 #: 障碍点云里点的高度(米,在 Nav2 障碍层的 min/max 之间)。
@@ -147,7 +147,10 @@ class Nav2Bridge:
         self.clear = [self.node.create_client(ClearEntireCostmap, s) for s in (
             "/local_costmap/clear_entirely_local_costmap",
             "/global_costmap/clear_entirely_global_costmap")]
-        self.node.create_subscription(Twist, "/cmd_vel", self._on_cmd, 10)
+        # 复查 P1:订控制器(和脱困行为)的原始输出 /cmd_vel_nav,不经速度平滑器 ——
+        # 平滑器 OPEN_LOOP 会把上一个目标的速度慢慢衰减,目标换了它还在出旧方向的速度。
+        # 加减速由代理和机器人自己管。
+        self.node.create_subscription(Twist, "/cmd_vel_nav", self._on_cmd, 10)
         from nav_msgs.msg import Path as PathMsg
         self.node.create_subscription(PathMsg, "/plan", self._on_plan, 5)
         self._init_goal_book()
