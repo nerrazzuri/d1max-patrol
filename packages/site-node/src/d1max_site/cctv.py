@@ -457,9 +457,13 @@ class CctvManager:
         self._alerts = alerts
         self._factory = watch_factory
         self._lock = threading.Lock()
-        #: 一次只做一个 sync(W44 复查 R4:网页每改一次就在后台线程里当场同步,两次交错时旧的那次
-        #: 会拿着等之前读的配置把刚删掉的摄像头重新起来)。
+        #: 「等旧订阅退出、起新的」一次只一个线程做(W44 复查 R4:两次交错时旧的那次会拿着等之前读的
+        #: 配置把刚删掉的摄像头重新起来)。别人在做时,后来的只记一笔 ``_again`` 就回去,由正在做的那个
+        #: 做完接着再来一遍(复查 N2:不许让站点杂事、别的删除等着一次最长 35 秒的退出)。
         self._sync_lock = threading.Lock()
+        self._again = False
+        #: 已经叫停、还没等它退出的旧订阅。
+        self._to_join: list[CameraWatch] = []
         self.watches: dict[str, CameraWatch] = {}
         #: 这一回连上之后,库里的「连不上」确认解决了的(省得每拍去问);断了就划掉。
         self._clean: set[str] = set()
@@ -511,11 +515,27 @@ class CctvManager:
 
     def sync(self) -> None:
         """照库里的摄像头起停订阅(命令行加、删、改了之后,这一拍就跟上)。断太久的报告警,连上了的、库里已经
-        没有了的,把告警簿里的「连不上」解决掉。一次只做一个(复查 R4)。"""
-        with self._sync_lock:
-            self._sync_locked()
+        没有了的,把告警簿里的「连不上」解决掉。
 
-    def _sync_locked(self) -> None:
+        跟库里对不上的订阅**当场**叫停(短锁,谁来都不等别人;叫停之后它交上来的入侵一律不认,复查 N2)。
+        等旧订阅退出、按库里最新的起新的,同一时刻只一个线程做(复查 R4);别人在做就记一笔回去,它做完
+        接着再来一遍。"""
+        self._stop_stale()
+        self._again = True
+        while True:
+            if not self._sync_lock.acquire(blocking=False):
+                return                                   # 正在做的那个会接着再来一遍
+            try:
+                while self._again:
+                    self._again = False
+                    self._sync_once()
+            finally:
+                self._sync_lock.release()
+            if not self._again:                          # 放锁那一刻没人又要过:完了
+                return
+
+    def _stop_stale(self) -> None:
+        """跟库里对不上(删了、改了)的订阅当场叫停、摘下来,记进待等退出的那一串。"""
         want = {c.name: c for c in load_cameras(self.db)}
         gone: list[CameraWatch] = []
         with self._lock:
@@ -524,14 +544,22 @@ class CctvManager:
                 if name not in want or want[name] != w.cam:
                     w.stop()
                     gone.append(self.watches.pop(name))
+            self._to_join.extend(gone)
         for w in gone:
             self._changed(w.cam.name)                    # 正在看的旧画面当场关(不等下一次打开)
-        self._stop_join(gone)                            # 旧的退干净了才起新的:不重叠
-        if gone:
-            # 等旧订阅退出可能要好几秒:这期间库里又改了、删了的,按最新的起(复查 R4)。还挂着的旧配置
-            # 由改它的那次请求排在后面的 sync 收拾。
-            want = {c.name: c for c in load_cameras(self.db)}
-        for w in gone:
+
+    def _sync_once(self) -> None:
+        joined: list[CameraWatch] = []
+        while True:
+            with self._lock:
+                gone, self._to_join = self._to_join, []
+            if not gone:
+                break
+            self._stop_join(gone)                        # 旧的退干净了才起新的:不重叠
+            joined += gone
+            self._stop_stale()                           # 等的这几秒里库里又改了的,也先停
+        want = {c.name: c for c in load_cameras(self.db)}   # 按最新的起(复查 R4)
+        for w in joined:
             if w.cam.name not in want:
                 self._clean.discard(w.cam.name)
                 self._told.discard(w.cam.name)
@@ -581,6 +609,8 @@ class CctvManager:
             for w in gone:
                 w.stop()
             self.watches.clear()
+            gone += self._to_join
+            self._to_join = []
         self._stop_join(gone)
 
 
