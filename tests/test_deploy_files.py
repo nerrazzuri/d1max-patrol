@@ -1835,6 +1835,9 @@ def test_W47_Nav2参数_没有YAML别名_机身是矩形_用Lattice和MPPI():
         # 感知节点早把机身的点滤掉了;开着「脚下清空」,窄门里机身轮廓(带余量)一压上门框就把门框清掉,
         # 门框又在两侧盲区里标不回来(2026-10-29 仿真里 0.85 m 门撞过一次)
         assert p["obstacle_layer"]["footprint_clearing_enabled"] is False
+        # 局部代价地图也要有静态地图层:MPPI 和脱困动作(Spin、后退)只看局部这张,地图上的墙进了两侧
+        # 盲区、雷达记忆过期就没了(2026-10-29 仿真里 0.85 m 门里原地转扫到门框)
+        assert "static_layer" in p["plugins"]
     cs = d["controller_server"]["ros__parameters"]
     assert cs["FollowPath"]["plugin"] == "nav2_mppi_controller::MPPIController"
     assert 1.0 / cs["controller_frequency"] <= cs["FollowPath"]["model_dt"] + 1e-9, \

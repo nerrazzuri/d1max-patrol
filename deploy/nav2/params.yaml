@@ -1,5 +1,6 @@
 # W47 Nav2 参数(docs/W47-导航换Nav2-设计.md)。由 Humble 自带的 nav2_bringup/params/nav2_params.yaml 改出来:
 # 机身 0.93×0.48 m 矩形(每边 +5 cm);Smac Lattice 差速基元(能原地转、按轮廓查碰撞,窄门);MPPI(先 DiffDrive);
+# 局部代价地图也带静态地图层(地图上的墙永远在,不靠雷达记忆:2026-10-29 仿真里窄门里原地转扫到门框);
 # 障碍层吃代理经转接节点送来的两份点云(/d1max/obs_occ 标记、/d1max/obs_free 只清);一律 use_sim_time
 # (转接节点按代理的钟发 /clock)。真机参数先抄厂家导航(真机项 3aj.1)再调。
 bt_navigator:
@@ -187,6 +188,7 @@ local_costmap:
       height: 6
       resolution: 0.05
       plugins:
+      - static_layer
       - obstacle_layer
       - inflation_layer
       inflation_layer:
@@ -226,6 +228,9 @@ local_costmap:
           observation_persistence: 0.0
           inf_is_valid: false
       transform_tolerance: 0.5
+      static_layer:
+        plugin: nav2_costmap_2d::StaticLayer
+        map_subscribe_transient_local: true
 global_costmap:
   global_costmap:
     ros__parameters:

@@ -44,6 +44,8 @@ CMD_FRESH_S = 0.4
 GUARD_REPORT_S = 5.0
 #: 引擎按路长估超时:Nav2 不报路长,按直线距离乘这个。
 PATH_FACTOR = 1.5
+#: 前进速度不到这个(米/秒)就当「原地转」,按地图上的墙核一道(:meth:`Nav2NavBackend._turn_hits_map`)。
+TURN_VX = 0.05
 
 
 def _compose_map_odom(est: Any, odom: tuple[float, float, float]) -> list[float]:
@@ -239,6 +241,11 @@ class Nav2NavBackend(PlannedNavBackend):
         vx = max(-cap, min(cap, vx))
         wz = max(-self._wmax, min(self._wmax, wz))
         vx, wz = self._deband(vx, wz)
+        if self._turn_hits_map(vx, wz, here):
+            from d1max_agent.obstacles import Verdict
+            self._guarded(Verdict(False, "原地转会扫到地图上的墙(窄处不转)"), here)
+            await self._send(0.0, 0.0, dt_s)
+            return
         if self.guard is not None and self.obstacles is not None and (abs(vx) > 1e-6
                                                                      or abs(wz) > 1e-6):
             v = self._guard_check(vx, wz)
@@ -263,6 +270,22 @@ class Nav2NavBackend(PlannedNavBackend):
         if 0.0 < abs(wz) < dbw:
             wz = 0.0 if abs(wz) < dbw / 2 else math.copysign(dbw, wz)
         return vx, wz
+
+    def _turn_hits_map(self, vx: float, wz: float, here: Any) -> bool:
+        """原地转扫过的那片(守卫算的扇形,机身外)压上地图里的墙没有。不靠雷达(墙进了两侧盲区、记忆
+        过期都还在),不靠 Nav2 的配置:2026-10-29 仿真里 Nav2 的脱困原地转(Spin)在 0.85 m 门里扫到
+        门框。直走不查:窄处两侧本来就贴得近,定位差几厘米就会误拦。"""
+        if self._base is None or self.guard is None or abs(vx) > TURN_VX or abs(wz) < 1e-6:
+            return False
+        blocked, res, (ox, oy) = self._base
+        h, w = blocked.shape
+        c, s = math.cos(here.yaw), math.sin(here.yaw)
+        for px, py in self.guard.swept(0.0, wz, 0.0, (self._last_wz, self._w_meas)):
+            x, y = here.x + c * px - s * py, here.y + s * px + c * py
+            r, k = int((y - oy) // res), int((x - ox) // res)
+            if 0 <= r < h and 0 <= k < w and blocked[r, k]:
+                return True
+        return False
 
     def _guarded(self, v: Any, here: Any) -> None:
         """守卫拦住了 Nav2 的速度(雷达真看到挡,或者障碍数据不新鲜):拦久了报一次被挡。"""
