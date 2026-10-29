@@ -198,8 +198,9 @@ def cmd_vpn(home: Path, args: argparse.Namespace) -> None:
     /etc/wireguard/d1max.conf、``sudo systemctl restart wg-quick@d1max``)。"""
     from d1max_site.vpn import VpnError, VpnState
     st = VpnState(home / "vpn")
-    apply = ("站点配置改了:d1max-site vpn server-conf > /tmp/d1max.conf && sudo install -m 600 "
-             "/tmp/d1max.conf /etc/wireguard/d1max.conf && rm /tmp/d1max.conf && "
+    # 外审 V213-I1:不经过临时文件(shell 重定向按 umask 建文件,常是 0644,私钥会漏出去)
+    apply = ("站点配置改了:d1max-site vpn server-conf | sudo sh -c "
+             "'umask 077; cat > /etc/wireguard/d1max.conf' && "
              "sudo systemctl restart wg-quick@d1max")
     try:
         if args.vpn_cmd == "reissue-cert":

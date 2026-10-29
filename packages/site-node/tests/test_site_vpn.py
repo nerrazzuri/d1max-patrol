@@ -115,3 +115,50 @@ def test_老站点证书里没有隧道地址_init说清楚_要明着重签_重�
     new = cmd_fingerprint(home)
     assert new != old and new in out and "重新添加站点" in out
     assert "IP:172.29.70.1" in ext.read_text()
+
+
+def test_复查I1_装配置的提示和文档_不经过临时文件(tmp_path, capsys):
+    """外审 V213-I1:server-conf > /tmp/x 由 shell 按 umask 建文件(常是 0644),私钥漏出去。
+    改成管道直接写进 /etc/wireguard(umask 077),不落临时文件。"""
+    from pathlib import Path
+
+    from d1max_site.main import main
+    home = tmp_path / "site"
+    home.mkdir()
+    assert main(["--home", str(home), "vpn", "init", "--endpoint", "1.2.3.4"]) == 0
+    assert main(["--home", str(home), "vpn", "add", "phone", "p1"]) == 0
+    out = capsys.readouterr().out
+    assert "> /tmp" not in out and "umask 077" in out
+    doc = (Path(__file__).resolve().parents[3] / "docs" / "W45-站点VPN.md").read_text("utf-8")
+    assert "> /tmp" not in doc and "umask 077" in doc
+
+
+def test_复查I2_两个进程同时改_删掉的不会被旧状态恢复(tmp_path):
+    """外审 V213-I2:读—改—存要整段互斥。一个在加(读到旧状态还没存),另一个删了手机:
+    加的那个存的时候不能把手机恢复回来。"""
+    import threading
+    st = vpn.VpnState(tmp_path / "vpn")
+    st.init(endpoint="1.2.3.4")
+    st.add("phone", "old-phone")
+    a, b = vpn.VpnState(tmp_path / "vpn"), vpn.VpnState(tmp_path / "vpn")
+    read_done, go = threading.Event(), threading.Event()
+    orig = a._load
+
+    def slow_load():
+        d = orig()
+        read_done.set()
+        go.wait(2)
+        return d
+    a._load = slow_load
+    t = threading.Thread(target=lambda: a.add("robot", "R1"))
+    t.start()
+    read_done.wait(2)
+    rm = threading.Thread(target=lambda: b.remove("old-phone"))
+    rm.start()
+    rm.join(0.3)                      # 拿不到锁:等着(不能在加的那个读完、存之前插进来)
+    go.set()
+    t.join(5)
+    rm.join(5)
+    names = [p["name"] for p in vpn.VpnState(tmp_path / "vpn").list()]
+    assert names == ["R1"], names
+    assert "old-phone" not in vpn.VpnState(tmp_path / "vpn").server_conf()

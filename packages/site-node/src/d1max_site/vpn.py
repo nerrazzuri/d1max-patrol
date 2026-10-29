@@ -25,6 +25,8 @@ import json
 import os
 import re
 import secrets
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -119,10 +121,24 @@ class VpnState:
             raise VpnError(f"{self.path} 坏了")
         return d
 
+    @contextmanager
+    def _locked(self) -> Iterator[None]:
+        """外审 V213-I2:读—改—存(连写 peer 配置)整段跨进程互斥。不锁的话两个命令拿同一份旧状态各存
+        各的,删掉的手机凭据会被旧副本恢复回来。"""
+        import fcntl
+        self.root.mkdir(parents=True, exist_ok=True)
+        os.chmod(self.root, 0o700)
+        fd = os.open(self.root / ".lock", os.O_RDWR | os.O_CREAT, 0o600)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            yield
+        finally:
+            os.close(fd)
+
     def _save(self, d: dict[str, Any]) -> None:
         self.root.mkdir(parents=True, exist_ok=True)
         os.chmod(self.root, 0o700)
-        tmp = self.path.with_name("state.json.tmp")
+        tmp = self.path.with_name(f"state.json.{os.getpid()}.{secrets.token_hex(4)}.tmp")
         fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
             fh.write(json.dumps(d, ensure_ascii=False, indent=1))
@@ -137,6 +153,10 @@ class VpnState:
         return d
 
     def init(self, *, endpoint: str, port: int = DEFAULT_PORT) -> dict[str, Any]:
+        with self._locked():
+            return self._init(endpoint=endpoint, port=port)
+
+    def _init(self, *, endpoint: str, port: int = DEFAULT_PORT) -> dict[str, Any]:
         if "server" in self._load():
             raise VpnError("已经 init 过了(站点密钥不覆盖;真要重来先删掉 vpn 目录,"
                            "所有配置都要重发)")
@@ -151,6 +171,10 @@ class VpnState:
         return {"public": pub, "address": str(SUBNET[SITE_HOST])}
 
     def add(self, kind: str, name: str) -> dict[str, Any]:
+        with self._locked():
+            return self._add(kind, name)
+
+    def _add(self, kind: str, name: str) -> dict[str, Any]:
         if kind not in RANGES:
             raise VpnError(f"种类要是 {'/'.join(RANGES)}")
         if not isinstance(name, str) or not _NAME.fullmatch(name):
@@ -174,6 +198,10 @@ class VpnState:
                 "conf": str(self.root / "peers" / f"{name}.conf")}
 
     def remove(self, name: str) -> None:
+        with self._locked():
+            return self._remove(name)
+
+    def _remove(self, name: str) -> None:
         d = self._need()
         if not any(p["name"] == name for p in d["peers"]):
             raise VpnError(f"没有 {name}")

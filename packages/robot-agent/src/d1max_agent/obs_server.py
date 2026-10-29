@@ -156,7 +156,7 @@ class ObsBridgeServer:
         self._drop(f"新的{self.PEER}连上来了,旧的没声了")
         self._writer, self._heard, self._seq = writer, self._now(), 0
         try:
-            writer.write(self.BRIDGE.encode(self.BRIDGE.Hello(proto=self.BRIDGE.PROTO)))
+            writer.write(self._hello_reply(hello, writer))
         except (ConnectionError, OSError, RuntimeError):
             self._drop("回 hello 就发不出去")
             return
@@ -176,7 +176,7 @@ class ObsBridgeServer:
                     return
                 self._heard = self._now()
                 try:
-                    msg = self.BRIDGE.parse(line)
+                    msg = self._decode(line)
                 except ContractError as exc:
                     log.warning("%s发来一行不成形,丢掉:%s", self.PEER, exc)
                     continue
@@ -190,6 +190,14 @@ class ObsBridgeServer:
         finally:
             if self._writer is writer:
                 self._drop(f"{self.PEER}断开了")
+
+    def _hello_reply(self, hello: Any, writer: asyncio.StreamWriter) -> bytes:
+        """回给对端的 hello(子类可以加东西,比如跨板人员桥的签名)。"""
+        return self.BRIDGE.encode(self.BRIDGE.Hello(proto=self.BRIDGE.PROTO))
+
+    def _decode(self, line: bytes) -> Any:
+        """握手以后收到的一行 → 报文(子类可以先验签名)。"""
+        return self.BRIDGE.parse(line)
 
     def _drop(self, why: str) -> None:
         w, self._writer = self._writer, None

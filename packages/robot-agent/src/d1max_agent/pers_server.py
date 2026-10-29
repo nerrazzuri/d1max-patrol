@@ -7,6 +7,10 @@
 - **认密钥**:连上先发 ``challenge {nonce}``(每条连接现给的随机数),检测节点的 ``hello`` 要带
   ``mac = HMAC-SHA256(共享密钥, nonce, 名字)``;对不上回一句、断开。给了 ``peer`` 还要对端 IP
   对得上。
+- **双向认证、逐行签名**(外审 P212-I1):检测节点的 ``hello`` 带它自己的 ``nonce``,这里回的
+  ``hello`` 带 :func:`~d1max_contract.persbridge.agent_mac`(检测节点核对上才发截图、才收外参);之后
+  两个方向每一行都封好(:func:`~d1max_contract.persbridge.seal`),签名不对、序号不往上走、没封的
+  一律不认。不加密(用户 2026-10-30:截图在机器人内部网线上明文,记账的残留)。
 - **截图走桥**:两块板不共用盘 —— 检测节点先发 ``snap {name, jpeg_b64}``、再发引用它的 ``persons``;
   这里写进截图目录(``PersonView.snapshot_dir``,先写临时文件再改名;最多留
   :data:`MAX_REMOTE_SNAPS` 张,代理一直没收走的删最旧的),后面跟本机一样。
@@ -57,6 +61,10 @@ class PersonBridgeServer(ObsBridgeServer):
         self.frames = frames
         self._nonces: dict[int, str] = {}
         self._frames_ref: str | None = None
+        #: 握手过了的这条连接的会话密钥、两个方向的序号(复查 P212-I1)。
+        self._ks: bytes | None = None
+        self._pending_ks: dict[int, tuple[bytes, str]] = {}
+        self._rx = self._tx = 0
 
     @property
     def port(self) -> int:
@@ -115,7 +123,33 @@ class PersonBridgeServer(ObsBridgeServer):
         want = persbridge.hello_mac(self.key, nonce, hello.name) if nonce else ""
         if not hello.mac or not want or not hmac.compare_digest(hello.mac, want):
             return "握手签名不对(两块板上的人员桥密钥不一样?)"
+        if not hello.nonce:
+            return "人员检测节点没给代理出题(老版本?两块板要一起升级)"
+        assert nonce is not None
+        self._pending_ks[id(writer)] = (persbridge.session_key(self.key, nonce, hello.nonce),
+                                        persbridge.agent_mac(self.key, hello.nonce, nonce))
         return ""
+
+    def _hello_reply(self, hello: Any, writer: asyncio.StreamWriter) -> bytes:
+        if self.listen is None:
+            return super()._hello_reply(hello, writer)
+        ks, mac = self._pending_ks.pop(id(writer))
+        self._ks, self._rx, self._tx = ks, 0, 0
+        return persbridge.encode(persbridge.Hello(proto=persbridge.PROTO, mac=mac))
+
+    def _decode(self, line: bytes) -> Any:
+        if self.listen is None:
+            return super()._decode(line)
+        if self._ks is None:
+            raise persbridge.ContractError("人员桥:还没握手")
+        self._rx, msg = persbridge.unseal(self._ks, persbridge.TO_AGENT, line, self._rx)
+        return msg
+
+    def _send(self, msg: Any) -> None:
+        assert self._writer is not None and self._ks is not None
+        self._tx += 1
+        self._writer.write(persbridge.seal(self._ks, persbridge.TO_DETECTOR, self._tx,
+                                           persbridge.encode(msg)))
 
     def _greeted(self) -> None:
         self._frames_ref = None
@@ -141,7 +175,7 @@ class PersonBridgeServer(ObsBridgeServer):
             return
         ref, frames = got
         try:
-            self._writer.write(persbridge.encode(persbridge.FramesMsg(ref=ref, frames=frames)))
+            self._send(persbridge.FramesMsg(ref=ref, frames=frames))
         except Exception as exc:                         # noqa: BLE001 - 写不过去下一拍再试
             log.warning("人员桥:外参推不过去:%s", exc)
             return

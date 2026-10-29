@@ -367,8 +367,9 @@ class PersonNode:
 class PersonLink:
     """连代理的人员桥(一行一个 JSON)。本机时连 Unix 套接字、直接发 ``hello``;跨板(给了 ``key``)时连
     TCP,
-    先收代理的 ``challenge``、``hello`` 带 HMAC 签名。代理推来的外参(``frames``)交给 ``on_frames``。
-    发不出去就断开,过 ``reconnect_s`` 再连;都不抛(检测照跑)。"""
+    先收代理的 ``challenge``、``hello`` 带 HMAC 签名和给代理出的题;**代理回的 hello 签名核对上才算
+    连上**(复查 P212-I1:不然谁冒充代理发个挑战就能收截图),之后两个方向每一行都封好。代理推来的外参
+    (``frames``)交给 ``on_frames``。发不出去就断开,过 ``reconnect_s`` 再连;都不抛(检测照跑)。"""
 
     def __init__(self, connect: Callable[[], socket.socket], *, key: bytes | None = None,
                  name: str = "d1max-persons", version: str = "",
@@ -384,12 +385,29 @@ class PersonLink:
         self._sock: socket.socket | None = None
         self._buf = b""
         self._next_try = 0.0
+        #: 跨板时这条连接的会话密钥和两个方向的序号。
+        self._ks: bytes | None = None
+        self._tx = self._rx = 0
 
     @property
     def connected(self) -> bool:
         return self._sock is not None
 
+    @staticmethod
+    def _readline(s: socket.socket, buf: bytes, limit: int) -> tuple[bytes, bytes]:
+        while b"\n" not in buf:
+            chunk = s.recv(4096)
+            if not chunk:
+                raise ConnectionError("代理握手没完就断了")
+            buf += chunk
+            if len(buf) > limit:
+                raise ConnectionError("握手的一行太长")
+        line, _, rest = buf.partition(b"\n")
+        return line, rest
+
     def _open(self) -> bool:
+        import secrets
+
         from d1max_contract import persbridge as pb
         now = self._mono()
         if now < self._next_try:
@@ -398,28 +416,37 @@ class PersonLink:
         try:
             s = self._connect()
             s.settimeout(self.timeout_s)
-            mac = ""
+            self._ks, self._tx, self._rx = None, 0, 0
             if self.key is not None:
-                line = b""
-                while not line.endswith(b"\n"):
-                    chunk = s.recv(4096)
-                    if not chunk:
-                        raise ConnectionError("代理没发挑战就断了")
-                    line += chunk
-                    if len(line) > pb.MAX_LINE:
-                        raise ConnectionError("挑战太长")
-                first, _, rest = line.partition(b"\n")
+                first, rest = self._readline(s, b"", pb.MAX_LINE)
                 ch = pb.parse(first)
                 if not isinstance(ch, pb.Challenge):
                     raise ConnectionError(f"代理没发挑战:{type(ch).__name__}")
-                mac = pb.hello_mac(self.key, ch.nonce, self.name)
+                nd = secrets.token_hex(16)
+                s.sendall(pb.encode(pb.Hello(proto=pb.PROTO, name=self.name, version=self.version,
+                                             mac=pb.hello_mac(self.key, ch.nonce, self.name),
+                                             nonce=nd)))
+                reply, rest = self._readline(s, rest, pb.MAX_LINE)
+                h = pb.parse(reply)
+                if not isinstance(h, pb.Hello):
+                    why = getattr(h, "reason", type(h).__name__)
+                    raise ConnectionError(f"代理没回 hello:{why}")
+                import hmac
+                if not h.mac or not hmac.compare_digest(h.mac,
+                                                        pb.agent_mac(self.key, nd, ch.nonce)):
+                    raise ConnectionError("代理回的 hello 签名不对(不是我们的代理,或者密钥不一样)")
+                self._ks = pb.session_key(self.key, ch.nonce, nd)
                 self._buf = rest
             else:
                 self._buf = b""
-            s.sendall(pb.encode(pb.Hello(proto=pb.PROTO, name=self.name, version=self.version,
-                                         mac=mac)))
+                s.sendall(pb.encode(pb.Hello(proto=pb.PROTO, name=self.name,
+                                             version=self.version)))
         except (OSError, ConnectionError, ValueError) as exc:
             log.warning("连不上代理的人员桥:%s", exc)
+            try:
+                s.close()
+            except (OSError, UnboundLocalError):
+                pass
             return False
         self._sock = s
         log.info("连上代理的人员桥了%s", "(跨板,过了挑战)" if self.key else "")
@@ -430,8 +457,13 @@ class PersonLink:
             return False
         assert self._sock is not None
         from d1max_localizer.obstacles import _line  # 跟障碍桥同一种行格式
+        line = _line(obj)
+        if self._ks is not None:
+            from d1max_contract import persbridge as pb
+            self._tx += 1
+            line = pb.seal(self._ks, pb.TO_AGENT, self._tx, line)
         try:
-            self._sock.sendall(_line(obj))
+            self._sock.sendall(line)
             return True
         except OSError as exc:
             log.warning("人员桥发不出去(断开,稍后再连):%s", exc)
@@ -459,9 +491,12 @@ class PersonLink:
         while b"\n" in self._buf:
             line, _, self._buf = self._buf.partition(b"\n")
             try:
-                m = pb.parse(line)
+                if self._ks is not None:
+                    self._rx, m = pb.unseal(self._ks, pb.TO_DETECTOR, line, self._rx)
+                else:
+                    m = pb.parse(line)
             except Exception as exc:                     # noqa: BLE001
-                log.warning("代理发来一行看不懂:%s", exc)
+                log.warning("代理发来一行看不懂(或者签名不对,不认):%s", exc)
                 continue
             if isinstance(m, pb.FramesMsg) and self.on_frames is not None:
                 try:
@@ -479,6 +514,7 @@ class PersonLink:
                 pass
         self._sock = None
         self._buf = b""
+        self._ks = None
 
 
 # ------------------------------------------------------------ ROS 节点

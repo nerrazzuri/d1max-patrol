@@ -205,8 +205,13 @@ class Nav2NavBackend(PlannedNavBackend):
                                "y": pose.position.y, "yaw": pose.yaw}
         if via:
             # 沿路加密(每隔不到 1 m):Nav2 离途经点 1.5 m 内就算经过、直奔下一个,点稀了拐角切一块
-            seg = sum(math.dist(a, b) for a, b in zip(via, via[1:], strict=False))
-            dense = densify(via, step=max(VIA_STEP_M, seg / (MAX_VIA - 1)))
+            # 点数按实际加密结果管(外审 W48-M1:每段各自向上取整,按总长算的间距保不住 500 个以内):
+            # 超了就把间隔放大;放到不加密(原来的点)还超,只留最后 MAX_VIA 个
+            step, dense = VIA_STEP_M, densify(via, step=VIA_STEP_M)
+            while len(dense) > MAX_VIA and len(dense) > len(via):
+                step *= 1.5
+                dense = densify(via, step=step)
+            dense = dense[-MAX_VIA:]
             msg["via"] = [[round(x, 3), round(y, 3)] for x, y in dense]
         self.link.send(msg)
         if here is not None:

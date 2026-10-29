@@ -6,6 +6,7 @@ import json
 
 import pytest
 
+from d1max_contract import persbridge as pb
 from d1max_contract.errors import ContractError
 from d1max_contract.persbridge import (
     MAX_LINE,
@@ -73,3 +74,36 @@ def test_一行太长_不认识的类型_不是对象():
         parse(b'{"t":"grid","seq":1}')
     with pytest.raises(ContractError):
         parse(b"[1]")
+
+
+# ---------------------------------------------------------------- 复查 P212-I1:双向认证 + 逐行签名
+
+def test_复查P212_双向认证_代理也要证明自己有密钥():
+    k = bytes(range(32))
+    na, nd = "ab" * 16, "cd" * 16
+    assert pb.agent_mac(k, nd, na) != pb.hello_mac(k, na, "x")
+    assert pb.agent_mac(k, nd, na) != pb.agent_mac(b"\x01" * 32, nd, na)
+    assert pb.Hello(proto=pb.PROTO, mac="ab" * 32, nonce=nd).nonce == nd
+    with pytest.raises(ContractError):
+        pb.Hello(proto=pb.PROTO, nonce="不是十六进制")
+
+
+def test_复查P212_逐行签名_改一个字或者换方向重放旧序号都不认():
+    k = bytes(range(32))
+    ks = pb.session_key(k, "ab" * 16, "cd" * 16)
+    line = pb.seal(ks, pb.TO_AGENT, 5, pb.encode(pb.Heartbeat(seq=9)))
+    seq, m = pb.unseal(ks, pb.TO_AGENT, line, last_seq=4)
+    assert seq == 5 and m == pb.Heartbeat(seq=9)
+    with pytest.raises(ContractError, match="序号"):
+        pb.unseal(ks, pb.TO_AGENT, line, last_seq=5)               # 重放
+    with pytest.raises(ContractError, match="签名"):
+        pb.unseal(ks, pb.TO_DETECTOR, line, last_seq=0)            # 换方向
+    with pytest.raises(ContractError, match="签名"):
+        pb.unseal(ks, pb.TO_AGENT, line.replace(b'\\"seq\\":9', b'\\"seq\\":8'), last_seq=0)
+    with pytest.raises(ContractError, match="签名"):
+        pb.unseal(pb.session_key(k, "ab" * 16, "ef" * 16), pb.TO_AGENT, line, last_seq=0)
+    with pytest.raises(ContractError):
+        pb.unseal(ks, pb.TO_AGENT, pb.encode(pb.Heartbeat(seq=1)), last_seq=0)   # 没封
+    jpeg = b"\xff\xd8\xff\xe0" + b"x" * 300_000 + b"\xff\xd9"
+    snap = pb.seal(ks, pb.TO_AGENT, 6, pb.encode(pb.Snap.of("a.jpg", jpeg)))
+    assert isinstance(pb.unseal(ks, pb.TO_AGENT, snap, last_seq=5)[1], pb.Snap)

@@ -347,12 +347,15 @@ def test_跨板_截图太大不发_这一帧不引用():
 
 
 class _假代理:
-    """在一个线程里当代理:发挑战、核签名、回 hello、推一次外参,然后收报文。"""
+    """在一个线程里当代理:发挑战、核签名、回 hello(带代理的签名)、推一次外参,然后收报文
+    (握手以后两边都封好,复查 P212-I1)。``knows_key=False``:不知道密钥的冒充者,只发挑战、
+    回一个不带签名的 hello。"""
 
-    def __init__(self, key):
+    def __init__(self, key, knows_key=True):
         import socket
         import threading
-        self.key = key
+        self.key, self.knows_key = key, knows_key
+        self.raw: list[bytes] = []
         self.srv = socket.create_server(("127.0.0.1", 0))
         self.port = self.srv.getsockname()[1]
         self.got: list[dict] = []
@@ -366,17 +369,28 @@ class _假代理:
         f.write(pb.encode(pb.Challenge(nonce="ab" * 16)))
         f.flush()
         hello = pb.parse(f.readline())
+        if not self.knows_key:
+            f.write(pb.encode(pb.Hello(proto=pb.PROTO)))            # 冒充:没法给签名
+            f.flush()
+            for line in f:
+                self.raw.append(line)
+            return
         if hello.mac != pb.hello_mac(self.key, "ab" * 16, hello.name):
             f.write(pb.encode(pb.Error(reason="签名不对")))
             f.flush()
             c.close()
             return
         self.ok.set()
-        f.write(pb.encode(pb.Hello(proto=pb.PROTO)))
-        f.write(pb.encode(pb.FramesMsg(ref="m:1", frames={"lidar": {"x": 0.4}})))
+        ks = pb.session_key(self.key, "ab" * 16, hello.nonce)
+        f.write(pb.encode(pb.Hello(proto=pb.PROTO, mac=pb.agent_mac(self.key, hello.nonce,
+                                                                    "ab" * 16))))
+        f.write(pb.seal(ks, pb.TO_DETECTOR, 1,
+                        pb.encode(pb.FramesMsg(ref="m:1", frames={"lidar": {"x": 0.4}}))))
         f.flush()
+        rx = 0
         for line in f:
-            self.got.append(json.loads(line))
+            rx, m = pb.unseal(ks, pb.TO_AGENT, line, rx)
+            self.got.append(json.loads(pb.encode(m)))
 
 
 def test_跨板_连上先过挑战_收到外参交出去_发的报文对面收得到():
@@ -422,4 +436,23 @@ def test_跨板_密钥不对_对面断了_发不出去也不炸_过一会儿再�
         _t.sleep(0.02)
     assert not link.connected
     assert link.send({"t": "hb", "seq": 2}) is False, "没到重连时间:不连"
+    link.close()
+
+
+def test_复查P212_冒充的代理_不知道密钥_什么也收不到_外参也不收():
+    """外审 P212-I1:原来只要发一个格式对的挑战就能收到 hello 和截图。现在代理也要证明自己有密钥,
+    核对上之前检测节点不算连上、什么都不发。"""
+    import socket
+    import time as _t
+
+    from d1max_localizer.persons import PersonLink
+    fake = _假代理(bytes(range(32)), knows_key=False)
+    frames: list = []
+    link = PersonLink(lambda: socket.create_connection(("127.0.0.1", fake.port), timeout=1),
+                      key=bytes(range(32)), on_frames=lambda ref, d: frames.append(ref),
+                      reconnect_s=60)
+    assert link.send({"t": "hb", "seq": 1}) is False
+    assert not link.connected
+    _t.sleep(0.2)
+    assert fake.raw == [] and frames == []
     link.close()
