@@ -46,3 +46,5 @@ motion/test_cmd_auth
 
 # agent 的 worktree 在这下面
 .claude/
+# 工作区里指向主仓库虚拟环境的符号链接(不带斜杠才连链接一起忽略)
+.venv
