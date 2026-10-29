@@ -118,6 +118,7 @@ def test_外审R7_速度标上是哪个目标的(monkeypatch):
     b, futs = _桥(monkeypatch)
     b.on_goal({"goal_id": 5, "x": 1, "y": 2, "yaw": 0})
     futs[0].set_result(_Handle())
+    b._mono = lambda: 1e9                     # 过了收下之后的屏障(复查 N3)
     b._on_cmd(NS(linear=NS(x=0.3, y=0.0), angular=NS(z=0.1)))
     assert b.sent[-1]["type"] == "cmd" and b.sent[-1]["goal_id"] == 5
 
@@ -145,3 +146,65 @@ def test_转接节点握手的协议号跟契约同一个():
 
     from d1max_contract.navbridge import PROTO
     assert nav2bridge.PROTO == PROTO
+
+
+# ---------------------------------------------------------------- W47 复查 N3、N4、N6
+
+def test_外审复查N4_收下的回调夹在中间时来了取消_也不丢(monkeypatch):
+    import threading
+    b, futs = _桥(monkeypatch)
+    b.on_goal({"goal_id": 41, "x": 1, "y": 2, "yaw": 0})
+    h = _Handle()
+    real_lock = b._goal_lock
+    inside = threading.Event()
+    go = threading.Event()
+
+    class 慢锁:
+        """收下回调第一次拿锁、放锁之后停一下(原来两段锁之间正好能插进取消)。"""
+        n = 0
+
+        def __enter__(self):
+            real_lock.acquire()
+
+        def __exit__(self, *a):
+            real_lock.release()
+            if threading.current_thread().name == "rclpy" and 慢锁.n == 0:
+                慢锁.n += 1
+                inside.set()
+                go.wait(2)
+    b._goal_lock = 慢锁()
+    th = threading.Thread(target=lambda: futs[0].set_result(h), name="rclpy")
+    th.start()
+    inside.wait(0.5)
+    b.on_cancel({"goal_id": 41})
+    go.set()
+    th.join(2)
+    assert h.cancels == 1 and b.active_gid is None
+
+
+def test_外审复查N3_新目标刚收下时排着队的旧速度不发(monkeypatch):
+    from types import SimpleNamespace as NS
+    b, futs = _桥(monkeypatch)
+    b.on_goal({"goal_id": 5, "x": 1, "y": 2, "yaw": 0})
+    futs[0].set_result(_Handle())
+    b._on_cmd(NS(linear=NS(x=0.4, y=0.0), angular=NS(z=0.0)))   # 上一个目标排着队的那条
+    assert not [m for m in b.sent if m["type"] == "cmd"]
+    b._mono = lambda: 1e9                                        # 过了屏障
+    b._on_cmd(NS(linear=NS(x=0.3, y=0.0), angular=NS(z=0.0)))
+    assert [m["goal_id"] for m in b.sent if m["type"] == "cmd"] == [5]
+
+
+def test_外审复查N6_同一拍规划的旧路线_终点对不上新目标就不报(monkeypatch):
+    from types import SimpleNamespace as NS
+    b, futs = _桥(monkeypatch)
+    b.t_ms = 2000
+    b.on_goal({"goal_id": 9, "x": 2, "y": 4, "yaw": 0})
+    futs[0].set_result(_Handle())
+    old = NS(header=NS(stamp=NS(sec=2, nanosec=0)),
+             poses=[NS(pose=NS(position=NS(x=x, y=4.0))) for x in (5.0, 7.0, 8.0)])
+    b._on_plan(old)
+    assert not [m for m in b.sent if m["type"] == "path"]
+    new = NS(header=NS(stamp=NS(sec=2, nanosec=0)),
+             poses=[NS(pose=NS(position=NS(x=x, y=4.0))) for x in (5.0, 3.0, 2.05)])
+    b._on_plan(new)
+    assert [m["goal_id"] for m in b.sent if m["type"] == "path"] == [9]
