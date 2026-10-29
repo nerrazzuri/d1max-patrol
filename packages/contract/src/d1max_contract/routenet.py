@@ -120,37 +120,61 @@ class RouteNet:
         return sum(math.dist((by[a].x, by[a].y), (by[b].x, by[b].y)) for a, b in self.edges)
 
 
+def _proj(p: tuple[float, float], a: Node, b: Node) -> tuple[float, float]:
+    """``p`` 在线段 ``a–b`` 上最近的那一点。"""
+    dx, dy = b.x - a.x, b.y - a.y
+    ll = dx * dx + dy * dy
+    t = 0.0 if ll == 0 else max(0.0, min(1.0, ((p[0] - a.x) * dx + (p[1] - a.y) * dy) / ll))
+    return (a.x + t * dx, a.y + t * dy)
+
+
 def route(net: RouteNet, start: tuple[float, float],
           goal: tuple[float, float]) -> list[tuple[float, float]]:
     """在路网上找从 ``start`` 到 ``goal`` 的路 → 途经点(地图坐标);
     不上路网更好(或者够不着)回 ``[]``。
 
-    代价:离开路网的两小段按直线 × :data:`OFF_NET_FACTOR`,沿连线按长度;直接走也按直线 × 那个系数。
-    只考虑离起点、终点 :data:`ENTRY_MAX_M` 以内的点上下路网;
+    从**路上离起点最近的那一点**上路网(投影到每条连线上,不回头去节点:偏离以后重规划也接得上),
+    同样从路上离终点最近的那一点下。代价:离开路网的两小段按直线 × :data:`OFF_NET_FACTOR`,
+    沿连线按长度;直接走也按直线 × 那个系数。只考虑离起点、终点 :data:`ENTRY_MAX_M` 以内的路;
     离起点、终点不到 :data:`DROP_NEAR_M` 的途经点去掉。"""
     if not net.nodes or not net.edges:
         return []
     by = {n.id: n for n in net.nodes}
+    pos: dict[str, tuple[float, float]] = {n.id: (n.x, n.y) for n in net.nodes}
     adj: dict[str, list[tuple[str, float]]] = {n.id: [] for n in net.nodes}
+
+    def link(u: str, v: str) -> None:
+        d = math.dist(pos[u], pos[v])
+        adj[u].append((v, d))
+        adj[v].append((u, d))
+
     for a, b in net.edges:
-        d = math.dist((by[a].x, by[a].y), (by[b].x, by[b].y))
-        adj[a].append((b, d))
-        adj[b].append((a, d))
-    direct = math.dist(start, goal) * OFF_NET_FACTOR
-    exits = {n.id: math.dist((n.x, n.y), goal) * OFF_NET_FACTOR for n in net.nodes
-             if adj[n.id] and math.dist((n.x, n.y), goal) <= ENTRY_MAX_M}
-    if not exits:
+        link(a, b)
+    # 上下路网的点:起点、终点投影到每条连线上(虚点,接到这条线的两头)
+    enter: dict[str, float] = {}
+    leave: dict[str, float] = {}
+    for k, (a, b) in enumerate(net.edges):
+        here: list[str] = []
+        for tag, p, book in (("s", start, enter), ("g", goal, leave)):
+            q = _proj(p, by[a], by[b])
+            d = math.dist(p, q)
+            if d > ENTRY_MAX_M:
+                continue
+            v = f"\x00{tag}{k}"
+            pos[v], adj[v] = q, []
+            link(v, a)
+            link(v, b)
+            book[v] = d * OFF_NET_FACTOR
+            here.append(v)
+        if len(here) == 2:
+            link(here[0], here[1])           # 起点、终点对着同一条路:沿这条路直接过去
+    if not enter or not leave:
         return []
-    dist: dict[str, float] = {}
-    prev: dict[str, str | None] = {}
-    heap: list[tuple[float, str]] = []
-    for n in net.nodes:
-        d0 = math.dist((n.x, n.y), start)
-        if adj[n.id] and d0 <= ENTRY_MAX_M:
-            dist[n.id] = d0 * OFF_NET_FACTOR
-            prev[n.id] = None
-            heapq.heappush(heap, (dist[n.id], n.id))
-    best, best_end = direct, None
+    best, best_end = math.dist(start, goal) * OFF_NET_FACTOR, None
+    dist: dict[str, float] = dict(enter)
+    prev: dict[str, str | None] = dict.fromkeys(enter)
+    heap = [(d, v) for v, d in enter.items()]
+    heapq.heapify(heap)
     done: set[str] = set()
     while heap:
         d, u = heapq.heappop(heap)
@@ -159,8 +183,8 @@ def route(net: RouteNet, start: tuple[float, float],
         done.add(u)
         if d >= best:
             break
-        if u in exits and d + exits[u] < best:
-            best, best_end = d + exits[u], u
+        if u in leave and d + leave[u] < best:
+            best, best_end = d + leave[u], u
         for v, w in adj[u]:
             nd = d + w
             if nd < dist.get(v, math.inf):
@@ -175,6 +199,11 @@ def route(net: RouteNet, start: tuple[float, float],
         chain.append(cur)
         cur = prev[cur]
     chain.reverse()
-    pts = [(by[i].x, by[i].y) for i in chain]
-    return [p for p in pts
-            if math.dist(p, start) >= DROP_NEAR_M and math.dist(p, goal) >= DROP_NEAR_M]
+    out: list[tuple[float, float]] = []
+    for i in chain:
+        p = pos[i]
+        if out and math.dist(out[-1], p) < 0.05:
+            continue                          # 投影正好落在节点上:同一个点不要两遍
+        if math.dist(p, start) >= DROP_NEAR_M and math.dist(p, goal) >= DROP_NEAR_M:
+            out.append(p)
+    return out

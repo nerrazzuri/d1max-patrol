@@ -163,6 +163,11 @@ async def run_planned(sc: dict[str, Any], defaults: dict[str, Any], seed: int,
             t.nav = nav
             t.c.ms = _NAV2["t_ms"] = _NAV2["t_ms"] + 60_000      # 仿真钟跨场景只往前
         t.nav.load_grid(Path(d))
+        if sc.get("route_net"):                               # W48 路网
+            from d1max_contract.routenet import RouteNet
+            t.nav.set_route_net(RouteNet.from_wire({"map_id": "m", "map_version": "",
+                                                    "revision": 1, **sc["route_net"]}))
+        passed = {i: math.inf for i, _ in enumerate(sc.get("must_pass", []))}
         await t.start(sx, sy, syaw)
         await t.nav.set_speed(VMAX["v"])
         if link is not None:
@@ -197,6 +202,8 @@ async def run_planned(sc: dict[str, Any], defaults: dict[str, Any], seed: int,
                 else:
                     t.world.dyn.pop(name, None)
             await t.一拍(tick)
+            for i, (px, py, _r) in enumerate(sc.get("must_pass", [])):
+                passed[i] = min(passed[i], math.hypot(t.r.x - px, t.r.y - py))
             if link is not None:
                 _NAV2["t_ms"] = t.c.ms
                 if t.status and t.status[-1] is NavStatus.ACTIVE:
@@ -249,6 +256,10 @@ async def run_planned(sc: dict[str, Any], defaults: dict[str, Any], seed: int,
         res.goal_dist_m = round(math.hypot(t.r.x - gx, t.r.y - gy), 2)
     if res.expect == "reach":
         res.ok = res.outcome == "reach" and not res.crashed
+        for i, (px, py, r) in enumerate(sc.get("must_pass", [])):
+            if res.ok and passed[i] > r:
+                res.ok = False
+                res.reason = f"没经过 ({px:g}, {py:g}):最近 {passed[i]:.1f} m"
     else:
         res.ok = res.outcome in ("fail", "refused") and not res.crashed
     if sc.get("deadline_s") is not None:

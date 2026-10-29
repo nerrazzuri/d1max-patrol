@@ -26,6 +26,7 @@ from d1max_patrol.protocol.nav_types import NavStatus, Pose
 @pytest.mark.parametrize("msg", [
     {"type": "tick", "t_ms": 5, "odom": [0, 0, 0], "vel": [0, 0, 0], "map_odom": None},
     {"type": "goal", "goal_id": 1, "x": 1.0, "y": 2.0, "yaw": 0.5},
+    {"type": "goal", "goal_id": 1, "x": 1.0, "y": 2.0, "yaw": 0.5, "via": [[0.5, 0.5], [1.0, 0.5]]},
     {"type": "map", "req": 1, "map_id": "m", "map_version": "", "dir": "/x",
      "nogo": [[[0, 0], [1, 0], [1, 1]]], "speed": [{"poly": [[0, 0], [1, 0], [1, 1]], "mps": 0.3}]},
     {"type": "cmd", "t_ms": 3, "vx": 0.2, "vy": 0.0, "wz": -0.1},
@@ -41,6 +42,10 @@ def test_契约_报文来回不变样(msg):
     {"type": "tick", "t_ms": -1, "odom": [0, 0, 0], "vel": [0, 0, 0]},
     {"type": "goal", "goal_id": 0, "x": 1, "y": 2, "yaw": 0},
     {"type": "goal", "goal_id": 1, "x": float("nan"), "y": 2, "yaw": 0},
+    {"type": "goal", "goal_id": 1, "x": 1, "y": 2, "yaw": 0, "via": "x"},
+    {"type": "goal", "goal_id": 1, "x": 1, "y": 2, "yaw": 0, "via": [[1, 2, 3]]},
+    {"type": "goal", "goal_id": 1, "x": 1, "y": 2, "yaw": 0, "via": [[0, 0]] * 501},
+    {"type": "goal", "goal_id": 1, "x": 1, "y": 2, "yaw": 0, "via": [[float("inf"), 0]]},
     {"type": "goal_state", "goal_id": 1, "state": "weird"},
     {"type": "cmd", "t_ms": 1, "vx": 0, "vy": 0, "wz": 0, "extra": 1},
     {"type": "cmd", "t_ms": 1, "vx": 0, "vy": 0, "wz": 0, "src": "smoother"},
@@ -750,3 +755,30 @@ def test_复查三_转接服务端_报文按到达编号_记下每个目标第�
     assert s.plan_rx[7] == 2 and s.cmd[6:] == ("beh", 4)
     s._on({"type": "cmd", "t_ms": 3, "vx": 0.2, "vy": 0, "wz": 0})       # 老转接节点:不带
     assert s.cmd[6:] == ("ctl", 5)
+
+
+def test_W48_协议4_目标可以带途经点():
+    from d1max_contract.navbridge import MAX_VIA, PROTO
+    assert PROTO == 4 and MAX_VIA >= 500, "路网最多 500 个点,途经点要装得下"
+
+
+async def test_W48_有路网_交给Nav2的目标带上路网上的途经点_没路网不带(tmp_path):
+    from d1max_contract.routenet import RouteNet
+    link = 假转接()
+    t = _台(tmp_path, link)
+    await t.start(1.5, 4.0)
+    await t.nav.goto(Pose.from_xy_yaw(6.0, 4.0, 0.0))
+    assert "via" not in link.kinds("goal")[-1]
+    link.goal_states.append({"type": "goal_state", "goal_id": link.kinds("goal")[-1]["goal_id"],
+                             "state": "succeeded"})
+    await t.跑(1.0)
+    net = RouteNet.from_wire({"map_id": "m", "map_version": "", "revision": 1,
+                              "nodes": [{"id": "A", "x": 1.5, "y": 5.0},
+                                        {"id": "B", "x": 6.0, "y": 5.2}],
+                              "edges": [["A", "B"]]})
+    t.nav.set_route_net(net)
+    await t.nav.goto(Pose.from_xy_yaw(6.0, 4.5, 0.0))
+    g = link.kinds("goal")[-1]
+    here = (t.r.x, t.r.y)
+    from d1max_contract.routenet import route
+    assert g["via"] == [list(p) for p in route(net, here, (6.0, 4.5))] and len(g["via"]) == 2

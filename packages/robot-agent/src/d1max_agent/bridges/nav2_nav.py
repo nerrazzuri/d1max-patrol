@@ -34,6 +34,7 @@ import numpy as np
 from d1max_agent.bridges.hal_nav import HalNavBackend
 from d1max_agent.bridges.planned_nav import PlannedNavBackend, _heading
 from d1max_contract.obsbridge import pack_bits
+from d1max_contract.routenet import route
 from d1max_contract.zones import ZoneSet, point_in_polygon, segments_cross
 from d1max_patrol.backends.base import NavRequestError
 from d1max_patrol.protocol.nav_types import NavStatus, Pose
@@ -183,21 +184,29 @@ class Nav2NavBackend(PlannedNavBackend):
             self._nav2_goal = None
             await super()._go(pose, op)
             return
+        here = await self._here()        # 先取位置:下面查状态到发目标之间不再让出(不让两次派发都过)
         if self._status is not NavStatus.STANDBY or self._planning:
             raise NavRequestError(op, f"只能在 StandBy 下启动,当前 {self._status.value}")
         if self.nogo_at(pose.position.x, pose.position.y) is not None:
             raise NavRequestError(op, "终点在禁行区里")
         self.fallback_reason = ""
+        goal_xy = (pose.position.x, pose.position.y)
+        # W48:有路网就先在路网上找路,途经点交给 Nav2(NavigateThroughPoses,只是路过)
+        via = route(self.route_net, (here.x, here.y), goal_xy) \
+            if self.route_net is not None and here is not None else []
         self._goal_id += 1
         self._nav2_goal = self._goal_id
         self.link.goal_states.clear()
         self.link.cmd = None                 # 外审 R7:上一个目标晚到的速度不许驱动这一个
-        self.link.send({"type": "goal", "goal_id": self._goal_id, "x": pose.position.x,
-                        "y": pose.position.y, "yaw": pose.yaw})
-        here = await self._here()
+        msg: dict[str, Any] = {"type": "goal", "goal_id": self._goal_id, "x": pose.position.x,
+                               "y": pose.position.y, "yaw": pose.yaw}
+        if via:
+            msg["via"] = [[x, y] for x, y in via]
+        self.link.send(msg)
         if here is not None:
-            self.planned_length_m = PATH_FACTOR * math.hypot(pose.position.x - here.x,
-                                                             pose.position.y - here.y)
+            pts = [(here.x, here.y), *via, goal_xy]
+            self.planned_length_m = PATH_FACTOR * sum(math.dist(a, b)
+                                                      for a, b in zip(pts, pts[1:], strict=False))
         self._guard_since, self._guard_told = None, False
         log.info("%s:交给 Nav2(目标 %d)→ (%.2f, %.2f)", op, self._goal_id, pose.position.x,
                  pose.position.y)

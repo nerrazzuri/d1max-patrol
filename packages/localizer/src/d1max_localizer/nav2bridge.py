@@ -10,7 +10,8 @@ ROS 那一侧(系统 Python + rclpy),跟 Nav2 一起起(``d1max-nav2.service``)�
   ``/d1max/obs_occ``(挡,标记)、``/d1max/obs_free``(看得见是空的格,只用来清)。Nav2 的障碍层吃这两份。
 - ``map`` → 读地图目录的 ``floor.pgm/.yaml``,禁行区烧成占用,发 ``/map``(transient local);清一遍两张
   代价地图。
-- ``goal`` / ``cancel`` → ``NavigateToPose`` 动作;结果回 ``goal_state``。
+- ``goal`` / ``cancel`` → ``NavigateToPose`` 动作(带路网途经点 ``via`` 的走
+  ``NavigateThroughPoses``,W48);结果回 ``goal_state``。
 - 订 ``/cmd_vel``(Nav2 速度平滑器、脱困动作的出口)→ ``cmd`` 给代理。
 - ``tick`` 里带的 ``speed``(代理按「看得清就快」算的)→ ``/speed_limit``(变了才发)。
 - 每秒看一次 Nav2 就没就绪(动作服务在、地图发过、时钟在走),变了发 ``ready``。
@@ -136,7 +137,7 @@ class Nav2Bridge:
     def __init__(self, sock: Path, *, name: str = "d1max-nav2bridge") -> None:
         import rclpy
         from geometry_msgs.msg import TransformStamped, Twist
-        from nav2_msgs.action import NavigateToPose
+        from nav2_msgs.action import NavigateThroughPoses, NavigateToPose
         from nav2_msgs.msg import SpeedLimit
         from nav2_msgs.srv import ClearEntireCostmap
         from nav_msgs.msg import OccupancyGrid, Odometry
@@ -151,6 +152,7 @@ class Nav2Bridge:
         self.name = name
         self._m = {"TransformStamped": TransformStamped, "OccupancyGrid": OccupancyGrid,
                    "Odometry": Odometry, "Clock": Clock, "NavigateToPose": NavigateToPose,
+                   "NavigateThroughPoses": NavigateThroughPoses,
                    "ClearEntireCostmap": ClearEntireCostmap}
         rclpy.init()
         self.node = rclpy.create_node("d1max_nav2bridge")
@@ -167,6 +169,8 @@ class Nav2Bridge:
         self._speed: float | None = None
         self.tf = TransformBroadcaster(self.node)
         self.nav = ActionClient(self.node, NavigateToPose, "navigate_to_pose")
+        #: W48:带路网途经点的目标走这个(行为树 navigate_through_poses_d1max.xml)
+        self.thru = ActionClient(self.node, NavigateThroughPoses, "navigate_through_poses")
         self.clear = [self.node.create_client(ClearEntireCostmap, s) for s in (
             "/local_costmap/clear_entirely_local_costmap",
             "/global_costmap/clear_entirely_global_costmap")]
@@ -530,26 +534,40 @@ class Nav2Bridge:
         self.send({"type": "goal_state", "goal_id": m["goal_id"], "state": "rejected",
                    "reason": f"上一个目标 Nav2 {QUEUE_MAX_S:g} 秒还没结束"})
 
-    def _send_goal(self, m: dict[str, Any]) -> None:
+    def _pose(self, x: float, y: float, yaw: float) -> Any:
         from geometry_msgs.msg import PoseStamped
-        gid = m["goal_id"]
-        goal = self._m["NavigateToPose"].Goal()
         ps = PoseStamped()
         ps.header.frame_id = "map"
         ps.header.stamp = self._stamp(self.t_ms)
-        ps.pose.position.x, ps.pose.position.y = float(m["x"]), float(m["y"])
-        q = _yaw_q(float(m["yaw"]))
+        ps.pose.position.x, ps.pose.position.y = x, y
         (ps.pose.orientation.x, ps.pose.orientation.y, ps.pose.orientation.z,
-         ps.pose.orientation.w) = q
-        goal.pose = ps
-        if not self.nav.server_is_ready():
+         ps.pose.orientation.w) = _yaw_q(yaw)
+        return ps
+
+    def _send_goal(self, m: dict[str, Any]) -> None:
+        gid = m["goal_id"]
+        gx, gy = float(m["x"]), float(m["y"])
+        end = self._pose(gx, gy, float(m["yaw"]))
+        via = [(float(x), float(y)) for x, y in m.get("via") or []]
+        if via:
+            # W48:途经点只是路过,朝向对着下一个点(Nav2 不在途经点上对朝向,给个顺的免得规划绕)
+            nxt = [*via[1:], (gx, gy)]
+            goal = self._m["NavigateThroughPoses"].Goal()
+            goal.poses = [self._pose(x, y, math.atan2(ny - y, nx - x))
+                          for (x, y), (nx, ny) in zip(via, nxt, strict=True)] + [end]
+            client, name = self.thru, "经点导航"
+        else:
+            goal = self._m["NavigateToPose"].Goal()
+            goal.pose = end
+            client, name = self.nav, "导航"
+        if not client.server_is_ready():
             self.send({"type": "goal_state", "goal_id": gid, "state": "rejected",
-                       "reason": "Nav2 的导航动作服务不在"})
+                       "reason": f"Nav2 的{name}动作服务不在"})
             return
         with self._goal_lock:
             self.pending[gid] = False
-            self.goal_xy[gid] = (float(m["x"]), float(m["y"]))
-        fut = self.nav.send_goal_async(goal)
+            self.goal_xy[gid] = (gx, gy)
+        fut = client.send_goal_async(goal)
         fut.add_done_callback(lambda f: self._accepted(gid, f))
 
     def _accepted(self, gid: int, fut: Any) -> None:
@@ -653,7 +671,7 @@ class Nav2Bridge:
             self._set_ready(False, "还没收到地图")
         elif time.monotonic() - self._clock_wall > CLOCK_STALE_S:
             self._set_ready(False, "代理没在送时钟")
-        elif not self.nav.server_is_ready():
+        elif not self.nav.server_is_ready() or not self.thru.server_is_ready():
             self._set_ready(False, "Nav2 的导航动作服务还没起来")
         elif not self.nav2_active:
             self._set_ready(False, "Nav2 还在启动(生命周期没全部激活)")

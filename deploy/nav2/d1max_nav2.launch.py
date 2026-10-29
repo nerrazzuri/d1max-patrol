@@ -31,7 +31,9 @@ def generate_launch_description():
         source_file=LaunchConfiguration("params_file"),
         param_rewrites={"use_sim_time": "true", "autostart": "true",
                         "default_nav_to_pose_bt_xml":
-                        os.path.join(here, "navigate_to_pose_d1max.xml")},
+                        os.path.join(here, "navigate_to_pose_d1max.xml"),
+                        "default_nav_through_poses_bt_xml":
+                        os.path.join(here, "navigate_through_poses_d1max.xml")},
         convert_types=True), allow_substs=True)
     sock = LaunchConfiguration("socket")
     pypath = LaunchConfiguration("pythonpath")

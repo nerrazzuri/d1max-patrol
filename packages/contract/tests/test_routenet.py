@@ -50,8 +50,7 @@ def test_空路网_不上路网():
 
 def test_L形_从路口附近去另一头_沿路走_不抄近道():
     got = route(L, (1, 1), (19, 21))
-    assert got == [(0.0, 0.0), (20.0, 0.0), (20.0, 20.0)] or got == [(20.0, 0.0), (20.0, 20.0)]
-    assert (20.0, 0.0) in got, "要经过拐角 B,不斜穿"
+    assert got == [(1.0, 0.0), (20.0, 0.0), (20.0, 20.0)], "从正对着的路上上去、经过拐角 B,不斜穿"
 
 
 def test_两个点挨着_直接走不上路网():
@@ -83,3 +82,26 @@ def test_不连通的两块_各走各的就不上路网():
 
 def test_路网的长度():
     assert math.isclose(L.length_m(), 40.0)
+
+
+def _直路():
+    return RouteNet.from_wire({"map_id": "m", "map_version": "1", "revision": 1,
+                               "nodes": [{"id": "A", "x": 2.0, "y": 6.0},
+                                         {"id": "B", "x": 10.0, "y": 6.0}],
+                               "edges": [["A", "B"]]})
+
+
+def test_从路上最近的那一点上路网_不回头去节点():
+    via = route(_直路(), (3.0, 4.0), (10.5, 4.0))
+    assert via[0] == pytest.approx((3.0, 6.0)), "A 在身后:直接上到正对着的路上"
+    assert via[-1] == pytest.approx((10.0, 6.0))
+
+
+def test_从路上最近的那一点下路网():
+    via = route(_直路(), (1.5, 4.0), (8.0, 4.5))      # 直走 6.5×3;上路网 2.1×3 + 6 + 1.5×3
+    assert via[-1] == pytest.approx((8.0, 6.0)), "终点正对着路中间:从那儿下,不走到 B 再回来"
+
+
+def test_起点终点对着同一条路_沿这条路走一段():
+    via = route(_直路(), (3.0, 5.0), (9.0, 5.0))      # 直走 6×3 = 18;上路网 1×3 + 6 + 1×3 = 12
+    assert via == [pytest.approx((3.0, 6.0)), pytest.approx((9.0, 6.0))]
