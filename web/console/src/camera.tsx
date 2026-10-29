@@ -18,6 +18,8 @@ const PAUSE_AFTER_MS = 2000;
 const RETRY_MS = 3000;
 const RECOVERED_MS = 2500;
 const HEALTH_MS = 2000;
+/** 健康请求多久不回算问不通(W44 复查 R5:网络静悄悄丢包时请求一直挂着,原来既不算断、又一直堆)。 */
+const HEALTH_TIMEOUT_MS = 3000;
 
 /** 不是机器人的那一路(报警现场的固定摄像头):地址、名字、健康地址。 */
 export interface Feed { src: string; label: string; health: string }
@@ -108,8 +110,13 @@ export function CameraWell(props: { robot: string; cam: Cam; forceLive?: boolean
   useEffect(() => {
     if (!streaming || noHealth) return;
     let stop = false;
+    let inflight: AbortController | null = null;               // 同一路最多一个在途
     const id = window.setInterval(() => {
-      api<Health & { cameras?: Record<string, Health> }>("GET", healthUrl)
+      if (inflight) return;
+      const ctrl = new AbortController();
+      inflight = ctrl;
+      const timer = window.setTimeout(() => ctrl.abort(), HEALTH_TIMEOUT_MS);
+      api<Health & { cameras?: Record<string, Health> }>("GET", healthUrl, undefined, { signal: ctrl.signal })
         .then((d) => {
           if (stop || !alive.current) return;
           misses.current = 0;
@@ -129,11 +136,15 @@ export function CameraWell(props: { robot: string; cam: Cam; forceLive?: boolean
         .catch((e) => {
           if (stop || !alive.current || broken) return;   // 断着时只为拿原因:问不着不算数
           if (e instanceof ApiError && e.status === 404) { setNoHealth(true); return; }
-          misses.current += 1;
+          misses.current += 1;                           // 超时(取消)也算问不通
           if (misses.current >= 2) lose(Date.now());     // 连着问不通站点:画面不可能是实时的
+        })
+        .finally(() => {
+          window.clearTimeout(timer);
+          if (inflight === ctrl) inflight = null;
         });
     }, HEALTH_MS);
-    return () => { stop = true; window.clearInterval(id); };
+    return () => { stop = true; window.clearInterval(id); inflight?.abort(); };
   }, [streaming, broken, noHealth, started, healthUrl]);
 
   useEffect(() => {

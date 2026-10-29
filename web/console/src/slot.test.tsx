@@ -228,3 +228,31 @@ describe("外审R6 报警现场断流", () => {
     expect(r.container.querySelector(".slot-main .lost")).not.toBeNull();
   });
 });
+
+describe("W44 复查 R5 健康请求静悄悄挂着", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date"] });
+  });
+  afterEach(() => vi.useRealTimers());
+
+  it("问了不回:同一路最多一个在途、超时算问不通、两次就标断了;卸载取消在途的", async () => {
+    const inflight: Record<string, number> = {};
+    let peak = 0;
+    let aborted = 0;
+    setFetch(((url: string, init?: RequestInit) => new Promise<Response>((_res, rej) => {
+      inflight[url] = (inflight[url] ?? 0) + 1;                  // 每一路分开数(现场、机器人小窗各问各的)
+      peak = Math.max(peak, inflight[url]);
+      init?.signal?.addEventListener("abort", () => { inflight[url] -= 1; aborted += 1; rej(new DOMException("aborted", "AbortError")); });
+    })) as typeof fetch);
+    const scene = { label: "3 号 后花园", src: "/api/cameras/cam3/live", health: "/api/cameras/cam3/health" };
+    const r = render(<VideoSlot u={unit()} now={Date.now()} pinned={false} onPin={() => {}} onZoom={() => {}} scene={scene} />);
+    fireEvent.load(r.container.querySelector(".slot-main img.scene")!);
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(peak).toBe(1);
+    expect(r.container.querySelector(".slot-main .lost")).not.toBeNull();
+    expect(aborted).toBeGreaterThan(0);                            // 超时的都取消了,不堆着
+    await vi.advanceTimersByTimeAsync(2_100);
+    r.unmount();
+    expect(Object.values(inflight).every((n) => n === 0)).toBe(true);
+  });
+});
