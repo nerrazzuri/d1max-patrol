@@ -229,7 +229,8 @@ async def test_速度太旧发零_低于死区的整形(tmp_path):
     link.cmd = (9.0, 1, 0.4, 0.0, 0.0)                     # 1 s 前的
     await t.一拍()
     assert abs(t.r.speed[0]) < 1e-9, "太旧的速度不执行"
-    db = t.r.deadband_vx
+    from d1max_agent.bridges.nav2_nav import MIN_TRAVEL_MPS
+    db = max(t.r.deadband_vx, MIN_TRAVEL_MPS)
     assert t.nav._deband(db * 0.4, 0.0) == (0.0, 0.0)
     assert t.nav._deband(-db * 0.6, 0.0) == (-db, 0.0)
     link.cmd = (10.0, 2, db * 0.7, 0.0, 0.0)
@@ -304,3 +305,34 @@ async def test_原地转会扫到地图上的墙就不转_空地照转(tmp_path)
         link.cmd = (link.now, 1, 0.0, 0.0, 1.0)
         await t.一拍()
     assert abs(t.r.yaw) > 0.3, "空地照转"
+
+
+async def test_死区至少按真机实测_0点13米每秒_0点07弧度每秒(tmp_path):
+    """2026-10-29 C40221 实测:前进、后退约 0.13 m/s 以下只踏步不走;转 0.07 rad/s 以下不转。"""
+    from d1max_agent.bridges.nav2_nav import MIN_TRAVEL_MPS, MIN_TURN_RPS
+    link = 假转接()
+    t = _台(tmp_path, link)
+    assert (MIN_TRAVEL_MPS, MIN_TURN_RPS) == (0.13, 0.07)
+    assert t.nav._deband(0.05, 0.0) == (0.0, 0.0)
+    assert t.nav._deband(0.08, 0.0) == (0.13, 0.0)
+    assert t.nav._deband(-0.09, 0.0) == (-0.13, 0.0)
+    assert t.nav._deband(0.3, 0.02) == (0.3, 0.0)
+    assert t.nav._deband(0.0, -0.05) == (0.0, -0.07)
+
+
+async def test_送给Nav2的速度按位置变化算_不信厂家里程报的速度(tmp_path):
+    """厂家里程低速时原地踏步也报在走(10-29 实测 vx +0.087 m/s 时位置不变)。"""
+    link = 假转接()
+    t = _台(tmp_path, link)
+    await t.start(1.5, 4.0)
+    t.nav._v_meas = 0.087                                   # 厂家说在走
+    for _ in range(5):
+        await t.一拍()
+    assert abs(link.kinds("tick")[-1]["vel"][0]) < 0.01, "位置没变:送 0"
+    await t.nav.goto(Pose.from_xy_yaw(6.0, 4.0))
+    for _ in range(20):
+        link.now += 0.1
+        link.cmd = (link.now, 1, 0.4, 0.0, 0.0)
+        await t.一拍()
+    v = link.kinds("tick")[-1]["vel"][0]
+    assert 0.25 < v < 0.5, v

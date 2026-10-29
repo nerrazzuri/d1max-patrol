@@ -44,6 +44,12 @@ CMD_FRESH_S = 0.4
 GUARD_REPORT_S = 5.0
 #: 引擎按路长估超时:Nav2 不报路长,按直线距离乘这个。
 PATH_FACTOR = 1.5
+#: 真机能走起来的最低速度(2026-10-29 C40221 实测:前进、后退 0.13 m/s 以下只踏步不走;转身
+#: 0.07 rad/s 以下不转)。HAL 报的死区比它小时按它整形。
+MIN_TRAVEL_MPS = 0.13
+MIN_TURN_RPS = 0.07
+#: 送给 Nav2 的实测速度按位置变化算,低通的系数(每拍新的占多少)。
+VEL_ALPHA = 0.5
 #: 前进速度不到这个(米/秒)就当「原地转」,按地图上的墙核一道(:meth:`Nav2NavBackend._turn_hits_map`)。
 TURN_VX = 0.05
 
@@ -181,6 +187,23 @@ class Nav2NavBackend(PlannedNavBackend):
         await super().step(dt_s)
         self._feed()
 
+    def _pose_vel(self, x: float, y: float, yaw: float) -> list[float]:
+        """机身系的实测速度,**按里程位置的变化算**(低通):厂家里程报的速度低速时不可信 —— 原地踏步
+        也报在走(2026-10-29 实测),Nav2 会以为狗在动。"""
+        t = self._now() / 1000.0
+        prev, self._vel_prev = getattr(self, "_vel_prev", None), (t, x, y, yaw)
+        v = getattr(self, "_vel", [0.0, 0.0, 0.0])
+        if prev is None or t - prev[0] <= 1e-3 or t - prev[0] > 1.0:
+            self._vel = [0.0, 0.0, 0.0]
+            return self._vel
+        dt = t - prev[0]
+        dx, dy = x - prev[1], y - prev[2]
+        c, s = math.cos(yaw), math.sin(yaw)
+        raw = [(c * dx + s * dy) / dt, (-s * dx + c * dy) / dt,
+               math.remainder(yaw - prev[3], 2 * math.pi) / dt]
+        self._vel = [VEL_ALPHA * r + (1 - VEL_ALPHA) * o for r, o in zip(raw, v, strict=True)]
+        return self._vel
+
     def _feed(self) -> None:
         """时钟、里程、``map→odom``、新的感知栅格送给转接节点。"""
         if self.link is None:
@@ -191,7 +214,7 @@ class Nav2NavBackend(PlannedNavBackend):
         est = self.anchor.estimate((ox, oy, oyaw)) if self.anchor.ok(self.odom_ok) else None
         mo = None if est is None else _compose_map_odom(est, (ox, oy, oyaw))
         self.link.send({"type": "tick", "t_ms": self._t_ms, "odom": [ox, oy, oyaw],
-                        "vel": [self._v_meas, 0.0, self._w_meas], "map_odom": mo})
+                        "vel": self._pose_vel(ox, oy, oyaw), "map_odom": mo})
         view = self.obstacles
         frames = getattr(view, "frames", None)
         if frames:
@@ -263,10 +286,10 @@ class Nav2NavBackend(PlannedNavBackend):
     def _deband(self, vx: float, wz: float) -> tuple[float, float]:
         """运控有死区(低于它的前进速度 HAL 直接拒、转速发了也不转):Nav2 起步、收尾时会发很小的速度。
         低于死区一半的当 0,另一半抬到死区。"""
-        db = float(getattr(self._caps, "deadband_vx", 0.0) or 0.0)
+        db = max(float(getattr(self._caps, "deadband_vx", 0.0) or 0.0), MIN_TRAVEL_MPS)
         if 0.0 < abs(vx) < db:
             vx = 0.0 if abs(vx) < db / 2 else math.copysign(db, vx)
-        dbw = float(getattr(self._caps, "deadband_wz", 0.0) or 0.0)
+        dbw = max(float(getattr(self._caps, "deadband_wz", 0.0) or 0.0), MIN_TURN_RPS)
         if 0.0 < abs(wz) < dbw:
             wz = 0.0 if abs(wz) < dbw / 2 else math.copysign(dbw, wz)
         return vx, wz
