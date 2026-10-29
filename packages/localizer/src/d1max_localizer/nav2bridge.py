@@ -34,9 +34,10 @@ from typing import Any
 
 import numpy as np
 
+from d1max_contract.navbridge import PROTO  # 跟代理同一个协议号(不另写一份)
+
 log = logging.getLogger("d1max.nav2bridge")
 
-PROTO = 1
 RECONNECT_S = 2.0
 #: 时钟这么久(墙钟秒)没走就当代理没在送 tick:不就绪。
 CLOCK_STALE_S = 2.0
