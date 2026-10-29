@@ -193,6 +193,61 @@ def cmd_enroll(home: Path, robot_id: str, days: int) -> Path:
         db.close()
 
 
+def cmd_vpn(home: Path, args: argparse.Namespace) -> None:
+    """站点 VPN(W45)。改了机器人、手机以后,站点配置要重新装一遍(``server-conf`` 打出来、装到
+    /etc/wireguard/d1max.conf、``sudo systemctl restart wg-quick@d1max``)。"""
+    from d1max_site.vpn import VpnError, VpnState
+    st = VpnState(home / "vpn")
+    apply = ("站点配置改了:d1max-site vpn server-conf > /tmp/d1max.conf && sudo install -m 600 "
+             "/tmp/d1max.conf /etc/wireguard/d1max.conf && rm /tmp/d1max.conf && "
+             "sudo systemctl restart wg-quick@d1max")
+    try:
+        if args.vpn_cmd == "reissue-cert":
+            cfg = _load(home)
+            ca = SiteCA(home / "ca")
+            ca.issue_server(list(cfg["hostnames"]))     # LOCAL_NAMES 里带着隧道地址
+            print(f"站点证书重签了(带上隧道地址 172.29.70.1)。新指纹:{cmd_fingerprint(home)}\n"
+                  "手机钉的是站点证书:每部手机要重新添加站点(扫配对码)。机器人不用动(CA 没变)。\n"
+                  "重启站点:sudo systemctl restart d1max-mosquitto d1max-site")
+            return
+        if args.vpn_cmd == "init":
+            got = st.init(endpoint=args.endpoint, port=args.port)
+            print(f"站点 VPN 建好了:隧道里站点是 {got['address']},公钥 {got['public']}")
+            ext = home / "ca" / "server" / "server_ext.cnf"
+            if ext.is_file() and "IP:172.29.70.1" not in ext.read_text("utf-8"):
+                print("注意:站点证书里没有隧道地址 172.29.70.1(老站点建的),走隧道连会被拒。"
+                      "d1max-site vpn reissue-cert 重签 —— 重签以后每部手机要重新添加站点。")
+            print(f"家里的路由器把 UDP {args.port} 转发到这台站点主机。"
+                  "装上:sudo apt install wireguard-tools,然后")
+            print(apply.replace("站点配置改了:", "") + "(第一次用 enable --now)")
+        elif args.vpn_cmd == "add":
+            got = st.add(args.kind, args.name)
+            print(f"{got['kind']} {got['name']}:隧道地址 {got['address']},配置文件 {got['conf']}")
+            if got["kind"] == "robot":
+                print("拷到机器人(3588)上:/etc/wireguard/d1max.conf(chmod 600),"
+                      "sudo systemctl enable --now wg-quick@d1max;/etc/d1max/env 里 "
+                      "D1MAX_SITE_MQTT=mqtts://172.29.70.1:8883(走隧道)")
+            else:
+                print("手机:WireGuard 应用里导入这个文件(或者 qrencode -t ansiutf8 < 文件 扫码);"
+                      "连上以后在手机应用里把站点地址设成 172.29.70.1")
+            print(apply)
+        elif args.vpn_cmd == "remove":
+            st.remove(args.name)
+            print(f"删掉了 {args.name}。{apply}")
+        elif args.vpn_cmd == "list":
+            rows = st.list()
+            if not rows:
+                print("还没有机器人、手机(d1max-site vpn add robot|phone <名字>)")
+            for r in rows:
+                print(f"{r['kind']:6} {r['name']:24} {r['address']}")
+        elif args.vpn_cmd == "server-conf":
+            print(st.server_conf())
+        elif args.vpn_cmd == "show":
+            print(st.peer_conf(args.name))
+    except VpnError as exc:
+        raise SiteError(str(exc)) from exc
+
+
 def cmd_renew(home: Path, robot_id: str, days: int) -> Path:
     """工单 9:续签证书。旧证书不吊销(到期前照样连得上);登记表换指纹和有效期。"""
     cfg = _load(home)
@@ -1247,6 +1302,22 @@ def build_parser() -> argparse.ArgumentParser:
                                       "机器人换上新的就切过去")
     rn.add_argument("robot_id")
     rn.add_argument("--days", type=int, default=365)
+    vp = sub.add_parser("vpn", help="站点 VPN(W45,WireGuard):4G 下的机器人、外面的手机连回站点")
+    vsub = vp.add_subparsers(dest="vpn_cmd", required=True)
+    vi = vsub.add_parser("init", help="生成站点密钥、记下对外地址"
+                                      "(家里路由器把这个 UDP 端口转发到站点主机)")
+    vi.add_argument("--endpoint", required=True, help="机器人、手机从外面连站点用的域名或公网 IP")
+    vi.add_argument("--port", type=int, default=51820)
+    va = vsub.add_parser("add", help="加一台机器人或一部手机,写出它的配置文件")
+    va.add_argument("kind", choices=("robot", "phone"))
+    va.add_argument("name")
+    vr = vsub.add_parser("remove", help="删掉一个(站点配置里没了它;改完要重新装站点配置)")
+    vr.add_argument("name")
+    vsub.add_parser("list", help="列出机器人、手机和它们的隧道地址")
+    vsub.add_parser("server-conf", help="打出站点自己的配置(/etc/wireguard/d1max.conf)")
+    vsub.add_parser("reissue-cert", help="重签站点证书、带上隧道地址(老站点要;手机要重新添加站点)")
+    vs = vsub.add_parser("show", help="打出一个机器人或手机的配置(手机可以拿 qrencode 出二维码)")
+    vs.add_argument("name")
     ec = sub.add_parser("enroll-code", help="给已登记的机器人重新出一个开通码(A4,旧码作废)")
     ec.add_argument("robot_id")
     ec.add_argument("--host", default=None, help="机器人连站点用的主机名(缺省第一个 --hostname)")
@@ -1404,6 +1475,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                   f"d1max-agent)。\n旧证书没吊销,到期之前照样连得上:换证书不断线。")
         elif args.cmd == "enroll-code":
             print(_code_text(cmd_enroll_code(home, args.robot_id, args.host, args.hours)))
+        elif args.cmd == "vpn":
+            cmd_vpn(home, args)
         elif args.cmd in ("robot-auto", "robot-manual"):
             print(cmd_robot_service(home, args.robot_id, args.cmd == "robot-manual",
                                     getattr(args, "note", "")))
