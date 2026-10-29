@@ -94,6 +94,17 @@ def _桥(monkeypatch):
     return b, futs
 
 
+_号 = iter(range(1, 1_000_000))
+
+
+def _状态(*codes, ids=None):
+    """一份动作状态列表;不给目标号就每项一个新号。"""
+    from types import SimpleNamespace as NS
+    ids = ids or [next(_号) for _ in codes]
+    return NS(status_list=[NS(status=c, goal_info=NS(goal_id=NS(uuid=i.to_bytes(16, "big"))))
+                           for c, i in zip(codes, ids, strict=True)])
+
+
 def test_外审R8_Nav2还没收下就取消_收下了马上取消_不当成在走的(monkeypatch):
     b, futs = _桥(monkeypatch)
     b.on_goal({"goal_id": 41, "x": 1, "y": 2, "yaw": 0})
@@ -129,6 +140,7 @@ def test_外审R10_收下新目标以前规划的路线不标成新目标的(mon
     b.t_ms = 1000
     b.on_goal({"goal_id": 9, "x": 2, "y": 4, "yaw": 0})
     futs[0].set_result(_Handle())
+    b._on_status("compute_path_to_pose", _状态(2))          # 新目标的规划开始了
     old = NS(header=NS(stamp=NS(sec=0, nanosec=900_000_000)),
              poses=[NS(pose=NS(position=NS(x=x, y=4.0))) for x in (1.0, 3.0, 6.0)])
     b._on_plan(old)
@@ -200,6 +212,7 @@ def test_外审复查N6_同一拍规划的旧路线_终点对不上新目标就�
     b.t_ms = 2000
     b.on_goal({"goal_id": 9, "x": 2, "y": 4, "yaw": 0})
     futs[0].set_result(_Handle())
+    b._on_status("compute_path_to_pose", _状态(2))          # 新目标的规划开始了
     old = NS(header=NS(stamp=NS(sec=2, nanosec=0)),
              poses=[NS(pose=NS(position=NS(x=x, y=4.0))) for x in (5.0, 7.0, 8.0)])
     b._on_plan(old)
@@ -216,6 +229,7 @@ def test_外审复查P2_近处的旧路线_终点差0点8米也不认(monkeypatc
     b.t_ms = 2000
     b.on_goal({"goal_id": 9, "x": 2, "y": 4, "yaw": 0})
     futs[0].set_result(_Handle())
+    b._on_status("compute_path_to_pose", _状态(2))          # 新目标的规划开始了
     old = NS(header=NS(stamp=NS(sec=2, nanosec=0)),
              poses=[NS(pose=NS(position=NS(x=x, y=4.0))) for x in (5.0, 3.5, 2.8)])
     b._on_plan(old)
@@ -255,10 +269,11 @@ def test_复查三P1_排着的目标被取消了就不发_排太久回拒(monkey
     assert len(futs) == 1
 
 
-def test_复查三P2_上一个目标结束那一刻及以前规划的路线_不标成新目标的(monkeypatch):
+def test_复查四P2_派出新目标以后_规划动作重新开跑之前来的路线一律不认(monkeypatch):
+    """路线的时间戳不是目标代次(Smac 拿到锁才填):老的规划停了(派之前确认过)、新的规划开跑以后
+    来的路线才是新目标的。"""
     from types import SimpleNamespace as NS
     b, futs = _桥(monkeypatch)
-    b.last_end_ms = 1000
     b.t_ms = 1000
     b.on_goal({"goal_id": 9, "x": 2, "y": 4, "yaw": 0})
     futs[0].set_result(_Handle())
@@ -267,9 +282,10 @@ def test_复查三P2_上一个目标结束那一刻及以前规划的路线_不�
         pose = NS(pose=NS(position=NS(x=end[0], y=end[1])))
         return NS(header=NS(stamp=NS(sec=at_ms // 1000, nanosec=(at_ms % 1000) * 1_000_000)),
                   poses=[pose])
-    b._on_plan(plan(1000, (2.3, 4)))                      # 同一拍、终点只差 0.3 m:旧的
+    b._on_plan(plan(1200, (2.0, 4)))                      # 时间戳新、终点也对,可规划还没开跑
     assert not [m for m in b.sent if m["type"] == "path"]
-    b._on_plan(plan(1100, (2.0, 4)))
+    b._on_status("compute_path_to_pose", _状态(2))
+    b._on_plan(plan(1000, (2.0, 4)))                      # 开跑以后:同一拍的也认(不晚一秒起步)
     assert [m for m in b.sent if m["type"] == "path"][-1]["goal_id"] == 9
 
 
@@ -293,3 +309,94 @@ def test_复查三P1_代理断了重连_旧目标在Nav2里结束之前_新目�
     assert h.cancels == 1
     b.on_goal({"goal_id": 2, "x": 3, "y": 2, "yaw": 0})
     assert len(futs) == 1 and b.queued["goal_id"] == 2
+
+
+def _结束(b, h, monkeypatch, status=5):
+    import sys
+    from types import SimpleNamespace as NS
+    monkeypatch.setitem(sys.modules, "action_msgs.msg",
+                        NS(GoalStatus=NS(STATUS_SUCCEEDED=4, STATUS_CANCELED=5)))
+    h.done[0](NS(result=lambda: NS(status=status)))
+
+
+def test_复查四P1_导航报结束了_控制器那个动作还在跑_新目标排着_它真停了才发(monkeypatch):
+    """Nav2 取消下层动作只等 20 ms,等不到也报结束:看控制器 follow_path 自己的动作状态才算停了。"""
+    b, futs = _桥(monkeypatch)
+    b.on_goal({"goal_id": 1, "x": 1, "y": 2, "yaw": 0})
+    h = _Handle()
+    futs[0].set_result(h)
+    b._on_status("follow_path", _状态(2))                      # 控制器在跑
+    b.on_cancel({"goal_id": 1})
+    b.on_goal({"goal_id": 2, "x": 3, "y": 2, "yaw": 0})
+    _结束(b, h, monkeypatch)                                     # 导航报「已取消」
+    assert len(futs) == 1, "控制器还没停:不发"
+    b._on_status("follow_path", _状态(3))                      # 正在取消
+    assert len(futs) == 1
+    b.t_ms = 700
+    b._on_status("follow_path", _状态(5))                      # 控制器自己结束了
+    assert len(futs) == 2 and b.last_end_ms == 700
+
+
+def test_复查四P4_脱困动作还在跑_新目标也排着(monkeypatch):
+    b, futs = _桥(monkeypatch)
+    b._on_status("backup", _状态(2))
+    b.on_goal({"goal_id": 1, "x": 1, "y": 2, "yaw": 0})
+    assert len(futs) == 0
+    b._on_status("backup", _状态(4, 6))
+    assert len(futs) == 1
+
+
+def test_复查四P1_结果查询出错_也要等生产端真停了(monkeypatch):
+    from types import SimpleNamespace as NS
+    b, futs = _桥(monkeypatch)
+    b.on_goal({"goal_id": 1, "x": 1, "y": 2, "yaw": 0})
+    h = _Handle()
+    futs[0].set_result(h)
+    b._on_status("navigate_to_pose", _状态(2))
+    b.on_goal({"goal_id": 2, "x": 3, "y": 2, "yaw": 0})
+
+    import sys
+
+    def boom():
+        raise RuntimeError("结果拿不到")
+    monkeypatch.setitem(sys.modules, "action_msgs.msg",
+                        NS(GoalStatus=NS(STATUS_SUCCEEDED=4, STATUS_CANCELED=5)))
+    h.done[0](NS(result=boom))
+    assert len(futs) == 1, "导航动作自己的状态还在跑:不发"
+    b._on_status("navigate_to_pose", _状态(6))
+    assert len(futs) == 2
+
+
+def test_复查四Q1_排着的时候又来一个_顶掉旧的_派的时候过期了回拒不发(monkeypatch):
+    b, futs = _桥(monkeypatch)
+    b._on_status("follow_path", _状态(2))
+    b.on_goal({"goal_id": 2, "x": 3, "y": 2, "yaw": 0})
+    b.on_goal({"goal_id": 3, "x": 4, "y": 2, "yaw": 0})
+    assert b.sent[-1] == {"type": "goal_state", "goal_id": 2, "state": "rejected",
+                          "reason": "又来了一个新目标"}
+    assert b.queued["goal_id"] == 3
+    b._mono = lambda: 1e9                                      # 排太久了
+    b._on_status("follow_path", _状态(5))
+    assert len(futs) == 0 and b.queued is None
+    assert b.sent[-1]["goal_id"] == 3 and b.sent[-1]["state"] == "rejected"
+
+
+def test_复查四Q1_空闲时来的目标_先看有没有排着的_不越过它(monkeypatch):
+    """ROS 线程清了账、还没轮到事件循环派排着的 B,这时来了 C:C 顶掉 B,不是 C 先走、B 留着。"""
+    b, futs = _桥(monkeypatch)
+    b.queued, b.queued_at = {"goal_id": 2, "x": 3, "y": 2, "yaw": 0}, b._mono()
+    b.on_goal({"goal_id": 3, "x": 4, "y": 2, "yaw": 0})
+    assert len(futs) == 1 and b.queued is None
+    assert b.sent[-1]["goal_id"] == 2 and b.sent[-1]["state"] == "rejected"
+
+
+def test_复查四P2_规划状态只收到完成那一条_也认得出是新规划(monkeypatch):
+    """状态话题只留最新一条:规划快的话「在跑」被「完成」盖掉,按列表里出现的新目标号认。"""
+    b, futs = _桥(monkeypatch)
+    b._on_status("compute_path_to_pose", _状态(4, ids=[1]))       # 老的,早结束了
+    b.on_goal({"goal_id": 9, "x": 2, "y": 4, "yaw": 0})
+    futs[0].set_result(_Handle())
+    b._on_status("compute_path_to_pose", _状态(4, ids=[1]))       # 还是老的那份:不开
+    assert not b.plan_open
+    b._on_status("compute_path_to_pose", _状态(4, 4, ids=[1, 2]))  # 多了一个新号(已完成)
+    assert b.plan_open

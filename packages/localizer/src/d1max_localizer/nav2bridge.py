@@ -46,6 +46,14 @@ CMD_QUIET_S = 0.2
 PLAN_END_TOL_M = 0.4
 #: 新目标排着等上一个在 Nav2 里结束,最多等这么久(秒),过了回拒(复查第三轮 P1)。
 QUEUE_MAX_S = 5.0
+#: Nav2 里会出速度、出路线的动作(和导航本身)。复查第四轮 P1/P4/P2:Nav2 取消下层动作只等 20 ms,
+#: 等不到也照样报导航结束;这些动作**自己的**动作状态只有在执行循环真退出(最后一条速度、路线发完)以后
+#: 才变终态。它们都没有在跑的目标,才算上一个目标真停了,才放下一个。
+PRODUCERS = ("navigate_to_pose", "navigate_through_poses", "follow_path",
+             "compute_path_to_pose", "compute_path_through_poses",
+             "backup", "wait", "spin", "drive_on_heading")
+#: action_msgs/GoalStatus:收下了、在跑、正在取消 —— 都算还在出东西。
+_LIVE_STATUS = (1, 2, 3)
 #: 时钟这么久(墙钟秒)没走就当代理没在送 tick:不就绪。
 CLOCK_STALE_S = 2.0
 #: 障碍点云里点的高度(米,在 Nav2 障碍层的 min/max 之间)。
@@ -155,6 +163,13 @@ class Nav2Bridge:
         # (d1max_nav2.launch.py 里接的),标上 beh:它常在规划不出来时做,代理不要求先有路线。
         self.node.create_subscription(Twist, "/cmd_vel_nav", self._on_cmd, 10)
         self.node.create_subscription(Twist, "/cmd_vel_behavior", self._on_beh, 10)
+        from action_msgs.msg import GoalStatusArray
+        from rclpy.qos import qos_profile_action_status_default
+        for name in PRODUCERS:                    # 复查第四轮:生产端自己停没停
+            self.node.create_subscription(
+                GoalStatusArray, f"/{name}/_action/status",
+                lambda msg, name=name: self._on_status(name, msg),
+                qos_profile_action_status_default)
         from nav_msgs.msg import Path as PathMsg
         self.node.create_subscription(PathMsg, "/plan", self._on_plan, 5)
         self._init_goal_book()
@@ -196,6 +211,14 @@ class Nav2Bridge:
         #: 排着的新目标(上一个在 Nav2 里还没结束,复查第三轮 P1)和开始排的单调钟。
         self.queued: dict[str, Any] | None = None
         self.queued_at = 0.0
+        #: :data:`PRODUCERS` 里每个动作此刻有没有在跑的目标(按它自己的动作状态,复查第四轮)。
+        self.producing: dict[str, bool] = {}
+        #: 派出最近这个目标以后,规划动作有没有出现过新的目标:有了以后来的路线才认(复查第四轮 P2)。
+        self.plan_open = False
+        #: 每个规划动作最近一份状态列表里的目标号(列表保留最近的目标,含已结束的);
+        #: 派出时记一份,之后出现的新号 = 派出以后才开始的规划。
+        self.planner_ids: dict[str, set[bytes]] = {}
+        self.plan_known: set[bytes] = set()
 
     def cancel_all(self) -> None:
         """代理断了:它派的目标没人管了,全部取消;还没收下的记着,收下了马上取消(外审 R8)。"""
@@ -229,15 +252,16 @@ class Nav2Bridge:
 
     def _on_plan(self, msg: Any) -> None:
         gid = self.active_gid
-        if gid is None:
+        if gid is None or not self.plan_open:
+            # 复查第四轮 P2:派出这个目标以后规划动作还没重新开跑 —— 来的路线是老规划的
+            # (时间戳不是目标代次,Smac 拿到锁才填)
             return
         st = getattr(getattr(msg, "header", None), "stamp", None)
         if st is not None:
             at = int(st.sec) * 1000 + int(st.nanosec) // 1_000_000
             if 0 < at < self.active_since_ms:
                 return                    # 外审 R10:收下这个目标以前规划的(上一个目标的),不标成它的
-            if 0 < at <= self.last_end_ms:
-                return                    # 复查第三轮 P2:上一个目标结束那一拍及以前规划的
+
         goal = self.goal_xy.get(gid)
         if goal is not None and msg.poses:
             end = msg.poses[-1].pose.position
@@ -344,35 +368,61 @@ class Nav2Bridge:
                 c.call_async(self._m["ClearEntireCostmap"].Request())
 
     def on_goal(self, m: dict[str, Any]) -> None:
-        """复查第三轮 P1:Nav2 的速度不带目标号,只有让上一个目标在 Nav2 里**结束**(收到终态结果 =
-        它的控制器、脱困都停了)再发下一个,之后来的速度才能当新目标的。上一个没结束就排着(只排最新的一个;
-        被顶掉的回拒),结束了马上发;排太久(:data:`QUEUE_MAX_S`)回拒。"""
+        """复查第三、四轮 P1:Nav2 的速度、路线不带目标号,只有上一个目标在 Nav2 里**真停了**(导航和
+        :data:`PRODUCERS` 里每个动作自己的状态都没有在跑的)再发下一个,之后来的才能当新目标的。
+        新目标一律先排着(只排最新的一个,被顶掉的回拒),在事件循环这一个地方派(:meth:`_pump`):
+        不会越过排着的那个(复查第四轮 Q1);排太久(:data:`QUEUE_MAX_S`)回拒。"""
         with self._goal_lock:
-            busy = bool(self.goals) or bool(self.pending)
-            old = None
-            if busy:
-                old, self.queued, self.queued_at = self.queued, m, self._mono()
-        if busy:
-            if old is not None:
-                self.send({"type": "goal_state", "goal_id": old["goal_id"], "state": "rejected",
-                           "reason": "又来了一个新目标"})
+            old, self.queued, self.queued_at = self.queued, m, self._mono()
+        if old is not None:
+            self.send({"type": "goal_state", "goal_id": old["goal_id"], "state": "rejected",
+                       "reason": "又来了一个新目标"})
+        self._pump()
+
+    def queued_waiting(self) -> bool:
+        """有目标排着、还没派出去(这时规划动作开跑不算新目标的)。"""
+        return self.queued is not None
+
+    def _busy(self) -> bool:
+        return bool(self.goals) or bool(self.pending) or any(self.producing.values())
+
+    def _on_status(self, name: str, msg: Any) -> None:
+        live = any(int(st.status) in _LIVE_STATUS for st in msg.status_list)
+        with self._goal_lock:
+            self.producing[name] = live
+            if name.startswith("compute_path"):
+                # 看目标号不看「在跑」:状态话题只留最新一条,规划快的话「在跑」那条会被「完成」盖掉
+                ids = {bytes(st.goal_info.goal_id.uuid) for st in msg.status_list}
+                self.planner_ids[name] = ids
+                if ids - self.plan_known and not self.queued_waiting():
+                    self.plan_open = True         # 派出以后才开始的规划(老的派之前确认停了)
+        if not live:
+            self._dispatch_soon()
+
+    def _pump(self) -> None:
+        """事件循环里派排着的目标(只在这儿派)。"""
+        with self._goal_lock:
+            if self.queued is None or self._busy():
+                return
+            m, self.queued = self.queued, None
+            expired = self._mono() - self.queued_at > QUEUE_MAX_S
+            if not expired:
+                self.last_end_ms = max(self.last_end_ms, self.t_ms)
+                self.plan_open = False            # 等新目标的规划开跑(复查第四轮 P2)
+                self.plan_known = set().union(*self.planner_ids.values())
+        if expired:
+            self.send({"type": "goal_state", "goal_id": m["goal_id"], "state": "rejected",
+                       "reason": f"上一个目标 Nav2 {QUEUE_MAX_S:g} 秒还没结束"})
             return
         self._send_goal(m)
 
-    def _dispatch_queued(self) -> None:
-        with self._goal_lock:
-            if self.goals or self.pending or self.queued is None:
-                return
-            m, self.queued = self.queued, None
-        self._send_goal(m)
-
     def _dispatch_soon(self) -> None:
-        """rclpy 线程里结束的:回事件循环那边发(跟别的发目标同一个线程)。"""
+        """rclpy 线程里来的(结束、拒绝、动作状态):回事件循环那边派(跟收目标同一个线程)。"""
         loop = getattr(self, "loop", None)
         if loop is not None:
-            loop.call_soon_threadsafe(self._dispatch_queued)
+            loop.call_soon_threadsafe(self._pump)
         else:
-            self._dispatch_queued()
+            self._pump()
 
     def expire_queued(self) -> None:
         with self._goal_lock:
