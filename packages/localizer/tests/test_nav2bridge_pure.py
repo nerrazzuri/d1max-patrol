@@ -91,6 +91,19 @@ def _桥(monkeypatch):
         futs[len(futs)] = f
         return f
     b.nav = NS(server_is_ready=lambda: True, send_goal_async=send_goal_async)
+    b.sent_goals = []
+    b.thru_goals = []
+
+    def thru_send(goal):
+        b.thru_goals.append(goal)
+        return send_goal_async(goal)
+
+    def nav_send(goal):
+        b.sent_goals.append(goal)
+        return send_goal_async(goal)
+    b.nav = NS(server_is_ready=lambda: True, send_goal_async=nav_send)
+    b.thru = NS(server_is_ready=lambda: True, send_goal_async=thru_send)
+    b._m["NavigateThroughPoses"] = NS(Goal=lambda: NS())
     return b, futs
 
 
@@ -554,3 +567,35 @@ def test_复查七_连上代理先全取消_都回了话才放行第一个目标
     b.advance_cleanup()                                        # 补发第二个,它当场就回了
     assert sent == [("nav", "全部"), ("thru", "全部")]
     assert not b.cleanup_pending and len(futs) == 1
+
+
+    assert calls == ["全部"]
+
+
+def test_W48_带途经点的目标走NavigateThroughPoses_途经点朝着下一个点_最后是终点(monkeypatch):
+    import math
+    b, futs = _桥(monkeypatch)
+    b.on_goal({"goal_id": 3, "x": 4, "y": 4, "yaw": 1.0, "via": [[0, 2], [4, 2]]})
+    assert not b.sent_goals and len(b.thru_goals) == 1
+    poses = b.thru_goals[0].poses
+    assert [(p.pose.position.x, p.pose.position.y) for p in poses] == [(0, 2), (4, 2), (4, 4)]
+    q = poses[0].pose.orientation                       # (0,2) → (4,2):朝 +x
+    assert math.isclose(2 * math.atan2(q.z, q.w), 0.0, abs_tol=1e-9)
+    q = poses[1].pose.orientation                       # (4,2) → (4,4):朝 +y
+    assert math.isclose(2 * math.atan2(q.z, q.w), math.pi / 2, abs_tol=1e-9)
+    futs[0].set_result(_Handle())
+    assert b.active_gid == 3 and b.goal_xy[3] == (4.0, 4.0), "路线终点照旧按最后的终点核"
+
+
+def test_W48_没途经点照旧NavigateToPose(monkeypatch):
+    b, _ = _桥(monkeypatch)
+    b.on_goal({"goal_id": 4, "x": 1, "y": 2, "yaw": 0})
+    assert len(b.sent_goals) == 1 and not b.thru_goals
+
+
+def test_W48_经点动作服务不在_带途经点的目标回拒(monkeypatch):
+    from types import SimpleNamespace as NS
+    b, _ = _桥(monkeypatch)
+    b.thru = NS(server_is_ready=lambda: False)
+    b.on_goal({"goal_id": 5, "x": 1, "y": 2, "yaw": 0, "via": [[0, 1]]})
+    assert b.sent[-1]["state"] == "rejected" and 5 not in b.pending

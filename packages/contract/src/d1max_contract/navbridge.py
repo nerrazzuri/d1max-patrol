@@ -22,7 +22,9 @@ Nav2 一律 ``use_sim_time``,转接节点按代理送来的时刻发 ``/clock``�
   转接节点转成 Nav2 的 ``/speed_limit``。
 - ``grid {t_ms, pose, res, size, occ, known}``:感知栅格(机身系、行 = 前、列 = 左,中心在机身)。
   ``pose`` 是拍下这一帧时的里程 ``[x, y, yaw]``;位图同障碍桥(``obsbridge.pack_bits``)。
-- ``goal {goal_id, x, y, yaw}`` / ``cancel {goal_id}``
+- ``goal {goal_id, x, y, yaw, via?}`` / ``cancel {goal_id}``。``via`` = 路网上的途经点
+  ``[[x, y], …]``(协议 4,W48):有就走 ``NavigateThroughPoses``(途经点只是路过),没有走
+  ``NavigateToPose``。
 - ``hb {seq}``
 
 转接节点 → 代理:
@@ -47,11 +49,13 @@ from typing import Any
 
 from d1max_contract.errors import ContractError
 
-#: 2(W47 外审 R7):``cmd`` 带 ``goal_id``;3(复查第三轮 P4):``cmd`` 带 ``src``。
-#: 两头同一个发布包里,对不上握手就拒(代理退回自己的规划)。
-PROTO = 3
+#: 2(W47 外审 R7):``cmd`` 带 ``goal_id``;3(复查第三轮 P4):``cmd`` 带 ``src``;
+#: 4(W48):``goal`` 可带 ``via``。两头同一个发布包里,对不上握手就拒(代理退回自己的规划)。
+PROTO = 4
 #: ``cmd.src``:控制器 / 脱困动作。
 CMD_SRCS = ("ctl", "beh")
+#: 途经点最多几个(路网最多 500 个点)。
+MAX_VIA = 500
 MAX_LINE = 256 * 1024
 GOAL_STATES = ("accepted", "succeeded", "aborted", "canceled", "rejected")
 #: 每种报文必须有的字段(多出来的拒:加字段要升协议)。
@@ -61,7 +65,7 @@ FIELDS: dict[str, tuple[set[str], set[str]]] = {
     "map": ({"req", "map_id", "map_version", "dir"}, {"nogo", "speed"}),
     "tick": ({"t_ms", "odom", "vel"}, {"map_odom", "speed"}),
     "grid": ({"t_ms", "pose", "res", "size", "occ", "known"}, set()),
-    "goal": ({"goal_id", "x", "y", "yaw"}, set()),
+    "goal": ({"goal_id", "x", "y", "yaw"}, {"via"}),
     "cancel": ({"goal_id"}, set()),
     "hb": ({"seq"}, set()),
     "ready": ({"ok"}, {"reason"}),
@@ -155,6 +159,14 @@ def check(msg: dict[str, Any]) -> dict[str, Any]:
         if t == "goal":
             for k in ("x", "y", "yaw"):
                 _num(msg[k], k)
+            via = msg.get("via", [])
+            if not isinstance(via, list) or len(via) > MAX_VIA:
+                raise ContractError(f"Nav2 转接:goal.via 要是最多 {MAX_VIA} 个点的列表")
+            for q in via:
+                if not isinstance(q, list) or len(q) != 2:
+                    raise ContractError("Nav2 转接:途经点要是 [x, y]")
+                _num(q[0], "via.x")
+                _num(q[1], "via.y")
         if t == "goal_state" and msg["state"] not in GOAL_STATES:
             raise ContractError(f"Nav2 转接:state 要是 {'/'.join(GOAL_STATES)}")
     elif t == "path":

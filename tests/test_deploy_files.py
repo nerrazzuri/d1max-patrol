@@ -1902,3 +1902,19 @@ def test_复查三P4_自己起Nav2的节点_控制器和脱困各出一路_不�
     src = (ROOT / "packages" / "localizer" / "src" / "d1max_localizer" / "nav2bridge.py").read_text(
         encoding="utf-8")
     assert '"/cmd_vel_behavior"' in src and '"/cmd_vel_nav"' in src
+
+
+def test_W48_经点行为树也不原地转_去掉路过的点_启动文件换成绝对路径():
+    xml = (DEPLOY / "nav2" / "navigate_through_poses_d1max.xml").read_text(encoding="utf-8")
+    body = xml.split("-->", 1)[1]
+    assert "<Spin" not in body, "两侧盲区里原地转一整圈会扫到看不见的东西(决策 76)"
+    assert "<RemovePassedGoals" in body and "<ComputePathThroughPoses" in body
+    assert 'backup_speed="0.15"' in body, "真机 0.13 m/s 以下只踏步不走"
+    assert 'radius="1.5"' in body, "拐弯切角离路口点 0.7 m 以外就过去了:没去掉会掉头回去找它"
+    launch = (DEPLOY / "nav2" / "d1max_nav2.launch.py").read_text(encoding="utf-8")
+    assert "navigate_through_poses_d1max.xml" in launch
+    import yaml
+    d = yaml.safe_load((DEPLOY / "nav2" / "params.yaml").read_text(encoding="utf-8"))
+    p = d["bt_navigator"]["ros__parameters"]
+    assert p["default_nav_through_poses_bt_xml"] == "navigate_through_poses_d1max.xml"
+    assert "nav2_remove_passed_goals_action_bt_node" in p["plugin_lib_names"]

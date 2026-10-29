@@ -64,6 +64,8 @@ bt_navigator:
     - nav2_is_battery_charging_condition_bt_node
     transform_tolerance: 0.5
     default_nav_to_pose_bt_xml: navigate_to_pose_d1max.xml
+    # W48 路网:带途经点的目标(同样不原地转;启动时填绝对路径)
+    default_nav_through_poses_bt_xml: navigate_through_poses_d1max.xml
 bt_navigator_navigate_through_poses_rclcpp_node:
   ros__parameters:
     use_sim_time: true

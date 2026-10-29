@@ -1,0 +1,39 @@
+<!--
+  D1 Max(W48 路网):照 Nav2 自带的 navigate_through_poses_w_replanning_and_recovery.xml,
+  跟 navigate_to_pose_d1max.xml 同样的改法:脱困里去掉原地转(两侧雷达盲区,决策 76),
+  后退速度 0.15 m/s(真机 0.13 m/s 以下只踏步不走);重规划 1 Hz(跟到点那份一样)。
+  途经点是路网上的点,只是路过:RemovePassedGoals 把走过的去掉。半径 1.5 m(自带的 0.7 m 太小:
+  拐弯时 MPPI 切角,离路口点 0.76 m 就过去了,没去掉,Nav2 又掉头回去找它,2026-10-29 仿真里来回走)。
+-->
+<root main_tree_to_execute="MainTree">
+  <BehaviorTree ID="MainTree">
+    <RecoveryNode number_of_retries="6" name="NavigateRecovery">
+      <PipelineSequence name="NavigateWithReplanning">
+        <RateController hz="1.0">
+          <RecoveryNode number_of_retries="1" name="ComputePathThroughPoses">
+            <ReactiveSequence>
+              <RemovePassedGoals input_goals="{goals}" output_goals="{goals}" radius="1.5"/>
+              <ComputePathThroughPoses goals="{goals}" path="{path}" planner_id="GridBased"/>
+            </ReactiveSequence>
+            <ClearEntireCostmap name="ClearGlobalCostmap-Context" service_name="global_costmap/clear_entirely_global_costmap"/>
+          </RecoveryNode>
+        </RateController>
+        <RecoveryNode number_of_retries="1" name="FollowPath">
+          <FollowPath path="{path}" controller_id="FollowPath"/>
+          <ClearEntireCostmap name="ClearLocalCostmap-Context" service_name="local_costmap/clear_entirely_local_costmap"/>
+        </RecoveryNode>
+      </PipelineSequence>
+      <ReactiveFallback name="RecoveryFallback">
+        <GoalUpdated/>
+        <RoundRobin name="RecoveryActions">
+          <Sequence name="ClearingActions">
+            <ClearEntireCostmap name="ClearLocalCostmap-Subtree" service_name="local_costmap/clear_entirely_local_costmap"/>
+            <ClearEntireCostmap name="ClearGlobalCostmap-Subtree" service_name="global_costmap/clear_entirely_global_costmap"/>
+          </Sequence>
+          <Wait wait_duration="5"/>
+          <BackUp backup_dist="0.30" backup_speed="0.15"/>
+        </RoundRobin>
+      </ReactiveFallback>
+    </RecoveryNode>
+  </BehaviorTree>
+</root>
