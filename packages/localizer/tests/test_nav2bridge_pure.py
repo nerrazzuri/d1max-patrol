@@ -540,8 +540,6 @@ def test_复查七_动作服务换了实例_新实例报的在跑不清_没发�
     assert b.producing["follow_path"] is False and len(futs) == 1
 
 
-
-
 def test_复查七_连上代理先全取消_都回了话才放行第一个目标_服务没起来就之后补发(monkeypatch):
     """上一次留下的导航目标转接节点不认识:连上代理先全取消(空的目标号 = 全部)。取消回话之前不派,
     免得新目标先被收下、又被这个「全部取消」一起取消(复查第七轮)。"""
@@ -567,9 +565,6 @@ def test_复查七_连上代理先全取消_都回了话才放行第一个目标
     b.advance_cleanup()                                        # 补发第二个,它当场就回了
     assert sent == [("nav", "全部"), ("thru", "全部")]
     assert not b.cleanup_pending and len(futs) == 1
-
-
-    assert calls == ["全部"]
 
 
 def test_W48_带途经点的目标走NavigateThroughPoses_途经点朝着下一个点_最后是终点(monkeypatch):
