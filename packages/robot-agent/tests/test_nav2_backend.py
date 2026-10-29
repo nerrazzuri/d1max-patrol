@@ -566,3 +566,59 @@ async def test_外审R7_旧目标晚到的速度_不驱动新目标(tmp_path):
     link.cmd = (link.now, 1, -0.3, 0, 0, b)                 # B 自己的:照走
     await t.一拍()
     assert t.nav._last_vx < -0.1
+
+
+# ---------------------------------------------------------------- W47 复查(N2、N3、N5)
+
+async def test_外审复查N2_很窄的限速区也算上_送给Nav2的不高于区域上限(tmp_path):
+    from test_planned_nav import _区
+    link = 假转接()
+    t = _台(tmp_path, link, max_vx=1.0)
+    await t.start(5, 4)
+    await t.nav.set_zones(_区({"id": "thin", "kind": "slow", "max_speed_mps": 0.2,
+                               "polygon": [[5.02, 2], [5.08, 2], [5.08, 6], [5.02, 6]]}))
+    await t.nav.goto(Pose.from_xy_yaw(8, 4))
+    gid = link.kinds("goal")[-1]["goal_id"]
+    sent = []
+    for _ in range(6):
+        link.now += 0.1
+        link.cmd = (link.now, 1, 0.8, 0, 0, gid)
+        await t.一拍()
+        sent.append(t.nav._last_vx)
+    assert 0 < max(sent) <= 0.2 + 1e-9, sent
+    assert link.kinds("tick")[-1]["speed"] <= 0.2 + 1e-9
+
+
+async def test_外审复查N3_没标目标号的速度不认(tmp_path):
+    link = 假转接()
+    t = _台(tmp_path, link)
+    await t.start(5, 4)
+    await t.nav.goto(Pose.from_xy_yaw(8, 4))
+    gid = link.kinds("goal")[-1]["goal_id"]
+    for _ in range(4):                                       # 先起步(头几拍切步态)
+        link.now += 0.1
+        link.cmd = (link.now, 1, 0.4, 0, 0, gid)
+        await t.一拍()
+    assert t.nav._last_vx > 0.3
+    for _ in range(2):
+        link.now += 0.1
+        link.cmd = (link.now, 1, 0.4, 0, 0, None)            # 转接节点那会儿没有在走的目标
+        await t.一拍()
+    assert t.nav._last_vx <= 1e-9
+
+
+async def test_外审复查N5_刚停下时上一条命令还在后退_往前也要先按后退方向查禁行区(tmp_path):
+    from test_planned_nav import _区, _在
+    link = 假转接()
+    t = _台(tmp_path, link)
+    await t.start(5, 4)
+    await t.nav.set_zones(_区({"id": "pond", "kind": "nogo",
+                               "polygon": [[2, 0], [4.365, 0], [4.365, 8], [2, 8]]}))
+    await t.nav.goto(Pose.from_xy_yaw(8, 4))
+    gid = link.kinds("goal")[-1]["goal_id"]
+    t.nav._v_meas = 0.0
+    t.nav._last_vx = -0.3                                     # 刚发过后退,实测还没跟上
+    link.now = 0.0
+    link.cmd = (0.0, 1, 0.3, 0, 0, gid)
+    await t.nav._drive(_在(5, 4), 0.1)
+    assert t.nav._last_vx <= 1e-9, "上一条后退可能还在执行:身后 17 cm 是禁行区,这一拍先停"
