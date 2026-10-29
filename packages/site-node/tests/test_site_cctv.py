@@ -1142,3 +1142,162 @@ def test_W44复查M2_收尾时有同步在等旧订阅_等它做完_收尾以后
     mgr.sync()                                    # 收尾以后再叫同步:什么都不做
     assert mgr.watches == {}
     db.close()
+
+
+# ---- W44 复查第四轮 K1、K2:只有配置真变了才重来;收尾不起新的、告警解决照做 ----
+
+class _记告警:
+    def __init__(self):
+        self.resolved: list[tuple] = []
+
+    def resolve_except(self, kind, prefix, keep, *, who):
+        self.resolved.append((kind, frozenset(keep)))
+
+    def resolve_all(self, *a, **k):
+        pass
+
+    def has_open(self, *a):
+        return False
+
+    def raise_alert(self, **k):
+        pass
+
+
+def _卡在读配置(mgr):
+    import threading
+    at, go = threading.Event(), threading.Event()
+    real = mgr._wanted
+    n = [0]
+
+    def 停一下():
+        w = real()
+        if threading.current_thread().name == "owner":
+            n[0] += 1
+            if n[0] == 1:
+                at.set()
+                go.wait(5)
+        return w
+    mgr._wanted = 停一下
+    return at, go, n
+
+
+def test_W44复查K1_别处一直叫同步但配置没变_正在做的那个照样把摄像头起了(tmp_path):
+    import threading
+    db, _body = _一台(tmp_path)
+    al = _记告警()
+
+    class 订阅(cctv.CameraWatch):
+        def start(self):
+            pass
+
+        def join(self, timeout=None):
+            return True
+    mgr = cctv.CctvManager(db, report=lambda cam, ev: None, now_ms=lambda: 1, alerts=al,
+                           watch_factory=订阅)
+    at, go, n = _卡在读配置(mgr)
+    owner = threading.Thread(target=mgr.sync, name="owner")
+    owner.start()
+    assert at.wait(5)
+    for _ in range(20):                          # 杂事、网页反复叫同步,配置一点没动
+        mgr.sync()
+    go.set()
+    owner.join(5)
+    assert not owner.is_alive()
+    assert mgr.camera("gate-cam") is not None
+    assert al.resolved, "告警对账也做到了"
+    mgr.close()
+    db.close()
+
+
+def test_W44复查K1_别的摄像头在改_没变的那台照样起(tmp_path):
+    import threading
+
+    from d1max_site import cctv_admin
+    db, body = _一台(tmp_path)
+
+    class 订阅(cctv.CameraWatch):
+        def start(self):
+            pass
+
+        def join(self, timeout=None):
+            return True
+    mgr = cctv.CctvManager(db, report=lambda cam, ev: None, now_ms=lambda: 1, watch_factory=订阅)
+    at, go, n = _卡在读配置(mgr)
+    owner = threading.Thread(target=mgr.sync, name="owner")
+    owner.start()
+    assert at.wait(5)
+    cctv_admin.save(db, body | {"name": "cam-B", "zone": "z1"}, now_ms=1)   # 另一台在变
+    mgr.sync()
+    go.set()
+    owner.join(5)
+    assert mgr.camera("gate-cam") is not None and mgr.camera("cam-B") is not None
+    mgr.close()
+    db.close()
+
+
+def test_W44复查K2_收尾时删了的摄像头_告警照样解决(tmp_path):
+    import threading
+
+    from d1max_site import cctv_admin
+    db, _body = _一台(tmp_path)
+    al = _记告警()
+    waiting, resume = threading.Event(), threading.Event()
+
+    class 订阅(cctv.CameraWatch):
+        def start(self):
+            pass
+
+        def join(self, timeout=None):
+            waiting.set()
+            resume.wait(5)
+            return True
+    mgr = cctv.CctvManager(db, report=lambda cam, ev: None, now_ms=lambda: 1, alerts=al,
+                           watch_factory=订阅)
+    mgr.sync()
+    al.resolved.clear()
+    assert cctv_admin.remove(db, "gate-cam")
+    owner = threading.Thread(target=mgr.sync)
+    owner.start()
+    assert waiting.wait(5)
+    closer = threading.Thread(target=mgr.close)
+    closer.start()
+    resume.set()
+    owner.join(5)
+    closer.join(5)
+    assert ("cctv_offline", frozenset()) in al.resolved, "删掉的那台的「连不上」收尾时也解决"
+    db.close()
+
+
+def test_W44复查K1_每次读配置时都有人叫同步_也不一直重来(tmp_path):
+    import threading
+    db, _body = _一台(tmp_path)
+
+    class 订阅(cctv.CameraWatch):
+        def start(self):
+            pass
+
+        def join(self, timeout=None):
+            return True
+    mgr = cctv.CctvManager(db, report=lambda cam, ev: None, now_ms=lambda: 1, watch_factory=订阅)
+    real = mgr._wanted
+    reads = [0]
+    seen: list[bool] = []
+
+    def 每次都插一脚():
+        w = real()
+        if threading.current_thread().name == "owner" and reads[0] < 50:
+            reads[0] += 1
+            seen.append(mgr.camera("gate-cam") is not None)
+            t = threading.Thread(target=mgr.sync)     # 配置没变,只是又叫了一次
+            t.start()
+            t.join(5)
+        return w
+    mgr._wanted = 每次都插一脚
+    owner = threading.Thread(target=mgr.sync, name="owner")
+    owner.start()
+    owner.join(10)
+    assert mgr.camera("gate-cam") is not None
+    # 别人每叫一次就多做一遍(合并请求),但第一遍就起了,不会一直起不来(原来 50 遍都没起)
+    assert len(seen) >= 2 and seen[1] is True, seen[:3]
+    mgr.close()
+    db.close()

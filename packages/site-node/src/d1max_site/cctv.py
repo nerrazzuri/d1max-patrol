@@ -437,6 +437,8 @@ def alert_robot(name: str) -> str:
     return f"cctv:{name}"
 
 
+#: 一次同步里配置一直在变时最多对几轮(复查 K1);剩下的留给下一轮。
+SYNC_ROUNDS = 10
 #: 站点收尾时最多等正在做的摄像头同步多久(秒;它手里每个旧订阅退出最长要等 ``JOIN_S`` 左右)。
 CLOSE_WAIT_S = 120.0
 
@@ -466,9 +468,6 @@ class CctvManager:
         #: 做完接着再来一遍(复查 N2:不许让站点杂事、别的删除等着一次最长 35 秒的退出)。
         self._sync_lock = threading.Lock()
         self._again = False
-        #: 每叫一次 sync 加一(复查 M1):起订阅之前看它变没变,变了说明配置可能刚改过、删过,
-        #: 从头再对一遍,不按读得早的那份起。
-        self._gen = 0
         #: 站点在收尾(复查 M2):不再起新订阅,sync 什么都不做。
         self._closing = False
         #: 已经叫停、还没等它退出的旧订阅。
@@ -532,7 +531,6 @@ class CctvManager:
         with self._lock:
             if self._closing:
                 return
-            self._gen += 1
         self._stop_stale()
         self._again = True
         while True:
@@ -567,7 +565,7 @@ class CctvManager:
 
     def _sync_once(self) -> None:
         joined: list[CameraWatch] = []
-        while True:
+        for _ in range(SYNC_ROUNDS):
             self._stop_stale()                           # 跟库里对不上的先停
             with self._lock:
                 gone, self._to_join = self._to_join, []
@@ -575,31 +573,38 @@ class CctvManager:
                 self._stop_join(gone)                    # 旧的退干净了才起新的:不重叠
                 joined += gone
                 continue                                 # 等的这几秒里库里可能又改了
-            with self._lock:
-                gen = self._gen
-            want = self._wanted()                        # 按最新的起(复查 R4)
+            want = self._wanted()
             with self._lock:
                 if self._closing:
-                    return                               # 收尾了:一个都不起(复查 M2)
-                if self._gen != gen or self._to_join:
-                    continue                             # 读完以后又有人改了、删了:重来(复查 M1)
+                    break                                # 收尾了:一个都不起(复查 M2),告警照做(K2)
+                # 复查 M1、K1:起之前在锁里再读一次库。读得早的那份跟现在不一样的(读完又改了、删了),
+                # 或者同名的旧订阅还在等退出的,这一轮先不起;别的照起。只有配置真变了才再来一轮。
+                now = {c.name: c for c in load_cameras(self.db)}
+                waiting = {w.cam.name for w in self._to_join}
                 for name, cam in want.items():
-                    if name not in self.watches:
-                        w = self._factory(cam, on_intrusion=self._report, now_ms=self._now)
-                        self.watches[name] = w
-                        w.start()
-                watches = list(self.watches.values())
-            break
+                    if name in self.watches or name in waiting or now.get(name) != cam:
+                        continue
+                    w = self._factory(cam, on_intrusion=self._report, now_ms=self._now)
+                    self.watches[name] = w
+                    w.start()
+                settled = now == want and not self._to_join
+            if settled:
+                break
+        else:
+            self._again = True                           # 一直在变:先放一放,下一轮接着对
+        cur = {c.name for c in load_cameras(self.db)}
         for w in joined:
-            if w.cam.name not in want:
+            if w.cam.name not in cur:
                 self._clean.discard(w.cam.name)
                 self._told.discard(w.cam.name)
         if self._alerts is not None:
             try:                                         # 库里没有了的(含站点停机期间删的)
-                self._alerts.resolve_except("cctv_offline", "cctv:", set(want),
+                self._alerts.resolve_except("cctv_offline", "cctv:", cur,
                                             who="站点:摄像头已删除")
             except Exception:
                 log.exception("解决已删除摄像头的「连不上」失败,下一拍再试")
+        with self._lock:
+            watches = list(self.watches.values())
         now = self._now()
         for w in watches:
             st, name = w.status, w.cam.name
