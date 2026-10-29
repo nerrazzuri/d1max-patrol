@@ -136,3 +136,12 @@ def test_外审R10_收下新目标以前规划的路线不标成新目标的(mon
              poses=[NS(pose=NS(position=NS(x=x, y=4.0))) for x in (5.0, 3.0, 2.0)])
     b._on_plan(new)
     assert [m["goal_id"] for m in b.sent if m["type"] == "path"] == [9]
+
+
+def test_转接节点握手的协议号跟契约同一个():
+    """外审修复把契约升到 2 时转接节点自己还写死着 1:真机上 Nav2 会一直连不上
+    (navbench 查出来的)。"""
+    from d1max_localizer import nav2bridge
+
+    from d1max_contract.navbridge import PROTO
+    assert nav2bridge.PROTO == PROTO
