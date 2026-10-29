@@ -639,3 +639,10 @@ def test_旁路进程9号_照旧不带vmax_近处不发():
     assert cmds == []
     _, far = _分档(9, ((3.6, 3.8), (-0.2, 0.2), 0.5))
     assert len(far) == 1 and "vmax" not in far[0]
+
+
+def test_G1_分档许可带来源和帧序号():
+    per, cmds = _分档(GRADED_CLEAR_PROTO, ((1.4, 1.6), (-0.2, 0.2), 0.5))
+    assert cmds[0]["src"] == per.permit_src > 0 and cmds[0]["seq"] == per.seq
+    _, old = _分档(9, ((3.6, 3.8), (-0.2, 0.2), 0.5))
+    assert "src" not in old[0] and "seq" not in old[0], "老旁路照旧"
