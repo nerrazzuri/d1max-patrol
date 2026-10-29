@@ -104,8 +104,8 @@ class ArmingDesk:
             "SELECT zone FROM zone_arming WHERE home_armed=0 ORDER BY zone")]
 
     def armed(self, zone: str) -> tuple[bool, str]:
-        """→ (这个防区现在布不布防, 当前模式)。整个判断拿着同一把读锁(W44 复查 R1:读完「按不按时间表」
-        之后另一个线程关掉时间表,不能拼成「按时间表 + 没开」= 撤防)。"""
+        """→ (这个防区现在布不布防, 当前模式)。整个判断拿着同一把读锁(W44 复查 R1:读完
+        「按不按时间表」之后另一个线程关掉时间表,不能拼成「按时间表 + 没开」= 撤防)。"""
         with self.db.snapshot():
             return self._armed_locked(zone)
 
