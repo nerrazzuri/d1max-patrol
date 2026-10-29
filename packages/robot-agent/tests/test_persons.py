@@ -14,7 +14,7 @@ from d1max_agent.persons import GONE_S, PersonView
 from d1max_agent.runtime import AgentRuntime
 from d1max_contract.memory_broker import MemoryBroker, MemoryTransport
 from d1max_contract.messages import Capabilities
-from d1max_contract.persbridge import Hello, Person, Persons, encode
+from d1max_contract.persbridge import PROTO, Hello, Person, Persons, encode
 from d1max_patrol.protocol.nav_types import Pose
 
 
@@ -204,7 +204,7 @@ async def test_端到端(tmp_path):
         await broker.drain()
         assert 能力() == {"state": "off", "present": None, "near": False}
         rd, w = await _连(tmp_path / "p.sock")
-        w.write(encode(Hello(proto=1, name="fake")))
+        w.write(encode(Hello(proto=PROTO, name="fake")))
         await w.drain()
         assert json.loads(await rd.readline())["t"] == "hello"
         w.write(encode(_帧(4.0, snapshot="s1.jpg")))
