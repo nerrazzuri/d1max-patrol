@@ -106,3 +106,19 @@ async def test_到点了才due():
     assert not w.due()
     t[0] += w.every_s
     assert w.due()
+
+
+async def test_外审R9_开机就糊_攒不出基线_半小时后报一次看不清_好了照常攒基线():
+    w, t, events = _watch()
+    await _跑(w, [_糊()] * 29, t)
+    assert events == []
+    await _跑(w, [_糊()], t)
+    assert [k for k, _ in events] == ["thermal_lens_blocked"]
+    assert events[0][1]["baseline"] == 0
+    h = w.health()
+    assert h["state"] == "degraded" and "开机" in h["detail"]
+    await _跑(w, [_糊()] * 10, t)
+    assert len(events) == 1, "一直糊着只报一次"
+    await _跑(w, [_景(i) for i in range(13)], t)
+    assert [k for k, _ in events][-1] == "thermal_lens_clear"
+    assert w.health()["state"] == "online"
