@@ -280,3 +280,27 @@ async def test_目标号跨后端不重复_旧目标的晚到回执不认(tmp_pa
     link.goal_states.append({"type": "goal_state", "goal_id": old, "state": "canceled"})
     await t2.跑(0.5)
     assert NavStatus.FAILED not in t2.status, "上一个后端的目标晚到的回执不算这一趟的"
+
+
+async def test_原地转会扫到地图上的墙就不转_空地照转(tmp_path):
+    """2026-10-29 仿真:0.85 m 门里 Nav2 的脱困原地转(Spin)扫到门框。门框在地图里:代理按地图核一道,
+    不靠雷达、不靠 Nav2 的配置。"""
+    link = 假转接()
+    t = _台(tmp_path, link, walls=[(6.0, 0.1, 6.2, 3.575), (6.0, 4.425, 6.2, 7.9)])
+    await t.start(6.1, 4.0)                                # 正卡在门里
+    await t.nav.goto(Pose.from_xy_yaw(10.0, 4.0))
+    for _ in range(30):
+        link.now += 0.1
+        link.cmd = (link.now, 1, 0.0, 0.0, 1.0)            # Nav2 要原地转
+        await t.一拍()
+    assert abs(t.r.yaw) < 0.05 and not t.crashed, "门里不许原地转"
+    await t.nav.stop()
+    await t.跑(1.0)
+    t.r.teleport(3.0, 4.0, 0.0)                            # 空地
+    await t.跑(1.0)
+    await t.nav.goto(Pose.from_xy_yaw(1.0, 4.0))
+    for _ in range(10):
+        link.now += 0.1
+        link.cmd = (link.now, 1, 0.0, 0.0, 1.0)
+        await t.一拍()
+    assert abs(t.r.yaw) > 0.3, "空地照转"
