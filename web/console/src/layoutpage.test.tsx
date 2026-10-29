@@ -56,10 +56,11 @@ const btn = (root: Element, text: string) => Array.from(root.querySelectorAll("b
 const tabBtn = (c: Element, text: string) => Array.from(c.querySelectorAll(".ly-tabs button")).find((b) => b.textContent === text) as HTMLButtonElement;
 
 describe("布置外框", () => {
-  it("五个标签、地址带tab", async () => {
+  it("六个标签(W48 加了路网)、地址带tab", async () => {
     const { container: c } = page();
     await waitFor(() => expect(c.querySelector(".fake")).not.toBeNull());
-    expect(Array.from(c.querySelectorAll(".ly-tabs button")).map((b) => b.textContent)).toEqual(["防区", "禁行区", "巡逻路线", "待命点", "摄像头"]);
+    expect(Array.from(c.querySelectorAll(".ly-tabs button")).map((b) => b.textContent)).toEqual(["防区", "禁行区", "巡逻路线", "路网", "待命点", "摄像头"]);
+    expect(tabFromHash("#/admin/layout?tab=roadnet")).toBe("roadnet");
     expect(tabFromHash("#/admin/layout?tab=routes")).toBe("routes");
     expect(tabFromHash("#/admin/layout?tab=nope")).toBe("zones");
   });

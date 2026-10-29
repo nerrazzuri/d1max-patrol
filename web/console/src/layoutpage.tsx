@@ -12,11 +12,12 @@ import { MapCanvas, type CanvasArea, type Screen } from "./mapcanvas";
 import { toPx, type NavZone, type PreviewMeta, type Pt } from "./mapview";
 
 type Say = (s: string) => void;
-export type LayoutTab = "zones" | "nogo" | "routes" | "standby" | "cameras";
-export const LAYOUT_TABS: LayoutTab[] = ["zones", "nogo", "routes", "standby", "cameras"];
-const TAB_KEY: Record<LayoutTab, Key> = { zones: "lyZones", nogo: "lyNogo", routes: "lyRoutes", standby: "lyStandby", cameras: "lyCameras" };
+export type LayoutTab = "zones" | "nogo" | "routes" | "roadnet" | "standby" | "cameras";
+export const LAYOUT_TABS: LayoutTab[] = ["zones", "nogo", "routes", "roadnet", "standby", "cameras"];
+const TAB_KEY: Record<LayoutTab, Key> = { zones: "lyZones", nogo: "lyNogo", routes: "lyRoutes", roadnet: "lyRoadnet", standby: "lyStandby", cameras: "lyCameras" };
 /** 历史版本里的种类(站点 layout_history.kind)。 */
-const HISTORY_KIND: Record<LayoutTab, string> = { zones: "zones", nogo: "nogo", routes: "route", standby: "standby", cameras: "cameras" };
+// 路网(W48)第一版没有历史版本:那个标签上不显示「历史」
+const HISTORY_KIND: Partial<Record<LayoutTab, string>> = { zones: "zones", nogo: "nogo", routes: "route", standby: "standby", cameras: "cameras" };
 
 export interface MapRow { map_id: string; version: string; note: string; active?: boolean }
 export interface Area { zone: string; points: Pt[] }
@@ -217,7 +218,7 @@ export function LayoutPage({ say, robots, tabs }: { say: Say; robots: string[]; 
           </select>
         </label>
         <span class="push" />
-        <button type="button" class="btn" onClick={() => setHistory(!history)} aria-pressed={history}>{t("lyHistory")}</button>
+        {HISTORY_KIND[tab] && <button type="button" class="btn" onClick={() => setHistory(!history)} aria-pressed={history}>{t("lyHistory")}</button>}
         <button type="button" class="btn primary ly-save" disabled={!dirty || busy} onClick={() => void save()}>{t("save")}</button>
       </div>
       <p class="muted lead">{t("lyLead")}</p>
@@ -240,8 +241,8 @@ export function LayoutPage({ say, robots, tabs }: { say: Say; robots: string[]; 
               setDirty={setDirty} registerSave={(fn) => { saveFn.current = fn; }} />
           ) : !sel ? <p class="empty">{t("noMap")}</p> : null}
         </div>
-        {history && sel && (
-          <HistoryDrawer key={`${HISTORY_KIND[tab]}|${tab === "cameras" ? "" : base}`} kind={HISTORY_KIND[tab]} map={tab === "cameras" ? null : sel} say={say}
+        {history && sel && HISTORY_KIND[tab] && (
+          <HistoryDrawer key={`${HISTORY_KIND[tab]}|${tab === "cameras" ? "" : base}`} kind={HISTORY_KIND[tab]!} map={tab === "cameras" ? null : sel} say={say}
             onRestored={() => { setDirty(false); setGen((g) => g + 1); void reload(); }} onClose={() => setHistory(false)} />
         )}
       </div>
