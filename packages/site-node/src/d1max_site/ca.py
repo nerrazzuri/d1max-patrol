@@ -32,7 +32,8 @@ SAFE_ID = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 #: 主机名或 IP(IPv6 带冒号)。逗号、换行会注入到 SAN 扩展文件里。
 _SAFE_HOST = re.compile(r"^[A-Za-z0-9.:-]{1,253}$")
 #: 站点证书总带上本机:``serve`` 默认连 ``mqtts://127.0.0.1``,主机名校验要过。
-LOCAL_NAMES = ("127.0.0.1", "localhost")
+#: 站点证书总带上的名字:本机,和站点 VPN 隧道里站点的地址(W45;机器人、手机走隧道时连它)。
+LOCAL_NAMES = ("127.0.0.1", "localhost", "172.29.70.1")
 
 
 class CAError(RuntimeError):
