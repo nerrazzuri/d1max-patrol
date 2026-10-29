@@ -1003,3 +1003,142 @@ def test_W44复查N2_有一次同步在等旧订阅_站点杂事里的同步不�
     assert {"slow-A", "delete-B", "new-C"} == set(mgr.watches), "等着的那次做完时把新加的也起了"
     mgr.close()
     db.close()
+
+
+# ---- W44 复查第三轮 M1、M2:起订阅前配置变了要重来;站点收尾要等正在做同步的那个 ----
+
+def _一台(tmp_path, **watch_kw):
+    from d1max_site import cctv_admin
+    db = SiteDB(tmp_path / "s.db")
+    body = {"name": "gate-cam", "zone": "old-gate", "onvif_url": "http://10.0.0.9",
+            "username": "admin", "password": "fake"}
+    cctv_admin.save(db, body, now_ms=1)
+    return db, body
+
+
+def _事件():
+    return cctv.OnvifEvent(topic="tns1:RuleEngine/FieldDetector/ObjectsInside",
+                           operation="Changed", source={"Rule": "R1"}, data={"IsInside": "true"})
+
+
+def test_W44复查M1_读完配置还没起订阅时删了_不按删之前的起(tmp_path):
+    import threading
+    db, _body = _一台(tmp_path)
+    reported: list[str] = []
+
+    class 订阅(cctv.CameraWatch):
+        def start(self):
+            pass
+
+        def join(self, timeout=None):
+            return True
+    mgr = cctv.CctvManager(db, report=lambda cam, ev: reported.append(cam.name), now_ms=lambda: 1,
+                           watch_factory=订阅)
+    at, go = threading.Event(), threading.Event()
+    real = mgr._wanted
+
+    def 停一下():
+        w = real()
+        if threading.current_thread().name == "owner" and not at.is_set():
+            at.set()
+            go.wait(5)
+        return w
+    mgr._wanted = 停一下
+    owner = threading.Thread(target=mgr.sync, name="owner")
+    owner.start()
+    assert at.wait(5)
+    from d1max_site import cctv_admin
+    assert cctv_admin.remove(db, "gate-cam")
+    newer = threading.Thread(target=mgr.sync)
+    newer.start()
+    newer.join(1)
+    assert not newer.is_alive()
+    go.set()
+    owner.join(5)
+    assert mgr.camera("gate-cam") is None and reported == []
+    mgr.close()
+    db.close()
+
+
+def test_W44复查M1_旧订阅还在等退出_不起同名的新订阅(tmp_path):
+    import threading
+    db, body = _一台(tmp_path)
+    made: list = []
+    joining, release = threading.Event(), threading.Event()
+
+    class 订阅(cctv.CameraWatch):
+        def start(self):
+            made.append(self)
+
+        def join(self, timeout=None):
+            if self is made[0]:
+                joining.set()
+                release.wait(5)
+            return True
+    mgr = cctv.CctvManager(db, report=lambda cam, ev: None, now_ms=lambda: 1, watch_factory=订阅)
+    mgr.sync()
+    at, go = threading.Event(), threading.Event()
+    real = mgr._wanted
+
+    def 停一下():
+        w = real()
+        if threading.current_thread().name == "owner" and not at.is_set():
+            at.set()
+            go.wait(5)
+        return w
+    mgr._wanted = 停一下
+    from d1max_site import cctv_admin
+    cctv_admin.save(db, body | {"edit": True, "zone": "mid-gate"}, now_ms=1)
+    owner = threading.Thread(target=mgr.sync, name="owner")
+    owner.start()
+    assert joining.wait(5)                       # 先等 made[0](old-gate)退出
+    release.set()
+    assert at.wait(5)                            # 读完配置(mid-gate),还没起
+    cctv_admin.save(db, body | {"edit": True, "zone": "new-gate"}, now_ms=1)
+    newer = threading.Thread(target=mgr.sync)
+    newer.start()
+    newer.join(1)
+    go.set()
+    owner.join(5)
+    zones = [w.cam.zone for w in made]
+    assert "mid-gate" not in zones, "配置在起之前又变了:不按旧的起"
+    assert mgr.camera("gate-cam").zone == "new-gate"
+    mgr.close()
+    db.close()
+
+
+def test_W44复查M2_收尾时有同步在等旧订阅_等它做完_收尾以后不起新的(tmp_path):
+    import threading
+    db, body = _一台(tmp_path)
+    waiting, resume = threading.Event(), threading.Event()
+    starts: list[tuple[str, bool]] = []
+    closed = threading.Event()
+
+    class 订阅(cctv.CameraWatch):
+        def start(self):
+            starts.append((self.cam.zone, closed.is_set()))
+
+        def join(self, timeout=None):
+            if self.cam.zone == "old-gate":
+                waiting.set()
+                resume.wait(5)
+            return True
+    mgr = cctv.CctvManager(db, report=lambda cam, ev: None, now_ms=lambda: 1, watch_factory=订阅)
+    mgr.sync()
+    from d1max_site import cctv_admin
+    cctv_admin.save(db, body | {"edit": True, "zone": "new-gate"}, now_ms=1)
+    owner = threading.Thread(target=mgr.sync)
+    owner.start()
+    assert waiting.wait(5)
+    closer = threading.Thread(target=lambda: (mgr.close(), closed.set()))
+    closer.start()
+    assert not closed.wait(0.3), "做同步的那个还在等旧订阅:收尾要等它"
+    resume.set()
+    owner.join(5)
+    closer.join(5)
+    assert closed.is_set() and not owner.is_alive()
+    assert starts == [("old-gate", False)], "收尾开始以后一个新订阅都不起"
+    assert mgr.watches == {}
+    mgr.sync()                                    # 收尾以后再叫同步:什么都不做
+    assert mgr.watches == {}
+    db.close()
