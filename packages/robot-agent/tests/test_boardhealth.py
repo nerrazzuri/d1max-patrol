@@ -300,3 +300,18 @@ def test_外审R2_一直没有NVMe的板子_SoC降了照常降级(tmp_path):
     _转(counters, 3000, 10)
     m.sample()
     assert m.level == "ok"
+
+
+def test_外审复查N1_最热的温区单独读不到_按它最后的读数算_读到低温才降(tmp_path):
+    zones = [{"bigcore0": 96.0, "littlecore": 50.0}]
+    m = BoardMonitor(BoardConfig(log_dir=str(tmp_path / "log")), emit=lambda k, d: None,
+                     mono=lambda: 1.0, wall=lambda: 1_793_000_000.0,
+                     read_soc=lambda: dict(zones[0]), read_nvme=lambda: None, counter=lambda c, l: None)
+    m.sample()
+    assert m.level == "critical"
+    zones[0] = {"littlecore": 50.0}                       # 96 °C 那个温区读不到了,别的还在
+    m.sample()
+    assert m.level == "critical" and "bigcore0" in m.reason
+    zones[0] = {"bigcore0": 60.0, "littlecore": 50.0}     # 读到了,而且凉了
+    m.sample()
+    assert m.level == "ok"
