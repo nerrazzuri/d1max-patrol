@@ -514,6 +514,8 @@ class Perception:
         self.last_clear = 0.0
         self.last_clear_tail = 0.0
         self.sidecar_proto: int | None = None
+        #: 这个感知进程发的许可的来源(启动时刻,毫秒;#208 首审 G1)。
+        self.permit_src = max(1, int(time.time() * 1000))
         self._rej_logged = -math.inf
         #: 墙那一层攒着的格子、攒了几帧、从什么时候开始攒(W41)。
         self._wall: Any = None
@@ -643,6 +645,8 @@ class Perception:
             if v < MIN_PERMIT_V:
                 return
             msg["vmax"] = math.floor(v * 100.0) / 100.0      # 往下取,不许多给
+            # #208 首审 G1:来源(这个感知进程的启动时刻)、帧序号 —— 旁路不认晚到的旧许可
+            msg["src"], msg["seq"] = self.permit_src, self.seq
         elif not permit(dist, self.cfg):
             return
         if end is not None:

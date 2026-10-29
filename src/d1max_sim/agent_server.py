@@ -108,8 +108,8 @@ class SimAgentServer:
         if not LEGACY_MAX_FRACTION <= max_fraction <= MAX_FORWARD_FRACTION:
             raise ValueError(f"max_fraction 要在 [0.5, 1.0],收到 {max_fraction}")
         self.max_fraction = max_fraction
-        #: 同 ``--permit-mps-per-unit``:分档许可的 m/s 换比例
-        #: (缺省按档位:低速 1.1、中速 2.2、其余 3.3)。
+        #: 同 ``--permit-mps-per-unit``:分档许可的 m/s 换比例(缺省按仿真自己的运动模型:
+        #: 低速 1.2、中速 2.4、其余 3.6;真旁路按实测 1.1 / 2.2 / 3.3)。
         self._permit_mps = permit_mps_per_unit
         #: 同 ``patrol_agent --token-file``(协议 9,S11):给了就要求每条连接先 ``auth``,没认证的连接
         #: 发运动命令回 ``not_authorized``;``None`` = 仿真不核令牌(hello 报 ``auth: false``,
@@ -126,6 +126,9 @@ class SimAgentServer:
         self._clear_until = [-math.inf, -math.inf]
         #: 分档许可(W47):两头各自的比例上限(最新的那条说了算)。
         self._clear_cap = [0.0, 0.0]
+        #: 两头最后收下的许可来源、帧序号(#208 首审 G1)。
+        self._clear_src = [0, 0]
+        self._clear_seq = [0, 0]
         #: 同 ``patrol_agent --sdk-follows-head``:调过头尾之后 SDK 的「往前」(里程、速度)跟着变成
         #: 狗尾那头。仿真照这个约定报里程:调头那一刻里程的朝向跳 π(真机怎么跳是真机项)。
         self.follows_head = follows_head
@@ -452,7 +455,18 @@ class SimAgentServer:
                     raise _Rejected("vmax 要在 [0, 5] m/s 内")
                 cap = vmax / self._permit_mps_per_unit()
             cap = max(0.0, min(cap, MAX_FORWARD_FRACTION))
-            until = time.monotonic() + ms / 1000.0
+            src, seq = args.get("src", 0), args.get("seq", 0)
+            if any(isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v)
+                   or v < 0 for v in (src, seq)):
+                raise _Rejected("src、seq 要是非负整数")
+            now = time.monotonic()
+            if src > 0:
+                # 同 vel_gate.hpp:这一头还有效时,更旧来源的、同来源序号不更新的不认(回 ok)
+                if now < self._clear_until[i] and (src < self._clear_src[i] or (
+                        src == self._clear_src[i] and seq <= self._clear_seq[i])):
+                    return
+                self._clear_src[i], self._clear_seq[i] = src, seq
+            until = now + ms / 1000.0
             # 同 vel_gate.hpp 的 SetClearance:上限按最新的;没升时有效期只往后延,升了只到它自己的期限
             if cap > self._clear_cap[i]:
                 self._clear_until[i] = until
@@ -472,7 +486,8 @@ class SimAgentServer:
     def _permit_mps_per_unit(self) -> float:
         if self._permit_mps is not None:
             return self._permit_mps
-        return {1: 1.1, 2: 2.2}.get(self.speed_level_want, 3.3)
+        # 仿真的运动模型是比例 1.0 走 1.2 m/s:低速档换算按它(#208 首审 G2:按 1.1 会超许可约 9%)
+        return {1: 1.2, 2: 2.4}.get(self.speed_level_want, 3.6)
 
     def _vel_unsafe(self) -> bool:
         """同 vel_gate.hpp:两路急停都**明确** Recover 才安全(Unknown 与 Stop 一样拒)。"""

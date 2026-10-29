@@ -421,7 +421,29 @@ static void 老许可_不带速度_按0点5算() {
   CHECK(r.gate.Live(true, r.now)->fwd == 0.5);
 }
 
+// G1(#208 首审):许可带来源(感知节点启动时刻)和帧序号。当前许可还有效时,更旧来源的、同来源序号不更新的
+// 不认 —— 跨连接晚到的旧高档许可不许把新的低档顶掉;当前的过期了谁的都认(感知重启、钟往回拨)。
+static void 分档许可_晚到的旧许可不覆盖新的() {
+  Rig r;
+  CHECK(r.gate.SetMaxForward(1.0));
+  r.gate.RequireClearance(true);
+  r.gate.OnHead(1);
+  const auto ms = std::chrono::milliseconds(300);
+  CHECK(r.gate.SetClearance(r.now + ms, velgate::kEndHead, 0.2, 5, 2, r.now));
+  CHECK(r.vel(0.9, 1000) == "");
+  CHECK(!r.gate.SetClearance(r.now + ms, velgate::kEndHead, 0.9, 5, 1, r.now));  // 同来源旧帧
+  CHECK(r.gate.Live(true, r.now)->fwd == 0.2);
+  CHECK(!r.gate.SetClearance(r.now + ms, velgate::kEndHead, 0.9, 4, 9, r.now));  // 更旧来源
+  CHECK(r.gate.Live(true, r.now)->fwd == 0.2);
+  CHECK(r.gate.SetClearance(r.now + ms, velgate::kEndHead, 0.6, 5, 3, r.now));   // 新帧照收
+  CHECK(r.gate.Live(true, r.now)->fwd == 0.6);
+  const auto later = r.now + std::chrono::milliseconds(400);                      // 都过期了
+  CHECK(r.gate.SetClearance(later + ms, velgate::kEndHead, 0.3, 3, 1, later));    // 谁的都认
+  CHECK(r.gate.Live(true, later)->fwd == 0.3);
+}
+
 int main() {
+  分档许可_晚到的旧许可不覆盖新的();
   分档许可_按许可限前进_最新的说了算();
   比例上限_超过0点5要开第二层许可_后退横移转向还是0点5();
   老许可_不带速度_按0点5算();

@@ -393,10 +393,11 @@ async def test_分档许可_hello报比例上限_按许可夹前进_最新的说
         hello = await client.recv()
         assert hello.proto == 10 and hello.max_fraction == 1.0
         assert (await client.call("stand", timeout_s=10)).ok
-        assert (await client.call("clear", ms=800, dist=0.9, vmax=0.33)).ok
+        assert (await client.call("clear", ms=800, dist=0.9, vmax=0.36)).ok
         assert (await client.call("vel", fwd=0.8, lat=0.0, yaw=0.0, ttl_ms=300)).ok
         await asyncio.sleep(0.15)
-        assert abs(sim.vx - 0.3 * 1.2) < 1e-6, "按许可:0.33 m/s ÷ 1.1 = 比例 0.3"
+        # 仿真低速档换算缺省 1.2(跟它自己的运动模型一样,#208 首审 G2):0.36 ÷ 1.2 = 比例 0.3
+        assert abs(sim.vx - 0.36) < 1e-6
         assert (await client.call("clear", ms=800, dist=3.0, vmax=2.0)).ok
         assert (await client.call("vel", fwd=0.8, lat=0.0, yaw=0.0, ttl_ms=300)).ok
         await asyncio.sleep(0.15)
@@ -438,3 +439,25 @@ def test_CPP的分档许可_参数与hello():
     assert "kProtoVersion = 10" in src and PROTO_VERSION == 10
     assert '"--max-fraction"' in src and '"--permit-mps-per-unit"' in src
     assert '\\"max_fraction\\":' in src and '"\\"vmax\\""' in src
+
+
+async def test_G2_仿真旁路的许可换算_实际速度不超过许可():
+    async with _client(require_clearance=True, max_fraction=1.0) as (sim, client):
+        await _站起(sim, client)
+        assert (await client.call("clear", ms=800, dist=1.0, vmax=0.55)).ok
+        assert (await client.call("vel", fwd=0.9, lat=0.0, yaw=0.0, ttl_ms=300)).ok
+        await asyncio.sleep(0.15)
+        assert 0 < sim.vx <= 0.55 + 1e-9
+
+
+async def test_G1_晚到的旧高档许可不把新的低档顶掉():
+    async with _client(require_clearance=True, max_fraction=1.0) as (sim, client):
+        await _站起(sim, client)
+        assert (await client.call("clear", ms=800, vmax=0.24, src=5, seq=2)).ok
+        assert (await client.call("clear", ms=800, vmax=1.2, src=5, seq=1)).ok      # 回 ok,不认
+        assert (await client.call("clear", ms=800, vmax=1.2, src=4, seq=9)).ok
+        assert (await client.call("vel", fwd=0.9, lat=0.0, yaw=0.0, ttl_ms=300)).ok
+        await asyncio.sleep(0.15)
+        assert abs(sim.vx - 0.24) < 1e-6
+        for bad in ({"src": -1}, {"seq": "x"}):
+            assert not (await client.call("clear", ms=300, vmax=0.2, **bad)).ok, bad

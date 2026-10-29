@@ -174,14 +174,27 @@ class Gate {
   /// 感知节点的许可:「到 until 为止 end 那一头空到能按比例 cap 往前走」(老许可不带速度:0.5)。
   /// 上限按最新的这条(障碍近了当拍就降);上限没升时有效期只往后延,不往前缩(晚到的同档许可不截短;
   /// 降了档的按老期限也安全 —— 老许可在更快的速度下都够);升了档的只到它自己的期限。
-  void SetClearance(Clock::time_point until, int end = kEndHead, double cap = kLegacyFraction) {
-    if (end != kEndHead && end != kEndTail) return;
-    if (!std::isfinite(cap)) return;
+  ///
+  /// 来源 ``src``(感知节点启动时刻,> 0)和帧序号 ``seq``(#208 首审 G1):这一头的许可还有效时,更旧来源的、
+  /// 同来源序号不更新的不认 —— 跨连接晚到的旧高档许可不许把新的低档顶掉;过期了谁的都认(感知重启、钟往回拨)。
+  /// ``src`` 0 = 老感知节点不带来源,照旧收。返回收没收。
+  bool SetClearance(Clock::time_point until, int end = kEndHead, double cap = kLegacyFraction,
+                    uint64_t src = 0, uint64_t seq = 0, Clock::time_point now = Clock::now()) {
+    if (end != kEndHead && end != kEndTail) return false;
+    if (!std::isfinite(cap)) return false;
     cap = std::max(0.0, std::min(cap, kMaxForwardCeiling));
     std::lock_guard<std::mutex> lk(mtx_);
+    if (src > 0) {
+      const bool live = now < clear_until_[end];
+      if (live && (src < clear_src_[end] || (src == clear_src_[end] && seq <= clear_seq_[end])))
+        return false;
+      clear_src_[end] = src;
+      clear_seq_[end] = seq;
+    }
     if (cap > clear_cap_[end]) clear_until_[end] = until;
     else if (until > clear_until_[end]) clear_until_[end] = until;
     clear_cap_[end] = cap;
+    return true;
   }
 
   /// 前进比例上限(旁路参数 --max-fraction):只许 [0.5, 1.0]。超过 0.5 的那段要开许可门才放行。
@@ -240,6 +253,8 @@ class Gate {
   int speed_level_ = 0;
   Clock::time_point clear_until_[2]{};
   double clear_cap_[2]{0.0, 0.0};
+  uint64_t clear_src_[2]{0, 0};
+  uint64_t clear_seq_[2]{0, 0};
   double max_fwd_ = kMaxFraction;
 };
 

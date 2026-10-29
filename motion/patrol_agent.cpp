@@ -719,10 +719,16 @@ static Outcome RunCommand(const std::string& cmd, const std::string& line,
       if (!std::isfinite(vmax) || vmax < 0 || vmax > 5) return Reject("vmax 要在 [0, 5] m/s 内");
       cap = vmax / PermitMpsPerUnit();
     }
-    g_gate.SetClearance(std::chrono::steady_clock::now() +
-                            std::chrono::milliseconds(static_cast<int>(ms)),
-                        end == "tail" ? velgate::kEndTail : velgate::kEndHead, cap);
-    return Outcome{};
+    // #208 首审 G1:来源(感知节点启动时刻)、帧序号;不带 = 老感知节点
+    const double src = JsonNumField(line, "src", 0.0), seq = JsonNumField(line, "seq", 0.0);
+    if (!std::isfinite(src) || !std::isfinite(seq) || src < 0 || seq < 0 || src > 9e15 ||
+        seq > 9e15)
+      return Reject("src、seq 要是非负整数");
+    const auto now = std::chrono::steady_clock::now();
+    g_gate.SetClearance(now + std::chrono::milliseconds(static_cast<int>(ms)),
+                        end == "tail" ? velgate::kEndTail : velgate::kEndHead, cap,
+                        static_cast<uint64_t>(src), static_cast<uint64_t>(seq), now);
+    return Outcome{};                     // 旧的不认也回 ok:感知节点不用管,下一帧照发
   }
   if (cmd == "vel")
     return DoVel(JsonNumField(line, "fwd", 0.0), JsonNumField(line, "lat", 0.0),
