@@ -1842,5 +1842,9 @@ def test_W47_Nav2参数_没有YAML别名_机身是矩形_用Lattice和MPPI():
     assert cs["FollowPath"]["plugin"] == "nav2_mppi_controller::MPPIController"
     assert 1.0 / cs["controller_frequency"] <= cs["FollowPath"]["model_dt"] + 1e-9, \
         "MPPI 要控制周期不大于 model_dt,不然 controller_server 起不来"
+    f = cs["FollowPath"]
+    assert f["prune_distance"] >= f["vx_max"] * f["time_steps"] * f["model_dt"], \
+        "MPPI 只看 prune_distance 那么长的路:比「最高速 × 推算时长」短,它就跑不到最高速" \
+        "(2026-10-29 仿真里卡在 0.6 m/s)"
     assert d["planner_server"]["ros__parameters"]["GridBased"]["plugin"] == \
         "nav2_smac_planner/SmacPlannerLattice"

@@ -30,7 +30,12 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 SCENARIOS = ROOT / "tools" / "navbench_scenarios.json"
 #: 仿真狗的参数(照真机量过的、保守的):链路延迟、起步切步态、刹车减速度上限。
-ROBOT = {"rear": True, "cone": True, "latency": 0.1, "gait": 0.3, "decel": 1.5, "clearance": True}
+ROBOT = {"rear": True, "cone": True, "latency": 0.1, "gait": 0.3, "decel": 1.5, "clearance": True,
+         "max_vx": 1.0}
+#: 导航限速(米/秒;``--vmax`` 改):低速档满量程约 1.0(用户 2026-10-29:遥控器低速档 0.6–1.0)。
+VMAX = {"v": 1.0}
+#: ``--trace``:每秒记一笔(时刻、位置、实际速度、Nav2 给的速度),查慢在哪。
+TRACE = {"on": False}
 
 
 @dataclass
@@ -46,6 +51,9 @@ class Result:
     blocked: int = 0
     replans: int = 0
     goal_dist_m: float = math.nan
+    #: 场景要求多少秒内到(``deadline_s``);到了而且没超时才算「限时内」。
+    deadline_s: float | None = None
+    in_time: bool | None = None
     reason: str = ""
     extra: dict[str, Any] = field(default_factory=dict)
 
@@ -159,6 +167,7 @@ async def run_planned(sc: dict[str, Any], defaults: dict[str, Any], seed: int,
             t.c.ms = _NAV2["t_ms"] = _NAV2["t_ms"] + 60_000      # 仿真钟跨场景只往前
         t.nav.load_grid(Path(d))
         await t.start(sx, sy, syaw)
+        await t.nav.set_speed(VMAX["v"])
         if link is not None:
             for _ in range(200):                              # 等 Nav2 收下这张图、时钟走起来
                 await t.一拍()
@@ -210,6 +219,11 @@ async def run_planned(sc: dict[str, Any], defaults: dict[str, Any], seed: int,
                     "nav2_cmd": None if c is None else [round(float(x), 3) for x in c[2:]],
                     "status": str(t.status[-1]) if t.status else "",
                     "path": "nav2" if getattr(t.nav, "_nav2_goal", None) else "planned"}
+            if TRACE["on"] and k % 10 == 0:
+                c = getattr(getattr(t.nav, "link", None), "cmd", None)
+                res.extra.setdefault("trace", []).append(
+                    [round(now), round(t.r.x, 1), round(t.r.y, 1), round(float(t.r.speed[0]), 2),
+                     None if c is None else round(float(c[2]), 2)])
             v = abs(t.r.speed[0]) > 0.02 or abs(t.r.speed[1]) > 0.05
             if moving and not v:
                 res.stops += 1
@@ -240,6 +254,9 @@ async def run_planned(sc: dict[str, Any], defaults: dict[str, Any], seed: int,
         res.ok = res.outcome == "reach" and not res.crashed
     else:
         res.ok = res.outcome in ("fail", "refused") and not res.crashed
+    if sc.get("deadline_s") is not None:
+        res.deadline_s = float(sc["deadline_s"])
+        res.in_time = res.ok and res.time_s <= res.deadline_s
     return res
 
 
@@ -266,19 +283,22 @@ def summarize(results: list[Result]) -> list[dict[str, Any]]:
             "time_med": round(statistics.median(times), 1) if times else None,
             "stops_mean": round(statistics.mean(r.stops for r in rs), 1),
             "blocked_mean": round(statistics.mean(r.blocked for r in rs), 1),
-            "fails": reasons})
+            "fails": reasons,
+            "in_time": (sum(bool(r.in_time) for r in rs)
+                        if any(r.deadline_s is not None for r in rs) else None)})
     return rows
 
 
 def table(rows: list[dict[str, Any]], backend: str) -> str:
     out = [f"## 后端 {backend}", "",
-           "| 场景 | 成功 | 撞 | 用时中位(s) | 平均停车 | 平均被挡 | 没成的原因 |",
-           "|---|---|---|---|---|---|---|"]
+           "| 场景 | 成功 | 撞 | 用时中位(s) | 限时内 | 平均停车 | 平均被挡 | 没成的原因 |",
+           "|---|---|---|---|---|---|---|---|"]
     for r in rows:
         why = ";".join(f"{k} ×{v}" for k, v in sorted(r["fails"].items(), key=lambda x: -x[1]))
-        out.append(f"| {r['scenario']} | {r['ok']}/{r['n']} | {r['crash']} | "
-                   f"{r['time_med'] if r['time_med'] is not None else '—'} | {r['stops_mean']} | "
-                   f"{r['blocked_mean']} | {why[:160] or '—'} |")
+        med = r["time_med"] if r["time_med"] is not None else "—"
+        intime = "—" if r["in_time"] is None else f"{r['in_time']}/{r['n']}"
+        out.append(f"| {r['scenario']} | {r['ok']}/{r['n']} | {r['crash']} | {med} | {intime} | "
+                   f"{r['stops_mean']} | {r['blocked_mean']} | {why[:160] or '—'} |")
     tot_ok = sum(r["ok"] for r in rows)
     tot = sum(r["n"] for r in rows)
     out += ["", f"合计 {tot_ok}/{tot}({100 * tot_ok / max(tot, 1):.0f}%),"
@@ -312,11 +332,15 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--only", default="", help="只跑这几个场景(逗号分开)")
     p.add_argument("--seed", type=int, default=1000)
     p.add_argument("--json", type=Path, default=None, help="每一次的结果存成 JSON")
+    p.add_argument("--vmax", type=float, default=1.0, help="导航限速(米/秒,缺省 1.0)")
+    p.add_argument("--trace", action="store_true", help="每秒记一笔速度,存进 JSON")
     a = p.parse_args(argv)
     sys.path.insert(0, str(ROOT / "packages" / "robot-agent" / "tests"))
     import logging
     logging.disable(logging.WARNING)
     only = {s for s in a.only.split(",") if s} or None
+    VMAX["v"] = a.vmax
+    TRACE["on"] = a.trace
     try:
         results = asyncio.run(bench(a.backend, a.n, only, a.seed))
     finally:
@@ -325,7 +349,8 @@ def main(argv: list[str] | None = None) -> int:
     print(table(rows, a.backend))
     if a.json is not None:
         a.json.parent.mkdir(parents=True, exist_ok=True)
-        a.json.write_text(json.dumps({"backend": a.backend, "robot": ROBOT, "rows": rows,
+        a.json.write_text(json.dumps({"backend": a.backend, "robot": ROBOT, "vmax": a.vmax,
+                                      "rows": rows,
                                       "runs": [asdict(r) for r in results]},
                                      ensure_ascii=False, indent=1), encoding="utf-8")
     return 0
