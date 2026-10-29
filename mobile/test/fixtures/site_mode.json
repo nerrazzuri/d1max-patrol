@@ -1,4 +1,5 @@
 {
+  "default_armed": null,
   "label": "访客",
   "manual_until_ms": null,
   "mode": "visitor",
