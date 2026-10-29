@@ -445,7 +445,7 @@ static void 分档许可_按连接认_旧连接的永远不认_新连接接管()
   CHECK(r.gate.SetClearance(later + ms, velgate::kEndHead, 0.6, 2, 6, later) == kPermitAccepted);
   CHECK(r.gate.Live(true, later)->fwd == 0.6);
   CHECK(r.gate.SetClearance(later + ms, velgate::kEndHead, 0.3, 3, 1, later) == kPermitTookOver);
-  CHECK(r.gate.HolderConn(velgate::kEndHead) == 3);
+  CHECK(r.gate.PermitConn() == 3);
   CHECK(r.gate.Live(true, later)->fwd == 0.3);
   CHECK(r.gate.SetClearance(later + ms, velgate::kEndHead, 0.9, 2, 7, later) == kPermitRejected);
   // 同一条连接里不带序号(老感知节点):按 TCP 的顺序照收
@@ -453,7 +453,33 @@ static void 分档许可_按连接认_旧连接的永远不认_新连接接管()
   CHECK(r.gate.Live(true, later)->fwd == 0.4);
 }
 
+// H1(#208 复查第三轮):接管是整条连接退役 —— 新连接在**一头**发了许可,旧连接在**另一头**在途的报文也不认
+// (原来按头尾各记持有者:旧连接给尾端的高档许可在头端被接管以后还能续期)。接管回报退役的是哪条连接。
+static void 分档许可_接管是整条连接退役_另一头在途的旧报文也不认() {
+  Rig r;
+  CHECK(r.gate.SetMaxForward(1.0));
+  r.gate.RequireClearance(true);
+  r.gate.OnHead(1);                                     // 往前走要头端的许可
+  const auto ms = std::chrono::milliseconds(300);
+  using velgate::kPermitRejected;
+  using velgate::kPermitTookOver;
+  uint64_t retired = 99;
+  CHECK(r.gate.SetClearance(r.now + ms, velgate::kEndHead, 0.2, 1, 1, r.now, &retired) ==
+        kPermitTookOver);
+  CHECK(retired == 0);
+  CHECK(r.gate.SetClearance(r.now + ms, velgate::kEndTail, 0.2, 2, 1, r.now, &retired) ==
+        kPermitTookOver);                               // 新连接只在尾端发了许可
+  CHECK(retired == 1);                                  // 调用方关掉连接 1
+  r.now += std::chrono::milliseconds(400);              // 头端许可过期了
+  CHECK(r.gate.SetClearance(r.now + ms, velgate::kEndHead, 0.9, 1, 2, r.now, &retired) ==
+        kPermitRejected);                               // 连接 1 在途的头端高档报文:不认
+  CHECK(r.vel(0.9, 1000) == "");
+  CHECK(r.gate.Live(true, r.now)->fwd == 0);
+  CHECK(r.gate.PermitConn() == 2);
+}
+
 int main() {
+  分档许可_接管是整条连接退役_另一头在途的旧报文也不认();
   分档许可_按连接认_旧连接的永远不认_新连接接管();
   分档许可_按许可限前进_最新的说了算();
   比例上限_超过0点5要开第二层许可_后退横移转向还是0点5();

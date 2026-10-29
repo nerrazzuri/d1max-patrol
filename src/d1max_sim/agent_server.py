@@ -126,8 +126,9 @@ class SimAgentServer:
         self._clear_until = [-math.inf, -math.inf]
         #: 分档许可(W47):两头各自的比例上限(最新的那条说了算)。
         self._clear_cap = [0.0, 0.0]
-        #: 两头现在认的是哪条连接的许可、那条连接上的帧序号(#208 首审 G1、复查 H1:按连接认)。
-        self._clear_conn = [0, 0]
+        #: 现在认的是哪条连接的许可(两头共用一个:接管是整条连接退役,复查第三轮 H1)、
+        #: 那条连接上两头各自的帧序号(#208 首审 G1、复查 H1:按连接认)。
+        self._permit_conn = 0
         self._clear_seq = [0, 0]
         #: 每条连上来的连接一个递增号(同 patrol_agent 的 g_conn_seq)。
         self._conn_seq = 0
@@ -475,14 +476,14 @@ class SimAgentServer:
             if conn > 0:
                 # 同 vel_gate.hpp:按连接认 —— 更旧连接的永远不认(过期了也不认);同一条连接里带序号的
                 # 要往上走;更新的连接发许可就接管,旧的那条关掉(它缓冲里没读的旧许可一起作废)
-                held = self._clear_conn[i]
+                held = self._permit_conn
                 if conn < held or (conn == held and seq > 0 and seq <= self._clear_seq[i]):
                     return
                 if conn > held:
                     old = self._writer_of.get(held)
                     if old is not None and held > 0:
                         old.close()
-                    self._clear_conn[i], self._clear_seq[i] = conn, 0
+                    self._permit_conn, self._clear_seq = conn, [0, 0]
                 if seq > 0:
                     self._clear_seq[i] = seq
             until = now + ms / 1000.0

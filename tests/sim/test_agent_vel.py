@@ -463,11 +463,22 @@ async def test_H1_许可按连接认_旧连接的过期了也不认_新连接接
         new = _RawClient(r2, w2)
         await new.recv()                                                    # hello
         assert (await new.call("clear", ms=300, vmax=0.24, seq=1)).ok       # 新连接接管
-        assert sim._clear_conn[0] == 2 and abs(sim._clear_cap[0] - 0.2) < 1e-9
+        assert sim._permit_conn == 2 and abs(sim._clear_cap[0] - 0.2) < 1e-9
         await asyncio.wait_for(client._reader.read(), 2)                   # 旧连接被关掉:读到底
         assert client._reader.at_eof()
         await asyncio.sleep(0.4)                                            # 过期了
-        assert sim._clear_conn[0] == 2, "旧连接已经关了:它的许可复活不了"
+        assert sim._permit_conn == 2, "旧连接已经关了:它的许可复活不了"
         for bad in ({"src": -1}, {"seq": "x"}):
             assert not (await new.call("clear", ms=300, vmax=0.2, **bad)).ok, bad
         await new.close()
+
+
+async def test_H1复查三_接管是整条连接退役_另一头在途的旧报文也不认():
+    """同 vel_gate.hpp:新连接在尾端发了许可,旧连接在头端在途的高档报文过期后也不认。"""
+    async with _client(require_clearance=True, max_fraction=1.0) as (sim, _client_):
+        g = sim._cancel_gen
+        await sim._run("clear", {"end": "head", "ms": 300, "vmax": 0.24, "seq": 1, "_conn": 1}, g)
+        await sim._run("clear", {"end": "tail", "ms": 300, "vmax": 0.24, "seq": 1, "_conn": 2}, g)
+        sim._clear_until[0] = -1.0                                   # 头端许可过期了
+        await sim._run("clear", {"end": "head", "ms": 300, "vmax": 1.2, "seq": 2, "_conn": 1}, g)
+        assert sim._clear_until[0] == -1.0 and sim._permit_conn == 2, "旧连接哪一头的都不认"
