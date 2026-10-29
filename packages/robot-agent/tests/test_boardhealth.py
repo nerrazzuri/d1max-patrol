@@ -208,7 +208,8 @@ def _假频率(tmp_path, *, cool=0):
         (cpu / pol).mkdir(parents=True)
         (cpu / pol / "scaling_cur_freq").write_text(f"{khz}\n")
     dev = tmp_path / "devfreq"
-    for name, hz in (("fb000000.gpu", 1000000000), ("fdab0000.npu", 800000000), ("dmc", 2112000000)):
+    for name, hz in (("fb000000.gpu", 1000000000), ("fdab0000.npu", 800000000),
+                     ("dmc", 2112000000)):
         (dev / name).mkdir(parents=True)
         (dev / name / "cur_freq").write_text(f"{hz}\n")
     th = tmp_path / "thermal"
