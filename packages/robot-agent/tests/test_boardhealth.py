@@ -198,3 +198,69 @@ def test_配置样例读得进来():
     c = BoardConfig.load(root / "deploy" / "board.example.json")
     assert [f.name for f in c.fans] == ["exhaust_l", "exhaust_r", "stir"]
     assert c.limits == Limits()
+
+
+# ---------------------------------------------------------------- 硬件组 C2:频率、降频也记下来
+
+def _假频率(tmp_path, *, cool=0):
+    cpu = tmp_path / "cpufreq"
+    for pol, khz in (("policy0", 1800000), ("policy4", 2256000), ("policy6", 2304000)):
+        (cpu / pol).mkdir(parents=True)
+        (cpu / pol / "scaling_cur_freq").write_text(f"{khz}\n")
+    dev = tmp_path / "devfreq"
+    for name, hz in (("fb000000.gpu", 1000000000), ("fdab0000.npu", 800000000), ("dmc", 2112000000)):
+        (dev / name).mkdir(parents=True)
+        (dev / name / "cur_freq").write_text(f"{hz}\n")
+    th = tmp_path / "thermal"
+    for i, (typ, st) in enumerate((("cpufreq-cpu0", 0), ("cpufreq-cpu4", cool),
+                                   ("devfreq-fb000000.gpu", 0))):
+        d = th / f"cooling_device{i}"
+        d.mkdir(parents=True)
+        (d / "type").write_text(typ + "\n")
+        (d / "cur_state").write_text(f"{st}\n")
+        (d / "max_state").write_text("5\n")
+    return cpu, dev, th
+
+
+def test_C2_读频率_CPU各簇_GPU_NPU_内存_单位MHz(tmp_path):
+    from d1max_agent.boardhealth import read_cooling, read_freqs
+    cpu, dev, th = _假频率(tmp_path, cool=2)
+    assert read_freqs(cpu, dev) == {"cpu0": 1800, "cpu4": 2256, "cpu6": 2304, "gpu": 1000,
+                                    "npu": 800, "dmc": 2112}
+    assert read_cooling(th) == {"cpufreq-cpu4": "2/5"}, "只报正在压频率的"
+    assert read_freqs(tmp_path / "没有", tmp_path / "没有") == {}
+    assert read_cooling(tmp_path / "没有") == {}
+
+
+def test_C2_日志每行带频率和降频_降频了健康里写出来(tmp_path):
+    from d1max_agent.boardhealth import read_cooling, read_freqs
+    cpu, dev, th = _假频率(tmp_path, cool=0)
+    m, t, temps, events, counters = _mon(tmp_path)
+    m._read_freqs = lambda: read_freqs(cpu, dev)
+    m._read_cooling = lambda: read_cooling(th)
+    t[0] += 10
+    _转(counters, 3000, 10)
+    m.sample()
+    (th / "cooling_device1" / "cur_state").write_text("3\n")
+    t[0] += 10
+    _转(counters, 3000, 10)
+    m.sample()
+    rows = list(csv.DictReader(next((tmp_path / "log").glob("board-*.csv")).open()))
+    assert rows[0]["freqs_mhz"] == "cpu0=1800;cpu4=2256;cpu6=2304;dmc=2112;gpu=1000;npu=800"
+    assert rows[0]["throttle"] == "" and rows[1]["throttle"] == "cpufreq-cpu4=3/5"
+    b = {d["id"]: d for d in m.health()}["board"]
+    assert "降频" in b["detail"] and "cpu4" in b["detail"]
+
+
+def test_C2_老格式的当天日志_换一个文件接着记_不把列写乱(tmp_path):
+    m, t, temps, events, counters = _mon(tmp_path)
+    log = tmp_path / "log"
+    log.mkdir()
+    from datetime import datetime, timezone
+    day = datetime.fromtimestamp(1_793_000_000 + t[0] + 10, tz=timezone.utc)
+    (log / f"board-{day:%Y%m%d}.csv").write_text("utc,level,soc_c\n")
+    t[0] += 10
+    _转(counters, 3000, 10)
+    m.sample()
+    new = log / f"board-{day:%Y%m%d}-v2.csv"
+    assert new.exists() and "freqs_mhz" in new.read_text().splitlines()[0]

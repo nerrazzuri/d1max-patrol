@@ -48,6 +48,8 @@ STOP_SAMPLES = 2
 _NAME = re.compile(r"[a-z][a-z0-9_]{0,15}")
 THERMAL_ROOT = Path("/sys/class/thermal")
 HWMON_ROOT = Path("/sys/class/hwmon")
+CPUFREQ_ROOT = Path("/sys/devices/system/cpu/cpufreq")
+DEVFREQ_ROOT = Path("/sys/class/devfreq")
 
 
 class BoardConfigError(ValueError):
@@ -196,6 +198,59 @@ def read_nvme(root: Path = HWMON_ROOT) -> float | None:
     return None
 
 
+def _read_int(p: Path) -> int | None:
+    try:
+        return int(p.read_text().strip())
+    except (OSError, ValueError):
+        return None
+
+
+def read_freqs(cpu_root: Path = CPUFREQ_ROOT, dev_root: Path = DEVFREQ_ROOT) -> dict[str, int]:
+    """此刻的频率(MHz;硬件组 C2 要看降没降频):CPU 每一簇(``cpufreq/policyN`` → ``cpuN``,
+    RK3588 是 0、4、6 三簇)、devfreq 设备(``fb000000.gpu`` → ``gpu``、``fdab0000.npu`` → ``npu``、
+    ``dmc`` 内存)。读不了的跳过。"""
+    out: dict[str, int] = {}
+    try:
+        pols = sorted(cpu_root.glob("policy*"))
+        devs = sorted(dev_root.glob("*"))
+    except OSError:
+        return out
+    for p in pols:
+        v = _read_int(p / "scaling_cur_freq")                   # kHz
+        if v is not None:
+            out[f"cpu{p.name.removeprefix('policy')}"] = round(v / 1000)
+    for d in devs:
+        v = _read_int(d / "cur_freq")                           # Hz
+        if v is not None:
+            out[d.name.rsplit(".", 1)[-1]] = round(v / 1_000_000)
+    return out
+
+
+def read_cooling(root: Path = THERMAL_ROOT) -> dict[str, str]:
+    """正在压频率的散热设备(``cooling_device*`` 的 ``cur_state`` > 0):类型 → ``"当前/最大"``。
+    空 = 没在降频。"""
+    out: dict[str, str] = {}
+    try:
+        devs = sorted(root.glob("cooling_device*"))
+    except OSError:
+        return out
+    for d in devs:
+        cur = _read_int(d / "cur_state")
+        if not cur:
+            continue
+        try:
+            typ = (d / "type").read_text().strip()
+        except OSError:
+            continue
+        mx = _read_int(d / "max_state")
+        out[typ] = f"{cur}/{mx if mx is not None else '?'}"
+    return out
+
+
+def _kv(d: dict[str, Any]) -> str:
+    return ";".join(f"{k}={v}" for k, v in sorted(d.items()))
+
+
 # ------------------------------------------------------------ 判级
 
 
@@ -241,11 +296,17 @@ class BoardMonitor:
                  mono: Callable[[], float] = time.monotonic, wall: Callable[[], float] = time.time,
                  read_soc: Callable[[], dict[str, float]] = read_soc,
                  read_nvme: Callable[[], float | None] = read_nvme,
-                 counter: Callable[[str, list[int]], Any] | None = None) -> None:
+                 counter: Callable[[str, list[int]], Any] | None = None,
+                 read_freqs: Callable[[], dict[str, int]] = read_freqs,
+                 read_cooling: Callable[[], dict[str, str]] = read_cooling) -> None:
         self.cfg = cfg
         self.emit = emit
         self._mono, self._wall = mono, wall
         self._read_soc, self._read_nvme = read_soc, read_nvme
+        self._read_freqs, self._read_cooling = read_freqs, read_cooling
+        #: 此刻的频率(MHz)、正在压频率的散热设备(硬件组 C2)。
+        self.freqs: dict[str, int] = {}
+        self.throttle: dict[str, str] = {}
         if counter is None:
             from d1max_contract.gpio import EdgeCounter
 
@@ -321,6 +382,18 @@ class BoardMonitor:
             fan.slow = fan.slow + 1 if fan.rpm < fan.cfg.min_rpm else 0
         self.soc = self._read_soc()
         self.nvme = self._read_nvme()
+        try:
+            self.freqs = self._read_freqs()
+            throttle = self._read_cooling()
+        except Exception:                                # 频率读不了不影响判级
+            log.exception("读频率、降频状态出错")
+            self.freqs, throttle = {}, {}
+        if set(throttle) != set(self.throttle):
+            if throttle:
+                log.warning("上装主控板在降频:%s", _kv(throttle))
+            else:
+                log.info("上装主控板不降频了")
+        self.throttle = throttle
         soc_max = max(self.soc.values()) if self.soc else None
         stopped = self.stopped()
         lvl, why = classify(soc_max, self.nvme, len(stopped), self.level, self.cfg.limits)
@@ -338,15 +411,23 @@ class BoardMonitor:
         d = Path(self.cfg.log_dir)
         p = d / f"board-{stamp:%Y%m%d}.csv"
         head = ["utc", "level", "soc_c", "nvme_c", *(f"fan_{f.cfg.name}_rpm" for f in self._fans),
-                "zones"]
+                "zones", "freqs_mhz", "throttle"]
 
         def num(v: float | None) -> str:
             return "" if v is None else f"{v:.1f}"
         row = [stamp.isoformat(timespec="seconds"), lvl, num(soc_max), num(self.nvme),
                *("" if f.rpm is None else str(f.rpm) for f in self._fans),
-               ";".join(f"{k}={v:.1f}" for k, v in sorted(self.soc.items()))]
+               ";".join(f"{k}={v:.1f}" for k, v in sorted(self.soc.items())),
+               _kv(self.freqs), _kv(self.throttle)]
         try:
             d.mkdir(parents=True, exist_ok=True)
+            n = 1
+            while p.exists():                    # 当天的文件是老格式(列不一样):换一个接着记
+                with p.open(encoding="utf-8") as fh:
+                    if fh.readline().rstrip("\r\n") == ",".join(head):
+                        break
+                n += 1
+                p = d / f"board-{stamp:%Y%m%d}-v{n}.csv"
             new = not p.exists()
             with p.open("a", newline="", encoding="utf-8") as fh:
                 w = csv.writer(fh)
@@ -367,7 +448,8 @@ class BoardMonitor:
             state = {"ok": "online", "warn": "degraded"}.get(self.level, "error")
             name = {"ok": "", "warn": "警戒:", "shed": "过热,已降负载:",
                     "critical": "严重过热:"}[self.level]
-            out.append(device("board", state, f"{name}{self.reason}"))
+            slow = f";降频中:{_kv(self.throttle)}" if self.throttle else ""
+            out.append(device("board", state, f"{name}{self.reason}{slow}"))
         stopped = set(self.stopped())
         for f in self._fans:
             fid = f"fan:{f.cfg.name}"
