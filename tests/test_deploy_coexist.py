@@ -51,6 +51,8 @@ from tests.test_deploy_files import DEPLOY
     "OBS_WANTS_LINK": "/etc/systemd/system/multi-user.target.wants/d1max-obstacles.service",
     "PERS_UNIT": "d1max-persons.service",
     "PERS_WANTS_LINK": "/etc/systemd/system/multi-user.target.wants/d1max-persons.service",
+    "NAV2_UNIT": "d1max-nav2.service",
+    "NAV2_WANTS_LINK": "/etc/systemd/system/multi-user.target.wants/d1max-nav2.service",
     "MERGE_UNIT": "d1max-lidar-merge.service",
     "MERGE_WANTS_LINK": "/etc/systemd/system/multi-user.target.wants/d1max-lidar-merge.service",
     "SIDE_UNIT": "d1max-sidecar.service",

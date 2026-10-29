@@ -169,7 +169,7 @@ class AgentRuntime:
                  robot_radius_m: float | None = None, obstacles: str = "none",
                  persons: str = "none", persons_socket: Path | None = None,
                  persons_snapshots: Path | None = None,
-                 obs_socket: Path | None = None) -> None:
+                 obs_socket: Path | None = None, nav2_socket: Path | None = None) -> None:
         self.registration = registration
         #: RTK 来源(W09e,``d1max_agent.rtk``:自己的串口驱动或厂家的);没配是 None。
         self.rtk = rtk
@@ -218,7 +218,7 @@ class AgentRuntime:
         self._head_told: tuple[str, bool] | tuple[()] = ()
         if obstacles == "bridge":
             if parts is None or not hasattr(parts.nav, "guard"):
-                raise ValueError("--obstacles bridge 要配 --nav planned(守卫在规划后端里)")
+                raise ValueError("--obstacles bridge 要配 --nav planned 或 nav2(守卫在规划后端里)")
             from d1max_agent.obs_server import ObsBridgeServer
             from d1max_agent.obstacles import ObstacleGuard, ObstacleView
             self.obs_view = ObstacleView(monotonic=monotonic or time.monotonic)
@@ -226,6 +226,13 @@ class AgentRuntime:
             parts.nav.guard = ObstacleGuard()
             self._obs_srv = ObsBridgeServer(obs_socket or store_dir / "obs.sock", self.obs_view,
                                             monotonic=monotonic or time.monotonic)
+        #: W47:Nav2 后端的转接服务端(``nav2.sock``,Nav2 转接节点来连)。
+        self._nav2_srv: Any = None
+        if parts is not None and hasattr(parts.nav, "nav2_ready"):
+            from d1max_agent.navbridge import NavBridgeServer
+            self._nav2_srv = NavBridgeServer(nav2_socket or store_dir / "nav2.sock",
+                                             monotonic=monotonic or time.monotonic)
+            parts.nav.link = self._nav2_srv
         #: W41 全局重定位:拿感知的墙那一层在整张图上套位置(配了避障、定位器才有)。
         from d1max_agent.globalloc import GlobalLoc
         self.globalloc: GlobalLoc | None = GlobalLoc(self.obs_view) \
@@ -2045,6 +2052,8 @@ class AgentRuntime:
             await self._locsrv.start()
         if self._obs_srv is not None:
             await self._obs_srv.start()          # 感知节点(W11)也可以先连上来
+        if self._nav2_srv is not None:
+            await self._nav2_srv.start()         # Nav2 转接节点(W47)
         if self._pers_srv is not None:
             await self._pers_srv.start()         # 人员检测节点(W24)
         await self.transport.connect()          # 首次连接:after_connect 会走 _flush_reconnect
@@ -2120,6 +2129,8 @@ class AgentRuntime:
             await _step("关本机定位桥", self._locsrv.close)
         if self._obs_srv is not None:
             await _step("关本机障碍桥", self._obs_srv.close)
+        if self._nav2_srv is not None:
+            await _step("关 Nav2 转接", self._nav2_srv.close)
         if self._pers_srv is not None:
             await _step("关本机人员桥", self._pers_srv.close)
         if self.video is not None:

@@ -1,0 +1,181 @@
+"""代理 ↔ Nav2 转接节点的报文(W47,`docs/W47-导航换Nav2-设计.md`)。
+
+转接节点(ROS 那一侧,跟 Nav2 一起起)跟代理在同一台机器上,经 Unix 套接字说话:
+**一行一个 JSON**,每行最多 :data:`MAX_LINE` 字节;代理监听、转接节点来连,第一行是 ``hello``。
+跟定位桥同一套写法。
+
+**Nav2 看到的一切都由代理送过去**(时钟、里程、``map→odom``、障碍栅格):时间全在代理的一个钟上,
+绕开狗的传感器钟(比系统钟慢约 230 天);Nav2 看到的跟代理的守卫看到的是同一份。
+Nav2 一律 ``use_sim_time``,转接节点按代理送来的时刻发 ``/clock``。
+
+代理 → 转接节点:
+
+- ``hello {proto}``
+- ``map {req, map_id, map_version, dir, nogo, speed}``:地图目录(``floor.pgm/.yaml``)。
+  ``nogo`` 是禁行区多边形(地图系,米)的列表,烧成致命格;``speed`` 是 ``[{poly, mps}]`` 限速区。
+  区域改了再发一遍。
+- ``tick {t_ms, odom, vel, map_odom}``:每拍一条。
+  ``t_ms`` 代理的钟(毫秒,严格递增);``odom`` = ``[x, y, yaw]`` 里程;
+  ``vel`` = ``[vx, vy, wz]`` 实测速度(机身系);
+  ``map_odom`` = ``[x, y, yaw]`` 地图系里里程原点在哪。定位可信时才有,不可信是 ``null``:
+  Nav2 那边 TF 过期,自己也会停。
+- ``grid {t_ms, pose, res, size, occ, known}``:感知栅格(机身系、行 = 前、列 = 左,中心在机身)。
+  ``pose`` 是拍下这一帧时的里程 ``[x, y, yaw]``;位图同障碍桥(``obsbridge.pack_bits``)。
+- ``goal {goal_id, x, y, yaw}`` / ``cancel {goal_id}``
+- ``hb {seq}``
+
+转接节点 → 代理:
+
+- ``hello {proto, name, version}``
+- ``ready {ok, reason}``:Nav2 各节点起来了、地图收下了才 ``ok``。
+- ``cmd {t_ms, vx, vy, wz}``:Nav2 出的速度(机身系),``t_ms`` 是它那时候的 ``/clock``。
+- ``goal_state {goal_id, state, reason}``:
+  ``accepted`` / ``succeeded`` / ``aborted`` / ``canceled`` / ``rejected``。
+- ``hb {seq}``
+"""
+
+from __future__ import annotations
+
+import json
+import math
+from typing import Any
+
+from d1max_contract.errors import ContractError
+
+PROTO = 1
+MAX_LINE = 256 * 1024
+GOAL_STATES = ("accepted", "succeeded", "aborted", "canceled", "rejected")
+#: 每种报文必须有的字段(多出来的拒:加字段要升协议)。
+FIELDS: dict[str, tuple[set[str], set[str]]] = {
+    # 类型: (必须的, 可选的)
+    "hello": ({"proto"}, {"name", "version"}),
+    "map": ({"req", "map_id", "map_version", "dir"}, {"nogo", "speed"}),
+    "tick": ({"t_ms", "odom", "vel"}, {"map_odom"}),
+    "grid": ({"t_ms", "pose", "res", "size", "occ", "known"}, set()),
+    "goal": ({"goal_id", "x", "y", "yaw"}, set()),
+    "cancel": ({"goal_id"}, set()),
+    "hb": ({"seq"}, set()),
+    "ready": ({"ok"}, {"reason"}),
+    "cmd": ({"t_ms", "vx", "vy", "wz"}, set()),
+    "goal_state": ({"goal_id", "state"}, {"reason"}),
+    "error": ({"reason"}, set()),
+}
+#: 只许代理发的、只许转接节点发的。
+FROM_AGENT = frozenset({"hello", "map", "tick", "grid", "goal", "cancel", "hb", "error"})
+FROM_BRIDGE = frozenset({"hello", "ready", "cmd", "goal_state", "hb", "error"})
+
+
+def _num(v: Any, what: str) -> float:
+    if isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v):
+        raise ContractError(f"Nav2 转接:{what} 要是有限数:{str(v)[:40]!r}")
+    return float(v)
+
+
+def _int(v: Any, what: str, *, lo: int = 0) -> int:
+    if isinstance(v, bool) or not isinstance(v, int) or v < lo:
+        raise ContractError(f"Nav2 转接:{what} 要是不小于 {lo} 的整数:{v!r}")
+    return v
+
+
+def _triple(v: Any, what: str) -> None:
+    if not isinstance(v, list) or len(v) != 3:
+        raise ContractError(f"Nav2 转接:{what} 要是三个数 [x, y, yaw]")
+    for i, x in enumerate(v):
+        _num(x, f"{what}[{i}]")
+
+
+def _poly(p: Any, what: str) -> None:
+    if not isinstance(p, list) or not 3 <= len(p) <= 256:
+        raise ContractError(f"Nav2 转接:{what} 要是 3–256 个点")
+    for q in p:
+        if not isinstance(q, list) or len(q) != 2:
+            raise ContractError(f"Nav2 转接:{what} 的点要是 [x, y]")
+        _num(q[0], what)
+        _num(q[1], what)
+
+
+def check(msg: dict[str, Any]) -> dict[str, Any]:
+    """查一条报文的形状;不对抛 :class:`ContractError`。"""
+    t = msg.get("type")
+    if t not in FIELDS:
+        raise ContractError(f"Nav2 转接:不认识的报文 {str(t)[:20]!r}")
+    need, opt = FIELDS[t]
+    keys = set(msg) - {"type"}
+    if need - keys or keys - need - opt:
+        raise ContractError(f"Nav2 转接:{t} 的字段不对:缺 {sorted(need - keys)}、"
+                            f"多 {sorted(keys - need - opt)}")
+    if t == "hello":
+        _int(msg["proto"], "proto", lo=1)
+    elif t == "map":
+        _int(msg["req"], "req", lo=1)
+        for k in ("map_id", "map_version", "dir"):
+            if not isinstance(msg[k], str) or len(msg[k]) > 512:
+                raise ContractError(f"Nav2 转接:map.{k} 要是字符串")
+        for i, p in enumerate(msg.get("nogo", [])):
+            _poly(p, f"nogo[{i}]")
+        for i, z in enumerate(msg.get("speed", [])):
+            if not isinstance(z, dict) or set(z) != {"poly", "mps"}:
+                raise ContractError("Nav2 转接:speed 每项要是 {poly, mps}")
+            _poly(z["poly"], f"speed[{i}]")
+            if _num(z["mps"], f"speed[{i}].mps") <= 0:
+                raise ContractError("Nav2 转接:限速要是正数")
+    elif t == "tick":
+        _int(msg["t_ms"], "t_ms")
+        _triple(msg["odom"], "odom")
+        _triple(msg["vel"], "vel")
+        if msg.get("map_odom") is not None:
+            _triple(msg["map_odom"], "map_odom")
+    elif t == "grid":
+        _int(msg["t_ms"], "t_ms")
+        _triple(msg["pose"], "pose")
+        if not 0 < _num(msg["res"], "res") <= 1:
+            raise ContractError("Nav2 转接:res 要在 (0, 1] 米")
+        _int(msg["size"], "size", lo=1)
+        if msg["size"] > 400:
+            raise ContractError("Nav2 转接:size 最多 400")
+        for k in ("occ", "known"):
+            if not isinstance(msg[k], str):
+                raise ContractError(f"Nav2 转接:{k} 要是 base64 字符串")
+    elif t in ("goal", "cancel", "goal_state"):
+        _int(msg["goal_id"], "goal_id", lo=1)
+        if t == "goal":
+            for k in ("x", "y", "yaw"):
+                _num(msg[k], k)
+        if t == "goal_state" and msg["state"] not in GOAL_STATES:
+            raise ContractError(f"Nav2 转接:state 要是 {'/'.join(GOAL_STATES)}")
+    elif t == "hb":
+        _int(msg["seq"], "seq")
+    elif t == "ready":
+        if not isinstance(msg["ok"], bool):
+            raise ContractError("Nav2 转接:ready.ok 要是 true/false")
+    elif t == "cmd":
+        _int(msg["t_ms"], "t_ms")
+        for k in ("vx", "vy", "wz"):
+            _num(msg[k], k)
+    for k in ("reason", "name", "version"):
+        if k in msg and (not isinstance(msg[k], str) or len(msg[k]) > 300):
+            raise ContractError(f"Nav2 转接:{k} 要是字符串、最多 300 字")
+    return msg
+
+
+def encode(msg: dict[str, Any]) -> bytes:
+    check(msg)
+    line = json.dumps(msg, ensure_ascii=False, separators=(",", ":")).encode()
+    if len(line) + 1 > MAX_LINE:
+        raise ContractError(f"Nav2 转接:一行太长({len(line)} 字节)")
+    return line + b"\n"
+
+
+def parse(line: bytes, *, allowed: frozenset[str] | None = None) -> dict[str, Any]:
+    if len(line) > MAX_LINE:
+        raise ContractError("Nav2 转接:一行太长")
+    try:
+        msg = json.loads(line)
+    except (ValueError, UnicodeDecodeError) as exc:
+        raise ContractError(f"Nav2 转接:不是 JSON:{exc}") from None
+    if not isinstance(msg, dict):
+        raise ContractError("Nav2 转接:一行要是 JSON 对象")
+    check(msg)
+    if allowed is not None and msg["type"] not in allowed:
+        raise ContractError(f"Nav2 转接:这一头不该收到 {msg['type']}")
+    return msg

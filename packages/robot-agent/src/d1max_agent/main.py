@@ -119,9 +119,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--sim-localizer", action="store_true",
                    help="仿真:在进程里起一个仿真定位器连本机定位桥"
                         "(要 --hal sim --localizer bridge)")
-    p.add_argument("--nav", choices=("straight", "planned"), default="straight",
+    p.add_argument("--nav", choices=("straight", "planned", "nav2"), default="straight",
                    help="导航后端(W10):straight = 直线桥(过渡期);planned = 在规划栅格上规划、"
-                        "守禁行区与限速区。**真机器人在 W10 真机项验过之前不改**")
+                        "守禁行区与限速区;nav2 = 规划、局部避障交给 Nav2(W47,要 d1max-nav2 单元;"
+                        "Nav2 没就绪的那一段退回 planned)。**真机器人在真机项验过之前不改**")
+    p.add_argument("--nav2-socket", type=Path, default=None,
+                   help="Nav2 转接的 Unix 套接字(默认 <store-dir>/nav2.sock)")
     p.add_argument("--obstacles", choices=("none", "bridge"), default="none",
                    help="局部避障(W11):bridge = 本机障碍桥上的感知节点(d1max-obstacles)给局部栅格,"
                         "规划后端每条速度命令先过守卫;要 --nav planned。"
@@ -325,8 +328,10 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         p.error("--outbox 与 --runs-root 给且只给一个(运行记录落在哪)")
     if args.mapping and args.outbox is None:
         p.error("--mapping 要配 --outbox(录包和生成的图都写进发件箱传给站点)")
-    if args.obstacles == "bridge" and args.nav != "planned":
-        p.error("--obstacles bridge 要配 --nav planned(守卫在规划后端里)")
+    if args.obstacles == "bridge" and args.nav not in ("planned", "nav2"):
+        p.error("--obstacles bridge 要配 --nav planned 或 nav2(守卫在规划后端里)")
+    if args.nav == "nav2" and args.obstacles != "bridge":
+        p.error("--nav nav2 要配 --obstacles bridge(Nav2 的障碍层吃感知节点的栅格)")
     if args.robot_radius is not None and not (0.1 <= args.robot_radius <= 2.0):
         p.error("--robot-radius 要在 0.1–2.0 米之间")
     if args.outbox is not None:
@@ -537,7 +542,8 @@ def build(args: argparse.Namespace) -> Assembled:
                                releases=_releases(args, registration),
                                localizer=args.localizer, loc_socket=args.loc_socket,
                                rtk=make_rtk(args), obstacles=args.obstacles,
-                               obs_socket=args.obs_socket, persons=args.persons,
+                               obs_socket=args.obs_socket, nav2_socket=args.nav2_socket,
+                               persons=args.persons,
                                persons_socket=args.persons_socket,
                                persons_snapshots=args.persons_snapshots)
         runtime.evidence_sealed = sealer is not None   # W30b:能力里报,没封站点报 P2
