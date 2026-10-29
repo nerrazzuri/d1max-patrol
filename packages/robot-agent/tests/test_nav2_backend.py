@@ -369,3 +369,57 @@ async def test_看不见的地方快了就慢下来_看得见的挡才停(tmp_pa
         await t.一拍()
     assert abs(t.r.speed[0]) < 0.05, "看得见的挡:停"
 
+
+
+# ------------------------------------------------------------ 看得清就快(决策 76)
+
+
+async def _看清(t, n=8):
+    for _ in range(n):
+        await t.一拍()
+    return t.nav._vis_cap(await t.nav._here(), 1)
+
+
+async def test_看得清就快_空地放到最快(tmp_path):
+    from d1max_agent.bridges.nav2_nav import V_FAST
+    t = _台(tmp_path, 假转接())
+    await t.start(1.5, 4.0)
+    assert await _看清(t) == pytest.approx(V_FAST)
+
+
+async def test_看得清就快_正前方有箱子按刹车距离降(tmp_path):
+    from d1max_agent.bridges.nav2_nav import V_FAST
+    t = _台(tmp_path, 假转接())
+    await t.start(1.5, 4.0)
+    t.world.dyn["box"] = (3.3, 3.7, 3.7, 4.3)               # 机头前约 1.3 m
+    v = await _看清(t)
+    assert v < 0.7 * V_FAST, v
+
+
+async def test_看得清就快_斜前方有人就降_地图上的墙不算(tmp_path):
+    from d1max_agent.bridges.nav2_nav import V_FAST
+    walls = [(0.1, 3.2, 11.9, 3.3), (0.1, 4.7, 11.9, 4.8)]  # 1.4 m 走廊:墙在地图里
+    t = _台(tmp_path, 假转接(), walls=walls)
+    await t.start(1.5, 4.0)
+    assert await _看清(t) == pytest.approx(V_FAST), "走廊两边的墙在地图里:不拖慢"
+    t2_dir = tmp_path / "b"
+    t2_dir.mkdir()
+    t2 = _台(t2_dir, 假转接())
+    await t2.start(1.5, 4.0)
+    t2.world.dyn["person"] = (3.0, 2.9, 3.4, 3.3)           # 前 1.2 m、右 0.9 m:不在扫过区
+    v = await _看清(t2)
+    assert v < 0.8 * V_FAST, v
+
+
+async def test_看得清就快_限速送给Nav2(tmp_path):
+    link = 假转接()
+    t = _台(tmp_path, link)
+    await t.start(1.5, 4.0)
+    t.world.dyn["box"] = (3.3, 3.7, 3.7, 4.3)
+    await t.nav.goto(Pose.from_xy_yaw(9.0, 4.0))
+    for _ in range(10):
+        link.now += 0.1
+        link.cmd = (link.now, 1, 0.0, 0.0, 0.0)
+        await t.一拍()
+    sp = link.kinds("tick")[-1].get("speed")
+    assert sp is not None and 0 < sp < 0.8, sp

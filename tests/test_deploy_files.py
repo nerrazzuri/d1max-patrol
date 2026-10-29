@@ -1848,3 +1848,19 @@ def test_W47_Nav2参数_没有YAML别名_机身是矩形_用Lattice和MPPI():
         "(2026-10-29 仿真里卡在 0.6 m/s)"
     assert d["planner_server"]["ros__parameters"]["GridBased"]["plugin"] == \
         "nav2_smac_planner/SmacPlannerLattice"
+
+
+def test_W47_行为树不原地转_启动文件换成绝对路径_转接节点留着ROS的PYTHONPATH():
+    xml = (DEPLOY / "nav2" / "navigate_to_pose_d1max.xml").read_text(encoding="utf-8")
+    body = xml.split("-->", 1)[1]
+    assert "<Spin" not in body, "两侧盲区里原地转一整圈会扫到看不见的东西(决策 76)"
+    assert "<BackUp" in body and "<Wait" in body
+    launch = (DEPLOY / "nav2" / "d1max_nav2.launch.py").read_text(encoding="utf-8")
+    assert "navigate_to_pose_d1max.xml" in launch and "RewrittenYaml" in launch
+    assert 'EnvironmentVariable(\n                           "PYTHONPATH"' in launch, \
+        "覆盖掉 ROS 的 PYTHONPATH 就找不到 rclpy"
+    import yaml
+    d = yaml.safe_load((DEPLOY / "nav2" / "params.yaml").read_text(encoding="utf-8"))
+    assert d["bt_navigator"]["ros__parameters"]["default_nav_to_pose_bt_xml"] == \
+        "navigate_to_pose_d1max.xml"
+    assert d["controller_server"]["ros__parameters"]["speed_limit_topic"] == "speed_limit"

@@ -96,23 +96,20 @@ async def _nav2_up() -> Any:
     params = ROOT / "deploy" / "nav2" / "params.yaml"
     logs = ROOT / "runs" / "navbench"
     logs.mkdir(parents=True, exist_ok=True)
+    # 跟狗上同一个启动文件(Nav2 + 转接节点 + 行为树换成绝对路径)
+    pypath = f"{ROOT}/packages/localizer/src:{ROOT}/packages/contract/src"
     nav2 = subprocess.Popen(
-        ["bash", "-c", src + f"ros2 launch nav2_bringup navigation_launch.py "
-                             f"params_file:={params} use_sim_time:=true autostart:=true"],
+        ["bash", "-c", src + f"ros2 launch {ROOT}/deploy/nav2/d1max_nav2.launch.py "
+                             f"params_file:={params} socket:={sock} pythonpath:={pypath}"],
         env=env, stdout=open(logs / "nav2.log", "w"), stderr=subprocess.STDOUT,
         start_new_session=True)
-    benv = env | {"PYTHONPATH": f"{ROOT}/packages/localizer/src:{ROOT}/packages/contract/src"}
-    bridge = subprocess.Popen(
-        ["bash", "-c", src + f"/usr/bin/python3 -m d1max_localizer.nav2bridge --socket {sock}"],
-        env=benv, stdout=open(logs / "nav2bridge.log", "w"), stderr=subprocess.STDOUT,
-        start_new_session=True)
-    _NAV2.update(link=link, procs=[nav2, bridge], t_ms=1_700_000_000_000)
+    _NAV2.update(link=link, procs=[nav2], t_ms=1_700_000_000_000)
     for _ in range(300):
         if link.connected:
             break
         await asyncio.sleep(0.1)
     if not link.connected:
-        raise RuntimeError("Nav2 转接节点 30 s 没连上(看 runs/navbench/nav2bridge.log)")
+        raise RuntimeError("Nav2 转接节点 30 s 没连上(看 runs/navbench/nav2.log)")
     return link
 
 

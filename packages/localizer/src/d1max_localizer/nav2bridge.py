@@ -12,6 +12,7 @@ ROS 那一侧(系统 Python + rclpy),跟 Nav2 一起起(``d1max-nav2.service``)�
   代价地图。
 - ``goal`` / ``cancel`` → ``NavigateToPose`` 动作;结果回 ``goal_state``。
 - 订 ``/cmd_vel``(Nav2 速度平滑器、脱困动作的出口)→ ``cmd`` 给代理。
+- ``tick`` 里带的 ``speed``(代理按「看得清就快」算的)→ ``/speed_limit``(变了才发)。
 - 每秒看一次 Nav2 就没就绪(动作服务在、地图发过、时钟在走),变了发 ``ready``。
 
 用法::
@@ -90,6 +91,7 @@ class Nav2Bridge:
         import rclpy
         from geometry_msgs.msg import TransformStamped, Twist
         from nav2_msgs.action import NavigateToPose
+        from nav2_msgs.msg import SpeedLimit
         from nav2_msgs.srv import ClearEntireCostmap
         from nav_msgs.msg import OccupancyGrid, Odometry
         from rclpy.action import ActionClient
@@ -113,6 +115,10 @@ class Nav2Bridge:
         self.p_map = self.node.create_publisher(OccupancyGrid, "/map", latched)
         self.p_occ = self.node.create_publisher(PointCloud2, "/d1max/obs_occ", 5)
         self.p_free = self.node.create_publisher(PointCloud2, "/d1max/obs_free", 5)
+        #: 代理每拍算的「此刻许跑多快」→ Nav2 控制器的限速(MPPI 按它缩速度上限)。
+        self.p_speed = self.node.create_publisher(SpeedLimit, "/speed_limit", 10)
+        self._speed_msg = SpeedLimit
+        self._speed: float | None = None
         self.tf = TransformBroadcaster(self.node)
         self.nav = ActionClient(self.node, NavigateToPose, "navigate_to_pose")
         self.clear = [self.node.create_client(ClearEntireCostmap, s) for s in (
@@ -200,6 +206,12 @@ class Nav2Bridge:
         o.twist.twist.linear.x, o.twist.twist.linear.y = float(m["vel"][0]), float(m["vel"][1])
         o.twist.twist.angular.z = float(m["vel"][2])
         self.p_odom.publish(o)
+        sp = m.get("speed")
+        if sp is not None and sp != self._speed:
+            self._speed = sp
+            lim = self._speed_msg()
+            lim.header.stamp, lim.percentage, lim.speed_limit = stamp, False, float(sp)
+            self.p_speed.publish(lim)
 
     def on_grid(self, m: dict[str, Any]) -> None:
         if self.odom is None:

@@ -18,7 +18,8 @@ Nav2 一律 ``use_sim_time``,转接节点按代理送来的时刻发 ``/clock``�
   ``t_ms`` 代理的钟(毫秒,严格递增);``odom`` = ``[x, y, yaw]`` 里程;
   ``vel`` = ``[vx, vy, wz]`` 实测速度(机身系);
   ``map_odom`` = ``[x, y, yaw]`` 地图系里里程原点在哪。定位可信时才有,不可信是 ``null``:
-  Nav2 那边 TF 过期,自己也会停。
+  Nav2 那边 TF 过期,自己也会停。``speed`` = 此刻许跑多快(米/秒,代理按「看得清就快」算的),
+  转接节点转成 Nav2 的 ``/speed_limit``。
 - ``grid {t_ms, pose, res, size, occ, known}``:感知栅格(机身系、行 = 前、列 = 左,中心在机身)。
   ``pose`` 是拍下这一帧时的里程 ``[x, y, yaw]``;位图同障碍桥(``obsbridge.pack_bits``)。
 - ``goal {goal_id, x, y, yaw}`` / ``cancel {goal_id}``
@@ -50,7 +51,7 @@ FIELDS: dict[str, tuple[set[str], set[str]]] = {
     # 类型: (必须的, 可选的)
     "hello": ({"proto"}, {"name", "version"}),
     "map": ({"req", "map_id", "map_version", "dir"}, {"nogo", "speed"}),
-    "tick": ({"t_ms", "odom", "vel"}, {"map_odom"}),
+    "tick": ({"t_ms", "odom", "vel"}, {"map_odom", "speed"}),
     "grid": ({"t_ms", "pose", "res", "size", "occ", "known"}, set()),
     "goal": ({"goal_id", "x", "y", "yaw"}, set()),
     "cancel": ({"goal_id"}, set()),
@@ -125,6 +126,8 @@ def check(msg: dict[str, Any]) -> dict[str, Any]:
         _triple(msg["vel"], "vel")
         if msg.get("map_odom") is not None:
             _triple(msg["map_odom"], "map_odom")
+        if "speed" in msg and not 0 < _num(msg["speed"], "speed") <= 5:
+            raise ContractError("Nav2 转接:speed 要在 (0, 5] 米/秒")
     elif t == "grid":
         _int(msg["t_ms"], "t_ms")
         _triple(msg["pose"], "pose")
