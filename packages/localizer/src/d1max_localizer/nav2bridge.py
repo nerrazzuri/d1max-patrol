@@ -49,9 +49,15 @@ QUEUE_MAX_S = 5.0
 #: Nav2 里会出速度、出路线的动作(和导航本身)。复查第四轮 P1/P4/P2:Nav2 取消下层动作只等 20 ms,
 #: 等不到也照样报导航结束;这些动作**自己的**动作状态只有在执行循环真退出(最后一条速度、路线发完)以后
 #: 才变终态。它们都没有在跑的目标,才算上一个目标真停了,才放下一个。
+#: 复查第五轮补 ``assisted_teleop``(params.yaml 里配着,走同一个行为速度出口)。
 PRODUCERS = ("navigate_to_pose", "navigate_through_poses", "follow_path",
              "compute_path_to_pose", "compute_path_through_poses",
-             "backup", "wait", "spin", "drive_on_heading")
+             "backup", "wait", "spin", "drive_on_heading", "assisted_teleop")
+#: 出脱困(行为)速度的那几个。
+BEHAVIORS = ("backup", "wait", "spin", "drive_on_heading", "assisted_teleop")
+#: 起来以后等这么久(秒)再派目标、报就绪:Nav2 那边补发(transient local)的动作状态
+#: 先处理完(复查第五轮)。
+STATUS_SYNC_S = 2.0
 #: action_msgs/GoalStatus:收下了、在跑、正在取消 —— 都算还在出东西。
 _LIVE_STATUS = (1, 2, 3)
 #: 时钟这么久(墙钟秒)没走就当代理没在送 tick:不就绪。
@@ -173,6 +179,7 @@ class Nav2Bridge:
         from nav_msgs.msg import Path as PathMsg
         self.node.create_subscription(PathMsg, "/plan", self._on_plan, 5)
         self._init_goal_book()
+        self.status_sync_until = self._mono() + STATUS_SYNC_S    # 复查第五轮:补发的状态先处理完
         from std_srvs.srv import Trigger
         self._trigger = Trigger
         #: Nav2 的生命周期管理器:全部节点激活了才算就绪(动作服务在不等于激活了,早发的目标会被拒)。
@@ -213,12 +220,16 @@ class Nav2Bridge:
         self.queued_at = 0.0
         #: :data:`PRODUCERS` 里每个动作此刻有没有在跑的目标(按它自己的动作状态,复查第四轮)。
         self.producing: dict[str, bool] = {}
-        #: 派出最近这个目标以后,规划动作有没有出现过新的目标:有了以后来的路线才认(复查第四轮 P2)。
-        self.plan_open = False
-        #: 每个规划动作最近一份状态列表里的目标号(列表保留最近的目标,含已结束的);
-        #: 派出时记一份,之后出现的新号 = 派出以后才开始的规划。
-        self.planner_ids: dict[str, set[bytes]] = {}
-        self.plan_known: set[bytes] = set()
+        #: 派出最近这个目标以后,哪几类生产端出现过新的目标号(= 这个目标的那一类开跑了):
+        #: ``plan`` 有了才认路线(复查第四轮 P2),``ctl`` 有了才转控制器的速度、``beh`` 有了而且还在跑
+        #: 才转脱困的速度(复查第五轮)。
+        self.opened: set[str] = set()
+        #: 每个动作最近一份状态列表里的目标号(列表保留最近的目标,含已结束的);
+        #: 派出时记一份,之后出现的新号 = 派出以后才开始的。
+        self.goal_ids: dict[str, set[bytes]] = {}
+        self.known_ids: set[bytes] = set()
+        #: 这个时刻(单调钟)以前不派目标:刚起来,补发的动作状态还没处理完(复查第五轮)。
+        self.status_sync_until = 0.0
 
     def cancel_all(self) -> None:
         """代理断了:它派的目标没人管了,全部取消;还没收下的记着,收下了马上取消(外审 R8)。"""
@@ -252,7 +263,7 @@ class Nav2Bridge:
 
     def _on_plan(self, msg: Any) -> None:
         gid = self.active_gid
-        if gid is None or not self.plan_open:
+        if gid is None or "plan" not in self.opened:
             # 复查第四轮 P2:派出这个目标以后规划动作还没重新开跑 —— 来的路线是老规划的
             # (时间戳不是目标代次,Smac 拿到锁才填)
             return
@@ -273,6 +284,13 @@ class Nav2Bridge:
     def _on_cmd(self, t: Any, src: str = "ctl") -> None:
         if self._mono() < self._cmd_quiet_until:
             return                        # 复查 N3:新目标刚收下,队里可能还排着上一个的旧速度
+        with self._goal_lock:
+            # 复查第五轮:这个目标自己的控制器(脱困:脱困动作)开跑了才转 —— 之前来的是上一个目标的
+            # 生产端晚到的。不要求脱困「此刻还在跑」:状态和速度两路在两个线程里处理,「结束」常比
+            # 最后几条后退速度先处理完,要求了就把合法的后退丢掉(navbench 终点贴墙 4/5 → 0/3)
+            ok = "ctl" in self.opened if src == "ctl" else "beh" in self.opened
+        if not ok:
+            return
         self.send_threadsafe({"type": "cmd", "t_ms": self.t_ms, "vx": float(t.linear.x),
                               "vy": float(t.linear.y), "wz": float(t.angular.z),
                               "goal_id": self.active_gid,       # 外审 R7:标上是哪个目标的
@@ -384,18 +402,34 @@ class Nav2Bridge:
         return self.queued is not None
 
     def _busy(self) -> bool:
-        return bool(self.goals) or bool(self.pending) or any(self.producing.values())
+        return (bool(self.goals) or bool(self.pending) or any(self.producing.values())
+                or self._mono() < self.status_sync_until)
+
+    def reap_gone_producers(self) -> None:
+        """复查第五轮:某个动作服务没了(状态话题没有发布者),它不会再出东西 —— 它记着的「在跑」清掉,
+        不然 Nav2 重启以后新的空闲服务不发状态,这条旧标记一直挡着新目标。"""
+        cleared = False
+        with self._goal_lock:
+            for name in PRODUCERS:
+                if self.producing.get(name) and \
+                        self.node.count_publishers(f"/{name}/_action/status") == 0:
+                    self.producing[name] = False
+                    cleared = True
+        if cleared:
+            self._dispatch_soon()
 
     def _on_status(self, name: str, msg: Any) -> None:
         live = any(int(st.status) in _LIVE_STATUS for st in msg.status_list)
         with self._goal_lock:
             self.producing[name] = live
-            if name.startswith("compute_path"):
-                # 看目标号不看「在跑」:状态话题只留最新一条,规划快的话「在跑」那条会被「完成」盖掉
-                ids = {bytes(st.goal_info.goal_id.uuid) for st in msg.status_list}
-                self.planner_ids[name] = ids
-                if ids - self.plan_known and not self.queued_waiting():
-                    self.plan_open = True         # 派出以后才开始的规划(老的派之前确认停了)
+            # 看目标号不看「在跑」:状态话题只留最新一条,快的话「在跑」那条会被「完成」盖掉
+            ids = {bytes(st.goal_info.goal_id.uuid) for st in msg.status_list}
+            self.goal_ids[name] = ids
+            if ids - self.known_ids and not self.queued_waiting():
+                # 派出以后才开始的(老的派之前确认停了):这一类开门
+                self.opened.add("plan" if name.startswith("compute_path") else
+                                "ctl" if name == "follow_path" else
+                                "beh" if name in BEHAVIORS else "nav")
         if not live:
             self._dispatch_soon()
 
@@ -408,8 +442,8 @@ class Nav2Bridge:
             expired = self._mono() - self.queued_at > QUEUE_MAX_S
             if not expired:
                 self.last_end_ms = max(self.last_end_ms, self.t_ms)
-                self.plan_open = False            # 等新目标的规划开跑(复查第四轮 P2)
-                self.plan_known = set().union(*self.planner_ids.values())
+                self.opened.clear()               # 等新目标自己的规划、控制器、脱困开跑
+                self.known_ids = set().union(*self.goal_ids.values())
         if expired:
             self.send({"type": "goal_state", "goal_id": m["goal_id"], "state": "rejected",
                        "reason": f"上一个目标 Nav2 {QUEUE_MAX_S:g} 秒还没结束"})
@@ -548,7 +582,9 @@ class Nav2Bridge:
 
     def check_ready(self) -> None:
         self._poll_active()
-        if not self.map_sent:
+        if self._mono() < self.status_sync_until:
+            self._set_ready(False, "等 Nav2 的动作状态同步")
+        elif not self.map_sent:
             self._set_ready(False, "还没收到地图")
         elif time.monotonic() - self._clock_wall > CLOCK_STALE_S:
             self._set_ready(False, "代理没在送时钟")
@@ -610,6 +646,7 @@ class Nav2Bridge:
             self._hb += 1
             self.send({"type": "hb", "seq": self._hb})
             self.check_ready()
+            self.reap_gone_producers()
             self.expire_queued()
             await asyncio.sleep(1.0)
 
