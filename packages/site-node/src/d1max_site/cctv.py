@@ -437,6 +437,10 @@ def alert_robot(name: str) -> str:
     return f"cctv:{name}"
 
 
+#: 站点收尾时最多等正在做的摄像头同步多久(秒;它手里每个旧订阅退出最长要等 ``JOIN_S`` 左右)。
+CLOSE_WAIT_S = 120.0
+
+
 class CctvManager:
     """站点里的摄像头:按库起停订阅、出状态、断太久报告警、恢复了自动解决。``report`` 把入侵交给
     事件派遣(跳到事件循环)。
@@ -462,6 +466,11 @@ class CctvManager:
         #: 做完接着再来一遍(复查 N2:不许让站点杂事、别的删除等着一次最长 35 秒的退出)。
         self._sync_lock = threading.Lock()
         self._again = False
+        #: 每叫一次 sync 加一(复查 M1):起订阅之前看它变没变,变了说明配置可能刚改过、删过,
+        #: 从头再对一遍,不按读得早的那份起。
+        self._gen = 0
+        #: 站点在收尾(复查 M2):不再起新订阅,sync 什么都不做。
+        self._closing = False
         #: 已经叫停、还没等它退出的旧订阅。
         self._to_join: list[CameraWatch] = []
         self.watches: dict[str, CameraWatch] = {}
@@ -520,6 +529,10 @@ class CctvManager:
         跟库里对不上的订阅**当场**叫停(短锁,谁来都不等别人;叫停之后它交上来的入侵一律不认,复查 N2)。
         等旧订阅退出、按库里最新的起新的,同一时刻只一个线程做(复查 R4);别人在做就记一笔回去,它做完
         接着再来一遍。"""
+        with self._lock:
+            if self._closing:
+                return
+            self._gen += 1
         self._stop_stale()
         self._again = True
         while True:
@@ -548,17 +561,35 @@ class CctvManager:
         for w in gone:
             self._changed(w.cam.name)                    # 正在看的旧画面当场关(不等下一次打开)
 
+    def _wanted(self) -> dict[str, Camera]:
+        """库里此刻的摄像头(起订阅用的那一份;测试在这里插一脚)。"""
+        return {c.name: c for c in load_cameras(self.db)}
+
     def _sync_once(self) -> None:
         joined: list[CameraWatch] = []
         while True:
+            self._stop_stale()                           # 跟库里对不上的先停
             with self._lock:
                 gone, self._to_join = self._to_join, []
-            if not gone:
-                break
-            self._stop_join(gone)                        # 旧的退干净了才起新的:不重叠
-            joined += gone
-            self._stop_stale()                           # 等的这几秒里库里又改了的,也先停
-        want = {c.name: c for c in load_cameras(self.db)}   # 按最新的起(复查 R4)
+            if gone:
+                self._stop_join(gone)                    # 旧的退干净了才起新的:不重叠
+                joined += gone
+                continue                                 # 等的这几秒里库里可能又改了
+            with self._lock:
+                gen = self._gen
+            want = self._wanted()                        # 按最新的起(复查 R4)
+            with self._lock:
+                if self._closing:
+                    return                               # 收尾了:一个都不起(复查 M2)
+                if self._gen != gen or self._to_join:
+                    continue                             # 读完以后又有人改了、删了:重来(复查 M1)
+                for name, cam in want.items():
+                    if name not in self.watches:
+                        w = self._factory(cam, on_intrusion=self._report, now_ms=self._now)
+                        self.watches[name] = w
+                        w.start()
+                watches = list(self.watches.values())
+            break
         for w in joined:
             if w.cam.name not in want:
                 self._clean.discard(w.cam.name)
@@ -569,13 +600,6 @@ class CctvManager:
                                             who="站点:摄像头已删除")
             except Exception:
                 log.exception("解决已删除摄像头的「连不上」失败,下一拍再试")
-        with self._lock:
-            for name, cam in want.items():
-                if name not in self.watches:
-                    w = self._factory(cam, on_intrusion=self._report, now_ms=self._now)
-                    self.watches[name] = w
-                    w.start()
-            watches = list(self.watches.values())
         now = self._now()
         for w in watches:
             st, name = w.status, w.cam.name
@@ -605,10 +629,19 @@ class CctvManager:
     def close(self) -> None:
         """叫停全部订阅并等它们退出(站点收尾:不许退出之后还往收掉的事件循环里交入侵)。"""
         with self._lock:
+            self._closing = True                         # 复查 M2:先挡住新建
             gone = list(self.watches.values())
             for w in gone:
                 w.stop()
             self.watches.clear()
+            gone += self._to_join
+            self._to_join = []
+        # 正在做同步的那个手里可能还拿着几个在等退出的旧订阅:等它做完(它看到收尾不会再起新的)
+        if self._sync_lock.acquire(timeout=CLOSE_WAIT_S):
+            self._sync_lock.release()
+        else:
+            log.error("站点收尾:摄像头同步 %.0f 秒还没做完,不等了", CLOSE_WAIT_S)
+        with self._lock:
             gone += self._to_join
             self._to_join = []
         self._stop_join(gone)
