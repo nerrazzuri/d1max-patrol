@@ -126,9 +126,13 @@ class SimAgentServer:
         self._clear_until = [-math.inf, -math.inf]
         #: 分档许可(W47):两头各自的比例上限(最新的那条说了算)。
         self._clear_cap = [0.0, 0.0]
-        #: 两头最后收下的许可来源、帧序号(#208 首审 G1)。
-        self._clear_src = [0, 0]
+        #: 两头现在认的是哪条连接的许可、那条连接上的帧序号(#208 首审 G1、复查 H1:按连接认)。
+        self._clear_conn = [0, 0]
         self._clear_seq = [0, 0]
+        #: 每条连上来的连接一个递增号(同 patrol_agent 的 g_conn_seq)。
+        self._conn_seq = 0
+        self._conn_of: dict[Any, int] = {}
+        self._writer_of: dict[int, Any] = {}
         #: 同 ``patrol_agent --sdk-follows-head``:调过头尾之后 SDK 的「往前」(里程、速度)跟着变成
         #: 狗尾那头。仿真照这个约定报里程:调头那一刻里程的朝向跳 π(真机怎么跳是真机项)。
         self.follows_head = follows_head
@@ -244,6 +248,9 @@ class SimAgentServer:
     async def _handle_client(self, reader: asyncio.StreamReader,
                              writer: asyncio.StreamWriter) -> None:
         self._clients.add(writer)
+        self._conn_seq += 1
+        self._conn_of[writer] = self._conn_seq
+        self._writer_of[self._conn_seq] = writer
         try:
             self._send(writer, self._hello(self._held))
             await writer.drain()
@@ -271,6 +278,7 @@ class SimAgentServer:
             pass
         finally:
             self._clients.discard(writer)
+            self._writer_of.pop(self._conn_of.pop(writer, 0), None)
             writer.close()
             with contextlib.suppress(Exception):
                 await writer.wait_closed()
@@ -364,7 +372,10 @@ class SimAgentServer:
                                 "error": f"{NOT_AUTHORIZED}: {cmd} 要先认证(发 auth)"})
             return
         if cmd in URGENT_COMMANDS:
-            await self._execute(writer, (cmd_id, cmd, dict(args), self._cancel_gen))
+            run_args = dict(args)
+            if cmd == "clear":
+                run_args["_conn"] = self._conn_of.get(writer, 0)    # 许可按连接认(复查 H1)
+            await self._execute(writer, (cmd_id, cmd, run_args, self._cancel_gen))
             return
         queue.put_nowait((cmd_id, cmd, dict(args), self._cancel_gen))
 
@@ -459,13 +470,21 @@ class SimAgentServer:
             if any(isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v)
                    or v < 0 for v in (src, seq)):
                 raise _Rejected("src、seq 要是非负整数")
+            conn = int(args.get("_conn", 0))
             now = time.monotonic()
-            if src > 0:
-                # 同 vel_gate.hpp:这一头还有效时,更旧来源的、同来源序号不更新的不认(回 ok)
-                if now < self._clear_until[i] and (src < self._clear_src[i] or (
-                        src == self._clear_src[i] and seq <= self._clear_seq[i])):
+            if conn > 0:
+                # 同 vel_gate.hpp:按连接认 —— 更旧连接的永远不认(过期了也不认);同一条连接里带序号的
+                # 要往上走;更新的连接发许可就接管,旧的那条关掉(它缓冲里没读的旧许可一起作废)
+                held = self._clear_conn[i]
+                if conn < held or (conn == held and seq > 0 and seq <= self._clear_seq[i]):
                     return
-                self._clear_src[i], self._clear_seq[i] = src, seq
+                if conn > held:
+                    old = self._writer_of.get(held)
+                    if old is not None and held > 0:
+                        old.close()
+                    self._clear_conn[i], self._clear_seq[i] = conn, 0
+                if seq > 0:
+                    self._clear_seq[i] = seq
             until = now + ms / 1000.0
             # 同 vel_gate.hpp 的 SetClearance:上限按最新的;没升时有效期只往后延,升了只到它自己的期限
             if cap > self._clear_cap[i]:

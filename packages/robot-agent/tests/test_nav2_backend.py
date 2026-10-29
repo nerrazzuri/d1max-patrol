@@ -155,6 +155,9 @@ class 假转接:
 
     def send(self, m):
         self.sent.append(m)
+        if m["type"] == "goal" and getattr(self, "auto_plan", True):
+            # 真 Nav2 收下目标就规划出路线(转接节点按目标号报);测 P1 的那条自己管
+            self.plan = (m["goal_id"], ((m["x"], m["y"]),))
         return True
 
     def tick(self):
@@ -438,6 +441,7 @@ async def test_看得清就快_限速送给Nav2(tmp_path):
 async def test_走Nav2时_站点地图上画Nav2规划的路线(tmp_path):
     link = 假转接()
     link.plan = None
+    link.auto_plan = False
     t = _台(tmp_path, link)
     await t.start(1.5, 4.0)
     await t.nav.goto(Pose.from_xy_yaw(6.0, 4.0))
@@ -622,3 +626,69 @@ async def test_外审复查N5_刚停下时上一条命令还在后退_往前也�
     link.cmd = (0.0, 1, 0.3, 0, 0, gid)
     await t.nav._drive(_在(5, 4), 0.1)
     assert t.nav._last_vx <= 1e-9, "上一条后退可能还在执行:身后 17 cm 是禁行区,这一拍先停"
+
+
+async def test_外审复查P1_新目标收到自己的规划路线之前_Nav2的速度一律不用(tmp_path):
+    """0.2 秒屏障证明不了速度是新目标的;控制器总是拿到新路线之后才出新目标的速度。"""
+    link = 假转接()
+    link.auto_plan = False
+    t = _台(tmp_path, link)
+    await t.start(5, 4)
+    await t.nav.goto(Pose.from_xy_yaw(8, 4))
+    gid = link.kinds("goal")[-1]["goal_id"]
+    for _ in range(5):
+        link.now += 0.1
+        link.cmd = (link.now, 1, 0.4, 0, 0, gid)                # 标的是新目标,可路线还没来
+        await t.一拍()
+    assert t.nav._last_vx <= 1e-9
+    link.plan = (gid - 1, ((5.0, 4.0), (2.0, 4.0)))             # 别的目标的路线:不算
+    link.now += 0.1
+    link.cmd = (link.now, 1, 0.4, 0, 0, gid)
+    await t.一拍()
+    assert t.nav._last_vx <= 1e-9
+    link.plan = (gid, ((5.0, 4.0), (8.0, 4.0)))                 # 自己的路线来了
+    for _ in range(3):
+        link.now += 0.1
+        link.cmd = (link.now, 1, 0.4, 0, 0, gid)
+        await t.一拍()
+    assert t.nav._last_vx > 0.3
+
+
+def test_外审复查P1_转接节点订控制器的原始输出_不经速度平滑器():
+    """平滑器会把旧目标的速度慢慢衰减(OPEN_LOOP),目标换了还在出旧方向的速度。"""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parents[3] / "packages" / "localizer" / "src"
+           / "d1max_localizer" / "nav2bridge.py").read_text(encoding="utf-8")
+    assert 'create_subscription(Twist, "/cmd_vel_nav"' in src
+    assert 'create_subscription(Twist, "/cmd_vel",' not in src
+
+
+async def test_外审复查P3_MPPI倒车被限速压到死区以下_照最小能走的倒车执行(tmp_path):
+    """MPPI 按同一比例缩倒车上限(vx_min / vx_max = 0.3):限速 0.2 时它最多倒 0.06,
+    原来落进死区一律清零。"""
+    from test_planned_nav import _区
+    link = 假转接()
+    t = _台(tmp_path, link)
+    await t.start(5, 4)
+    await t.nav.set_zones(_区({"id": "lawn", "kind": "slow", "max_speed_mps": 0.2,
+                               "polygon": [[3, 2], [9, 2], [9, 6], [3, 6]]}))
+    await t.nav.goto(Pose.from_xy_yaw(8, 4))
+    gid = link.kinds("goal")[-1]["goal_id"]
+    sent = []
+    for _ in range(6):
+        link.now += 0.1
+        link.cmd = (link.now, 1, -0.06, 0, 0, gid)
+        await t.一拍()
+        sent.append(t.nav._last_vx)
+    assert min(sent) == pytest.approx(-0.13) and max(abs(v) for v in sent) <= 0.2 + 1e-9
+
+
+def test_外审复查P3_代理记的倒车比例跟Nav2参数一致():
+    from pathlib import Path
+
+    from d1max_agent.bridges.nav2_nav import MPPI_REVERSE_RATIO
+    text = (Path(__file__).resolve().parents[3] / "deploy" / "nav2" / "params.yaml").read_text()
+    import re
+    vmax = float(re.search(r"\n\s+vx_max:\s*([0-9.]+)", text).group(1))
+    vmin = float(re.search(r"\n\s+vx_min:\s*(-?[0-9.]+)", text).group(1))
+    assert MPPI_REVERSE_RATIO == pytest.approx(-vmin / vmax)
