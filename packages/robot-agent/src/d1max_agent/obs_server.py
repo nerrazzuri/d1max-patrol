@@ -20,7 +20,6 @@ from typing import Any
 
 from d1max_contract import obsbridge
 from d1max_contract.errors import ContractError
-from d1max_contract.obsbridge import MAX_LINE
 
 log = logging.getLogger(__name__)
 
@@ -51,6 +50,11 @@ class ObsBridgeServer:
         self._seq = 0
 
     @property
+    def max_line(self) -> int:
+        """一行最长多少(读的上限):人员桥的截图那一种可以更长(``MAX_READ``)。"""
+        return int(getattr(self.BRIDGE, "MAX_READ", self.BRIDGE.MAX_LINE))
+
+    @property
     def connected(self) -> bool:
         return self._writer is not None
 
@@ -61,7 +65,7 @@ class ObsBridgeServer:
             self.path.unlink()
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._server = await asyncio.start_unix_server(self._on_conn, str(self.path),
-                                                       limit=MAX_LINE + 2)
+                                                       limit=self.max_line + 2)
         os.chmod(self.path, 0o600)
         log.info("%s在 %s 等%s", self.WHAT, self.path, self.PEER)
 
@@ -103,10 +107,30 @@ class ObsBridgeServer:
     def _busy(self) -> bool:
         return self._writer is not None and self._now() - self._heard <= HB_DEAD_S
 
-    async def _on_conn(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+    # ---- 子类可换的几步(人员桥跨板走 TCP 时换认法、多几种报文)
+
+    def _admit(self, writer: asyncio.StreamWriter) -> bool:
+        """连上来先认人:本机套接字按对端账号。"""
         uid = self._peer_uid(writer)
         if uid != self.allowed_uid:
             log.warning("%s:账号 %s 连上来了(只认 %s),断开", self.WHAT, uid, self.allowed_uid)
+            return False
+        return True
+
+    def _hello_problem(self, hello: Any, writer: asyncio.StreamWriter) -> str:
+        """``hello`` 还要查什么;空 = 行。"""
+        return ""
+
+    def _greeted(self) -> None:
+        """回完 ``hello`` 之后(人员桥跨板:推外参)。"""
+
+    def _other(self, msg: Any) -> None:
+        """数据、心跳以外的报文。"""
+        if isinstance(msg, getattr(self.BRIDGE, "Wall", ())) and hasattr(self.sink, "on_wall"):
+            self._sink("on_wall", msg)                   # W41:墙那一层(全局重定位)
+
+    async def _on_conn(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        if not self._admit(writer):
             writer.close()
             return
         if self._busy():
@@ -121,6 +145,11 @@ class ObsBridgeServer:
         if not isinstance(hello, self.BRIDGE.Hello) or hello.proto != self.BRIDGE.PROTO:
             self._refuse(writer, f"第一行要是 hello(协议版本 {self.BRIDGE.PROTO})")
             return
+        why = self._hello_problem(hello, writer)
+        if why:
+            log.warning("%s:%s,断开", self.WHAT, why)
+            self._refuse(writer, why)
+            return
         if self._busy():
             self._refuse(writer, f"已经有一个{self.PEER}连着")
             return
@@ -133,12 +162,13 @@ class ObsBridgeServer:
             return
         log.info("%s连上了:%s %s", self.PEER, hello.name, hello.version)
         self._sink("on_connect")
+        self._greeted()
         try:
             while self._writer is writer:
                 try:
                     line = await reader.readline()
                 except (ValueError, asyncio.LimitOverrunError):
-                    log.warning("%s发来的一行超过 %d 字节,断开", self.PEER, MAX_LINE)
+                    log.warning("%s发来的一行超过 %d 字节,断开", self.PEER, self.max_line)
                     return
                 except (ConnectionError, OSError):
                     return
@@ -155,11 +185,8 @@ class ObsBridgeServer:
                         continue                         # 旧的、重的
                     self._seq = msg.seq
                     self._sink(self.DATA_CB, msg)
-                elif isinstance(msg, getattr(self.BRIDGE, "Wall", ())) \
-                        and hasattr(self.sink, "on_wall"):
-                    self._sink("on_wall", msg)               # W41:墙那一层(全局重定位)
                 elif not isinstance(msg, self.BRIDGE.Heartbeat):
-                    continue
+                    self._other(msg)
         finally:
             if self._writer is writer:
                 self._drop(f"{self.PEER}断开了")

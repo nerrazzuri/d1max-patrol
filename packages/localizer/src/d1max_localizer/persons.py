@@ -247,8 +247,13 @@ class PersonNode:
     def __init__(self, detector: Detector | None, *, snapshot_dir: Path | None = None,
                  settings: Settings | None = None, unavailable: str = "",
                  monotonic: Callable[[], float] = time.monotonic,
-                 wall_ns: Callable[[], int] = time.time_ns) -> None:
+                 wall_ns: Callable[[], int] = time.time_ns,
+                 remote_snapshots: bool = False) -> None:
         self.detector = detector
+        #: 跨板(人员检测在厂家 Orin、代理在 RK3588):截图不写本地盘,攒着交给桥发
+        #: (:meth:`take_snapshot`)。
+        self.remote_snapshots = remote_snapshots
+        self._pending_snap: tuple[str, bytes] | None = None
         self.unavailable = unavailable
         self.cfg = settings or Settings()
         self.snapshot_dir = snapshot_dir
@@ -314,14 +319,33 @@ class PersonNode:
                            "range_m": None if r is None else round(r, 2),
                            "score": round(min(1.0, max(0.0, b.score)), 3)})
         snap = ""
-        if people and self.snapshot_dir is not None \
+        if people and (self.snapshot_dir is not None or self.remote_snapshots) \
                 and self._mono() - self._snap_at >= self.cfg.snapshot_every_s:
-            snap = self._save(camera, jpeg)
+            snap = self._save_remote(camera, jpeg) if self.remote_snapshots \
+                else self._save(camera, jpeg)
         return base | {"check": "ok", "people": people, "snapshot": snap}
 
-    def _save(self, camera: str, jpeg: bytes) -> str:
-        name = f"{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime(self._wall_ns() / 1e9))}" \
+    def _name(self, camera: str) -> str:
+        return f"{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime(self._wall_ns() / 1e9))}" \
                f"-{camera}-{self.seq}.jpg"
+
+    def _save_remote(self, camera: str, jpeg: bytes) -> str:
+        from d1max_contract.persbridge import MAX_SNAP_BYTES
+        if len(jpeg) > MAX_SNAP_BYTES:
+            log.warning("截图 %d 字节,超过桥的上限 %d:这一张不发", len(jpeg), MAX_SNAP_BYTES)
+            return ""
+        name = self._name(camera)
+        self._pending_snap = (name, jpeg)
+        self._snap_at = self._mono()
+        return name
+
+    def take_snapshot(self) -> tuple[str, bytes] | None:
+        """跨板:这一帧要发的截图(名字, JPEG);要在引用它的 ``persons`` 之前发。一张只交一次。"""
+        got, self._pending_snap = self._pending_snap, None
+        return got
+
+    def _save(self, camera: str, jpeg: bytes) -> str:
+        name = self._name(camera)
         try:
             assert self.snapshot_dir is not None
             self.snapshot_dir.mkdir(parents=True, exist_ok=True)
@@ -338,6 +362,125 @@ class PersonNode:
         return name
 
 
+# ------------------------------------------------------------ 连代理
+
+class PersonLink:
+    """连代理的人员桥(一行一个 JSON)。本机时连 Unix 套接字、直接发 ``hello``;跨板(给了 ``key``)时连
+    TCP,
+    先收代理的 ``challenge``、``hello`` 带 HMAC 签名。代理推来的外参(``frames``)交给 ``on_frames``。
+    发不出去就断开,过 ``reconnect_s`` 再连;都不抛(检测照跑)。"""
+
+    def __init__(self, connect: Callable[[], socket.socket], *, key: bytes | None = None,
+                 name: str = "d1max-persons", version: str = "",
+                 on_frames: Callable[[str, dict], Any] | None = None,
+                 reconnect_s: float = 1.0, timeout_s: float = 2.0,
+                 monotonic: Callable[[], float] = time.monotonic) -> None:
+        self._connect = connect
+        self.key = key
+        self.name, self.version = name, version
+        self.on_frames = on_frames
+        self.reconnect_s, self.timeout_s = reconnect_s, timeout_s
+        self._mono = monotonic
+        self._sock: socket.socket | None = None
+        self._buf = b""
+        self._next_try = 0.0
+
+    @property
+    def connected(self) -> bool:
+        return self._sock is not None
+
+    def _open(self) -> bool:
+        from d1max_contract import persbridge as pb
+        now = self._mono()
+        if now < self._next_try:
+            return False
+        self._next_try = now + self.reconnect_s
+        try:
+            s = self._connect()
+            s.settimeout(self.timeout_s)
+            mac = ""
+            if self.key is not None:
+                line = b""
+                while not line.endswith(b"\n"):
+                    chunk = s.recv(4096)
+                    if not chunk:
+                        raise ConnectionError("代理没发挑战就断了")
+                    line += chunk
+                    if len(line) > pb.MAX_LINE:
+                        raise ConnectionError("挑战太长")
+                first, _, rest = line.partition(b"\n")
+                ch = pb.parse(first)
+                if not isinstance(ch, pb.Challenge):
+                    raise ConnectionError(f"代理没发挑战:{type(ch).__name__}")
+                mac = pb.hello_mac(self.key, ch.nonce, self.name)
+                self._buf = rest
+            else:
+                self._buf = b""
+            s.sendall(pb.encode(pb.Hello(proto=pb.PROTO, name=self.name, version=self.version,
+                                         mac=mac)))
+        except (OSError, ConnectionError, ValueError) as exc:
+            log.warning("连不上代理的人员桥:%s", exc)
+            return False
+        self._sock = s
+        log.info("连上代理的人员桥了%s", "(跨板,过了挑战)" if self.key else "")
+        return True
+
+    def send(self, obj: dict) -> bool:
+        if self._sock is None and not self._open():
+            return False
+        assert self._sock is not None
+        from d1max_localizer.obstacles import _line  # 跟障碍桥同一种行格式
+        try:
+            self._sock.sendall(_line(obj))
+            return True
+        except OSError as exc:
+            log.warning("人员桥发不出去(断开,稍后再连):%s", exc)
+            self.close()
+            return False
+
+    def poll(self) -> None:
+        """代理发来的(hello、外参、出错)读掉;外参交给 ``on_frames``。"""
+        import select
+
+        from d1max_contract import persbridge as pb
+        s = self._sock
+        if s is None:
+            return
+        try:
+            while select.select([s], [], [], 0)[0]:
+                chunk = s.recv(65536)
+                if not chunk:
+                    self.close()
+                    return
+                self._buf += chunk
+        except OSError:
+            self.close()
+            return
+        while b"\n" in self._buf:
+            line, _, self._buf = self._buf.partition(b"\n")
+            try:
+                m = pb.parse(line)
+            except Exception as exc:                     # noqa: BLE001
+                log.warning("代理发来一行看不懂:%s", exc)
+                continue
+            if isinstance(m, pb.FramesMsg) and self.on_frames is not None:
+                try:
+                    self.on_frames(m.ref, m.frames)
+                except Exception:
+                    log.exception("外参用不上(图 %s)", m.ref)
+            elif isinstance(m, pb.Error):
+                log.warning("代理说:%s", m.reason)
+
+    def close(self) -> None:
+        if self._sock is not None:
+            try:
+                self._sock.close()
+            except OSError:
+                pass
+        self._sock = None
+        self._buf = b""
+
+
 # ------------------------------------------------------------ ROS 节点
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -346,6 +489,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     ap.add_argument("--model", type=Path, default=Path("/etc/d1max/person.onnx"),
                     help="ONNX 检测模型(YOLO 系,COCO person 类);没有就报 no_model")
     ap.add_argument("--socket", type=Path, default=Path("/var/lib/d1max/agent/persons.sock"))
+    ap.add_argument("--connect", default=None, metavar="HOST:PORT",
+                    help="跨板:代理在另一块板(自带的 RK3588)上,经机器人内网 TCP 连它的人员桥"
+                         "(要配 --key);"
+                         "截图走桥、外参由代理推过来。不给 = 本机套接字 --socket")
+    ap.add_argument("--key", type=Path, default=None,
+                    help="跨板人员桥的共享密钥文件(跟代理那块板同一把;一行十六进制,chmod 600)")
     ap.add_argument("--snapshots", type=Path,
                     default=Path("/var/lib/d1max/agent/person-snapshots"))
     ap.add_argument("--front-topic", default="/front_camera/image_compressed")
@@ -372,6 +521,18 @@ def main(argv: Sequence[str] | None = None) -> int:
     ap.add_argument("--z-max", type=float, default=Z_MAX)
     a = ap.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    key: bytes | None = None
+    if a.connect:
+        if a.key is None:
+            ap.error("--connect 要配 --key(共享密钥文件)")
+        from d1max_contract.persbridge import load_key
+        try:
+            key = load_key(a.key)
+        except (OSError, ValueError) as exc:
+            ap.error(f"人员桥密钥:{exc}")
+        host, _, port = a.connect.rpartition(":")
+        if not host or not port.isdigit():
+            ap.error("--connect 要写成 HOST:PORT")
 
     import rclpy
     from rclpy.executors import SingleThreadedExecutor
@@ -379,11 +540,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     from rclpy.serialization import deserialize_message
     from sensor_msgs.msg import CompressedImage, PointCloud2
 
-    from d1max_contract.persbridge import PROTO
     from d1max_localizer.build import cloud_xyz
     from d1max_localizer.frames import Frames
     from d1max_localizer.livemap import cdr_stamp
-    from d1max_localizer.obstacles import LineClient, Mount, RearMount, active_frames
+    from d1max_localizer.obstacles import Mount, RearMount, active_frames
 
     detector: Detector | None = None
     why = ""
@@ -393,7 +553,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     except DetectorUnavailable as exc:
         why = str(exc)
         log.error("检测器起不来(报 no_model):%s", why)
-    node_logic = PersonNode(detector, snapshot_dir=a.snapshots, unavailable=why,
+    node_logic = PersonNode(detector, snapshot_dir=None if a.connect else a.snapshots,
+                            unavailable=why, remote_snapshots=bool(a.connect),
                             settings=Settings(hfov_deg=a.hfov, lens=a.lens, z_min=a.z_min,
                                               z_max=a.z_max))
 
@@ -412,9 +573,23 @@ def main(argv: Sequence[str] | None = None) -> int:
             log.error("外参读不了:%s(先不测距)", exc)
             return None, None
 
-    mnt, rear_mnt = mounts()
-    client = LineClient(lambda: _unix(a.socket), {"t": "hello", "proto": PROTO,
-                                                  "name": "d1max-persons"})
+    cur: dict[str, Any] = {}
+    cur["front"], cur["rear"] = (None, None) if a.connect else mounts()
+
+    def on_frames(ref: str, d: dict) -> None:
+        """跨板:代理推来正在用的那张图的外参,换上(本机时自己读代理的地图目录)。"""
+        f = Frames.from_json(d)
+        front = Mount.from_frames(f)
+        cur["front"] = front
+        cur["rear"] = RearMount.from_lidars(front, f, a.lidars) if a.rear_lidar_topic else None
+        log.info("用上图 %s 的外参", ref)
+
+    if a.connect:
+        host, _, port = a.connect.rpartition(":")
+        client = PersonLink(lambda: socket.create_connection((host, int(port)), timeout=2.0),
+                            key=key, on_frames=on_frames)
+    else:
+        client = PersonLink(lambda: _unix(a.socket))
     from d1max_localizer import rosinit
     rosinit.init(rclpy)
     stop = rosinit.stop_flag()                           # W41:正常停止退出码 0
@@ -423,8 +598,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                      reliability=ReliabilityPolicy.BEST_EFFORT)
     last: dict[str, float] = {}
 
-    def on_lidar(source: str, m: Any) -> Callable[[bytes], None]:
+    def on_lidar(source: str) -> Callable[[bytes], None]:
         def cb(raw: bytes) -> None:
+            m = cur.get(source)
             if m is None:
                 return
             try:
@@ -445,23 +621,30 @@ def main(argv: Sequence[str] | None = None) -> int:
             try:
                 msg = deserialize_message(raw, CompressedImage)
                 st = msg.header.stamp
-                client.send(node_logic.on_image(camera, bytes(msg.data),
-                                                st.sec * 1_000_000_000 + st.nanosec))
+                out = node_logic.on_image(camera, bytes(msg.data),
+                                          st.sec * 1_000_000_000 + st.nanosec)
+                snap = node_logic.take_snapshot()
+                if snap is not None:                     # 跨板:截图先发,再发引用它的 persons
+                    from d1max_contract.persbridge import Snap
+                    sm = Snap.of(*snap)
+                    if not client.send({"t": "snap", "name": sm.name, "jpeg_b64": sm.jpeg_b64}):
+                        out["snapshot"] = ""             # 截图没发过去:不引用
+                client.send(out)
             except Exception:
                 log.exception("%s 这一帧处理不了", camera)
         return cb
 
-    node.create_subscription(PointCloud2, a.lidar_topic, on_lidar("front", mnt), qos, raw=True)
+    node.create_subscription(PointCloud2, a.lidar_topic, on_lidar("front"), qos, raw=True)
     if a.rear_lidar_topic:
-        node.create_subscription(PointCloud2, a.rear_lidar_topic, on_lidar("rear", rear_mnt), qos,
-                                 raw=True)
+        node.create_subscription(PointCloud2, a.rear_lidar_topic, on_lidar("rear"), qos, raw=True)
     node.create_subscription(CompressedImage, a.front_topic, on_image("front"), qos, raw=True)
     if a.back_topic:
         node.create_subscription(CompressedImage, a.back_topic, on_image("back"), qos, raw=True)
     ex = SingleThreadedExecutor()
     ex.add_node(node)
     log.info("人员检测:订 %s%s + %s → %s", a.front_topic,
-             f"、{a.back_topic}" if a.back_topic else "", a.lidar_topic, a.socket)
+             f"、{a.back_topic}" if a.back_topic else "", a.lidar_topic,
+             f"代理 {a.connect}(跨板)" if a.connect else a.socket)
     hb = time.monotonic()
     try:
         while rclpy.ok() and not stop.is_set():

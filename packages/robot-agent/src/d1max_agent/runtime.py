@@ -169,6 +169,8 @@ class AgentRuntime:
                  robot_radius_m: float | None = None, obstacles: str = "none",
                  persons: str = "none", persons_socket: Path | None = None,
                  persons_snapshots: Path | None = None,
+                 persons_listen: tuple[str, int] | None = None, persons_key: bytes | None = None,
+                 persons_peer: str | None = None,
                  obs_socket: Path | None = None, nav2_socket: Path | None = None) -> None:
         self.registration = registration
         #: RTK 来源(W09e,``d1max_agent.rtk``:自己的串口驱动或厂家的);没配是 None。
@@ -260,7 +262,9 @@ class AgentRuntime:
             self.person_view.ignore = self._person_ignored     # W41:人员检测忽略区
             self._pers_srv = PersonBridgeServer(persons_socket or store_dir / "persons.sock",
                                                 self.person_view,
-                                                monotonic=monotonic or time.monotonic)
+                                                monotonic=monotonic or time.monotonic,
+                                                listen=persons_listen, key=persons_key,
+                                                peer=persons_peer, frames=self._active_frames)
         #: 每张图上的原点(W00c6f 内审):标的、站点下发时带的都记在这儿,重启先看它(``--home`` 垫底)。
         self.homes = HomeBook(store_dir / "homes.json")
         if parts is not None and loaded_map is not None:
@@ -464,6 +468,19 @@ class AgentRuntime:
         if est is None or (callable(ok) and not ok(getattr(nav, "odom_ok", True))):
             return None
         return (est.x, est.y, est.yaw)
+
+    def _active_frames(self) -> tuple[str, dict] | None:
+        """跨板人员桥推给检测节点的外参(``地图号:版本``, ``frames.json`` 的内容);
+        没图、没外参回 None。"""
+        if self.maps is None:
+            return None
+        ref = self.maps.active()
+        if ref is None:
+            return None
+        path = self.maps.dir_of(ref) / "frames.json"
+        if not path.is_file():
+            return None
+        return f"{ref.map_id}:{ref.version}", json.loads(path.read_text("utf-8"))
 
     def _person_ignored(self, bearing_deg: float, range_m: float) -> bool:
         """检测到的人(狗身系:方向°、距离 m)落在正用着的那张图的人员忽略区里(W41)。定位不可信、没有

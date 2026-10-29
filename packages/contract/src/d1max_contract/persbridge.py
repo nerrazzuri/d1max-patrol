@@ -18,10 +18,24 @@
 - ``hb {seq}``:心跳,每秒一条。
 
 代理 → 检测节点:``hello {proto}``、``error {reason}``(握手不对,说完就断)。
+
+**跨板(2026-10-27 用户定)**:我们的服务搬到自带的 RK3588 上,人员检测留在厂家 Orin(用它的 GPU)。
+这时桥走 TCP(狗内网),多三种报文,本机套接字照旧不用:
+
+- 代理 → 检测节点 ``challenge {nonce}``:连上就发,检测节点的 ``hello`` 要带 ``mac``
+  (:func:`hello_mac`:两边同一把共享密钥对 nonce 做 HMAC-SHA256)。认的是密钥,不是账号。
+- 检测节点 → 代理 ``snap {name, jpeg_b64}``:截图本身(两块板不共用盘)。先发 ``snap``、再发引用它的
+  ``persons``;代理存进截图目录,后面跟本机一样。
+- 代理 → 检测节点 ``frames {ref, frames}``:正在用的那张图的雷达外参(``frames.json`` 的内容),
+  连上发一次、换图再发(本机时检测节点自己读代理的地图目录)。
 """
 
 from __future__ import annotations
 
+import base64
+import binascii
+import hashlib
+import hmac
 import json
 import math
 import re
@@ -32,6 +46,10 @@ from d1max_contract.errors import ContractError
 
 PROTO = 1
 MAX_LINE = 16 * 1024
+#: ``snap`` 这一种可以长到这么多(截图 JPEG 的 base64);别的报文还是 :data:`MAX_LINE`。
+MAX_SNAP_BYTES = 512 * 1024
+MAX_READ = 4 * (MAX_SNAP_BYTES // 3 + 1) + 256
+MAX_FRAMES_BYTES = 4096
 CAMERAS = ("front", "back")
 CHECKS = ("ok", "no_model", "no_camera", "initializing")
 MAX_PEOPLE = 16
@@ -69,17 +87,101 @@ class Person:
         _num(self.score, "score", 0.0, 1.0)
 
 
+_HEX = re.compile(r"[0-9a-f]{32,128}")
+
+
+#: 跨板共享密钥最短多少字节。
+MIN_KEY_BYTES = 16
+
+
+def load_key(path: Any) -> bytes:
+    """读跨板共享密钥:文件里一行十六进制(``openssl rand -hex 32``)。太短、读不了、别人也能读都拒
+    (``ValueError`` / ``OSError``)。两块板(代理那块、人员检测那块)放同一把。"""
+    from pathlib import Path
+    path = Path(path)
+    st = path.stat()
+    if st.st_mode & 0o077:
+        raise ValueError(f"{path} 别人也能读(权限 {st.st_mode & 0o777:o}):chmod 600")
+    try:
+        key = bytes.fromhex(path.read_text("utf-8").strip())
+    except ValueError as exc:
+        raise ValueError(f"{path} 要是一行十六进制(openssl rand -hex 32)") from exc
+    if len(key) < MIN_KEY_BYTES:
+        raise ValueError(f"{path} 太短(要至少 {MIN_KEY_BYTES} 字节)")
+    return key
+
+
+def hello_mac(key: bytes, nonce: str, name: str) -> str:
+    """跨板握手:``hello`` 里的 ``mac``。nonce 是代理这一次连接现给的,录下来也不能重放。"""
+    return hmac.new(key, f"d1max-persons|{nonce}|{name}".encode(), hashlib.sha256).hexdigest()
+
+
 @dataclass(frozen=True)
 class Hello:
     T: ClassVar[str] = "hello"
     proto: int
     name: str = ""
     version: str = ""
+    #: 跨板(TCP)时必带,见 :func:`hello_mac`;本机套接字空着。
+    mac: str = ""
 
     def __post_init__(self) -> None:
         _pos_int(self.proto, "proto")
         _text(self.name, "name", 64)
         _text(self.version, "version", 64)
+        if self.mac and (not isinstance(self.mac, str) or not _HEX.fullmatch(self.mac)):
+            raise ContractError("人员桥:mac 要是小写十六进制")
+
+
+@dataclass(frozen=True)
+class Challenge:
+    T: ClassVar[str] = "challenge"
+    nonce: str
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.nonce, str) or not _HEX.fullmatch(self.nonce):
+            raise ContractError("人员桥:nonce 要是 32–128 位小写十六进制")
+
+
+@dataclass(frozen=True)
+class Snap:
+    T: ClassVar[str] = "snap"
+    name: str
+    jpeg_b64: str
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.name, str) or not _SNAP.fullmatch(self.name):
+            raise ContractError(f"人员桥:snap 的 name 要是 .jpg 文件名:{self.name!r}")
+        if not isinstance(self.jpeg_b64, str) or len(self.jpeg_b64) > MAX_READ:
+            raise ContractError("人员桥:snap 的图太大")
+        try:
+            raw = base64.b64decode(self.jpeg_b64, validate=True)
+        except (binascii.Error, ValueError):
+            raise ContractError("人员桥:snap 的图不是 base64") from None
+        if not raw.startswith(b"\xff\xd8") or len(raw) > MAX_SNAP_BYTES:
+            raise ContractError("人员桥:snap 的图不是 JPEG,或者超过上限")
+
+    @classmethod
+    def of(cls, name: str, jpeg: bytes) -> Snap:
+        return cls(name=name, jpeg_b64=base64.b64encode(jpeg).decode("ascii"))
+
+    def jpeg(self) -> bytes:
+        return base64.b64decode(self.jpeg_b64)
+
+
+@dataclass(frozen=True)
+class FramesMsg:
+    T: ClassVar[str] = "frames"
+    #: 哪张图(``地图号:版本``),检测节点记日志用。
+    ref: str
+    #: ``frames.json`` 的内容(检测节点按 ``Frames.from_json`` 读,这里只管大小、是对象)。
+    frames: dict
+
+    def __post_init__(self) -> None:
+        _text(self.ref, "ref", 200)
+        if not isinstance(self.frames, dict) \
+                or len(json.dumps(self.frames, separators=(",", ":"))) > MAX_FRAMES_BYTES:
+            raise ContractError(f"人员桥:frames 要是 JSON 对象、最多 {MAX_FRAMES_BYTES} 字节")
 
 
 @dataclass(frozen=True)
@@ -145,8 +247,9 @@ class Error:
         _text(self.reason, "reason", 200)
 
 
-Message = Hello | Persons | Heartbeat | Error
-_TYPES: dict[str, type] = {c.T: c for c in (Hello, Persons, Heartbeat, Error)}
+Message = Hello | Persons | Heartbeat | Error | Challenge | Snap | FramesMsg
+_TYPES: dict[str, type] = {c.T: c for c in (Hello, Persons, Heartbeat, Error, Challenge, Snap,
+                                            FramesMsg)}
 
 
 def encode(msg: Message) -> bytes:
@@ -155,8 +258,11 @@ def encode(msg: Message) -> bytes:
 
 
 def parse(line: bytes) -> Message:
-    """一行 → 报文。不成形的抛 ``ContractError``。"""
-    if len(line) > MAX_LINE:
+    """一行 → 报文。不成形的抛 ``ContractError``。``snap`` 最多 :data:`MAX_READ`,
+    别的 :data:`MAX_LINE`。"""
+    if len(line) > MAX_READ:
+        raise ContractError(f"人员桥:一行太长({len(line)} 字节,最多 {MAX_READ})")
+    if len(line) > MAX_LINE and not line.startswith(b'{"t":"snap"'):
         raise ContractError(f"人员桥:一行太长({len(line)} 字节,最多 {MAX_LINE})")
     try:
         d = json.loads(line.decode("utf-8"))

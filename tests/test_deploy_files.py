@@ -1864,3 +1864,25 @@ def test_W47_行为树不原地转_启动文件换成绝对路径_转接节点�
     assert d["bt_navigator"]["ros__parameters"]["default_nav_to_pose_bt_xml"] == \
         "navigate_to_pose_d1max.xml"
     assert d["controller_server"]["ros__parameters"]["speed_limit_topic"] == "speed_limit"
+
+
+def test_agent启动脚本_人员检测跨板从env来_密钥缺省路径_没设不带(tmp_path):
+    """跨板(检测在厂家 Orin、代理在 RK3588):D1MAX_PERSONS_LISTEN / KEY / PEER。"""
+    base = {"D1MAX_SITE_MQTT": "mqtts://site:8883", "D1MAX_OUTBOX": "/var/lib/d1max/outbox",
+            "D1MAX_MAP": "estate:1", "D1MAX_HOME": "0,0,0", "D1MAX_PERSONS": "bridge"}
+    got = _启动脚本跑一遍(tmp_path, base)
+    args = got.stdout.splitlines()[1:]
+    assert "--persons-listen" not in args and "--persons-key" not in args
+    got = _启动脚本跑一遍(tmp_path / "b", {**base, "D1MAX_PERSONS_LISTEN": "0.0.0.0:47010",
+                                           "D1MAX_PERSONS_PEER": "192.168.168.100"})
+    args = got.stdout.splitlines()[1:]
+    assert args[args.index("--persons-listen") + 1] == "0.0.0.0:47010"
+    assert args[args.index("--persons-key") + 1] == "/etc/d1max/persons.key"
+    assert args[args.index("--persons-peer") + 1] == "192.168.168.100"
+
+
+def test_persons启动脚本_跨板时带上连谁和密钥():
+    text = (DEPLOY / "d1max-persons-start").read_text(encoding="utf-8")
+    want = '${D1MAX_PERSONS_CONNECT:+--connect} ${D1MAX_PERSONS_CONNECT:+"$D1MAX_PERSONS_CONNECT"}'
+    assert want in text
+    assert '${D1MAX_PERSONS_CONNECT:+"${D1MAX_PERSONS_KEY:-/etc/d1max/persons.key}"}' in text
