@@ -35,6 +35,8 @@ ALLOWED_KINDS = frozenset({
     "speed_cap",
     # W13:对桩、充电、出桩。任务级(调厂家回充、按电池判,站点只派)
     "dock",
+    # W48:路网(在地图上画好的路)。跟区域一样是配置:只决定往哪走,不发速度、不派任务
+    "route_net_set",
 })
 #: 直接速度、运动原语:站点永远不许发。
 FORBIDDEN_KINDS = frozenset({"vel", "walk", "move", "stand", "lie", "estop_off", "gait"})

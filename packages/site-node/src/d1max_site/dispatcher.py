@@ -174,6 +174,9 @@ class Dispatcher:
         self.maps: Any = None
         #: 禁行区、限速区(``NavZones``,W10):派单前核狗上的区域修订、补发没同步的。
         self.zones: Any = None
+        #: W48:路网(``d1max_site.route_nets.RouteNets``);站点主程序接上。
+        self.route_nets: Any = None
+        self._route_sent: dict[tuple[str, int], int] = {}
         #: 运行可视化(``RunViz``,运营可视化):狗视图里带被挡 / 重规划状态。
         self.runviz: Any = None
         self._zones_sent: dict[tuple[str, int], int] = {}
@@ -594,6 +597,48 @@ class Dispatcher:
             return str(exc)[:200] or type(exc).__name__
         ack = r.get("ack", {})
         return "" if ack.get("result") in ("accepted", "duplicate") else str(ack.get("reason"))
+
+    async def push_route_net(self, net: Any, *, issued_by: str) -> dict[str, str]:
+        """改了路网(W48):发给在线、加载着这一版、认路网(能力里有 ``route_net_set``)的机器人 →
+        {机器人: 空串(收下)或原因}。发不出去的由 :meth:`sync_route_nets` 补发。"""
+        targets = [(rid, c) for rid, c in list(self.clients.items())
+                   if self._loaded(c) == (net.map_id, net.map_version) and self._fresh(c)
+                   and c.capabilities is not None and "route_net_set" in c.capabilities.tasks]
+        got = await asyncio.gather(*(self._send_route_net(rid, c, net, issued_by)
+                                     for rid, c in targets))
+        return {rid: why for (rid, _), why in zip(targets, got, strict=True)}
+
+    async def _send_route_net(self, rid: str, c: DispatchClient, net: Any, issued_by: str) -> str:
+        self._route_sent[(rid, net.revision)] = self._now()
+        try:
+            r = await self._send(c, rid, "route_net_set", {"route_net": net.to_wire()},
+                                 issued_by=issued_by)
+        except Exception as exc:  # noqa: BLE001 —— 一台发不出去不挡别的,补发兜底
+            log.warning("给 %s 发路网第 %d 版没成:%s", rid, net.revision, exc)
+            return str(exc)[:200] or type(exc).__name__
+        ack = r.get("ack", {})
+        return "" if ack.get("result") in ("accepted", "duplicate") else str(ack.get("reason"))
+
+    async def sync_route_nets(self, *, retry_ms: int = 30_000) -> list[str]:
+        """补发路网(W48):机器人报的修订号比站点的旧 → 再发一次(同一版 30 s 内不重发)。"""
+        if self.route_nets is None:
+            return []
+        sent = []
+        now = self._now()
+        for rid, c in list(self.clients.items()):
+            loaded = self._loaded(c)
+            rn = c.capabilities.tasks.get("route_net_set") if c.capabilities is not None else None
+            if loaded is None or rn is None or not self._fresh(c):
+                continue
+            site = self.route_nets.get(*loaded)
+            if not isinstance(rn.get("rev"), int) or rn["rev"] >= site.revision:
+                continue
+            last = self._route_sent.get((rid, site.revision))
+            if last is not None and now - last < retry_ms:
+                continue
+            await self._send_route_net(rid, c, site, "site:route_net_sync")
+            sent.append(rid)
+        return sent
 
     async def expire_zones(self) -> list[str]:
         """临时区到期(决策 66):站点删掉到期的、出新修订,发给加载着那一版的狗(放宽,狗空闲时换上;

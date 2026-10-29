@@ -147,6 +147,8 @@ _MAPVIEW = re.compile(
 #: W10:``/api/maps/<id>/<版本>/zones``(看、整份改)与 ``…/zones/confirm``(发布前人工确认);
 #: R2:``…/zones/proposal``(丢掉从上一版带过来、待核的建议)。
 _ZONES = re.compile(r"^/api/maps/([^/]{1,64})/([^/]{1,32})/zones(/confirm|/proposal)?$")
+#: W48:``/api/maps/<id>/<版本>/route_net``(看、整份改)。
+_ROUTENET = re.compile(r"^/api/maps/([^/]{1,64})/([^/]{1,32})/route_net$")
 #: W00c6g:狗上建图进程日志的列表、某一个的尾巴(``?bytes=``)。
 _LOGS = re.compile(r"^/api/robots/([^/]{1,64})/logs(?:/([^/]{1,64}))?$")
 _LOG_NAME = re.compile(r"[a-z0-9_.-]{1,48}")
@@ -299,6 +301,14 @@ class SiteApi:
         self.zones = zones
         if zones is not None and getattr(dispatcher, "zones", None) is None:
             dispatcher.zones = zones
+        #: W48:路网。跟区域一样有地图目录就有,派遣器共用这一份(补发)。
+        from d1max_site.route_nets import RouteNets
+        self.route_nets: Any = None
+        if dispatcher is not None and maps is not None:
+            self.route_nets = getattr(dispatcher, "route_nets", None) \
+                or RouteNets(dispatcher.db, now_ms=self._now)
+            if getattr(dispatcher, "route_nets", None) is None:
+                dispatcher.route_nets = self.route_nets
         #: 监护心跳(W00c6i):站点主程序会传同一个给待命点管理器;不传就自己建一个(测试)。
         from d1max_site.supervision import SupervisionDesk
         self.supervision = supervision if supervision is not None else \
@@ -624,7 +634,7 @@ class _Handler(TlsHandlerMixin):
             if path == "/api/admin/maps" or path.startswith("/api/admin/maps/"):
                 return self._maps_admin(method, path, user)     # 地图管理页
             if path == "/api/maps" or _MAPCMD.match(path) or _MAPVIEW.match(path) \
-                    or _ZONES.match(path):
+                    or _ZONES.match(path) or _ROUTENET.match(path):
                 return self._maps(method, path, user)
             if method == "POST" and path == "/api/releases/upload":
                 return self._release_upload(user)
@@ -2381,6 +2391,9 @@ class _Handler(TlsHandlerMixin):
         if m is not None:
             return self._zones(method, unquote(m.group(1)), unquote(m.group(2)),
                                (m.group(3) or "").lstrip("/"), user)
+        m = _ROUTENET.match(path)
+        if m is not None:
+            return self._route_net(method, unquote(m.group(1)), unquote(m.group(2)), user)
         m = _MAPCMD.match(path)
         if m is None or method != "POST":
             raise HttpError(404, f"没有 {method} {path}")
@@ -2510,6 +2523,42 @@ class _Handler(TlsHandlerMixin):
         except ZonesError as exc:
             raise HttpError(400, str(exc)) from exc
         raise HttpError(404, f"没有 {method} 区域接口")
+
+    def _route_net(self, method: str, map_id: str, version: str, user) -> None:
+        """路网(W48):``GET`` 看(``view``);``POST`` 整份改(``manage``,带 ``base_revision``;
+        点、连线不许
+        碰这一版在生效的禁行区),改完发给加载着这一版的机器人。"""
+        from d1max_site.maps import MapError
+        from d1max_site.route_nets import RouteNetConflict, RouteNetError
+        rn = getattr(self.site, "route_nets", None)
+        if rn is None:
+            raise HttpError(404, "这个站点没开地图目录")
+        try:
+            self.site.maps.get(map_id, version)
+        except MapError as exc:
+            raise HttpError(404, str(exc)) from exc
+        if method == "GET":
+            self._need(user, VIEW)
+            return self._send_json(200, rn.view(map_id, version))
+        if method != "POST":
+            raise HttpError(404, f"没有 {method} 路网接口")
+        self._need(user, MANAGE)
+        self._audit_target = f"{map_id}:{version}"
+        d = self._body()
+        zones = self.site.zones
+        keep_out = tuple(z for z in zones.effective(map_id, version).zones if z.keep_out) \
+            if zones is not None else ()
+        try:
+            net = rn.put(map_id, version, d, by=str(user), keep_out=keep_out)
+        except RouteNetConflict as exc:
+            raise HttpError(409, str(exc)) from exc
+        except RouteNetError as exc:
+            raise HttpError(400, str(exc)) from exc
+        self._audit_detail = {"revision": net.revision, "nodes": len(net.nodes),
+                              "edges": len(net.edges)}
+        pushed = self.site.dispatch(lambda: self.site.dispatcher.push_route_net(
+            net, issued_by=str(user)))
+        return self._send_json(200, rn.view(map_id, version) | {"pushed": pushed})
 
     def _zones_confirm(self, map_id: str, version: str, d: dict, user) -> None:
         """确认(W08 决定 5)。一个区域都没有的要明说(R2:``empty_ok: true``,手机多弹一道提示 —— 重建图

@@ -37,6 +37,7 @@ from d1max_agent.mapping_trail import MappingTrail
 from d1max_agent.nav_report import NavPathReporter
 from d1max_agent.release_precheck import MIN_BATTERY_PCT as _PRECHECK_MIN_BATTERY_PCT
 from d1max_agent.resources import ResourceLedger
+from d1max_agent.routebook import RouteBook
 from d1max_agent.status import (
     compose_capabilities,
     compose_ready,
@@ -202,6 +203,9 @@ class AgentRuntime:
         #: 区域(W10):每个几何版本一份,落盘;``_zones`` 是正在用的那一份,``_zones_pending`` 是等狗空闲
         #: 再换的放宽。
         self.zonebook = ZoneBook(store_dir / "zones.json")
+        #: 路网(W48):每个几何版本一份,落盘;规划后端按它分段走。
+        self.routebook = RouteBook(store_dir / "routenets.json")
+        self._route_net: Any = None
         self._zones: ZoneSet | None = None
         self._zones_pending: ZoneSet | None = None
         #: 最近一次收下的巡检命令带的任务修订(R4 运行配置;进程内,重启清空)。
@@ -855,6 +859,11 @@ class AgentRuntime:
                 if nav.plan_problem:
                     z["problem"] = nav.plan_problem
             out["zones_set"] = z
+            if self._planned:
+                # W48:路网修订号(站点按它补发)、几个点
+                rn = self._route_net
+                out["route_net_set"] = {"rev": rn.revision if rn else 0,
+                                        "nodes": len(rn.nodes) if rn else 0}
         rc = self._running_config()
         if rc is not None:
             out["running_config"] = rc
@@ -1159,6 +1168,8 @@ class AgentRuntime:
             return await self._mark_home(cmd)
         if kind == "zones_set":
             return await self._zones_set(cmd)
+        if kind == "route_net_set":
+            return await self._route_net_set(cmd)
         if kind == "proc_log":
             return await asyncio.to_thread(self._proc_log, cmd.payload)
         if kind == "mapping_trail":
@@ -1909,6 +1920,10 @@ class AgentRuntime:
         # 区域跟着几何版本走(W10):换图就换成这一版记着的那份,等放宽的作废
         self._zones = self.zonebook.get(ref.map_id, ref.version)
         self._zones_pending = None
+        # 路网也跟着几何版本走(W48)
+        self._route_net = self.routebook.get(ref.map_id, ref.version)
+        if self._planned:
+            self.parts.nav.set_route_net(self._route_net)
         if self._planned:
             nav = self.parts.nav
             self._grid_gen = getattr(self, "_grid_gen", 0) + 1     # 之前那次换图还在读的,读完不装
@@ -1988,6 +2003,34 @@ class AgentRuntime:
         if self.transport.connected:
             await self._publish_caps()                # 站点看得到「等着换」的那一版
         return "", {"revision": zs.revision, "deferred": True}
+
+    async def _route_net_set(self, cmd: Command) -> str | tuple[str, dict[str, Any]]:
+        """站点下发路网(W48):整份换,下一次规划起按新的走。同一份重发 = 收下不动;旧修订、同修订内容
+        不同拒(``stale``);几何版本不是正在用的拒(``map_mismatch``)。先落盘再换上。"""
+        from d1max_contract.routenet import RouteNet
+        try:
+            net = RouteNet.from_wire(cmd.payload.get("route_net"))
+        except ContractError as exc:
+            return f"payload: {exc}"
+        if self.loaded_map != (net.map_id, net.map_version):
+            return "map_mismatch"
+        cur = self._route_net
+        if cur is not None and (net.revision < cur.revision
+                                or (net.revision == cur.revision and net != cur)):
+            return "stale"
+        if cur is not None and net == cur:
+            return "", {"revision": net.revision}
+        try:
+            await asyncio.to_thread(self.routebook.put, net)
+        except OSError as exc:
+            return f"store_failed: {exc}"[:200]
+        self._route_net = net
+        if self._planned:
+            self.parts.nav.set_route_net(net)
+        log.info("路网换成修订 %d(%d 个点、%d 条线)", net.revision, len(net.nodes), len(net.edges))
+        if self.transport.connected:
+            await self._publish_caps()
+        return "", {"revision": net.revision}
 
     async def _apply_zones(self, zs: ZoneSet) -> None:
         self._zones = zs
@@ -2070,6 +2113,10 @@ class AgentRuntime:
             self.rtk.start()
         # 先载正在用的图,再连站点:连上之后进来的命令要按真的地图版本核对。
         await self._load_active_map()
+        if self._route_net is None and self.loaded_map is not None:
+            self._route_net = self.routebook.get(*self.loaded_map)
+            if self._planned:
+                self.parts.nav.set_route_net(self._route_net)
         if self._zones is None and self.loaded_map is not None:
             self._zones = self.zonebook.get(*self.loaded_map)
             if self._planned and self._grid_job is None:

@@ -38,6 +38,8 @@ def temporal_class(kind: str, payload: dict[str, Any] | None = None) -> str:
         return SAFE if p.get("on") is False else GATED
     if kind == "mapping":
         return SAFE if p.get("action") == "stop" else GATED
+    if kind == "route_net_set":
+        return SAFE                      # W48:同区域,修订号挡住旧的(狗上旧修订拒)
     if kind == "zones_set":
         # W10(内审应修 8):区域一律照发 —— 修订号挡住旧的重放(狗上旧修订拒),放宽的狗等空闲才换
         # (狗上自己判,不信站点的标);钟差未知时补发不出去的话,收紧的禁行区就一直到不了狗上
