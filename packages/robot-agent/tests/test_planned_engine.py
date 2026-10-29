@@ -108,9 +108,13 @@ def test_默认还是直线桥_不认识的拒(tmp_path):
                       nav_kind="planned", robot_radius_m=0.4)
     assert isinstance(p2.nav, PlannedNavBackend) and p2.nav.robot_radius_m == 0.4
     assert p2.nav.PATH_KIND == "planned"
+    from d1max_agent.bridges.nav2_nav import Nav2NavBackend
+    p3 = build_engine(r, runs_root=tmp_path, now_ms=lambda: 0, map_id="m", home=None,
+                      nav_kind="nav2")
+    assert isinstance(p3.nav, Nav2NavBackend) and p3.nav.PATH_KIND == "planned"   # W47
     with pytest.raises(ValueError):
         build_engine(r, runs_root=tmp_path, now_ms=lambda: 0, map_id="m", home=None,
-                     nav_kind="nav2")
+                     nav_kind="nav3")
 
 
 async def test_点位在禁行区里_这个点失败_其余照走(台子):
