@@ -322,8 +322,10 @@ class BoardMonitor:
         self.soc: dict[str, float] = {}
         self.nvme: float | None = None
         self.sampled = False
-        #: 读到过 SoC / NVMe 温度没有(外审 R2:读到过、现在读不到 ≠ 降温了)。
-        self._had_soc = self._had_nvme = False
+        #: 每个温区、NVMe 最后一次读到的温度(外审 R2、复查 N1:读到过、现在读不到 ≠ 降温了 ——
+        #: 按它最后的读数算,读到低温才降)。
+        self._last_zone: dict[str, float] = {}
+        self._last_nvme: float | None = None
 
     def start(self) -> None:
         by_chip: dict[str, list[int]] = {}
@@ -397,17 +399,24 @@ class BoardMonitor:
                 log.info("上装主控板不降频了")
         self.throttle = throttle
         soc_max = max(self.soc.values()) if self.soc else None
+        # 外审 R2、复查 N1:读到过的温区(按名字)、NVMe 这一拍读不到,不是降温的证据 —— 按它最后的读数
+        # 判级(保护不解除),重新读到低于回差门槛的才降
+        gone = {z: t for z, t in self._last_zone.items() if z not in self.soc}
+        self._last_zone.update(self.soc)
+        eff = {**gone, **self.soc}
+        nvme = self.nvme if self.nvme is not None else self._last_nvme
+        if self.nvme is not None:
+            self._last_nvme = self.nvme
         stopped = self.stopped()
-        lvl, why = classify(soc_max, self.nvme, len(stopped), self.level, self.cfg.limits)
-        lost = [n for n, had, now in (("SoC", self._had_soc, soc_max), ("NVMe", self._had_nvme,
-                                                                         self.nvme))
-                if had and now is None]
-        self._had_soc = self._had_soc or soc_max is not None
-        self._had_nvme = self._had_nvme or self.nvme is not None
+        lvl, why = classify(max(eff.values()) if eff else None, nvme, len(stopped), self.level,
+                            self.cfg.limits)
+        lost = [f"{z}(最后 {t:.0f} °C)" for z, t in sorted(gone.items())]
+        if self.nvme is None and self._last_nvme is not None:
+            lost.append(f"NVMe(最后 {self._last_nvme:.0f} °C)")
         if lost and LEVELS.index(lvl) < LEVELS.index(self.level):
-            # 外审 R2:读到过的测点现在读不到,不是降温的证据 —— 保持上一级(保护不解除),等读到低温
             lvl = self.level
-            why = f"读不到 {'、'.join(lost)} 温度,保持上一级;{why}"
+        if lost:
+            why = f"读不到 {'、'.join(lost)},按最后的读数算;{why}"
         self.reason = why
         self.sampled = True
         self._log(soc_max, lvl)
