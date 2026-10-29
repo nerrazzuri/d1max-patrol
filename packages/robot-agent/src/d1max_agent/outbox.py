@@ -250,8 +250,16 @@ class OutboxPump:
         self.boxes = (box, *more, *uncounted)
         self.period_s = period_s
         self._stop = threading.Event()
+        #: 暂停上传(W46:上装过热降负载)。手上那一块传完才停,不打断。
+        self._hold = threading.Event()
         self._lock = threading.Lock()
         self._thread = threading.Thread(target=self._run, daemon=True, name="outbox")
+
+    def set_hold(self, on: bool) -> None:
+        if on:
+            self._hold.set()
+        else:
+            self._hold.clear()
 
     def start(self) -> None:
         self._thread.start()
@@ -269,7 +277,7 @@ class OutboxPump:
     def _run(self) -> None:
         while not self._stop.is_set():
             for b in self.boxes:
-                if self._stop.is_set():
+                if self._stop.is_set() or self._hold.is_set():
                     break
                 try:
                     with self._lock:

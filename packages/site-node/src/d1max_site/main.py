@@ -959,8 +959,12 @@ class Server:
                     kind="rtk", robot=SITE_ROBOT,
                     title=f"基站坐标跳了 {m:.2f} m",
                     detail="基站要用固定坐标(自测平均每次重启都会漂);机器人上的 RTK 核对会停用")
+            from d1max_site.rtk_relay import load_ntrip
+            # W46:NTRIP 源的账号在站点目录的 ntrip.json(0600,不进命令行)
+            acc = load_ntrip(Path(home) / "ntrip.json") if rtcm_source.startswith("ntrip:") \
+                else None
             self.rtk = RtcmRelay(rtcm_source, now_ms=wall_ms, publish=lambda b: self.loop.submit(
-                lambda: self.dispatcher.publish_rtcm(b)), on_base_moved=_base_moved)
+                lambda: self.dispatcher.publish_rtcm(b)), on_base_moved=_base_moved, ntrip=acc)
         self.api.rtk = self.rtk
         self.api.recordings = self.recordings
         self.api.cctv = self.cctv
@@ -1177,9 +1181,11 @@ def cmd_serve(home: Path, api_host: str, api_port: int, broker_url: str | None,
     cfg = _load(home)
     url = broker_url or f"mqtts://127.0.0.1:{cfg['broker_port']}"
     if rtcm_source:
-        from d1max_site.rtk_relay import SourceError, parse_source
+        from d1max_site.rtk_relay import SourceError, load_ntrip, parse_source
         try:
             parse_source(rtcm_source)
+            if rtcm_source.startswith("ntrip:"):
+                load_ntrip(Path(home) / "ntrip.json")
         except SourceError as exc:
             print(f"d1max-site 起不来: {exc}", file=sys.stderr, flush=True)
             return 2
@@ -1353,8 +1359,9 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--api-port", type=int, default=8443)
     s.add_argument("--broker", default=None, help="默认 mqtts://127.0.0.1:<init 时的端口>")
     s.add_argument("--rtcm-source", default=None,
-                   help="自建基站的改正数据(W09e):serial:<设备>:<波特率> 或 "
-                        "tcp:<主机>:<端口>;不给不转发")
+                   help="RTK 改正数据(W09e、W46):serial:<设备>:<波特率>、tcp:<主机>:<端口>,"
+                        "或 ntrip:<主机>:<端口>/<挂载点>(账号写在站点目录的 ntrip.json,"
+                        "chmod 600);不给不转发")
     return p
 
 

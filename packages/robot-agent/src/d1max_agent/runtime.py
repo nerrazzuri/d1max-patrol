@@ -356,6 +356,14 @@ class AgentRuntime:
         self._next_devices_ms = 0
         self._devices_task: asyncio.Task | None = None
         self._devices_ready = False
+        #: 上装主控板的温度、风扇(W46,决策 74;装机入口 :meth:`attach_board` 接上)。
+        self.board: Any = None
+        #: 暂停 / 接着上传(装机入口接到 ``OutboxPump.set_hold``)。
+        self.upload_hold: Callable[[bool], Any] | None = None
+        self._shedding = False
+        #: 热像镜头被挡(W46;装机入口 :meth:`attach_lens` 接上)。
+        self.lens: Any = None
+        self._lens_task: asyncio.Task | None = None
         self.processor.admit_hook = self._admit
         #: 地图(W00c5d 第二部分):正在用的那一张(``MapKeeper``)、录包与重建(``MappingService``)。
         self.maps = maps
@@ -563,10 +571,73 @@ class AgentRuntime:
             return "map_switching"
         if cmd.kind in _AUTONOMOUS_KINDS and self.parts is not None and self._head_key()[1]:
             return "head_not_forward"             # W11a、W09i:头尾不知道,或狗尾为前但后面看不清
+        if cmd.kind in ("goto", "patrol", "standoff"):
+            hot = self._overheat_refusal(cmd.kind)
+            if hot:
+                return hot
         if cmd.kind != "patrol" or self._storage is None:
             return ""
         f = self._storage()
         return "storage_full" if f is not None and f.full() else ""
+
+    # ------------------------------------------------------------ 上装过热(W46,决策 74)
+
+    def attach_board(self, board: Any) -> None:
+        """接上板子温度监视:事件进事件簿,设备健康带上,引擎从设备桥拿过热级别(危急 → 回家)。"""
+        self.board = board
+        board.emit = self.events.emit
+        if self.devices is not None:
+            self.devices.board = board
+        if self.parts is not None and hasattr(self.parts.device, "overheat"):
+            self.parts.device.overheat = lambda: (board.level, board.reason)
+
+    def attach_lens(self, lens: Any) -> None:
+        """接上热像镜头检测:事件进事件簿,设备健康带上。"""
+        self.lens = lens
+        lens.emit = self.events.emit
+        if self.devices is not None:
+            self.devices.lens = lens
+
+    async def _lens_check(self) -> None:
+        try:
+            await self.lens.step()
+        except asyncio.CancelledError:
+            raise
+        except Exception:                         # 镜头检测出毛病不许带走代理
+            log.exception("热像镜头检测这一次炸了")
+
+    def _overheat_refusal(self, kind: str) -> str:
+        """过热时不接的:降负载起不接新的建图(录包、重建);危急不接新的自主任务(对桩、遥控照接)。"""
+        lvl = getattr(self.board, "level", "ok")
+        if kind in ("mapping", "map_build") and lvl in ("shed", "critical"):
+            return "overheat"
+        if kind in ("goto", "patrol", "standoff") and lvl == "critical":
+            return "overheat"
+        return ""
+
+    async def _watch_board(self) -> None:
+        if self.board is None:
+            return
+        try:
+            await self.board.step()
+        except Exception:                               # 读温度出毛病不许带走这一拍
+            log.exception("板子温度这一拍炸了")
+        shed = self.board.level in ("shed", "critical")
+        if shed == self._shedding:
+            return
+        self._shedding = shed
+        log.warning("上装%s:%s", "过热,降负载(停热像录像、暂停上传、不接新建图)" if shed
+                    else "温度回来了,恢复热像录像和上传", self.board.reason)
+        if self.recorder is not None and hasattr(self.recorder, "hold"):
+            try:
+                self.recorder.hold({"thermal"} if shed else set())
+            except Exception:
+                log.exception("热像录像停 / 恢复没成")
+        if self.upload_hold is not None:
+            try:
+                self.upload_hold(shed)
+            except Exception:
+                log.exception("上传暂停 / 恢复没成")
 
     # ------------------------------------------------------------ 地图(W00c5d 第二部分)
 
@@ -1107,6 +1178,8 @@ class AgentRuntime:
             if action == "start":
                 if self.mapper.recording:
                     return "busy"
+                if self._overheat_refusal("mapping"):
+                    return "overheat"             # W46:过热降负载时不录新的(在线建很吃 CPU)
                 if target is not None and self._running(self._build_job):
                     return "busy"                 # 还在重建 / 打包上一趟:不同时在线建
                 f = self._storage() if self._storage is not None else None
@@ -1121,6 +1194,8 @@ class AgentRuntime:
             return "busy"
         if not self._tasks_idle():
             return "busy"                         # 重建吃 CPU:开跑时不跟巡检抢(开跑后不挡出警)
+        if self._overheat_refusal("map_build"):
+            return "overheat"
         self._build_job = loop.create_task(self._build(bag, map_id, version, cmd.task_id))
         return ""
 
@@ -2055,6 +2130,12 @@ class AgentRuntime:
             async def _rec_off() -> None:
                 self.recorder.close()
             await _step("停录像", _rec_off)
+        if self._lens_task is not None and not self._lens_task.done():
+            self._lens_task.cancel()
+        if self.board is not None:
+            async def _board_off() -> None:
+                self.board.close()
+            await _step("停板子温度", _board_off)
         if self.mapper is not None and hasattr(self.mapper, "shutdown"):
             # 正在录就好好停下:录包写完索引、在线建图 SIGINT 存盘(W09c2),重启后接着打包
             await _step("停录包", self.mapper.shutdown)
@@ -2444,6 +2525,11 @@ class AgentRuntime:
                 self.recorder.step()
             except Exception:                     # 录像出毛病不许带走这一拍(狗照样巡检、遥控)
                 log.exception("录像这一拍炸了")
+        await self._watch_board()
+        if self.lens is not None and self.lens.due() \
+                and (self._lens_task is None or self._lens_task.done()):
+            # 取一帧要起 ffmpeg、最长等 15 s:放后台,不卡这一拍(遥测、导航照走)
+            self._lens_task = asyncio.get_running_loop().create_task(self._lens_check())
         await self._watch_faults()
         await self._flush_events()
         await self._publish_status()

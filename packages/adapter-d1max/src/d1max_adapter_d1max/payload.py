@@ -4,6 +4,10 @@ W40(上装 V1.2,决策 70):左右两只聚光灯能分开开关;多色警灯按�
 可以软件打闪;没有独立警笛时用喇叭循环放警笛声;功放的电源可以接在继电器上,出声才合上。
 线圈在配置里起名字,各路引用名字(见 :class:`PayloadConfig`)。
 
+W46(上装 V2,硬件版本 D):压电警笛接继电器,放警报时喇叭跟着一起放警笛声(两样都配);功放常电,
+用 GPIO 控 MUTE 脚(先放开、等 ``amp_lead_s`` 再出声,防爆音);看护循环每 ``READBACK_S`` 秒回读一次
+线圈,继电器板自己掉电重启(输出全关)以后重新下发。
+
 硬件还没选型,这一层只认通用的东西:
 - 继电器板:Modbus RTU,功能码 05 写单个线圈(``FF00`` 开、``0000`` 关)、01 读线圈。
   哪一路接什么、站号、波特率都在配置里(``PayloadConfig``)。
@@ -39,6 +43,9 @@ log = logging.getLogger(__name__)
 #: 能接到继电器上的几路(HAL 的执行器名)。
 RELAY_OUTPUTS = ("strobe", "siren", "spotlight")
 MAX_ON_S = 600.0                                     # 一次最长开 10 分钟,再长要再下命令
+#: GPIO 控 MUTE 的功放:放开以后等这么久再出声(硬件组建议约 200 ms,防爆音)。
+AMP_LEAD_S = 0.2
+AMP_LEAD_MAX_S = 2.0
 _CLIP = re.compile(r"[A-Za-z0-9_.-]{1,64}")
 _LANG = re.compile(r"[A-Za-z]{2,3}(?:[-_][A-Za-z0-9]{2,8})?")
 MAX_TTS_CHARS = 300
@@ -237,8 +244,16 @@ class PayloadConfig:
     #: 功放的电源接在哪个线圈上(空 = 功放常电)。喇叭要出声前合上,不出声 ``amp_idle_s`` 秒后断开。
     amp_coil: str = ""
     amp_idle_s: float = 15.0
+    #: 功放常电、MUTE 脚接 GPIO(W46):哪个芯片、第几根线、什么电平是静音。跟 ``amp_coil`` 二选一。
+    mute_chip: str = ""
+    mute_line: int = -1
+    mute_level: str = "high"
+    #: 放开功放以后等多久再出声(防爆音)。负数 = 缺省:GPIO 0.2 秒,继电器 0。
+    amp_lead_s: float = -1.0
 
     def __post_init__(self) -> None:
+        if self.amp_lead_s < 0:
+            object.__setattr__(self, "amp_lead_s", AMP_LEAD_S if self.mute_chip else 0.0)
         # 老配置(W21):coils 的键就是那几路
         if not self.spotlight and "spotlight" in self.coils:
             object.__setattr__(self, "spotlight", {"both": ("spotlight",)})
@@ -267,12 +282,26 @@ class PayloadConfig:
             raise PayloadError(f"strobe.default {self.strobe_default!r} 不在 colors 里")
         if self.blink_s and not BLINK_MIN_S <= self.blink_s <= BLINK_MAX_S:
             raise PayloadError(f"strobe.blink_s 要是 0 或 {BLINK_MIN_S}–{BLINK_MAX_S} 秒")
-        if self.siren_coil and self.siren_clip:
-            raise PayloadError("siren 只能二选一:coil(继电器)或 clip(喇叭放)")
         if self.siren_clip and (not _CLIP.fullmatch(self.siren_clip)
                                 or self.siren_clip.startswith(".")):
             raise PayloadError(f"siren.clip 只许字母、数字、. _ -:{self.siren_clip!r}")
-        if (self.siren_clip or self.amp_coil) and not self.audio_device:
+        if self.mute_chip:
+            from d1max_contract.gpio import GpioError, chip_path
+            try:
+                chip_path(self.mute_chip)
+            except GpioError as exc:
+                raise PayloadError(f"audio.mute.chip:{exc}") from exc
+            if isinstance(self.mute_line, bool) or not isinstance(self.mute_line, int) \
+                    or self.mute_line < 0:
+                raise PayloadError("audio.mute.line 还没填(按 GPIO 引脚方案写;装机时 gpioinfo 查)")
+            if self.mute_level not in ("high", "low"):
+                raise PayloadError("audio.mute.mute_level 只认 high 或 low(哪个电平是静音)")
+            if self.amp_coil:
+                raise PayloadError("功放只能二选一:audio.amp(电源接继电器)"
+                                   "或 audio.mute(GPIO 控 MUTE)")
+        if not 0 <= self.amp_lead_s <= AMP_LEAD_MAX_S:
+            raise PayloadError(f"audio.amp_lead_s 要在 0–{AMP_LEAD_MAX_S:.0f} 秒")
+        if (self.siren_clip or self.amp_coil or self.mute_chip) and not self.audio_device:
             raise PayloadError("喇叭警笛、功放都要先接喇叭(audio.device)")
         if not 0 <= self.amp_idle_s <= MAX_ON_S:
             raise PayloadError(f"audio.amp_idle_s 要在 0–{MAX_ON_S:.0f} 秒")
@@ -331,9 +360,18 @@ class PayloadConfig:
         colors = strobe.get("colors") or {}
         if not isinstance(colors, dict):
             raise PayloadError("strobe.colors 要是对象")
+        mute = audio.get("mute") or {}
+        if not isinstance(mute, dict):
+            raise PayloadError("audio.mute 要是对象:{\"chip\": \"gpiochipN\", \"line\": N, "
+                               "\"mute_level\": \"high\"}")
+        line = mute.get("line", -1)
+        if not isinstance(mute.get("chip", ""), str) or not isinstance(line, int) \
+                or isinstance(line, bool) or not isinstance(mute.get("mute_level", "high"), str):
+            raise PayloadError("audio.mute 的 chip、mute_level 要是字符串,line 要是整数")
         try:
             blink = float(strobe.get("blink_s", 0))
             idle = float(audio.get("amp_idle_s", cls.amp_idle_s))
+            lead = float(audio.get("amp_lead_s", -1.0))
             baud, slave = int(relay.get("baud", cls.baud)), int(relay.get("slave", cls.slave))
         except (TypeError, ValueError) as exc:
             raise PayloadError(f"上装配置的数字不对: {exc}") from exc
@@ -351,7 +389,9 @@ class PayloadConfig:
                    strobe_colors={k: _names(v, f"strobe.colors.{k}") for k, v in colors.items()},
                    strobe_default=strobe.get("default", ""), blink_s=blink,
                    siren_coil=siren.get("coil", ""), siren_clip=siren.get("clip", ""),
-                   amp_coil=audio.get("amp", ""), amp_idle_s=idle)
+                   amp_coil=audio.get("amp", ""), amp_idle_s=idle,
+                   mute_chip=mute.get("chip", ""), mute_line=line,
+                   mute_level=mute.get("mute_level", "high"), amp_lead_s=lead)
 
 
 # ------------------------------------------------------------ 上装
@@ -388,18 +428,35 @@ class Payload:
 
     RETRY_S = 0.5
     BLINK_TICK_S = 0.1
+    #: 多久回读一次线圈(W46:继电器板自己掉电重启以后输出全关,要发现、重新下发)。
+    READBACK_S = 5.0
     #: 警笛等说话说完时多久看一次。
     SIREN_POLL_S = 0.1
     #: 警笛放不出来时隔多久再试。
     SIREN_RETRY_S = 1.0
 
     def __init__(self, cfg: PayloadConfig, *, relay: ModbusRelay | None = None,
-                 run: Callable[..., Any] | None = None) -> None:
+                 run: Callable[..., Any] | None = None, mute: Any = None) -> None:
         self.cfg = cfg
         self.relay = relay
         if relay is None and cfg.coils:
             from d1max_contract.serialport import open_serial
             self.relay = ModbusRelay(lambda: open_serial(cfg.port, cfg.baud), slave=cfg.slave)
+        #: 功放 MUTE 脚(W46;``set(电平)``、``close()``,测试换掉)。拿不到这根线不挡代理起来:
+        #: 灯、警笛照样能用,喇叭出声时报「功放开不了」。
+        self.amp_error = ""
+        self.mute = mute
+        if mute is None and cfg.mute_chip:
+            from d1max_contract.gpio import OutputLine
+            try:
+                self.mute = OutputLine(cfg.mute_chip, cfg.mute_line, value=self._muted_level,
+                                       consumer="d1max-amp")
+            except OSError as exc:
+                self.amp_error = str(exc)
+                log.error("功放 MUTE 脚拿不到,喇叭出不了声: %s", exc)
+        #: GPIO 功放:放开着到单调钟几点(None = 要静音);现在是不是放开着。
+        self._amp_until: float | None = None
+        self._amp_open = False
         #: 起子进程(测试换掉)。
         self._run = run or asyncio.create_subprocess_exec
         #: 期望:开着到单调钟几点(None = 要关)。按线圈。
@@ -432,11 +489,15 @@ class Payload:
     def _siren_wav(self) -> Path:
         return Path(self.cfg.clips_dir) / f"{self.cfg.siren_clip}.wav"
 
+    def _speaker_siren(self) -> bool:
+        """喇叭放得了警笛声(配了、接了喇叭、声音文件在)。"""
+        return bool(self.cfg.siren_clip and self.cfg.audio_device) and self._siren_wav().is_file()
+
     def has(self, output: str) -> bool:
         if output == "speaker":
             return bool(self.cfg.audio_device)
-        if output == "siren" and self.cfg.siren_clip:
-            return bool(self.cfg.audio_device) and self._siren_wav().is_file()
+        if output == "siren" and self.cfg.siren_clip and not self.cfg.siren_coil:
+            return self._speaker_siren()
         if self.relay is None:
             return False
         if output == "spotlight":
@@ -456,7 +517,10 @@ class Payload:
             d["strobe_colors"] = list(self.cfg.strobe_colors)
             d["strobe_default"] = self.cfg.strobe_default
         if self.has("siren"):
-            d["siren_via"] = "speaker" if self.cfg.siren_clip else "relay"
+            if not self.cfg.siren_coil:
+                d["siren_via"] = "speaker"
+            else:
+                d["siren_via"] = "relay+speaker" if self._speaker_siren() else "relay"
         return d
 
     # ---- 继电器
@@ -471,7 +535,8 @@ class Payload:
             self._until.get(c) is not None for c in self.cfg.strobe_coils)
 
     def _ensure_guard(self) -> None:
-        if not self._closed and self.cfg.coils and (self._guard is None or self._guard.done()):
+        if not self._closed and (self.cfg.coils or self.cfg.mute_chip) \
+                and (self._guard is None or self._guard.done()):
             self._guard = asyncio.get_running_loop().create_task(self._watch())
 
     async def start(self) -> None:
@@ -526,10 +591,36 @@ class Payload:
                     for c in self.cfg.strobe_coils:
                         self._until[c] = None
 
+    async def _readback(self) -> None:
+        """读一遍线圈,跟确认过的对不上的改成「不明」(下一步 :meth:`_reconcile` 重新下发)。
+        读不出来不管:写的时候自然会报。"""
+        if self.relay is None or not self.cfg.coils:
+            return
+        nums = self.cfg.coils
+        lo = min(nums.values())
+        async with self._lock():
+            try:
+                bits = await asyncio.to_thread(self.relay.read_coils, lo,
+                                               max(nums.values()) - lo + 1)
+            except Exception:                          # noqa: BLE001 - 写的时候会报
+                return
+            for name, n in nums.items():
+                k = self._known.get(name)
+                if k is not None and n - lo < len(bits) and bits[n - lo] != k:
+                    log.warning("继电器板上 %s(%s)跟记的不一样(板子掉过电?),重新下发",
+                                name, self.cfg.role_of(name))
+                    self._known[name] = None
+
     async def _watch(self) -> None:
+        loop = asyncio.get_running_loop()
+        next_read = loop.time() + self.READBACK_S
         while not self._closed:
+            if loop.time() >= next_read:
+                await self._readback()
+                next_read = loop.time() + self.READBACK_S
             for c in self.cfg.coils:
                 await self._reconcile(c)
+            self._amp_idle_check()
             await asyncio.sleep(self.BLINK_TICK_S if self._blinking() else self.RETRY_S)
 
     def _pick(self, output: str, on: bool, side: str, color: str
@@ -564,11 +655,24 @@ class Payload:
             raise PayloadError(f"继电器上只有 {RELAY_OUTPUTS}")
         if on and not 0 < max_s <= MAX_ON_S:
             raise PayloadError(f"max_s 要在 0–{MAX_ON_S:.0f} 秒之间")
-        if output == "siren" and self.cfg.siren_clip:
+        if output == "siren" and self.cfg.siren_clip and not self.cfg.siren_coil:
             await self._siren_sound(on, max_s)
             return
         if not self.has(output):
             raise PayloadError(f"上装没接 {output}")
+        both = output == "siren" and bool(self.cfg.siren_clip)
+        if both and not on:
+            await self._siren_sound(False, 0)          # 关:喇叭先停,继电器关不上也不许接着放
+        await self._set_coils(output, on, max_s, side, color)
+        if both and on and self._speaker_siren():
+            try:                                       # 喇叭是补音量的:放不出来不算警笛没开
+                await self._siren_sound(True, max_s)
+            except PayloadError as exc:
+                self.siren_error = str(exc)
+                log.warning("警笛的喇叭那一半放不出来: %s", exc)
+
+    async def _set_coils(self, output: str, on: bool, max_s: float, side: str,
+                         color: str) -> None:
         turn_on, turn_off = self._pick(output, on, side, color)
         self._ensure_guard()
         async with self._lock():
@@ -612,14 +716,16 @@ class Payload:
     def problems(self) -> list[str]:
         """状态不明或关不上的线圈,加上放不出来的喇叭警笛(HAL 当故障报)。
         期望开、还没确认开的不算(那是正在开);打闪时灭的那半拍也不算。"""
-        out = []
-        for c in self.cfg.coils:
-            known = self._known.get(c)
-            if known is None or (known and self._until.get(c) is None):
-                out.append(c)
+        out = self._coil_problems()
         if self.siren_error and self.siren_on():
             out.append("siren")
+        if self.amp_error:
+            out.append("amp")
         return out
+
+    def _coil_problems(self) -> list[str]:
+        return [c for c in self.cfg.coils if self._known.get(c) is None
+                or (self._known.get(c) and self._until.get(c) is None)]
 
     def _output_of(self, coil: str) -> str:
         if coil in self.cfg.strobe_coils:
@@ -633,18 +739,18 @@ class Payload:
     def faults(self) -> dict[str, str]:
         """:meth:`problems` 按路合起来:``strobe``/``siren``/``spotlight``/``amp`` → 说明(给人看)。
         站点按路出告警(``payload_<路>``),线圈名是现场配置起的,站点不认识。"""
-        out: dict[str, list[str]] = {}
-        for name in self.problems():
-            if name == "siren" and name not in self.cfg.coils:
-                out.setdefault("siren", []).append(f"喇叭警笛放不出来:{self.siren_error}")
-            else:
-                out.setdefault(self._output_of(name), []).append(self.cfg.role_of(name))
+        roles: dict[str, list[str]] = {}
+        for c in self._coil_problems():
+            roles.setdefault(self._output_of(c), []).append(self.cfg.role_of(c))
+        extra: dict[str, list[str]] = {}
+        if self.siren_error and self.siren_on():
+            extra.setdefault("siren", []).append(f"喇叭警笛放不出来:{self.siren_error}")
+        if self.amp_error:
+            extra.setdefault("amp", []).append(f"功放 MUTE 脚写不进去:{self.amp_error}")
         text = {}
-        for o, items in out.items():
-            stuck = [i for i in items if not i.startswith("喇叭警笛")]
-            parts = ([f"上装{'、'.join(dict.fromkeys(stuck))}状态不明或关不上"
-                      "(继电器板没确认,正在接着关)"] if stuck else []) + \
-                [i for i in items if i.startswith("喇叭警笛")]
+        for o in dict.fromkeys([*roles, *extra]):
+            parts = ([f"上装{'、'.join(dict.fromkeys(roles[o]))}状态不明或关不上"
+                      "(继电器板没确认,正在接着关)"] if o in roles else []) + extra.get(o, [])
             text[o] = ";".join(parts)
         return text
 
@@ -674,7 +780,11 @@ class Payload:
                 out.append(device("speaker", "error", self.sound_error))
             else:
                 out.append(device("speaker", "online", self.cfg.audio_device))
-        if self.cfg.siren_clip:
+        if self.cfg.mute_chip:
+            where = f"{self.cfg.mute_chip}:{self.cfg.mute_line}"
+            out.append(device("amp", "error", f"功放 MUTE 脚 {where} 写不进去:{self.amp_error}")
+                       if self.amp_error else device("amp", "online", f"MUTE 脚 {where}"))
+        if self.cfg.siren_clip and not self.cfg.siren_coil:
             if not self._siren_wav().is_file():
                 out.append(device("siren", "error", f"没有警笛声文件 {self._siren_wav()}"))
             elif self.siren_error:
@@ -685,8 +795,16 @@ class Payload:
 
     # ---- 功放
 
+    @property
+    def _muted_level(self) -> bool:
+        return self.cfg.mute_level == "high"
+
     async def _amp_on(self, until: float) -> None:
-        """出声前合上功放,至少合到 ``until`` + 闲置时间。合不上就报错(不出声的喇叭当没放)。"""
+        """出声前放开功放,至少放开到 ``until`` + 闲置时间;刚放开的等 ``amp_lead_s`` 再出声。
+        放不开就报错(不出声的喇叭当没放)。"""
+        if self.cfg.mute_chip:
+            await self._amp_unmute(until)
+            return
         a = self.cfg.amp_coil
         if not a or self.relay is None:
             return
@@ -701,16 +819,57 @@ class Payload:
             except Exception as exc:
                 self._until[a] = None
                 raise PayloadError(f"功放开不了(继电器板): {exc}") from exc
+        if self.cfg.amp_lead_s:
+            await asyncio.sleep(self.cfg.amp_lead_s)
+
+    async def _amp_unmute(self, until: float) -> None:
+        self._ensure_guard()
+        self._amp_until = max(self._amp_until or 0.0, until + self.cfg.amp_idle_s)
+        if self._amp_open:
+            return
+        try:
+            if self.mute is None:
+                raise OSError(self.amp_error or "没拿到这根线")
+            self.mute.set(not self._muted_level)
+        except Exception as exc:
+            self._amp_until = None
+            self.amp_error = str(exc)
+            raise PayloadError(f"功放开不了(MUTE 脚): {exc}") from exc
+        self.amp_error = ""
+        self._amp_open = True
+        if self.cfg.amp_lead_s:
+            await asyncio.sleep(self.cfg.amp_lead_s)
+
+    def _amp_idle_check(self) -> None:
+        """看护循环每拍:GPIO 功放闲够了就静音(静音写不进去下一拍再来)。"""
+        if not self._amp_open or self.mute is None:
+            return
+        until = self._amp_until
+        if until is not None and asyncio.get_running_loop().time() < until:
+            return
+        try:
+            self.mute.set(self._muted_level)
+        except Exception as exc:                       # noqa: BLE001 - 下一拍再静音
+            self.amp_error = str(exc)
+            log.warning("功放静音不了(接着试): %s", exc)
+            return
+        self._amp_open = False
+        self._amp_until = None
 
     def _amp_release(self) -> None:
         """一段声音停了:另一样(说话 / 警笛)也不响的话,功放闲置 ``amp_idle_s`` 秒后
-        由看护循环断开。"""
-        a = self.cfg.amp_coil
-        if not a or self.relay is None:
-            return
+        由看护循环断开(或静音)。"""
         me = asyncio.current_task()
         busy = any(t is not None and not t.done() and t is not me
                    for t in (self._sound, self._siren))
+        if self.cfg.mute_chip:
+            if not busy and self._amp_until is not None:
+                self._amp_until = min(self._amp_until,
+                                      asyncio.get_running_loop().time() + self.cfg.amp_idle_s)
+            return
+        a = self.cfg.amp_coil
+        if not a or self.relay is None:
+            return
         cur = self._until.get(a)
         if not busy and cur is not None:
             self._until[a] = min(cur, asyncio.get_running_loop().time() + self.cfg.amp_idle_s)
@@ -936,5 +1095,12 @@ class Payload:
                     await self._write(c, False)
             except Exception:
                 log.exception("上装线圈 %s 收尾时关不掉", c)
+        if self.mute is not None:
+            try:
+                self.mute.set(self._muted_level)
+            except Exception:
+                log.exception("功放收尾时静音不了")
+            self.mute.close()
+            self._amp_open = False
         if self.relay is not None:
             self.relay.close()

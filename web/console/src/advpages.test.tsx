@@ -47,6 +47,10 @@ describe("诊断", () => {
     expect(c.querySelector('[data-robot="A"]')!.textContent).toContain("浮点解");
     expect(deviceText("link:router")).toContain("router");
     expect(deviceText("relay")).toBe("relay");
+    expect(deviceText("board")).toBe("主控板温度");
+    expect(deviceText("fan:stir")).toBe("风扇 stir");
+    expect(deviceText("amp")).toBe("功放");
+    expect(deviceText("lens:thermal")).toBe("热像镜头");
   });
   it("打包日志是下载", () => {
     const { container: c } = render(<DiagPage />);

@@ -145,6 +145,10 @@ def build_parser() -> argparse.ArgumentParser:
                     default=Path(os.environ.get("D1MAX_PAYLOAD", "/etc/d1max/payload.json")),
                     help="上装配置(JSON:relay.port/baud/slave/coils、audio.device/clips_dir/"
                          "tts_command);文件不在就是没装上装,能力全报 false")
+    pl.add_argument("--board", type=Path,
+                    default=Path(os.environ.get("D1MAX_BOARD", "/etc/d1max/board.json")),
+                    help="上装主控板的温度、风扇(W46:风扇测速线接哪几根 GPIO、门槛、日志目录);"
+                         "文件不在就不看(厂商 Orin 上、老机器人)")
     pl.add_argument("--sim-payload", action="store_true",
                     help="仿真机器人装上上装(警灯、警笛、聚光灯、喇叭;演示与测试用)")
     rk = p.add_argument_group("RTK(W09e;决策 21:自己的为主、厂家的可选)")
@@ -560,6 +564,14 @@ def build(args: argparse.Namespace) -> Assembled:
         if pump is not None:
             runtime._outbox_retry = pump.retry_refused
             runtime._unsealed = pump.unsealed
+            runtime.upload_hold = pump.set_hold         # W46:过热降负载时暂停上传
+        board = _board(args)
+        if board is not None:
+            runtime.attach_board(board)
+        if kind == "rtsp" and "thermal" in extra_cameras(args):   # W46:热像镜头被挡
+            from d1max_agent.lens import LensWatch, ffmpeg_gray
+            runtime.attach_lens(LensWatch(ffmpeg_gray(source("thermal"), args.ffmpeg),
+                                          emit=lambda k, d: None))
         return hal, parts, runtime, pump
 
     async def _in_loop():
@@ -639,6 +651,21 @@ def _sealer(args: argparse.Namespace) -> Any:
         log.warning("没有证据公钥 %s:照片、截图、录像明文存在机器人上(站点会报 P2)", path)
     RunArchive.sealer = sealer
     return sealer
+
+
+def _board(args: argparse.Namespace) -> Any:
+    """``--board``(W46):文件在才看板子温度、风扇;写错了代理不起(说清楚哪里错)。"""
+    path = getattr(args, "board", None)
+    if path is None or not Path(path).is_file():
+        return None
+    from d1max_agent.boardhealth import BoardConfig, BoardConfigError, BoardMonitor
+    try:
+        cfg = BoardConfig.load(path)
+    except BoardConfigError as exc:
+        raise SystemExit(f"{path}:{exc}") from exc
+    mon = BoardMonitor(cfg, emit=lambda k, d: None)
+    mon.start()
+    return mon
 
 
 def _outbox(args: argparse.Namespace, registration: Registration, parts: EngineParts,

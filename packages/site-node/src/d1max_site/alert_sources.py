@@ -471,6 +471,28 @@ class SiteAlertSources:
             self.desk.raise_alert(kind="force_config_bad", robot=rid,
                                   title="机器人上的受力门槛文件读不懂,用的是缺省门槛",
                                   detail=f"/etc/d1max/force.json:{str(d.get('reason', ''))[:250]}")
+        elif e.kind == "board_thermal" and d.get("level") in ("warn", "shed", "critical"):
+            # W46(决策 74):上装主控板过热。警戒、降负载给业主(P2);危急机器人自己结束这一趟回家,出 P1
+            stopped = "、".join(str(f) for f in d.get("fans_stopped", [])[:5])
+            detail = str(d.get("reason", ""))[:200] + (f";停转的风扇:{stopped}" if stopped else "")
+            lvl = d.get("level")
+            if lvl == "critical":
+                self.desk.raise_alert(kind="board_overheat", robot=rid,
+                                      title="机器人上装严重过热,结束这一趟、回去了",
+                                      detail=detail + ";看风扇、进风口,凉下来之前不接新的巡逻")
+            else:
+                self.desk.raise_alert(
+                    kind="board_hot", robot=rid,
+                    title="机器人上装过热,已降负载(停热像录像、暂停上传)" if lvl == "shed"
+                    else "机器人上装温度偏高",
+                    detail=detail + ";巡逻照走,今天之内看一下风扇、进风口")
+        elif e.kind == "thermal_lens_blocked":
+            # W46:热像镜头被雨水、脏东西挡住,夜里找人、看起火就瞎了一半
+            self.desk.raise_alert(kind="lens_blocked", robot=rid,
+                                  title="热像镜头可能被挡住了(雨水、脏东西)",
+                                  detail="热像画面糊成一片好几分钟了;雨停了会自己好,不好就去擦镜头"
+                                         f"(细节 {d.get('detail', '?')},"
+                                         f"平时 {d.get('baseline', '?')})")
         elif e.kind == "recording_failed":
             # W18:这一路录像断了(相机不通、盘写不进),狗每 10 s 重试;录回来报 recording_ok
             self.desk.raise_alert(kind="recording_failed", robot=rid,

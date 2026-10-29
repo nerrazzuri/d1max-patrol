@@ -403,7 +403,16 @@ class DevicePoseEvent:
     pose: Pose
 
 
-DeviceEvent = BatteryEvent | FaultEvent | ControlLostEvent | DevicePoseEvent
+@dataclass(frozen=True)
+class OverheatEvent:
+    """上装主控板过热级别变了(W46,决策 74):``ok``、``warn``、``shed``、``critical``。
+    只有 ``critical`` 要引擎管(结束这一趟、回家);前两级的告警、降负载由运行时做。"""
+
+    level: str
+    reason: str = ""
+
+
+DeviceEvent = BatteryEvent | FaultEvent | ControlLostEvent | DevicePoseEvent | OverheatEvent
 
 
 class DeviceBackend(EventEmitter[DeviceEvent], ABC):

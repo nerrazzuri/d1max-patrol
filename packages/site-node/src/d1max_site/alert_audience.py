@@ -24,10 +24,12 @@ _INTRUSION = ("intrusion", "intrusion_unanswered", "intrusion_person", "dog_sees
 _HELP = ("stuck", "nav_blocked", "fallen", "force_flipped", "deter_cornered", "battery_abort",
          "run_abort", "charge_failed", "dock_stuck", "loc_lost_paused", "loc_lost_idle",
          "estop_pressed", "nogo", "payload_siren", "payload_strobe", "payload_spotlight",
-         "schedule_missed", "battery_swap", "standby_failed", "lease_expired", "suspend_stale")
+         "schedule_missed", "battery_swap", "standby_failed", "lease_expired", "suspend_stale",
+         "board_overheat")
 _OFFLINE = ("robot_offline", "robot_offline_idle", "cctv_offline")
-_OWNER = ("agent_args_skipped", "agent_too_old", "archive_failed", "backup_stale",
-          "backup_verify_failed", "bundle_lag", "cert_expiring", "charge_overlap", "clock_skew",
+_OWNER = ("agent_args_skipped", "agent_too_old", "archive_failed", "backup_stale", "board_hot",
+          "lens_blocked", "backup_verify_failed", "bundle_lag", "cert_expiring", "charge_overlap",
+          "clock_skew",
           "disk_80", "evidence_plain", "evidence_seal_failed", "evidence_unopened", "finding",
           "force_bump", "force_config_bad", "incident_flood", "lane_stuck", "loc_degraded",
           "map_failed", "map_integrity", "payload_amp", "purged_incoming_stuck", "push_failed",

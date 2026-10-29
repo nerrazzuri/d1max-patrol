@@ -338,6 +338,10 @@ String deviceName(String id) {
     'siren' => tr('Siren (speaker)', '警笛（喇叭）'),
     'rtk' => 'RTK',
     'disk' => tr('Storage disk', '存储盘'),
+    'board' => tr('Main board temperature', '主控板温度'),
+    'fan' => tr('Fan $name', '风扇 $name'),
+    'amp' => tr('Amplifier', '功放'),
+    'lens' => tr('Thermal lens', '热像镜头'),
     'camera' => tr('Camera ${cameraName(name)}', '相机 ${cameraName(name)}'),
     'link' => name == 'router'
         ? tr('Router', '路由器')

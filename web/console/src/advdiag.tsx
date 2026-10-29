@@ -22,6 +22,10 @@ export function deviceText(id: string): string {
   if (kind === "link") return t("devLink", { n: name });
   if (kind === "rtk") return t("devRtk");
   if (kind === "disk") return t("devDisk");
+  if (kind === "board") return t("devBoard");
+  if (kind === "fan") return t("devFan", { n: name });
+  if (kind === "amp") return t("devAmp");
+  if (kind === "lens") return t("devLens");
   return id;
 }
 

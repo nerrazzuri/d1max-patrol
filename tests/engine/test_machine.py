@@ -774,3 +774,21 @@ async def test_后端不支持返航_到过两个点就倒着走两段再回原�
     assert await engine.wait_done(timeout_s=5.0) is RunState.DONE
     assert nav.goto_calls[3:] == [p2, p1, _HOME.pose], nav.goto_calls
     await engine.aclose()
+
+
+# --------------------------------------------------------------------- 上装过热(W46)
+
+
+async def test_上装严重过热_结束这一趟回家(make_engine, nav, device):
+    from d1max_patrol.backends.base import OverheatEvent
+    nav.on_goto = NEVER
+    engine = make_engine()
+    await engine.start(make_mission(), home=_HOME)
+    await until(lambda: nav.goto_calls)
+    device.emit(OverheatEvent("shed", "SoC 86 °C"))
+    await asyncio.sleep(0.1)
+    assert nav.home_calls == 0, "降负载那一级巡逻照走"
+    device.emit(OverheatEvent("critical", "SoC 96 °C"))
+    assert await engine.wait_done(timeout_s=5.0) is RunState.DONE
+    assert nav.home_calls == 1 and RunState.RETURNING in engine._seen
+    await engine.aclose()

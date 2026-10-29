@@ -22,6 +22,7 @@ from d1max_patrol.backends.base import (
     DeviceBackendError,
     Frame,
     MediaError,
+    OverheatEvent,
 )
 
 log = logging.getLogger(__name__)
@@ -36,6 +37,9 @@ class HalDeviceBackend(DeviceBackend):
         self._light_warned = self._gimbal_warned = False
         self._connected = False
         self._last_battery: tuple[int, bool] | None = None
+        #: 上装主控板过热级别(W46):运行时接上 ``() -> (级别, 原因)``;变了发 :class:`OverheatEvent`。
+        self.overheat: Callable[[], tuple[str, str]] | None = None
+        self._last_heat: str | None = None
 
     @property
     def connected(self) -> bool:
@@ -114,3 +118,8 @@ class HalDeviceBackend(DeviceBackend):
         if key != self._last_battery:
             self._last_battery = key
             self.emit(BatteryEvent(percent=b.percent, charging=b.charging))
+        if self.overheat is not None:
+            level, why = self.overheat()
+            if level != self._last_heat:
+                self._last_heat = level
+                self.emit(OverheatEvent(level=level, reason=why))

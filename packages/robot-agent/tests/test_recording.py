@@ -319,3 +319,51 @@ def test_W18外审_狗上删不掉的段不算删了(录, monkeypatch):
     [(kind, d)] = r.events
     assert kind == "recording_dropped" and d["count"] == 2, d
     assert d["oldest"] == "front/20261004T010100Z", "删不掉的那段不算"
+
+
+# ------------------------------------------------------------ W46:断电最多丢几秒
+
+
+def test_W46正在写的那段每两秒fsync一次_写完的和退了的不管(录, monkeypatch):
+    import d1max_agent.recording as R
+    r = 录
+    synced: list[list[str]] = []
+    r._sync = lambda paths: synced.append(sorted(p.name for p in paths))
+    r.start()
+    _段(r, "front", "20261004T010000Z")
+    _段(r, "front", "20261004T010100Z")
+    _段(r, "back", "20261004T010030Z")
+    r.step()
+    assert synced == [["20261004T010030Z.mp4", "20261004T010100Z.mp4"]], "每路只 sync 最新那段"
+    r.t[0] += R.SYNC_S / 2
+    r.step()
+    assert len(synced) == 1, "没到两秒不再 sync"
+    r.t[0] += R.SYNC_S
+    r.procs[1].returncode = 1                              # back 的 ffmpeg 退了
+    r.step()
+    assert synced[-1] == ["20261004T010100Z.mp4"]
+
+
+def test_W46fsync真跑_文件没了不炸(tmp_path):
+    from d1max_agent.recording import fsync_files
+    p = tmp_path / "a.mp4"
+    p.write_bytes(b"x")
+    fsync_files([p, tmp_path / "gone.mp4"])
+
+
+def test_W46过热暂停录某一路_不重起_放开了再录(录):
+    r = 录
+    r.start()
+    front = r.procs[0]
+    _段(r, "front", "20261004T010000Z")
+    r.hold({"front"})
+    assert front.returncode == -15, "停这一路:ffmpeg 收掉"
+    assert _已传(r) == ["front/20261004T010000Z/video.mp4"], "写到一半的那段照样挪走"
+    r.t[0] += 60
+    r.step()
+    assert len(r.procs) == 2, "停着的不重起"
+    assert r.held == {"front"} and r.camera_health()["front"] == "", "停着不算录像断了"
+    assert not [e for e in r.events if e[0] == "recording_failed"]
+    r.hold(set())
+    r.step()
+    assert len(r.procs) == 3 and "front" in r.procs[2].argv[-1]
