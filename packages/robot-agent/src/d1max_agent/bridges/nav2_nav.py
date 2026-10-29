@@ -34,7 +34,7 @@ import numpy as np
 from d1max_agent.bridges.hal_nav import HalNavBackend
 from d1max_agent.bridges.planned_nav import PlannedNavBackend, _heading
 from d1max_contract.obsbridge import pack_bits
-from d1max_contract.zones import ZoneSet, point_in_polygon
+from d1max_contract.zones import ZoneSet, point_in_polygon, segments_cross
 from d1max_patrol.backends.base import NavRequestError
 from d1max_patrol.protocol.nav_types import NavStatus, Pose
 
@@ -75,6 +75,16 @@ FRONT_BLIND_M = 0.5
 CLEAR_MARGIN_M = 0.3
 #: 前进速度不到这个(米/秒)就当「原地转」,按地图上的墙核一道(:meth:`Nav2NavBackend._turn_hits_map`)。
 TURN_VX = 0.05
+
+
+def _overlap(a: tuple[tuple[float, float], ...], b: tuple[tuple[float, float], ...]) -> bool:
+    """两个多边形有没有重叠(一个的顶点在另一个里面,或者有边相交)。"""
+    if any(point_in_polygon(x, y, b) for x, y in a) or any(point_in_polygon(x, y, a)
+                                                            for x, y in b):
+        return True
+    ea = list(zip(a, a[1:] + a[:1], strict=True))
+    eb = list(zip(b, b[1:] + b[:1], strict=True))
+    return any(segments_cross(p, q, r, t) for p, q in ea for r, t in eb)
 
 
 def _compose_map_odom(est: Any, odom: tuple[float, float, float]) -> list[float]:
@@ -214,21 +224,23 @@ class Nav2NavBackend(PlannedNavBackend):
             self._travel_sign = None
 
     def _slow_cap(self, here: Any, sign: int) -> float:
-        """限速区的上限(外审 R4):机身中心到机头(行进方向)再往前半米,压上的限速区里最低的那个。"""
+        """限速区的上限(外审 R4、复查 N2):机身(行进方向上从机尾到机头再往前半米、机身宽)这块矩形
+        压上的限速区里最低的那个。按多边形相交算(原来每 10 cm 取一个点,窄的区会漏)。"""
         zs = self.zones.zones if self.zones is not None else ()
         slow = [z for z in zs if z.kind == "slow" and z.max_speed_mps and not z.keep_out]
         if not slow:
             return math.inf
+        g = self.guard
+        hl = getattr(g, "body_len", 0.93) / 2 + getattr(g, "margin", 0.05)
+        hw = getattr(g, "body_wid", 0.48) / 2 + getattr(g, "margin", 0.05)
         h = _heading(here.yaw, sign)
         c, sn = math.cos(h), math.sin(h)
-        g = self.guard
-        ahead = (getattr(g, "body_len", 0.93) / 2 + getattr(g, "margin", 0.05)) + 0.5
+        rect = tuple((here.x + c * dx - sn * dy, here.y + sn * dx + c * dy)
+                     for dx, dy in ((-hl, -hw), (hl + 0.5, -hw), (hl + 0.5, hw), (-hl, hw)))
         v = math.inf
-        for i in range(int(ahead / 0.1) + 1):
-            x, y = here.x + c * i * 0.1, here.y + sn * i * 0.1
-            for z in slow:
-                if point_in_polygon(x, y, z.polygon):
-                    v = min(v, float(z.max_speed_mps))
+        for z in slow:
+            if _overlap(rect, tuple(z.polygon)):
+                v = min(v, float(z.max_speed_mps))
         return v
 
     async def stop(self) -> None:
@@ -294,9 +306,10 @@ class Nav2NavBackend(PlannedNavBackend):
         mo = None if est is None else _compose_map_odom(est, (ox, oy, oyaw))
         self.link.send({"type": "tick", "t_ms": self._t_ms, "odom": [ox, oy, oyaw],
                         "vel": self._pose_vel(ox, oy, oyaw), "map_odom": mo,
-                        "speed": round(min(getattr(self, "_vis", V_BASE),
-                                           max(min(self._vlim(), self._slow), VIS_SLOW_MPS)),
-                                       3)})
+                        # 复查 N2:按实际许的发(不再垫到最低档 0.3);0 在 Nav2 里是「不限」,所以
+                        # 垫到能走起来的最低速度(再低代理这边也会停)
+                        "speed": round(max(min(getattr(self, "_vis", V_BASE), self._vlim(),
+                                               self._slow), MIN_TRAVEL_MPS), 3)})
         view = self.obstacles
         frames = getattr(view, "frames", None)
         if frames:
@@ -315,8 +328,10 @@ class Nav2NavBackend(PlannedNavBackend):
         if self._hold:
             await self._send(0.0, 0.0, dt_s)
             return
-        vm = self._v_meas
-        moving = 1 if vm > 0.02 else -1 if vm < -0.02 else None   # 外审 R6:按真在走的方向查
+        vm, lv = self._v_meas, self._last_vx
+        # 外审 R6:按真在走的方向查;复查 N5:实测刚过零、上一条命令还没停(可能还在执行)时按那条的方向
+        moving = (1 if vm > 0.02 else -1 if vm < -0.02 else
+                  1 if lv > 1e-6 else -1 if lv < -1e-6 else None)
         verdict, z = self._backstop_to(here, moving)
         if verdict == "inside":
             await self._inside_nogo(z, here)
@@ -343,8 +358,9 @@ class Nav2NavBackend(PlannedNavBackend):
         if c is None or now - c[0] > CMD_FRESH_S:
             await self._send(0.0, 0.0, dt_s)
             return
-        if len(c) > 5 and c[5] is not None and c[5] != self._nav2_goal:
-            await self._send(0.0, 0.0, dt_s)              # 外审 R7:别的目标的速度不认
+        if len(c) > 5 and c[5] != self._nav2_goal:
+            # 外审 R7、复查 N3:别的目标的、转接节点那会儿没在走目标(没标号)的速度都不认
+            await self._send(0.0, 0.0, dt_s)
             return
         _, _, vx, _vy, wz = c[:5]
         sign = 1 if vx >= 0 else -1
