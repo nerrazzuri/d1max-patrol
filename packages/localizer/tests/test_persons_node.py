@@ -323,3 +323,103 @@ def test_点云延后换算_没人不算_有人只算一次():
         assert m.people[0].range_m == pytest.approx(3.0, abs=0.05)
     assert 算了 == [1], "同一帧点云只换算一次"
 
+
+
+# -------------------------------------------- 跨板(人员检测在厂家 Orin、代理在 RK3588)
+
+def test_跨板_截图不写盘_交给桥发_一张只交一次(tmp_path):
+    c = 钟()
+    n = PersonNode(假检测器([Box(860, 300, 1060, 900, 0.88)]), remote_snapshots=True, monotonic=c,
+                   wall_ns=lambda: 1_791_000_000 * 10**9)
+    m = _过契约(n.on_image("front", b"\xff\xd8x\xff\xd9", 5))
+    assert m.snapshot.endswith(".jpg")
+    assert n.take_snapshot() == (m.snapshot, b"\xff\xd8x\xff\xd9")
+    assert n.take_snapshot() is None
+    assert not list(tmp_path.iterdir()), "跨板时不写本地盘"
+
+
+def test_跨板_截图太大不发_这一帧不引用():
+    from d1max_contract.persbridge import MAX_SNAP_BYTES
+    n = PersonNode(假检测器([Box(860, 300, 1060, 900, 0.88)]), remote_snapshots=True)
+    big = b"\xff\xd8" + b"x" * (MAX_SNAP_BYTES + 10)
+    m = _过契约(n.on_image("front", big, 5))
+    assert m.snapshot == "" and n.take_snapshot() is None
+
+
+class _假代理:
+    """在一个线程里当代理:发挑战、核签名、回 hello、推一次外参,然后收报文。"""
+
+    def __init__(self, key):
+        import socket
+        import threading
+        self.key = key
+        self.srv = socket.create_server(("127.0.0.1", 0))
+        self.port = self.srv.getsockname()[1]
+        self.got: list[dict] = []
+        self.ok = threading.Event()
+        threading.Thread(target=self._run, daemon=True).start()
+
+    def _run(self):
+        from d1max_contract import persbridge as pb
+        c, _ = self.srv.accept()
+        f = c.makefile("rwb")
+        f.write(pb.encode(pb.Challenge(nonce="ab" * 16)))
+        f.flush()
+        hello = pb.parse(f.readline())
+        if hello.mac != pb.hello_mac(self.key, "ab" * 16, hello.name):
+            f.write(pb.encode(pb.Error(reason="签名不对")))
+            f.flush()
+            c.close()
+            return
+        self.ok.set()
+        f.write(pb.encode(pb.Hello(proto=pb.PROTO)))
+        f.write(pb.encode(pb.FramesMsg(ref="m:1", frames={"lidar": {"x": 0.4}})))
+        f.flush()
+        for line in f:
+            self.got.append(json.loads(line))
+
+
+def test_跨板_连上先过挑战_收到外参交出去_发的报文对面收得到():
+    import socket
+    import time as _t
+
+    from d1max_localizer.persons import PersonLink
+    key = bytes(range(32))
+    agent = _假代理(key)
+    frames: list = []
+    link = PersonLink(lambda: socket.create_connection(("127.0.0.1", agent.port), timeout=1),
+                      key=key, on_frames=lambda ref, d: frames.append((ref, d)))
+    assert link.send({"t": "hb", "seq": 1})
+    assert agent.ok.wait(2)
+    for _ in range(50):
+        link.poll()
+        if frames:
+            break
+        _t.sleep(0.02)
+    assert frames == [("m:1", {"lidar": {"x": 0.4}})]
+    for _ in range(50):
+        if agent.got:
+            break
+        _t.sleep(0.02)
+    assert agent.got[0] == {"t": "hb", "seq": 1}
+    link.close()
+
+
+def test_跨板_密钥不对_对面断了_发不出去也不炸_过一会儿再连():
+    import socket
+
+    from d1max_localizer.persons import PersonLink
+    agent = _假代理(bytes(range(32)))
+    link = PersonLink(lambda: socket.create_connection(("127.0.0.1", agent.port), timeout=1),
+                      key=b"\x01" * 32, reconnect_s=60)
+    import time as _t
+    link.send({"t": "hb", "seq": 1})
+    assert not agent.ok.is_set()
+    for _ in range(50):                               # 主循环每拍读一次:读到对面断了
+        link.poll()
+        if not link.connected:
+            break
+        _t.sleep(0.02)
+    assert not link.connected
+    assert link.send({"t": "hb", "seq": 2}) is False, "没到重连时间:不连"
+    link.close()

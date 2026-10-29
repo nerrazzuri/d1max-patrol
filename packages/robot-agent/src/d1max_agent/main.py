@@ -64,6 +64,19 @@ def _transport_arg(text: str) -> str:
         f"--transport 只认 mqtt://host[:port]、mqtts://host[:port] 或 memory://,收到 {text!r}")
 
 
+def _persons_key(args: argparse.Namespace) -> bytes | None:
+    """跨板人员桥的密钥:配了 ``--persons-listen`` 就必须有、读得出来,不然代理不起(说清楚为什么)。"""
+    if args.persons_listen is None:
+        return None
+    if args.persons_key is None:
+        raise SystemExit("--persons-listen 要配 --persons-key(共享密钥文件)")
+    from d1max_agent.pers_server import load_key
+    try:
+        return load_key(args.persons_key)
+    except (OSError, ValueError) as exc:
+        raise SystemExit(f"人员桥密钥:{exc}") from exc
+
+
 def _hostport(text: str) -> tuple[str, int]:
     host, _, port = text.rpartition(":")
     if not host or not port.isdigit():
@@ -141,6 +154,14 @@ def build_parser() -> argparse.ArgumentParser:
                    help="本机人员桥的 Unix 套接字(默认 <store-dir>/persons.sock)")
     p.add_argument("--persons-snapshots", type=Path, default=None,
                    help="检测节点存截图的目录(默认 <store-dir>/person-snapshots)")
+    p.add_argument("--persons-listen", type=_hostport, default=None, metavar="HOST:PORT",
+                   help="人员检测跨板(检测在厂家 Orin、代理在自带的 RK3588):人员桥改在这个地址"
+                        "听 TCP(要配 --persons-key);不给 = 本机套接字")
+    p.add_argument("--persons-key", type=Path, default=None,
+                   help="跨板人员桥的共享密钥文件(一行十六进制,openssl rand -hex 32;chmod 600,"
+                        "两块板同一把)")
+    p.add_argument("--persons-peer", default=None, metavar="IP",
+                   help="跨板时只认这个 IP 连上来(厂家 Orin 的机器人内网地址;不给 = 只认密钥)")
     p.add_argument("--robot-radius", type=float, default=None,
                    help="规划膨胀用的机体外接圆半径(米,默认 0.52:930 × 480 mm,W08 决定 6)")
     pl = p.add_argument_group("上装(W21,决策 36:RS485 Modbus 继电器板 + USB 声卡)")
@@ -547,7 +568,10 @@ def build(args: argparse.Namespace) -> Assembled:
                                obs_socket=args.obs_socket, nav2_socket=args.nav2_socket,
                                persons=args.persons,
                                persons_socket=args.persons_socket,
-                               persons_snapshots=args.persons_snapshots)
+                               persons_snapshots=args.persons_snapshots,
+                               persons_listen=args.persons_listen,
+                               persons_key=_persons_key(args),
+                               persons_peer=args.persons_peer)
         runtime.evidence_sealed = sealer is not None   # W30b:能力里报,没封站点报 P2
         if args.tls_cert:
             runtime.tls_cert = Path(args.tls_cert)       # 工单 9:能力里报在用证书哪天到期

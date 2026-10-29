@@ -13,6 +13,9 @@
 #   D1MAX_LOC_RMW=rmw_zenoh_cpp    中间件
 #   D1MAX_PERSONS_MODEL=/etc/d1max/person.onnx  检测模型
 #   D1MAX_PERSONS_ARGS=其余参数(--fps、--hfov、--lens、--z-min、--z-max、--back-topic …)
+#   D1MAX_PERSONS_CONNECT=HOST:PORT  跨板(这块是厂家 Orin、代理在自带的 RK3588):经机器人内网 TCP 连代理的
+#                 人员桥(就是那边的 D1MAX_PERSONS_LISTEN);截图走桥、外参由代理推过来。共享密钥
+#                 D1MAX_PERSONS_KEY(缺省 /etc/d1max/persons.key,跟代理那块板同一把)
 set -eu
 here=$(cd "$(dirname "$0")/.." && pwd -P)
 set +u
@@ -30,6 +33,9 @@ export OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1
 export PYTHONPATH="$here/packages/localizer/src:$here/packages/contract/src${PYTHONPATH:+:$PYTHONPATH}"
 # shellcheck disable=SC2086  # D1MAX_PERSONS_ARGS 要按空白拆成几个参数
 exec /usr/bin/python3 -m d1max_localizer.persons \
+  ${D1MAX_PERSONS_CONNECT:+--connect} ${D1MAX_PERSONS_CONNECT:+"$D1MAX_PERSONS_CONNECT"} \
+  ${D1MAX_PERSONS_CONNECT:+--key} \
+  ${D1MAX_PERSONS_CONNECT:+"${D1MAX_PERSONS_KEY:-/etc/d1max/persons.key}"} \
   --socket /var/lib/d1max/agent/persons.sock \
   --snapshots /var/lib/d1max/agent/person-snapshots \
   --maps-dir /var/lib/d1max/agent/maps \

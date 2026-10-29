@@ -17,6 +17,10 @@
 #                   真狗等 W11 的真机项验过再设)
 #   D1MAX_PERSONS=none|bridge(W24;空着 = none。bridge 要起了 d1max-persons、检测模型装好,
 #                 真狗等 W24 的真机项验过再设)
+#   D1MAX_PERSONS_LISTEN=HOST:PORT  人员检测跨板(检测在厂家 Orin、代理在自带的 RK3588):人员桥改在这个地址听
+#                 TCP(比如 192.168.168.50:47010);空着 = 本机套接字。要有共享密钥 D1MAX_PERSONS_KEY
+#                 (缺省 /etc/d1max/persons.key,一行十六进制,chmod 600,两块板同一把);
+#                 D1MAX_PERSONS_PEER=厂家 Orin 的 IP(只认它连上来,可不给)
 #   D1MAX_NAV=straight|planned|nav2(W10;空着 = straight 直线桥。planned 在规划栅格上规划、守禁行区,
 #              真狗等 W10 的真机项验过再设;nav2 = 规划、避障交给 Nav2(W47),要起 d1max-nav2、
 #              D1MAX_OBSTACLES=bridge;Nav2 没就绪的那一段自动退回 planned)
@@ -34,6 +38,10 @@ exec "$here/venv/bin/d1max-agent" \
   ${D1MAX_NAV:+--nav} ${D1MAX_NAV:+"$D1MAX_NAV"} \
   ${D1MAX_OBSTACLES:+--obstacles} ${D1MAX_OBSTACLES:+"$D1MAX_OBSTACLES"} \
   ${D1MAX_PERSONS:+--persons} ${D1MAX_PERSONS:+"$D1MAX_PERSONS"} \
+  ${D1MAX_PERSONS_LISTEN:+--persons-listen} ${D1MAX_PERSONS_LISTEN:+"$D1MAX_PERSONS_LISTEN"} \
+  ${D1MAX_PERSONS_LISTEN:+--persons-key} \
+  ${D1MAX_PERSONS_LISTEN:+"${D1MAX_PERSONS_KEY:-/etc/d1max/persons.key}"} \
+  ${D1MAX_PERSONS_PEER:+--persons-peer} ${D1MAX_PERSONS_PEER:+"$D1MAX_PERSONS_PEER"} \
   --registration /etc/d1max/registration.json --store-dir /var/lib/d1max/agent \
   --outbox "${D1MAX_OUTBOX:?单元里应该有 D1MAX_OUTBOX}" \
   --map "${D1MAX_MAP:?/etc/d1max/env 里没有 D1MAX_MAP(地图号:版本)}" \
