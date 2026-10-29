@@ -282,3 +282,70 @@ def test_实测_排着的发不出去_同一个原因只记一次_不刷堆栈(t
     recs = [r for r in caplog.records if r.name == "d1max_site.release_queue"]
     assert len(recs) == 1 and recs[0].exc_info is None and "不支持" in recs[0].getMessage()
     assert len(q.list()) == 1                                  # 留着:代理升级了还能接着换
+
+
+# ---- W44 复查 R3:库 64 → 65 迁移要整个一起成、一起不成;老版本留下的半截要自己补回来 ----
+
+def _库64(path):
+    import sqlite3
+    from pathlib import Path
+    v64 = Path(__file__).parent / "fixtures" / "schema" / "site-v64.sql"
+    con = sqlite3.connect(path)
+    con.executescript(v64.read_text(encoding="utf-8"))
+    con.execute("INSERT INTO release_queue(robot_id, name, by, at_ms) VALUES ('A','r1','alice',5)")
+    con.commit()
+    con.close()
+
+
+@pytest.mark.parametrize("at", ["ALTER TABLE release_queue RENAME", "CREATE TABLE release_queue",
+                                "INSERT OR IGNORE INTO release_queue(",
+                                "DROP TABLE release_queue_64",
+                                "INSERT OR REPLACE INTO meta"])
+def test_外审复查R3_迁移做到一半进程没了_重开排着的还在(tmp_path, at):
+    import subprocess
+    import sys
+    path = tmp_path / "s.db"
+    _库64(path)
+    child = r"""
+import os, sqlite3, sys
+from d1max_site.db import SiteDB
+original = sqlite3.connect
+def connect(*a, **kw):
+    c = original(*a, **kw)
+    c.set_trace_callback(lambda sql: os._exit(73) if sql.startswith(sys.argv[2]) else None)
+    return c
+sqlite3.connect = connect
+SiteDB(sys.argv[1])
+"""
+    r = subprocess.run([sys.executable, "-c", child, str(path), at], capture_output=True,
+                       timeout=20)
+    assert r.returncode == 73, r.stderr
+    db = SiteDB(path)
+    try:
+        q = ReleaseQueue(db, 假派遣(), now_ms=lambda: 9, payload=lambda n: {"name": n})
+        assert [x["name"] for x in q.list()] == ["r1"]
+        assert db.query("SELECT name FROM sqlite_master WHERE name='release_queue_64'") == []
+    finally:
+        db.close()
+
+
+def test_外审复查R3_老版本迁移留下的半截_重开自己补回来(tmp_path):
+    """复查前的版本:新表建好、记成 65、还没搬就停了 —— 旧行留在 release_queue_64。"""
+    import sqlite3
+    path = tmp_path / "s.db"
+    _库64(path)
+    con = sqlite3.connect(path)
+    con.execute("ALTER TABLE release_queue RENAME TO release_queue_64")
+    con.execute("CREATE TABLE release_queue (id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                "robot_id TEXT NOT NULL UNIQUE, name TEXT NOT NULL, by TEXT NOT NULL, "
+                "at_ms INTEGER NOT NULL)")
+    con.execute("INSERT OR REPLACE INTO meta VALUES ('schema', '65')")
+    con.commit()
+    con.close()
+    db = SiteDB(path)
+    try:
+        q = ReleaseQueue(db, 假派遣(), now_ms=lambda: 9, payload=lambda n: {"name": n})
+        assert [x["name"] for x in q.list()] == ["r1"]
+        assert db.query("SELECT name FROM sqlite_master WHERE name='release_queue_64'") == []
+    finally:
+        db.close()
