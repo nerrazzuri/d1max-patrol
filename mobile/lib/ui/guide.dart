@@ -202,7 +202,7 @@ Future<bool?> _showStep(BuildContext context, TourStep s, int i, int n) => showG
           ),
         );
         return Stack(children: [
-          Positioned.fill(child: CustomPaint(painter: _Dim(rect, nw.primary))),
+          Positioned.fill(child: SizedBox.expand(child: CustomPaint(size: size, painter: _Dim(rect, nw.primary)))),
           Positioned(
               left: Nw.s16,
               right: Nw.s16,
@@ -220,13 +220,15 @@ class _Dim extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    final all = Path()..addRect(Offset.zero & size);
+    final all = Offset.zero & size;
     final h = hole?.inflate(4);
-    final p = h == null
-        ? all
-        : Path.combine(PathOperation.difference, all,
-            Path()..addRRect(RRect.fromRectAndRadius(h, const Radius.circular(Nw.r8))));
-    canvas.drawPath(p, Paint()..color = Colors.black54);
+    // 整屏压暗，再把要看的那一块挖空（单独一层里清掉）
+    canvas.saveLayer(all, Paint());
+    canvas.drawRect(all, Paint()..color = const Color(0x99000000));
+    if (h != null) {
+      canvas.drawRRect(RRect.fromRectAndRadius(h, const Radius.circular(Nw.r8)), Paint()..blendMode = BlendMode.clear);
+    }
+    canvas.restore();
     if (h != null) {
       canvas.drawRRect(RRect.fromRectAndRadius(h, const Radius.circular(Nw.r8)),
           Paint()

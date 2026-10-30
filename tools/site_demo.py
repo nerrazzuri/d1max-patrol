@@ -38,6 +38,10 @@ ROOT = Path(__file__).resolve().parents[1]
 ENV = {k: v for k, v in os.environ.items()
        if k not in ("PYTHONPATH", "AMENT_PREFIX_PATH", "COLCON_PREFIX_PATH")}
 ENV["PYTHONUNBUFFERED"] = "1"
+# 跑的是**这一份仓库**的代码(工作树、分支上的),不是 .venv 里装的那一份(那是主工作目录的)
+ENV["PYTHONPATH"] = os.pathsep.join(str(ROOT / p) for p in (
+    "packages/contract/src", "packages/adapter-d1max/src", "packages/adapter-sim/src",
+    "packages/robot-agent/src", "packages/site-node/src", "packages/localizer/src", "src"))
 HOST = "127.0.0.2"
 
 
@@ -163,6 +167,66 @@ def _follow_bind(r: dict, agents: dict[str, subprocess.Popen], logs: Path) -> No
         print(f"{serial} 解绑清机了:收掉它的代理", flush=True)
 
 
+def _seed_w53(base: str, password: str, robots: list[str]) -> list[str]:
+    """W53 演示数据(``--w53``):保安 gina、经理 olga、只看 vic(密码同 demo)、一条等批准的
+    账号申请、排程时区、禁行区确认、机器人 A 旁边一条小路线 ``demo-loop``、15 分钟后跑它的一条日程。
+    回打印的几行。"""
+    import json
+    import ssl
+    import urllib.request
+    from datetime import datetime, timedelta
+    from zoneinfo import ZoneInfo
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE                 # 本机演示站点,自签证书
+
+    def req(method: str, path: str, body: dict | None = None,
+            token: str = "") -> tuple[int, dict]:
+        head = {"Content-Type": "application/json"}
+        if token:
+            head["Authorization"] = f"Bearer {token}"
+        r = urllib.request.Request(base + path, method=method, headers=head,
+                                   data=json.dumps(body).encode() if body is not None else None)
+        try:
+            with urllib.request.urlopen(r, context=ctx, timeout=20) as resp:
+                return resp.status, json.loads(resp.read() or b"{}")
+        except urllib.error.HTTPError as exc:
+            return exc.code, json.loads(exc.read() or b"{}")
+
+    out: list[str] = []
+    _, d = req("POST", "/api/login", {"name": "demo", "password": password})
+    tok = d.get("token", "")
+    for name, role in (("gina", "guard"), ("olga", "owner"), ("vic", "viewer")):
+        code, _ = req("POST", "/api/accounts",
+                      {"name": name, "password": password, "role": role}, tok)
+        out.append(f"  账号  {name} / {password}({role}){'' if code == 200 else f' 没建成 {code}'}")
+    req("POST", "/api/account-requests", {"name": "wangxm", "display": "王小明",
+                                          "password": password})
+    out.append("  等批准的账号申请:王小明(wangxm)")
+    tz = "Asia/Kuala_Lumpur"
+    req("POST", "/api/route-timezone", {"timezone": tz}, tok)
+    code, d = req("POST", "/api/maps/estate-1/7/zones/confirm",
+                  {"revision": 0, "confirm": True, "empty_ok": True}, tok)
+    if code != 200:
+        out.append(f"  禁行区确认没成({code} {d.get('error', '')})")
+    # 机器人 A 起在 (0, 0):旁边绕一小圈
+    pts = [(0.6, 0.0), (0.6, 0.6), (0.0, 0.6)]
+    wps = [{"name": f"P{i + 1}", "x": x, "y": y, "yaw": 0.0} for i, (x, y) in enumerate(pts)]
+    code, d = req("POST", "/api/routes/demo-loop", {"map_id": "estate-1", "map_version": "7",
+                                                    "waypoints": wps, "base_revision": 0}, tok)
+    if code != 200:
+        out.append(f"  路线 demo-loop 没存成({code} {d.get('error', '')})")
+        return out
+    at = datetime.now(ZoneInfo(tz)) + timedelta(minutes=15)
+    code, d = req("POST", "/api/route-schedules/demo-night",
+                  {"mission": "demo-loop", "at": f"{at:%H:%M}", "robot": robots[0],
+                   "days": ["mon", "tue", "wed", "thu", "fri", "sat", "sun"], "window_min": 30,
+                   "on_missed": "skip", "base_revision": 0}, tok)
+    out.append(f"  路线 demo-loop;日程 {at:%H:%M}(吉隆坡时间)由 {robots[0]} 跑"
+               + ("" if code == 200 else f" —— 日程没存成 {code} {d.get('error', '')}"))
+    return out
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     # 默认不放仓库里:仓库路径带空格(「D1 Max」),Mosquitto 的配置按空白切词,路径里不许有空格
@@ -183,6 +247,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--unbound", type=int, default=0, choices=range(0, 5), metavar="N",
                     help="W42:再起 N 台出厂状态、还没绑定的机器人(配网服务 + 假路由器),打印贴纸码;"
                          "站点上批准以后演示脚本起它的代理,解绑以后收掉")
+    ap.add_argument("--w53", action="store_true",
+                    help="W53:加保安 gina、经理 olga、只看 vic、一条账号申请、"
+                         "一条路线和 15 分钟后的日程")
     a = ap.parse_args(argv)
     mosq = shutil.which("mosquitto") or "/usr/sbin/mosquitto"
     if not Path(mosq).exists():
@@ -256,11 +323,13 @@ def main(argv: list[str] | None = None) -> int:
                                   "--map", "estate-1:7", "--home", f"{i * 1.0},0,0"],
                   "d1max-agent 起来了")
         fresh = _unbound(a, logs, start) if a.unbound else []
+        seeded = _seed_w53(f"https://{a.host}:{a.api_port}", a.password, names) if a.w53 else []
         print(f"演示站点起来了(日志在 {logs}):\n"
               f"  地址  https://{a.host}:{a.api_port}\n"
               f"  指纹  {fp}\n"
               f"  账号  demo / {a.password}\n"
               f"  机器人 {'、'.join(names)}(仿真)\n"
+              + "".join(s + "\n" for s in seeded)
               + "".join(f"  没绑定 {r['serial']}  贴纸码 {r['sticker']}\n" for r in fresh)
               + "Ctrl+C 全部收掉。", flush=True)
         # 等 Ctrl+C:用处理函数立个旗,不用屏蔽信号(屏蔽会被子进程继承,收掉时它们就不理 SIGTERM)

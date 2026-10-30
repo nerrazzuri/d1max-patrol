@@ -51,6 +51,9 @@ List<Map<String, dynamic>> dutyOrder(List<Map<String, dynamic>> robots) {
   return live;
 }
 
+/// `10-31 01:29:51` → `10-31 01:29`（值守页的最近事件只要到分钟）。
+String _short(String t) => t.length > 11 ? t.substring(0, 11) : t;
+
 /// 机器人给人看的名字（起了名用名字，没起用编号）。
 String robotLabel(Map<String, dynamic> r) {
   final n = '${r['name'] ?? ''}';
@@ -361,16 +364,16 @@ class _SiteDutyPageState extends State<SiteDutyPage> {
       key: _t.video,
       onHorizontalDragEnd: _swipe,
       child: _playing
-          ? Stack(key: SiteDutyPage.videoKey, children: [
+          ? Column(key: SiteDutyPage.videoKey, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+              Align(
+                alignment: Alignment.centerRight,
+                child: TextButton.icon(
+                    key: SiteDutyPage.closeKey,
+                    onPressed: () => setState(() => _playing = false),
+                    icon: const Icon(Icons.close_rounded, size: 18),
+                    label: Text(tr('Stop video', '关画面'))),
+              ),
               SiteVideo(key: ValueKey<String>('duty-video-$id'), api: widget.api, robotId: id),
-              Positioned(
-                  right: 4,
-                  top: 4,
-                  child: IconButton.filledTonal(
-                      key: SiteDutyPage.closeKey,
-                      tooltip: tr('Stop video', '关画面'),
-                      onPressed: () => setState(() => _playing = false),
-                      icon: const Icon(Icons.close_rounded))),
             ])
           : AspectRatio(
               key: SiteDutyPage.videoKey,
@@ -509,8 +512,9 @@ class _SiteDutyPageState extends State<SiteDutyPage> {
               padding: const EdgeInsets.symmetric(vertical: 2),
               child: Row(children: [
                 SizedBox(
-                    width: 48,
-                    child: Text(robotEventTime(e['stamp']),
+                    width: 100,
+                    child: Text(_short(robotEventTime(e['stamp'])),
+                        maxLines: 1, overflow: TextOverflow.fade, softWrap: false,
                         style: NwText.labelSmall.copyWith(color: c.textSecondary))),
                 Expanded(
                     child: Text(
