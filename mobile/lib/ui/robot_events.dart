@@ -47,8 +47,11 @@ String? _title(String kind) => switch (kind) {
       _ => null,
     };
 
-/// 事件标题：查表 → 告警词条 → 种类名（下划线换空格）。
-String robotEventTitle(String kind) {
+/// 事件标题：查表 → 告警词条 → 种类名（下划线换空格）。[data] 给了，机器人故障报的是空列表就是「故障已清除」。
+String robotEventTitle(String kind, [Map<String, dynamic>? data]) {
+  if (kind == 'robot_fault' && data != null && data['faults'] is List && (data['faults'] as List).isEmpty) {
+    return tr('Faults cleared', '故障已清除');
+  }
   final own = _title(kind);
   if (own != null) return own;
   final t = alertTitles[kind];
@@ -61,6 +64,13 @@ final RegExp _code = RegExp(r'^[a-z_]+$');
 /// 事件说明：只挑人读得懂的字段，挑不出来是空串。
 String robotEventDetail(String kind, Map<String, dynamic> data) {
   final parts = <String>[];
+  final faults = data['faults'];
+  if (kind == 'robot_fault' && faults is List) {
+    for (final f in faults.whereType<Map>()) {
+      final t = f['text'], c = f['code'];
+      parts.add(t is String && t.isNotEmpty ? t : '$c');
+    }
+  }
   final name = data['name'];
   if (name is String && name.isNotEmpty) parts.add(name);
   if (kind == 'patrol_waypoint' && data['ok'] is bool) {

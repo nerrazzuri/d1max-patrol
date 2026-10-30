@@ -666,7 +666,7 @@ class _SiteRobotPageState extends State<SiteRobotPage> {
             ListTile(
                 dense: true,
                 contentPadding: EdgeInsets.zero,
-                title: Text(robotEventTitle('${e['kind']}')),
+                title: Text(robotEventTitle('${e['kind']}', e['data'] is Map ? (e['data'] as Map).cast<String, dynamic>() : null)),
                 subtitle: _eventSub(e),
                 trailing: Text(robotEventTime(e['stamp']), style: NwText.labelSmall)),
         ]),
