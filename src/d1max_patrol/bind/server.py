@@ -36,11 +36,44 @@ log = logging.getLogger(__name__)
 PORT = 8450
 SOCK = Path("/run/d1max/bind.sock")
 MAX_BODY = 16 * 1024
+#: 同时最多几条连接(热点上最多 20 台,一台手机够用);握手多久没做完就断(外审 I6)。
+MAX_CONN = 16
+HANDSHAKE_S = 10.0
 
 
 class _Https(ThreadingHTTPServer):
+    """TLS 握手放在每条连接自己的线程里做、有时限(外审 I6:监听套接字整个包成 TLS 的话,握手在唯一的
+    接收线程里做,一条不发 ClientHello 的连接就把服务堵死);连接数有上限。"""
+
     daemon_threads = True
     core: BindCore
+    ctx: ssl.SSLContext
+
+    def __init__(self, *a: Any, **kw: Any) -> None:
+        super().__init__(*a, **kw)
+        self._slots = threading.BoundedSemaphore(MAX_CONN)
+
+    def process_request(self, request: Any, client_address: Any) -> None:
+        if not self._slots.acquire(blocking=False):
+            self.shutdown_request(request)               # 满了:直接断,不排队
+            return
+        try:
+            super().process_request(request, client_address)
+        except BaseException:
+            self._slots.release()
+            raise
+
+    def process_request_thread(self, request: Any, client_address: Any) -> None:
+        try:
+            request.settimeout(HANDSHAKE_S)
+            try:
+                tls = self.ctx.wrap_socket(request, server_side=True)
+            except (OSError, ssl.SSLError):
+                self.shutdown_request(request)
+                return
+            super().process_request_thread(tls, client_address)
+        finally:
+            self._slots.release()
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -60,7 +93,10 @@ class _Handler(BaseHTTPRequestHandler):
         self.wfile.write(raw)
 
     def _body(self) -> Any:
-        n = int(self.headers.get("Content-Length") or 0)
+        raw = self.headers.get("Content-Length") or "0"
+        n = int(raw) if raw.isdigit() else -1          # 外审 C5:负数、乱写的一律拒,读的时候也有上限
+        if n < 0:
+            raise BindRefused(400, "Content-Length 不对")
         if n > MAX_BODY:
             raise BindRefused(413, "太大了")
         try:
@@ -104,7 +140,7 @@ def make_https(core: BindCore, host: str, port: int, cert: Path, key: Path) -> _
     ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     ctx.minimum_version = ssl.TLSVersion.TLSv1_2
     ctx.load_cert_chain(str(cert), str(key))
-    srv.socket = ctx.wrap_socket(srv.socket, server_side=True)
+    srv.ctx = ctx
     return srv
 
 

@@ -249,8 +249,12 @@ class BindCore:
         if ch and ch["phase"] in ("waiting", "trying"):
             view = {"id": ch["id"], "ssid": ch["ssid"], "mode": ch["mode"],
                     "expires_ms": ch["expires_ms"]}
-        return {"ssid": (self.s.get("wifi") or {}).get("ssid", ""), "link": self._link,
-                "change": view}
+        out: dict[str, Any] = {"ssid": (self.s.get("wifi") or {}).get("ssid", ""),
+                               "link": self._link, "change": view}
+        res = self.s.get("change_result")
+        if res:
+            out["result"] = {"id": res["id"], "result": res["result"]}   # 外审 I13:手机看最后怎样了
+        return out
 
     def site_unbind(self, cert: Any) -> str:
         """站点上点了解绑(§5.3)。证书对得上才清
@@ -333,6 +337,8 @@ class BindCore:
     # ------------------------------------------------------------ 清机
 
     def _begin_wipe(self) -> None:
+        self.paths.bind_dir.mkdir(parents=True, exist_ok=True)
+        self.paths.wiping_marker.touch()
         self.s = {"state": "wiping", "error": ""}
         self._save()
 
@@ -358,6 +364,7 @@ class BindCore:
                 else:
                     self.s = {"state": "unbound", "error": ""}
                     self._save()
+                    self.paths.wiping_marker.unlink(missing_ok=True)
                     log.warning("清机完成,回到没绑定")
                 return
             if st == "pending" and now >= self._next_poll:
@@ -425,14 +432,11 @@ class BindCore:
             log.warning("绑定完成:站点 %s", site.get("name") or site["url"])
             self._start()
         elif state in ("rejected", "expired", "replaced", "done"):
-            why = {"rejected": "站点上拒绝了", "expired": "24 小时没人批准,申请作废了",
-                   "replaced": "这台又挂了一条新申请", "done": "开通码领过了"}[state]
-            if state == "done" and self.paths.robot_cert.is_file():
-                self.s = {"state": "bound", "wifi": s["wifi"], "site": site,
-                          "site_ok_ms": self._now(), "error": ""}
-                self._save()
-                self._start()
-                return
+            # 「done」是老站点的回法(领过一次就不再给):这一回没领到就只能重来
+            why = {"rejected": "站点上拒绝了",
+                   "expired": "申请过期了(24 小时没人批,或批了太久没领证)",
+                   "replaced": "这台又挂了一条新申请(或者站点上已经解绑过)",
+                   "done": "开通码领过了"}[state]
             self.router.forget_wifi()
             self.s = {"state": "unbound", "error": why + ":要重新绑定就再扫一次贴纸"}
             self._save()

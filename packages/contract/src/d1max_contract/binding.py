@@ -32,7 +32,7 @@ _UNBIND_DOMAIN = b"d1max-unbind-v1\n"
 ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
 CODE_LEN = 16
 #: 序列号也是站点上的机器人编号:跟站点 ``SAFE_ID`` 一样的字。
-SERIAL_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
+SERIAL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")   # 外审 C3:不许 . 打头(..)
 _FP32 = re.compile(r"^[0-9a-f]{32}$")
 _ADDR = re.compile(r"^[A-Za-z0-9.\-]+:\d{1,5}$")
 #: 3588 在路由器 LAN1 上的地址和配网服务的端口(热点上的手机找它)。
@@ -91,7 +91,7 @@ def check_digits(nonce: str) -> str:
 
 def check_serial(serial: Any) -> str:
     if not isinstance(serial, str) or SERIAL_RE.match(serial) is None:
-        raise BindingError("序列号只收字母、数字、点、下划线、减号,最多 64 个")
+        raise BindingError("序列号只收字母、数字、点、下划线、减号(字母或数字打头),最多 64 个")
     return serial
 
 
@@ -223,6 +223,8 @@ def verify_unbind(text: str, pub: bytes, *, serial: str, now_ms: int) -> UnbindT
 LINKS = ("wifi", "4g", "none")
 #: 挂着的 WiFi 改动:``online`` 机器人连得上站点、等确认才换;``trial`` 连不上站点、正在试新 WiFi。
 CHANGE_MODES = ("online", "trial")
+#: 上一个改动最后怎样了:换上了 / 不同意 / 没人管作废了 / 换上以后连不上站点退回了 / 被新提的顶掉了。
+CHANGE_RESULTS = ("applied", "rejected", "expired", "unreachable", "replaced")
 _CHANGE_ID = re.compile(r"^[0-9a-f]{8,32}$")
 
 
@@ -230,7 +232,7 @@ def wifi_view(net: Any) -> dict[str, Any] | None:
     """遥测 ``net.wifi`` → 站点、网页、手机看的形状;形状不对的字段丢掉,整块不对回 ``None``。
 
     ``{"ssid": 现在连的 WiFi, "link": "wifi"/"4g"/"none",
-    "change": {"id", "ssid", "mode", "expires_ms"} 或 None}``"""
+    "change": {"id", "ssid", "mode", "expires_ms"} 或 None, "result": {"id", "result"} 或 None}``"""
     w = net.get("wifi") if isinstance(net, dict) else None
     if not isinstance(w, dict):
         return None
@@ -244,4 +246,8 @@ def wifi_view(net: Any) -> dict[str, Any] | None:
         out["change"] = {"id": c["id"], "ssid": c["ssid"][:64], "mode": c["mode"],
                          "expires_ms": exp if isinstance(exp, int) and not isinstance(exp, bool)
                          else None}
+    r = w.get("result")
+    out["result"] = ({"id": r["id"], "result": r["result"]}
+                     if isinstance(r, dict) and isinstance(r.get("id"), str)
+                     and _CHANGE_ID.match(r["id"]) and r.get("result") in CHANGE_RESULTS else None)
     return out

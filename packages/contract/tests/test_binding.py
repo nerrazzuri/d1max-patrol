@@ -93,10 +93,13 @@ def test_解绑令_有效期太长不签_机器人钟慢太多也拒():
 def test_WiFi状态_形状不对的丢掉():
     assert b.wifi_view({}) is None and b.wifi_view(None) is None
     assert b.wifi_view({"wifi": {"ssid": "E", "link": "4g"}}) == \
-        {"ssid": "E", "link": "4g", "change": None}
+        {"ssid": "E", "link": "4g", "change": None, "result": None}
+    assert b.wifi_view({"wifi": {"ssid": "E", "result": {"id": "0123abcd", "result": "applied"}}}
+                       )["result"] == {"id": "0123abcd", "result": "applied"}
+    assert b.wifi_view({"wifi": {"result": {"id": "0123abcd", "result": "boom"}}})["result"] is None
     v = b.wifi_view({"wifi": {"ssid": "E", "link": "wifi", "change": {
         "id": "0123abcd", "ssid": "New", "mode": "trial", "expires_ms": 5}}})
     assert v["change"] == {"id": "0123abcd", "ssid": "New", "mode": "trial", "expires_ms": 5}
     v = b.wifi_view({"wifi": {"ssid": 3, "link": "lte", "change": {
         "id": "x", "ssid": "New", "mode": "trial"}}})
-    assert v == {"ssid": "", "link": "none", "change": None}
+    assert v == {"ssid": "", "link": "none", "change": None, "result": None}

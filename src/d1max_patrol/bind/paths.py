@@ -34,6 +34,11 @@ class BindPaths:
         return self.bind_dir / "state.json"
 
     @property
+    def wiping_marker(self) -> Path:
+        """正在清机:我们的服务单元看到它就不起(外审 I8:清机半路断电,开机别先把老业务起来)。"""
+        return self.bind_dir / "wiping"
+
+    @property
     def used_tokens(self) -> Path:
         return self.bind_dir / "used-tokens.json"
 

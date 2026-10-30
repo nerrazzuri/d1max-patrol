@@ -79,6 +79,21 @@ def test_只推标题给登记了的手机_停用账号不推(台):
     assert len(j.sent) == 1, "推过的不再推"
 
 
+def test_W42外审I11_等批准加入_换WiFi等确认_也推_只推给管理员和工程师_标题不写P1(台):
+    desk, p, j, clock, db = 台
+    with db.tx() as c:
+        c.execute("INSERT INTO accounts(name, role, salt, pw_hash, created_at, disabled) "
+                  "VALUES ('ada', 'admin', x'00', x'00', 0, 0)")
+        c.execute("INSERT INTO sessions(token_hash, name, created_at, last_used) "
+                  "VALUES ('s-ada', 'ada', 0, 0)")
+    p.register("ada", "rid-ada", "android", session="s-ada")
+    desk.raise_alert(kind="bind_request", robot="D1M-7", title="有一台机器人等批准加入站点")
+    desk.raise_alert(kind="wifi_change", robot="A", title="机器人要换 WiFi,等确认")
+    p.tick()
+    assert sorted((tuple(reg), title) for reg, title, _, _ in j.sent) == [
+        (("rid-ada",), "翠湖庄园 · 等你批准"), (("rid-ada",), "翠湖庄园 · 等你批准")]
+
+
 def test_已经确认或解决的不推_一小时没发出去作废_没有手机作废(台):
     desk, p, j, clock, db = 台
     a = desk.raise_alert(kind="dog_sees_person", robot="A", title="x")
