@@ -313,3 +313,14 @@ def test_外审I13_改动最后怎样了_进遥测(机):
     v = 机.core.net_view()["wifi"]
     assert v["change"] is None and v["result"] == {"id": ch["id"], "result": "rejected"}
     assert b.wifi_view({"wifi": v})["result"] == v["result"]
+
+
+def test_扫附近WiFi_同名留最强_强的在前_空名不列_要绑定码(机):
+    from d1max_patrol.bind.router import WifiSeen
+    机.router.nearby = (WifiSeen("B", -80, True), WifiSeen("A", -50, False),
+                        WifiSeen("B", -60, True), WifiSeen("", -40, True))
+    with pytest.raises(c.BindRefused):
+        机.core.scan("0000000000000000")
+    assert 机.core.scan(CODE)["networks"] == [
+        {"ssid": "A", "signal": -50, "secured": False},
+        {"ssid": "B", "signal": -60, "secured": True}]

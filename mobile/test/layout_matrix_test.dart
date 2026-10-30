@@ -60,6 +60,16 @@ final _pages = <String, Widget Function()>{
       scanner: (_) async => null),
   'change wifi': () => RobotWifiPage(api: FakeApi('admin'), robotId: 'A', scanner: (_) async => null),
   'engineer unbind': () => EngineerUnbindPage(scanner: (_) async => null),
+  'wifi picker': () => Scaffold(
+      body: SingleChildScrollView(
+          child: WifiPicker(
+              networks: <Map<String, dynamic>>[
+                <String, dynamic>{'ssid': 'A very long WiFi network name 32b', 'signal': -45, 'secured': true},
+                <String, dynamic>{'ssid': 'Guest', 'signal': -80, 'secured': false},
+              ],
+              busy: false,
+              onRescan: () async {},
+              onSend: (_, _) async {}))),
   'robots (bind pending)': () => SiteRobotsPage(
       api: FakeApi('admin')
         ..binds = <Map<String, dynamic>>[

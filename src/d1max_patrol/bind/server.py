@@ -5,6 +5,7 @@
 
   ========================  ==============================================
   ``GET  /status``           序列号、状态、核对码、WiFi、挂着的改动
+  ``GET  /scan``             附近的 WiFi(路由器扫的;名字扫出来、密码手填)
   ``POST /bind``             ``{"wifi": {"ssid","psk"}, "site": {"url","fp","name"}}``
   ``POST /wifi``             ``{"ssid","psk"}``(绑好以后换 WiFi,站点确认)
   ``POST /unbind``           ``{"token"}``(工程师的解绑令)
@@ -113,6 +114,8 @@ class _Handler(BaseHTTPRequestHandler):
         try:
             if method == "GET" and path == "/status":
                 return self._send(200, core.status(code))
+            if method == "GET" and path == "/scan":
+                return self._send(200, core.scan(code))
             if method == "POST" and path == "/bind":
                 return self._send(200, core.bind(code, self._body()))
             if method == "POST" and path == "/wifi":

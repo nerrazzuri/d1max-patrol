@@ -151,6 +151,8 @@ class RobotBindError implements Exception {
 abstract class RobotBindLink {
   /// `{serial, state, phase, error, site_name, check?, wifi, change?, change_result?}`。
   Future<Map<String, dynamic>> status();
+  /// 机器人附近的 WiFi（路由器扫的，强的在前）：`[{ssid, signal(dBm), secured}]`。
+  Future<List<Map<String, dynamic>>> scan();
   Future<Map<String, dynamic>> bind(
       {required String ssid, required String psk, required String siteUrl,
       required String siteFingerprint, required String siteName});
@@ -176,8 +178,9 @@ class RobotHotspot implements RobotBindLink {
   @override
   void close() => _io.close(force: true);
 
-  Future<Map<String, dynamic>> _send(String method, String path, [Object? body]) async {
+  Future<Map<String, dynamic>> _send(String method, String path, [Object? body, Duration? within]) async {
     final uri = Uri.parse('https://${sticker.addr}$path');
+    final timeout = within ?? this.timeout;
     try {
       final req = await _io.openUrl(method, uri).timeout(timeout);
       req.headers.set('X-Bind-Code', sticker.code);
@@ -215,6 +218,13 @@ class RobotHotspot implements RobotBindLink {
 
   @override
   Future<Map<String, dynamic>> status() => _send('GET', '/status');
+
+  @override
+  Future<List<Map<String, dynamic>>> scan() async {
+    // 真路由器扫一次要半分钟到一分钟（G806w 说明书 4.6）
+    final nets = (await _send('GET', '/scan', null, const Duration(seconds: 90)))['networks'];
+    return nets is List ? nets.whereType<Map>().map(Map<String, dynamic>.from).toList() : const [];
+  }
 
   @override
   Future<Map<String, dynamic>> bind(
