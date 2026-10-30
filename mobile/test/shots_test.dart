@@ -253,7 +253,7 @@ void main() {
   final pages = <String, _Shot>{
     '00-gallery': _Shot(const Size(390, 2000), _gallery),
     '01-sites': _Shot(_phone, () => SiteListPage(store: MemorySiteStore([_site]))),
-    '02-login': _Shot(_phone, () => SiteLoginPage(site: _site, signIn: (_) async => FakeApi('guard'))),
+    '02-login': _Shot(_phone, () => SiteLoginPage(site: _site, signIn: (_, _) async => FakeApi('guard'))),
     '03-duty-p1': _Shot(_phone, () => NwShell(api: _busy('guard'), title: 'East Gate Estate', ring: () {})),
     '04-duty-clear': _Shot(_phone, () => NwShell(api: _clear('guard'), title: 'East Gate Estate', ring: () {})),
     '05-alarm': _Shot(

@@ -202,7 +202,7 @@ void main() {
       return store;
     }
 
-    testWidgets('扫到站点的码：三样填进表单、提示核对；填了账号才存，口令不存', (t) async {
+    testWidgets('扫到站点的码：三样填进表单、提示核对；不用填账号（第一次登录时输），口令不存', (t) async {
       final store = await open(t, scanner: (_) async => _code);
       expect(find.byKey(const Key('site-check-note')), findsNothing);
       await t.tap(find.byKey(const Key('site-scan')));
@@ -211,16 +211,12 @@ void main() {
       expect(t.widget<TextField>(find.byKey(const Key('site-name'))).controller!.text, '庄园一号');
       expect(t.widget<TextField>(find.byKey(const Key('site-url'))).controller!.text, 'https://192.168.1.5:8443');
       expect(t.widget<TextField>(find.byKey(const Key('site-fp'))).controller!.text, 'ab' * 32);
+      expect(find.byKey(const Key('site-user')), findsNothing, reason: '加站点时还没有账号，不问');
       await t.ensureVisible(find.byKey(const Key('site-save')));
       await t.tap(find.byKey(const Key('site-save')));
       await t.pumpAndSettle();
-      expect(store.sites, isEmpty, reason: '账号没填：配对码里没有账号');
-      expect(find.textContaining('名字和账号要填'), findsOneWidget);
-      await t.enterText(find.byKey(const Key('site-user')), 'gina');
-      await t.tap(find.byKey(const Key('site-save')));
-      await t.pumpAndSettle();
       final s = store.sites.single;
-      expect((s.name, s.url, s.fingerprint, s.username), ('庄园一号', 'https://192.168.1.5:8443', 'ab' * 32, 'gina'));
+      expect((s.name, s.url, s.fingerprint, s.username), ('庄园一号', 'https://192.168.1.5:8443', 'ab' * 32, ''));
       expect(s.toJson().keys, isNot(contains('password')));
       expect(find.text('庄园一号'), findsOneWidget, reason: '回到站点列表，新站点在');
     });

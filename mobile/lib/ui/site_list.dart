@@ -94,6 +94,7 @@ class _SiteListPageState extends State<SiteListPage> {
   }
 
   Future<void> _open(SiteEntry s) async {
+    String? account0;
     final messenger = ScaffoldMessenger.of(context);
     final nav = Navigator.of(context);
     // 口令在登录页上收（2026-10-14 重做：原来是弹窗）。登录不了人留在那一页、原因摆在那一页上，
@@ -101,19 +102,28 @@ class _SiteListPageState extends State<SiteListPage> {
     final api = await nav.push<SiteApi>(MaterialPageRoute<SiteApi>(
         builder: (_) => SiteLoginPage(
             site: s,
-            signIn: (password) async {
+            signIn: (account, password) async {
               SiteApi? api;
               try {
                 api = widget.apiFactory(s);
-                await api.login(s.username, password);
+                await api.login(account, password);
               } catch (_) {
                 api?.close();
                 rethrow;
               }
+              account0 = account;
               return api;
             })));
     if (api == null) return;
     final a = api;
+    // 记下这次登录用的账号（下次登录页自动填好）
+    if (account0 != null && account0 != s.username) {
+      final upd = SiteEntry(name: s.name, url: s.url, fingerprint: s.fingerprint, username: account0!);
+      final next = [for (final x in _sites) identical(x, s) ? upd : x];
+      await widget.store.save(next);
+      if (mounted) setState(() => _sites = next);
+      s = upd;
+    }
     // 商业化 A6：进了站点就收这个站点的 P1 推送。登记不上不挡进站点（后台值守照旧），退避一直重试，
     // 页面上看得见没登记上（A6 外审 F2）。
     final push = PushSession(widget.push ?? defaultPush(),
@@ -230,7 +240,7 @@ class _SiteListPageState extends State<SiteListPage> {
   /// 一个站点一张卡。登录之前不知道连没连上、有没有 P1：卡上不显示这两样（不编）。
   Widget _card(NwColors c, SiteEntry s) => NwSiteCard(
       name: s.name,
-      address: '${s.url} · ${s.username}',
+      address: s.username.isEmpty ? s.url : '${s.url} · ${s.username}',
       enterKey: Key('site-enter-${s.name}'),
       onEnter: () => _open(s),
       menu: PopupMenuButton<bool>(
@@ -250,7 +260,8 @@ class _SiteListPageState extends State<SiteListPage> {
 }
 
 /// 登录这个站点：拿口令去登，登上了回连好的客户端，登不上抛（原因给人看）。
-typedef SiteSignIn = Future<SiteApi> Function(String password);
+/// 用账号、口令登录（账号添加站点时不填，第一次登录时输，之后记着；用户 10-30）。
+typedef SiteSignIn = Future<SiteApi> Function(String account, String password);
 
 /// 登录页（2026-10-14 重做，原来是弹窗）：品牌、要登的是哪个站点、口令。账号是加站点时存下的，这里
 /// 只填口令。登上了带着客户端退回去（`Navigator.pop(context, api)`）；登不上留在这一页说原因。
@@ -265,6 +276,7 @@ class SiteLoginPage extends StatefulWidget {
 }
 
 class _SiteLoginPageState extends State<SiteLoginPage> {
+  late final _account = TextEditingController(text: widget.site.username);
   final _pw = TextEditingController();
 
   /// 正在登：这时候不收第二次提交，也不许退出去（退了登上的那个会话就没人管了）。
@@ -273,19 +285,24 @@ class _SiteLoginPageState extends State<SiteLoginPage> {
 
   @override
   void dispose() {
+    _account.dispose();
     _pw.dispose();
     super.dispose();
   }
 
   Future<void> _submit() async {
     if (_busy) return;
+    if (_account.text.trim().isEmpty) {
+      setState(() => _error = tr('Enter your account', '填你的账号'));
+      return;
+    }
     setState(() {
       _busy = true;
       _error = null;
     });
     final SiteApi api;
     try {
-      api = await widget.signIn(_pw.text);
+      api = await widget.signIn(_account.text.trim(), _pw.text);
     } catch (e) {
       if (mounted) {
         setState(() {
@@ -382,12 +399,21 @@ class _SiteLoginPageState extends State<SiteLoginPage> {
                                   ])),
                               const SizedBox(height: Nw.s32),
                               NwField(
+                                  fieldKey: const Key('site-account'),
+                                  controller: _account,
+                                  label: tr('Account', '账号'),
+                                  icon: Icons.person_outline_rounded,
+                                  autocorrect: false,
+                                  enableSuggestions: false,
+                                  autofocus: s.username.isEmpty),
+                              const SizedBox(height: Nw.s16),
+                              NwField(
                                   fieldKey: const Key('site-password'),
                                   controller: _pw,
-                                  label: tr('Password for ${s.username}', '${s.username} 的口令'),
+                                  label: tr('Password', '口令'),
                                   icon: Icons.lock_outline_rounded,
                                   obscureText: true,
-                                  autofocus: true, // 桌面版（W15）：一进来就能打字，回车就登录
+                                  autofocus: s.username.isNotEmpty, // 桌面版（W15）：一进来就能打字，回车就登录
                                   autocorrect: false,
                                   enableSuggestions: false,
                                   error: error != null,

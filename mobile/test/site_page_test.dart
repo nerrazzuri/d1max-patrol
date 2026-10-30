@@ -937,7 +937,6 @@ void main() {
     await t.enterText(find.byKey(const Key('site-name')), '庄园');
     await t.enterText(find.byKey(const Key('site-url')), 'https://site.local:8443');
     await t.enterText(find.byKey(const Key('site-fp')), 'AB:' * 31 + 'AB');
-    await t.enterText(find.byKey(const Key('site-user')), 'gina');
     await t.tap(find.text('保存'));
     await t.pumpAndSettle();
     expect(store.sites.single.fingerprint, 'ab' * 32);
@@ -1021,6 +1020,32 @@ void main() {
     }
   });
 
+  testWidgets('加站点不填账号：第一次登录时输，登上了记下来，下次自动填好', (t) async {
+    final store = MemorySiteStore([SiteEntry(name: '演示', url: 'https://h:1', fingerprint: 'ab' * 32, username: '')]);
+    final api = FakeApi('guard');
+    await t.pumpWidget(MaterialApp(home: SiteListPage(store: store, apiFactory: (_) => api, push: const NoPush())));
+    await t.pumpAndSettle();
+    await t.tap(find.text('演示'));
+    await t.pumpAndSettle();
+    expect(t.widget<TextField>(find.byKey(const Key('site-account'))).controller!.text, '');
+    await t.enterText(find.byKey(const Key('site-password')), 'pw');
+    await t.tap(find.text('登录'));
+    await t.pumpAndSettle();
+    expect(find.text('填你的账号'), findsOneWidget, reason: '没填账号不登');
+    await t.enterText(find.byKey(const Key('site-account')), 'gina');
+    await t.tap(find.text('登录'));
+    await t.pumpAndSettle();
+    expect(find.byType(NwShell), findsOneWidget);
+    expect(store.sites.single.username, 'gina', reason: '登上了记下账号');
+    await t.pumpWidget(const SizedBox());
+    await t.pumpWidget(MaterialApp(home: SiteListPage(store: store, apiFactory: (_) => api, push: const NoPush())));
+    await t.pumpAndSettle();
+    await t.tap(find.text('演示'));
+    await t.pumpAndSettle();
+    expect(t.widget<TextField>(find.byKey(const Key('site-account'))).controller!.text, 'gina');
+    await t.pumpWidget(const SizedBox());
+  });
+
   testWidgets('令牌过期（401）退回站点列表并说明', (t) async {
     final store = MemorySiteStore([
       SiteEntry(name: '庄园', url: 'https://h:1', fingerprint: 'ab' * 32, username: 'gina')
@@ -1062,7 +1087,6 @@ void main() {
     await t.enterText(find.byKey(const Key('site-name')), '庄园');
     await t.enterText(find.byKey(const Key('site-url')), 'https://site.local:8443');
     await t.enterText(find.byKey(const Key('site-fp')), 'abc');
-    await t.enterText(find.byKey(const Key('site-user')), 'gina');
     await t.tap(find.text('保存'));
     await t.pumpAndSettle();
     expect(store.sites, isEmpty);
