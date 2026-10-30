@@ -13,7 +13,7 @@ type Say = (s: string) => void;
 interface Account { name: string; role: string; disabled: boolean; display_name: string; expires_ms: number | null; last_login_ms: number | null; expired: boolean }
 interface AuditRow { id: number; at: number; actor: string; actor_role?: string | null; action: string; target: string; status: number }
 
-const ROLES = ["admin", "guard", "owner"] as const;
+const ROLES = ["admin", "guard", "owner", "viewer"] as const;
 
 function errText(e: unknown): string {
   return t("failed", { why: e instanceof ApiError ? e.message : String(e) });
@@ -89,6 +89,7 @@ export function UsersPage({ me, say, now }: { me: string; say: Say; now: number 
         <button type="button" class="btn primary" onClick={() => setAdding(true)}>{t("addUser")}</button>
       </div>
       <p class="muted lead">{t("usersLead")}</p>
+      <Requests say={say} onDone={reload} />
       <div class={who ? "users-split" : undefined}>
         <table class="grid users-table">
           <thead><tr><th>{t("name")}</th><th>{t("role")}</th><th>{t("lastLogin")}</th><th>{t("status")}</th><th>{t("colActions")}</th></tr></thead>
@@ -278,5 +279,59 @@ function PasswordDialog({ name, onClose, onSave }: { name: string; onClose: () =
         </div>
       </form>
     </Modal>
+  );
+}
+
+/** W52:App 上申请的账号,等管理员批准(选权限,默认只看;批准再输一次密码)。没有就不占地方。 */
+interface AccountRequest { id: string; name: string; display: string; created_ms: number }
+
+export function Requests({ say, onDone }: { say: Say; onDone: () => void }) {
+  const [rows, setRows] = useState<AccountRequest[]>([]);
+  const [roles, setRoles] = useState<Record<string, string>>({});
+  const [approving, setApproving] = useState<AccountRequest | null>(null);
+  const load = useCallback(() => {
+    api<{ requests: AccountRequest[] }>("GET", "/api/account-requests").then((d) => setRows(d.requests ?? [])).catch(() => setRows([]));
+  }, []);
+  useEffect(load, [load]);
+  if (rows.length === 0) return null;
+  const roleOf = (r: AccountRequest) => roles[r.id] ?? "viewer";
+  return (
+    <section class="panel requests" aria-label={t("reqTitle")}>
+      <h2>{t("reqTitle")}</h2>
+      <table class="grid">
+        <tbody>
+          {rows.map((r) => (
+            <tr key={r.id} data-req={r.id}>
+              <td><b>{r.display}</b><div class="muted small mono">{r.name}</div></td>
+              <td class="muted small">{hm(r.created_ms)}</td>
+              <td>
+                <select aria-label={`${t("role")} ${r.name}`} value={roleOf(r)} onChange={(e) => setRoles({ ...roles, [r.id]: e.currentTarget.value })}>
+                  {(["viewer", "guard", "owner", "admin"] as const).map((x) => <option key={x} value={x}>{t(roleLabel(x))}</option>)}
+                </select>
+              </td>
+              <td class="actions">
+                <button type="button" class="btn sm" onClick={async () => {
+                  try { await api("POST", `/api/account-requests/${enc(r.id)}/reject`, {}); say(t("reqRejected", { name: r.name })); }
+                  catch (e) { say(errText(e)); }
+                  load();
+                }}>{t("reqReject")}</button>
+                <button type="button" class="btn sm primary" onClick={() => setApproving(r)}>{t("reqApprove")}</button>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {approving && (
+        <ConfirmPassword title={t("reqApproveTitle", { name: approving.display, role: t(roleLabel(roleOf(approving))) })}
+          onClose={() => setApproving(null)}
+          onConfirm={async (pw) => {
+            await api("POST", `/api/account-requests/${enc(approving.id)}/approve`, { role: roleOf(approving), confirm_password: pw });
+            say(t("reqApproved", { name: approving.name }));
+            setApproving(null);
+            load();
+            onDone();
+          }} />
+      )}
+    </section>
   );
 }

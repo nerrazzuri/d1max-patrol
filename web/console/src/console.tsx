@@ -15,6 +15,7 @@ import { ReportsPage } from "./reportpage";
 import { MapPage } from "./mappage";
 import { FELL_KINDS, forGuard, isOwnerLike, queue, robotCams, robotState, type Alert, type Mode } from "./model";
 import { AlarmLogPage } from "./alarmlog";
+import { HelpDialog, WEB_TOUR } from "./guide";
 import { ArmingPage } from "./armingpage";
 import { DutyPage } from "./duty";
 import { LiveWall } from "./livewall";
@@ -48,6 +49,8 @@ export function Console({ me, onOut }: { me: Me; onOut: () => void }) {
   const [route, setRoute] = useState(readRoute);
   const [pending, setPending] = useState<Pending>(null);
   const [toast, setToast] = useState("");
+  // W53:第一次登录(这个账号没看过当前版本的网页教程)自动打开;老站点不带 guide 就不弹
+  const [help, setHelp] = useState(() => me.guide != null && (me.guide.web_tour ?? 0) < WEB_TOUR);
   void lang.value; // 换语言整页重画
 
   useEffect(() => {
@@ -120,7 +123,9 @@ export function Console({ me, onOut }: { me: Me; onOut: () => void }) {
       <TopBar me={me} page={route.page} mode={data?.mode ?? null} alarms={stale ? null : guardAlarms} now={now}
         pref={pref} onPref={(p) => { saveThemePref(p); setPref(p); }}
         onStop={() => setPending({ kind: "stop" })} onSay={say}
+        onHelp={() => setHelp(true)}
         onSignOut={async () => { try { await api("POST", "/api/logout", {}); } finally { onOut(); } }} />
+      {help && <HelpDialog role={me.role} onClose={() => setHelp(false)} />}
       {stale && (
         <div class="stalebar" role="alert">
           <Shape kind="P2" />

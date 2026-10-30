@@ -1,6 +1,7 @@
 import { useEffect, useState } from "preact/hooks";
 import { api, ApiError, onUnauthorized } from "./api";
 import { Console } from "./console";
+import type { Guide } from "./guide";
 import { Login } from "./login";
 
 export interface Me {
@@ -8,6 +9,8 @@ export interface Me {
   role: string;
   display_name: string;
   site_name: string;
+  /** W53:上手向导看过哪一版(老站点没有)。 */
+  guide?: Guide;
 }
 
 export function App() {

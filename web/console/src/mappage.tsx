@@ -7,14 +7,14 @@ import { useEffect, useMemo, useState } from "preact/hooks";
 import { api, ApiError, enc } from "./api";
 import { hm, nameOf, useDutySettings } from "./data";
 import { Modal } from "./dialogs";
-import { alertTitle, lang, t, type Key } from "./i18n";
+import { alertTitle, lang, refusalText, t, type Key } from "./i18n";
 import type { UnitInfo } from "./live";
 import { etaNext, LAYERS, loadLayers, saveLayers, shiftStart, staleAfter, staleCells, tonightEvents, zoneDecor,
   type AuthzRow, type Cell, type Layer, type ModeView } from "./maplayers";
 import { fanPath } from "./layoutpage";
 import { MapCanvas, type CanvasArea, type LegendKey, type Screen } from "./mapcanvas";
 import { heading, namedAreas, onMap, toPx, type PreviewMeta, type Pt } from "./mapview";
-import { abnormal, alarmState, canArm, canDispatch, canFindPose, robotMap, type Alert } from "./model";
+import { abnormal, alarmState, canArm, canDispatch, canFindPose, canPatrol, robotMap, type Alert } from "./model";
 import { notAccepted, usePosePick, type CommandReply } from "./posepick";
 import { pxToMap, yawToward } from "./routes";
 import { RunLegendItems, VizWorld, vizAvoid, vizHas, vizMarks, vizOnMap } from "./runlayers";
@@ -306,7 +306,7 @@ export function MapPage(props: {
         onPickMap={canDispatch(props.role ?? "") ? (x, y, map) => {
           if (route) setRoute([...route, [x, y]]);
           else setLook({ at: [x, y], map });
-        } : undefined}
+        } : canPatrol(props.role ?? "") && route ? (x, y) => setRoute([...route, [x, y]]) : undefined}
         hint={route ? t("trHint", { n: route.length }) : null}
         extraWorld={(meta) => (
           <>
@@ -375,7 +375,7 @@ export function MapPage(props: {
         {route ? (
           shown.map && <TempRoutePanel map={shown.map} points={route} robots={robotsHere} say={say}
             onUndo={() => setRoute(route.slice(0, -1))} onCancel={() => setRoute(null)} onSent={() => setRoute(null)} />
-        ) : canDispatch(props.role ?? "") && (
+        ) : canPatrol(props.role ?? "") && (
           <div class="tip">
             <p>{t("mapTip")}</p>
             <button type="button" class="btn sm" onClick={() => { setLook(null); setRoute([]); }}>{t("trStart")}</button>
@@ -492,8 +492,15 @@ export function TempRoutePanel(props: {
     setBusy(true);
     setErrs([]);
     try {
-      const r = await api<CommandReply>("POST", `/api/robots/${enc(robot)}/patrol`,
+      const r = await api<CommandReply & { queued?: boolean; start_after_ms?: number; because?: string }>(
+        "POST", `/api/robots/${enc(robot)}/patrol`,
         { points: props.points.map(([x, y]) => ({ x, y })), map_id: props.map.map_id, map_version: props.map.version });
+      // W53:撞上日程就排到后面(日程优先),说排到几点
+      if (r.queued) {
+        props.say(t("trQueued", { id: robot, at: hm(r.start_after_ms ?? 0), why: r.because ?? "" }));
+        props.onSent();
+        return;
+      }
       const no = notAccepted(r);
       if (no) setErrs([no]);
       else { props.say(t("trSent", { id: robot })); props.onSent(); }
@@ -501,7 +508,7 @@ export function TempRoutePanel(props: {
       const list = e instanceof ApiError ? (e.data as { errors?: { index: number | null; problem: string }[] } | undefined)?.errors : undefined;
       setErrs(list && list.length
         ? list.map((x) => (x.index == null ? x.problem : t("trBadPoint", { n: x.index + 1, why: x.problem })))
-        : [e instanceof ApiError ? e.message : String(e)]);
+        : [e instanceof ApiError ? refusalText(e.message, e.data) : String(e)]);
     } finally {
       setBusy(false);
     }

@@ -10,6 +10,7 @@ import { whoText } from "./armingpage";
 import type { Authz } from "./accesspage";
 import { hm } from "./data";
 import { alertTitle, lang, t, type Key } from "./i18n";
+import { SetupChecklist } from "./guide";
 import { Icon } from "./icons";
 import { forGuard, type Alert, type Mode } from "./model";
 import { reportRange, type Summary } from "./reports";
@@ -52,6 +53,7 @@ export function HomePage(props: {
   return (
     <section class="homepage">
       <h1>{t("tabHome")}</h1>
+      <SetupChecklist />
 
       {todo.length > 0 && (
         <section class="panel home-todo">
