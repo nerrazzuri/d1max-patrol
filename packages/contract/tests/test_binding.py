@@ -31,6 +31,10 @@ def test_贴纸_来回一致_前缀不对或改坏了拒():
         b.decode_sticker("D1MAXSITE1." + text.split(".", 1)[1])
     with pytest.raises(b.BindingError):
         b.decode_sticker(text[:-6])
+    demo = b.Sticker("D1M-1", s.code, "NW-1", "abcdefgh", "0" * 32, "127.0.0.2:18450")
+    assert b.decode_sticker(demo.encode()).addr == "127.0.0.2:18450"
+    with pytest.raises(b.BindingError):
+        b.decode_sticker(b.Sticker("D1M-1", s.code, "NW-1", "abcdefgh", "0" * 32, "x y").encode())
 
 
 def test_贴纸_序列号和指纹形状不对拒():

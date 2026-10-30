@@ -16,6 +16,7 @@ import 'nw/nw_p1_entry.dart';
 import 'nw/nw_shell.dart';
 import 'nw/nw_theme.dart';
 import 'nw/nw_widgets.dart';
+import 'robot_bind_page.dart';
 import 'site_add.dart';
 
 /// 造一个站点客户端。测试换成假的。
@@ -155,6 +156,13 @@ class _SiteListPageState extends State<SiteListPage> {
                       PopupMenuItem(value: AppLang.en, child: Text('English')),
                       PopupMenuItem(value: AppLang.zh, child: Text('中文')),
                     ]),
+            // W42：工程师工具 —— 站点坏了没备份，拿公司签的解绑令解绑机器人（不用登录站点）
+            IconButton(
+                key: const Key('engineer-unbind'),
+                tooltip: tr('Engineer: unbind a robot with a token', '工程师：用解绑令解绑机器人'),
+                icon: Icon(Icons.build_circle_outlined, color: c.text),
+                onPressed: () => Navigator.push(
+                    context, MaterialPageRoute<void>(builder: (_) => const EngineerUnbindPage()))),
             if (!broken)
               IconButton(
                   key: const Key('site-add-top'),

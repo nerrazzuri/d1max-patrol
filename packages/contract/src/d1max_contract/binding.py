@@ -4,6 +4,7 @@
   手输时大小写、``-``、空格都不计较;``I``/``L`` 当 ``1``、``O`` 当 ``0``。
 - **贴纸二维码**:``D1MAXBOT1.<base64url(JSON)>``,``s`` 序列号、``c`` 绑定码、``w`` 热点名、
   ``p`` 热点密码、``f`` 配网服务证书指纹(DER 的 SHA-256 前 32 位十六进制)。
+  可选 ``a``:热点上找配网服务的地址(缺省 :data:`DEFAULT_BIND_ADDR`,出厂配置定死)。
   跟站点配对码 ``D1MAXSITE1.``、开通码 ``D1MAX1.`` 前缀不同,扫错当场认得出。
 - **核对码**:6 位数,从机器人那次申请的随机数算出来。手机和站点上各显示一次,两边对得上再批。
 - **解绑令**:``D1MAXUNBIND1.<base64url(JSON)>.<base64url(签名)>``,
@@ -33,6 +34,9 @@ CODE_LEN = 16
 #: 序列号也是站点上的机器人编号:跟站点 ``SAFE_ID`` 一样的字。
 SERIAL_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 _FP32 = re.compile(r"^[0-9a-f]{32}$")
+_ADDR = re.compile(r"^[A-Za-z0-9.\-]+:\d{1,5}$")
+#: 3588 在路由器 LAN1 上的地址和配网服务的端口(热点上的手机找它)。
+DEFAULT_BIND_ADDR = "192.168.1.2:8450"
 _HEX64 = re.compile(r"^[0-9a-fA-F]{64}$")
 _NONCE = re.compile(r"^[0-9a-f]{16,64}$")
 #: 解绑令最长管多久(签的时候拦一道;机器人那头也按它拦)。
@@ -115,10 +119,13 @@ class Sticker:
     hotspot_ssid: str
     hotspot_psk: str
     fingerprint: str          # 配网服务证书指纹前 32 位十六进制
+    addr: str = ""            # 空 = DEFAULT_BIND_ADDR
 
     def encode(self) -> str:
         d = {"s": self.serial, "c": normalize_code(self.code), "w": self.hotspot_ssid,
              "p": self.hotspot_psk, "f": self.fingerprint}
+        if self.addr:
+            d["a"] = self.addr
         raw = json.dumps(d, separators=(",", ":"), sort_keys=True, ensure_ascii=False).encode()
         return STICKER_PREFIX + base64.urlsafe_b64encode(raw).decode().rstrip("=")
 
@@ -141,8 +148,11 @@ def decode_sticker(text: str) -> Sticker:
         raise BindingError("贴纸二维码坏了")
     if _FP32.match(d["f"]) is None:
         raise BindingError("贴纸二维码坏了")
+    a = d.get("a", "")
+    if not isinstance(a, str) or (a and _ADDR.match(a) is None):
+        raise BindingError("贴纸二维码坏了")
     check_wifi(d["w"], d["p"])
-    return Sticker(check_serial(d["s"]), normalize_code(d["c"]), d["w"], d["p"], d["f"])
+    return Sticker(check_serial(d["s"]), normalize_code(d["c"]), d["w"], d["p"], d["f"], a)
 
 
 # ------------------------------------------------------------ 解绑令

@@ -142,6 +142,10 @@ class SiteSession {
 
   /// 站点体检、诊断包（商业化 A1）：只有管理员。
   bool get canSeeHealth => role == 'admin';
+
+  /// W42：批准机器人加入、确认机器人换 WiFi（站点的 manage 权限：管理员、工程师）。添加（扫贴纸配网）谁都能做，
+  /// 批准要这个。
+  bool get canManageRobots => role == 'admin' || role == 'engineer';
   bool get canAbort => role == 'admin' || role == 'guard' || role == 'owner';
 }
 
@@ -615,6 +619,15 @@ abstract class SiteApi {
   /// 停车（W00c5c）：走站点的 `halt`，**不走遥控连接**。业主也能按。停下之后站点不再派它，
   /// 直到有人 [resume]（W00c5e）。
   Future<Map<String, dynamic>> halt(String robotId);
+
+  /// W42：等待批准加入的机器人（`[{id, serial, check, model, version, source, created_ms, expires_ms}]`，
+  /// 管理员）。站点没开绑定回 404。
+  Future<List<Map<String, dynamic>>> bindRequests();
+  /// 批准一台加入（要再输一次密码；[name] 起个名字，空就用序列号）。
+  Future<Map<String, dynamic>> approveBind(String id, String password, {String name = ''});
+  Future<Map<String, dynamic>> rejectBind(String id);
+  /// 机器人上有人提了换 WiFi：确认 / 不换（[changeId] 是机器人视图 `wifi.change.id`）。
+  Future<Map<String, dynamic>> confirmRobotWifi(String robotId, String changeId, bool approve);
 
   /// 解除叫停（W00c5e）：之后站点才重新给这只狗派单。管理员、保安。
   Future<Map<String, dynamic>> resume(String robotId);
@@ -1472,6 +1485,29 @@ class SiteClient implements SiteApi {
           '遥控握手没完成：${e.message}'));
     }
   }
+
+  @override
+  Future<List<Map<String, dynamic>>> bindRequests() async {
+    final rows = _map(await _send('GET', '/api/admin/bind'))['requests'];
+    if (rows is! List) {
+      throw FormatException(tr('Site reply has no "requests" field', '站点回的东西里没有 requests'));
+    }
+    return rows.whereType<Map<String, dynamic>>().toList();
+  }
+
+  @override
+  Future<Map<String, dynamic>> approveBind(String id, String password, {String name = ''}) async =>
+      _map(await _send('POST', '/api/admin/bind/${Uri.encodeComponent(id)}/approve',
+          <String, dynamic>{'confirm_password': password, 'name': name}));
+
+  @override
+  Future<Map<String, dynamic>> rejectBind(String id) async =>
+      _map(await _send('POST', '/api/admin/bind/${Uri.encodeComponent(id)}/reject', <String, dynamic>{}));
+
+  @override
+  Future<Map<String, dynamic>> confirmRobotWifi(String robotId, String changeId, bool approve) async =>
+      _map(await _send('POST', '/api/robots/${Uri.encodeComponent(robotId)}/wifi',
+          <String, dynamic>{'id': changeId, 'approve': approve}));
 
   @override
   Future<Map<String, dynamic>> halt(String robotId) async => _map(await _send(
