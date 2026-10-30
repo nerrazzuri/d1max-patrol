@@ -45,7 +45,7 @@ String? normalizeBindCode(String raw) {
 /// （指纹只在二维码里），[RobotSticker.fingerprint] 是空的。不对抛 [FormatException]。
 RobotSticker manualSticker(String serial, String code) {
   final s = serial.trim();
-  if (!RegExp(r'^[A-Za-z0-9._-]{1,64}$').hasMatch(s)) {
+  if (!RegExp(r'^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$').hasMatch(s)) {
     throw FormatException(tr('Enter the serial number printed on the sticker', '填贴纸上印的序列号'));
   }
   final c = normalizeBindCode(code);
@@ -83,7 +83,7 @@ RobotSticker parseSticker(String raw) {
   if (d is! Map) throw FormatException(tr('The sticker code is damaged', '贴纸码坏了'));
   final s = d['s'], c = d['c'], w = d['w'], p = d['p'], f = d['f'], a = d['a'];
   if (s is! String || c is! String || w is! String || p is! String || f is! String ||
-      !RegExp(r'^[0-9a-f]{32}$').hasMatch(f) || !RegExp(r'^[A-Za-z0-9._-]{1,64}$').hasMatch(s) ||
+      !RegExp(r'^[0-9a-f]{32}$').hasMatch(f) || !RegExp(r'^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$').hasMatch(s) ||
       (a != null && (a is! String || !RegExp(r'^[A-Za-z0-9.\-]+:\d{1,5}$').hasMatch(a)))) {
     throw FormatException(tr('The sticker code is damaged', '贴纸码坏了'));
   }

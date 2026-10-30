@@ -35,10 +35,12 @@ object RobotHotspot {
             .build()
         var answered = false
         val main = Handler(Looper.getMainLooper())
-        fun answer(ok: Boolean) = main.post {
-            if (!answered) {
-                answered = true
-                done(ok)
+        fun answer(ok: Boolean) {
+            main.post {
+                if (!answered) {
+                    answered = true
+                    done(ok)
+                }
             }
         }
         val cb = object : ConnectivityManager.NetworkCallback() {
@@ -47,7 +49,9 @@ object RobotHotspot {
                 answer(true)
             }
 
-            override fun onUnavailable() = answer(false)
+            override fun onUnavailable() {
+                answer(false)
+            }
 
             override fun onLost(network: Network) {
                 cm.bindProcessToNetwork(null)

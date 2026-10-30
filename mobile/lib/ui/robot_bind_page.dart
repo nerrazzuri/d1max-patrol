@@ -43,10 +43,14 @@ String bindPhaseText(Map<String, dynamic> st) {
   return tr('Connecting to the WiFi and the site…', '正在连 WiFi 和站点…');
 }
 
-/// 连热点：自动连上回 true；连不上把热点名、密码摆出来，人在系统设置里连好了点「已经连上」回 true，取消回 false。
-Future<bool> joinRobotHotspot(BuildContext context, HotspotJoiner joiner, RobotSticker s) async {
-  if (await joiner.join(s.ssid, s.psk)) return true;
-  if (!context.mounted) return false;
+/// 怎么连上热点的：App 自动连的（离开时 App 自己断）/ 人在系统设置里手动连的（离开时要人自己切回去）。
+enum HotspotJoin { auto, manual }
+
+/// 连热点：自动连上回 [HotspotJoin.auto]；连不上把热点名、密码摆出来，人在系统设置里连好了点「已经连上」
+/// 回 [HotspotJoin.manual]，取消回 null。
+Future<HotspotJoin?> joinRobotHotspot(BuildContext context, HotspotJoiner joiner, RobotSticker s) async {
+  if (await joiner.join(s.ssid, s.psk)) return HotspotJoin.auto;
+  if (!context.mounted) return null;
   final ok = await showDialog<bool>(
     context: context,
     builder: (c) {
@@ -70,6 +74,37 @@ Future<bool> joinRobotHotspot(BuildContext context, HotspotJoiner joiner, RobotS
           NwButton(label: tr('Cancel', '取消'), variant: NwButtonVariant.ghost,
               onPressed: () => Navigator.pop(c, false)),
           NwButton(buttonKey: const Key('hotspot-joined'), label: tr("I'm connected", '已经连上'),
+              onPressed: () => Navigator.pop(c, true)),
+        ],
+      );
+    },
+  );
+  return ok == true ? HotspotJoin.manual : null;
+}
+
+/// 离开热点、回到平时的网络（之后要找站点）。手动连的热点 App 断不了：教人去系统设置里切回去，点了
+/// 「已经切回」回 true（外审 I12）。
+Future<bool> leaveRobotHotspot(
+    BuildContext context, HotspotJoiner joiner, HotspotJoin? how, String ssid) async {
+  await joiner.leave();
+  if (how != HotspotJoin.manual || !context.mounted) return true;
+  final ok = await showDialog<bool>(
+    context: context,
+    builder: (c) {
+      final nw = Nw.of(c);
+      return AlertDialog(
+        scrollable: true,
+        backgroundColor: nw.surface,
+        title: Text(tr('Switch back to your network', '切回平时的网络'),
+            style: NwText.titleLarge.copyWith(color: nw.text)),
+        content: Text(
+            tr('Open the phone WiFi settings, leave \u201c$ssid\u201d and join the estate WiFi (or use mobile data), then come back.',
+                '打开手机的 WiFi 设置，断开「$ssid」，连回庄园 WiFi（或者用移动数据），再回来。'),
+            style: NwText.bodyMedium.copyWith(color: nw.text)),
+        actions: [
+          NwButton(label: tr('Cancel', '取消'), variant: NwButtonVariant.ghost,
+              onPressed: () => Navigator.pop(c, false)),
+          NwButton(buttonKey: const Key('hotspot-left'), label: tr("I've switched back", '已经切回'),
               onPressed: () => Navigator.pop(c, true)),
         ],
       );
@@ -257,9 +292,14 @@ class _RobotAddPageState extends State<RobotAddPage> with _StickerScan<RobotAddP
   Timer? _poll;
   bool _busy = false;
 
+  HotspotJoin? _join;
+
   /// 离开热点了（之后在站点上批准）。
   bool _left = false;
   bool _approved = false;
+
+  /// 批准没成（还连着热点、站点上还没看到申请……）：给人看的原因，下面有「去批准」再试。
+  String? _approveErr;
 
   @override
   CodeScanner? get scanner => widget.scanner;
@@ -281,7 +321,9 @@ class _RobotAddPageState extends State<RobotAddPage> with _StickerScan<RobotAddP
     if (bad != null) return say(bad);
     setState(() => _busy = true);
     try {
-      if (!await joinRobotHotspot(context, widget.joiner, s)) return;
+      final how = await joinRobotHotspot(context, widget.joiner, s);
+      if (how == null) return;
+      _join = how;
       final link = _link ??= widget.link(s);
       final now = await link.status();
       if (now['state'] == 'bound' || now['state'] == 'wiping') {
@@ -314,24 +356,31 @@ class _RobotAddPageState extends State<RobotAddPage> with _StickerScan<RobotAddP
   }
 
   Future<void> _leaveAndApprove() async {
+    if (!await leaveRobotHotspot(context, widget.joiner, _join, sticker!.ssid) || !mounted) return;
     _poll?.cancel();
-    await widget.joiner.leave();
-    if (!mounted) return;
     setState(() => _left = true);
+    await _approve();
+  }
+
+  Future<void> _approve() async {
     if (widget.api.session?.canManageRobots != true) return;
     final serial = sticker!.serial;
+    setState(() => _approveErr = null);
     try {
       final rows = await widget.api.bindRequests();
       final req = rows.where((r) => r['serial'] == serial).firstOrNull;
       if (!mounted) return;
       if (req == null) {
-        return say(tr("The site doesn't show this robot yet. Try again in a moment.",
+        return setState(() => _approveErr = tr("The site doesn't show this robot yet. Try again in a moment.",
             '站点上还没看到这台的申请，等一下再试。'));
       }
       final ok = await approveBindDialog(context, widget.api, req);
       if (ok && mounted) setState(() => _approved = true);
     } on SiteError catch (e) {
-      say(e.toString());
+      if (mounted) {
+        setState(() => _approveErr = tr("Can't reach the site: $e. Is the phone back on its usual network?",
+            '连不上站点：$e。手机切回平时的网络了吗？'));
+      }
     }
   }
 
@@ -404,6 +453,14 @@ class _RobotAddPageState extends State<RobotAddPage> with _StickerScan<RobotAddP
                     '已批准。机器人几秒后出现在机器人列表里。')
                 : tr('Ask the control room to approve it on the site (Robots page). Check code ${st?['check'] ?? ''}.',
                     '请控制室在站点上批准（机器人页）。核对码 ${st?['check'] ?? ''}。')),
+      if (_left && !_approved && _approveErr != null) ...[
+        _gap,
+        NwNotice(key: const Key('bind-approve-error'), tone: NwTone.warning, text: _approveErr!),
+      ],
+      if (_left && !_approved && widget.api.session?.canManageRobots == true) ...[
+        _gap,
+        NwButton(buttonKey: const Key('bind-approve-retry'), label: tr('Approve', '去批准'), onPressed: _approve),
+      ],
     ]);
   }
 }
@@ -416,13 +473,16 @@ class RobotWifiPage extends StatefulWidget {
   final CodeScanner? scanner;
   final HotspotJoiner joiner;
   final BindLinkFactory link;
+  /// 多久经站点看一次这个改动最后怎样了（测试调短）。
+  final Duration watchEvery;
   const RobotWifiPage(
       {super.key,
       required this.api,
       required this.robotId,
       this.scanner,
       this.joiner = const ChannelHotspotJoiner(),
-      this.link = defaultBindLink});
+      this.link = defaultBindLink,
+      this.watchEvery = const Duration(seconds: 5)});
 
   @override
   State<RobotWifiPage> createState() => _RobotWifiPageState();
@@ -434,6 +494,10 @@ class _RobotWifiPageState extends State<RobotWifiPage> with _StickerScan<RobotWi
   Map<String, dynamic>? _change;
   bool _busy = false;
   bool _confirmed = false;
+
+  /// 这个改动最后怎样了（机器人经站点报上来的：applied / rejected / expired / unreachable / replaced）。
+  String? _result;
+  Timer? _watch;
 
   @override
   CodeScanner? get scanner => widget.scanner;
@@ -449,6 +513,7 @@ class _RobotWifiPageState extends State<RobotWifiPage> with _StickerScan<RobotWi
 
   @override
   void dispose() {
+    _watch?.cancel();
     _ssid.dispose();
     _psk.dispose();
     super.dispose();
@@ -461,8 +526,10 @@ class _RobotWifiPageState extends State<RobotWifiPage> with _StickerScan<RobotWi
     if (bad != null) return say(bad);
     setState(() => _busy = true);
     RobotBindLink? link;
+    HotspotJoin? how;
     try {
-      if (!await joinRobotHotspot(context, widget.joiner, s)) return;
+      how = await joinRobotHotspot(context, widget.joiner, s);
+      if (how == null) return;
       link = widget.link(s);
       final st = await link.wifi(_ssid.text, _psk.text);
       final ch = st['change'];
@@ -471,10 +538,37 @@ class _RobotWifiPageState extends State<RobotWifiPage> with _StickerScan<RobotWi
       say(e.message);
     } finally {
       link?.close();
-      await widget.joiner.leave();
+      if (how != null && mounted) await leaveRobotHotspot(context, widget.joiner, how, s.ssid);
       if (mounted) setState(() => _busy = false);
     }
+    if (_change != null && mounted) {
+      _watch?.cancel();
+      _watch = Timer.periodic(widget.watchEvery, (_) => _check());   // 外审 I13：看最后怎样了
+    }
   }
+
+  /// 经站点看机器人报的这个改动最后怎样了。
+  Future<void> _check() async {
+    final id = _change?['id'];
+    try {
+      final v = await widget.api.robot(widget.robotId);
+      final w = v['wifi'];
+      final r = w is Map ? w['result'] : null;
+      if (r is Map && r['id'] == id && mounted) {
+        _watch?.cancel();
+        setState(() => _result = '${r['result']}');
+      }
+    } on SiteError {
+      return; // 一时连不上站点（刚切回网络）：下一次再看
+    }
+  }
+
+  /// 没换成：回到表单再改一次。
+  void _again() => setState(() {
+        _change = null;
+        _result = null;
+        _confirmed = false;
+      });
 
   Future<void> _confirm() async {
     final ch = _change;
@@ -524,7 +618,24 @@ class _RobotWifiPageState extends State<RobotWifiPage> with _StickerScan<RobotWi
                         '机器人现在连不上站点，正在试「${ch['ssid']}」。它连上站点后 30 分钟内在机器人页确认，不然退回原来的。')
                     : tr('Sent. Nothing changes until it is approved on the site.',
                         '已发给机器人。站点上确认了才换。')),
-        if (ch['mode'] == 'online' && manage && !_confirmed) ...[
+        if (_result != null) ...[
+          _gap,
+          NwNotice(
+              key: const Key('wifi-result'),
+              tone: _result == 'applied' ? NwTone.success : NwTone.warning,
+              text: switch (_result) {
+                'applied' => tr('Done: the robot is on \u201c${ch['ssid']}\u201d now.', '换好了：机器人现在连的是「${ch['ssid']}」。'),
+                'rejected' => tr('Not approved on the site. The robot keeps its WiFi.', '站点上没同意，机器人还用原来的 WiFi。'),
+                'unreachable' => tr("The robot couldn't reach the site on the new WiFi and switched back. Check the name and password.",
+                    '机器人用新 WiFi 连不上站点，退回原来的了。核对一下 WiFi 名和密码。'),
+                _ => tr('Nobody approved it in time. The robot keeps its WiFi.', '没人及时确认，机器人还用原来的 WiFi。'),
+              }),
+          if (_result != 'applied') ...[
+            _gap,
+            NwButton(buttonKey: const Key('wifi-again'), label: tr('Try again', '再改一次'), onPressed: _again),
+          ],
+        ],
+        if (_result == null && ch['mode'] == 'online' && manage && !_confirmed) ...[
           _gap,
           NwButton(buttonKey: const Key('wifi-confirm'), label: tr('Approve WiFi change', '确认换 WiFi'),
               onPressed: _confirm),
@@ -575,7 +686,7 @@ class _EngineerUnbindPageState extends State<EngineerUnbindPage> with _StickerSc
     setState(() => _busy = true);
     RobotBindLink? link;
     try {
-      if (!await joinRobotHotspot(context, widget.joiner, s)) return;
+      if (await joinRobotHotspot(context, widget.joiner, s) == null) return;
       link = widget.link(s);
       await link.unbind(_token.text.trim());
       if (mounted) setState(() => _done = true);
