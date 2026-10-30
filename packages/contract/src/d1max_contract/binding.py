@@ -105,7 +105,7 @@ def check_nonce(nonce: Any) -> str:
 
 
 def check_wifi(ssid: Any, psk: Any) -> tuple[str, str]:
-    """庄园 WiFi 名和密码。名字 1–32 字节;密码空(不加密)、8–63 个可见 ASCII,或者 64 位十六进制。"""
+    """现场 WiFi 名和密码。名字 1–32 字节;密码空(不加密)、8–63 个可见 ASCII,或者 64 位十六进制。"""
     if not isinstance(ssid, str) or not 1 <= len(ssid.encode("utf-8")) <= 32 \
             or any(ord(ch) < 0x20 for ch in ssid):
         raise BindingError("WiFi 名要有,最长 32 字节")

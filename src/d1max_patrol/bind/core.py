@@ -1,7 +1,7 @@
 """配网服务的状态机(W42 §4–§7)。不碰网络、不起线程:网络经 ``SiteLink``,路由器经 ``Router``,
 时间经 ``now_ms``;``tick()`` 由服务主循环每秒叫一次。所有入口在一把锁里。
 
-状态(存 ``/etc/d1max/bind/state.json``,0600,里面有庄园 WiFi 密码和轮询口令):
+状态(存 ``/etc/d1max/bind/state.json``,0600,里面有现场 WiFi 密码和轮询口令):
 
 - ``unbound``:没绑定。热点那一侧能 ``/bind``。
 - ``pending``:有了 WiFi 和站点,正在连站点(``phase=connecting``)或者等站点批准(``waiting``)。
