@@ -155,6 +155,13 @@ class Feed:
 # ------------------------------------------------------------ 派遣器
 
 
+
+def battery_pct(c: Any, *, fresh: bool) -> int | None:
+    """最近一份遥测里的电量,取整;连接不新鲜、没有遥测都是 None(旧数显示成「现在的电量」会误导)。"""
+    tel = getattr(c, "telemetry", None) if c is not None and fresh else None
+    b = getattr(tel, "battery_pct", None)
+    return round(b) if isinstance(b, (int, float)) and not isinstance(b, bool) else None
+
 class Dispatcher:
     def __init__(self, transport: Transport, db: SiteDB, registry: Registry, *,
                  now_ms: Callable[[], int], stale_ms: int = STALE_MS,
@@ -340,6 +347,8 @@ class Dispatcher:
                "loc": self._loc_view(c), "clock_skew_s": _round1(self.clock_skew_s(robot_id)),
                # W09e:最近一份遥测里的 RTK 解(没配 RTK、老狗都是 None)
                "rtk": c.telemetry.rtk if c is not None and c.telemetry is not None else None,
+               # 电量(整数百分数):跟机器人卡片(``robot_overview``)一个口径,不新鲜就是 None
+               "battery_pct": battery_pct(c, fresh=self._fresh(c)),
                # W40:设备健康(最近一份;老狗、没装上装的狗是 None)
                "devices": self.devices_view(robot_id)}
         # 运营可视化:被挡多久、为什么、重规划几次(``runviz.RunViz``);没有被挡 / 重规划就没有这个键

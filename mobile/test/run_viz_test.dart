@@ -137,6 +137,31 @@ void main() {
   });
 
   group('地图栏', () {
+    testWidgets('位置自己跟着动：隔几秒重读机器人和路径，底图不重读、缩放不动（2026-10-30 走查）', (t) async {
+      _size(t);
+      List<Map<String, dynamic>> at(double x) => [
+            for (final r in _robotsOn('8'))
+              <String, dynamic>{
+                ...r,
+                'loc': <String, dynamic>{...(r['loc'] as Map).cast<String, dynamic>(), 'pose': {'x': x, 'y': 0.0, 'yaw': 0.0}},
+              },
+          ];
+      final api = _Api('guard')
+        ..robotsOverride = at(0)
+        ..vizBody = _viz();
+      await _pump(t, SiteMapTab(api: api, livePeriod: const Duration(seconds: 2)));
+      final before = t.getCenter(find.byKey(SiteMapTab.markerKey('A')));
+      final previews = api.calls.where((c) => c.startsWith('mapPreview ')).length;
+      api.robotsOverride = at(3);
+      await t.pump(const Duration(seconds: 2));
+      await t.pumpAndSettle();
+      final after = t.getCenter(find.byKey(SiteMapTab.markerKey('A')));
+      expect(after.dx, greaterThan(before.dx + 5), reason: '往 +x 挪了 3 米，没点刷新');
+      expect(api.calls.where((c) => c.startsWith('mapPreview ')).length, previews, reason: '底图不重读');
+      expect(api.calls.where((c) => c == 'runViz').length, 2, reason: '路径跟着重读');
+      await t.pumpWidget(Container());
+    });
+
     testWidgets('路径、轨迹、被挡、定位问题画在转角里的同一层；坐标是画布像素，图例只列有的', (t) async {
       _size(t);
       final api = _Api('guard', rotation: 20)

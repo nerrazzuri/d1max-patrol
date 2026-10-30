@@ -175,6 +175,8 @@ class ObsBridgeServer:
                 if not line:
                     return
                 self._heard = self._now()
+                if not self._admit_line(line):
+                    continue                             # 发得太快:验签、解析之前就丢
                 try:
                     msg = self._decode(line)
                 except ContractError as exc:
@@ -194,6 +196,10 @@ class ObsBridgeServer:
     def _hello_reply(self, hello: Any, writer: asyncio.StreamWriter) -> bytes:
         """回给对端的 hello(子类可以加东西,比如跨板人员桥的签名)。"""
         return self.BRIDGE.encode(self.BRIDGE.Hello(proto=self.BRIDGE.PROTO))
+
+    def _admit_line(self, line: bytes) -> bool:
+        """这一行收不收(子类可以限速);不收的直接丢,不断开。"""
+        return True
 
     def _decode(self, line: bytes) -> Any:
         """握手以后收到的一行 → 报文(子类可以先验签名)。"""

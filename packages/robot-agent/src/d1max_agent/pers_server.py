@@ -14,6 +14,10 @@
 - **截图走桥**:两块板不共用盘 —— 检测节点先发 ``snap {name, jpeg_b64}``、再发引用它的 ``persons``;
   这里写进截图目录(``PersonView.snapshot_dir``,先写临时文件再改名;最多留
   :data:`MAX_REMOTE_SNAPS` 张,代理一直没收走的删最旧的),后面跟本机一样。
+- **接收端限速**(外审 PR212 Minor):每秒 :data:`LINE_RATE` 行(一口气最多 :data:`LINE_BURST`)、
+  :data:`BYTE_RATE` 字节(一口气最多 :data:`BYTE_BURST`,约 6 张最大的截图);超了的行在验签、
+  解析之前就丢(不断开,10 秒最多记一句)。正常的发送端(每个相机 2 帧/秒、截图 10 秒一张)差得远。
+  丢了人员结果,人员状态按「好一会儿没来」回到不知道 —— 往保守的那头走。
 - **外参推过去**:检测节点要正在用的那张图的雷达外参测距(本机时它自己读代理的地图目录)。``frames()``
   回 ``(地图号:版本, frames.json 的内容)``;连上推一次,每拍看换没换图,换了再推。
 """
@@ -41,6 +45,14 @@ load_key = persbridge.load_key
 
 Frames = Callable[[], "tuple[str, dict] | None"]
 
+#: 接收端限速(令牌桶):每秒几行、一口气最多几行;每秒几字节、一口气最多几字节。
+LINE_RATE = 50.0
+LINE_BURST = 100
+BYTE_RATE = 1024 * 1024.0
+BYTE_BURST = 4 * 1024 * 1024
+#: 丢行的日志最多隔这么久记一句。
+DROP_LOG_S = 10.0
+
 
 class PersonBridgeServer(ObsBridgeServer):
     BRIDGE: Any = persbridge
@@ -65,6 +77,12 @@ class PersonBridgeServer(ObsBridgeServer):
         self._ks: bytes | None = None
         self._pending_ks: dict[int, tuple[bytes, str]] = {}
         self._rx = self._tx = 0
+        #: 限速的两个桶(行数、字节)和上一次记账的时刻;丢了几行、上次记日志的时刻。
+        self._lines = float(LINE_BURST)
+        self._bytes = float(BYTE_BURST)
+        self._filled: float | None = None
+        self._dropped = 0
+        self._drop_logged = -1e18
 
     @property
     def port(self) -> int:
@@ -136,6 +154,24 @@ class PersonBridgeServer(ObsBridgeServer):
         ks, mac = self._pending_ks.pop(id(writer))
         self._ks, self._rx, self._tx = ks, 0, 0
         return persbridge.encode(persbridge.Hello(proto=persbridge.PROTO, mac=mac))
+
+    def _admit_line(self, line: bytes) -> bool:
+        now = self._now()
+        if self._filled is not None:
+            dt = max(0.0, now - self._filled)
+            self._lines = min(float(LINE_BURST), self._lines + dt * LINE_RATE)
+            self._bytes = min(float(BYTE_BURST), self._bytes + dt * BYTE_RATE)
+        self._filled = now
+        if self._lines >= 1.0 and self._bytes >= len(line):
+            self._lines -= 1.0
+            self._bytes -= len(line)
+            return True
+        self._dropped += 1
+        if now - self._drop_logged >= DROP_LOG_S:
+            log.warning("人员桥:%s发得太快(超过每秒 %g 行 / %g 字节),已丢 %d 行",
+                        self.PEER, LINE_RATE, BYTE_RATE, self._dropped)
+            self._drop_logged = now
+        return False
 
     def _decode(self, line: bytes) -> Any:
         if self.listen is None:

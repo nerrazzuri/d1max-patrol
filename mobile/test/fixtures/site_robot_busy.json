@@ -1,5 +1,6 @@
 {
   "active": true,
+  "battery_pct": null,
   "capabilities": {
     "actuators": {
       "light": [],
@@ -86,8 +87,8 @@
     {
       "ack_reason": "",
       "ack_result": "accepted",
-      "command_id": "cmd-b3a4da8fdfe4",
-      "issued_at": 1793096195997,
+      "command_id": "cmd-17c61ff80cc9",
+      "issued_at": 1793345867555,
       "issued_by": "alice",
       "kind": "goto",
       "payload": {
@@ -103,22 +104,22 @@
       },
       "priority": 60,
       "robot_id": "A",
-      "task_id": "task-23c4f9d874e1"
+      "task_id": "task-84d42dca0079"
     }
   ],
   "devices": null,
   "events": [
     {
-      "boot_id": "boot-ae92e414fb",
+      "boot_id": "boot-4a26976c20",
       "data": {
         "faults": []
       },
       "kind": "robot_fault",
       "seq": 1,
-      "stamp": 1793096195925
+      "stamp": 1793345867482
     }
   ],
-  "expires_at": 1794096195869,
+  "expires_at": 1794345867435,
   "fresh": true,
   "held": null,
   "loc": null,
@@ -151,9 +152,9 @@
     }
   },
   "status": {
-    "boot_id": "boot-ae92e414fb",
+    "boot_id": "boot-4a26976c20",
     "control_epoch": 1,
-    "last_seen": 1793096196000,
+    "last_seen": 1793345867559,
     "online": true,
     "ready": {
       "control": true,
@@ -165,7 +166,7 @@
     "task": {
       "kind": "goto",
       "state": "pending",
-      "task_id": "task-23c4f9d874e1"
+      "task_id": "task-84d42dca0079"
     }
   }
 }

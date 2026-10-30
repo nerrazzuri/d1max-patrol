@@ -86,10 +86,10 @@ void main() {
       }
     });
 
-    test('电量：视图里有才有（站点现在没放），不编', () {
+    test('电量：视图里有才有，不编', () {
       expect(robotBattery(_robot('A')), isNull);
       expect(robotBattery(_robot('A', over: {'battery_pct': 41.6})), 41.6);
-      expect(robotBattery(siteFixture('site_robot')), isNull, reason: '真站点的机器人视图里没有电量');
+      expect(robotBattery(siteFixture('site_robot')), isA<num>(), reason: '真站点的单台视图带电量（2026-10-30）');
     });
   });
 

@@ -57,9 +57,12 @@ class RouteNets:
                                 "length_m": round(net.length_m(), 1)}
 
     def put(self, map_id: str, version: str, d: Any, *, by: str,
-            keep_out: tuple[Zone, ...] = ()) -> RouteNet:
+            keep_out: tuple[Zone, ...] = (),
+            place_problem: Callable[[list[tuple[str, float, float]]], str] | None = None
+            ) -> RouteNet:
         """整份换。``d`` = ``{nodes, edges, base_revision}``;
-        ``keep_out`` = 这一版在生效的禁行区。"""
+        ``keep_out`` = 这一版在生效的禁行区;``place_problem`` 核点的位置(``[(名字, x, y)]`` → 原因,
+        都行回 ``""``;站点用 ``MapCatalog.reach_problem``,跟巡检点一个口径,W48-M2)。"""
         if not isinstance(d, dict):
             raise RouteNetError("要一个对象:nodes、edges、base_revision")
         base = d.get("base_revision")
@@ -87,6 +90,10 @@ class RouteNets:
                     pa, pb = by_id[a], by_id[b]
                     if _edge_hits((pa.x, pa.y), (pb.x, pb.y), z.polygon):
                         raise RouteNetError(f"连线 {a}–{b} 穿过禁行区「{z.label or z.id}」")
+            if place_problem is not None:
+                why = place_problem([(f"点 {n.id}", n.x, n.y) for n in net.nodes])
+                if why:
+                    raise RouteNetError(why)
             c.execute("INSERT INTO route_nets(map_id, map_version, body, revision, updated_ms, "
                       "updated_by) VALUES (?,?,?,?,?,?) ON CONFLICT(map_id, map_version) DO UPDATE "
                       "SET body=excluded.body, revision=excluded.revision, "

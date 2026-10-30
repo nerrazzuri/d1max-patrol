@@ -20,6 +20,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 
 import 'l10n.dart';
 import 'store/paths.dart';
@@ -66,6 +67,10 @@ class PatrolApp extends StatelessWidget {
         builder: (context, lang, _) => MaterialApp(
               key: ValueKey<AppLang>(lang),
               title: 'Nexus Warden',
+              // 系统自带的文字（返回、关闭这些按钮的提示）跟着 App 选的语言，不跟系统。
+              locale: lang == AppLang.zh ? const Locale('zh', 'CN') : const Locale('en'),
+              supportedLocales: const <Locale>[Locale('en'), Locale('zh', 'CN')],
+              localizationsDelegates: GlobalMaterialLocalizations.delegates,
               // 桌面版（W15）：鼠标拖也能滚、能「下拉刷新」（Flutter 桌面默认只认触摸、触控板拖动）。
               scrollBehavior: const MaterialScrollBehavior().copyWith(dragDevices: {
                 PointerDeviceKind.touch,

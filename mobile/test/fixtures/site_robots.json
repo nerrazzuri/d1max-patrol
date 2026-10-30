@@ -2,6 +2,7 @@
   "robots": [
     {
       "active": true,
+      "battery_pct": 100,
       "capabilities": {
         "actuators": {
           "light": [],
@@ -85,7 +86,7 @@
       },
       "clock_skew_s": 0.0,
       "devices": null,
-      "expires_at": 1794096195869,
+      "expires_at": 1794345867435,
       "fresh": true,
       "held": null,
       "loc": {
@@ -129,9 +130,9 @@
         }
       },
       "status": {
-        "boot_id": "boot-ae92e414fb",
+        "boot_id": "boot-4a26976c20",
         "control_epoch": 1,
-        "last_seen": 1793096196573,
+        "last_seen": 1793345868133,
         "online": true,
         "ready": {
           "control": true,
