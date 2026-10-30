@@ -37,6 +37,8 @@ ALLOWED_KINDS = frozenset({
     "dock",
     # W48:路网(在地图上画好的路)。跟区域一样是配置:只决定往哪走,不发速度、不派任务
     "route_net_set",
+    # W42:解绑(机器人恢复出厂)、确认 / 不同意换 WiFi。都是维护级,不动腿
+    "unbind", "wifi_confirm",
 })
 #: 直接速度、运动原语:站点永远不许发。
 FORBIDDEN_KINDS = frozenset({"vel", "walk", "move", "stand", "lie", "estop_off", "gait"})
