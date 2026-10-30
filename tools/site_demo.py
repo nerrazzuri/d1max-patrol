@@ -229,6 +229,7 @@ def main(argv: list[str] | None = None) -> int:
         _seed_recordings(home, a.dir, a.recordings)
 
     procs: list[subprocess.Popen] = []
+    agents: dict[str, subprocess.Popen] = {}       # W42:绑定好了的出厂机器人的代理
 
     def start(name: str, argv: list[str], ready: str) -> None:
         log = logs / f"{name}.log"
@@ -255,7 +256,6 @@ def main(argv: list[str] | None = None) -> int:
                                   "--map", "estate-1:7", "--home", f"{i * 1.0},0,0"],
                   "d1max-agent 起来了")
         fresh = _unbound(a, logs, start) if a.unbound else []
-        agents: dict[str, subprocess.Popen] = {}
         print(f"演示站点起来了(日志在 {logs}):\n"
               f"  地址  https://{a.host}:{a.api_port}\n"
               f"  指纹  {fp}\n"
@@ -275,7 +275,7 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"有进程退了(看 {logs}),全部收掉", flush=True)
                 break
     finally:
-        procs.extend(agents.values() if a.unbound else [])
+        procs.extend(agents.values())
         for p in reversed(procs):
             if p.poll() is None:
                 p.terminate()
