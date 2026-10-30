@@ -182,8 +182,13 @@ class RobotHotspot implements RobotBindLink {
       final req = await _io.openUrl(method, uri).timeout(timeout);
       req.headers.set('X-Bind-Code', sticker.code);
       if (body != null) {
+        // 带上长度：不带的话 Dart 用分块发送，机器人那头按 Content-Length 读，读到的是空的（演示站点上查出来的）
+        final raw = utf8.encode(jsonEncode(body));
         req.headers.contentType = ContentType.json;
-        req.add(utf8.encode(jsonEncode(body)));
+        req.contentLength = raw.length;
+        req.add(raw);
+      } else {
+        req.contentLength = 0;
       }
       final resp = await req.close().timeout(timeout);
       final text = await resp.transform(utf8.decoder).join().timeout(timeout);

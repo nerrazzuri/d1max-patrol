@@ -24,6 +24,9 @@ const TABLE: Record<string, Advice> = {
   finding: { say: "advFinding", todo: "advFindingTodo" },
   recording_failed: { say: "advRecording", todo: "advCallEngineer" },
   map_failed: { say: "advMap", todo: "advCallEngineer", go: "admin/maps" },
+  // W42:有机器人等批准加入、机器人换 WiFi 等确认 —— 去机器人页批 / 确认
+  bind_request: { say: "advBind", todo: "advBindTodo", go: "admin/robots" },
+  wifi_change: { say: "advWifi", todo: "advWifiTodo", go: "admin/robots" },
 };
 
 export function advice(kind: string): Advice | null {
