@@ -802,7 +802,8 @@ class Server:
         self.alert_sources.attach(self.dispatcher)
         # W53:临时巡逻(手动派的巡逻;撞日程排在后面,排队的跟排程同一拍派)
         from d1max_site.adhoc import AdhocDesk
-        self.adhoc = AdhocDesk(self.db, self.dispatcher, now_ms=wall_ms, alerts=self.alerts)
+        self.adhoc = AdhocDesk(self.db, self.dispatcher, now_ms=wall_ms, alerts=self.alerts,
+                               refusal=self.supervision.refusal)
         # 运营可视化:规划路径 / 轨迹 / 被挡(内存)、定位历史(库 58)
         from d1max_site.loc_history import LocHistory
         from d1max_site.runviz import RunViz

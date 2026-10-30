@@ -73,7 +73,11 @@ def today_view(db: Any, *, now_ms: int, adhoc: Any = None) -> dict[str, Any]:
     first = next((it for it in items if it["state"] == "later"), None)
     if first is not None:
         first["state"] = "next"                         # 还没到点的第一趟
-    return {"date": start.strftime("%Y-%m-%d"), "timezone": str(tz), "items": items}
+    off = now.utcoffset()
+    return {"date": start.strftime("%Y-%m-%d"), "timezone": str(tz),
+            # 手机、网页按站点的钟显示时刻(外审 W53-1 #12)
+            "utc_offset_min": int(off.total_seconds() // 60) if off is not None else 0,
+            "items": items}
 
 
 def _schedule_item(db: Any, e: Any, occ_ms: int, now_ms: int) -> dict[str, Any]:

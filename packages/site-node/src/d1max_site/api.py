@@ -1193,7 +1193,8 @@ class _Handler(TlsHandlerMixin):
         if site.adhoc is None:
             from d1max_site.adhoc import AdhocDesk
             site.adhoc = AdhocDesk(site.dispatcher.db, site.dispatcher, now_ms=site._now,
-                                   alerts=site.alerts)
+                                   alerts=site.alerts,
+                                   refusal=getattr(site.supervision, "refusal", None))
         return site.adhoc
 
     def _patrol_wire(self, d: dict[str, Any]) -> tuple[dict[str, Any], str]:

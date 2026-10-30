@@ -561,6 +561,11 @@ abstract class SiteApi {
   /// because, adhoc_id}`；马上派了回 `{task_id, ack, queued: false, estimate_s, adhoc_id}`。
   Future<Map<String, dynamic>> patrol(String id, String missionId);
 
+  /// 派一趟临时路线（W53，用户 10-31：保安在图上点几个点）：不存进路线库、不进日程。[points] 是地图坐标（米）。
+  /// 回的跟 [patrol] 一样。
+  Future<Map<String, dynamic>> patrolPoints(
+      String robotId, List<(double, double)> points, String mapId, String version);
+
   /// 派之前先看（W53）：`{estimate_s, start_ms, queued, because, label}`。不派。
   Future<Map<String, dynamic>> patrolPlan(String robotId, String missionId);
 
@@ -1559,6 +1564,15 @@ class SiteClient implements SiteApi {
           '遥控握手没完成：${e.message}'));
     }
   }
+
+  @override
+  Future<Map<String, dynamic>> patrolPoints(
+          String robotId, List<(double, double)> points, String mapId, String version) async =>
+      _map(await _send('POST', '/api/robots/${Uri.encodeComponent(robotId)}/patrol', <String, dynamic>{
+        'points': [for (final p in points) <String, dynamic>{'x': p.$1, 'y': p.$2}],
+        'map_id': mapId,
+        'map_version': version,
+      }));
 
   @override
   Future<Map<String, dynamic>> patrolPlan(String robotId, String missionId) async => _map(await _send(

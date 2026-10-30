@@ -97,6 +97,37 @@ void main() {
   setUp(() => appLang.value = AppLang.en);
   tearDown(() => appLang.value = AppLang.zh);
 
+  group('W53 临时路线（用户 10-31：保安在图上点几个点派一趟，不存）', () {
+    testWidgets('保安点两个点、派出去：走的是这两个点，没有保存、删除', (t) async {
+      final api = FakeApi('guard');
+      String? got;
+      await t.binding.setSurfaceSize(const Size(900, 700));
+      addTearDown(() => t.binding.setSurfaceSize(null));
+      await t.pumpWidget(MaterialApp(
+          home: Builder(
+              builder: (c) => TextButton(
+                  onPressed: () async {
+                    got = await Navigator.push<String>(c, MaterialPageRoute<String>(
+                        builder: (_) => SiteRouteEditorPage(
+                            api: api, mapId: 'estate-1', version: '8', newName: '', tempFor: 'A')));
+                  },
+                  child: const Text('open')))));
+      await t.tap(find.text('open'));
+      await t.pumpAndSettle();
+      expect(find.byKey(SiteRouteEditorPage.saveKey), findsNothing);
+      expect(find.byKey(SiteRouteEditorPage.deleteKey), findsNothing);
+      final geo = MapGeo.fromPreview(await api.mapPreview('estate-1', '8'));
+      final c = _Canvas(t, SiteRouteEditorPage.canvasKey, geo);
+      await _tapMap(t, c, -4.25, 2.5);
+      await _tapMap(t, c, 1.75, -1.25);
+      await t.tap(find.byKey(SiteRouteEditorPage.tempSendKey));
+      await t.pumpAndSettle();
+      expect(api.calls, contains('patrolPoints A 2 estate-1:8'));
+      expect(api.calls.where((x) => x.startsWith('saveRoute')), isEmpty, reason: '不存进路线库');
+      expect(got, isNotNull, reason: '派出去就退回派单的地方，带一句结果');
+    });
+  });
+
   group('路线编辑页：点图加点，存下去的是点的那一处的地图坐标', () {
     for (final rotated in [false, true]) {
       testWidgets('图${rotated ? '转 23°' : '不转'}', (t) async {

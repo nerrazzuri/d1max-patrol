@@ -6,6 +6,7 @@ import type { ComponentChildren } from "preact";
 import { useEffect, useMemo, useState } from "preact/hooks";
 import { api, ApiError, enc } from "./api";
 import { hm, nameOf, useDutySettings } from "./data";
+import { siteHm } from "./todaypatrols";
 import { Modal } from "./dialogs";
 import { alertTitle, lang, refusalText, t, type Key } from "./i18n";
 import type { UnitInfo } from "./live";
@@ -492,12 +493,12 @@ export function TempRoutePanel(props: {
     setBusy(true);
     setErrs([]);
     try {
-      const r = await api<CommandReply & { queued?: boolean; start_after_ms?: number; because?: string }>(
+      const r = await api<CommandReply & { queued?: boolean; start_after_ms?: number; because?: string; utc_offset_min?: number }>(
         "POST", `/api/robots/${enc(robot)}/patrol`,
         { points: props.points.map(([x, y]) => ({ x, y })), map_id: props.map.map_id, map_version: props.map.version });
       // W53:撞上日程就排到后面(日程优先),说排到几点
       if (r.queued) {
-        props.say(t("trQueued", { id: robot, at: hm(r.start_after_ms ?? 0), why: r.because ?? "" }));
+        props.say(t("trQueued", { id: robot, at: siteHm(r.start_after_ms ?? 0, r.utc_offset_min), why: r.because ?? "" }));
         props.onSent();
         return;
       }
