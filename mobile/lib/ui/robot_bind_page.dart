@@ -285,9 +285,10 @@ class RobotAddPage extends StatefulWidget {
 }
 
 class _RobotAddPageState extends State<RobotAddPage> with _StickerScan<RobotAddPage> {
-  final _ssid = TextEditingController();
-  final _psk = TextEditingController();
   RobotBindLink? _link;
+
+  /// 连上热点以后机器人扫到的 WiFi（null = 还没连机器人）。
+  List<Map<String, dynamic>>? _nets;
   Map<String, dynamic>? _st;
   Timer? _poll;
   bool _busy = false;
@@ -309,16 +310,13 @@ class _RobotAddPageState extends State<RobotAddPage> with _StickerScan<RobotAddP
     _poll?.cancel();
     _link?.close();
     if (_link != null && !_left) unawaited(widget.joiner.leave());
-    _ssid.dispose();
-    _psk.dispose();
     super.dispose();
   }
 
-  Future<void> _send() async {
+  /// 连机器人的热点、看它是不是已经绑了、让它扫附近的 WiFi（用户 10-30：WiFi 名扫出来、密码手填）。
+  Future<void> _connect() async {
     final s = sticker;
     if (s == null) return;
-    final bad = checkWifi(_ssid.text, _psk.text);
-    if (bad != null) return say(bad);
     setState(() => _busy = true);
     try {
       final how = await joinRobotHotspot(context, widget.joiner, s);
@@ -330,8 +328,33 @@ class _RobotAddPageState extends State<RobotAddPage> with _StickerScan<RobotAddP
         return say(tr('This robot already belongs to a site. Unbind it there first.',
             '这台机器人已经绑在一个站点上了：先在原来的站点上解绑。'));
       }
+      final nets = await link.scan();
+      if (mounted) setState(() => _nets = nets);
+    } on RobotBindError catch (e) {
+      say(e.message);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _rescan() async {
+    final link = _link;
+    if (link == null) return;
+    try {
+      final nets = await link.scan();
+      if (mounted) setState(() => _nets = nets);
+    } on RobotBindError catch (e) {
+      say(e.message);
+    }
+  }
+
+  Future<void> _send(String ssid, String psk) async {
+    final link = _link;
+    if (link == null) return;
+    setState(() => _busy = true);
+    try {
       final st = await link.bind(
-          ssid: _ssid.text, psk: _psk.text, siteUrl: widget.site.url,
+          ssid: ssid, psk: psk, siteUrl: widget.site.url,
           siteFingerprint: widget.site.fingerprint, siteName: widget.site.name);
       if (!mounted) return;
       setState(() => _st = st);
@@ -400,26 +423,19 @@ class _RobotAddPageState extends State<RobotAddPage> with _StickerScan<RobotAddP
     final waiting = st != null && st['state'] == 'pending' && st['phase'] == 'waiting';
     return _Frame(title: tr('Add robot', '添加机器人'), children: [
       Text(tr(
-          'Stand next to the robot. Scan the sticker on its payload, enter the WiFi it should use, then approve it on the site.',
-          '站在机器人旁边：扫上装上的贴纸，填机器人要连的 WiFi，然后在站点上批准。'),
+          'Stand next to the robot. Scan the sticker on its payload, pick the WiFi it should use and enter the password, then approve it on the site.',
+          '站在机器人旁边：扫上装上的贴纸，选机器人要连的 WiFi、填密码，然后在站点上批准。'),
           style: NwText.bodySmall.copyWith(color: c.textSecondary)),
       _gap,
       if (s == null) scanButton(),
       if (s != null && st == null) ...[
         NwNotice(key: const Key('bind-serial'), text: tr('Robot ${s.serial}', '机器人 ${s.serial}')),
         _gap,
-        NwField(fieldKey: const Key('bind-ssid'), controller: _ssid, autocorrect: false,
-            label: tr('WiFi name', 'WiFi 名')),
-        _gap,
-        NwField(fieldKey: const Key('bind-psk'), controller: _psk, obscureText: true, autocorrect: false,
-            enableSuggestions: false, label: tr('WiFi password', 'WiFi 密码')),
-        const SizedBox(height: Nw.s8),
-        Text(tr('2.4 GHz WiFi only. If there is only 5 GHz, turn on 2.4 GHz on the WiFi router first.',
-            '只支持 2.4 GHz 的 WiFi。只有 5 GHz 的，先在 WiFi 路由器上把 2.4 GHz 打开。'),
-            style: NwText.bodySmall.copyWith(color: c.textSecondary)),
-        const SizedBox(height: Nw.s24),
-        NwButton(buttonKey: const Key('bind-send'), label: tr('Send to robot', '发给机器人'),
-            onPressed: _busy ? null : _send),
+        if (_nets == null)
+          NwButton(buttonKey: const Key('bind-join'), label: tr('Connect to the robot', '连机器人'),
+              icon: Icons.wifi_tethering_rounded, onPressed: _busy ? null : _connect)
+        else
+          WifiPicker(networks: _nets!, busy: _busy, onRescan: _rescan, onSend: _send),
       ],
       if (st != null && !_left) ...[
         NwNotice(key: const Key('bind-phase'), text: bindPhaseText(st),
@@ -451,8 +467,10 @@ class _RobotAddPageState extends State<RobotAddPage> with _StickerScan<RobotAddP
             text: _approved
                 ? tr('Approved. The robot shows up in the robot list in a few seconds.',
                     '已批准。机器人几秒后出现在机器人列表里。')
-                : tr('Ask the control room to approve it on the site (Robots page). Check code ${st?['check'] ?? ''}.',
-                    '请控制室在站点上批准（机器人页）。核对码 ${st?['check'] ?? ''}。')),
+                : widget.api.session?.canManageRobots == true
+                    ? tr('Check code ${st?['check'] ?? ''}. Tap Approve below.', '核对码 ${st?['check'] ?? ''}。点下面「去批准」。')
+                    : tr('Ask the control room to approve it on the site (Robots page). Check code ${st?['check'] ?? ''}.',
+                        '请控制室在站点上批准（机器人页）。核对码 ${st?['check'] ?? ''}。')),
       if (_left && !_approved && _approveErr != null) ...[
         _gap,
         NwNotice(key: const Key('bind-approve-error'), tone: NwTone.warning, text: _approveErr!),
@@ -489,8 +507,11 @@ class RobotWifiPage extends StatefulWidget {
 }
 
 class _RobotWifiPageState extends State<RobotWifiPage> with _StickerScan<RobotWifiPage> {
-  final _ssid = TextEditingController();
-  final _psk = TextEditingController();
+  RobotBindLink? _link;
+  HotspotJoin? _how;
+
+  /// 连上热点以后机器人扫到的 WiFi（null = 还没连机器人）。
+  List<Map<String, dynamic>>? _nets;
   Map<String, dynamic>? _change;
   bool _busy = false;
   bool _confirmed = false;
@@ -514,33 +535,57 @@ class _RobotWifiPageState extends State<RobotWifiPage> with _StickerScan<RobotWi
   @override
   void dispose() {
     _watch?.cancel();
-    _ssid.dispose();
-    _psk.dispose();
+    _link?.close();
+    if (_link != null) unawaited(widget.joiner.leave());
     super.dispose();
   }
 
-  Future<void> _send() async {
+  /// 连机器人的热点、让它扫附近的 WiFi。
+  Future<void> _connect() async {
     final s = sticker;
     if (s == null) return;
-    final bad = checkWifi(_ssid.text, _psk.text);
-    if (bad != null) return say(bad);
     setState(() => _busy = true);
-    RobotBindLink? link;
-    HotspotJoin? how;
     try {
-      how = await joinRobotHotspot(context, widget.joiner, s);
+      final how = await joinRobotHotspot(context, widget.joiner, s);
       if (how == null) return;
-      link = widget.link(s);
-      final st = await link.wifi(_ssid.text, _psk.text);
+      _how = how;
+      final link = _link ??= widget.link(s);
+      final nets = await link.scan();
+      if (mounted) setState(() => _nets = nets);
+    } on RobotBindError catch (e) {
+      say(e.message);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _rescan() async {
+    try {
+      final nets = await _link?.scan();
+      if (nets != null && mounted) setState(() => _nets = nets);
+    } on RobotBindError catch (e) {
+      say(e.message);
+    }
+  }
+
+  Future<void> _send(String ssid, String psk) async {
+    final s = sticker, link = _link;
+    if (s == null || link == null) return;
+    setState(() => _busy = true);
+    try {
+      final st = await link.wifi(ssid, psk);
       final ch = st['change'];
       if (mounted && ch is Map) setState(() => _change = Map<String, dynamic>.from(ch));
     } on RobotBindError catch (e) {
       say(e.message);
-    } finally {
-      link?.close();
-      if (how != null && mounted) await leaveRobotHotspot(context, widget.joiner, how, s.ssid);
       if (mounted) setState(() => _busy = false);
+      return;
     }
+    // 发出去了：离开热点（之后经站点确认、看结果）
+    link.close();
+    _link = null;
+    if (mounted) await leaveRobotHotspot(context, widget.joiner, _how, s.ssid);
+    if (mounted) setState(() => _busy = false);
     if (_change != null && mounted) {
       _watch?.cancel();
       _watch = Timer.periodic(widget.watchEvery, (_) => _check());   // 外审 I13：看最后怎样了
@@ -568,6 +613,7 @@ class _RobotWifiPageState extends State<RobotWifiPage> with _StickerScan<RobotWi
         _change = null;
         _result = null;
         _confirmed = false;
+        _nets = null;                    // 要再连一次机器人
       });
 
   Future<void> _confirm() async {
@@ -593,19 +639,12 @@ class _RobotWifiPageState extends State<RobotWifiPage> with _StickerScan<RobotWi
           style: NwText.bodySmall.copyWith(color: c.textSecondary)),
       _gap,
       if (sticker == null) scanButton(),
-      if (sticker != null && ch == null) ...[
-        NwField(fieldKey: const Key('wifi-ssid'), controller: _ssid, autocorrect: false,
-            label: tr('New WiFi name', '新的 WiFi 名')),
-        _gap,
-        NwField(fieldKey: const Key('wifi-psk'), controller: _psk, obscureText: true, autocorrect: false,
-            enableSuggestions: false, label: tr('WiFi password', 'WiFi 密码')),
-        const SizedBox(height: Nw.s8),
-        Text(tr('2.4 GHz WiFi only.', '只支持 2.4 GHz 的 WiFi。'),
-            style: NwText.bodySmall.copyWith(color: c.textSecondary)),
-        const SizedBox(height: Nw.s24),
-        NwButton(buttonKey: const Key('wifi-send'), label: tr('Send to robot', '发给机器人'),
-            onPressed: _busy ? null : _send),
-      ],
+      if (sticker != null && ch == null)
+        if (_nets == null)
+          NwButton(buttonKey: const Key('wifi-join'), label: tr('Connect to the robot', '连机器人'),
+              icon: Icons.wifi_tethering_rounded, onPressed: _busy ? null : _connect)
+        else
+          WifiPicker(networks: _nets!, busy: _busy, onRescan: _rescan, onSend: _send),
       if (ch != null) ...[
         NwNotice(
             key: const Key('wifi-sent'),
@@ -891,5 +930,131 @@ class _BindApprovalsState extends State<BindApprovals> {
         ]),
       ),
     );
+  }
+}
+
+// ------------------------------------------------------------ 选 WiFi
+
+/// 机器人扫到的 WiFi 列表：点一个、填密码（不要密码的不填）、发给机器人。没有想要的：重新扫，或者手输
+/// （隐藏的 WiFi 扫不到名字）。只列机器人连得上的（它的路由器只连 2.4 GHz）。
+class WifiPicker extends StatefulWidget {
+  final List<Map<String, dynamic>> networks;
+  final bool busy;
+  final Future<void> Function() onRescan;
+  final Future<void> Function(String ssid, String psk) onSend;
+  const WifiPicker(
+      {super.key, required this.networks, required this.busy, required this.onRescan, required this.onSend});
+
+  @override
+  State<WifiPicker> createState() => _WifiPickerState();
+}
+
+class _WifiPickerState extends State<WifiPicker> {
+  final _ssid = TextEditingController();
+  final _psk = TextEditingController();
+  Map<String, dynamic>? _picked;
+  bool _manual = false;
+  bool _scanning = false;
+
+  @override
+  void dispose() {
+    _ssid.dispose();
+    _psk.dispose();
+    super.dispose();
+  }
+
+  IconData _bars(Object? dbm) {
+    final s = dbm is num ? dbm : -100;
+    return s >= -55
+        ? Icons.signal_wifi_4_bar_rounded
+        : s >= -67
+            ? Icons.network_wifi_3_bar_rounded
+            : s >= -75
+                ? Icons.network_wifi_2_bar_rounded
+                : Icons.network_wifi_1_bar_rounded;
+  }
+
+  Future<void> _rescan() async {
+    setState(() => _scanning = true);
+    await widget.onRescan();
+    if (mounted) setState(() => _scanning = false);
+  }
+
+  void _send() {
+    final ssid = _manual ? _ssid.text : '${_picked?['ssid'] ?? ''}';
+    final needPsk = _manual || _picked?['secured'] != false;
+    final psk = needPsk ? _psk.text : '';
+    final bad = checkWifi(ssid, psk);
+    if (bad != null) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(bad)));
+      return;
+    }
+    widget.onSend(ssid, psk);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final c = Nw.of(context);
+    final picked = _picked;
+    final needPsk = _manual || (picked != null && picked['secured'] != false);
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      Text(tr("WiFi the robot can see (2.4 GHz only, which is all it can use)", '机器人附近的 WiFi（只列它连得上的 2.4 GHz）'),
+          style: NwText.titleSmall.copyWith(color: c.text)),
+      const SizedBox(height: Nw.s8),
+      if (widget.networks.isEmpty)
+        NwNotice(
+            key: const Key('wifi-none'),
+            tone: NwTone.warning,
+            text: tr("The robot doesn't see any WiFi. Move it closer to the router, check 2.4 GHz is on, then scan again.",
+                '机器人没扫到 WiFi。离路由器近一点、确认路由器开了 2.4 GHz，再重新扫。')),
+      for (final n in widget.networks)
+        Padding(
+          padding: const EdgeInsets.only(bottom: Nw.s8),
+          child: NwCard(
+            key: Key('wifi-net-${n['ssid']}'),
+            tone: !_manual && identical(n, picked) ? NwTone.info : NwTone.neutral,
+            onTap: () => setState(() {
+              _picked = n;
+              _manual = false;
+            }),
+            child: Row(children: [
+              Icon(_bars(n['signal']), color: c.text),
+              const SizedBox(width: Nw.s16),
+              Expanded(child: Text('${n['ssid']}', style: NwText.bodyLarge.copyWith(color: c.text))),
+              if (n['secured'] != false) Icon(Icons.lock_rounded, size: 18, color: c.textSecondary),
+              if (!_manual && identical(n, picked)) ...[
+                const SizedBox(width: Nw.s8),
+                Icon(Icons.check_circle_rounded, color: c.success),
+              ],
+            ]),
+          ),
+        ),
+      Wrap(spacing: Nw.s8, children: [
+        NwButton(buttonKey: const Key('wifi-rescan'), label: tr('Scan again', '重新扫'),
+            variant: NwButtonVariant.ghost, icon: Icons.refresh_rounded,
+            onPressed: _scanning || widget.busy ? null : _rescan),
+        NwButton(buttonKey: const Key('wifi-manual'), label: tr('Hidden WiFi: type the name', '隐藏的 WiFi：手输名字'),
+            variant: NwButtonVariant.ghost, icon: Icons.keyboard_rounded,
+            onPressed: () => setState(() {
+                  _manual = true;
+                  _picked = null;
+                })),
+      ]),
+      if (_manual) ...[
+        const SizedBox(height: Nw.s8),
+        NwField(fieldKey: const Key('wifi-manual-ssid'), controller: _ssid, autocorrect: false,
+            label: tr('WiFi name', 'WiFi 名')),
+      ],
+      if (needPsk) ...[
+        const SizedBox(height: Nw.s16),
+        NwField(fieldKey: const Key('wifi-pick-psk'), controller: _psk, obscureText: true, autocorrect: false,
+            enableSuggestions: false, label: tr('WiFi password', 'WiFi 密码')),
+      ],
+      const SizedBox(height: Nw.s24),
+      NwButton(
+          buttonKey: const Key('wifi-pick-send'),
+          label: tr('Send to robot', '发给机器人'),
+          onPressed: widget.busy || (picked == null && !_manual) ? null : _send),
+    ]);
   }
 }

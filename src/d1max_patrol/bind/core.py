@@ -152,6 +152,29 @@ class BindCore:
             out["change_result"] = s["change_result"]
         return out
 
+    def scan(self, code: Any) -> dict[str, Any]:
+        """附近的 WiFi(路由器扫的,用户 10-30:WiFi 名扫出来、密码手填)。同名的留信号最强的那个,
+        强的排前面。扫要好几秒到一分钟(真路由器):锁外面扫,不挡别的请求。"""
+        with self._lock:
+            self._check_code(code)
+            if self.s["state"] == "wiping":
+                raise BindRefused(409, "正在恢复出厂,稍后再试")
+        try:
+            seen = self.router.scan()
+        except Exception as exc:  # 原因给手机看
+            raise BindRefused(503, f"路由器扫不了 WiFi:{exc}") from exc
+        best: dict[str, Any] = {}
+        for w in seen:
+            try:
+                check_wifi(w.ssid, "")
+            except BindingError:
+                continue                              # 隐藏的(空名)、名字不对的不列
+            if w.ssid not in best or w.signal > best[w.ssid].signal:
+                best[w.ssid] = w
+        nets = sorted(best.values(), key=lambda w: -w.signal)
+        return {"networks": [{"ssid": w.ssid, "signal": int(w.signal), "secured": bool(w.secured)}
+                             for w in nets[:50]]}
+
     def bind(self, code: Any, body: Any) -> dict[str, Any]:
         """``{"wifi": {"ssid", "psk"}, "site": {"url", "fp", "name"}}``:还没绑定(或正在绑)才行。"""
         with self._lock:
