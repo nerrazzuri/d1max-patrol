@@ -17,10 +17,14 @@ const card = (o: Record<string, unknown>) => ({ robot_id: "A", name: "", revoked
   battery_pct: 76, patrols_today: 3, problems: [], recent_problems: [], agent: "0.9.1", compat: "ok", manual_only: false, ...o });
 let robots: Record<string, unknown>[];
 let posted: { url: string; body: Record<string, unknown> }[];
+let pending: Record<string, unknown>[];
+let said: string[];
 
 beforeEach(() => {
   lang.value = "zh";
   posted = [];
+  said = [];
+  pending = [];
   robotNames.value = {};
   robots = [card({}), card({ robot_id: "B", online: false, battery_pct: null, patrols_today: 0,
     problems: [{ key: "B/stuck#1", kind: "stuck", first_ms: NOW - 60_000 }, { device: "front_camera", state: "offline" }],
@@ -30,10 +34,16 @@ beforeEach(() => {
       const body = JSON.parse(String(init.body ?? "{}"));
       posted.push({ url, body });
       if (url.endsWith("/name")) robots = robots.map((r) => (url.includes(`/${r.robot_id}/`) ? { ...r, name: body.name } : r));
-      if (url.endsWith("/revoke")) return Promise.resolve(json({ robot_id: "A", summary: "CRL", broker_restart: "systemctl restart x" }));
+      if (url.endsWith("/revoke")) return Promise.resolve(json({ robot_id: "A", summary: "CRL", robot_wipe: "offline", broker_restart: "systemctl restart x" }));
+      if (url.startsWith("/api/admin/bind/")) {
+        if (url.endsWith("/approve") && body.confirm_password !== "pw") return Promise.resolve(json({ error: "密码不对" }, 403));
+        pending = [];
+        return Promise.resolve(json({ state: "ok" }));
+      }
       return Promise.resolve(json({ robots }));
     }
     if (url.startsWith("/api/robots/overview")) return Promise.resolve(json({ robots }));
+    if (url === "/api/admin/bind") return Promise.resolve(json({ requests: pending }));
     return Promise.resolve(json({}, 404));
   }) as typeof fetch);
 });
@@ -42,7 +52,7 @@ afterEach(() => {
   robotNames.value = {};
 });
 
-const page = () => render(<RobotsPage say={() => {}} now={NOW} />);
+const page = () => render(<RobotsPage say={(s) => said.push(s)} now={NOW} />);
 const cardOf = (c: Element, id: string) => c.querySelector(`.robot-card[data-robot="${id}"]`)!;
 const btn = (root: Element, text: string) => Array.from(root.querySelectorAll("button")).find((b) => b.textContent?.trim() === text) as HTMLButtonElement;
 
@@ -91,6 +101,68 @@ describe("机器人页", () => {
     fireEvent.input(document.querySelector('form.confirm-pw input[type="password"]')!, { target: { value: "my-own-password" } });
     fireEvent.submit(document.querySelector("form.confirm-pw")!);
     await waitFor(() => expect(posted.find((p) => p.url === "/api/admin/robots/A/revoke")?.body).toEqual({ confirm_password: "my-own-password" }));
+    await waitFor(() => expect(said.join()).toContain("下次连上站点时会自己清掉数据"));
+  });
+
+  it("解绑确认写明恢复出厂、数据删掉", async () => {
+    const { container: c } = page();
+    await waitFor(() => expect(cardOf(c, "A")).not.toBeNull());
+    fireEvent.click(cardOf(c, "A"));
+    fireEvent.click(btn(c.querySelector(".robot-detail")!, "解绑"));
+    expect(document.querySelector(".modal")!.textContent).toContain("恢复出厂");
+  });
+
+  it("W42 等待批准加入:核对码、再输密码批准、能起名字;拒绝要确认", async () => {
+    pending = [{ id: "ab12", serial: "D1M-7", check: "042917", model: "D1 Max", version: "1", source: "192.168.1.20", created_ms: NOW, expires_ms: NOW + 1 }];
+    const { container: c } = page();
+    await waitFor(() => expect(c.querySelector('.bind-req[data-serial="D1M-7"]')).not.toBeNull());
+    const row = c.querySelector('.bind-req[data-serial="D1M-7"]')!;
+    expect(row.textContent).toContain("042917");
+    fireEvent.click(btn(row, "批准"));
+    const form = document.querySelector("form.bind-approve")!;
+    expect(form.textContent).toContain("042917");
+    fireEvent.input(form.querySelector('input:not([type="password"])')!, { target: { value: "后院" } });
+    fireEvent.input(form.querySelector('input[type="password"]')!, { target: { value: "wrong" } });
+    fireEvent.submit(form);
+    await waitFor(() => expect(document.querySelector("form.bind-approve .error")?.textContent).toContain("密码不对"));
+    fireEvent.input(form.querySelector('input[type="password"]')!, { target: { value: "pw" } });
+    fireEvent.submit(form);
+    await waitFor(() => expect(said.join()).toContain("D1M-7 已加入站点"));
+    expect(posted.at(-1)).toEqual({ url: "/api/admin/bind/ab12/approve", body: { confirm_password: "pw", name: "后院" } });
+    await waitFor(() => expect(c.querySelector(".bind-pending")).toBeNull());
+  });
+
+  it("W42 拒绝申请", async () => {
+    pending = [{ id: "cd34", serial: "D1M-8", check: "111111", model: "", version: "", source: "x", created_ms: NOW, expires_ms: NOW + 1 }];
+    const { container: c } = page();
+    await waitFor(() => expect(c.querySelector('.bind-req[data-serial="D1M-8"]')).not.toBeNull());
+    fireEvent.click(btn(c.querySelector(".bind-req")!, "拒绝"));
+    fireEvent.click(btn(document.querySelector(".modal")!, "拒绝"));
+    await waitFor(() => expect(posted.at(-1)?.url).toBe("/api/admin/bind/cd34/reject"));
+  });
+
+  it("W42 机器人上提了换 WiFi:卡片标出来,详情里确认", async () => {
+    robots = [card({ wifi: { ssid: "Estate", link: "4g", change: { id: "0a1b2c3d4e5f", ssid: "New", mode: "trial", expires_ms: NOW } } })];
+    const { container: c } = page();
+    await waitFor(() => expect(cardOf(c, "A")).not.toBeNull());
+    expect(cardOf(c, "A").textContent).toContain("换 WiFi 等确认");
+    fireEvent.click(cardOf(c, "A"));
+    const d = c.querySelector(".robot-detail")!;
+    expect(d.textContent).toContain("Estate · 走 4G");
+    expect(d.querySelector(".wifi-change")!.textContent).toContain("正在试 WiFi「New」");
+    fireEvent.click(btn(d, "确认换 WiFi"));
+    await waitFor(() => expect(posted.at(-1)).toEqual({ url: "/api/robots/A/wifi", body: { id: "0a1b2c3d4e5f", approve: true } }));
+  });
+
+  it("W42 添加:说明用手机扫贴纸,工程师的开通码收在按钮后面", async () => {
+    const { container: c } = page();
+    await waitFor(() => expect(cardOf(c, "A")).not.toBeNull());
+    fireEvent.click(btn(c, "添加四足机器人"));
+    const m = document.querySelector(".modal")!;
+    expect(m.textContent).toContain("扫机器人身上的贴纸");
+    expect(m.querySelector("form")).toBeNull();
+    fireEvent.click(btn(m, "工程师：用开通码手动添加"));
+    expect(document.querySelector(".modal form")!.textContent).toContain("provision --code");
   });
 
   it("保安页用起的名字", () => {

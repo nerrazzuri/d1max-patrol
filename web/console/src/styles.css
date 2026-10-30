@@ -768,6 +768,12 @@ p.warn { color: var(--c-text); background: var(--c-warningSoft); padding: 8px 12
 .robot-health { font-weight: 600; font-size: 14px; }
 .robot-health.ok { color: var(--c-success); }
 .robot-health.warn { color: var(--c-warning); }
+/* W42:等待批准加入、核对码、换 WiFi 等确认 */
+.bind-pending { margin-bottom: 16px; border-left: 4px solid var(--c-warning); }
+.bind-req { align-items: center; gap: 16px; padding: 8px 0; border-top: 1px solid var(--c-outline); }
+.check-digits { font-size: 18px; letter-spacing: 0.12em; }
+.check-digits.big { font-size: 32px; text-align: center; margin: 8px 0; }
+.wifi-change { margin: 12px 0; padding: 12px 16px; border: 1px solid var(--c-outline); border-left: 4px solid var(--c-warning); border-radius: var(--r-r8); background: var(--c-surface); display: flex; flex-direction: column; gap: 8px; }
 .robot-detail ul.plain { list-style: none; padding: 0; margin: 0 0 8px; display: flex; flex-direction: column; gap: 4px; }
 .robot-detail .field.grow { flex: 1; }
 .state.tone-muted { color: var(--c-textMuted); }
