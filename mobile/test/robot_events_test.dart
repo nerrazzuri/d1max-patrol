@@ -27,6 +27,11 @@ void main() {
     expect(robotEventDetail('patrol_waypoint', {'name': '东门', 'ok': false, 'note': '被挡'}),
         '东门 · 没到 · 被挡');
     expect(robotEventDetail('robot_fault', {'faults': []}), '');
+    expect(robotEventTitle('robot_fault', {'faults': []}), '故障已清除', reason: '空列表 = 清了，不是有故障');
+    expect(robotEventTitle('robot_fault', {'faults': [{'code': 'E1', 'fatal': false, 'text': '左前腿过热'}]}),
+        '机器人故障');
+    expect(robotEventDetail('robot_fault', {'faults': [{'code': 'E1', 'fatal': false, 'text': '左前腿过热'},
+      {'code': 'E2', 'fatal': true, 'text': ''}]}), '左前腿过热 · E2');
   });
 
   test('时刻：没有就空串', () {
