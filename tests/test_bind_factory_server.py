@@ -165,6 +165,11 @@ def test_热点口和代理套接字(出厂, tmp_path):
             raw.sendall(b"POST /bind HTTP/1.1\r\nHost: x\r\nContent-Length: -1\r\n\r\n"
                         + b"x" * 4096)
             assert raw.recv(64).startswith(b"HTTP/1.0 400")
+        with ctx.wrap_socket(socket.create_connection(("127.0.0.1", port)),
+                             server_hostname="x") as raw:   # 分块发送的拒(不当成空的)
+            raw.sendall(b"POST /bind HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\n"
+                        b"2\r\n{}\r\n0\r\n\r\n")
+            assert raw.recv(64).startswith(b"HTTP/1.0 411")
         idle.close()
         code, d = _req(port, st.fingerprint, "GET", "/status", st.code)
         assert code == 200 and d["state"] == "unbound" and d["serial"] == "D1M-000123"

@@ -93,6 +93,9 @@ class _Handler(BaseHTTPRequestHandler):
         self.wfile.write(raw)
 
     def _body(self) -> Any:
+        if self.headers.get("Transfer-Encoding"):
+            # 分块发送的不认(按 Content-Length 读会读成空的,当成没填)
+            raise BindRefused(411, "要带 Content-Length")
         raw = self.headers.get("Content-Length") or "0"
         n = int(raw) if raw.isdigit() else -1          # 外审 C5:负数、乱写的一律拒,读的时候也有上限
         if n < 0:
