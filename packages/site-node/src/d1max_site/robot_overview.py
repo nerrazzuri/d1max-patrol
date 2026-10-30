@@ -58,6 +58,5 @@ def overview(dispatcher: Any, db: Any, *, now_ms: int, tz: tzinfo) -> list[dict[
                     "agent": getattr(caps, "agent", None),
                     "compat": _robot(rid, c)["verdict"] if c is not None else "unknown",
                     # W42:连的哪个 WiFi、走哪条线、有没有等确认的 WiFi 改动(老机器人是 None)
-                    "wifi": wifi_view(c.telemetry.net)
-                    if c is not None and c.telemetry is not None else None})
+                    "wifi": wifi_view(getattr(getattr(c, "telemetry", None), "net", None))})
     return out
