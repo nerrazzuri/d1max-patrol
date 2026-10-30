@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Protocol
@@ -148,8 +149,12 @@ class HalCapabilities:
     recharge_mode: str
     sensing: dict[str, bool]
     actuators: dict[str, bool]
+    #: 横移最快多少(m/s;``lateral`` 为真才有意义,2026-10-30)。老代理不报 = 0。
+    max_vy: float = 0.0
 
     def __post_init__(self) -> None:
+        if not (math.isfinite(self.max_vy) and self.max_vy >= 0):
+            raise ContractError("HalCapabilities: max_vy 要是非负的有限数")
         if self.recharge_mode not in RECHARGE_MODES:
             raise ContractError(f"HalCapabilities: recharge_mode 只能是 {RECHARGE_MODES}")
         for k in SENSING_KEYS:
@@ -163,7 +168,8 @@ class HalCapabilities:
         return {"max_vx": self.max_vx, "max_wz": self.max_wz, "deadband_vx": self.deadband_vx,
                 "lateral": self.lateral, "control_releasable": self.control_releasable,
                 "recharge_mode": self.recharge_mode, "sensing": dict(self.sensing),
-                "actuators": dict(self.actuators)}
+                "actuators": dict(self.actuators),
+                **({"max_vy": self.max_vy} if self.lateral else {})}
 
     @classmethod
     def from_wire(cls, d: Any) -> HalCapabilities:
@@ -174,7 +180,8 @@ class HalCapabilities:
                    deadband_vx=as_float(d, "deadband_vx", w), lateral=as_bool(d, "lateral", w),
                    control_releasable=as_bool(d, "control_releasable", w),
                    recharge_mode=as_str(d, "recharge_mode", w),
-                   sensing=as_dict(d, "sensing", w), actuators=as_dict(d, "actuators", w))
+                   sensing=as_dict(d, "sensing", w), actuators=as_dict(d, "actuators", w),
+                   max_vy=as_float(d, "max_vy", w) if "max_vy" in d else 0.0)
 
 
 class RobotHAL(Protocol):

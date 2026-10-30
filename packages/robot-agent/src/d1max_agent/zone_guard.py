@@ -285,15 +285,34 @@ class TeleopZoneGuard:
             first = first or hit
         return Verdict(0.0, 0.0, "blocked", first, _block_text(first, False))
 
+    def lateral(self, vy: float, odom: Pose) -> float:
+        """横移(2026-10-30,机身系左为正):有硬禁区时,位置不可信就不横移;往侧面扫一下再刹停会更靠近
+        哪个硬禁区也不横移(已经压上的,只许往外)。其余照发。
+        不改 :attr:`last`(手机上那句话看前后)。"""
+        if vy == 0.0:
+            return 0.0
+        hard = boxed(z for z in self._zones() if z.keep_out and z.hard)
+        if not hard:
+            return vy
+        est, trusted, _ = self._locate(odom)
+        if est is None or not trusted:
+            return 0.0
+        pose = (est.x, est.y, est.yaw)
+        need = sigma_of(est) + MARGIN_M
+        side = est.yaw + math.copysign(math.pi / 2, vy)
+        hit = self._hits(pose, need, hard, abs(vy), 0.0, 0.0, heading=side)
+        return 0.0 if hit is not None else vy
+
     def _hits(self, pose: Pose, need: float, hard: list[_Boxed], vx: float, wz: float,
-              v_meas: float) -> Zone | None:
-        """这条命令照着开、下一拍再刹停,扫过的那一片会不会更靠近哪个硬禁区(到 ``need`` 以内)。"""
+              v_meas: float, heading: float | None = None) -> Zone | None:
+        """这条命令照着开、下一拍再刹停,扫过的那一片会不会更靠近哪个硬禁区(到 ``need`` 以内)。
+        ``heading``:平移的方向(默认机身朝向;横移时是朝向 ± π/2,机身不转)。"""
         v = abs(vx)
         if vx != 0.0 and v_meas * vx > 0:
             v = max(v, abs(v_meas))                          # 还在往同一个方向冲:按快的那个算刹车
         dist = math.copysign(v * TICK_S + stop_distance(v), vx) if vx != 0.0 else 0.0
         ang = math.copysign(abs(wz) * TICK_S + stop_angle(wz), wz) if wz != 0.0 else 0.0
-        poses = sweep(*pose, dist, ang)
+        poses = sweep(*pose, dist, ang, heading=heading)
         reach = abs(dist) + 2 * math.hypot(BODY_HL, BODY_HW) + need
         for z in hard:
             if _box_gap((pose[0] - reach, pose[1] - reach, pose[0] + reach, pose[1] + reach),

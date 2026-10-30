@@ -37,9 +37,13 @@ class Joystick extends StatefulWidget {
     required this.onChanged,
     this.enabled = true,
     this.label,
+    this.icon,
   });
 
   final JoystickAxis axis;
+
+  /// 静止时杆头上画的记号；不给按轴（平移 ↕、转向 ⇄）。
+  final IconData? icon;
 
   /// 这根杆管什么的一个词（「前后」「转向」），没人按着的时候写在静止的那个圈里。
   final String? label;
@@ -252,7 +256,8 @@ class _JoystickState extends State<Joystick> {
                 border: Border.all(color: ink.withValues(alpha: 0.54 * dim), width: 1.5),
               ),
               child: Icon(
-                  widget.axis == JoystickAxis.turn ? Icons.swap_horiz_rounded : Icons.swap_vert_rounded,
+                  widget.icon ??
+                      (widget.axis == JoystickAxis.turn ? Icons.swap_horiz_rounded : Icons.swap_vert_rounded),
                   size: 20,
                   color: soft),
             ),

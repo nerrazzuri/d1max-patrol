@@ -429,3 +429,45 @@ def test_硬禁区_老狗不守_开遥控时就告诉手机(desk):
     caps.tasks["zones_set"] = {"rev": 1, "enforced": True, "teleop_hard": True}
     s = k.open("A", _u("gina", "guard"))
     assert s.zone_told is None, "新机器人自己守,自己会说"
+
+
+# ------------------------------------------------------------ 横移(2026-10-30)
+
+def _横(k, s, ph, vy):
+    ph.seq += 1
+    ph.t += 100
+    ph.rx += 0.1
+    k.on_messages(s, [json.dumps({"seq": ph.seq, "t": ph.t, "vx": 0, "wz": 0, "vy": vy})],
+                  rx=ph.rx)
+
+
+def test_横移_狗报了max_vy才转_站点夹一次(desk):
+    k, d = desk
+    d.clients["A"].capabilities.tasks["teleop"]["max_vy"] = 0.25
+    s = k.open("A", _u("gina", "guard"))
+    assert s.max_vy == 0.25
+    ph = _手机()
+    _横(k, s, ph, 0.9)
+    assert [(f.vx, f.wz, f.vy) for f in d.frames] == [(0.0, 0.0, 0.25)]
+    assert d.frames[0].to_wire()["vy"] == 0.25
+    _横(k, s, ph, 0)                                  # 松手:零速帧照转
+    assert d.frames[-1].vy == 0.0 and "vy" not in d.frames[-1].to_wire()
+
+
+def test_横移_狗没报max_vy_手机给了也当零(desk):
+    k, d = desk
+    s = k.open("A", _u("gina", "guard"))
+    assert s.max_vy == 0.0
+    ph = _手机()
+    _发(k, s, ph, 0.3)
+    _横(k, s, ph, 0.3)
+    assert [(f.vx, f.vy) for f in d.frames] == [(0.3, 0.0), (0.0, 0.0)]
+
+
+def test_横移_不成形的vy整帧丢掉(desk):
+    k, d = desk
+    d.clients["A"].capabilities.tasks["teleop"]["max_vy"] = 0.25
+    s = k.open("A", _u("gina", "guard"))
+    k.on_messages(s, ['{"seq": 5, "t": 1, "vx": 0, "wz": 0, "vy": "left"}'], rx=1.0)
+    k.on_messages(s, ['{"seq": 6, "t": 1, "vx": 0, "wz": 0, "vy": true}'], rx=1.1)
+    assert d.frames == []

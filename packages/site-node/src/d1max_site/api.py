@@ -2258,7 +2258,8 @@ class _Handler(TlsHandlerMixin):
         try:
             granted = {"kind": "granted", "lease_epoch": session.epoch,
                        "operator": session.operator, "max_vx": session.max_vx,
-                       "max_wz": session.max_wz, "frame_period_ms": 100}
+                       "max_wz": session.max_wz, "max_vy": session.max_vy,
+                       "frame_period_ms": 100}
             if session.zone_told is not None:
                 granted["zone_guard"] = session.zone_told    # 决策 65:老狗不守硬禁区,开场就说
             ws.send_text(json.dumps(granted, ensure_ascii=False))

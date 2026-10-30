@@ -756,8 +756,9 @@ abstract class TeleopLink {
   Stream<Map<String, dynamic>> get messages;
   bool get closed;
 
-  /// 一帧摇杆（m/s、rad/s）。站点会再夹一次限速；狗那头也夹。
-  void send(double vx, double wz);
+  /// 一帧摇杆（m/s、rad/s）。站点会再夹一次限速；狗那头也夹。[vy]：横移（机身系左为正，2026-10-30；
+  /// 站点只对报了能横移的狗转，别的当零）。
+  void send(double vx, double wz, {double vy = 0});
 
   /// 我不遥控了（放租）。
   void release();
@@ -810,7 +811,7 @@ class WsTeleopLink implements TeleopLink {
   bool get closed => _closed;
 
   @override
-  void send(double vx, double wz) {
+  void send(double vx, double wz, {double vy = 0}) {
     if (_closed || _closing) return;
     _seq++;
     _ws.add(jsonEncode(<String, dynamic>{
@@ -818,6 +819,7 @@ class WsTeleopLink implements TeleopLink {
       't': _clock.elapsedMicroseconds / 1000.0,
       'vx': vx,
       'wz': wz,
+      if (vy != 0) 'vy': vy,
     }));
   }
 

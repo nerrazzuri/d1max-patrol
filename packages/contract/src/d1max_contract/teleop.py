@@ -56,10 +56,15 @@ class TeleopFrame:
     ttl_ms: int
     vx: float
     wz: float
+    #: 横移(机身系,左为正;2026-10-30)。0 不上线:老代理不认这个键也照旧(不横移)。
+    vy: float = 0.0
 
     def to_wire(self) -> dict[str, Any]:
-        return {"lease_epoch": self.lease_epoch, "seq": self.seq, "sent_at": self.sent_at,
-                "ttl_ms": self.ttl_ms, "vx": self.vx, "wz": self.wz}
+        d = {"lease_epoch": self.lease_epoch, "seq": self.seq, "sent_at": self.sent_at,
+             "ttl_ms": self.ttl_ms, "vx": self.vx, "wz": self.wz}
+        if self.vy:
+            d["vy"] = self.vy
+        return d
 
     @classmethod
     def from_wire(cls, d: Any) -> TeleopFrame:
@@ -70,7 +75,8 @@ class TeleopFrame:
             raise ContractError(f"teleop: ttl_ms 要在 [{FRAME_TTL_MIN_MS}, {FRAME_TTL_MAX_MS}]")
         return cls(lease_epoch=_pos_int(d, "lease_epoch"), seq=_pos_int(d, "seq"),
                    sent_at=_pos_int(d, "sent_at", lo=0), ttl_ms=ttl,
-                   vx=_speed(d, "vx"), wz=_speed(d, "wz"))
+                   vx=_speed(d, "vx"), wz=_speed(d, "wz"),
+                   vy=_speed(d, "vy") if "vy" in d else 0.0)
 
 
 def teleop_grant_payload(*, lease_epoch: int, operator: str, lease_ttl_ms: int) -> dict[str, Any]:

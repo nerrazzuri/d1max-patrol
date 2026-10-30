@@ -18,6 +18,9 @@
   先过它 —— 会把机身(加定位 σ、刹车距离)带进硬禁区的那一下截掉(先减速、再只许转、再零速),往外开、
   平着开照发;定位不可信时全程限速。普通禁行区、没有硬禁区照旧不管。为什么截了随续租回执给站点
   (:meth:`TeleopTask.zone_note`),站点转给手机。
+- **横移**(2026-10-30,左杆左右):HAL 报 ``lateral`` 才认 ``vy``,限速同样是 HAL 的一半;前后和横移
+  同时给了只走大的那一个(真机遥控器推 45° 也只走一个轴);狗尾为前时左右也反。有硬禁区时横移另过守卫
+  (:meth:`~d1max_agent.zone_guard.TeleopZoneGuard.lateral`):位置不可信、扫过去会更靠近硬禁区就不横移。
 """
 
 from __future__ import annotations
@@ -57,10 +60,11 @@ class TeleopTask(Task):
         self._lease_ttl = lease_ttl_ms
         caps = hal.hal_capabilities()
         self._vmax, self._wmax = caps.max_vx / 2.0, caps.max_wz / 2.0
+        self._vymax = caps.max_vy / 2.0 if caps.lateral else 0.0
         self._deadband = caps.deadband_vx
         self._until: int | None = None
-        #: 最近收下的那一帧:(vx, wz, 有效到哪一刻(狗钟), 帧的有效期)。
-        self._cmd: tuple[float, float, int, int] | None = None
+        #: 最近收下的那一帧:(vx, wz, 有效到哪一刻(狗钟), 帧的有效期, vy)。
+        self._cmd: tuple[float, float, int, int, float] | None = None
         self._moving = False
         self._vseq = 0
         #: 结束的去向 (终态, 原因);None = 还在遥控。
@@ -96,7 +100,7 @@ class TeleopTask(Task):
             return "ended"
         why = self.gate.accept(frame, rx_ms=rx_ms)
         if not why:
-            self._cmd = (frame.vx, frame.wz, rx_ms + frame.ttl_ms, frame.ttl_ms)
+            self._cmd = (frame.vx, frame.wz, rx_ms + frame.ttl_ms, frame.ttl_ms, frame.vy)
         return why
 
     def renew(self, lease_ttl_ms: int) -> None:
@@ -141,25 +145,33 @@ class TeleopTask(Task):
             return
         c = self._cmd
         live = c is not None and now < c[2] and self._video_live()
-        vx = wz = 0.0
+        vx = wz = vy = 0.0
         if live:
             vx = max(-self._vmax, min(self._vmax, c[0]))
             wz = max(-self._wmax, min(self._wmax, c[1]))
+            vy = max(-self._vymax, min(self._vymax, c[4]))
             if abs(vx) < self._deadband:
                 vx = 0.0                                  # 死区以下的平移不下(HAL 会拒)
+            if vx and vy:                                 # 前后、横移只走大的那一个
+                if abs(vy) > abs(vx):
+                    vx = 0.0
+                else:
+                    vy = 0.0
             if self._head == "tail":
-                vx = -vx                                  # 人眼里的「往前」是狗尾那头
+                vx, vy = -vx, -vy                         # 人眼里的「往前」是狗尾那头,左右也反
         if self._guard is not None:
             vx, wz = await self._zone_check(vx, wz)       # 硬禁区(决策 65):机身系里查
             if abs(vx) < self._deadband:
                 vx = 0.0
-        if live and vx == 0.0 and wz == 0.0:
+            if vy:
+                vy = await self._lateral_check(vy)
+        if live and vx == 0.0 and wz == 0.0 and vy == 0.0:
             live = False
         if live:
             self._vseq += 1
             ttl = max(_MIN_TTL_MS, min(c[3], c[2] - now))
             got = await self._hal.set_velocity(VelocityCommand(
-                seq=self._vseq, ttl_ms=ttl, frame="base", vx=vx, vy=0.0, wz=wz))
+                seq=self._vseq, ttl_ms=ttl, frame="base", vx=vx, vy=vy, wz=wz))
             if got.rejected:
                 log.warning("遥控的速度被 HAL 拒了(%s)", got.reason)
             self._moving = not got.rejected
@@ -181,6 +193,15 @@ class TeleopTask(Task):
                 log.info("遥控硬禁区:%s %s", v.state, v.reason)
             self._guard_state = v.state
         return v.vx, v.wz
+
+    async def _lateral_check(self, vy: float) -> float:
+        """横移过硬禁区守卫。守卫出错同样当零。"""
+        try:
+            o = await self._hal.odometry()
+            return float(self._guard.lateral(vy, (o.x, o.y, o.yaw)))
+        except Exception:
+            log.exception("硬禁区守卫(横移)出错:这一拍不横移")
+            return 0.0
 
     async def _finish(self, dt_s: float) -> None:
         """结束:先停车、等停稳,再进终态。"""

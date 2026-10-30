@@ -24,6 +24,10 @@
 - **机身系**(W09i 设计稿 §1):HAL 的里程、速度一律按机身(x 朝狗头、装前雷达那头),不随调头变。
   狗尾为前、旁路进程报 ``follows_head``(SDK 的「往前」跟着变成狗尾那头)时,里程朝向加 π、前进速度
   反号,发出去的前进速度也反号。SDK 调头时到底怎么变是真机项。
+- **横移**(2026-10-30,遥控左杆左右):``lateral_mps_per_unit`` 是横向比例 1.0 对应的 m/s,0 = 不横移
+  (照旧拒 ``no_lateral``)。缺省按跟前进差不多的 1.0 算:真的慢一些也只是走得慢,不会超速。横向正负
+  (机身系左为正)跟 SDK 的 ``Move(lat, …)`` 是不是一个方向、调头时跟不跟着反,都是真机项
+  (``invert_lateral`` 翻过来)。横移没有雷达净空许可门(那只管头尾),只在有人看着画面遥控时用。
 """
 
 from __future__ import annotations
@@ -107,6 +111,7 @@ class D1MaxHal:
                  mps_per_unit: float = 1.0, radps_per_unit: float = 1.5,
                  deadband_mps: float = 0.2, max_fraction: float = 0.5, fwd_offset: float = 0.0,
                  invert_yaw: bool = False, stopped_eps: float = STOPPED_EPS,
+                 lateral_mps_per_unit: float = 0.0, invert_lateral: bool = False,
                  frame_id: str = "odom",
                  now_ms: Callable[[], int] = wall_ms,
                  backend: SidecarDeviceBackend | None = None,
@@ -132,6 +137,10 @@ class D1MaxHal:
         self._frac = max_fraction
         self._fwd0 = fwd_offset
         self._yaw_sign = -1.0 if invert_yaw else 1.0
+        if not (math.isfinite(lateral_mps_per_unit) and lateral_mps_per_unit >= 0):
+            raise ValueError(f"lateral_mps_per_unit 不能是负数,收到 {lateral_mps_per_unit}")
+        self._lat_mps = lateral_mps_per_unit
+        self._lat_sign = -1.0 if invert_lateral else 1.0
         if not (math.isfinite(stopped_eps) and stopped_eps > 0):
             raise ValueError(f"stopped_eps 要是正数,收到 {stopped_eps}")
         self._stopped_eps = stopped_eps
@@ -158,6 +167,11 @@ class D1MaxHal:
     @property
     def max_vx(self) -> float:
         return self._vx_range()[1]
+
+    @property
+    def max_vy(self) -> float:
+        """横移最快(m/s);0 = 不横移。比例上限跟往后一样(不过 0.5)。"""
+        return min(self._frac, MAX_WALK_SPEED) * self._lat_mps
 
     @property
     def max_wz(self) -> float:
@@ -254,20 +268,24 @@ class D1MaxHal:
             return _reject("speed_level")        # 换算只对要的那一档成立(W12)
         if not all(math.isfinite(v) for v in (cmd.vx, cmd.vy, cmd.wz)):
             return _reject("not_finite")
-        if abs(cmd.vy) > 1e-9:
+        if abs(cmd.vy) > 1e-9 and self._lat_mps <= 0:
             return _reject("no_lateral")
         if 0.0 < abs(cmd.vx) < self._deadband:
             return _reject("deadband")
         lo, hi = self._vx_range()
         vx, wz = min(max(cmd.vx, lo), hi), _clamp(cmd.wz, self.max_wz)
-        clamped = (vx != cmd.vx) or (wz != cmd.wz)
+        vy = _clamp(cmd.vy, self.max_vy) if self._lat_mps > 0 else 0.0
+        clamped = (vx != cmd.vx) or (wz != cmd.wz) or (vy != cmd.vy)
         # 换算后再夹一次:浮点误差也不许越过旁路进程的上限(它越界就拒)。
         cap_fwd, cap_back = self._sdk_caps()
         fwd = min(max(self._sdk_sign() * self._fwd_fraction(vx), -cap_back), cap_fwd)
         yaw = _clamp(self._yaw_sign * wz / self._radps, min(self._frac, MAX_WALK_SPEED))
+        # 横移:SDK 跟着调头时左右也反(同前进);比例上限同往后
+        lat = (_clamp(self._sdk_sign() * self._lat_sign * vy / self._lat_mps,
+                      min(self._frac, MAX_WALK_SPEED)) if vy else 0.0)
         ttl = min(max(int(cmd.ttl_ms), VEL_TTL_MIN_MS), VEL_TTL_MAX_MS)
         try:
-            await self._b.vel(fwd, 0.0, yaw, ttl, timeout_s=VEL_ACK_TIMEOUT_S)
+            await self._b.vel(fwd, lat, yaw, ttl, timeout_s=VEL_ACK_TIMEOUT_S)
         except DeviceBackendError as exc:
             return _reject(f"sidecar: {exc}")
         self._vel_until = self._monotonic() + ttl / 1000.0
@@ -502,7 +520,8 @@ class D1MaxHal:
 
     def hal_capabilities(self) -> HalCapabilities:
         return HalCapabilities(
-            max_vx=self.max_vx, max_wz=self.max_wz, deadband_vx=self._deadband, lateral=False,
+            max_vx=self.max_vx, max_wz=self.max_wz, deadband_vx=self._deadband,
+            lateral=self._lat_mps > 0, max_vy=self.max_vy,
             control_releasable=False, recharge_mode="none",
             sensing={"lidar": False, "depth": False, "thermal": False, "imu": True,
                      "imu_hz": IMU_HZ, "joint_effort": False, "foot_force": False},

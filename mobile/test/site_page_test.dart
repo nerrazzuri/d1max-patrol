@@ -29,6 +29,8 @@ class FakeTeleopLink implements TeleopLink {
   final StreamController<Map<String, dynamic>> ctl =
       StreamController<Map<String, dynamic>>.broadcast();
   final List<List<double>> sent = <List<double>>[];
+  /// 每帧的横移（跟 [sent] 一一对应；老测试只看前后、转向）。
+  final List<double> sentVy = <double>[];
   bool released = false;
   bool isClosed = false;
   @override
@@ -36,7 +38,10 @@ class FakeTeleopLink implements TeleopLink {
   @override
   bool get closed => isClosed;
   @override
-  void send(double vx, double wz) => sent.add(<double>[vx, wz]);
+  void send(double vx, double wz, {double vy = 0}) {
+    sent.add(<double>[vx, wz]);
+    sentVy.add(vy);
+  }
   @override
   void release() => released = true;
   @override

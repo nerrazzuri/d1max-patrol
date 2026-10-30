@@ -11,6 +11,7 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'site_page_test.dart' show FakeApi;
 import 'support/fake_site.dart';
+import 'support/zone_ui.dart';
 
 Map<String, dynamic> _view() {
   final v = Map<String, dynamic>.of(siteFixture('site_robot'));
@@ -153,6 +154,7 @@ void main() {
     await t.pumpAndSettle();
     expect(api.calls, containsAll(['mapPreview estate-1:8', 'mapPreviewPng estate-1:8']));
     expect(find.byType(Image), findsOneWidget);
+    await openZonePanel(t);
     expect(find.textContaining('A · dock'), findsOneWidget);
     expect(find.textContaining('默认'), findsOneWidget);
     final painter = t.widget<CustomPaint>(find.byKey(SiteMapPreviewPage.overlayKey)).painter!
@@ -167,6 +169,7 @@ void main() {
     await t.pumpWidget(MaterialApp(home: SiteMapPreviewPage(api: api, mapId: 'estate-1',
         version: '8')));
     await t.pumpAndSettle();
+    await openZonePanel(t);
     expect(find.textContaining('yard.yaml'), findsOneWidget);
     expect(find.textContaining('转角'), findsOneWidget);
   });
@@ -206,7 +209,8 @@ void main() {
     await t.pumpWidget(MaterialApp(home: SiteMapPreviewPage(api: api, mapId: 'estate-1',
         version: '8')));
     await t.pumpAndSettle();
-    expect(find.textContaining('第 2 版'), findsOneWidget);
+    await openZonePanel(t);
+    expect(find.textContaining('第 2 版'), findsWidgets);
     expect(find.textContaining('已确认（alice）'), findsOneWidget);
     expect(find.textContaining('禁行 · 池子'), findsOneWidget);
     expect(find.textContaining('限速 0.3 m/s · 草坪'), findsOneWidget);
@@ -216,7 +220,9 @@ void main() {
     // 左边缘 x = -10、上边缘 y = 5、一像素 0.1 m:(0, 0) 在 (100, 50)。
     expect(p.shapes.first.pixels.first, const Offset(100, 50));
     expect(find.byKey(SiteMapPreviewPage.drawNogoKey), findsNothing);
+    await openZonePanel(t);
     expect(find.byKey(SiteMapPreviewPage.confirmKey), findsNothing);
+    await openZonePanel(t);
     expect(find.byKey(SiteMapPreviewPage.deleteKey('pond')), findsNothing);
   });
 
@@ -225,8 +231,9 @@ void main() {
     await t.pumpWidget(MaterialApp(home: SiteMapPreviewPage(api: api, mapId: 'estate-1',
         version: '8')));
     await t.pumpAndSettle();
+    await openZonePanel(t);
     expect(find.textContaining('还没确认'), findsOneWidget);
-    await t.tap(find.byKey(SiteMapPreviewPage.drawNogoKey));
+    await tapZoneMenu(t, SiteMapPreviewPage.drawNogoKey);
     await t.pump();
     final rect = t.getRect(find.byKey(SiteMapPreviewPage.canvasKey));
     final k = rect.width / 200;                      // 图 200 像素宽,画到屏上缩放了
@@ -253,19 +260,22 @@ void main() {
     expect((poly[0][0] as num).toDouble(), closeTo(-8.0, 0.02));
     expect((poly[0][1] as num).toDouble(), closeTo(4.0, 0.02));
     expect(find.textContaining('存好了'), findsOneWidget);
+    await openZonePanel(t);
     await t.ensureVisible(find.byKey(SiteMapPreviewPage.confirmKey)); // 右栏多了「抹掉」那段说明,确认钮往下挪了
+    await openZonePanel(t);
     await t.tap(find.byKey(SiteMapPreviewPage.confirmKey));
     await t.pumpAndSettle();
     expect(find.textContaining('确认之后这张图才能下发'), findsOneWidget, reason: '弹框念一遍那句话');
     await t.tap(find.text('再看看'));
     await t.pumpAndSettle();
     expect(api.calls.where((c) => c.startsWith('confirmZones')), isEmpty);
+    await openZonePanel(t);
     await t.tap(find.byKey(SiteMapPreviewPage.confirmKey));
     await t.pumpAndSettle();
     await t.tap(find.byKey(SiteMapPreviewPage.confirmOkKey));
     await t.pumpAndSettle();
     expect(api.calls, contains('confirmZones estate-1:8 rev=1'));
-    expect(find.textContaining('已确认'), findsOneWidget);
+    expect(find.textContaining('已确认'), findsWidgets);
   });
 
   testWidgets('虚拟墙（2026-10-15）：两个点就能画完；只送墙线、标硬；图上画成线、列表写虚拟墙', (t) async {
@@ -273,8 +283,7 @@ void main() {
     await t.pumpWidget(MaterialApp(home: SiteMapPreviewPage(api: api, mapId: 'estate-1',
         version: '8')));
     await t.pumpAndSettle();
-    await t.ensureVisible(find.byKey(SiteMapPreviewPage.drawWallKey));
-    await t.tap(find.byKey(SiteMapPreviewPage.drawWallKey));
+    await tapZoneMenu(t, SiteMapPreviewPage.drawWallKey);
     await t.pump();
     final rect = t.getRect(find.byKey(SiteMapPreviewPage.canvasKey));
     final k = rect.width / 200;
@@ -318,6 +327,7 @@ void main() {
     await t.pumpWidget(MaterialApp(home: SiteMapPreviewPage(api: api, mapId: 'estate-1',
         version: '8')));
     await t.pumpAndSettle();
+    await openZonePanel(t);
     expect(find.textContaining('硬虚拟墙 · 围栏'), findsOneWidget);
     final p = t.widget<CustomPaint>(find.byKey(SiteMapPreviewPage.zonesKey)).painter! as ZonesPainter;
     final s = p.shapes.single;
@@ -339,7 +349,7 @@ void main() {
     await t.pumpWidget(MaterialApp(home: SiteMapPreviewPage(api: api, mapId: 'estate-1',
         version: '8')));
     await t.pumpAndSettle();
-    await t.tap(find.byKey(SiteMapPreviewPage.drawSlowKey));
+    await tapZoneMenu(t, SiteMapPreviewPage.drawSlowKey);
     await t.pump();
     final rect = t.getRect(find.byKey(SiteMapPreviewPage.canvasKey));
     final k = rect.width / 200;
@@ -353,19 +363,21 @@ void main() {
     expect(saved.map((z) => z['id']), ['pond', 'z2']);
     expect(saved.last['kind'], 'slow');
     expect(saved.last['max_speed_mps'], 0.3);
+    await openZonePanel(t);
     await t.tap(find.byKey(SiteMapPreviewPage.deleteKey('pond')));
     await t.pumpAndSettle();
     expect(api.savedZones.last.map((z) => z['id']), ['z2']);
     api.zonesConflict = true;
+    await openZonePanel(t);
     await t.tap(find.byKey(SiteMapPreviewPage.deleteKey('z2')));
     await t.pumpAndSettle();
-    expect(find.textContaining('没存上'), findsOneWidget);
-    expect(find.textContaining('重新拉一下'), findsOneWidget);
-    await t.tap(find.byKey(SiteMapPreviewPage.drawNogoKey));
+    expect(find.textContaining('没存上'), findsWidgets);
+    expect(find.textContaining('重新拉一下'), findsWidgets);
+    await tapZoneMenu(t, SiteMapPreviewPage.drawNogoKey);
     await t.pump();
     await t.tap(find.byKey(SiteMapPreviewPage.cancelKey));
     await t.pump();
-    expect(find.byKey(SiteMapPreviewPage.drawNogoKey), findsOneWidget, reason: '不画了回到按钮');
+    expect(find.byKey(SiteMapPreviewPage.menuKey), findsOneWidget, reason: '不画了回到菜单按钮');
   });
 
   // ------------------------------------------------------------ 决策 65、66，R2（2026-10-14）
@@ -379,8 +391,14 @@ void main() {
     }
   }
 
-  /// 右边那一栏能滚：先滚到看得见再点。
+  /// 说明栏能滚：先滚到看得见再点。不在眼前的先开说明栏找，还没有就是菜单里的。
   Future<void> tapVis(WidgetTester t, Finder f) async {
+    if (f.evaluate().isEmpty) await openZonePanel(t);
+    if (f.evaluate().isEmpty) {
+      await closeZonePanel(t);
+      await t.tap(find.byKey(SiteMapPreviewPage.menuKey));
+      await t.pump();
+    }
     await t.ensureVisible(f);
     await t.pumpAndSettle();
     await t.tap(f);
@@ -392,7 +410,7 @@ void main() {
     await t.pumpWidget(MaterialApp(home: SiteMapPreviewPage(api: api, mapId: 'estate-1',
         version: '8')));
     await t.pumpAndSettle();
-    await t.tap(find.byKey(SiteMapPreviewPage.drawNogoKey));
+    await tapZoneMenu(t, SiteMapPreviewPage.drawNogoKey);
     await t.pump();
     expect(find.byKey(SiteMapPreviewPage.hardKey), findsOneWidget, reason: '画禁行区时能标硬禁区');
     await tapVis(t, find.byKey(SiteMapPreviewPage.hardKey));
@@ -415,6 +433,7 @@ void main() {
     await t.pumpWidget(MaterialApp(home: SiteMapPreviewPage(key: UniqueKey(), api: api,
         mapId: 'estate-1', version: '8')));
     await t.pumpAndSettle();
+    await openZonePanel(t);
     expect(find.textContaining('硬禁区'), findsWidgets);
     expect(find.textContaining('到 10-14 18:30'), findsOneWidget);
     final p = t.widget<CustomPaint>(find.byKey(SiteMapPreviewPage.zonesKey)).painter!
@@ -464,6 +483,7 @@ void main() {
     await t.pumpWidget(MaterialApp(home: SiteMapPreviewPage(api: api, mapId: 'estate-1',
         version: '8')));
     await t.pumpAndSettle();
+    await openZonePanel(t);
     expect(find.byKey(SiteMapPreviewPage.proposalKey), findsOneWidget);
     expect(find.textContaining('从第 7 版带过来的'), findsOneWidget);
     expect(find.textContaining('坐标可能不一样'), findsOneWidget);
@@ -487,9 +507,11 @@ void main() {
     await t.pumpWidget(MaterialApp(home: SiteMapPreviewPage(api: api, mapId: 'estate-1',
         version: '8')));
     await t.pumpAndSettle();
+    await openZonePanel(t);
     expect(find.textContaining('坐标系变了'), findsOneWidget);
     await tapVis(t, find.byKey(SiteMapPreviewPage.discardProposalKey));
     expect(api.calls, contains('discardZoneProposal estate-1:8'));
+    await openZonePanel(t);
     expect(find.byKey(SiteMapPreviewPage.proposalKey), findsNothing);
   });
 
@@ -498,9 +520,12 @@ void main() {
     await t.pumpWidget(MaterialApp(home: SiteMapPreviewPage(api: api, mapId: 'estate-1',
         version: '8')));
     await t.pumpAndSettle();
+    await openZonePanel(t);
     expect(find.byKey(SiteMapPreviewPage.proposalKey), findsOneWidget);
+    await openZonePanel(t);
     expect(t.widget<CheckboxListTile>(find.byKey(SiteMapPreviewPage.proposedKey('zone', 'pond')))
         .onChanged, isNull);
+    await openZonePanel(t);
     expect(find.byKey(SiteMapPreviewPage.discardProposalKey), findsNothing);
   });
 

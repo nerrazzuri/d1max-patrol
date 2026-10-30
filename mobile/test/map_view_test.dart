@@ -21,6 +21,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'site_page_test.dart' show FakeApi;
 import 'support/fake_map.dart';
 import 'support/fake_site.dart';
+import 'support/zone_ui.dart';
 
 /// FakeApi 那张图：200 × 100 像素、一像素 0.1 m、左边缘 x = -10、上边缘 y = 5；[extra] 并进预览 JSON。
 class _GeoApi extends FakeApi {
@@ -447,7 +448,7 @@ void main() {
         final api = _GeoApi('admin', extra: <String, dynamic>{'rotation_deg': deg});
         await t.pumpWidget(MaterialApp(home: SiteMapPreviewPage(api: api, mapId: 'estate-1', version: '8')));
         await t.pumpAndSettle();
-        await t.tap(find.byKey(SiteMapPreviewPage.drawNogoKey));
+        await tapZoneMenu(t, SiteMapPreviewPage.drawNogoKey);
         await t.pump();
         final b = _box(t, find.byKey(SiteMapPreviewPage.canvasKey));
         const c = Offset(100, 50);
