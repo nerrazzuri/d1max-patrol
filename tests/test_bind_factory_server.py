@@ -40,6 +40,7 @@ def test_烧写_只存哈希_热点写进路由器_检验对得上(出厂, tmp_p
     assert paths.tls_key.stat().st_mode & 0o077 == 0
     env = paths.env.read_text()
     assert "D1MAX_MAP=unmapped:0" in env and "D1MAX_SITE_MQTT=\n" in env
+    assert "D1MAX_BIND_HOST=192.168.1.2" in env
     assert fa.check(paths, st.encode()) == []
     [txt] = fa.label_files(st, tmp_path / "label")
     assert b.pretty_code(st.code) in txt.read_text() and txt.stat().st_mode & 0o077 == 0
