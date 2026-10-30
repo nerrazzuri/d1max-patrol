@@ -222,18 +222,13 @@ void main() {
       await t.pumpWidget(const SizedBox());
     });
 
-    testWidgets('电量读不到写「--」；诊断卡只放机器人报的，没有运行时长、延迟', (t) async {
+    testWidgets('电量读不到写「--」；W53：诊断卡去掉了（工程师在 管理 → 体检 看）', (t) async {
       await t.pumpWidget(MaterialApp(
           home: SiteRobotPage(api: FakeApi('admin', robotView: busyView()), robotId: 'A')));
       await t.pumpAndSettle();
       expect(find.text('--'), findsOneWidget);
-      final diag = find.byKey(const Key('robot-diagnostics'));
-      expect(diag, findsOneWidget);
-      Finder inDiag(String s) => find.descendant(of: diag, matching: find.text(s));
-      expect(inDiag('0.1.0'), findsOneWidget, reason: '代理版本');
-      expect(inDiag('sim/0.1.0'), findsOneWidget, reason: '适配器');
-      expect(inDiag('2026-09-20-aaaaaa'), findsOneWidget, reason: '当前版本');
-      expect(find.descendant(of: diag, matching: find.byType(NwDiagnosticRow)), findsNWidgets(5));
+      expect(find.byKey(const Key('robot-diagnostics')), findsNothing);
+      expect(find.byType(NwDiagnosticRow), findsNothing);
       await t.pumpWidget(const SizedBox());
     });
 

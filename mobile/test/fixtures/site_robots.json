@@ -86,7 +86,8 @@
       },
       "clock_skew_s": 0.0,
       "devices": null,
-      "expires_at": 1794368851946,
+      "enrolled_at": 1793379421500,
+      "expires_at": 1794379421501,
       "fresh": true,
       "held": null,
       "loc": {
@@ -130,9 +131,9 @@
         }
       },
       "status": {
-        "boot_id": "boot-d01b91fce0",
+        "boot_id": "boot-d548ea16a1",
         "control_epoch": 1,
-        "last_seen": 1793368852670,
+        "last_seen": 1793379422263,
         "online": true,
         "ready": {
           "control": true,

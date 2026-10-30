@@ -10,11 +10,15 @@ import 'package:flutter_test/flutter_test.dart';
 /// 故意留着的中文（文件 → 那一行里的一段）。每条都要说得出为什么。
 const _allowed = <String, List<String>>{
   // 语言自己的名字：不管界面是什么语言都这么写
-  'lib/ui/site_list.dart': ["Text('中文')"],
+  // W52：登录失败时站点说的申请状态（原话是中文）按关键词认，再按语言说
+  'lib/ui/site_list.dart': ["Text('中文')", "site.contains('等管理员批准')", "site.contains('拒')",
+    "site.contains('过期')"],
   'lib/ui/site_deter.dart': ["Text('中文')"],
   // 跟站点回的报错原文对：剥掉开头那几个字
   'lib/ui/site_robot.dart': [r"RegExp(r'^机器人没标[:：]')"],
   'lib/ui/site_standby.dart': [r"RegExp(r'^机器人没标[:：]')"],
+  // W53：禁行区没确认的拒绝原话里抠出图号、版本
+  'lib/ui/refusal.dart': [r"RegExp(r'^(\S+?):(\S+?)\s*当前的区域修订')"],
   'lib/ui/site_intercepts.dart': [r"RegExp(r'^机器人没标[:：]')"],
   // 存到站点上的区域名字（数据，不是界面文字）；显示的时候另外翻（zoneLabelText）
   'lib/ui/site_mapping.dart': [

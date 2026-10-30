@@ -16,16 +16,13 @@ import '../net/background_watch.dart';
 import '../net/push.dart';
 import '../net/site_client.dart';
 import '../store/site_store.dart';
-import 'nw/nw_button.dart';
 import 'nw/nw_p3_robots.dart';
 import 'nw/nw_theme.dart';
 import 'nw/nw_widgets.dart';
 import 'robot_bind_page.dart';
 import 'site_deterrence.dart';
-import 'site_mode.dart';
 import 'site_robot.dart';
 import 'site_watch_page.dart';
-import 'site_weather.dart';
 
 /// 响铃：系统提示音 + 震动。测试换成计数的。
 void defaultRing() {
@@ -57,8 +54,7 @@ class SiteRobotsPage extends StatefulWidget {
 
   static const Key bgWatchKey = Key('btn-bg-watch');
   static const Key pushKey = Key('push-state');
-  static const Key modeKey = Key('mode-banner');
-  static const Key weatherKey = Key('weather-banner');
+  static const Key addKey = Key('robot-add');
 
   @override
   State<SiteRobotsPage> createState() => _SiteRobotsPageState();
@@ -67,9 +63,6 @@ class SiteRobotsPage extends StatefulWidget {
 class _SiteRobotsPageState extends State<SiteRobotsPage> {
   List<Map<String, dynamic>> _robots = <Map<String, dynamic>>[];
 
-  /// 布防模式（W20）；站点没开（老站点 404）就是 null，不显示那一行。
-  Map<String, dynamic>? _mode;
-  Map<String, dynamic>? _weather;
 
   /// 正在进行的驱离（W22），按狗。站点推 `deterrence` 帧当场换。
   Map<String, Map<String, dynamic>> _deter = <String, Map<String, dynamic>>{};
@@ -100,12 +93,6 @@ class _SiteRobotsPageState extends State<SiteRobotsPage> {
       if (f['kind'] == 'snapshot') unawaited(_ringIfPending());
       if (f['kind'] == 'alert' && f['alert'] is Map) {
         _track(Map<String, dynamic>.from(f['alert'] as Map));
-      }
-      if (f['kind'] == 'mode' && f['mode'] is Map && mounted) {
-        setState(() => _mode = Map<String, dynamic>.from(f['mode'] as Map));
-      }
-      if (f['kind'] == 'weather' && f['weather'] is Map && mounted) {
-        setState(() => _weather = Map<String, dynamic>.from(f['weather'] as Map));
       }
       if (f['kind'] == 'deterrence' && f['robot_id'] is String && mounted) {
         setState(() {
@@ -198,18 +185,6 @@ class _SiteRobotsPageState extends State<SiteRobotsPage> {
     } on SiteError catch (e) {
       if (e.status == 401) return _backToLogin();
       if (mounted) setState(() => _error = e.toString());
-    }
-    try {
-      final m = await widget.api.mode();
-      if (mounted) setState(() => _mode = m);
-    } on SiteError {
-      // 老站点没有布防模式（404）；读不到就不显示那一行
-    }
-    try {
-      final w = await widget.api.weather();
-      if (mounted) setState(() => _weather = w);
-    } on SiteError {
-      // 老站点没有天气（404）
     }
     try {
       final d = await widget.api.deterrence();
@@ -308,16 +283,27 @@ class _SiteRobotsPageState extends State<SiteRobotsPage> {
   @override
   Widget build(BuildContext context) {
     final c = Nw.of(context);
-    final role = widget.api.session?.role ?? '';
     final title = widget.title ?? tr('Site', '站点');
     return Scaffold(
       body: Column(children: [
         NwHeader(
-            overline: tr('Robot fleet', '机器人'),
-            title: tr('$title ($role)', '$title（$role）'),
+            // W53：布防、天气挪到值守页；页头不再印角色代号
+            overline: title,
+            title: tr('Robots', '机器人'),
             // 能退就给返回：从站点列表登录进来的，返回 = 离开站点（注销）
             leading: Navigator.canPop(context) ? const BackButton() : null,
             trailing: [
+              // W42：添加机器人（扫贴纸配网；站点上批准要管理权限）。W53：挪到右上角
+              if (widget.entry != null && !(widget.api.session?.isViewer ?? true))
+                IconButton(
+                    key: SiteRobotsPage.addKey,
+                    tooltip: tr('Add robot', '添加机器人'),
+                    icon: const Icon(Icons.add_rounded),
+                    onPressed: () async {
+                      await Navigator.push(context, MaterialPageRoute<void>(
+                          builder: (_) => RobotAddPage(api: widget.api, site: widget.entry!)));
+                      await _reload();
+                    }),
               if (widget.push != null)
                 ValueListenableBuilder<PushState>(
                     valueListenable: widget.push!.state,
@@ -364,32 +350,6 @@ class _SiteRobotsPageState extends State<SiteRobotsPage> {
                 Padding(
                     padding: const EdgeInsets.only(bottom: Nw.s8),
                     child: NwNotice(text: _error!, tone: NwTone.error)),
-              if (_mode != null)
-                Padding(
-                    padding: const EdgeInsets.only(bottom: Nw.s8),
-                    child: NwBanner(
-                      key: SiteRobotsPage.modeKey,
-                      icon: modeIcon('${_mode!['mode']}'),
-                      title: tr('Mode: ${modeText(_mode!)}', '模式：${modeText(_mode!)}'),
-                      onTap: () async {
-                        await Navigator.push(
-                            context, MaterialPageRoute<void>(builder: (_) => SiteModePage(api: widget.api)));
-                        await _reload();
-                      },
-                    )),
-              if (_weather != null)
-                Padding(
-                    padding: const EdgeInsets.only(bottom: Nw.s8),
-                    child: NwBanner(
-                      key: SiteRobotsPage.weatherKey,
-                      icon: weatherIcon('${_weather!['condition']}'),
-                      title: weatherText(_weather!),
-                      onTap: () async {
-                        await Navigator.push(context,
-                            MaterialPageRoute<void>(builder: (_) => SiteWeatherPage(api: widget.api)));
-                        await _reload();
-                      },
-                    )),
               for (final e in _deter.entries)
                 Padding(
                     padding: const EdgeInsets.only(bottom: Nw.s8),
@@ -406,7 +366,7 @@ class _SiteRobotsPageState extends State<SiteRobotsPage> {
                           MaterialPageRoute<void>(
                               builder: (_) => SiteDeterrencePage(api: widget.api, robotId: e.key))),
                     )),
-              if (_mode != null || _weather != null || _deter.isNotEmpty) const SizedBox(height: Nw.s8),
+              if (_deter.isNotEmpty) const SizedBox(height: Nw.s8),
               // W42：等待批准加入的机器人（有管理权限的人才看得到、才批得了）
               if (widget.api.session?.canManageRobots == true)
                 BindApprovals(key: const Key('bind-approvals-host'), api: widget.api),
@@ -420,25 +380,6 @@ class _SiteRobotsPageState extends State<SiteRobotsPage> {
                   loadSummary: widget.api.watchSummary,
                   onOpen: (id) => Navigator.push(context,
                       MaterialPageRoute<void>(builder: (_) => SiteRobotPage(api: widget.api, robotId: id)))),
-              // W42：添加机器人（扫贴纸配网，谁都能做；站点上批准要管理权限）
-              if (widget.entry != null)
-                Padding(
-                  padding: const EdgeInsets.only(top: Nw.s16),
-                  child: Align(
-                    alignment: Alignment.centerLeft,
-                    child: NwButton(
-                      buttonKey: const Key('robot-add'),
-                      icon: Icons.add_rounded,
-                      variant: NwButtonVariant.outline,
-                      label: tr('Add robot', '添加机器人'),
-                      onPressed: () async {
-                        await Navigator.push(context, MaterialPageRoute<void>(
-                            builder: (_) => RobotAddPage(api: widget.api, site: widget.entry!)));
-                        await _reload();
-                      },
-                    ),
-                  ),
-                ),
             ]),
           ),
         ),

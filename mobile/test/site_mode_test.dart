@@ -3,8 +3,8 @@
 import 'dart:async';
 
 import 'package:d1max_patrol/net/site_client.dart';
+import 'package:d1max_patrol/ui/site_duty_page.dart';
 import 'package:d1max_patrol/ui/site_mode.dart';
-import 'package:d1max_patrol/ui/site_page.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -139,29 +139,30 @@ void main() {
     expect(find.text('现在：留守'), findsOneWidget);
   });
 
-  testWidgets('首页：模式那一行；站点推「模式变了」当场换；点进去是模式页', (t) async {
+  testWidgets('值守页（W53）：模式那一行；站点推「模式变了」就重读；点「切换」是模式页', (t) async {
     final api = FakeApi('guard');
-    await t.binding.setSurfaceSize(const Size(800, 360));
+    await t.binding.setSurfaceSize(const Size(800, 600));
     addTearDown(() => t.binding.setSurfaceSize(null));
-    await t.pumpWidget(MaterialApp(home: SiteRobotsPage(api: api)));
+    await t.pumpWidget(MaterialApp(home: SiteDutyPage(api: api)));
     await t.pumpAndSettle();
-    expect(find.textContaining('模式：临时撤防（到 '), findsOneWidget);
+    expect(find.textContaining('临时撤防（到 '), findsOneWidget);
     api.modeView = <String, dynamic>{...api.modeView, 'mode': 'armed', 'until_ms': null};
     api.sse.add(<String, dynamic>{'kind': 'mode', 'mode': api.modeView});
-    await t.pump(const Duration(milliseconds: 100)); // 不等那半秒的合并刷新：是推的那一帧换的
-    expect(find.text('模式：布防'), findsOneWidget);
-    await t.tap(find.byKey(SiteRobotsPage.modeKey));
+    await t.pump(const Duration(milliseconds: 600));
+    await t.pumpAndSettle();
+    expect(find.text('布防'), findsOneWidget);
+    await t.tap(find.byKey(SiteDutyPage.modeChangeKey));
     await t.pumpAndSettle();
     expect(find.byType(SiteModePage), findsOneWidget);
   });
 
-  testWidgets('首页：老站点没有布防模式就不显示那一行', (t) async {
+  testWidgets('值守页：老站点没有布防模式就没有「切换」', (t) async {
     final api = FakeApi('guard')..modeError = const SiteError(404, '没开');
-    await t.binding.setSurfaceSize(const Size(800, 360));
+    await t.binding.setSurfaceSize(const Size(800, 600));
     addTearDown(() => t.binding.setSurfaceSize(null));
-    await t.pumpWidget(MaterialApp(home: SiteRobotsPage(api: api)));
+    await t.pumpWidget(MaterialApp(home: SiteDutyPage(api: api)));
     await t.pumpAndSettle();
-    expect(find.byKey(SiteRobotsPage.modeKey), findsNothing);
+    expect(find.byKey(SiteDutyPage.modeChangeKey), findsNothing);
   });
 
   test('权限：管理员能确认告警、能切模式；保安只能布防；管理员不能标录像留着', () {

@@ -14,7 +14,9 @@ import 'package:d1max_patrol/ui/site_intercepts.dart';
 import 'package:d1max_patrol/ui/site_logs.dart';
 import 'package:d1max_patrol/ui/site_mapping.dart';
 import 'package:d1max_patrol/ui/site_maps.dart';
+import 'package:d1max_patrol/ui/alarm_log.dart';
 import 'package:d1max_patrol/ui/site_page.dart' show SiteIncidentsPage, SiteRobotPage, SiteSchedulePage;
+import 'package:d1max_patrol/ui/site_tabs.dart';
 import 'package:d1max_patrol/ui/site_releases.dart';
 import 'package:d1max_patrol/ui/site_runs.dart';
 import 'package:d1max_patrol/ui/site_weather.dart';
@@ -307,11 +309,11 @@ void main() {
       expect(find.byType(SiteIncidentsPage), findsOneWidget);
       expect(find.byKey(const Key('btn-cameras')), findsOneWidget);
       expect(find.byKey(const Key('btn-intercepts')), findsOneWidget);
-      await t.tap(find.byKey(NwShell.scheduleKey));
+      // W53：第三段是报警记录（原来的排程挪到了日程页）
+      await t.tap(find.byKey(NwShell.alarmsKey));
       await t.pumpAndSettle();
       expect(find.byType(AppBar), findsNothing);
-      expect(find.byType(SiteSchedulePage), findsOneWidget);
-      expect(find.textContaining('nightly'), findsOneWidget);
+      expect(find.byType(AlarmLogPage), findsOneWidget);
       await t.pumpWidget(Container());
     });
   });
@@ -410,21 +412,17 @@ void main() {
       }
     });
 
-    testWidgets('外壳里的管理栏：体检在上，下面是版本、拦截点、摄像头、天气的入口；刷新在页头', (t) async {
+    testWidgets('W53 外壳里的管理栏：要你处理、开站清单在上，下面三组入口、每项一句说明；没有第二个顶栏', (t) async {
       _size(t);
       await t.pumpWidget(MaterialApp(home: NwShell(api: FakeApi('admin'), ring: () {})));
       await t.pumpAndSettle();
       await t.tap(find.byKey(NwShell.adminKey));
       await t.pumpAndSettle();
       expect(find.byType(AppBar), findsNothing);
-      expect(t.widget(find.byKey(SiteHealthPage.refreshKey)), isA<IconButton>());
-      final overall = t.getRect(find.byKey(SiteHealthPage.overallKey));
-      for (final k in [NwShell.releasesKey, NwShell.interceptsKey, NwShell.camerasKey, NwShell.weatherKey]) {
-        expect(t.widget(find.byKey(k)), isA<OutlinedButton>(), reason: '$k');
-        expect(t.getRect(find.byKey(k)).top, greaterThan(overall.bottom), reason: '$k 在体检下面');
-        expect(find.ancestor(of: find.byKey(k), matching: find.byType(SiteHealthPage)), findsOneWidget,
-            reason: '跟体检一起滚');
-      }
+      expect(find.byKey(AdminHomeTab.todoKey), findsOneWidget, reason: '假站点的禁行区没确认');
+      expect(find.byKey(SetupChecklist.cardKey), findsOneWidget);
+      final card = t.getRect(find.byKey(SetupChecklist.cardKey));
+      expect(t.getRect(find.byKey(AdminHomeTab.entryKey('routes'))).top, greaterThan(card.bottom));
       await t.pumpWidget(Container());
     });
   });
@@ -448,7 +446,7 @@ void main() {
             await t.pumpWidget(MaterialApp(theme: th.value, home: NwShell(api: api, ring: () {})));
             await t.pumpAndSettle();
             for (final k in [
-              NwShell.mapKey, NwShell.historyKey, NwShell.incidentsKey, NwShell.scheduleKey, NwShell.adminKey, //
+              NwShell.mapKey, NwShell.historyKey, NwShell.incidentsKey, NwShell.alarmsKey, NwShell.adminKey, //
             ]) {
               await t.tap(find.byKey(k));
               await t.pumpAndSettle();

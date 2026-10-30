@@ -37,9 +37,9 @@ def test_只看只能看_经理能派能排日程不能遥控_保安能派不能
     assert s.req("POST", "/api/routes/r1", {}, token=olga)[0] == 403
     from d1max_site.permissions import TELEOP, allowed
     assert not allowed("owner", TELEOP) and allowed("guard", TELEOP)
-    code, d = s.req("POST", "/api/robots/A/goto", {"target": target(0.3)}, token=olga)
-    assert code == 200, d
-    assert s.req("POST", "/api/robots/A/abort", {"task_id": d["task_id"]}, token=olga)[0] == 200
+    # 经理只多了「派巡逻」:去这里、回待命点、设位置这些照旧不能
+    assert s.req("POST", "/api/robots/A/goto", {"target": target(0.3)}, token=olga)[0] == 403
+    assert s.req("POST", "/api/robots/A/patrol", {"mission_id": "nope"}, token=olga)[0] == 404
     assert s.req("GET", "/api/robots", token=olga)[0] == 200
     code, d = s.req("POST", "/api/robots/A/goto", {"target": target(0.3)}, token=gina)
     assert code == 200, d

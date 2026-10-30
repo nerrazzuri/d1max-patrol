@@ -90,6 +90,11 @@ class Registry:
         return {r["robot_id"]: r["display_name"] for r in self.db.query(
             "SELECT robot_id, display_name FROM robots WHERE display_name<>''")}
 
+    def enrolled_at(self, robot_id: str) -> int | None:
+        """第一次登记进这个站点的时刻(W53:值守页默认跟第一台加入的)。"""
+        rows = self.db.query("SELECT enrolled_at FROM robots WHERE robot_id=?", (robot_id,))
+        return int(rows[0]["enrolled_at"]) if rows else None
+
     def set_name(self, robot_id: str, name: object) -> None:
         """起名:1–32 个字,不许控制字符;空串 = 不起名(用编号)。"""
         if not isinstance(name, str):

@@ -3,13 +3,13 @@
   "label": "临时撤防",
   "manual_until_ms": null,
   "mode": "visitor",
-  "next_change_ms": 1793096458977,
+  "next_change_ms": 1793383021741,
   "prev_mode": "armed",
   "set_by": "alice",
-  "set_ms": 1793092858977,
+  "set_ms": 1793379421741,
   "source": "manual",
   "state": "disarmed",
-  "until_ms": 1793096458977,
+  "until_ms": 1793383021741,
   "visitor_zones": [
     "drive"
   ],

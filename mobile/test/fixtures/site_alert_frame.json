@@ -5,15 +5,15 @@
     "audience": "help",
     "channel": "screen",
     "context": {
-      "task_id": "task-19e1f2c951a5"
+      "task_id": "task-c1de7d4e5a48"
     },
     "count": 1,
     "detail": "机器人报急停没解除",
     "escalated": 0,
-    "first_ms": 1793068689924,
+    "first_ms": 1793379421846,
     "key": "A/estop_pressed#1",
     "kind": "estop_pressed",
-    "last_ms": 1793068689924,
+    "last_ms": 1793379421846,
     "level": "P1",
     "resolved_by": "",
     "resolved_ms": null,

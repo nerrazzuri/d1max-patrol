@@ -57,18 +57,18 @@ def test_标成不用了的项不算没做(tmp_path):
 
 
 def test_向导记录_按账号_合并写_不认的键拒(tmp_path):
+    from d1max_site.accounts import Accounts
     db = SiteDB(tmp_path / "s.db")
-    with db.tx() as c:
-        c.execute("INSERT INTO accounts(name, role, salt, pw_hash, created_at) "
-                  "VALUES ('g', 'guard', x'00', x'00', 0)")
-    assert read_guide(db, "g") == {"tour": 0, "setup_hidden": False, "skip": []}
-    write_guide(db, "g", {"tour": 1})
-    assert write_guide(db, "g", {"skip": ["arming"]}) == {"tour": 1, "setup_hidden": False,
+    acc = Accounts(db, now_ms=lambda: 0)
+    acc.add("g", "pass-word-123", role="guard")
+    assert read_guide(acc, "g") == {"tour": 0, "setup_hidden": False, "skip": []}
+    write_guide(acc, "g", {"tour": 1})
+    assert write_guide(acc, "g", {"skip": ["arming"]}) == {"tour": 1, "setup_hidden": False,
                                                           "skip": ["arming"]}
     for bad in ({}, {"x": 1}, {"tour": "1"}, {"tour": True}, {"skip": ["nope"]},
                 {"tour": -1}, {"setup_hidden": 1}):
         with pytest.raises(GuideError):
-            write_guide(db, "g", bad)
+            write_guide(acc, "g", bad)
     db.close()
 
 

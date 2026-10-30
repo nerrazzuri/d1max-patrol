@@ -1,19 +1,19 @@
-// 登录之后的外壳（2026-10-14 重做）：底部五栏；管理栏只有管理员有；狗列表身上的站点级逻辑（事件流、
-// 响铃、登录过期退回）切到哪一栏都照样活着。各栏里面还是老页面。
+// 登录之后的外壳：底部五栏，第 5 栏按角色（W53：管理员「管理」、经理「日程」、保安和只看「我的」）；
+// 狗列表身上的站点级逻辑（事件流、响铃、登录过期退回）切到哪一栏都照样活着。
 import 'package:d1max_patrol/l10n.dart';
 import 'package:d1max_patrol/net/site_client.dart';
 import 'package:d1max_patrol/store/site_store.dart';
 import 'package:d1max_patrol/ui/nw/nw_shell.dart';
 import 'package:d1max_patrol/ui/nw/nw_theme.dart';
-import 'package:d1max_patrol/ui/site_cameras.dart';
+import 'package:d1max_patrol/ui/alarm_log.dart';
+import 'package:d1max_patrol/ui/site_duty_page.dart';
 import 'package:d1max_patrol/ui/site_health.dart';
 import 'package:d1max_patrol/ui/site_intercepts.dart';
 import 'package:d1max_patrol/ui/site_maps.dart';
 import 'package:d1max_patrol/ui/site_page.dart';
 import 'package:d1max_patrol/ui/site_releases.dart';
 import 'package:d1max_patrol/ui/site_runs.dart';
-import 'package:d1max_patrol/ui/site_watch_page.dart';
-import 'package:d1max_patrol/ui/site_weather.dart';
+import 'package:d1max_patrol/ui/site_tabs.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -34,6 +34,13 @@ Future<void> _show(WidgetTester t, FakeApi api, {ThemeData? theme, void Function
 
 Future<void> _tab(WidgetTester t, Key key) async {
   await t.tap(find.byKey(key));
+  await t.pumpAndSettle();
+}
+
+/// 管理栏是懒建的列表：往下滚到它出来。
+Future<void> _reveal(WidgetTester t, Key key) async {
+  await t.scrollUntilVisible(find.byKey(key), 200,
+      scrollable: find.descendant(of: find.byType(AdminHomeTab), matching: find.byType(Scrollable)).first);
   await t.pumpAndSettle();
 }
 
@@ -59,7 +66,7 @@ void main() {
         expect(find.ancestor(of: find.byKey(key), matching: find.byType(NwBottomNav)), findsOneWidget);
       }
       expect(find.byKey(NwShell.moreKey), findsNothing);
-      expect(find.byType(SiteWatchPage), findsOneWidget);
+      expect(find.byType(SiteDutyPage), findsOneWidget);
       expect(find.byType(SiteRobotsPage), findsNothing, reason: '机器人列表在背后，不显示');
       expect(find.byType(SiteRobotsPage, skipOffstage: false), findsOneWidget, reason: '但是活着');
       // 五栏等宽、够手指点、都在屏幕里
@@ -74,27 +81,21 @@ void main() {
       await t.pumpWidget(Container());
     });
 
-    testWidgets('保安、管理员：没有管理栏，那一栏是「更多」（版本、拦截点、摄像头、天气），没有站点体检', (t) async {
+    testWidgets('W53：经理的第 5 栏是「日程」、保安和只看的是「我的」，都没有管理栏', (t) async {
       _size(t);
-      for (final role in ['guard', 'owner']) {
+      for (final (role, key, page) in [
+        ('owner', NwShell.planKey, SchedulePage),
+        ('guard', NwShell.moreKey, MeTab),
+        ('viewer', NwShell.moreKey, MeTab),
+      ]) {
         await _show(t, FakeApi(role));
         expect(find.byKey(NwShell.adminKey), findsNothing, reason: role);
-        expect(find.text('管理'), findsNothing, reason: role);
         for (final k in _navKeys) {
           expect(find.byKey(k), findsOneWidget, reason: '$role $k');
         }
-        await _tab(t, NwShell.moreKey);
+        await _tab(t, key);
+        expect(find.byType(page), findsOneWidget, reason: role);
         expect(find.byType(SiteHealthPage, skipOffstage: false), findsNothing, reason: role);
-        for (final k in [NwShell.releasesKey, NwShell.interceptsKey, NwShell.camerasKey, NwShell.weatherKey]) {
-          expect(find.byKey(k), findsOneWidget, reason: '$role $k');
-        }
-        await _tab(t, NwShell.camerasKey);
-        expect(find.byType(SiteCamerasPage), findsOneWidget);
-        expect(find.byType(NwBottomNav), findsNothing, reason: '推进去的页面没有底部导航');
-        await t.pageBack();
-        await t.pumpAndSettle();
-        await _tab(t, NwShell.weatherKey);
-        expect(find.byType(SiteWeatherPage), findsOneWidget);
         await t.pumpWidget(Container());
       }
     });
@@ -104,7 +105,7 @@ void main() {
       await _show(t, FakeApi('admin'));
       await _tab(t, NwShell.dogsKey);
       expect(find.byType(SiteRobotsPage), findsOneWidget);
-      expect(find.byType(SiteWatchPage, skipOffstage: false), findsNothing, reason: '切走的那一栏拆掉，不在背后空跑');
+      expect(find.byType(SiteDutyPage, skipOffstage: false), findsNothing, reason: '切走的那一栏拆掉，不在背后空跑');
       expect(find.byKey(const Key('robot-A')), findsOneWidget);
       await _tab(t, NwShell.mapKey);
       // 第四批：地图栏是当前这张图；地图列表从它右上角推进去
@@ -118,36 +119,41 @@ void main() {
 
       await _tab(t, NwShell.historyKey);
       expect(find.byType(SiteRunsPage), findsOneWidget);
-      for (final k in [NwShell.runsKey, NwShell.incidentsKey, NwShell.scheduleKey]) {
+      for (final k in [NwShell.runsKey, NwShell.incidentsKey, NwShell.alarmsKey]) {
         expect(find.byKey(k), findsOneWidget);
       }
       await _tab(t, const Key('open-incidents'));
       expect(find.byType(SiteIncidentsPage), findsOneWidget);
       expect(find.byType(SiteRunsPage), findsNothing);
-      await _tab(t, const Key('open-schedule'));
-      expect(find.byType(SiteSchedulePage), findsOneWidget);
+      await _tab(t, NwShell.alarmsKey);
+      expect(find.byType(AlarmLogPage), findsOneWidget);
       await _tab(t, NwShell.runsKey);
       expect(find.byType(SiteRunsPage), findsOneWidget);
 
+      // W53：管理栏 = 要你处理 + 开站清单 + 三组入口（每项一句说明）；体检、版本从入口进
       await _tab(t, NwShell.adminKey);
-      expect(find.byType(SiteHealthPage), findsOneWidget);
-      expect(t.widget(find.byKey(const Key('open-releases'))), isA<OutlinedButton>());
-      // 第四批：入口在体检下面（同一页里往下滚）
-      await t.ensureVisible(find.byKey(const Key('open-releases')));
-      await _tab(t, const Key('open-releases'));
+      expect(find.byType(AdminHomeTab), findsOneWidget);
+      expect(find.byKey(SetupChecklist.cardKey), findsOneWidget);
+      await _reveal(t, AdminHomeTab.entryKey('releases'));
+      await _tab(t, AdminHomeTab.entryKey('releases'));
       expect(find.byType(SiteReleasesPage), findsOneWidget);
       expect(find.byType(NwBottomNav), findsNothing);
       await t.pageBack();
       await t.pumpAndSettle();
-      expect(find.byType(SiteHealthPage), findsOneWidget, reason: '退回来还在管理栏');
-      await t.ensureVisible(find.byKey(NwShell.interceptsKey));
-      await _tab(t, NwShell.interceptsKey);
+      expect(find.byType(AdminHomeTab), findsOneWidget, reason: '退回来还在管理栏');
+      await _reveal(t, AdminHomeTab.entryKey('intercepts'));
+      await _tab(t, AdminHomeTab.entryKey('intercepts'));
       expect(find.byType(SiteInterceptsPage), findsOneWidget);
+      await t.pageBack();
+      await t.pumpAndSettle();
+      await _reveal(t, AdminHomeTab.entryKey('health'));
+      await _tab(t, AdminHomeTab.entryKey('health'));
+      expect(find.byType(SiteHealthPage), findsOneWidget);
       await t.pageBack();
       await t.pumpAndSettle();
 
       await _tab(t, NwShell.dutyKey);
-      expect(find.byType(SiteWatchPage), findsOneWidget);
+      expect(find.byType(SiteDutyPage), findsOneWidget);
       await t.pumpWidget(Container());
     });
 
@@ -248,7 +254,7 @@ void main() {
       expect(find.byType(NwShell), findsOneWidget);
       expect(find.byType(NwBottomNav), findsOneWidget);
       await _tab(t, NwShell.dogsKey);
-      expect(find.text('庄园（admin）'), findsOneWidget, reason: '站点名交给了机器人列表');
+      expect(find.text('庄园'), findsOneWidget, reason: '站点名交给了机器人列表（W53：页头不再印角色代号）');
       await t.pageBack();
       await t.pumpAndSettle();
       expect(find.byType(NwShell), findsNothing);
@@ -274,8 +280,8 @@ void main() {
               await _show(t, FakeApi(role), theme: th.value);
               expect(t.takeException(), isNull);
               for (final k in [
-                NwShell.dogsKey, NwShell.mapKey, NwShell.historyKey, NwShell.incidentsKey, NwShell.scheduleKey,
-                role == 'admin' ? NwShell.adminKey : NwShell.moreKey, NwShell.dutyKey,
+                NwShell.dogsKey, NwShell.mapKey, NwShell.historyKey, NwShell.incidentsKey, NwShell.alarmsKey,
+                role == 'admin' ? NwShell.adminKey : NwShell.planKey, NwShell.dutyKey,
               ]) {
                 await _tab(t, k);
                 expect(t.takeException(), isNull, reason: '$k');

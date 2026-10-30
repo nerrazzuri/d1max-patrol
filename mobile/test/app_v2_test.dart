@@ -722,15 +722,13 @@ void main() {
       expect(find.descendant(of: find.byKey(const Key('open-maps')), matching: find.text('地图')), findsOneWidget);
       await t.tap(find.byKey(const Key('open-runs')));
       await t.pumpAndSettle();
-      for (final k in ['open-incidents', 'open-schedule']) {
+      for (final k in ['open-incidents', 'history-alarms']) {
         expect(find.byKey(Key(k)), findsOneWidget, reason: k);
       }
-      await t.tap(find.byKey(const Key('open-schedule')));
-      await t.pumpAndSettle();
-      expect(find.byType(SiteSchedulePage), findsOneWidget);
+      // W53：管理栏是「要你处理 + 开站清单 + 三组入口」
       await t.tap(find.byKey(const Key('open-health')));
       await t.pumpAndSettle();
-      expect(find.byKey(const Key('open-releases')), findsOneWidget);
+      expect(find.byKey(const Key('admin-entry-routes')), findsOneWidget);
       await t.pumpWidget(Container());
     });
 

@@ -154,6 +154,27 @@ class Accounts:
                       "VALUES (?,?,?,?,?,?)", (name, role, salt, _hash(password, salt),
                                                self._now(), display_name.strip()))
 
+    def add_hashed(self, name: str, *, role: str, salt: bytes, pw_hash: bytes, display_name: str,
+                   tx: Any) -> None:
+        """W52:批准申请时用申请人自己设的密码(只有哈希)建账号。在调用方的事务里(跟改申请状态一起)。"""
+        tx.execute("INSERT INTO accounts(name, role, salt, pw_hash, created_at, display_name) "
+                   "VALUES (?,?,?,?,?,?)", (name, role, salt, pw_hash, self._now(), display_name))
+
+    def guide(self, name: str) -> str:
+        """W53 上手向导记录(JSON 原文;没有这个账号是空串)。"""
+        rows = self.db.query("SELECT guide FROM accounts WHERE name=?", (name,))
+        return rows[0]["guide"] if rows else ""
+
+    def set_guide(self, name: str, update: Callable[[str], str]) -> bool:
+        """读改写向导记录(同一个事务里);没有这个账号回 False。"""
+        with self.db.tx() as c:
+            row = c.execute("SELECT guide FROM accounts WHERE name=?", (name,)).fetchone()
+            if row is None:
+                return False
+            c.execute("UPDATE accounts SET guide=? WHERE name=?",
+                      (update(row["guide"] or "{}"), name))
+        return True
+
     def names(self) -> list[str]:
         return [r["name"] for r in self.db.query("SELECT name FROM accounts ORDER BY name")]
 

@@ -69,6 +69,7 @@ from d1max_site.permissions import (
     HANDLE_ALERTS,
     MANAGE,
     MANAGE_ACCOUNTS,
+    PATROL,
     REVIEW,
     SCHEDULE,
     SET_MODE,
@@ -569,19 +570,19 @@ class _Handler(TlsHandlerMixin):
                     "site_name": self.site.site_name, "api_level": SITE_API_LEVEL,
                     "min_app_level": MIN_APP_API_LEVEL,
                     # W53:上手向导看过哪一版、开站清单收没收起来
-                    "guide": read_guide(self.site.accounts.db, str(user))})
+                    "guide": read_guide(self.site.accounts, str(user))})
             if method == "POST" and path == "/api/me/guide":
                 from d1max_site.setup import GuideError, write_guide
                 self._need(user, VIEW)
                 try:
-                    return self._send_json(200, write_guide(self.site.accounts.db, str(user),
+                    return self._send_json(200, write_guide(self.site.accounts, str(user),
                                                             self._body()))
                 except GuideError as exc:
                     raise HttpError(400, str(exc)) from exc
             if method == "GET" and path == "/api/setup":
                 from d1max_site.setup import read_guide, setup_view
                 self._need(user, MANAGE)
-                skip = set(read_guide(self.site.accounts.db, str(user))["skip"])
+                skip = set(read_guide(self.site.accounts, str(user))["skip"])
                 disp = self.site.dispatcher
                 return self._send_json(200, self.site.loop.call(lambda: _sync(
                     setup_view, disp.db, disp, skip=skip)))
@@ -1122,6 +1123,8 @@ class _Handler(TlsHandlerMixin):
             self._need(user, ABORT)
         elif action == "standby":
             self._need(user, MANAGE)
+        elif action == "patrol":
+            self._need(user, PATROL)              # W53:经理也能派巡逻(别的派单不能)
         else:
             self._need(user, DISPATCH)
         if action is None:
@@ -1213,7 +1216,7 @@ class _Handler(TlsHandlerMixin):
         from d1max_site.adhoc import AdhocError
         if method != "POST":
             raise HttpError(405, "只支持 POST")
-        self._need(user, DISPATCH)
+        self._need(user, PATROL)
         self._audit_target = aid
         desk = self._adhoc()
         others = allowed(getattr(user, "role", ""), SCHEDULE)
@@ -1229,7 +1232,7 @@ class _Handler(TlsHandlerMixin):
         """派之前先看(W53):``GET ?mission_id=`` → 估时、能不能马上走、撞了哪趟日程。"""
         if method != "GET":
             raise HttpError(405, "只支持 GET")
-        self._need(user, DISPATCH)
+        self._need(user, PATROL)
         if robot_id not in self.site.dispatcher.clients:
             raise HttpError(404, f"没有登记过 {robot_id}")
         q = parse_qs(self.path.split("?", 1)[1] if "?" in self.path else "")
@@ -1843,8 +1846,7 @@ class _Handler(TlsHandlerMixin):
             from d1max_site.account_requests import AccountRequests
             from d1max_site.alert_store import LoopAlerts
             alerts = LoopAlerts(site.alerts, site.loop) if site.alerts is not None else None
-            site.account_requests = AccountRequests(site.accounts.db, now_ms=site._now,
-                                                    alerts=alerts)
+            site.account_requests = AccountRequests(site.accounts, now_ms=site._now, alerts=alerts)
         return site.account_requests
 
     def _account_apply(self) -> None:
