@@ -285,7 +285,7 @@ def 视频站(tmp_path):
 
 
 def _tok(s):
-    from test_site_video import _登, _新鲜
+    from test_site_video import _新鲜, _登
     tok = _登(s)
     _新鲜(s, tok)
     return tok
