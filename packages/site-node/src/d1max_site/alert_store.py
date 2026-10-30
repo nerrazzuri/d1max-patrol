@@ -93,7 +93,7 @@ class AlertDesk:
     # ------------------------------------------------------------ 操作
 
     def raise_alert(self, *, kind: str, robot: str, title: str, detail: str = "",
-                    context: dict[str, Any] | None = None) -> Alert:
+                    context: dict[str, Any] | None = None, merge: bool = True) -> Alert:
         ctx: dict[str, Any] = {}
         if self.context_for is not None:
             try:
@@ -102,7 +102,7 @@ class AlertDesk:
                 log.exception("%s 的现场拿不到", robot)
         ctx.update(context or {})
         return self.book.raise_alert(kind=kind, robot=robot, title=title, detail=detail,
-                                     now_ms=self._now(), context=ctx)
+                                     now_ms=self._now(), context=ctx, merge=merge)
 
     def absorbing(self, robot: str, kind: str) -> Alert | None:
         return self.book.absorbing(robot, kind, now_ms=self._now())

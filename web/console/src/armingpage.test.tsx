@@ -74,6 +74,17 @@ describe("布防时间页", () => {
     expect(body.slots).toContainEqual({ zone: "", day: 0, start: "22:00", end: "24:00" });
   });
 
+  it("W53 经理:能排布防时间,交班那一块不显示、也不提交(外审 W53-1 #10)", async () => {
+    const { container: c } = render(<ArmingPage say={() => {}} now={at(12)} role="owner" />);
+    await waitFor(() => expect(row(c, 0).querySelector(".armblock")).not.toBeNull());
+    expect(c.querySelector(".arm-duty")).toBeNull();
+    drag(row(c, 1).querySelector(".armtrack")!, 600, 720);
+    fireEvent.click(c.querySelector(".arm-save")!);
+    await waitFor(() => expect(posted.some((p) => p.url === "/api/arming/schedule")).toBe(true));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(posted.some((p) => p.url === "/api/duty-settings")).toBe(false);
+  });
+
   it("点色块能删", async () => {
     const { container: c } = page();
     await waitFor(() => expect(row(c, 0).querySelector(".armblock")).not.toBeNull());

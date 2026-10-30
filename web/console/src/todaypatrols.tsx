@@ -22,6 +22,13 @@ const STATE: Record<string, [Key, string]> = {
   queued: ["tdQueued", "warn"], cancelled: ["tdCancelled", ""], expired: ["tdExpired", ""],
 };
 
+/** 时刻按站点的钟(站点回的 ``utc_offset_min``);老站点没有就按浏览器的(外审 W53-1 #12)。 */
+export function siteHm(ms: number, offsetMin: number | null | undefined): string {
+  if (offsetMin == null) return hm(ms);
+  const d = new Date(ms + offsetMin * 60_000);
+  return `${String(d.getUTCHours()).padStart(2, "0")}:${String(d.getUTCMinutes()).padStart(2, "0")}`;
+}
+
 export function stateOf(s: string): [string, string] {
   const x = STATE[s];
   return x ? [t(x[0]), x[1]] : [s, ""];
@@ -29,10 +36,11 @@ export function stateOf(s: string): [string, string] {
 
 export function TodayPatrols() {
   const [items, setItems] = useState<TodayItem[] | null>(null);
+  const [off, setOff] = useState<number | null>(null);
   useEffect(() => {
     let live = true;
-    const load = () => api<{ items: TodayItem[] }>("GET", "/api/patrols/today")
-      .then((d) => live && setItems(d.items ?? []))
+    const load = () => api<{ items: TodayItem[]; utc_offset_min?: number }>("GET", "/api/patrols/today")
+      .then((d) => { if (live) { setItems(d.items ?? []); setOff(d.utc_offset_min ?? null); } })
       .catch(() => live && setItems((x) => x ?? []));
     void load();
     const timer = window.setInterval(load, 30_000);
@@ -47,7 +55,7 @@ export function TodayPatrols() {
           const [label, tone] = stateOf(x.state);
           return (
             <li key={i} class="today-row" title={x.reason || undefined}>
-              <span class="mono">{hm(x.at_ms)}</span>
+              <span class="mono">{siteHm(x.at_ms, off)}</span>
               <span class="today-what">
                 {[x.kind === "adhoc" ? t("tdAdhoc") : "", x.label, x.robot, x.kind === "adhoc" ? x.by : ""].filter(Boolean).join(" · ")}
                 {x.reason && <span class="muted small"> · {x.reason}</span>}

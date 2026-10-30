@@ -674,6 +674,14 @@ class FakeApi implements SiteApi {
   SiteError? applyError;
 
   @override
+  Future<Map<String, dynamic>> patrolPoints(
+      String robotId, List<(double, double)> points, String mapId, String version) async {
+    calls.add('patrolPoints $robotId ${points.length} $mapId:$version');
+    if (patrolError != null) throw patrolError!;
+    return patrolReply ?? siteFixture('site_dispatch');
+  }
+
+  @override
   Future<Map<String, dynamic>> patrolPlan(String robotId, String missionId) async {
     calls.add('patrolPlan $robotId $missionId');
     return plans[missionId] ??
@@ -709,6 +717,7 @@ class FakeApi implements SiteApi {
 
   Map<String, dynamic> schedules = <String, dynamic>{'timezone': 'UTC', 'revision': 1, 'schedules': <dynamic>[]};
   SiteError? saveScheduleError;
+  void Function(Map<String, dynamic> body)? onSaveSchedule;
 
   @override
   Future<Map<String, dynamic>> routeSchedules() async {
@@ -719,6 +728,7 @@ class FakeApi implements SiteApi {
   @override
   Future<Map<String, dynamic>> saveSchedule(String id, Map<String, dynamic> body) async {
     calls.add('saveSchedule $id ${body['mission']} ${body['at']} ${body['robot'] ?? ''}');
+    onSaveSchedule?.call(body);
     if (saveScheduleError != null) throw saveScheduleError!;
     final rows = (schedules['schedules'] as List).where((e) => (e as Map)['id'] != id).toList()
       ..add(<String, dynamic>{...body, 'id': id, 'revision': 1});

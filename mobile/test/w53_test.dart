@@ -149,6 +149,33 @@ void main() {
       expect(api.calls, contains('resume A'));
     });
 
+    testWidgets('机器人明确没收（忙）：不说「派出去了」，框里写原因（外审 W53-1 #4）', (t) async {
+      final api = FakeApi('guard')
+        ..patrolReply = <String, dynamic>{'queued': false, 'ack': <String, dynamic>{'result': 'rejected', 'reason': 'busy'}};
+      await _duty(t, api);
+      await t.tap(find.byKey(SiteDutyPage.patrolKey));
+      await t.pumpAndSettle();
+      await t.tap(find.byKey(patrolRouteKey('loop')));
+      await t.pumpAndSettle();
+      await t.tap(find.byKey(patrolSendKey));
+      await t.pumpAndSettle();
+      expect(find.textContaining('机器人没接'), findsOneWidget);
+      expect(find.textContaining('派出去了'), findsNothing);
+    });
+
+    testWidgets('派巡逻框里能改成「在地图上点点位」', (t) async {
+      await _duty(t, FakeApi('guard'));
+      await t.tap(find.byKey(SiteDutyPage.patrolKey));
+      await t.pumpAndSettle();
+      expect(find.byKey(patrolCustomKey), findsOneWidget);
+    });
+
+    test('时刻按站点的钟：给了偏移就不看手机时区', () {
+      const ms = 1800000000000; // 2027-01-15 08:00 UTC
+      expect(hhmm(ms, 480), '16:00');
+      expect(hhmm(ms, 0), '08:00');
+    });
+
     test('被拒的原话按语言说：英文界面用 reason_en', () {
       const e = SiteError(409, 'A 不在线', body: <String, dynamic>{'reason_code': 'offline', 'reason_en': 'Offline.'});
       appLang.value = AppLang.en;
@@ -213,6 +240,35 @@ void main() {
       expect(saved, hasLength(1));
       expect(saved.single, contains(' loop 08:00'));
       expect(find.byKey(SchedulePage.rowKey(saved.single.split(' ')[1])), findsOneWidget);
+    });
+
+    testWidgets('改已有的日程：编辑器没有的字段（每隔几分钟、到几点、回哪个待命点）原样带回去（外审 #9）', (t) async {
+      final api = FakeApi('owner')
+        ..schedules = <String, dynamic>{'timezone': 'UTC', 'revision': 1, 'schedules': <dynamic>[
+          <String, dynamic>{'id': 'night', 'mission': 'loop', 'at': '22:00', 'days': <dynamic>['mon', 'tue'],
+            'robot': 'A', 'every_min': 30, 'until': '02:00', 'standby': 'gate', 'priority': 3, 'revision': 4,
+            'window_min': 20, 'on_missed': 'alarm', 'updated_by': 'x'},
+        ]};
+      Map<String, dynamic>? sent;
+      api.onSaveSchedule = (b) => sent = b;
+      _size(t);
+      await t.pumpWidget(MaterialApp(home: SchedulePage(api: api)));
+      await t.pumpAndSettle();
+      await t.tap(find.byKey(SchedulePage.weekTabKey));
+      await t.pumpAndSettle();
+      await t.tap(find.byKey(SchedulePage.rowKey('night')));
+      await t.pumpAndSettle();
+      await t.tap(find.byKey(const Key('sched-save')));
+      await t.pumpAndSettle();
+      expect(sent, isNotNull);
+      expect(sent!['every_min'], 30);
+      expect(sent!['until'], '02:00');
+      expect(sent!['standby'], 'gate');
+      expect(sent!['priority'], 3);
+      expect(sent!['window_min'], 20);
+      expect(sent!['on_missed'], 'alarm');
+      expect(sent!['base_revision'], 4);
+      expect(sent!.containsKey('updated_by'), isFalse);
     });
 
     testWidgets('保安看日程：只看，不能加', (t) async {

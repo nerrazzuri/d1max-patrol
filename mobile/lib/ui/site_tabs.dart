@@ -625,6 +625,7 @@ class SchedulePage extends StatefulWidget {
 class _SchedulePageState extends State<SchedulePage> {
   bool _week = false;
   List<Map<String, dynamic>> _today = const [];
+  int? _offsetMin;
   Map<String, dynamic>? _sched;
   List<String> _routes = const [];
   List<String> _robots = const [];
@@ -647,6 +648,7 @@ class _SchedulePageState extends State<SchedulePage> {
       if (!mounted) return;
       setState(() {
         _today = [for (final x in ((got[0] as Map)['items'] as List? ?? const [])) if (x is Map) x.cast<String, dynamic>()];
+        _offsetMin = ((got[0] as Map)['utc_offset_min'] as num?)?.toInt();
         _sched = (got[1] as Map).cast<String, dynamic>();
         _routes = [for (final m in ((got[2] as Map)['missions'] as List? ?? const [])) '$m'];
         _robots = [for (final r in got[3] as List) if (r is Map && r['revoked'] != true) '${r['robot_id']}'];
@@ -664,13 +666,21 @@ class _SchedulePageState extends State<SchedulePage> {
         builder: (_) => _ScheduleEditor(api: widget.api, routes: _routes, robots: _robots, old: old));
     if (got == null) return;
     final id = old != null ? '${old['id']}' : 'app-${DateTime.now().millisecondsSinceEpoch}';
+    // 外审 W53-1 #9：编辑器没有的字段（每隔几分钟、到几点、优先级、回哪个待命点……）原样带回去，
+    // 站点是整条替换的；选了「任一台」就把原来的 robot 去掉
+    const meta = {'id', 'revision', 'active_from_ms', 'updated_ms', 'updated_by', 'source'};
+    final body = <String, dynamic>{
+      if (old != null)
+        for (final e in old.entries)
+          if (!meta.contains(e.key)) e.key: e.value,
+      'window_min': old?['window_min'] ?? 30,
+      'on_missed': old?['on_missed'] ?? 'skip',
+      ...got,
+      'base_revision': old?['revision'] ?? 0,
+    };
+    if (!got.containsKey('robot')) body.remove('robot');
     try {
-      await widget.api.saveSchedule(id, <String, dynamic>{
-        ...got,
-        'window_min': old?['window_min'] ?? 30,
-        'on_missed': old?['on_missed'] ?? 'skip',
-        'base_revision': old?['revision'] ?? 0,
-      });
+      await widget.api.saveSchedule(id, body);
       if (mounted) setState(() => _msg = tr('Saved', '存好了'));
     } on SiteError catch (e) {
       if (mounted) setState(() => _msg = refusalText(e));
@@ -720,7 +730,7 @@ class _SchedulePageState extends State<SchedulePage> {
         nwGap8,
         if (_msg != null) ...[NwNotice(text: _msg!), nwGap8],
         if (!_week)
-          TodayPatrolList(api: widget.api, items: _today, onChanged: _load)
+          TodayPatrolList(api: widget.api, items: _today, onChanged: _load, offsetMin: _offsetMin)
         else ...[
           if (rows.isEmpty)
             Text(tr('No schedule yet.', '还没有日程。'), style: NwText.bodyMedium.copyWith(color: c.textSecondary)),

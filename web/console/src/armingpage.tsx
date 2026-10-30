@@ -2,6 +2,7 @@
 // 全部防区一样,或者每个防区单独设;例外日期(节假日、出远门);交班时间、多久没巡过;一个「保存」存整份。
 // 星期、日子、时区都由站点算(站点时区),网页只画站点回来的。
 import { useEffect, useRef, useState } from "preact/hooks";
+import { isOwnerLike } from "./model";
 import { api, ApiError, enc } from "./api";
 import { addBlock, copyDay, fromWire, minutesText, moveEdge, removeBlock, toWire, type Slot, type WireSlot } from "./armgrid";
 import { hm, type DutySettings } from "./data";
@@ -38,7 +39,9 @@ export function whoText(m: ModeView | null, enabled: boolean): string {
   return t("armWhoOff", { s });
 }
 
-export function ArmingPage({ say, now }: { say: Say; now: number }) {
+export function ArmingPage({ say, now, role = "admin" }: { say: Say; now: number; role?: string }) {
+  // W53:经理能排布防时间,值班设置(交班钟点等)还是管理员的事 —— 经理那一块不显示、不提交(外审 W53-1 #10)
+  const canDuty = isOwnerLike(role);
   const [loaded, setLoaded] = useState<{ enabled: boolean; slots: Slot[]; duty: DutySettings } | null>(null);
   const [enabled, setEnabled] = useState(false);
   const [slots, setSlots] = useState<Slot[]>([]);
@@ -86,7 +89,7 @@ export function ArmingPage({ say, now }: { say: Say; now: number }) {
     setBusy(true);
     try {
       await api("POST", "/api/arming/schedule", { enabled, slots: toWire(slots) });
-      await api("POST", "/api/duty-settings", duty);
+      if (canDuty) await api("POST", "/api/duty-settings", duty);
       setLoaded({ enabled, slots, duty });
       say(t("saved"));
       void loadMode();
@@ -154,7 +157,7 @@ export function ArmingPage({ say, now }: { say: Say; now: number }) {
 
       <Exceptions list={exceptions} say={say} onChange={setExceptions} />
 
-      <section class="panel arm-duty">
+      {canDuty && <section class="panel arm-duty">
         <h2>{t("armDutyTitle")}</h2>
         <div class="row wrap">
           <label class="field">{t("armShiftA")}
@@ -173,7 +176,7 @@ export function ArmingPage({ say, now }: { say: Say; now: number }) {
           </label>
         </div>
         <p class="muted small">{t("armDutyHint")}</p>
-      </section>
+      </section>}
     </section>
   );
 }

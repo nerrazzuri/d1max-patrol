@@ -37,11 +37,28 @@ class 假派遣器:
         self.running: dict[str, str] = {}
         self.sent: list[dict] = []
         self.refuse = ""
+        self.ack = "accepted"
+        self.cannot: dict[str, str] = {}           # 派不出去的机器人 → 原因
+        self.loaded = ("estate-1", "7")
+        self.acks = []
         self.registry = SimpleNamespace(list=lambda: [SimpleNamespace(robot_id=r, revoked=False)
                                                       for r in self.robots])
+        self.clients: dict = {}
 
     def busy(self, rid):
         return self.running.get(rid)
+
+    def dispatchable(self, rid, kind):
+        return self.cannot.get(rid, "")
+
+    def autonomy(self, rid):
+        return "autonomous"
+
+    def _loaded(self, c):
+        return self.loaded
+
+    def on_ack(self, cb):
+        self.acks.append(cb)
 
     async def patrol(self, rid, wire, *, issued_by, priority=0, task_id=None, before_send=None):
         if self.refuse:
@@ -54,17 +71,21 @@ class 假派遣器:
                        (f"c-{task_id}", task_id, rid, "patrol",
                         json.dumps({"mission": wire}), issued_by, self.now(), priority))
         self.sent.append({"robot": rid, "task_id": task_id, "by": issued_by, "priority": priority,
-                          "mission": wire["mission"]})
-        self.running[rid] = task_id
-        return {"task_id": task_id, "ack": {"result": "accepted"}}
+                          "mission": wire["mission"], "wire": wire})
+        if self.ack == "accepted":
+            self.running[rid] = task_id
+        reason = "忙" if self.ack != "accepted" else ""
+        return {"task_id": task_id, "ack": {"result": self.ack, "reason": reason}}
 
 
 class 假告警:
     def __init__(self) -> None:
         self.got: list[dict] = []
 
-    def raise_alert(self, **kw):
-        self.got.append(kw)
+    def raise_alert(self, *, kind, robot, title, detail="", context=None, merge=True):
+        # 跟真的告警台一个签名(外审 #2:原来多传了 now_ms,真站点上全抛 TypeError)
+        self.got.append({"kind": kind, "robot": robot, "title": title, "detail": detail,
+                         "context": context, "merge": merge})
 
 
 @pytest.fixture
@@ -75,8 +96,9 @@ def 台(tmp_path):
     d = 假派遣器(db)
     d.now = lambda: now["t"]
     a = 假告警()
-    desk = AdhocDesk(db, d, now_ms=lambda: now["t"], alerts=a)
-    yield SimpleNamespace(db=db, now=now, disp=d, alerts=a, desk=desk)
+    sup = {"why": ""}
+    desk = AdhocDesk(db, d, now_ms=lambda: now["t"], alerts=a, refusal=lambda r: sup["why"])
+    yield SimpleNamespace(db=db, now=now, disp=d, alerts=a, desk=desk, sup=sup)
     db.close()
 
 
@@ -160,11 +182,15 @@ def test_正在跑日程也排到后面(台):
     assert got["queued"] is True and "正在跑的日程" in got["because"]
 
 
-def test_日程没写哪台_站点不止一台就不算撞(台):
+def test_日程没写哪台_别的台也能跑就不算撞_别的台跑不了就算(台):
     t = 台
     t.disp.robots = ["A", "B"]
     t.now["t"] = 毫秒(21, 59)
-    assert 跑(t.desk.submit("A", 任务定义(), label="loop", by="gina"))["queued"] is False
+    assert t.desk.plan("A", 任务定义())["queued"] is False
+    t.disp.cannot["B"] = "B 不在线"                 # 外审 #6:只有 A 能跑这条日程
+    assert t.desk.plan("A", 任务定义())["queued"] is True
+    t.disp.cannot["A"] = "A 没定位"
+    assert t.desk.plan("B", 任务定义())["queued"] is False, "A 也跑不了:日程落不到谁头上"
 
 
 def test_排队的_没到点不派_到点机器人忙不派_空了派_告诉派的人(台):
@@ -285,3 +311,168 @@ def test_今天的巡逻_日程走完_没跑_在跑(台):
     assert item["state"] == "missed" and "离线" in item["reason"]
     t.now["t"] = 毫秒(22, 5, 0, 16)
     assert today_view(t.db, now_ms=t.now["t"])["items"][0]["state"] == "waiting"
+
+
+# ------------------------------------------------------------ 外审 W53-1
+
+
+def test_外审1_排队的到点起跑前再查监护_没人监护就不派(台):
+    t = 台
+    t.now["t"] = 毫秒(21, 59)
+    got = 跑(t.desk.submit("A", 任务定义(), label="loop", by="gina"))
+    t.now["t"] = got["start_after_ms"]
+    t.sup["why"] = "A 要人现场监护:先在手机上打开「我在现场监护」"
+    跑(t.desk.tick())
+    assert t.disp.sent == []
+    row = t.db.query("SELECT * FROM adhoc_queue")[0]
+    assert row["state"] == "failed" and "监护" in row["note"]
+
+
+def test_外审2和3_通知经过真告警台_一次一条不合并_各推各的人(tmp_path):
+    from d1max_site.alert_store import AlertDesk
+    db = SiteDB(tmp_path / "s.db")
+    import_bundle(db, 打包(tmp_path, 1), imported_by="alice", now_ms=1)
+    now = {"t": 毫秒(21, 59)}
+    d = 假派遣器(db)
+    d.now = lambda: now["t"]
+    alerts = AlertDesk(db, now_ms=lambda: now["t"])
+    desk = AdhocDesk(db, d, now_ms=lambda: now["t"], alerts=alerts)
+    a = 跑(desk.submit("A", 任务定义(), label="loop", by="g1"))
+    b = 跑(desk.submit("A", 任务定义(), label="loop", by="g2"))
+    now["t"] = max(a["start_after_ms"], b["start_after_ms"]) + ah.QUEUE_TTL_MS
+    跑(desk.tick())                                   # 两条都作废:各告诉各的人
+    rows = db.query("SELECT kind, context FROM alerts ORDER BY first_ms, key")
+    sent = [r for r in rows if r["kind"] == "adhoc_patrol"]
+    told = sorted(json.loads(r["context"])["to"] for r in rows if r["kind"] == "adhoc_queue")
+    assert len(sent) == 2 and told == ["g1", "g2"], [dict(r) for r in rows]
+    db.close()
+
+
+def test_外审4_机器人明确没收_记成没走成_晚到的拒收也改(台):
+    t = 台
+    t.disp.ack = "rejected"                            # 代理忙:回 rejected、原因 busy
+    got = 跑(t.desk.submit("A", 任务定义(), label="loop", by="gina"))
+    assert got["ack"]["result"] == "rejected"
+    row = t.db.query("SELECT * FROM adhoc_queue")[0]
+    assert row["state"] == "failed" and "rejected" in row["note"]
+    assert [x["state"] for x in today_view(t.db, now_ms=t.now["t"], adhoc=t.desk)["items"]
+            if x["kind"] == "adhoc"] == ["failed"]
+    # 先收下(没回执)、后来才说不收
+    t.disp.ack = "accepted"
+    t.disp.running.clear()
+    got = 跑(t.desk.submit("A", 任务定义(), label="loop", by="gina"))
+    from d1max_contract.messages import AckResult
+    for cb in t.disp.acks:
+        cb(SimpleNamespace(task_id=got["task_id"], result=AckResult.REJECTED, reason="busy"))
+    row = t.db.query("SELECT * FROM adhoc_queue WHERE task_id=?", (got["task_id"],))[0]
+    assert row["state"] == "failed"
+
+
+def test_外审5_正在跑日程_排到它走完之后_不越推越远(台):
+    t = 台
+    t.disp.running["A"] = "sched-abc"
+    with t.db.tx() as c:
+        c.execute("INSERT INTO schedule_runs(entry_id, scheduled_ms, outcome, robot_id, task_id, "
+                  "decided_at) VALUES ('nightly', ?, 'started', 'A', 'sched-abc', ?)",
+                  (毫秒(20, 0), 毫秒(20, 0)))
+        c.execute("INSERT INTO commands(command_id, task_id, robot_id, kind, payload, issued_by, "
+                  "issued_at) VALUES ('c', 'sched-abc', 'A', 'patrol', '{}', 'schedule:nightly', "
+                  "?)", (毫秒(20, 0),))
+    t.now["t"] = 毫秒(20, 0, 30)
+    est = t.desk.estimate_s("A", parse_mission(任务定义()))
+    p = t.desk.plan("A", 任务定义())
+    end = max(毫秒(20, 0) + est * 1000, t.now["t"] + 60_000)
+    assert p["queued"] and p["start_ms"] == end + 60_000, "两分钟左右,不是四十分钟"
+
+
+def test_外审7_到点还没派的那一轮也算撞(台):
+    t = 台
+    t.now["t"] = 毫秒(22, 0, 1)                       # 22:00 到点,执行器下一拍还没来
+    assert t.desk.plan("A", 任务定义())["queued"] is True
+    with t.db.tx() as c:                               # 那一轮派出去了(在别处跑):不再算
+        c.execute("INSERT INTO schedule_runs(entry_id, scheduled_ms, outcome, robot_id, task_id, "
+                  "decided_at) VALUES ('nightly', ?, 'skip', NULL, NULL, ?)",
+                  (毫秒(22, 0), 毫秒(22, 0)))
+    assert t.desk.plan("A", 任务定义())["queued"] is False
+    t.now["t"] = 毫秒(22, 31)                          # 窗口(30 分钟)过了:也不算
+    with t.db.tx() as c:
+        c.execute("DELETE FROM schedule_runs")
+    assert t.desk.plan("A", 任务定义())["queued"] is False
+
+
+def test_外审8_派不出去的不排队_当场说(台):
+    t = 台
+    with t.db.tx() as c:                               # 日程写明了 A:A 派不出去也照样落到它头上
+        c.execute("UPDATE route_schedules SET definition=json_set(definition, '$.robot', 'A')")
+    t.now["t"] = 毫秒(21, 59)
+    t.disp.cannot["A"] = "A 不在线"
+    with pytest.raises(DispatchRefused, match="不在线"):
+        跑(t.desk.submit("A", 任务定义(), label="loop", by="gina"))
+    t.disp.cannot.clear()
+    t.disp.loaded = ("estate-1", "6")
+    with pytest.raises(DispatchRefused, match="加载的是"):
+        跑(t.desk.submit("A", 任务定义(), label="loop", by="gina"))
+    assert t.db.query("SELECT COUNT(*) AS n FROM adhoc_queue")[0]["n"] == 0
+
+
+def test_外审11_排到明天的也在今天的列表里_能取消(台):
+    t = 台
+    with t.db.tx() as c:
+        c.execute("UPDATE route_schedules SET definition=json_set(definition, '$.at', '00:10')")
+    from d1max_site.catalog import active_bundle
+    assert active_bundle(t.db).schedule.entries[0].at_h == 0
+    t.now["t"] = 毫秒(23, 59)
+    got = 跑(t.desk.submit("A", 任务定义(), label="loop", by="gina"))
+    if not got["queued"]:                              # 估时不够长撞不上 00:10:直接排一条明天的
+        with t.db.tx() as c:
+            c.execute("UPDATE adhoc_queue SET state='queued', not_before_ms=?",
+                      (毫秒(0, 20, 0, 16),))
+    items = [x for x in today_view(t.db, now_ms=t.now["t"], adhoc=t.desk)["items"]
+             if x["kind"] == "adhoc"]
+    assert items and items[0]["state"] in ("queued", "running")
+
+
+def test_外审12_今天的巡逻和先看都带站点时区的偏移(台):
+    t = 台
+    assert today_view(t.db, now_ms=t.now["t"], adhoc=t.desk)["utc_offset_min"] == 480
+    assert t.desk.plan("A", 任务定义())["utc_offset_min"] == 480
+
+
+def _站在(t, x, y, path="straight"):
+    t.disp.clients["A"] = SimpleNamespace(
+        telemetry=SimpleNamespace(pose=SimpleNamespace(x=x, y=y, yaw=0.0)),
+        capabilities=SimpleNamespace(tasks={"goto": {"path": path}}))
+
+
+def test_用户1031_走完回起点_直线的沿来路回_会规划的直接回_本来在起点不加(台):
+    t = 台
+    _站在(t, -2.0, -1.0)
+    跑(t.desk.submit("A", 任务定义(), label="loop", by="gina"))
+    wps = t.disp.sent[-1]["wire"]["waypoints"]
+    assert [w["name"] for w in wps] == ["a", "b", "return-1", "start"], "直线:倒着走回 a 再回起点"
+    assert wps[-1]["pose"]["position"]["x"] == -2.0 and wps[-1]["pose"]["position"]["y"] == -1.0
+    t.disp.running.clear()
+    _站在(t, -2.0, -1.0, path="planned")
+    跑(t.desk.submit("A", 任务定义(), label="loop", by="gina"))
+    assert [w["name"] for w in t.disp.sent[-1]["wire"]["waypoints"]] == ["a", "b", "start"]
+    t.disp.running.clear()
+    _站在(t, 0.6, 0.6)                                    # 就站在最后一点:不加
+    跑(t.desk.submit("A", 任务定义(), label="loop", by="gina"))
+    assert [w["name"] for w in t.disp.sent[-1]["wire"]["waypoints"]] == ["a", "b"]
+    t.disp.clients.clear()                               # 不知道在哪:不加
+    t.disp.running.clear()
+    跑(t.desk.submit("A", 任务定义(), label="loop", by="gina"))
+    assert [w["name"] for w in t.disp.sent[-1]["wire"]["waypoints"]] == ["a", "b"]
+
+
+def test_用户1031_排队的到点按那时站的地方回(台):
+    t = 台
+    t.now["t"] = 毫秒(21, 59)
+    got = 跑(t.desk.submit("A", 任务定义(), label="loop", by="gina"))
+    _站在(t, 3.0, 4.0)
+    t.now["t"] = got["start_after_ms"]
+    跑(t.desk.tick())
+    start = t.disp.sent[-1]["wire"]["waypoints"][-1]
+    assert start["name"] == "start" and start["pose"]["position"]["x"] == 3.0
+    stored = json.loads(t.db.query("SELECT mission FROM adhoc_queue")[0]["mission"])
+    assert [w["name"] for w in stored["waypoints"]] == ["a", "b"], "存的还是原来那条"

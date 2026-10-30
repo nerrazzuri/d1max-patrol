@@ -398,6 +398,7 @@ class AlertBook:
         now_ms: int,
         level: Level | None = None,
         context: dict[str, Any] | None = None,
+        merge: bool = True,
     ) -> Alert:
         """记一条告警。
 
@@ -418,7 +419,8 @@ class AlertBook:
             )
 
         group = f"{robot}/{kind}"
-        existing = self.absorbing(robot, kind, now_ms=now_ms)
+        # merge=False:一次一条、不合并(W53 外审 #3:临时巡逻的通知各是各的事、各推给各的人)
+        existing = self.absorbing(robot, kind, now_ms=now_ms) if merge else None
         seq = None
         if existing is not None:
             alert = replace(

@@ -23,7 +23,9 @@ import 'nw/nw_map_raster.dart';
 import 'nw/nw_p4_admin.dart';
 import 'nw/nw_theme.dart';
 import 'nw/nw_widgets.dart';
+import 'patrol_dispatch.dart' show dispatchResultText;
 import 'pose_marker.dart';
+import 'refusal.dart';
 import 'widget/fields_dialog.dart';
 
 /// 路线名、排程 id：ASCII 字母数字 . _ -（跟站点同一条规矩）。
@@ -302,6 +304,10 @@ class SiteRouteEditorPage extends StatefulWidget {
   final Map<String, dynamic>? route;
   final String? newName;
   final List<Map<String, dynamic>> allRoutes;
+
+  /// W53（用户 10-31）：临时路线 —— 保安在图上点几个点，派给这台机器人走一趟；**不存**、不进日程。
+  /// 给了这台机器人的编号就是这个模式：没有保存、删除，只有「派出这条临时路线」。派出去回给人看的那一句。
+  final String? tempFor;
   const SiteRouteEditorPage(
       {super.key,
       required this.api,
@@ -309,7 +315,10 @@ class SiteRouteEditorPage extends StatefulWidget {
       required this.version,
       this.route,
       this.newName,
-      this.allRoutes = const []});
+      this.allRoutes = const [],
+      this.tempFor});
+
+  static const Key tempSendKey = Key('route-temp-send');
 
   static const Key canvasKey = Key('route-canvas');
   static const Key saveKey = Key('route-save');
@@ -355,7 +364,9 @@ class _SiteRouteEditorPageState extends State<SiteRouteEditorPage> {
   int _formGen = 0;
 
   bool get _isNew => widget.route == null;
-  bool get _canEdit => widget.api.session?.canManageRoutes ?? false;
+  bool get _temp => widget.tempFor != null;
+  bool get _canEdit =>
+      _temp ? (widget.api.session?.canPatrol ?? false) : (widget.api.session?.canManageRoutes ?? false);
   bool get _canSend => widget.api.session?.canDispatch ?? false;
   String get _snapshot => jsonEncode([for (final p in _pts) p.toWire()]);
   bool get _dirty => _snapshot != _saved;
@@ -573,12 +584,49 @@ class _SiteRouteEditorPageState extends State<SiteRouteEditorPage> {
     }
   }
 
+  /// 临时路线派出去（W53）：站点按点逐个校验（在不在图上、走不走得到），撞日程就排队。
+  Future<void> _sendTemp() async {
+    final rid = widget.tempFor!;
+    setState(() {
+      _busy = true;
+      _msg = null;
+      _problems.clear();
+    });
+    try {
+      final r = await widget.api.patrolPoints(rid, [for (final p in _pts) (p.x, p.y)], widget.mapId, widget.version);
+      if (!mounted) return;
+      final ack = r['ack'];
+      if (r['queued'] != true && ack is Map && ack['result'] != 'accepted' && ack['result'] != 'duplicate') {
+        setState(() => _msg = tr('The robot did not accept: ${ack['result']} ${ack['reason'] ?? ''}',
+            '机器人没接：${ack['result']} ${ack['reason'] ?? ''}'));
+        return;
+      }
+      Navigator.pop(context, dispatchResultText(r, tr('custom route', '临时路线')));
+    } on SiteError catch (e) {
+      if (!mounted) return;
+      final errs = e.body['errors'];
+      setState(() {
+        if (errs is List) {
+          for (final x in errs) {
+            if (x is Map && x['index'] is num) _problems[(x['index'] as num).toInt()] = '${x['problem']}';
+          }
+        }
+        _msg = refusalText(e);
+      });
+      if (e.status == 409 && e.body['reason_code'] is String) {
+        await showRefusal(context, widget.api, e, robotId: rid);
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
   // ---- 画
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-        appBar: AppBar(title: Text(_id)),
+        appBar: AppBar(title: Text(_temp ? tr('Custom route for ${widget.tempFor}', '${widget.tempFor} 的临时路线') : _id)),
         body: FutureBuilder<(Map<String, dynamic>, Uint8List, bool)>(
             future: _data,
             builder: (context, snap) {
@@ -751,7 +799,7 @@ class _SiteRouteEditorPageState extends State<SiteRouteEditorPage> {
               Text('${e.key + 1}. ${e.key < _pts.length ? _pts[e.key].name : ''}: ${e.value}',
                   style: NwText.bodySmall.copyWith(color: c.error)),
           ],
-          if (sel != null) _pointForm(context, sel),
+          if (sel != null && !_temp) _pointForm(context, sel),
           nwGap16,
           if (_msg != null)
             Text(_msg!, key: SiteRouteEditorPage.messageKey, style: NwText.bodySmall.copyWith(color: c.text)),
@@ -761,6 +809,13 @@ class _SiteRouteEditorPageState extends State<SiteRouteEditorPage> {
                 onPressed: _reload,
                 child: Text(tr('Reload from the site (your edits are lost)', '从站点重新拉取（你的修改会丢）'))),
           nwGap8,
+          if (_temp)
+            NwButton(
+                buttonKey: SiteRouteEditorPage.tempSendKey,
+                icon: Icons.near_me_rounded,
+                label: tr('Send ${widget.tempFor} on this route', '派 ${widget.tempFor} 走这条'),
+                onPressed: _busy || _pts.isEmpty ? null : _sendTemp)
+          else
           Wrap(spacing: Nw.s8, runSpacing: Nw.s8, children: [
             if (edit)
               NwButton(
@@ -781,7 +836,14 @@ class _SiteRouteEditorPageState extends State<SiteRouteEditorPage> {
                   variant: NwButtonVariant.destructive,
                   onPressed: _delete),
           ]),
-          if (_dirty && _canSend && !_isNew)
+          if (_temp)
+            Padding(
+                padding: const EdgeInsets.only(top: Nw.s4),
+                child: Text(
+                    tr("A one-off route: it isn't saved. When it finishes the robot walks back to where it started.",
+                        '临时路线：不保存。走完机器人自己走回出发的地方。'),
+                    style: sub)),
+          if (_dirty && _canSend && !_isNew && !_temp)
             Padding(
                 padding: const EdgeInsets.only(top: Nw.s4),
                 child: Text(tr('Save first: a patrol runs the saved route.', '先保存：派出去的是站点上存着的那一条。'),

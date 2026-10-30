@@ -103,6 +103,7 @@ class _SiteDutyPageState extends State<SiteDutyPage> {
   List<Map<String, dynamic>> _robots = const [];
   List<Alert> _alerts = const [];
   List<Map<String, dynamic>> _today = const [];
+  int? _offsetMin;
   Map<String, dynamic>? _mode;
   Map<String, dynamic>? _weather;
   Map<String, dynamic>? _view;
@@ -173,6 +174,7 @@ class _SiteDutyPageState extends State<SiteDutyPage> {
       _robots = robots;
       if (got[1] is List) _alerts = (got[1] as List).cast<Alert>();
       if (got[2] is Map) {
+        _offsetMin = ((got[2] as Map)['utc_offset_min'] as num?)?.toInt();
         _today = [
           for (final x in ((got[2] as Map)['items'] as List? ?? const [])) if (x is Map) x.cast<String, dynamic>(),
         ];
@@ -416,8 +418,8 @@ class _SiteDutyPageState extends State<SiteDutyPage> {
     final run = runningItem(_today, '${r['robot_id']}', tid);
     final battery = robotBattery(r);
     final doing = run != null
-        ? tr('Patrolling "${run['label']}"${run['end_ms'] is num ? ' · done around ${hhmm((run['end_ms'] as num).toInt())}' : ''}',
-            '在走「${run['label']}」${run['end_ms'] is num ? ' · 预计 ${hhmm((run['end_ms'] as num).toInt())} 走完' : ''}')
+        ? tr('Patrolling "${run['label']}"${run['end_ms'] is num ? ' · done around ${hhmm((run['end_ms'] as num).toInt(), _offsetMin)}' : ''}',
+            '在走「${run['label']}」${run['end_ms'] is num ? ' · 预计 ${hhmm((run['end_ms'] as num).toInt(), _offsetMin)} 走完' : ''}')
         : robotStatusLine(r);
     return Padding(
       key: _t.status,
@@ -567,7 +569,7 @@ class _SiteDutyPageState extends State<SiteDutyPage> {
                   key: _t.today,
                   child: KeyedSubtree(
                       key: SiteDutyPage.todayKey,
-                      child: TodayPatrolList(api: widget.api, items: _today, onChanged: _reload))),
+                      child: TodayPatrolList(api: widget.api, items: _today, onChanged: _reload, offsetMin: _offsetMin))),
               if (others > 0) ...[
                 nwGap8,
                 NwCard(

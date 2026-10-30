@@ -8,7 +8,7 @@ import { HelpDialog, SetupChecklist, WEB_TOUR } from "./guide";
 import { lang, refusalText } from "./i18n";
 import { canPatrol, canSchedule } from "./model";
 import { pageAllowed, roleLabel } from "./shell";
-import { TodayPatrols } from "./todaypatrols";
+import { siteHm, TodayPatrols } from "./todaypatrols";
 import { Requests } from "./userspage";
 
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
@@ -101,6 +101,12 @@ describe("W53 网页", () => {
     fireEvent.click(btn(d, "常见问题"));
     expect(d.textContent).toContain("我派的巡逻怎么排队了");
     expect(d.textContent).not.toContain("怎么加账号");
+  });
+
+  it("时刻按站点的钟(外审 #12)", () => {
+    const ms = Date.UTC(2027, 0, 15, 8, 0);
+    expect(siteHm(ms, 480)).toBe("16:00");
+    expect(siteHm(ms, 0)).toBe("08:00");
   });
 
   it("拒绝原因:英文界面用 reason_en,中文照原话", () => {

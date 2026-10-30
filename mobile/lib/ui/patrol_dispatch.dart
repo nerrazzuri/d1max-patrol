@@ -18,9 +18,14 @@ import 'nw/nw_p4_admin.dart' show nwGap8;
 import 'nw/nw_theme.dart';
 import 'nw/nw_widgets.dart';
 import 'refusal.dart';
+import 'site_routes.dart' show SiteRouteEditorPage;
 
-String hhmm(int ms) {
-  final t = DateTime.fromMillisecondsSinceEpoch(ms);
+/// 时刻 `14:05`。给了 [offsetMin]（站点时区离 UTC 几分钟，站点回的 `utc_offset_min`）就按站点的钟，
+/// 不按手机的（外审 W53-1 #12：人在异地、手机时区设错，巡逻时间就对不上）。
+String hhmm(int ms, [int? offsetMin]) {
+  final t = offsetMin == null
+      ? DateTime.fromMillisecondsSinceEpoch(ms)
+      : DateTime.fromMillisecondsSinceEpoch(ms, isUtc: true).add(Duration(minutes: offsetMin));
   return '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
 }
 
@@ -31,13 +36,14 @@ String minutesText(num seconds) {
 
 /// 派出去以后（或排上了）给人看的一句。
 String dispatchResultText(Map<String, dynamic> r, String label) {
+  final off = (r['utc_offset_min'] as num?)?.toInt();
   if (r['queued'] == true) {
     final at = r['start_after_ms'];
     final why = '${r['because'] ?? ''}';
     return tr(
-        'Queued: "$label" starts after ${at is num ? hhmm(at.toInt()) : '?'} (the schedule comes first${why.isEmpty ? '' : ': $why'}). '
+        'Queued: "$label" starts after ${at is num ? hhmm(at.toInt(), off) : '?'} (the schedule comes first${why.isEmpty ? '' : ': $why'}). '
             "You'll be notified when it starts.",
-        '排上了：「$label」${at is num ? hhmm(at.toInt()) : '?'} 以后走（日程优先${why.isEmpty ? '' : '：$why'}）。开始时会通知你。');
+        '排上了：「$label」${at is num ? hhmm(at.toInt(), off) : '?'} 以后走（日程优先${why.isEmpty ? '' : '：$why'}）。开始时会通知你。');
   }
   final est = r['estimate_s'];
   return tr('Sent: "$label"${est is num ? ', ${minutesText(est)}' : ''}. The manager and administrator are notified.',
@@ -68,6 +74,7 @@ class _PatrolSheet extends StatefulWidget {
 Key patrolRouteKey(String id) => _PatrolSheet.routeKey(id);
 const Key patrolSendKey = _PatrolSheet.sendKey;
 const Key patrolQueuedKey = Key('patrol-queued');
+const Key patrolCustomKey = Key('patrol-custom');
 
 class _PatrolSheetState extends State<_PatrolSheet> {
   List<String>? _routes;
@@ -107,6 +114,18 @@ class _PatrolSheetState extends State<_PatrolSheet> {
     setState(() => _busy = true);
     try {
       final got = await widget.api.patrol(widget.robotId, r);
+      final ack = got['ack'];
+      if (got['queued'] != true && ack is Map && ack['result'] != 'accepted' && ack['result'] != 'duplicate') {
+        // 机器人明确没收（忙、电量低……）：不说「派出去了」（外审 W53-1 #4）
+        if (mounted) {
+          setState(() {
+            _busy = false;
+            _error = tr('The robot did not accept: ${ack['result']} ${ack['reason'] ?? ''}',
+                '机器人没接：${ack['result']} ${ack['reason'] ?? ''}');
+          });
+        }
+        return;
+      }
       if (mounted) Navigator.pop(context, dispatchResultText(got, r));
     } on SiteError catch (e) {
       if (!mounted) return;
@@ -118,13 +137,47 @@ class _PatrolSheetState extends State<_PatrolSheet> {
     }
   }
 
+  /// 在图上点几个点（W53，用户 10-31）：路线编辑页的临时模式，派出去不存。
+  Future<void> _custom() async {
+    Map<String, dynamic> v;
+    try {
+      v = await widget.api.robot(widget.robotId);
+    } on SiteError catch (e) {
+      if (mounted) setState(() => _error = refusalText(e));
+      return;
+    }
+    final caps = v['capabilities'];
+    final tasks = caps is Map ? caps['tasks'] : null;
+    final p = tasks is Map ? tasks['patrol'] : null;
+    if (p is! Map || p['map_id'] is! String || p['map_version'] is! String) {
+      if (mounted) {
+        setState(() => _error = tr("${widget.robotId} hasn't reported which map it has loaded",
+            '${widget.robotId} 没报加载的是哪张图'));
+      }
+      return;
+    }
+    if (!mounted) return;
+    final msg = await Navigator.push<String>(
+        context,
+        MaterialPageRoute<String>(
+            builder: (_) => SiteRouteEditorPage(
+                api: widget.api,
+                mapId: '${p['map_id']}',
+                version: '${p['map_version']}',
+                newName: '',
+                tempFor: widget.robotId)));
+    if (msg != null && mounted) Navigator.pop(context, msg);
+  }
+
   @override
   Widget build(BuildContext context) {
     final c = Nw.of(context);
     final rs = _routes;
     final plan = _pick == null ? null : _plans[_pick];
     final queued = plan != null && plan['queued'] == true;
-    final startAt = plan != null && plan['start_ms'] is num ? hhmm((plan['start_ms'] as num).toInt()) : '?';
+    final startAt = plan != null && plan['start_ms'] is num
+        ? hhmm((plan['start_ms'] as num).toInt(), (plan['utc_offset_min'] as num?)?.toInt())
+        : '?';
     return SafeArea(
       child: Padding(
         padding: EdgeInsets.fromLTRB(Nw.s16, 0, Nw.s16, Nw.s16 + MediaQuery.viewInsetsOf(context).bottom),
@@ -163,6 +216,13 @@ class _PatrolSheetState extends State<_PatrolSheet> {
                   ),
               ]),
             ),
+          nwGap8,
+          NwButton(
+              buttonKey: patrolCustomKey,
+              variant: NwButtonVariant.outline,
+              icon: Icons.touch_app_rounded,
+              label: tr('Tap points on the map instead', '在地图上点点位（临时路线）'),
+              onPressed: _busy ? null : _custom),
           if (queued) ...[
             nwGap8,
             NwNotice(
@@ -234,7 +294,10 @@ class TodayPatrolList extends StatelessWidget {
   final List<Map<String, dynamic>> items;
   /// 取消了一条以后调（页面重读）。
   final VoidCallback? onChanged;
-  const TodayPatrolList({super.key, required this.api, required this.items, this.onChanged});
+
+  /// 站点时区离 UTC 几分钟（今天的巡逻回的 `utc_offset_min`）；老站点没有就按手机的钟。
+  final int? offsetMin;
+  const TodayPatrolList({super.key, required this.api, required this.items, this.onChanged, this.offsetMin});
 
   static const Key emptyKey = Key('today-empty');
 
@@ -246,10 +309,10 @@ class TodayPatrolList extends StatelessWidget {
         (it['by'] == s?.name || (s?.canSchedule ?? false));
     final (st, _) = patrolStateText('${it['state']}');
     final lines = <String>[
-      '${hhmm((it['at_ms'] as num).toInt())} · ${it['label']}${'${it['robot'] ?? ''}'.isEmpty ? '' : ' · ${it['robot']}'}',
+      '${hhmm((it['at_ms'] as num).toInt(), offsetMin)} · ${it['label']}${'${it['robot'] ?? ''}'.isEmpty ? '' : ' · ${it['robot']}'}',
       st,
       if (adhoc) tr('One-off patrol sent by ${it['by']}', '${it['by']} 派的临时巡逻'),
-      if (it['end_ms'] is num) tr('Ends around ${hhmm((it['end_ms'] as num).toInt())}', '大约 ${hhmm((it['end_ms'] as num).toInt())} 走完'),
+      if (it['end_ms'] is num) tr('Ends around ${hhmm((it['end_ms'] as num).toInt(), offsetMin)}', '大约 ${hhmm((it['end_ms'] as num).toInt(), offsetMin)} 走完'),
       if (reason.isNotEmpty) reason,
     ];
     final cancel = await showDialog<bool>(
@@ -298,7 +361,7 @@ class TodayPatrolList extends StatelessWidget {
               child: Row(children: [
                 SizedBox(
                     width: 48,
-                    child: Text(hhmm((items[i]['at_ms'] as num).toInt()),
+                    child: Text(hhmm((items[i]['at_ms'] as num).toInt(), offsetMin),
                         style: NwText.labelLarge.copyWith(color: c.text, fontFeatures: const [FontFeature.tabularFigures()]))),
                 Expanded(
                     child: Text(
