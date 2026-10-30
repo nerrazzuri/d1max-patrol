@@ -1,15 +1,16 @@
 // 一路摄像头画面(B0 专业版 2.3 / VMS 惯例):画面上沿是「D1-01 Front 02:15:08」,下沿是 Live / Paused at … /
 // Reconnecting…。**看得见才拉流**:可见面积 ≥25% 才拉;离开视口 2 秒后停(防滚动抖动),停之前把最后一帧
 // 画到 canvas 上压暗显示;浏览器页签藏起来也停。P1 的狗(forceLive)一直拉。
-// 断流(W44、外审 R6):出错停在最后一帧、写「画面断了 · 最后画面 几点 · 已断几秒」,3 秒后换个地址重连。MJPEG 放在
-// <img> 里浏览器不报每一帧,静悄悄停帧看不出来 —— 拉着的时候每 2 秒问站点「最后一帧多久了」(站点收到帧的时刻,
-// 不是浏览器重载图片的时刻):停了就按断了处理;重连以后站点说又有新帧了才把提示收掉。报警现场的固定摄像头
-// (``feed``)走同一套。
+// 断流(W44、外审 R6):出错停在最后一帧、写「画面断了 · 最后画面 几点 · 已断几秒」,3 秒后重新订阅。拉着的时候
+// 每 2 秒问站点「最后一帧多久了」(站点收到帧的时刻):停了就按断了处理;重连以后站点说又有新帧了才把提示收掉。
+// 报警现场的固定摄像头(``feed``)走同一套。
+// W51:所有画面走一条 WebSocket(videomux.ts),不再每路占一条 HTTP 连接 —— 原来浏览器对一个站点最多 6 条,
+// 只敢开 3 路长连、别的隔 2 秒一张。<img> 的 ``data-src`` 是这一路的画面地址(也是订阅用的 id)。
 import { useEffect, useRef, useState } from "preact/hooks";
 import { api, ApiError, enc } from "./api";
 import { hms, nameOf, usePageVisible } from "./data";
 import { t } from "./i18n";
-import { slotRank, STILL_MS, useStreamSlot } from "./streams";
+import { useVideoFrame } from "./videomux";
 
 /** 相机:狗自带前后两路;装了上装 V1.2 热像的多一路 thermal(W40)。 */
 export type Cam = "front" | "back" | "thermal";
@@ -20,6 +21,9 @@ const RECOVERED_MS = 2500;
 const HEALTH_MS = 2000;
 /** 健康请求多久不回算问不通(W44 复查 R5:网络静悄悄丢包时请求一直挂着,原来既不算断、又一直堆)。 */
 const HEALTH_TIMEOUT_MS = 3000;
+/** 每路每秒最多几帧:大画面给满,小窗少一点(站点上限 15)。 */
+const MAIN_FPS = 15;
+const PIP_FPS = 5;
 
 /** 不是机器人的那一路(报警现场的固定摄像头):地址、名字、健康地址。 */
 export interface Feed { src: string; label: string; health: string }
@@ -49,8 +53,6 @@ export function CameraWell(props: { robot: string; cam: Cam; forceLive?: boolean
   /** 连着几次问不通站点(网断了)。只有站点回 404 才算「没有健康接口」,网断了照样接着问(演示站点实测)。 */
   const misses = useRef(0);
   const pageVisible = usePageVisible();
-  /** 拿到长连了没有(一页最多几路,见 streams.ts);没拿到的隔 2 秒取一张。 */
-  const [shot, setShot] = useState(0);
 
   useEffect(() => {
     const el = box.current;
@@ -156,26 +158,24 @@ export function CameraWell(props: { robot: string; cam: Cam; forceLive?: boolean
     return () => window.clearTimeout(id);
   }, [broken]);
 
-  const slot = useStreamSlot(streaming, slotRank(props));
-  const stillMode = streaming && !slot;
-  // 取一张:这一张到了(或没到)再等 2 秒取下一张;不叠请求
-  const nextShot = () => window.setTimeout(() => { if (alive.current) setShot((n) => n + 1); }, STILL_MS);
   const label = props.feed ? props.feed.label : camLabel(props.robot, props.cam);
-  const src = props.feed
-    ? (nonce ? `${props.feed.src}${props.feed.src.includes("?") ? "&" : "?"}v=${nonce}` : props.feed.src)
-    : `/api/robots/${enc(props.robot)}/video/${props.cam}?v=${nonce}`;
+  const stream = props.feed ? props.feed.src : `/api/robots/${enc(props.robot)}/video/${props.cam}`;
+  const frame = useVideoFrame(stream, streaming && !broken, props.variant === "pip" ? PIP_FPS : MAIN_FPS, nonce,
+    (_status, message) => {
+      if (message) setWhy(message);
+      lose(Date.now());
+    });
   // 断过、重连了但第一帧还没到:还是「正在重连」,不写「实时」(真浏览器上查出来的)
   const retrying = broken || (lostAt != null && !started);
-  const status = retrying ? t("reconnecting") : stillMode ? t("stillEvery", { s: STILL_MS / 1000 }) : streaming ? t("live")
+  const status = retrying ? t("reconnecting") : streaming ? t("live")
     : pausedAt ? t("pausedAt", { t: hms(pausedAt) }) : t("noFeed");
-  const imgSrc = stillMode ? `${src}${src.includes("?") ? "&" : "?"}still=1&s=${shot}` : src;
   const cls = `${streaming ? "well" : "well paused"}${lostAt != null ? " lostfeed" : ""}${props.variant ? ` ${props.variant}` : ""}`;
   return (
     <div ref={box} class={cls} title={!streaming ? t("pausedHint") : undefined}>
       <canvas ref={frozen} class="frozen" aria-hidden="true" />
       {streaming && !broken && (
-        <img ref={img} class={props.feed ? "feed scene" : "feed"} src={imgSrc} alt={label}
-          onLoad={() => { setStarted(true); if (stillMode) nextShot(); }}
+        <img ref={img} class={props.feed ? "feed scene" : "feed"} src={frame ?? undefined} data-src={stream} alt={label}
+          onLoad={() => setStarted(true)}
           onError={() => lose(Date.now())} />
       )}
       {lostAt != null && (
@@ -189,7 +189,7 @@ export function CameraWell(props: { robot: string; cam: Cam; forceLive?: boolean
         <span>{hms(streaming ? props.now : pausedAt ?? props.now)}</span>
       </div>
       <div class="osd bottom">
-        <span class="osd-status">{streaming && !retrying && !stillMode && <span class="livedot" aria-hidden="true" />}{props.feed ? `${label} · ` : ""}{status}</span>
+        <span class="osd-status">{streaming && !retrying && <span class="livedot" aria-hidden="true" />}{props.feed ? `${label} · ` : ""}{status}</span>
         {props.onOpen && (
           <button type="button" class="osd-btn" onClick={props.onOpen} aria-label={`${t("fullScreen")}: ${label}`}>{t("fullScreen")}</button>
         )}

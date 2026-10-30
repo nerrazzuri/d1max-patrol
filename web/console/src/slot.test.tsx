@@ -7,6 +7,7 @@ import { lang } from "./i18n";
 import type { UnitInfo } from "./live";
 import type { Robot } from "./model";
 import { VideoSlot } from "./slot";
+import { subscribed } from "./videomux";
 
 const robot = (cams?: string[]): Robot => ({
   robot_id: "A", active: true, fresh: true, revoked: false, held: null,
@@ -15,8 +16,8 @@ const robot = (cams?: string[]): Robot => ({
 });
 const unit = (cams?: string[]): UnitInfo => ({ robot: robot(cams), state: "patrolling", battery: 82, task: "" });
 
-const mainSrc = (c: Element) => (c.querySelector(".slot-main img.feed, .slot-main img.scene") as HTMLImageElement | null)?.getAttribute("src") ?? "";
-const pipSrc = (c: Element) => (c.querySelector(".slot-pip img.feed") as HTMLImageElement | null)?.getAttribute("src") ?? "";
+const mainSrc = (c: Element) => (c.querySelector(".slot-main img.feed, .slot-main img.scene") as HTMLImageElement | null)?.getAttribute("data-src") ?? "";
+const pipSrc = (c: Element) => (c.querySelector(".slot-pip img.feed") as HTMLImageElement | null)?.getAttribute("data-src") ?? "";
 
 beforeEach(() => {
   lang.value = "zh";
@@ -122,12 +123,14 @@ describe("外审R6 报警现场断流", () => {
     fireEvent.load(sceneImg(r.container)!);
     fireEvent.error(sceneImg(r.container)!);
     r.rerender(slot(t0 + 15000));
+    expect(subscribed()).not.toContain("/api/cameras/cam3/live");  // 断着:这一路退订了
     const lost = r.container.querySelector(".slot-main .lost")!;
     expect(lost.textContent).toContain("画面断了");
     expect(lost.textContent).toContain("23:10:00");
     expect(lost.textContent).toContain("已断 15 秒");
     await vi.advanceTimersByTimeAsync(3100);
-    expect(sceneImg(r.container)!.getAttribute("src")).toMatch(/^\/api\/cameras\/cam3\/live\?v=1$/);
+    expect(sceneImg(r.container)!.getAttribute("data-src")).toBe("/api/cameras/cam3/live");
+    expect(subscribed()).toContain("/api/cameras/cam3/live");     // W51:重连 = 重新订阅
   });
 
   it("真浏览器查出来的:重连后第一帧没到之前,左下角写正在重连,不写实时;现场写摄像头名字", async () => {
@@ -149,7 +152,7 @@ describe("外审R6 报警现场断流", () => {
     fireEvent.error(sceneImg(r.container)!);
     expect(r.container.querySelector(".slot-main .lost")).not.toBeNull();
     await vi.advanceTimersByTimeAsync(3100);
-    expect(sceneImg(r.container)!.getAttribute("src")).toContain("?v=1");
+    expect(subscribed()).toContain("/api/cameras/cam3/live");     // W51:重连 = 重新订阅
   });
 
   it("静悄悄停帧:站点说最后一帧是 7 秒前,标断了(时刻按最后一帧算),重连", async () => {
@@ -167,7 +170,7 @@ describe("外审R6 报警现场断流", () => {
     expect(lost.textContent).toContain("23:09:57");             // 23:10:04 − 7 秒
     expect(asked).toContain(SCENE.health);
     await vi.advanceTimersByTimeAsync(3100);
-    expect(sceneImg(r.container)!.getAttribute("src")).toContain("?v=1");
+    expect(subscribed()).toContain("/api/cameras/cam3/live");     // W51:重连 = 重新订阅
   });
 
   it("重连上了、站点也说有新帧了,才把断了的提示收掉", async () => {
@@ -197,7 +200,7 @@ describe("外审R6 报警现场断流", () => {
     fireEvent.load(sceneImg(r.container)!);
     late(new Response(JSON.stringify({ online: false, last_frame_age_ms: 9000 }), { headers: { "Content-Type": "application/json" } }));
     await vi.advanceTimersByTimeAsync(100);
-    expect(sceneImg(r.container)!.getAttribute("src")).toBe("/api/cameras/cam4/live");
+    expect(sceneImg(r.container)!.getAttribute("data-src")).toBe("/api/cameras/cam4/live");
     expect(r.container.querySelector(".slot-main .lost")).toBeNull();
   });
 

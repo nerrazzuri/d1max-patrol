@@ -64,8 +64,10 @@ def check_upgrade(headers: Mapping[str, str]) -> str | None:
 
 class WsConn:
     def __init__(self, sock: socket.socket, *, ping_every_s: float = 1.0,
-                 dead_after_s: float = 3.0) -> None:
+                 dead_after_s: float = 3.0, send_timeout_s: float | None = None) -> None:
         self._sock = sock
+        #: 发的时候套接字的超时(W51 画面:一帧几十 KB,不能用收的那条设的 0.01–0.2 s);None = 不动。
+        self.send_timeout_s = send_timeout_s
         self._buf = bytearray()
         self._wlock = threading.Lock()
         self.ping_every_s = ping_every_s
@@ -94,6 +96,8 @@ class WsConn:
             if self.closed and opcode != 8:
                 raise WsClosed(self.close_reason or "连接已关")
             try:
+                if self.send_timeout_s is not None:
+                    self._sock.settimeout(self.send_timeout_s)
                 self._sock.sendall(head + payload)
             except (OSError, ssl.SSLError) as exc:
                 self._mark_closed(f"写不出去: {exc}")
@@ -108,6 +112,13 @@ class WsConn:
             return
         self._flush()
         self._send(1, text.encode("utf-8"))
+
+    def send_binary(self, data: bytes) -> None:
+        """发一条二进制消息(W51 画面)。只许收的那条线程调(大消息不排队)。"""
+        if threading.get_ident() != self._owner:
+            raise RuntimeError("send_binary 只许连接那条线程调")
+        self._flush()
+        self._send(2, data)
 
     def close(self, code: int = 1000, reason: str = "") -> None:
         """关连接。收的那条线程调:把排着的发完、发 close 帧、关套接字。别的线程调:排一个关闭,
@@ -234,9 +245,9 @@ class WsConn:
                 self._fail(1003, f"不收这种帧(opcode {opcode})")
 
 
-def upgrade(handler) -> WsConn | None:
+def upgrade(handler, **kw: float | None) -> WsConn | None:
     """在一个 ``BaseHTTPRequestHandler`` 里把请求升级成 WebSocket。不是像样的升级请求 →
-    回 400、返回 None。"""
+    回 400、返回 None。``kw`` 给 :class:`WsConn`(心跳、发送超时)。"""
     key = check_upgrade(handler.headers)
     if key is None:
         handler.send_error(400, "要 WebSocket 升级请求")
@@ -248,7 +259,7 @@ def upgrade(handler) -> WsConn | None:
     handler.end_headers()
     handler.wfile.flush()
     handler.close_connection = True
-    return WsConn(handler.connection)
+    return WsConn(handler.connection, **kw)  # type: ignore[arg-type]
 
 
 def client_mask_frame(payload: bytes, opcode: int = 1) -> bytes:

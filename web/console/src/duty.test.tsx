@@ -109,7 +109,7 @@ describe("值班页的报警横幅", () => {
 
   it("有人闯入的现场放那个防区的摄像头", async () => {
     const { container: c } = page([alert({})]);
-    await waitFor(() => expect(c.querySelector(".slot img.scene")?.getAttribute("src")).toBe("/api/cameras/cam3/live"));
+    await waitFor(() => expect(c.querySelector(".slot img.scene")?.getAttribute("data-src")).toBe("/api/cameras/cam3/live"));
   });
 });
 

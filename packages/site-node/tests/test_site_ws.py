@@ -251,3 +251,40 @@ def test_套接字只由收的那条线程碰_别的线程的发与关都排队(
     assert {tid for _, tid in rec.who} == {out["owner"]}, rec.who
     b.close()
     a.close()
+
+
+def test_W51_发二进制_只许连接那条线程(一对):
+    ws, peer = 一对
+    ws.send_binary(b"\x02ab" + b"\xff\xd8" * 100)
+    op, data = _read_server_frame(peer)
+    assert op == 2 and data == b"\x02ab" + b"\xff\xd8" * 100
+    err: list[BaseException] = []
+
+    def 别的线程():
+        try:
+            ws.send_binary(b"x")
+        except RuntimeError as exc:
+            err.append(exc)
+    t = threading.Thread(target=别的线程)
+    t.start()
+    t.join()
+    assert err, "别的线程发二进制要拒"
+
+
+def test_W51_发送超时_跟收的短超时分开():
+    a, b = socket.socketpair()
+    try:
+        ws = WsConn(a, ping_every_s=10, dead_after_s=30, send_timeout_s=7.0)
+        assert ws.recv(timeout_s=0.05) is None           # 收的那条把超时设成很短
+        ws.send_binary(b"y" * 70000)                      # 发之前换回 7 秒(大消息不被短超时打断)
+        assert a.gettimeout() == 7.0
+        h = b.recv(2)
+        assert h[0] & 0x0F == 2 and h[1] & 0x7F == 127
+        n = struct.unpack(">Q", b.recv(8))[0]
+        data = b""
+        while len(data) < n:
+            data += b.recv(n - len(data))
+        assert n == 70000 and data == b"y" * 70000
+    finally:
+        a.close()
+        b.close()
