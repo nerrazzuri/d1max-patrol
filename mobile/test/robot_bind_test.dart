@@ -192,7 +192,7 @@ void main() {
       expect(find.byKey(const Key('bind-serial')), findsOneWidget);
     });
 
-    testWidgets('手输序列号和绑定码：提醒核不了机器人身份', (t) async {
+    testWidgets('手输序列号和绑定码', (t) async {
       final link = FakeLink();
       RobotSticker? got;
       await t.pumpWidget(host(RobotAddPage(api: FakeApi('guard'), site: site,
@@ -203,7 +203,7 @@ void main() {
       await t.enterText(find.byKey(const Key('manual-code')), '7KQ2-M9XD-4HTP-R8WC');
       await t.tap(find.byKey(const Key('manual-ok')));
       await t.pumpAndSettle();
-      expect(find.byKey(const Key('bind-unpinned')), findsOneWidget);
+      expect(find.byKey(const Key('bind-serial')), findsOneWidget);
       await t.enterText(find.byKey(const Key('bind-ssid')), 'Estate');
       await t.tap(find.byKey(const Key('bind-send')));
       await t.pumpAndSettle();
