@@ -39,14 +39,13 @@ class _SiteAddPageState extends State<SiteAddPage> {
   final _name = TextEditingController();
   final _url = TextEditingController(text: 'https://');
   final _fp = TextEditingController();
-  final _user = TextEditingController();
 
   /// 表单里这三样是从配对码来的（提示人去核对）。
   bool _fromCode = false;
 
   @override
   void dispose() {
-    for (final c in [_name, _url, _fp, _user]) {
+    for (final c in [_name, _url, _fp]) {
       c.dispose();
     }
     super.dispose();
@@ -120,8 +119,8 @@ class _SiteAddPageState extends State<SiteAddPage> {
 
   void _save() {
     final bad = checkSiteEntry(_url.text, _fp.text);
-    if (bad != null || _name.text.trim().isEmpty || _user.text.trim().isEmpty) {
-      _say(tr('Not saved: ${bad ?? 'enter a name and an account'}', '没保存：${bad ?? '名字和账号要填'}'));
+    if (bad != null || _name.text.trim().isEmpty) {
+      _say(tr('Not saved: ${bad ?? 'enter a name'}', '没保存：${bad ?? '名字要填'}'));
       return;
     }
     Navigator.pop(
@@ -130,7 +129,7 @@ class _SiteAddPageState extends State<SiteAddPage> {
         name: _name.text.trim(),
         url: _url.text.trim(),
         fingerprint: normalizeFingerprint(_fp.text),
-        username: _user.text.trim(),
+        username: '',                   // 账号第一次登录时再输（用户 10-30：加站点时还没有账号，填什么）
       ),
     );
   }
@@ -191,8 +190,8 @@ class _SiteAddPageState extends State<SiteAddPage> {
                       padding: const EdgeInsets.only(bottom: Nw.s16),
                       child: NwNotice(
                         text: tr(
-                          'Check that the site name and certificate fingerprint below match the ones on the console, then enter your account.',
-                          '核对下面的站点名和证书指纹跟值班台上显示的一样，再填你的账号。',
+                          'Check that the site name and certificate fingerprint below match the ones on the console, then save.',
+                          '核对下面的站点名和证书指纹跟值班台上显示的一样，再保存。',
                         ),
                       ),
                     ),
@@ -218,13 +217,6 @@ class _SiteAddPageState extends State<SiteAddPage> {
                       'Certificate fingerprint (d1max-site fingerprint)',
                       '证书指纹（d1max-site fingerprint）',
                     ),
-                  ),
-                  gap,
-                  NwField(
-                    fieldKey: const Key('site-user'),
-                    controller: _user,
-                    autocorrect: false,
-                    label: tr('Account', '账号'),
                   ),
                   const SizedBox(height: Nw.s24),
                   Row(

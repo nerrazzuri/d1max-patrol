@@ -209,7 +209,7 @@ void main() {
                 theme: th.value(),
                 home: SiteLoginPage(
                     site: site,
-                    signIn: (_) async =>
+                    signIn: (_, _) async =>
                         throw const SiteError(0, '站点证书指纹对不上：实际是 cd…，存的是 ab…，删了重加'))));
             await t.pumpAndSettle();
             expect(t.takeException(), isNull);
@@ -275,7 +275,7 @@ void main() {
     testWidgets('四栏还是带 controller 的 TextField；按钮的 Key 在标准按钮上', (t) async {
       await t.pumpWidget(MaterialApp(home: SiteAddPage(scanner: (_) async => null)));
       await t.pumpAndSettle();
-      for (final k in ['site-name', 'site-url', 'site-fp', 'site-user']) {
+      for (final k in ['site-name', 'site-url', 'site-fp']) {
         expect(t.widget<TextField>(find.byKey(Key(k))).controller, isNotNull, reason: k);
       }
       expect(t.widget<TextField>(find.byKey(const Key('site-url'))).controller!.text, 'https://');
