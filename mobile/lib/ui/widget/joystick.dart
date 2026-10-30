@@ -170,7 +170,7 @@ class _JoystickState extends State<Joystick> {
   /// 是先把整组画到一层上、再整层压暗，杆头压住底圈的那一块只压一次；逐色
   /// 乘 alpha 是各画各的，重叠那一块两层都留着，于是**杆头压在底圈上的那圈
   /// 比原来略亮一点**。灰态下几个百分点的观感差，换掉的是全屏大小的离屏层，
-  /// 这笔账是划算的 —— 要改也别改回 `Opacity`，把 0.24/0.70 调一下就是了。
+  /// 这笔账是划算的 —— 要改也别改回 `Opacity`，把 0.30/0.85 调一下就是了。
   double get _dim => widget.enabled ? 1.0 : 0.35;
 
   @override
@@ -186,9 +186,9 @@ class _JoystickState extends State<Joystick> {
         // **不画死一个圈** —— 画了人就会去按它，而按不准正是要避开的事。
         DecoratedBox(
           decoration: BoxDecoration(
-            color: ink.withValues(alpha: 0.08 * dim),
+            color: ink.withValues(alpha: 0.14 * dim),
             borderRadius: const BorderRadius.all(Radius.circular(Nw.r12)),
-            border: Border.all(color: ink.withValues(alpha: 0.30 * dim), width: 1.5),
+            border: Border.all(color: ink.withValues(alpha: 0.50 * dim), width: 1.5),
           ),
         ),
         // 没人按着：在这一块正中画一个静止的样子 —— 跟推的时候一样大的底圈、杆头，加一个词说这根杆
@@ -196,13 +196,13 @@ class _JoystickState extends State<Joystick> {
         // 一按下这个样子就换成跟着手指的那一个。静止的杆头不带 [Joystick.knobKey]。
         if (c == null) _idle(ink, dim),
         if (c != null) ...<Widget>[
-          _circle(c, Joystick.radius, 0.24, dim, null, ink),
+          _circle(c, Joystick.radius, 0.30, dim, null, ink),
           _circle(
               c +
                   Offset(_value.dx * Joystick.radius,
                       -_value.dy * Joystick.radius),
               Joystick.knobRadius,
-              0.70,
+              0.85,
               dim,
               Joystick.knobKey,
               ink),
@@ -228,7 +228,7 @@ class _JoystickState extends State<Joystick> {
   /// 静止的样子：底圈、杆头、方向记号和那个词，都在底圈里面。
   Widget _idle(Color ink, double dim) {
     const double r = Joystick.radius, k = Joystick.knobRadius;
-    final Color soft = ink.withValues(alpha: 0.70 * dim);
+    final Color soft = ink.withValues(alpha: 0.95 * dim);
     final String? label = widget.label;
     return Center(
       child: SizedBox(
@@ -238,9 +238,9 @@ class _JoystickState extends State<Joystick> {
           Positioned.fill(
             child: DecoratedBox(
               decoration: BoxDecoration(
-                color: ink.withValues(alpha: 0.06 * dim),
+                color: ink.withValues(alpha: 0.16 * dim),
                 shape: BoxShape.circle,
-                border: Border.all(color: ink.withValues(alpha: 0.40 * dim), width: 1.5),
+                border: Border.all(color: ink.withValues(alpha: 0.75 * dim), width: 2),
               ),
             ),
           ),
@@ -251,9 +251,9 @@ class _JoystickState extends State<Joystick> {
             height: k * 2,
             child: DecoratedBox(
               decoration: BoxDecoration(
-                color: ink.withValues(alpha: 0.24 * dim),
+                color: ink.withValues(alpha: 0.45 * dim),
                 shape: BoxShape.circle,
-                border: Border.all(color: ink.withValues(alpha: 0.54 * dim), width: 1.5),
+                border: Border.all(color: ink.withValues(alpha: 0.90 * dim), width: 2),
               ),
               child: Icon(
                   widget.icon ??
@@ -290,7 +290,7 @@ class _JoystickState extends State<Joystick> {
             color: ink.withValues(alpha: alpha * dim),
             shape: BoxShape.circle,
             border: Border.all(
-                color: ink.withValues(alpha: 0.54 * dim), width: 1.5),
+                color: ink.withValues(alpha: 0.90 * dim), width: 2),
           ),
         ),
       );
