@@ -260,6 +260,38 @@ void main() {
     });
   });
 
+  group('退出站点', () {
+    testWidgets('每个角色的第 5 栏都有「退出站点」，点了回站点列表', (t) async {
+      _size(t, const Size(400, 1400));
+      for (final (role, tab) in [
+        ('admin', NwShell.adminKey),
+        ('owner', NwShell.planKey),
+        ('guard', NwShell.moreKey),
+      ]) {
+        await t.pumpWidget(MaterialApp(
+            home: Builder(builder: (c) => Scaffold(body: Center(child: TextButton(
+                onPressed: () => Navigator.push(c, MaterialPageRoute<void>(
+                    builder: (_) => NwShell(api: FakeApi(role), title: '站点', ring: () {}))),
+                child: const Text('站点列表')))))));
+        await t.tap(find.text('站点列表'));
+        await t.pumpAndSettle();
+        await t.tap(find.byKey(tab));
+        await t.pumpAndSettle();
+        final leave = role == 'guard' ? MeTab.leaveKey : leaveSiteKey;
+        if (role == 'admin') {
+          await t.scrollUntilVisible(find.byKey(leave), 200,
+              scrollable: find.descendant(of: find.byType(AdminHomeTab), matching: find.byType(Scrollable)).first);
+          await t.pumpAndSettle();
+        }
+        await t.tap(find.byKey(leave));
+        await t.pumpAndSettle();
+        expect(find.byType(NwShell), findsNothing, reason: role);
+        expect(find.text('站点列表'), findsOneWidget, reason: role);
+        await t.pumpWidget(Container());
+      }
+    });
+  });
+
   group('上手向导', () {
     testWidgets('没看过导览的保安：进站点就开始，一步步走完记下来，最后练一次报警（不发给站点）', (t) async {
       final api = FakeApi('guard')..guide = <String, dynamic>{'tour': 0, 'setup_hidden': false, 'skip': <dynamic>[]};

@@ -30,6 +30,11 @@ import 'site_weather.dart';
 void _push(BuildContext context, Widget page) =>
     Navigator.push(context, MaterialPageRoute<void>(builder: (_) => page));
 
+/// 退出站点（回站点列表；外壳那一页退掉时站点列表注销会话、停推送）。每个角色的第 5 栏都有。
+Future<void> leaveSite(BuildContext context) => Navigator.of(context, rootNavigator: true).maybePop();
+
+const Key leaveSiteKey = Key('leave-site');
+
 /// 一个入口：图标、名字、一句说明。
 class _Entry extends StatelessWidget {
   final Key entryKey;
@@ -429,6 +434,13 @@ class _AdminHomeTabState extends State<AdminHomeTab> {
                     hint: tr('What to do when an alarm comes in, when a robot won\'t go, and more.',
                         '报警来了怎么办、派不出去怎么办……'),
                     onTap: () => _push(context, HelpPage(role: s?.role ?? ''))),
+                _Entry(
+                    entryKey: leaveSiteKey,
+                    icon: Icons.logout_rounded,
+                    title: tr('Leave this site', '退出站点'),
+                    hint: tr('Signed in as ${s?.name ?? ''} (${roleName(s?.role ?? '')}).',
+                        '现在登录的是 ${s?.name ?? ''}（${roleName(s?.role ?? '')}）。'),
+                    onTap: () => leaveSite(context)),
               ]),
             ]),
           ),
@@ -758,7 +770,13 @@ class _SchedulePageState extends State<SchedulePage> {
     if (widget.embedded) {
       return Scaffold(
           body: Column(children: [
-        NwHeader(overline: 'Nexus Warden', title: tr('Schedule', '日程')),
+        NwHeader(overline: 'Nexus Warden', title: tr('Schedule', '日程'), trailing: [
+          IconButton(
+              key: leaveSiteKey,
+              tooltip: tr('Leave this site', '退出站点'),
+              icon: const Icon(Icons.logout_rounded),
+              onPressed: () => leaveSite(context)),
+        ]),
         Expanded(child: body),
       ]));
     }
@@ -934,7 +952,7 @@ class MeTab extends StatelessWidget {
                 variant: NwButtonVariant.outline,
                 icon: Icons.logout_rounded,
                 label: tr('Leave this site', '退出站点'),
-                onPressed: () => Navigator.of(context, rootNavigator: true).maybePop()),
+                onPressed: () => leaveSite(context)),
           ]),
         ),
       ]),
