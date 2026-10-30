@@ -13,6 +13,7 @@ import { SiteMap } from "./mappage";
 import { pointInPolygon } from "./mapview";
 import type { Alert } from "./model";
 import { VideoSlot, type Scene } from "./slot";
+import { TodayPatrols } from "./todaypatrols";
 
 /** 迷路了的两种(站点 alerts.LEVEL_OF):横幅上多一个「帮它找位置」。 */
 const LOST = new Set(["loc_lost_paused", "loc_lost_idle"]);
@@ -123,6 +124,7 @@ export function DutyPage(props: {
         {slot(slots[1], 1)}
       </div>
       <div class="duty-bottom">
+        <div class="duty-left">
         <ul class="duty-list" aria-label={t("robots")}>
           {ranked.length === 0 && <li class="muted">{t("dutyNoRobots")}</li>}
           {ranked.map((u) => (
@@ -137,6 +139,8 @@ export function DutyPage(props: {
             </li>
           ))}
         </ul>
+        <TodayPatrols />
+        </div>
         <div class="duty-map">
           <SiteMap units={props.units} p1={alarms.filter((a) => a.level === "P1")} now={props.now} role={props.role}
             selected={finding ?? selected ?? slots[0]?.robot ?? null} onSelect={setSelected} hot={hot} episodes={false}

@@ -932,3 +932,26 @@ polygon.me-op.obstacle { fill: var(--c-text); stroke: none; }
 /* 布置、地图编辑器的地图在一屏模式里也要够高 */
 .layout-map .mapwrap, .me-canvas .mapwrap, .console.fill .layout-map .mapwrap, .console.fill .me-canvas .mapwrap { flex: none; height: calc(100vh - 280px); min-height: 420px; }
 .ly-side .row { flex-wrap: wrap; }
+
+/* W53:值班页左下角「今天的巡逻」 */
+.duty-left { display: flex; flex-direction: column; gap: 10px; min-height: 0; }
+.duty-left .duty-list { flex: 1 1 auto; }
+.today { border: 1px solid var(--c-outline); border-radius: var(--r-r12); background: var(--c-surface); padding: 8px 12px; max-height: 40%; overflow: auto; }
+.today-h { margin: 0 0 6px; font-size: 13px; color: var(--c-textSecondary); font-weight: 600; }
+.today-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.today-row { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.today-what { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tdchip { font-size: 11px; padding: 1px 8px; border-radius: 99px; background: var(--c-surfaceVariant); white-space: nowrap; }
+.tdchip.ok { color: var(--c-success); } .tdchip.bad { color: var(--c-error); } .tdchip.warn { color: var(--c-warning); } .tdchip.info { color: var(--c-primary); }
+
+/* W53:开站清单、使用教程 */
+.setup .row { display: flex; align-items: center; gap: 8px; }
+.setup-list li { display: flex; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--c-outline); }
+.setup-list li.done { opacity: .7; }
+.setup-mark { width: 18px; text-align: center; color: var(--c-success); }
+.setup-text { flex: 1; display: flex; flex-direction: column; }
+.help { display: flex; flex-direction: column; gap: 12px; min-width: min(520px, 86vw); }
+.help-step p { margin: 6px 0; line-height: 1.6; }
+.help-faq details { border-bottom: 1px solid var(--c-outline); padding: 6px 0; }
+.help-faq summary { cursor: pointer; font-weight: 600; }
+.requests { margin-bottom: 16px; }

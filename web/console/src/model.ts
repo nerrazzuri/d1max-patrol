@@ -182,6 +182,16 @@ export function canDispatch(role: string): boolean {
   return isOwnerLike(role) || role === "guard";
 }
 
+/** 派巡逻(临时巡逻,W53):能派单的,加上经理。 */
+export function canPatrol(role: string): boolean {
+  return canDispatch(role) || role === "owner";
+}
+
+/** 排巡逻日程、布防时间(W53):管理员、工程师、经理。 */
+export function canSchedule(role: string): boolean {
+  return isOwnerLike(role) || role === "owner";
+}
+
 export function canArm(role: string): boolean {
   return isOwnerLike(role) || role === "guard" || role === "owner";
 }

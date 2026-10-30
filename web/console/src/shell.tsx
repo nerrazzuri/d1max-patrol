@@ -62,7 +62,8 @@ export function isAdminPage(p: Page): p is AdminPage {
 
 /** 角色的界面名字(设计 §3):admin 叫管理员,owner 叫经理,engineer 是工程师(临时)。 */
 export function roleLabel(role: string): Key {
-  return role === "admin" ? "roleOwner" : role === "guard" ? "roleGuard" : role === "engineer" ? "roleEngineer" : "roleFamily";
+  return role === "admin" ? "roleOwner" : role === "guard" ? "roleGuard" : role === "engineer" ? "roleEngineer"
+    : role === "viewer" ? "roleViewer" : "roleFamily";
 }
 
 /** 页面默认的明暗(设计 §2.2):保安页深色,管理页浅色。 */
@@ -90,6 +91,8 @@ export function pinFor(p: Page, pref: ThemePref, systemDark: boolean): "dark" | 
 export function pageAllowed(p: Page, role: string): boolean {
   if (!isAdminPage(p)) return true;
   if (p === "admin/users") return role === "admin";
+  // W53:经理能排布防时间(App 里排巡逻日程,布防时间在这里)
+  if (p === "admin/arming") return isOwnerLike(role) || role === "owner";
   return isOwnerLike(role);
 }
 
@@ -130,6 +133,8 @@ export function TopBar(props: {
   onStop: () => void;
   onSignOut: () => void;
   onSay: (s: string) => void;
+  /** 「?」:使用教程、常见问题(W53)。 */
+  onHelp?: () => void;
 }) {
   return (
     <header class="topbar">
@@ -146,12 +151,21 @@ export function TopBar(props: {
             <a href="#/admin/home" aria-current={isAdminPage(props.page) ? "page" : undefined}>{t("adminGroup")}</a>
           </>
         )}
+        {props.me.role === "owner" && (
+          <>
+            <span class="navsep" aria-hidden="true" />
+            <a href="#/admin/arming" aria-current={props.page === "admin/arming" ? "page" : undefined}>{t("tabArming")}</a>
+          </>
+        )}
       </nav>
       <span class={props.alarms ? "alarmcount on push" : "alarmcount push"} aria-live="polite">
         {t("alarmCount", { n: props.alarms == null ? "?" : props.alarms })}
       </span>
       {props.mode && <ArmState mode={props.mode} />}
       <span class="clock mono">{new Date(props.now).toLocaleTimeString("en-GB", { hour12: false })}</span>
+      {props.onHelp && (
+        <button type="button" class="btn sm help-btn" aria-label={t("helpTitle")} title={t("helpTitle")} onClick={props.onHelp}>?</button>
+      )}
       <UserMenu me={props.me} pref={props.pref} onPref={props.onPref} onSignOut={props.onSignOut} onSay={props.onSay} />
       {(canDispatch(props.me.role) || props.me.role === "owner") && (
         <button type="button" class="btn stop" onClick={props.onStop}><Icon name="octagon" />{t("stopAll")}</button>
@@ -255,7 +269,7 @@ export function AdminNav({ page, notices, role }: { page: Page; notices: number;
   useEffect(() => { if (inAdvanced) setOpen(true); }, [inAdvanced]);
   return (
     <nav class="adminnav" aria-label={t("adminGroup")}>
-      {ADMIN_GROUPS.map((g) => {
+      {ADMIN_GROUPS.filter((g) => g.pages.some((x) => pageAllowed(x.id, role))).map((g) => {
         const fold = g.id === "advanced";
         const shown = !fold || open;
         return (
@@ -263,7 +277,7 @@ export function AdminNav({ page, notices, role }: { page: Page; notices: number;
             {fold
               ? <button type="button" class="navgroup-title" aria-expanded={open} onClick={() => setOpen(!open)}>{t(g.key)}</button>
               : <div class="navgroup-title">{t(g.key)}</div>}
-            {shown && g.pages.filter((x) => x.id !== "admin/users" || role === "admin").map((x) => (
+            {shown && g.pages.filter((x) => pageAllowed(x.id, role)).map((x) => (
               <a key={x.id} href={`#/${x.id}`} aria-current={page === x.id ? "page" : undefined}>
                 {t(x.key)}{x.id === "admin/home" && notices > 0 ? <span class="badge">{notices}</span> : null}
               </a>
