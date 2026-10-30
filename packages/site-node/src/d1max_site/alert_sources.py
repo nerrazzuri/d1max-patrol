@@ -22,6 +22,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
+from d1max_contract.binding import wifi_view
 from d1max_contract.errors import ContractError
 from d1max_contract.messages import (
     Event,
@@ -120,6 +121,8 @@ class _Mem:
     loc_reason: str = ""
     fallen: bool = False
     skew: bool = False
+    #: W42:上次报过的 WiFi 改动(编号;空 = 没有挂着的)。
+    wifi_change: str = ""
     disk80: bool = False
     backlog: bool = False
     offline: bool = False
@@ -618,6 +621,21 @@ class SiteAlertSources:
             m.skew = False
         if t.storage is not None:
             self._storage(rid, m, t.storage)
+        self._wifi_change(rid, m, t)
+
+    def _wifi_change(self, rid: str, m: _Mem, t: Telemetry) -> None:
+        """W42 §6:机器人上有人提了换 WiFi(报一次,等有 manage 权限的人确认);改动没了就收掉。"""
+        w = wifi_view(t.net)
+        ch = w["change"] if w is not None else None
+        cid = ch["id"] if ch is not None else ""
+        if cid and cid != m.wifi_change:
+            note = ("机器人现在连不上站点,正在试新 WiFi;30 分钟内没人确认就退回"
+                    if ch["mode"] == "trial" else "确认了才换")
+            self.desk.raise_alert(kind="wifi_change", robot=rid, title="机器人要换 WiFi,等确认",
+                                  detail=f"换成「{ch['ssid']}」:{note}")
+        elif not cid and m.wifi_change:
+            self.desk.resolve_all(rid, "wifi_change", who="system")
+        m.wifi_change = cid
 
     def _nogo_check(self, rid: str, m: _Mem, pose: Any) -> None:
         """「狗在禁行区里」的 P1:狗离开在生效的禁行区够远、连着够久就自己解决(W41)。定位不可信

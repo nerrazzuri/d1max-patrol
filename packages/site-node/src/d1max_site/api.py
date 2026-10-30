@@ -98,6 +98,11 @@ _ARM_EX = re.compile(r"^/api/arming/exceptions/(\d{1,9})/remove$")
 _AUTHZ = re.compile(r"^/api/lists/authorizations(?:/(\d{1,9})/(remove|end))?$")
 #: 网页上登记 / 出开通码 / 吊销机器狗(商业化 B1b,管理员)。
 _ADMIN_ROBOT = re.compile(r"^/api/admin/robots(?:/([^/]{1,64})/(code|revoke|name))?$")
+#: W42:机器人轮询自己的绑定申请;站点上的人批准 / 拒绝。
+_BIND_POLL = re.compile(r"^/api/bind/request/([0-9a-f]{1,32})$")
+_ADMIN_BIND = re.compile(r"^/api/admin/bind(?:/([0-9a-f]{1,32})/(approve|reject))?$")
+#: W42 §6:确认 / 不同意机器人上提的换 WiFi。
+_ROBOT_WIFI = re.compile(r"^/api/robots/([^/]{1,64})/wifi$")
 #: ``GET /api/alerts?all=1&limit=`` 的上限。
 ALERTS_LIMIT_MAX = 2000
 #: 告警键 ``robot/kind#seq`` 里有 ``/`` 与 ``#``:客户端整个键编码成一段(``%2F``、``%23``)。
@@ -266,6 +271,10 @@ class SiteApi:
         self.health: Any = None
         #: 站点目录(商业化 A4:狗领证书包从 ``<站点目录>/ca/issued/`` 拿)。站点主程序接上。
         self.home: Path | None = None
+        #: W42 绑定申请台(``binding.BindDesk``;有站点目录时第一次用现建)。
+        self.bind: Any = None
+        #: W42:解绑后重启 broker(让它重读吊销名单);站点主程序接上,回做没做到。
+        self.broker_restart: Callable[[], bool] | None = None
         #: 网页值班台的静态文件目录(商业化 B1;None = 包里带的 web/,测试换成别的)。
         self.web_dir: Path | None = None
         #: 给人看的站点名(商业化 B1,网页顶栏;站点主程序从 site.json 接)。
@@ -518,6 +527,8 @@ class _Handler(TlsHandlerMixin):
                 return self._login()
             if method == "POST" and path == "/api/enroll/claim":
                 return self._enroll_claim()          # 商业化 A4:狗领证书包,开通码就是凭证
+            if path.startswith("/api/bind/"):
+                return self._bind_robot(method, path)  # W42:机器人挂绑定申请、轮询、问证书还算不算
             if method == "POST" and path == "/api/incidents":
                 return self._incident_in()          # 摄像头不登录:验签
             if method == "POST" and path == "/api/logout":
@@ -561,6 +572,14 @@ class _Handler(TlsHandlerMixin):
             if m is not None:
                 self._need(user, MANAGE)
                 return self._admin_robot(method, m.group(1), m.group(2), user)
+            m = _ADMIN_BIND.match(path)
+            if m is not None:
+                self._need(user, MANAGE)
+                return self._admin_bind(method, m.group(1), m.group(2), user)
+            m = _ROBOT_WIFI.match(path)
+            if m is not None and method == "POST":
+                self._need(user, MANAGE)
+                return self._robot_wifi(unquote(m.group(1)), user)
             if path == "/api/accounts" or _ACCOUNT.match(path) or _ACCOUNT_RM.match(path):
                 self._need(user, MANAGE_ACCOUNTS)
                 return self._accounts(method, path, user)
@@ -1449,9 +1468,14 @@ class _Handler(TlsHandlerMixin):
                     raise HttpError(400, "开通码有效小时数要在 0.25–168 之间")
                 code = site_main.cmd_enroll_code(home, rid, d.get("host") or None, float(hours))
                 return self._send_json(200, {"robot_id": rid, "code": code, "hours": hours})
+            wiped = self._unbind_robot(rid, user)
             summary = site_main.cmd_revoke(home, rid)
-            return self._send_json(200, {"robot_id": rid, "summary": summary,
-                                         "broker_restart": "systemctl restart d1max-mosquitto"})
+            out = {"robot_id": rid, "summary": summary, "robot_wipe": wiped}
+            # 吊销进了 CRL,broker 重启才读:站点自己重启它(systemd 拉起来);做不到才叫人去重启
+            restart = self.site.broker_restart
+            if restart is None or not restart():
+                out["broker_restart"] = "systemctl restart d1max-mosquitto"
+            return self._send_json(200, out)
         except site_main.SiteError as exc:
             msg = str(exc)
             raise HttpError(409 if ("已登记" in msg or "没登记" in msg or "没有" in msg) else 400,
@@ -1677,6 +1701,100 @@ class _Handler(TlsHandlerMixin):
         except ProvisionError as exc:
             raise HttpError(403, str(exc)) from exc
         return self._send_json(200, {"robot_id": rid, "files": files})
+
+    def _bind_desk(self) -> Any:
+        """W42 绑定申请台(站点主程序接了站点目录才有;第一次用时现建)。"""
+        site = self.site
+        if site.home is None or site.dispatcher is None:
+            raise HttpError(404, "这个站点没开绑定")
+        if site.bind is None:
+            from d1max_site import main as site_main
+            from d1max_site.binding import BindDesk
+            home = site.home
+            from d1max_site.alert_store import LoopAlerts
+            alerts = LoopAlerts(site.alerts, site.loop) if site.alerts is not None else None
+            site.bind = BindDesk(
+                site.dispatcher.db, now_ms=site._now, alerts=alerts,
+                enroll=lambda serial: site_main.cmd_enroll(home, serial, 365),
+                issue=lambda serial, host: site_main.cmd_enroll_code(home, serial, host or None,
+                                                                     1.0),
+                set_name=site.dispatcher.registry.set_name)
+        return site.bind
+
+    def _bind_robot(self, method: str, path: str) -> None:
+        """机器人这头(不用登录,W42 §5.1):挂申请、轮询、问证书。"""
+        from d1max_site.binding import BindRefused
+        desk = self._bind_desk()
+        q = parse_qs(self.path.split("?", 1)[1] if "?" in self.path else "")
+        try:
+            if method == "POST" and path == "/api/bind/request":
+                d = self._body()
+                serial = str(d.get("serial") or "")[:64] if isinstance(d, dict) else ""
+                self._actor, self._audit_target = f"robot:{serial}", serial
+                host = urlparse("//" + (self.headers.get("Host") or "")).hostname or ""
+                return self._send_json(200, desk.request(d, source=self.client_address[0],
+                                                         host=host))
+            m = _BIND_POLL.match(path)
+            if method == "GET" and m is not None:
+                return self._send_json(200, desk.poll(m.group(1), (q.get("secret") or [""])[0]))
+            if method == "GET" and path == "/api/bind/state":
+                return self._send_json(200, {"state": desk.cert_state(
+                    (q.get("serial") or [""])[0], (q.get("cert") or [""])[0])})
+        except BindRefused as exc:
+            raise HttpError(exc.status, exc.message) from exc
+        raise HttpError(404, f"没有 {method} {path}")
+
+    def _admin_bind(self, method: str, rid: str | None, action: str | None, user) -> None:
+        """站点上的人看、批、拒绑定申请(W42 §5.1;批准要再输一次密码)。"""
+        from d1max_site import main as site_main
+        from d1max_site.binding import BindRefused
+        desk = self._bind_desk()
+        if rid is None:
+            if method != "GET":
+                raise HttpError(405, "只支持 GET")
+            return self._send_json(200, {"requests": desk.pending()})
+        if method != "POST":
+            raise HttpError(405, "只支持 POST")
+        d = self._body()
+        self._audit_target = rid
+        try:
+            if action == "approve":
+                self._confirm(user, d)
+                out = desk.approve(rid, by=str(user), name=d.get("name"))
+            else:
+                out = desk.reject(rid, by=str(user))
+        except BindRefused as exc:
+            raise HttpError(exc.status, exc.message) from exc
+        except site_main.SiteError as exc:
+            raise HttpError(409, str(exc)) from exc
+        self._audit_detail = {"serial": out["serial"], "outcome": out["state"]}
+        return self._send_json(200, out)
+
+    def _robot_wifi(self, robot_id: str, user) -> None:
+        """W42 §6:``{"id": 改动编号, "approve": true/false}`` → 发给机器人(它挂着那一条才认)。"""
+        if not SAFE_ID.match(robot_id):
+            raise HttpError(404, "没有这台机器人")
+        d = self._body()
+        cid, ok = d.get("id"), d.get("approve")
+        if not isinstance(cid, str) or not re.fullmatch(r"[0-9a-f]{8,32}", cid) \
+                or not isinstance(ok, bool):
+            raise HttpError(400, "要 {\"id\": 改动编号, \"approve\": true/false}")
+        self._audit_target, self._audit_detail = robot_id, {"id": cid, "approve": ok}
+        return self._send_json(200, self.site.dispatch(lambda: self.site.dispatcher.map_command(
+            robot_id, "wifi_confirm", {"id": cid, "approve": ok}, issued_by=str(user))))
+
+    def _unbind_robot(self, robot_id: str, user) -> str:
+        """W42 §5.3:解绑先叫机器人恢复出厂(它不在线、老版本不认就算了 —— 它会自己来问,§5.3),
+        回 ``sent`` / ``offline`` / ``unsupported``。"""
+        rec = self.site.dispatcher.registry.get(robot_id)
+        if rec is None or rec.revoked:
+            return "offline"
+        try:
+            self.site.dispatch(lambda: self.site.dispatcher.map_command(
+                robot_id, "unbind", {"cert": rec.fingerprint}, issued_by=str(user)))
+        except HttpError as exc:
+            return "unsupported" if exc.extra.get("unsupported") else "offline"
+        return "sent"
 
     def _healthz(self) -> None:
         """探活(商业化 A1):不用登录,只回 ``{"ok", "version"}``;不好回 503。"""

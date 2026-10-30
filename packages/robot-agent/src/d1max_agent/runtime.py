@@ -409,6 +409,8 @@ class AgentRuntime:
         self._rec_action = ""
         #: 发件箱隔离的文件重新排上(站点改了规矩之后,管理员让它再传一次);主程序接上。
         self._outbox_retry: Callable[[], int] | None = None
+        #: W42:本机配网服务(``bindlink.BindLink``;WiFi 状态、解绑、确认换 WiFi)。主程序接上。
+        self.bind: Any = None
         #: W30b 外审 1:发件箱里封不上、扣着不传的明文证据(件数, 原因);主程序接上(配了证据加密才接)。
         self._unsealed: Callable[[], tuple[int, str]] | None = None
         self._unsealed_told = 0
@@ -875,6 +877,9 @@ class AgentRuntime:
             out["obstacles"] = o
         if self._storage is not None:
             out["outbox_retry"] = {}
+        if self.bind is not None:
+            out["unbind"] = {}                         # W42:解绑 = 恢复出厂(配网服务清机)
+            out["wifi_confirm"] = {}                   # W42 §6:站点确认 / 不同意换 WiFi
         if self.rtk is not None:
             out["rtk"] = {"source": self.rtk.kind}  # W09e:站点、手机据此显示 RTK
         if self.person_view is not None:
@@ -1195,6 +1200,19 @@ class AgentRuntime:
             return "", got | {"starting": starting}
         if kind.startswith("release_"):
             return await self._release_command(cmd)
+        if kind in ("unbind", "wifi_confirm"):
+            # W42:转给本机配网服务(清机在它那儿做,会把代理自己也停掉:先回执再清)
+            if self.bind is None:
+                return "unsupported: 这台没有配网服务"
+            p = cmd.payload
+            if kind == "unbind":
+                why = await asyncio.to_thread(self.bind.unbind, p.get("cert"))
+            else:
+                why = await asyncio.to_thread(self.bind.wifi_confirm, p.get("id"),
+                                              p.get("approve"))
+            self.events.emit(kind, {"task_id": cmd.task_id, "ok": not why,
+                                    **({"reason": why} if why else {})})
+            return why
         if kind == "outbox_retry":
             # 放隔离要拿上传线程的锁(它可能正卡在一次上传里):不在事件循环里等。
             n = await asyncio.to_thread(self._outbox_retry) if self._outbox_retry is not None \
@@ -2780,4 +2798,8 @@ class AgentRuntime:
         nav = self._nav_report.wire(nav_path() if nav_path is not None else None, now)
         if nav is not None:
             tele = dataclasses.replace(tele, nav=nav)
+        if self.bind is not None:
+            bn = await asyncio.to_thread(self.bind.net)
+            if bn:
+                tele = dataclasses.replace(tele, net={**tele.net, **bn})   # W42:WiFi 状态
         await self.transport.publish(self.topics.telemetry, _dumps(tele.to_wire()), qos=0)

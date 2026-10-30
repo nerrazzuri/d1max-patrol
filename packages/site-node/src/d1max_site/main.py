@@ -42,6 +42,7 @@ import json
 import logging
 import os
 import signal
+import subprocess
 import sys
 import threading
 import time
@@ -323,6 +324,29 @@ def cmd_robot_service(home: Path, robot_id: str, manual: bool, note: str = "") -
                 else f"{robot_id}:接自动派遣(排程、入侵、回充、自动回待命点)")
     finally:
         db.close()
+
+
+BROKER_UNIT = "d1max-mosquitto.service"
+
+
+def restart_broker(*, run=subprocess.run, kill=os.kill) -> bool:
+    """吊销进了 CRL 以后 broker 要重启才读(mosquitto 不在重载信号里重读监听的证书设置)。
+    站点跟 broker
+    是同一个系统用户:查到它的主进程号、发 SIGTERM,systemd 按 ``Restart=always`` 5 秒后拉起来。
+    回做没做到(没有 systemd、没这个单元、查不到进程号都算没做到)。"""
+    try:
+        r = run(["systemctl", "show", "-p", "MainPID", "--value", BROKER_UNIT],
+                capture_output=True, text=True, timeout=5)
+        pid = int((r.stdout or "").strip() or 0)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return False
+    if pid <= 1:
+        return False
+    try:
+        kill(pid, signal.SIGTERM)
+    except OSError:
+        return False
+    return True
 
 
 def cmd_revoke(home: Path, robot_id: str) -> str:
@@ -993,6 +1017,7 @@ class Server:
         self.health.alerts = self._loop_alerts            # 杂事线程里报:经事件循环
         self.api.health = self.health
         self.api.home = home                              # A4:狗领证书包
+        self.api.broker_restart = restart_broker          # W42:解绑后让 broker 重读吊销名单
         self.api.site_name = str(cfg.get("site_name") or cfg.get("site_id") or "")   # B1
         from d1max_site.compat import CompatWatch
         #: 狗的版本配不配站点(商业化 A7)。

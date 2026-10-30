@@ -63,6 +63,8 @@ const Map<String, (String, String)> alertTitles = <String, (String, String)>{
   'rtk': ('RTK base station moved', 'RTK 基站坐标跳了'),
   'standby_failed': ('Did not return to standby', '没回待命点'),
   'upload_refused': ('Site refused an upload', '站点不收上传'),
+  'bind_request': ('Robot waiting to join the site', '有机器人等批准加入站点'),
+  'wifi_change': ('Robot WiFi change waiting for approval', '机器人换 WiFi 等确认'),
   'release_failed': ('Software update failed', '升级没成'),
   'upload_backlog': ('Evidence upload delayed', '证据半小时没传上来'),
   'bundle_lag': ('Robot mission data out of date', '机器人上的任务包落后'),

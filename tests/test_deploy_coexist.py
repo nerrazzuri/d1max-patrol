@@ -59,6 +59,8 @@ from tests.test_deploy_files import DEPLOY
     "SIDE_WANTS_LINK": "/etc/systemd/system/multi-user.target.wants/d1max-sidecar.service",
     "ZENOH_UNIT": "d1max-zenohd.service",
     "ZENOH_WANTS_LINK": "/etc/systemd/system/multi-user.target.wants/d1max-zenohd.service",
+    "BIND_UNIT": "d1max-bind.service",
+    "BIND_WANTS_LINK": "/etc/systemd/system/multi-user.target.wants/d1max-bind.service",
 }
 
 

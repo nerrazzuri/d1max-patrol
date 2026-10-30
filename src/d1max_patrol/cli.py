@@ -150,6 +150,7 @@ def build_parser() -> argparse.ArgumentParser:
     pv.add_argument("--user", default=os.environ.get("D1MAX_USER", "robot"),
                     help="代理用哪个账号跑(证书包的属主)")
     pv.add_argument("--force", action="store_true", help="已经开通成别的编号也换(小心)")
+    _bind_args(sub)
     sc = sub.add_parser("selfcheck", help="出厂自检:证书、env、连站点、对时、盘、服务(商业化 A4)")
     sc.add_argument("--etc", default="/etc/d1max", help=argparse.SUPPRESS)
     sc.add_argument("--user", default=os.environ.get("D1MAX_USER", "robot"))
@@ -263,6 +264,12 @@ async def _backend(args) -> AsyncIterator[VendorNavBackend]:
                       file=sys.stderr)
 
 
+def _bind_args(sub: argparse._SubParsersAction) -> None:
+    """W42:配网服务、出厂烧写、解绑令(参数在 ``d1max_patrol.bind.cli``)。"""
+    from d1max_patrol.bind.cli import add_args
+    add_args(sub)
+
+
 def _cmd_provision(args: argparse.Namespace) -> int:
     """开通、出厂自检(商业化 A4)。"""
     from d1max_patrol import provision as pv
@@ -326,6 +333,9 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_bundle_pack(args)
     if args.command in ("provision", "selfcheck"):
         return _cmd_provision(args)
+    if args.command in ("bind-serve", "factory", "unbind-token"):
+        from d1max_patrol.bind.cli import run
+        return run(args)
 
     if args.command == "release":
         # 跟 sim 同一条道理:装机时机器上根本没有后端可连,boot-guard 更是

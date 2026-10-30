@@ -68,6 +68,8 @@ set -euo pipefail
 # @删除 /etc/systemd/system/multi-user.target.wants/d1max-sidecar.service 运动控制旁路的自启链(有人手工 enable 过的话)
 # @删除 /etc/systemd/system/d1max-zenohd.service                          自带算力板的 zenoh 路由单元(A5)
 # @删除 /etc/systemd/system/multi-user.target.wants/d1max-zenohd.service zenoh 路由的自启链(enable 过的话)
+# @删除 /etc/systemd/system/d1max-bind.service                            配网服务单元(W42)
+# @删除 /etc/systemd/system/multi-user.target.wants/d1max-bind.service   配网服务的自启链(烧写时 enable 的)
 # @删除 /etc/systemd/timesyncd.conf.d/d1max.conf                          对时配置(W09d;删了之后按系统原来的配置对时)
 # @删除 /etc/chrony/conf.d/d1max.conf                                     对时片段(决策 61;删了之后 chrony 回到厂家的配置)
 # @删除 /etc/systemd/system/d1max-bootguard.service                      老的守卫单元(多数机器上没有)
@@ -110,6 +112,8 @@ SIDE_UNIT=d1max-sidecar.service
 SIDE_WANTS_LINK=/etc/systemd/system/multi-user.target.wants/d1max-sidecar.service
 ZENOH_UNIT=d1max-zenohd.service
 ZENOH_WANTS_LINK=/etc/systemd/system/multi-user.target.wants/d1max-zenohd.service
+BIND_UNIT=d1max-bind.service
+BIND_WANTS_LINK=/etc/systemd/system/multi-user.target.wants/d1max-bind.service
 LEGACY_WANTS_LINK=/etc/systemd/system/multi-user.target.wants/d1max-patrol.service
 
 say()  { printf '%s\n' "$*"; }
@@ -402,7 +406,7 @@ stop_service() {
     return 0
   fi
   # 旁路排在代理后面:代理先停车、放下控制权,再停握着控制权的旁路(工单 7)
-  for u in "$NAV2_UNIT" "$PERS_UNIT" "$OBS_UNIT" "$LOC_UNIT" "$MERGE_UNIT" "$ZENOH_UNIT" "$MAIN_UNIT" "$SIDE_UNIT" "$LEGACY_UNIT" "$OLD_UNIT"; do
+  for u in "$BIND_UNIT" "$NAV2_UNIT" "$PERS_UNIT" "$OBS_UNIT" "$LOC_UNIT" "$MERGE_UNIT" "$ZENOH_UNIT" "$MAIN_UNIT" "$SIDE_UNIT" "$LEGACY_UNIT" "$OLD_UNIT"; do
     if [ "$DO_IT" != 1 ]; then
       say "  [dry-run] 会 stop + disable $u"
       continue
@@ -426,6 +430,8 @@ stop_service() {
   rm_sys "$MERGE_WANTS_LINK" "前后雷达合并的自启链,没 enable 过就没有"
   rm_sys "$UNIT_DIR/$ZENOH_UNIT" "zenoh 路由单元(A5)"
   rm_sys "$ZENOH_WANTS_LINK" "zenoh 路由的自启链,没 enable 过就没有"
+  rm_sys "$UNIT_DIR/$BIND_UNIT" "配网服务单元(W42)"
+  rm_sys "$BIND_WANTS_LINK" "配网服务的自启链,没烧写过就没有"
   rm_sys "$UNIT_DIR/$SIDE_UNIT" "运动控制旁路单元(工单 7)"
   rm_sys "$SIDE_WANTS_LINK" "运动控制旁路的自启链,没 enable 过就没有"
   rm_sys "/etc/systemd/timesyncd.conf.d/d1max.conf" "对时配置(W09d),站点地址没填过就没有"

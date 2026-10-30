@@ -43,7 +43,8 @@ class 站:
                  agent_video: bool = True, teleop: dict | None = None,
                  runs: dict | None = None, maps: dict | None = None,
                  releases: dict | None = None, autonomy: str = "autonomous",
-                 payload: bool = False, cameras: tuple[str, ...] | None = None) -> None:
+                 payload: bool = False, cameras: tuple[str, ...] | None = None,
+                 bind=None) -> None:
         self.loop = LoopThread()
         self.loop.start()
         self.db = SiteDB(tmp_path / "site.db")
@@ -112,6 +113,7 @@ class 站:
                                       mapper=(maps or {}).get("mapper"),
                                       releases=(releases or {}).get("ops"),
                                       autonomy=autonomy)
+            self.agent.bind = bind                     # W42:本机配网服务(测试给一个)
             await self.agent.start()
             self.desk = self.sources = None
             if alerts:                      # W00c5a:告警台挂上派遣器

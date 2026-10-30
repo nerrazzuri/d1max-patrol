@@ -1,0 +1,23 @@
+[Unit]
+Description=D1 Max 配网服务(W42:热点那一侧配网、绑定站点、解绑清机、换 WiFi)
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=0
+# 生产线烧写过(d1max-patrol factory burn)才有 device.json;没烧写的机器(老机器、开发机)不起。
+ConditionPathExists=/etc/d1max/device.json
+
+[Service]
+Type=simple
+# 要写 /etc/d1max、停起我们的服务、清机、改路由器:root。热点那一侧只开它一个端口(只绑 LAN1 的地址)。
+User=root
+Environment=D1MAX_DATA_ROOT=/var/lib/d1max
+Environment=D1MAX_OUTBOX=/var/lib/d1max/outbox
+Environment=PYTHONUNBUFFERED=1
+# D1MAX_BIND_HOST(3588 在路由器 LAN1 上的地址)、D1MAX_ROUTER、D1MAX_OUTBOX 从 env 文件来。
+EnvironmentFile=-/etc/d1max/env
+ExecStart=/opt/d1max/current/deploy/d1max-bind-start
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

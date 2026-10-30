@@ -197,6 +197,9 @@ LEVEL_OF: dict[str, Level] = {
     # 事件源被限流(W16):摄像头误报成串,或者密钥漏了被人刷;今天之内看一下。
     "incident_flood": Level.P2,
     "robot_offline_idle": Level.P2,
+    # W42:机器人等批准加入站点 / 机器人上有人提了换 WiFi:要有 manage 权限的人今天之内批一下。
+    "bind_request": Level.P2,
+    "wifi_change": Level.P2,
     # P3:只记录。日常的正常事件,不需要谁去处理什么。
     "run_done": Level.P3,
     "run_start": Level.P3,
