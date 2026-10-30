@@ -41,7 +41,8 @@ def 台(tmp_path, monkeypatch):
     a = 告警()
     desk = bd.BindDesk(db, now_ms=lambda: clock["t"], alerts=a,
                        enroll=lambda s: site_main.cmd_enroll(home, s, 365),
-                       issue=lambda s, h: site_main.cmd_enroll_code(home, s, h or None, 1.0),
+                       issue=lambda s, h, fp: site_main.cmd_enroll_code(home, s, h or None, 1.0,
+                                                                        expect_fp=fp),
                        set_name=lambda s, n: names.__setitem__(s, n))
     yield desk, home, db, clock, a, names
     db.close()
@@ -319,3 +320,41 @@ def test_端到端_换WiFi站点确认_解绑先叫机器人清机(tmp_path, 台
     finally:
         s.close()
         unix.shutdown()
+
+
+def test_外审2A_批准后被解绑重新登记_旧申请出码那一刻也领不到新一代(台):
+    """检查和出码之间有人解绑、重新登记(并发交错):出码时在同一个事务里再核一次批准时那一代。"""
+    desk, home, db, *_ = 台
+    r = _挂(desk)
+    desk.approve(r["request_id"], by="owner")
+    real = desk._issue
+
+    def 交错(serial, host, fp):
+        site_main.cmd_revoke(home, serial)                 # 刚核完那一代,另一边解绑、重新登记
+        site_main.cmd_enroll(home, serial, 365)
+        return real(serial, host, fp)
+    desk._issue = 交错
+    with pytest.raises(bd.BindRefused):
+        desk.poll(r["request_id"], r["poll_secret"])
+
+
+def test_外审2B_老的绑定申请表没有cert_fp列_升上来补上(tmp_path):
+    import sqlite3
+
+    from d1max_site.db import SiteDB
+    p = tmp_path / "s.db"
+    SiteDB(p).close()
+    con = sqlite3.connect(p)
+    con.execute("DROP TABLE bind_requests")
+    con.execute("CREATE TABLE bind_requests (id TEXT PRIMARY KEY, serial TEXT NOT NULL, "
+                "nonce TEXT NOT NULL, secret_hash TEXT NOT NULL, created_ms INTEGER NOT NULL, "
+                "expires_ms INTEGER NOT NULL, state TEXT NOT NULL DEFAULT 'pending', "
+                "decided_by TEXT NOT NULL DEFAULT '', decided_ms INTEGER, model TEXT NOT NULL "
+                "DEFAULT '', version TEXT NOT NULL DEFAULT '', source TEXT NOT NULL DEFAULT '', "
+                "host TEXT NOT NULL DEFAULT '')")
+    con.commit()
+    con.close()
+    db = SiteDB(p)
+    cols = {r[1] for r in db.query("PRAGMA table_info(bind_requests)")}
+    db.close()
+    assert "cert_fp" in cols

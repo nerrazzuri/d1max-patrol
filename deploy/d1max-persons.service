@@ -6,6 +6,8 @@ Description=D1 Max 人员检测节点(相机看到人 + 雷达量距离,经本�
 After=network-online.target d1max-agent.service d1max-zenohd.service
 Wants=network-online.target
 StartLimitIntervalSec=0
+# W42:正在清机(解绑 = 恢复出厂,半路断电了)就不起,等配网服务清完
+ConditionPathExists=!/etc/d1max/bind/wiping
 
 [Service]
 Type=simple

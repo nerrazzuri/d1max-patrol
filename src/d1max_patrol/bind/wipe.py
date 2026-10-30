@@ -32,6 +32,8 @@ UNITS = ("d1max-agent", "d1max-localizer", "d1max-nav2", "d1max-obstacles", "d1m
 SITE_FILES = ("tls", "registration.json", "evidence-pub.key")
 
 Run = Callable[[Sequence[str]], int]
+#: ``fstrim``:回 ``(退出码, 出错的话)``。测试换掉。
+Trim = Callable[[str], tuple[int, str]]
 
 
 #: 停服务最多等多久:代理停在线建图要存盘,单元给了 420 s(外审 I8),这里多等一点。
@@ -43,6 +45,15 @@ def _run(cmd: Sequence[str]) -> int:
         return subprocess.run(list(cmd), capture_output=True, timeout=STOP_TIMEOUT_S).returncode
     except (OSError, subprocess.SubprocessError):
         return 127
+
+
+def _trim(mount: str) -> tuple[int, str]:
+    try:
+        r = subprocess.run(["fstrim", mount], capture_output=True, text=True,
+                           timeout=STOP_TIMEOUT_S)
+        return r.returncode, (r.stderr or r.stdout).strip()
+    except (OSError, subprocess.SubprocessError) as exc:
+        return 127, str(exc)
 
 
 def mountpoint(path: Path) -> Path:
@@ -79,7 +90,7 @@ def _clear_dir(d: Path) -> None:
             p.unlink()
 
 
-def wipe(paths: BindPaths, *, router: Router, run: Run = _run) -> list[str]:
+def wipe(paths: BindPaths, *, router: Router, run: Run = _run, trim: Trim = _trim) -> list[str]:
     """清机。回失败了的那几步(空 = 全清干净了)。"""
     failed: list[str] = []
     bad = stop_services(run)
@@ -115,9 +126,14 @@ def wipe(paths: BindPaths, *, router: Router, run: Run = _run) -> list[str]:
     mounts = {mountpoint(d) for d in (Path("/"), paths.data_root, *paths.extra_data)
               if Path(d).exists()}
     for m in sorted(mounts):
-        if run(["fstrim", str(m)]) != 0:
-            # 盘不支持 trim 也不能卡在清机里出不来:文件已经删了,记下来
-            log.warning("fstrim %s 没成(盘不支持?);文件已经删了", m)
+        rc, why = trim(str(m))
+        if rc == 0:
+            continue
+        if "not supported" in why or "不支持" in why:
+            # 盘或文件系统不支持 trim:没法做,不能卡在清机里出不来;文件已经删了
+            log.warning("fstrim %s:盘不支持(%s);文件已经删了", m, why)
+        else:
+            failed.append(f"fstrim {m}:{why or rc}")    # 外审 2-D:真出错不算清完,下一轮再来
     if failed:
         log.error("清机没清干净:%s", ";".join(failed))
     return failed

@@ -57,11 +57,12 @@ def _fp(text: Any) -> str:
 
 
 class BindDesk:
-    """``enroll(serial)`` 签证书、登记;``issue(serial, host)`` 出 1 小时的开通码
+    """``enroll(serial)`` 签证书、登记;``issue(serial, host, cert_fp)`` 给 ``cert_fp`` 那一代
+    出 1 小时的开通码
     (都是站点现有的函数)。"""
 
     def __init__(self, db: Any, *, now_ms: Callable[[], int], enroll: Callable[[str], None],
-                 issue: Callable[[str, str], str], alerts: Any = None,
+                 issue: Callable[[str, str, str], str], alerts: Any = None,
                  set_name: Callable[[str, str], None] | None = None) -> None:
         self.db = db
         self._now = now_ms
@@ -135,7 +136,7 @@ class BindDesk:
         if now > (r["decided_ms"] or 0) + CLAIM_WINDOW_MS:
             return {"state": "expired"}
         try:
-            code = self._issue(r["serial"], r["host"])
+            code = self._issue(r["serial"], r["host"], r["cert_fp"])
         except Exception as exc:  # 原因原样告诉机器人(它会记日志、再问)
             raise BindRefused(409, f"批了,但开通码出不来:{exc}") from exc
         return {"state": "approved", "code": code}

@@ -328,6 +328,25 @@ void main() {
       expect(find.byKey(const Key('wifi-join')), findsOneWidget, reason: '没换成：再连机器人、再选');
     });
 
+    testWidgets('外审 2-F：结果送不到站点时，到机器人旁边经热点问；也能随时重新配', (t) async {
+      final api = FakeApi('guard');
+      final link = FakeLink();
+      await t.pumpWidget(host(RobotWifiPage(api: api, robotId: 'D1M-1', scanner: (_) async => sticker(),
+          joiner: FakeJoiner(), link: (_) => link, watchEvery: const Duration(hours: 1))));
+      await t.tap(find.byKey(const Key('bind-scan')));
+      await t.pumpAndSettle();
+      await t.tap(find.byKey(const Key('wifi-join')));
+      await t.pumpAndSettle();
+      await pick(t, 'Estate', '12345678');
+      link.st = <String, dynamic>{...link.st,
+        'change_result': <String, dynamic>{'id': '0a1b2c3d4e5f', 'result': 'expired'}};
+      await t.ensureVisible(find.byKey(const Key('wifi-ask-robot')));
+      await t.tap(find.byKey(const Key('wifi-ask-robot')));
+      await t.pumpAndSettle();
+      expect(find.byKey(const Key('wifi-result')), findsOneWidget);
+      expect(find.byKey(const Key('wifi-again')), findsOneWidget);
+    });
+
     testWidgets('工程师：解绑令 + 贴纸 → 机器人清机', (t) async {
       final link = FakeLink();
       await t.pumpWidget(host(EngineerUnbindPage(scanner: (_) async => sticker(), joiner: FakeJoiner(),

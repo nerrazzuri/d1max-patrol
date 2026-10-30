@@ -1716,8 +1716,8 @@ class _Handler(TlsHandlerMixin):
             site.bind = BindDesk(
                 site.dispatcher.db, now_ms=site._now, alerts=alerts,
                 enroll=lambda serial: site_main.cmd_enroll(home, serial, 365),
-                issue=lambda serial, host: site_main.cmd_enroll_code(home, serial, host or None,
-                                                                     1.0),
+                issue=lambda serial, host, fp: site_main.cmd_enroll_code(
+                    home, serial, host or None, 1.0, expect_fp=fp),
                 set_name=site.dispatcher.registry.set_name)
         return site.bind
 

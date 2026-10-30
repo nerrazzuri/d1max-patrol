@@ -7,6 +7,8 @@ After=network-online.target
 Wants=network-online.target
 # 2026-10-28 C40221:现场手写的单元撞了起停次数上限,开机抢控制权的窗口就那几秒 —— 不设上限
 StartLimitIntervalSec=0
+# W42:正在清机(解绑 = 恢复出厂,半路断电了)就不起,等配网服务清完
+ConditionPathExists=!/etc/d1max/bind/wiping
 
 [Service]
 Type=simple
