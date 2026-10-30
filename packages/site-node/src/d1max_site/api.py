@@ -102,6 +102,7 @@ _AUTHZ = re.compile(r"^/api/lists/authorizations(?:/(\d{1,9})/(remove|end))?$")
 _ADMIN_ROBOT = re.compile(r"^/api/admin/robots(?:/([^/]{1,64})/(code|revoke|name))?$")
 #: W42:机器人轮询自己的绑定申请;站点上的人批准 / 拒绝。
 _BIND_POLL = re.compile(r"^/api/bind/request/([0-9a-f]{1,32})$")
+_ACCT_REQ = re.compile(r"^/api/account-requests(?:/([0-9a-f]{1,32})/(approve|reject))?$")
 _ADMIN_BIND = re.compile(r"^/api/admin/bind(?:/([0-9a-f]{1,32})/(approve|reject))?$")
 #: W42 §6:确认 / 不同意机器人上提的换 WiFi。
 _ROBOT_WIFI = re.compile(r"^/api/robots/([^/]{1,64})/wifi$")
@@ -277,6 +278,8 @@ class SiteApi:
         self.bind: Any = None
         #: W53 临时巡逻台(``adhoc.AdhocDesk``);站点主程序接上,没接的第一次用时现建。
         self.adhoc: Any = None
+        #: W52 账号申请台(``account_requests.AccountRequests``);第一次用时现建。
+        self.account_requests: Any = None
         #: W42:解绑后重启 broker(让它重读吊销名单);站点主程序接上,回做没做到。
         self.broker_restart: Callable[[], bool] | None = None
         #: 网页值班台的静态文件目录(商业化 B1;None = 包里带的 web/,测试换成别的)。
@@ -418,7 +421,8 @@ class SiteApi:
         except Unsupported as exc:
             raise HttpError(409, str(exc), extra={"unsupported": True}) from exc
         except DispatchRefused as exc:
-            raise HttpError(409, str(exc)) from exc
+            from d1max_site.refusals import extra_for
+            raise HttpError(409, str(exc), extra=extra_for(str(exc))) from exc   # W53:带代号
         except (DispatchTimeout, TimeoutError) as exc:
             raise HttpError(504, f"等机器人的回执超时: {exc}") from exc
 
@@ -533,6 +537,8 @@ class _Handler(TlsHandlerMixin):
                 return self._enroll_claim()          # 商业化 A4:狗领证书包,开通码就是凭证
             if path.startswith("/api/bind/"):
                 return self._bind_robot(method, path)  # W42:机器人挂绑定申请、轮询、问证书还算不算
+            if method == "POST" and path == "/api/account-requests":
+                return self._account_apply()          # W52:App 上申请账号(不用登录)
             if method == "POST" and path == "/api/incidents":
                 return self._incident_in()          # 摄像头不登录:验签
             if method == "POST" and path == "/api/logout":
@@ -556,11 +562,29 @@ class _Handler(TlsHandlerMixin):
                 # 商业化 B1:网页刷新以后靠 cookie 认人,要知道是谁、什么角色、站点叫什么
                 from d1max_contract.compat import MIN_APP_API_LEVEL, SITE_API_LEVEL
                 self._need(user, VIEW)
+                from d1max_site.setup import read_guide
                 return self._send_json(200, {
                     "name": str(user), "role": getattr(user, "role", ""),
                     "display_name": self.site.accounts.display_name(str(user)),
                     "site_name": self.site.site_name, "api_level": SITE_API_LEVEL,
-                    "min_app_level": MIN_APP_API_LEVEL})
+                    "min_app_level": MIN_APP_API_LEVEL,
+                    # W53:上手向导看过哪一版、开站清单收没收起来
+                    "guide": read_guide(self.site.accounts.db, str(user))})
+            if method == "POST" and path == "/api/me/guide":
+                from d1max_site.setup import GuideError, write_guide
+                self._need(user, VIEW)
+                try:
+                    return self._send_json(200, write_guide(self.site.accounts.db, str(user),
+                                                            self._body()))
+                except GuideError as exc:
+                    raise HttpError(400, str(exc)) from exc
+            if method == "GET" and path == "/api/setup":
+                from d1max_site.setup import read_guide, setup_view
+                self._need(user, MANAGE)
+                skip = set(read_guide(self.site.accounts.db, str(user))["skip"])
+                disp = self.site.dispatcher
+                return self._send_json(200, self.site.loop.call(lambda: _sync(
+                    setup_view, disp.db, disp, skip=skip)))
             if method == "GET" and path == "/api/pairing":
                 self._need(user, VIEW)
                 return self._pairing()
@@ -580,6 +604,10 @@ class _Handler(TlsHandlerMixin):
             if m is not None:
                 self._need(user, MANAGE)
                 return self._admin_bind(method, m.group(1), m.group(2), user)
+            m = _ACCT_REQ.match(path)
+            if m is not None:
+                self._need(user, MANAGE_ACCOUNTS)
+                return self._account_requests(method, m.group(1), m.group(2), user)
             m = _ROBOT_WIFI.match(path)
             if m is not None and method == "POST":
                 self._need(user, MANAGE)
@@ -1070,7 +1098,9 @@ class _Handler(TlsHandlerMixin):
         except LockedOut as exc:
             raise HttpError(429, str(exc)) from exc
         except AuthError as exc:
-            raise HttpError(401, str(exc)) from exc
+            hint = self._acct_desk().login_hint(name)      # W52:申请了还没批 / 被拒了
+            raise HttpError(401, hint or str(exc), extra={"apply": hint} if hint else None) \
+                from exc
         who = self.site.accounts.check(token)
         from d1max_contract.compat import MIN_APP_API_LEVEL, SITE_API_LEVEL
         if d.get("web") is True:
@@ -1122,7 +1152,8 @@ class _Handler(TlsHandlerMixin):
             # 站点这一道关(W00c6i 内审):要人监护的狗没人监护就不派 —— 回滚到旧版代理时狗自己不查。
             why = self.site.supervision.refusal(robot_id)
             if why:
-                raise HttpError(409, why)
+                from d1max_site.refusals import extra_for
+                raise HttpError(409, why, extra=extra_for(why))
         if action == "goto":
             speed = d.get("max_speed_mps")
             if speed is not None and (isinstance(speed, bool)
@@ -1291,7 +1322,8 @@ class _Handler(TlsHandlerMixin):
                 raise HttpError(405, "只支持 POST")
             why = self.site.supervision.refusal(robot_id)
             if why:
-                raise HttpError(409, why)
+                from d1max_site.refusals import extra_for
+                raise HttpError(409, why, extra=extra_for(why))
             d = self._body() or {}
             name = d.get("name") if isinstance(d, dict) else None
             if name is not None and (not isinstance(name, str) or not SAFE_ID.match(name)):
@@ -1803,6 +1835,52 @@ class _Handler(TlsHandlerMixin):
         except BindRefused as exc:
             raise HttpError(exc.status, exc.message) from exc
         raise HttpError(404, f"没有 {method} {path}")
+
+    def _acct_desk(self) -> Any:
+        """W52 账号申请台(第一次用时现建;告警经事件循环)。"""
+        site = self.site
+        if site.account_requests is None:
+            from d1max_site.account_requests import AccountRequests
+            from d1max_site.alert_store import LoopAlerts
+            alerts = LoopAlerts(site.alerts, site.loop) if site.alerts is not None else None
+            site.account_requests = AccountRequests(site.accounts.db, now_ms=site._now,
+                                                    alerts=alerts)
+        return site.account_requests
+
+    def _account_apply(self) -> None:
+        from d1max_site.account_requests import RequestRefused
+        d = self._body()
+        name = str(d.get("name") or "")[:64] if isinstance(d, dict) else ""
+        self._actor, self._audit_target = f"apply:{name}", name
+        try:
+            out = self._acct_desk().submit(d, source=self.client_address[0])
+        except RequestRefused as exc:
+            raise HttpError(exc.status, str(exc)) from exc
+        self._send_json(200, out)
+
+    def _account_requests(self, method: str, rid: str | None, action: str | None, user) -> None:
+        """管理员看、批、拒账号申请(W52;批准要再输一次密码,批的时候选权限,默认只看)。"""
+        from d1max_site.account_requests import RequestRefused
+        desk = self._acct_desk()
+        if rid is None:
+            if method != "GET":
+                raise HttpError(405, "只支持 GET")
+            return self._send_json(200, {"requests": desk.pending()})
+        if method != "POST":
+            raise HttpError(405, "只支持 POST")
+        d = self._body()
+        self._audit_target = rid
+        try:
+            if action == "approve":
+                self._confirm(user, d)
+                out = desk.approve(rid, role=d.get("role"), by=str(user))
+                self._audit_detail = out
+            else:
+                desk.reject(rid, by=str(user))
+                out = {"ok": True}
+        except RequestRefused as exc:
+            raise HttpError(exc.status, str(exc)) from exc
+        self._send_json(200, out)
 
     def _admin_bind(self, method: str, rid: str | None, action: str | None, user) -> None:
         """站点上的人看、批、拒绑定申请(W42 §5.1;批准要再输一次密码)。"""
