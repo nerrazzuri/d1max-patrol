@@ -555,3 +555,17 @@ async def test_W25_保持距离_真派遣到真代理_人近就退_撤了就停(
         assert t.site.clients["A"].capabilities.tasks["standoff"] == {"state": "idle"}
     finally:
         await t.close()
+
+
+async def test_单台视图带电量_跟机器人列表一个口径(台):
+    """2026-10-30 走查:列表里 100%、点进详情却是「--」——
+    单台视图(``GET /api/robots/{id}``)没带电量。"""
+    from d1max_site.robot_overview import overview
+    from d1max_site.sitetime import site_tz
+    t = 台
+    await t.run(50)
+    view = t.site.robot_view("A")
+    assert view["fresh"] is True
+    card = next(r for r in overview(t.site, t.site.db, now_ms=t.clock(), tz=site_tz(t.site.db))
+                if r["robot_id"] == "A")
+    assert isinstance(view["battery_pct"], int) and view["battery_pct"] == card["battery_pct"]

@@ -2549,8 +2549,16 @@ class _Handler(TlsHandlerMixin):
         zones = self.site.zones
         keep_out = tuple(z for z in zones.effective(map_id, version).zones if z.keep_out) \
             if zones is not None else ()
+        def place(points: list[tuple[str, float, float]]) -> str:
+            # W48-M2:点在图外、墙里、离建图走过的路太远都拒(跟巡检点一个口径;老图没有
+            # coverage.json 不查)
+            try:
+                return self.site.maps.reach_problem(map_id, version, points)
+            except MapError as exc:
+                return str(exc)
         try:
-            net = rn.put(map_id, version, d, by=str(user), keep_out=keep_out)
+            net = rn.put(map_id, version, d, by=str(user), keep_out=keep_out,
+                         place_problem=place)
         except RouteNetConflict as exc:
             raise HttpError(409, str(exc)) from exc
         except RouteNetError as exc:

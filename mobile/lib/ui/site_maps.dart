@@ -9,6 +9,7 @@
 /// 原点、禁行区和限速区；上面这个列表页从它的右上角进。
 library;
 
+import 'dart:async';
 import 'dart:math' as math;
 import 'dart:typed_data';
 
@@ -323,6 +324,20 @@ class _MapView {
   final Map<String, dynamic>? viz;
   final List<Map<String, dynamic>> episodes;
 
+  /// 只换位置那几样（机器人列表、运营可视化），别的原样。
+  _MapView withLive(List<Map<String, dynamic>> robots, Map<String, dynamic>? viz) => _MapView(
+      mapId: mapId,
+      version: version,
+      inUse: inUse,
+      meta: meta,
+      png: png,
+      plan: plan,
+      previewError: previewError,
+      zones: zones,
+      robots: robots,
+      viz: viz ?? this.viz,
+      episodes: episodes);
+
   const _MapView(
       {this.mapId,
       this.version,
@@ -349,10 +364,14 @@ Widget _raster(BuildContext context, Uint8List png, {bool plan = false}) =>
 /// （[SiteMapsPage]：管理员下发、重建都在那里）。
 ///
 /// 摆哪张图：狗报着的那一张（报得最多的；要站点上有）。狗报的图站点上没有，就摆站点上最新的一张，并且
-/// 写明没有狗在这张图上 —— 不把别的坐标系里的狗画上来。位置是打开、点刷新时读的，不自己跟着动。
+/// 写明没有狗在这张图上 —— 不把别的坐标系里的狗画上来。
+///
+/// 位置自己跟着动（2026-10-30 走查：原来要点刷新）：每 [livePeriod] 只重读机器人列表和运营可视化
+/// （位置、路径），底图、区域不重读，缩放也不动。换了哪张图这种大变化还是点刷新。
 class SiteMapTab extends StatefulWidget {
   final SiteApi api;
-  const SiteMapTab({super.key, required this.api});
+  final Duration livePeriod;
+  const SiteMapTab({super.key, required this.api, this.livePeriod = const Duration(seconds: 3)});
 
   static const Key canvasKey = Key('map-tab-canvas');
   static const Key wallLegendKey = Key('map-tab-legend-wall');
@@ -387,8 +406,16 @@ class SiteMapTab extends StatefulWidget {
 }
 
 class _SiteMapTabState extends State<SiteMapTab> {
-  late Future<_MapView> _data = _load();
+  late Future<_MapView> _data = _start();
   final TransformationController _zoom = TransformationController();
+
+  /// 上一次读完的整份（底图在内）；还没读完、读失败是 null。
+  _MapView? _base;
+
+  /// 定时重读的位置（[SiteMapTab.livePeriod]）；点刷新就清掉。
+  _MapView? _live;
+  Timer? _liveTimer;
+  bool _liveBusy = false;
 
   /// 点图选的位置（去这里 / 设位置，[site_pose_pick.dart]；保安、管理员）。
   final PosePickController _posePick = PosePickController();
@@ -405,10 +432,47 @@ class _SiteMapTabState extends State<SiteMapTab> {
   static const double _scaleBarHeight = 48;
 
   @override
+  void initState() {
+    super.initState();
+    _liveTimer = Timer.periodic(widget.livePeriod, (_) => unawaited(_tickLive()));
+  }
+
+  @override
   void dispose() {
+    _liveTimer?.cancel();
     _zoom.dispose();
     _posePick.dispose();
     super.dispose();
+  }
+
+  /// 重读位置：底图还没读完、上一趟还没回来、读不到，都这一拍不动。
+  Future<void> _tickLive() async {
+    final base = _base;
+    if (_liveBusy || base == null || base.mapId == null) return;
+    _liveBusy = true;
+    try {
+      final robots = await widget.api.robots();
+      Map<String, dynamic>? viz;
+      if (base.png != null) {
+        try {
+          viz = await widget.api.runViz();
+        } on SiteError {
+          // 留着上一份
+        }
+      }
+      if (!mounted || !identical(base, _base)) return; // 中间点了刷新：这一份作废
+      setState(() => _live = base.withLive(robots, viz ?? _live?.viz));
+    } on SiteError {
+      // 这一拍读不到：留着上一份
+    } finally {
+      _liveBusy = false;
+    }
+  }
+
+  Future<_MapView> _start() async {
+    final v = await _load();
+    if (mounted) _base = v;
+    return v;
   }
 
   Future<_MapView> _load() async {
@@ -501,7 +565,9 @@ class _SiteMapTabState extends State<SiteMapTab> {
   void _reload() {
     _zoom.value = Matrix4.identity();
     setState(() {
-      _data = _load();
+      _live = null;
+      _base = null;
+      _data = _start();
     });
   }
 
@@ -535,7 +601,7 @@ class _SiteMapTabState extends State<SiteMapTab> {
         future: _data,
         builder: (context, snap) {
           final done = snap.connectionState == ConnectionState.done;
-          final v = done ? snap.data : null;
+          final v = done ? (_live ?? snap.data) : null;
           final onMap = v == null ? 0 : v.robots.where((r) => v.inUse && robotMapTag(r) == v.tag).length;
           return Column(children: [
             NwHeader(

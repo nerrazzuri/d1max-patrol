@@ -257,3 +257,70 @@ async def test_复查P212_真的两头对接_双向认证过了_人员结果和�
         link.close()
     finally:
         await srv.close()
+
+
+class 钟:
+    def __init__(self) -> None:
+        self.t = 1000.0
+
+    def __call__(self) -> float:
+        return self.t
+
+
+async def _等到(cond, n=100):
+    for _ in range(n):
+        if cond():
+            return
+        await asyncio.sleep(0.02)
+
+
+async def test_外审Minor_接收端限速_发得太快的丢掉_过一会儿又收(tmp_path):
+    """外审(PR212)Minor:接收端没有帧率、字节速率上限 ——
+    失常的发送端能一直逼代理验签、解析、落盘。"""
+    from d1max_agent.pers_server import LINE_BURST
+    clock = 钟()
+    sink = 收(tmp_path / "snaps")
+    srv = PersonBridgeServer(tmp_path / "persons.sock", sink, listen=("127.0.0.1", 0), key=KEY,
+                             monotonic=clock)
+    await srv.start()
+    try:
+        c = await _连(srv)
+        await c.read()
+        for i in range(1, 301):                      # 时间不走:一口气 300 帧
+            c.send(pb.Persons(seq=i, stamp_ns=i, camera="front"))
+        await c.w.drain()
+        await _等到(lambda: sink.got and sink.got[-1].seq >= LINE_BURST - 2)
+        await asyncio.sleep(0.2)
+        assert LINE_BURST - 5 <= len(sink.got) <= LINE_BURST, len(sink.got)
+        clock.t += 2.0                               # 过两秒:又能收
+        c.send(pb.Persons(seq=301, stamp_ns=301, camera="front"))
+        await c.w.drain()
+        await _等到(lambda: sink.got[-1].seq == 301)
+        assert sink.got[-1].seq == 301
+        c.w.close()
+    finally:
+        await srv.close()
+
+
+async def test_外审Minor_截图按字节限速_大图一口气只收几张(tmp_path):
+    from d1max_agent.pers_server import BYTE_BURST
+    clock = 钟()
+    sink = 收(tmp_path / "snaps")
+    srv = PersonBridgeServer(tmp_path / "persons.sock", sink, listen=("127.0.0.1", 0), key=KEY,
+                             monotonic=clock)
+    await srv.start()
+    big = b"\xff\xd8" + b"y" * (pb.MAX_SNAP_BYTES - 4) + b"\xff\xd9"
+    try:
+        c = await _连(srv)
+        await c.read()
+        for i in range(20):
+            c.send(pb.Snap.of(f"b-{i:02d}.jpg", big))
+            await c.w.drain()
+        c.send(pb.Heartbeat(seq=1))
+        await c.w.drain()
+        await asyncio.sleep(0.5)
+        saved = list((tmp_path / "snaps").glob("*.jpg"))
+        assert 1 <= len(saved) <= BYTE_BURST // pb.MAX_SNAP_BYTES, len(saved)
+        c.w.close()
+    finally:
+        await srv.close()

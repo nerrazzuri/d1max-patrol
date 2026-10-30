@@ -14,6 +14,7 @@ import 'nw/nw_button.dart';
 import 'nw/nw_p3_robots.dart';
 import 'nw/nw_theme.dart';
 import 'nw/nw_widgets.dart';
+import 'robot_events.dart';
 import 'site_deter.dart';
 import 'site_logs.dart';
 import 'site_mapping.dart';
@@ -665,8 +666,9 @@ class _SiteRobotPageState extends State<SiteRobotPage> {
             ListTile(
                 dense: true,
                 contentPadding: EdgeInsets.zero,
-                title: Text('${e['kind']}'),
-                subtitle: Text('${e['data']}')),
+                title: Text(robotEventTitle('${e['kind']}')),
+                subtitle: _eventSub(e),
+                trailing: Text(robotEventTime(e['stamp']), style: NwText.labelSmall)),
         ]),
           ),
         ),
@@ -675,6 +677,12 @@ class _SiteRobotPageState extends State<SiteRobotPage> {
   }
 }
 
+
+Widget? _eventSub(Map e) {
+  final d = e['data'];
+  final text = robotEventDetail('${e['kind']}', d is Map ? d.cast<String, dynamic>() : const <String, dynamic>{});
+  return text.isEmpty ? null : Text(text, maxLines: 2, overflow: TextOverflow.ellipsis);
+}
 
 /// 设备健康（W40）：一台一行，圆点按状态上色；不在线的排前面；好一会儿没更新整块标出来。
 class _Devices extends StatelessWidget {

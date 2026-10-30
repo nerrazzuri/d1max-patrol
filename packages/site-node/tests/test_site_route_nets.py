@@ -96,3 +96,34 @@ def test_补发_机器人报的修订旧了就发_同一版30秒内不重发_对
     del caps["route_net_set"]                               # 直线桥的狗不认路网:不发
     s.disp.route_nets.put(MAP[0], MAP[1], _body([], [], base=1), by="alice")
     assert s.loop.call(lambda: s.disp.sync_route_nets()) == []
+
+
+def test_点要在图上能走的地方_说清是哪个点(tmp_path):
+    """W48-M2(外审 Minor):点在图外、墙里、离建图走过的路太远 —— 跟巡检点、待命点一个口径拒。"""
+    rn = RouteNets(SiteDB(tmp_path / "s.db"), now_ms=lambda: 5)
+    seen = []
+
+    def place(points):
+        seen.extend(points)
+        return next((f"{n} 在图上不是可通行的地方" for n, x, _y in points if x > 100), "")
+    with pytest.raises(RouteNetError, match="点 Z 在图上不是可通行的地方"):
+        rn.put("m", "1", _body([("A", 0, 0), ("Z", 500, 0)], []), by="o",
+               place_problem=place)
+    assert ("点 A", 0.0, 0.0) in seen
+    assert rn.get("m", "1").revision == 0, "拒了就不存"
+    assert rn.put("m", "1", _body([("A", 0, 0), ("B", 5, 0)], [("A", "B")]), by="o",
+                  place_problem=place).revision == 1
+
+
+def test_接口存路网_用站点的地图核点的位置(站点, monkeypatch):
+    s = 站点
+    alice = _登(s, "alice")
+    asked = []
+
+    def reach_problem(map_id, version, points):
+        asked.append((map_id, version, points))
+        return "点 B 离建图时走过的地方 40.0 m" if any(n == "点 B" for n, *_ in points) else ""
+    monkeypatch.setattr(s.maps, "reach_problem", reach_problem)
+    code, d = s.req("POST", RP, _body([("A", 0, 0), ("B", 50, 0)], [("A", "B")]), token=alice)
+    assert code == 400 and "点 B" in d["error"], d
+    assert asked and asked[0][:2] == MAP

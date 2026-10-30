@@ -12,6 +12,7 @@ from datetime import tzinfo
 from typing import Any
 
 from d1max_site.alert_audience import audience
+from d1max_site.dispatcher import battery_pct
 from d1max_site.sitetime import local_day_start
 
 PROBLEM_AUDIENCES = ("help", "offline")
@@ -30,8 +31,6 @@ def overview(dispatcher: Any, db: Any, *, now_ms: int, tz: tzinfo) -> list[dict[
         rid = rec.robot_id
         c = dispatcher.clients.get(rid)
         fresh = bool(dispatcher._fresh(c))
-        tel = getattr(c, "telemetry", None) if c is not None else None
-        batt = getattr(tel, "battery_pct", None) if fresh and tel is not None else None
         [n] = db.query("SELECT COUNT(*) AS n FROM commands WHERE robot_id=? AND kind='patrol' "
                        "AND issued_at>=? AND (ack_result IS NULL OR ack_result NOT IN "
                        "('rejected', 'expired', 'timeout'))", (rid, day0))
@@ -52,7 +51,7 @@ def overview(dispatcher: Any, db: Any, *, now_ms: int, tz: tzinfo) -> list[dict[
         caps = getattr(c, "capabilities", None) if c is not None else None
         out.append({"robot_id": rid, "name": names.get(rid, ""), "revoked": rec.revoked,
                     "expires_at": rec.expires_at, "online": fresh,
-                    "battery_pct": round(batt) if isinstance(batt, (int, float)) else None,
+                    "battery_pct": battery_pct(c, fresh=fresh),
                     "manual_only": reg.manual_only(rid) is not None,
                     "patrols_today": n["n"], "problems": problems, "recent_problems": recent,
                     "agent": getattr(caps, "agent", None),
