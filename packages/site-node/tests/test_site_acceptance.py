@@ -209,7 +209,10 @@ def test_W00c1_端到端(现场):
     v = req(ctx, "GET", "/api/robots/A", token=tok)[1]
     点 = [e for e in v["events"] if e["kind"] == "patrol_waypoint"
          and e["data"].get("task_id") == pt["task_id"]]
-    assert sorted(e["data"]["name"] for e in 点) == ["a", "b"] and all(e["data"]["ok"] for e in 点)
+    # W53(用户 10-31):手动派的巡逻走完自己回起点 —— 直线走的仿真机器人沿来路倒回去,最后到起点
+    names = [e["data"]["name"] for e in sorted(点, key=lambda e: e["seq"])]
+    assert {"a", "b"} <= set(names) and names[-1] == "start", names
+    assert all(e["data"]["ok"] for e in 点)
 
     # 2. A 冒充 B:站点看不到 B 的 status
     home, bport = ctx["home"], ctx["bport"]
