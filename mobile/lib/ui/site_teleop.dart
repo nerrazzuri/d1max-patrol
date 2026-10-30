@@ -477,7 +477,7 @@ class _SiteTeleopPageState extends State<SiteTeleopPage> with WidgetsBindingObse
                     bottom: Nw.s8,
                     width: stick,
                     height: stick,
-                    child: _stickBack(Joystick(
+                    child: Joystick(
                       key: SiteTeleopPage.moveStickKey,
                       axis: JoystickAxis.translate,
                       enabled: _canDrive,
@@ -487,20 +487,20 @@ class _SiteTeleopPageState extends State<SiteTeleopPage> with WidgetsBindingObse
                         _fwd = v.dy;
                         _lat = lateral ? v.dx : 0;
                       },
-                    )),
+                    ),
                   ),
                   Positioned(
                     right: Nw.s8,
                     bottom: Nw.s8,
                     width: stick,
                     height: stick,
-                    child: _stickBack(Joystick(
+                    child: Joystick(
                       key: SiteTeleopPage.turnStickKey,
                       axis: JoystickAxis.turn,
                       enabled: _canDrive,
                       label: tr('Turn', '转向'),
                       onChanged: (v) => _turn = v.dx,
-                    )),
+                    ),
                   ),
                 ]),
               ),
@@ -510,11 +510,4 @@ class _SiteTeleopPageState extends State<SiteTeleopPage> with WidgetsBindingObse
       ),
     );
   }
-
-  /// 杆底下一层淡黑：白的杆压在亮的画面上也看得清，画面还透得过来。
-  static Widget _stickBack(Widget stick) => DecoratedBox(
-        decoration: BoxDecoration(
-            color: Colors.black.withValues(alpha: 0.38), borderRadius: BorderRadius.circular(Nw.r12)),
-        child: stick,
-      );
 }
