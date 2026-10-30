@@ -13,6 +13,10 @@
     .venv/bin/python tools/site_demo.py --host 192.168.5.12 --recordings 30
     # ↑ 绑局域网地址:同一个网里的手机装上 App 就能连(配对码:d1max-site --home <目录>/site pair-code)
 
+    .venv/bin/python tools/site_demo.py --unbound 1
+    # ↑ W42:再起一台出厂状态、还没绑定的机器人(带配网服务、假路由器),打印它的贴纸码:
+    #   App「添加机器人」粘贴贴纸码 → 热点那一步点「已经连上」→ 站点上批准 → 演示脚本起它的代理
+
 桌面版:「站点」页右下角 +,填打印出来的地址和指纹,账号 ``demo``。每次起都是新的站点目录(``--dir``,
 默认 ``~/.cache/d1max-site-demo``,起之前清掉),证书指纹每次都不一样。
 """
@@ -94,6 +98,71 @@ def _seed_recordings(home: Path, work: Path, minutes: int) -> None:
         db.close()
 
 
+def _patrol(*args: str) -> str:
+    r = subprocess.run([sys.executable, "-m", "d1max_patrol.cli", *args], capture_output=True,
+                       text=True, timeout=120, env=ENV)
+    if r.returncode:
+        raise SystemExit(f"d1max-patrol {' '.join(args)} 没成:\n{r.stdout}{r.stderr}")
+    return r.stdout
+
+
+def _unbound(a: argparse.Namespace, logs: Path, start) -> list[dict]:
+    """W42:出厂状态的机器人。各自烧写(绑定码、热点、配网证书)、起配网服务(``--dry-system``:不碰系统
+    服务);贴纸码里带上配网服务在这台机器上的地址。"""
+    from d1max_contract.binding import decode_sticker
+    keys = a.dir / "unbind-keys"
+    keys.mkdir()
+    _patrol("unbind-token", "keygen", "--private", str(keys / "unbind.key"),
+            "--public", str(keys / "unbind-pub.pem"))
+    out = []
+    for k in range(a.unbound):
+        serial, base, port = f"D1M-NEW{k + 1}", a.dir / f"new{k + 1}", 18450 + k
+        etc, data = base / "etc", base / "data"
+        data.mkdir(parents=True)
+        router = f"fake:{base / 'router.json'}"
+        _patrol("factory", "burn", "--etc", str(etc), "--data-root", str(data), "--router", router,
+                "--serial", serial, "--unbind-pub", str(keys / "unbind-pub.pem"),
+                "--out", str(base / "label"))
+        line = next(x for x in (base / "label" / f"{serial}.txt").read_text().splitlines()
+                    if x.startswith("二维码 "))
+        st = decode_sticker(line.split(" ", 1)[1])
+        sticker = type(st)(st.serial, st.code, st.hotspot_ssid, st.hotspot_psk, st.fingerprint,
+                           f"{a.host}:{port}").encode()
+        sock = base / "bind.sock"
+        start(f"bind-{serial}", [sys.executable, "-m", "d1max_patrol.cli", "bind-serve",
+                                 "--etc", str(etc), "--data-root", str(data), "--host", a.host,
+                                 "--port", str(port), "--sock", str(sock), "--group", "",
+                                 "--user", "", "--router", router, "--dry-system"],
+              "配网服务起来了")
+        out.append({"serial": serial, "base": base, "etc": etc, "sock": sock,
+                    "sticker": sticker})
+    return out
+
+
+def _follow_bind(r: dict, agents: dict[str, subprocess.Popen], logs: Path) -> None:
+    """站点批准了(机器人领到了注册文件):起它的代理;解绑清机了(注册文件没了):收掉。"""
+    etc, serial = r["etc"], r["serial"]
+    bound = (etc / "registration.json").is_file()
+    p = agents.get(serial)
+    if bound and (p is None or p.poll() is not None):
+        env = dict(line.split("=", 1) for line in (etc / "env").read_text().splitlines()
+                   if "=" in line and not line.startswith("#"))
+        log = logs / f"agent-{serial}.log"
+        agents[serial] = subprocess.Popen(
+            [sys.executable, "-m", "d1max_agent.main", "--transport", env["D1MAX_SITE_MQTT"],
+             "--tls-ca", str(etc / "tls" / "ca.crt"), "--tls-cert", str(etc / "tls" / "robot.crt"),
+             "--tls-key", str(etc / "tls" / "robot.key"), "--hal", "sim",
+             "--registration", str(etc / "registration.json"),
+             "--store-dir", str(r["base"] / "agent"), "--runs-root", str(r["base"] / "runs"),
+             "--map", "estate-1:7", "--home", "0,0,0"],
+            stdout=open(log, "ab"), stderr=subprocess.STDOUT,
+            env=ENV | {"D1MAX_BIND_SOCK": str(r["sock"])})
+        print(f"{serial} 绑定好了:起了它的代理(日志 {log})", flush=True)
+    elif not bound and p is not None and p.poll() is None:
+        p.terminate()
+        print(f"{serial} 解绑清机了:收掉它的代理", flush=True)
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     # 默认不放仓库里:仓库路径带空格(「D1 Max」),Mosquitto 的配置按空白切词,路径里不许有空格
@@ -111,6 +180,9 @@ def main(argv: list[str] | None = None) -> int:
                          "试备份、解开备份、演练、托管包用")
     ap.add_argument("--recordings", type=int, default=0, metavar="N",
                     help="往站点里放 N 分钟的假录像(要 ffmpeg;看值班台的录像页用)")
+    ap.add_argument("--unbound", type=int, default=0, choices=range(0, 5), metavar="N",
+                    help="W42:再起 N 台出厂状态、还没绑定的机器人(配网服务 + 假路由器),打印贴纸码;"
+                         "站点上批准以后演示脚本起它的代理,解绑以后收掉")
     a = ap.parse_args(argv)
     mosq = shutil.which("mosquitto") or "/usr/sbin/mosquitto"
     if not Path(mosq).exists():
@@ -182,22 +254,28 @@ def main(argv: list[str] | None = None) -> int:
                                   "--runs-root", str(a.dir / f"runs{sub}"),
                                   "--map", "estate-1:7", "--home", f"{i * 1.0},0,0"],
                   "d1max-agent 起来了")
+        fresh = _unbound(a, logs, start) if a.unbound else []
+        agents: dict[str, subprocess.Popen] = {}
         print(f"演示站点起来了(日志在 {logs}):\n"
               f"  地址  https://{a.host}:{a.api_port}\n"
               f"  指纹  {fp}\n"
               f"  账号  demo / {a.password}\n"
               f"  狗    {'、'.join(names)}(仿真)\n"
-              f"Ctrl+C 全部收掉。", flush=True)
+              + "".join(f"  没绑定 {r['serial']}  贴纸码 {r['sticker']}\n" for r in fresh)
+              + "Ctrl+C 全部收掉。", flush=True)
         # 等 Ctrl+C:用处理函数立个旗,不用屏蔽信号(屏蔽会被子进程继承,收掉时它们就不理 SIGTERM)
         stop = threading.Event()
         for sig in (signal.SIGINT, signal.SIGTERM):
             signal.signal(sig, lambda *_: stop.set())
         while not stop.wait(1.0):
+            for r in fresh:
+                _follow_bind(r, agents, logs)
             dead = [p for p in procs if p.poll() is not None]
             if dead:
                 print(f"有进程退了(看 {logs}),全部收掉", flush=True)
                 break
     finally:
+        procs.extend(agents.values() if a.unbound else [])
         for p in reversed(procs):
             if p.poll() is None:
                 p.terminate()

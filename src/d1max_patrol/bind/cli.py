@@ -33,6 +33,8 @@ def add_args(sub: argparse._SubParsersAction) -> None:
                    help="发件箱在别的盘上时给出来(清机一起清)")
     p.add_argument("--user", default=os.environ.get("D1MAX_USER", "robot"),
                    help="代理用哪个账号跑(证书包的属主)")
+    # 演示站点:不碰系统服务、日志
+    p.add_argument("--dry-system", action="store_true", help=argparse.SUPPRESS)
 
     f = sub.add_parser("factory", help="出厂:烧写、检验、重做贴纸(W42,生产线上以 root 跑)")
     fs = f.add_subparsers(dest="factory_command", required=True)
@@ -96,11 +98,18 @@ def _serve(args: argparse.Namespace) -> int:
     from d1max_patrol.bind.sitelink import SiteLink
     paths, router = _paths(args), _router(args.router)
     user = args.user or None
+    if args.dry_system:                       # 演示站点(tools/site_demo.py):代理由演示脚本起、收
+
+        def sysrun(cmd: object) -> int:
+            return 0
+    else:
+        sysrun = wp._run
     core = BindCore(paths, router=router, site=SiteLink(),
                     provision=lambda code: pv.provision(code, etc=paths.etc, user=user,
                                                         force=True),
-                    wipe=lambda: wp.wipe(paths, router=router),
-                    start_services=wp.start_services, now_ms=_now, version=__version__)
+                    wipe=lambda: wp.wipe(paths, router=router, run=sysrun),
+                    start_services=lambda: wp.start_services(sysrun), now_ms=_now,
+                    version=__version__)
     serve(core, host=args.host, port=args.port, sock=Path(args.sock), group=args.group)
     return 0
 

@@ -172,6 +172,17 @@ void main() {
       expect(link.calls.last, startsWith('bind Estate'));
     });
 
+    testWidgets('桌面版没相机：粘贴贴纸码', (t) async {
+      await t.pumpWidget(host(RobotAddPage(api: FakeApi('guard'), site: site,
+          joiner: FakeJoiner(), link: (_) => FakeLink())));
+      await t.tap(find.byKey(const Key('bind-paste')));
+      await t.pumpAndSettle();
+      await t.enterText(find.byKey(const Key('sticker-code')), sticker());
+      await t.tap(find.byKey(const Key('sticker-code-ok')));
+      await t.pumpAndSettle();
+      expect(find.byKey(const Key('bind-serial')), findsOneWidget);
+    });
+
     testWidgets('不是机器人贴纸：说清楚', (t) async {
       await t.pumpWidget(host(RobotAddPage(api: FakeApi('guard'), site: site,
           scanner: (_) async => 'D1MAXSITE1.xx', joiner: FakeJoiner(), link: (_) => FakeLink())));
