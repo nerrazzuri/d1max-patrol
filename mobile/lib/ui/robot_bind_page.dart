@@ -19,7 +19,7 @@ import 'nw/nw_button.dart';
 import 'nw/nw_p1_entry.dart';
 import 'nw/nw_theme.dart';
 import 'nw/nw_widgets.dart';
-import 'site_add.dart' show CodeScanner;
+import 'site_add.dart' show CodeScanner, canScanCodes;
 import 'site_scan.dart';
 
 /// 跟一台机器人的配网服务说话的东西从哪来（测试换成假的）。
@@ -118,6 +118,37 @@ mixin _StickerScan<T extends StatefulWidget> on State<T> {
   Future<void> scanSticker() async {
     final raw = await (scanner ?? scanRobotCode)(context);
     if (raw == null || !mounted) return;
+    takeSticker(raw);
+  }
+
+  /// 桌面版没有相机：粘贴贴纸码（装机工程师从出厂文件里拷、演示站点打印出来的）。
+  Future<void> pasteSticker() async {
+    final code = TextEditingController();
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (c) {
+        final nw = Nw.of(c);
+        return AlertDialog(
+          scrollable: true,
+          backgroundColor: nw.surface,
+          title: Text(tr('Paste sticker code', '粘贴贴纸码'), style: NwText.titleLarge.copyWith(color: nw.text)),
+          content: NwField(fieldKey: const Key('sticker-code'), controller: code, autofocus: true,
+              autocorrect: false, enableSuggestions: false, maxLines: 4, minLines: 2, mono: true,
+              hint: '$stickerPrefix…'),
+          actions: [
+            NwButton(label: tr('Cancel', '取消'), variant: NwButtonVariant.ghost,
+                onPressed: () => Navigator.pop(c, false)),
+            NwButton(buttonKey: const Key('sticker-code-ok'), label: tr('Use code', '用这个码'),
+                onPressed: () => Navigator.pop(c, true)),
+          ],
+        );
+      },
+    );
+    final text = code.text;
+    if (ok == true && mounted) takeSticker(text);
+  }
+
+  void takeSticker(String raw) {
     try {
       final s = parseSticker(raw);
       setState(() => sticker = s);
@@ -129,12 +160,22 @@ mixin _StickerScan<T extends StatefulWidget> on State<T> {
 
   void onSticker(RobotSticker s) {}
 
-  Widget scanButton() => NwButton(
-        buttonKey: const Key('bind-scan'),
-        onPressed: scanSticker,
-        icon: Icons.qr_code_scanner_rounded,
-        label: tr('Scan the sticker on the robot', '扫机器人身上的贴纸'),
-      );
+  Widget scanButton() => Wrap(spacing: Nw.s16, runSpacing: Nw.s8, children: [
+        if (scanner != null || canScanCodes)
+          NwButton(
+            buttonKey: const Key('bind-scan'),
+            onPressed: scanSticker,
+            icon: Icons.qr_code_scanner_rounded,
+            label: tr('Scan the sticker on the robot', '扫机器人身上的贴纸'),
+          ),
+        NwButton(
+          buttonKey: const Key('bind-paste'),
+          onPressed: pasteSticker,
+          icon: Icons.content_paste_rounded,
+          variant: NwButtonVariant.outline,
+          label: tr('Paste sticker code', '粘贴贴纸码'),
+        ),
+      ]);
 }
 
 // ------------------------------------------------------------ 添加机器人
