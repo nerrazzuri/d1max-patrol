@@ -97,6 +97,7 @@ void main() {
       expect((s.ssid, s.psk, s.fingerprint, s.code), ('NW-000123', hotspotPsk, '', '7KQ2M9XD4HTPR8W0'));
       expect(hotspotSsid('AB'), 'NW-AB');
       expect(() => manualSticker('有空格 1', '7KQ27M9XD4HTPR8W'), throwsFormatException);
+      expect(() => manualSticker('..', '7KQ27M9XD4HTPR8W'), throwsFormatException);
       expect(() => manualSticker('D1M-1', '123'), throwsFormatException);
       expect(() => manualSticker('D1M-1', 'UUUUUUUUUUUUUUUU'), throwsFormatException);
     });
@@ -181,6 +182,36 @@ void main() {
       expect(link.calls.last, startsWith('bind Estate'));
     });
 
+    testWidgets('外审 I12：手动连的热点，离开时教人切回去；站点连不上给「去批准」再试', (t) async {
+      final api = FakeApi('admin');
+      final link = FakeLink();
+      await t.pumpWidget(host(RobotAddPage(api: api, site: site, scanner: (_) async => sticker(),
+          joiner: FakeJoiner(auto: false), link: (_) => link, pollEvery: const Duration(milliseconds: 100))));
+      await t.tap(find.byKey(const Key('bind-scan')));
+      await t.pumpAndSettle();
+      await t.enterText(find.byKey(const Key('bind-ssid')), 'Estate');
+      await t.tap(find.byKey(const Key('bind-send')));
+      await t.pumpAndSettle();
+      await t.tap(find.byKey(const Key('hotspot-joined')));
+      await t.pumpAndSettle();
+      link.st = <String, dynamic>{...link.st, 'phase': 'waiting', 'check': '042917'};
+      await t.pump(const Duration(milliseconds: 150));
+      await t.pump();
+      await t.tap(find.byKey(const Key('bind-leave')));
+      await t.pumpAndSettle();
+      expect(find.byKey(const Key('hotspot-left')), findsOneWidget, reason: '手动连的：要人自己切回去');
+      await t.tap(find.byKey(const Key('hotspot-left')));
+      await t.pumpAndSettle();
+      expect(find.byKey(const Key('bind-approve-error')), findsOneWidget, reason: '站点上还没看到申请');
+      api.binds = <Map<String, dynamic>>[
+        <String, dynamic>{'id': 'ab12', 'serial': 'D1M-1', 'check': '042917', 'source': 'x'}
+      ];
+      await t.ensureVisible(find.byKey(const Key('bind-approve-retry')));
+      await t.tap(find.byKey(const Key('bind-approve-retry')));
+      await t.pumpAndSettle();
+      expect(find.byKey(const Key('approve-check')), findsOneWidget);
+    });
+
     testWidgets('桌面版没相机：粘贴贴纸码', (t) async {
       await t.pumpWidget(host(RobotAddPage(api: FakeApi('guard'), site: site,
           joiner: FakeJoiner(), link: (_) => FakeLink())));
@@ -221,12 +252,12 @@ void main() {
   });
 
   group('换 WiFi、工程师解绑', () {
-    testWidgets('贴纸要是这台的；发给机器人，在线时站点上确认', (t) async {
+    testWidgets('贴纸要是这台的；发给机器人，在线时站点上确认；经站点看到最后怎样了', (t) async {
       final api = FakeApi('admin');
       final link = FakeLink();
       var serial = 'D1M-2';
       await t.pumpWidget(host(RobotWifiPage(api: api, robotId: 'D1M-1', scanner: (_) async => sticker(serial: serial),
-          joiner: FakeJoiner(), link: (_) => link)));
+          joiner: FakeJoiner(), link: (_) => link, watchEvery: const Duration(milliseconds: 100))));
       await t.tap(find.byKey(const Key('bind-scan')));
       await t.pumpAndSettle();
       expect(find.textContaining('不是 D1M-1'), findsOneWidget);
@@ -241,6 +272,16 @@ void main() {
       await t.tap(find.byKey(const Key('wifi-confirm')));
       await t.pumpAndSettle();
       expect(api.calls, contains('confirmRobotWifi D1M-1 0a1b2c3d4e5f true'));
+      api.view = <String, dynamic>{...api.view,
+        'wifi': <String, dynamic>{'ssid': 'Estate', 'link': 'wifi', 'change': null,
+          'result': <String, dynamic>{'id': '0a1b2c3d4e5f', 'result': 'unreachable'}}};
+      await t.pump(const Duration(milliseconds: 150));
+      await t.pumpAndSettle();
+      expect(find.byKey(const Key('wifi-result')), findsOneWidget);
+      expect(find.textContaining('退回原来的了'), findsOneWidget);
+      await t.tap(find.byKey(const Key('wifi-again')));
+      await t.pumpAndSettle();
+      expect(find.byKey(const Key('wifi-ssid')), findsOneWidget, reason: '没换成：回到表单再改');
     });
 
     testWidgets('工程师：解绑令 + 贴纸 → 机器人清机', (t) async {
