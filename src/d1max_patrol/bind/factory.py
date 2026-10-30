@@ -4,7 +4,7 @@
   ``env`` 出厂值;写路由器热点。回贴纸(:class:`~d1max_contract.binding.Sticker`),由调用方出打印文件,
   **打完删掉**。
 - ``check``:扫贴纸得到的那串跟机器人里存的核对。
-- ``rekey``:贴纸坏了重做:绑定码、热点密码、配网证书一起换,旧的作废。**只能在没绑定的时候**
+- ``rekey``:贴纸坏了重做:绑定码、配网证书一起换,旧的作废(热点密码统一,不换)。**只能在没绑定的时候**
   (绑着的先在站点上解绑,站点坏了先用解绑令解)。
 """
 
@@ -12,19 +12,19 @@ from __future__ import annotations
 
 import base64
 import os
-import secrets
 import shutil
-import string
 import subprocess
 from pathlib import Path
 
 from d1max_contract.binding import (
     DEFAULT_BIND_ADDR,
+    HOTSPOT_PSK,
     BindingError,
     Sticker,
     check_serial,
     code_hash,
     decode_sticker,
+    hotspot_ssid,
     new_code,
     pretty_code,
     short_fp,
@@ -32,8 +32,6 @@ from d1max_contract.binding import (
 from d1max_patrol.bind.paths import FACTORY_ENV, BindPaths, read_json, write_json
 from d1max_patrol.bind.router import Router
 from d1max_patrol.provision import set_env
-
-PSK_CHARS = string.ascii_letters + string.digits
 
 
 class FactoryError(RuntimeError):
@@ -69,8 +67,9 @@ def _make_cert(paths: BindPaths, serial: str) -> str:
 
 def _new_secrets(paths: BindPaths, serial: str, router: Router, *, ssid: str,
                  model: str) -> Sticker:
+    """新绑定码、新配网证书。热点密码所有机器人统一(:data:`HOTSPOT_PSK`),不用每台生成。"""
     code = new_code()
-    psk = "".join(secrets.choice(PSK_CHARS) for _ in range(16))
+    psk = HOTSPOT_PSK
     fp = _make_cert(paths, serial)
     write_json(paths.device, {"serial": serial, "code_hash": code_hash(code),
                               "hotspot_ssid": ssid, "fingerprint": fp, "model": model})
@@ -100,7 +99,7 @@ def burn(paths: BindPaths, serial: str, *, router: Router, unbind_pub: Path,
         # 3588 在路由器 LAN1 上的地址(出厂配置定死;贴纸不带地址时手机就找它)
         set_env(paths.env, "D1MAX_BIND_HOST", DEFAULT_BIND_ADDR.split(":")[0])
     write_json(paths.state, {"state": "unbound", "error": ""})
-    return _new_secrets(paths, serial, router, ssid=f"NW-{serial[-6:]}", model=model)
+    return _new_secrets(paths, serial, router, ssid=hotspot_ssid(serial), model=model)
 
 
 def rekey(paths: BindPaths, *, router: Router) -> Sticker:

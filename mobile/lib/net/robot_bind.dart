@@ -24,11 +24,43 @@ const String unbindPrefix = 'D1MAXUNBIND1.';
 /// 3588 在路由器 LAN1 上的地址（热点上的手机找配网服务）：出厂配置定死，贴纸可以带别的。
 const String defaultBindAddr = '192.168.1.2:8450';
 
+/// 热点密码：所有机器人统一一个（用户 2026-10-30：热点只用来配网、要站点同意、跟内网隔开，不用保密）。
+/// 跟 `d1max_contract.binding.HOTSPOT_PSK` 一样。
+const String hotspotPsk = 'NexusWarden';
+
+/// 热点名：`NW-` + 序列号后 6 位。
+String hotspotSsid(String serial) => 'NW-${serial.length > 6 ? serial.substring(serial.length - 6) : serial}';
+
+const String _codeAlphabet = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
+
+/// 手输的绑定码 → 16 位大写（`-`、空格不计较，`I`/`L` 当 `1`、`O` 当 `0`）。不对回 null。
+String? normalizeBindCode(String raw) {
+  final s = raw.toUpperCase().replaceAll(RegExp(r'[\s-]'), '')
+      .replaceAll('I', '1').replaceAll('L', '1').replaceAll('O', '0');
+  if (s.length != 16 || s.split('').any((ch) => !_codeAlphabet.contains(ch))) return null;
+  return s;
+}
+
+/// 贴纸二维码坏了、或者手动连热点的时候：手输序列号和绑定码（贴纸上印着）。**核不了机器人的证书**
+/// （指纹只在二维码里），[RobotSticker.fingerprint] 是空的。不对抛 [FormatException]。
+RobotSticker manualSticker(String serial, String code) {
+  final s = serial.trim();
+  if (!RegExp(r'^[A-Za-z0-9._-]{1,64}$').hasMatch(s)) {
+    throw FormatException(tr('Enter the serial number printed on the sticker', '填贴纸上印的序列号'));
+  }
+  final c = normalizeBindCode(code);
+  if (c == null) {
+    throw FormatException(tr('The binding code is 16 letters and digits', '绑定码是 16 位字母和数字'));
+  }
+  return RobotSticker(s, c, hotspotSsid(s), hotspotPsk, '');
+}
+
 class RobotSticker {
   final String serial;
   final String code;
   final String ssid;
   final String psk;
+  /// 配网证书指纹前 32 位；空 = 手输的，核不了机器人身份。
   final String fingerprint;
   final String addr;
   const RobotSticker(this.serial, this.code, this.ssid, this.psk, this.fingerprint,
@@ -136,8 +168,9 @@ class RobotHotspot implements RobotBindLink {
   RobotHotspot(this.sticker, {this.timeout = const Duration(seconds: 15)})
       : _io = HttpClient(context: SecurityContext(withTrustedRoots: false)) {
     _io.connectionTimeout = const Duration(seconds: 5);
-    _io.badCertificateCallback =
-        (cert, host, port) => sha256.convert(cert.der).toString().substring(0, 32) == sticker.fingerprint;
+    // 手输的（没有指纹）核不了：接受（界面上已经提示过「能扫码就扫码」）
+    _io.badCertificateCallback = (cert, host, port) =>
+        sticker.fingerprint.isEmpty || sha256.convert(cert.der).toString().substring(0, 32) == sticker.fingerprint;
   }
 
   @override

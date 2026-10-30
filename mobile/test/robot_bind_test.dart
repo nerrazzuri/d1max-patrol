@@ -92,6 +92,15 @@ void main() {
       expect(() => parseSticker(sticker(serial: '有空格 1')), throwsFormatException);
     });
 
+    test('手输：序列号 + 绑定码，热点名算出来、密码统一、没有指纹', () {
+      final s = manualSticker('D1M-000123', '7kq2-m9xd-4htp-r8wo');
+      expect((s.ssid, s.psk, s.fingerprint, s.code), ('NW-000123', hotspotPsk, '', '7KQ2M9XD4HTPR8W0'));
+      expect(hotspotSsid('AB'), 'NW-AB');
+      expect(() => manualSticker('有空格 1', '7KQ27M9XD4HTPR8W'), throwsFormatException);
+      expect(() => manualSticker('D1M-1', '123'), throwsFormatException);
+      expect(() => manualSticker('D1M-1', 'UUUUUUUUUUUUUUUU'), throwsFormatException);
+    });
+
     test('WiFi：名字 1–32 字节；密码空、8–63 个可见字符、64 位十六进制', () {
       expect(checkWifi('Estate', ''), isNull);
       expect(checkWifi('庄园', '12345678'), isNull);
@@ -181,6 +190,25 @@ void main() {
       await t.tap(find.byKey(const Key('sticker-code-ok')));
       await t.pumpAndSettle();
       expect(find.byKey(const Key('bind-serial')), findsOneWidget);
+    });
+
+    testWidgets('手输序列号和绑定码：提醒核不了机器人身份', (t) async {
+      final link = FakeLink();
+      RobotSticker? got;
+      await t.pumpWidget(host(RobotAddPage(api: FakeApi('guard'), site: site,
+          joiner: FakeJoiner(), link: (s) { got = s; return link; })));
+      await t.tap(find.byKey(const Key('bind-manual')));
+      await t.pumpAndSettle();
+      await t.enterText(find.byKey(const Key('manual-serial')), 'D1M-000123');
+      await t.enterText(find.byKey(const Key('manual-code')), '7KQ2-M9XD-4HTP-R8WC');
+      await t.tap(find.byKey(const Key('manual-ok')));
+      await t.pumpAndSettle();
+      expect(find.byKey(const Key('bind-unpinned')), findsOneWidget);
+      await t.enterText(find.byKey(const Key('bind-ssid')), 'Estate');
+      await t.tap(find.byKey(const Key('bind-send')));
+      await t.pumpAndSettle();
+      expect(got?.ssid, 'NW-000123');
+      expect(link.calls.take(2).last, startsWith('bind Estate'));
     });
 
     testWidgets('不是机器人贴纸：说清楚', (t) async {

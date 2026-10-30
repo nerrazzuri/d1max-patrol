@@ -36,7 +36,7 @@ def test_烧写_只存哈希_热点写进路由器_检验对得上(出厂, tmp_p
     dev = read_json(paths.device)
     assert dev["serial"] == "D1M-000123" and dev["hotspot_ssid"] == "NW-000123"
     assert st.code not in paths.device.read_text(), "机器人里只存哈希"
-    assert router.hotspot == ("NW-000123", st.hotspot_psk) and len(st.hotspot_psk) == 16
+    assert router.hotspot == ("NW-000123", b.HOTSPOT_PSK) and st.hotspot_psk == b.HOTSPOT_PSK
     assert paths.tls_key.stat().st_mode & 0o077 == 0
     env = paths.env.read_text()
     assert "D1MAX_MAP=unmapped:0" in env and "D1MAX_SITE_MQTT=\n" in env
@@ -69,7 +69,7 @@ def test_烧写过了不重来_检验抓得到贴错的(出厂):
 def test_重做贴纸_旧的作废_绑着不让(出厂):
     paths, router, st, _ = 出厂
     new = fa.rekey(paths, router=router)
-    assert new.code != st.code and new.hotspot_psk != st.hotspot_psk
+    assert new.code != st.code and new.hotspot_psk == st.hotspot_psk == b.HOTSPOT_PSK
     assert new.fingerprint != st.fingerprint and new.hotspot_ssid == st.hotspot_ssid
     assert fa.check(paths, st.encode()) and fa.check(paths, new.encode()) == []
     write_json(paths.state, {"state": "bound"})
