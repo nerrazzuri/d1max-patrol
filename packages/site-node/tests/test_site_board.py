@@ -1,4 +1,4 @@
-"""W46(决策 74):上装主控板过热 → 站点告警。警戒、降负载给业主(P2);危急出 P1(机器人自己回家)。"""
+"""W46(决策 74):上装主控板过热 → 站点告警。警戒、降负载给管理员(P2);危急出 P1(机器人自己回原点)。"""
 
 from __future__ import annotations
 
@@ -40,7 +40,7 @@ def test_过热三级出告警_回到正常不出(tmp_path):
     assert {a["kind"] for a in desk.open()} == {"board_hot", "board_overheat"}, "人去看过再关"
 
 
-def test_热像镜头被挡_出P2给业主(tmp_path):
+def test_热像镜头被挡_出P2给管理员(tmp_path):
     from d1max_site.alert_audience import audience
     desk, src = _src(tmp_path)
     src.on_event("A", _ev("thermal_lens_blocked", {"camera": "thermal", "detail": 1.2,

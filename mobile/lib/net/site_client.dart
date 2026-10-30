@@ -116,22 +116,22 @@ class SiteSession {
 
   bool get canDispatch => role == 'admin' || role == 'guard';
 
-  /// 确认、解决告警（W00c5a）：值班的人（保安、管理员）；业主也行（W20：在家时自己看到了点「我知道了」）。
+  /// 确认、解决告警（W00c5a）：值班的人（保安、管理员）；经理也行（W20：留守时自己看到了点「我知道了」）。
   bool get canHandleAlerts => role == 'admin' || role == 'guard' || role == 'owner';
 
   /// 切到布防（W20）：谁都能。
   bool get canArm => role == 'admin' || role == 'guard' || role == 'owner';
 
-  /// 切到在家、访客（撤防，W20）：业主、管理员；保安不能。
+  /// 切到留守、临时撤防（撤防，W20）：经理、管理员；保安不能。
   bool get canSetMode => role == 'admin' || role == 'owner';
 
-  /// 遥控（W00c5c，决策 7）：保安、管理员；业主没有（业主能按「停」）。
+  /// 遥控（W00c5c，决策 7）：保安、管理员；经理没有（经理能按「停」）。
   bool get canTeleop => role == 'admin' || role == 'guard';
 
   /// 强制接管别人的遥控：只有管理员，而且要写理由。
   bool get canTakeover => role == 'admin';
 
-  /// 判读、复核照片（W00c5d）：值班的人（保安、管理员）；业主只看。
+  /// 判读、复核照片（W00c5d）：值班的人（保安、管理员）；经理只看。
   bool get canReview => role == 'admin' || role == 'guard';
 
   /// 下发地图、录包、重建（W00c5d 第二部分）：只有管理员。
@@ -169,9 +169,9 @@ String scheduleWhen(Map<String, dynamic> e) {
       '$when，巡完回 $stb') : when;
 }
 
-/// 布防模式说人话（W20）：`布防` / `在家` / `访客（到 21:30）`。
+/// 布防模式说人话（W20）：`布防` / `留守` / `临时撤防（到 21:30）`。
 String modeText(Map<String, dynamic> m) {
-  // W44 第二期：站点的布防时间表管着时，写「按时间表：布防 / 部分布防 / 撤防」，不按 mode 写成「在家」
+  // W44 第二期：站点的布防时间表管着时，写「按时间表：布防 / 部分布防 / 撤防」，不按 mode 写成「留守」
   if (m['source'] == 'schedule') {
     final st = switch (m['state']) {
       'armed' => tr('armed', '布防'),
@@ -182,8 +182,8 @@ String modeText(Map<String, dynamic> m) {
   }
   final label = switch (m['mode']) {
     'armed' => tr('Armed', '布防'),
-    'home' => tr('Home', '在家'),
-    'visitor' => tr('Visitor', '访客'),
+    'home' => tr('Stay', '留守'),
+    'visitor' => tr('Temp disarm', '临时撤防'),
     _ => '${m['mode']}',
   };
   final until = m['until_ms'];
@@ -586,11 +586,11 @@ abstract class SiteApi {
   Future<Map<String, dynamic>> unmapZone(String zone);
   Future<Map<String, dynamic>> removeIntercept(String name);
 
-  /// 布防模式（W20）：当前模式、访客到几点、每个防区现在布不布防。站点没开回 404。
+  /// 布防模式（W20）：当前模式、临时撤防到几点、每个防区现在布不布防。站点没开回 404。
   Future<Map<String, dynamic>> mode();
-  /// 切模式：`armed`（谁都能）、`home`、`visitor`（业主、管理员；访客带 [zones] 和 [minutes]）。
+  /// 切模式：`armed`（谁都能）、`home`、`visitor`（经理、管理员；临时撤防带 [zones] 和 [minutes]）。
   Future<Map<String, dynamic>> setMode(String mode, {List<String>? zones, int? minutes});
-  /// 这个防区在家时布不布防（管理员）。
+  /// 这个防区留守时布不布防（管理员）。
   Future<Map<String, dynamic>> setZoneHome(String zone, bool homeArmed);
 
   /// 天气（W29）：现在按什么管（正常 / 下雨 / 雷暴 / 不知道）、手动切的、联网查的。
@@ -616,7 +616,7 @@ abstract class SiteApi {
   /// [takeoverReason] 非空 = 管理员强制接管。
   Future<TeleopLink> teleop(String robotId, {String takeoverReason = ''});
 
-  /// 停车（W00c5c）：走站点的 `halt`，**不走遥控连接**。业主也能按。停下之后站点不再派它，
+  /// 停车（W00c5c）：走站点的 `halt`，**不走遥控连接**。经理也能按。停下之后站点不再派它，
   /// 直到有人 [resume]（W00c5e）。
   Future<Map<String, dynamic>> halt(String robotId);
 
@@ -654,7 +654,7 @@ abstract class SiteApi {
   Future<List<Map<String, dynamic>>> deterrence();
   /// 跳级、往回退（保安、管理员）。人动过一次就不再自动升。
   Future<Map<String, dynamic>> deterLevel(String robotId, int level);
-  /// 解除（保安、管理员、业主）：全关、狗回待命点。
+  /// 解除（保安、管理员、经理）：全关、狗回待命点。
   Future<void> deterRelease(String robotId);
   /// 就地驱离（W33，决策 48；保安、管理员）：狗自己看见人报了 P1，看过现场决定驱离。狗在跑的任务先撤掉，
   /// 在它此刻的位置开一场、从 L1（灯光）起。回这一场。

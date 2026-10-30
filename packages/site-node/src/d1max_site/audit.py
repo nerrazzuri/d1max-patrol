@@ -11,7 +11,7 @@ from typing import Any
 from d1max_site.db import SiteDB
 
 #: ``detail`` 落库最多这么长。**落进去的必须是一份完整的 JSON**(W20 外审:原来序列化之后硬截,25 个
-#: 防区名的访客模式一截,``list()`` 就读不回来了)。
+#: 防区名的临时撤防一截,``list()`` 就读不回来了)。
 MAX_DETAIL = 2000
 _KEEP_ITEMS = 10
 _KEEP_CHARS = 200

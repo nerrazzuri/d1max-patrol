@@ -174,8 +174,8 @@ def estimate_cost_pct(distance_m: float,
     return max(params.floor_pct, hours * params.drain_pct_per_hour)
 
 
-#: 全程里「回来」那段怎么走(W00c6b 内审):``home`` 最后一个点直线回原点(后端自己规划回家);
-#: ``retrace`` 沿来路倒着回出发点、再回原点(直线后端);``none`` 不回 —— 这一趟本身就是回家的路。
+#: 全程里「回来」那段怎么走(W00c6b 内审):``home`` 最后一个点直线回原点(后端自己规划回原点);
+#: ``retrace`` 沿来路倒着回出发点、再回原点(直线后端);``none`` 不回 —— 这一趟本身就是回原点的路。
 BACK_MODES = ("home", "retrace", "none")
 
 
@@ -212,8 +212,9 @@ Crumb = tuple[int | None, Pose]
 
 
 def path_kind(nav: object) -> str:
-    """导航后端回家怎么走:``planned`` 自己规划回家;``straight`` 不认 ``return_home``、引擎沿来路回。
-    没说的(测试替身)按 ``planned`` —— 回家的电照旧按直线估。"""
+    """导航后端回原点怎么走:``planned`` 自己规划回原点;``straight`` 不认 ``return_home``、
+    引擎沿来路回。
+    没说的(测试替身)按 ``planned`` —— 回原点的电照旧按直线估。"""
     return str(getattr(nav, "PATH_KIND", "planned"))
 
 

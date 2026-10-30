@@ -59,8 +59,8 @@ describe("用户页", () => {
   it("角色写界面名字", async () => {
     const { container: c } = page();
     await waitFor(() => expect(tr(c, "alice")).not.toBeNull());
-    expect(tr(c, "alice").textContent).toContain("业主（最高权限）");
-    expect(tr(c, "olga").textContent).toContain("家人 / 只看");
+    expect(tr(c, "alice").textContent).toContain("管理员（最高权限）");
+    expect(tr(c, "olga").textContent).toContain("经理");
     expect(tr(c, "eng-20261027-0900").textContent).toContain("工程师（临时）");
     expect((tr(c, "gina").querySelector("select") as HTMLSelectElement).selectedOptions[0].textContent).toBe("保安");
   });

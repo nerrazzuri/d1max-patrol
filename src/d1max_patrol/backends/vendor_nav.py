@@ -79,7 +79,7 @@ class _Pending:
 
 
 class VendorNavBackend(NavBackend):
-    #: 厂商导航自己规划回家(``start_nav_return_home``),见 ``NavBackend.PATH_KIND``。
+    #: 厂商导航自己规划回原点(``start_nav_return_home``),见 ``NavBackend.PATH_KIND``。
     PATH_KIND = "planned"
 
     def __init__(

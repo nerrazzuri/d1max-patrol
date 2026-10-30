@@ -181,7 +181,7 @@ def test_外审I3_位置说不清_只认全站授权(台):  # noqa: F811
     areas = AreaBook(t.db, now_ms=lambda: t.ms[0])
     areas.set("m", "1", "Back garden", SQUARE, by="admin")
     t.w.areas = areas
-    _可靠位置(t, loc_ok=False)                               # 旧坐标还在花园里
+    _可靠位置(t, loc_ok=False)                               # 旧坐标还在东区里
     t.arming.authz = SimpleNamespace(
         active=lambda zone: "Gardener" if zone == "Back garden" else None)
     t.d.persons("A", present=True, count=1, nearest_m=4.0)
@@ -417,16 +417,16 @@ def _本子(tmp_path, clock, local):
 def test_授权提前结束(tmp_path):
     clock, local = [NOW], [_lt(0, 10, 0)]
     b = _本子(tmp_path, clock, local)
-    eid = b.add({"name": "园丁", "zones": [], "days": ALL_DAYS, "start": "09:00",
+    eid = b.add({"name": "维修工", "zones": [], "days": ALL_DAYS, "start": "09:00",
                  "end": "18:00"}, by="olga")
-    assert b.active(None) == "园丁"
+    assert b.active(None) == "维修工"
     assert b.end_now(eid, by="olga") is True
     clock[0], local[0] = NOW + 60_000, _lt(0, 10, 1)
     assert b.active(None) is None
     assert [e["active_now"] for e in b.list(with_active=True)] == [False]
     # 第二天 09:30 照常
     clock[0], local[0] = NOW + 23 * 3_600_000 + 30 * 60_000, _lt(1, 9, 30)
-    assert b.active(None) == "园丁"
+    assert b.active(None) == "维修工"
 
 
 def test_授权提前结束_跨午夜那一段(tmp_path):
@@ -444,7 +444,7 @@ def test_授权提前结束_跨午夜那一段(tmp_path):
 def test_授权提前结束_不在时间里(tmp_path):
     clock, local = [NOW], [_lt(0, 8, 0)]
     b = _本子(tmp_path, clock, local)
-    eid = b.add({"name": "园丁", "zones": [], "days": ALL_DAYS, "start": "09:00",
+    eid = b.add({"name": "维修工", "zones": [], "days": ALL_DAYS, "start": "09:00",
                  "end": "18:00"}, by="olga")
     assert b.end_now(eid, by="olga") is False
     assert b.end_now(999, by="olga") is False
@@ -455,10 +455,10 @@ def test_授权今天有没有(tmp_path):
     b = _本子(tmp_path, clock, local)
     b.add({"name": "周末保洁", "zones": [], "days": 0b1100000, "start": "09:00",
            "end": "12:00"}, by="olga")
-    b.add({"name": "园丁", "zones": [], "days": 0b0000001, "start": "09:00",
+    b.add({"name": "维修工", "zones": [], "days": 0b0000001, "start": "09:00",
            "end": "12:00"}, by="olga")
     got = {e["name"]: e["on_today"] for e in b.list(with_active=True)}
-    assert got == {"周末保洁": False, "园丁": True}
+    assert got == {"周末保洁": False, "维修工": True}
 
 
 def test_接口_提前结束(tmp_path):
@@ -467,7 +467,7 @@ def test_接口_提前结束(tmp_path):
         clock, local = [NOW], [_lt(0, 10, 0)]
         s.api.authz = AuthzBook(s.db, now_ms=lambda: clock[0], localtime=lambda x: local[0](x))
         tok = s.login()
-        s.req("POST", "/api/lists/authorizations", {"name": "园丁", "start": "09:00",
+        s.req("POST", "/api/lists/authorizations", {"name": "维修工", "start": "09:00",
               "end": "18:00"}, token=tok)
         eid = s.req("GET", "/api/lists/authorizations", token=tok)[1]["authorizations"][0]["id"]
         code, d = s.req("POST", f"/api/lists/authorizations/{eid}/end", {}, token=tok)

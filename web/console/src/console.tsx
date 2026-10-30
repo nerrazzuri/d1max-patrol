@@ -1,5 +1,5 @@
 // 值班台外框(W44 第一期):外壳(shell.tsx 的顶栏、路由、主题)+ 站点数据 + 各页 + 共用的对话框。
-// 保安五页:值班、实况、地图、录像、报警记录(深色);管理各页(浅色)只有业主进得去。
+// 保安五页:值班、实况、地图、录像、报警记录(深色);管理各页(浅色)只有管理员进得去。
 import { useEffect, useMemo, useState } from "preact/hooks";
 import { api, ApiError, enc } from "./api";
 import type { Me } from "./app";

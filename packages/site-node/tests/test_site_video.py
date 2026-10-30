@@ -96,7 +96,7 @@ def test_两个观众只起一路_都走了之后站点收掉_狗也在有效期
     s = 站点
     tok, olga = _登(s), _登(s, "olga")
     _新鲜(s, tok)
-    a, b = 观众(s, tok), 观众(s, olga)                   # 业主也能看(view)
+    a, b = 观众(s, tok), 观众(s, olga)                   # 管理员也能看(view)
     try:
         assert len(a.jpegs(2)) == 2 and len(b.jpegs(2)) == 2
         assert s.hub.feed("A", "front").starts == 1

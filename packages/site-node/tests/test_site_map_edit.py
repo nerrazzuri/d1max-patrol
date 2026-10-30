@@ -117,12 +117,12 @@ def test_权限(站点):
 def test_存显示设置读回来_预览带上(站点):
     s = 站点
     tok = _登(s)
-    body = {"rotate_deg": 12.5, "regions": [{"name": "车库", "polygon": [[0, 0], [2, 0], [2, 2]]}]}
+    body = {"rotate_deg": 12.5, "regions": [{"name": "A区", "polygon": [[0, 0], [2, 0], [2, 2]]}]}
     code, d = s.req("POST", f"{ADM}/display", body, token=tok)
     assert code == 200, d
-    assert s.req("GET", f"{ADM}/display", token=tok)[1]["regions"][0]["name"] == "车库"
+    assert s.req("GET", f"{ADM}/display", token=tok)[1]["regions"][0]["name"] == "A区"
     pv = s.req("GET", f"/api/maps/{MAP[0]}/{MAP[1]}/preview", token=_登(s, "gina"))[1]
-    assert pv["rotation_deg"] == 12.5 and pv["display"]["regions"][0]["name"] == "车库"
+    assert pv["rotation_deg"] == 12.5 and pv["display"]["regions"][0]["name"] == "A区"
 
 
 @pytest.mark.parametrize("bad", [{"rotate_deg": 200}, {"regions": [{"name": "", "polygon": []}]},
@@ -175,15 +175,15 @@ def test_底图上传和大小限制(站点):
     assert _传(s, tok, b"not png", "image/png")[0] == 400
 
 
-def test_区域命名_报警写在车库_没命名用防区名(站点):
+def test_区域命名_报警写在A区_没命名用防区名(站点):
     from d1max_site.alert_sources import SiteAlertSources
     from d1max_site.map_display import MapDisplay
     s = 站点
     disp = MapDisplay(s.db, now_ms=lambda: 1)
-    disp.put(MAP[0], MAP[1], {"regions": [{"name": "车库", "polygon": [[0, 0], [2, 0], [2, 2],
+    disp.put(MAP[0], MAP[1], {"regions": [{"name": "A区", "polygon": [[0, 0], [2, 0], [2, 2],
                                                                        [0, 2]]}]}, by="a")
-    s.api.areas.set(MAP[0], MAP[1], "后院", [[5, 0], [8, 0], [8, 4], [5, 4]], by="a")
-    assert disp.region_at(MAP[0], MAP[1], 1, 1) == "车库"
+    s.api.areas.set(MAP[0], MAP[1], "西区", [[5, 0], [8, 0], [8, 4], [5, 4]], by="a")
+    assert disp.region_at(MAP[0], MAP[1], 1, 1) == "A区"
     assert disp.region_at(MAP[0], MAP[1], 6, 1) is None
     src = SiteAlertSources(s.desk, now_ms=lambda: 1)
     src.where_of = lambda p: (disp.region_at(p["map_id"], p["map_version"], p["x"], p["y"])
@@ -191,7 +191,7 @@ def test_区域命名_报警写在车库_没命名用防区名(站点):
     src._mem["A"] = type("M", (), {"pose": {"map_id": MAP[0], "map_version": MAP[1], "x": 6.0,
                                             "y": 1.0}, "pose_ms": 1, "running": False,
                                    "started": None})()
-    assert src.here("A")["where"] == "后院"
+    assert src.here("A")["where"] == "西区"
 
 
 # ---- 外审 R4:按地图自己的编码写空地 / 障碍(negate=1 的图 0 是空地) ----

@@ -262,7 +262,7 @@ async def test_狗在新禁行区里_发事件带图号(台):
     await _跑(rt, broker, 20, r, c)
     o = await r.odometry()
     await rt._on_cmd(_cmd("zones_set", _zs(1, [{
-        "id": "bed", "kind": "nogo", "label": "花坛",
+        "id": "bed", "kind": "nogo", "label": "高楼楼梯",
         "polygon": [[o.x - 0.5, 0.2], [o.x + 0.5, 0.2], [o.x + 0.5, 2], [o.x - 0.5, 2]]}]),
         "z1", c))
     await _跑(rt, broker, 10, r, c)

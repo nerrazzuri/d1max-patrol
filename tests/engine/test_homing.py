@@ -207,7 +207,7 @@ def test_直线后端的全程_回来是沿来路倒着走():
         (math.hypot(3, 1) + 4) * 2 + 1)
 
 
-def test_回家这一趟本身不算回来那段():
+def test_回原点这一趟本身不算回来那段():
     home = Pose.from_xy_yaw(0.0, 0.0)
     wps = [Pose.from_xy_yaw(3.0, 4.0), Pose.from_xy_yaw(0.0, 0.0)]
     assert route_length_m(home, wps, start=Pose.from_xy_yaw(3.0, 0.0), back="none") \

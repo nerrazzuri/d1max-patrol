@@ -39,8 +39,8 @@ ON_LOC_LOST = frozenset({"pause_then_abort", "abort"})
 #: (清单 #46/#47),不必直接判整趟失败。
 ON_CONTROL_LOST = frozenset({"pause", "abort"})
 
-#: 电量到返航线之后怎么办(W00c6b 内审)。``return_home`` 掉头回家;``continue`` 接着往前走 ——
-#: 这一趟本身就是回家的路(站点在巡检之后派的回程巡检),掉头是往远端走。低于中止线两种都原地停。
+#: 电量到返航线之后怎么办(W00c6b 内审)。``return_home`` 掉头回原点;``continue`` 接着往前走 ——
+#: 这一趟本身就是回原点的路(站点在巡检之后派的回程巡检),掉头是往远端走。低于中止线两种都原地停。
 ON_BATTERY_LOW = frozenset({"return_home", "continue"})
 #: 巡检点的顺序(W14):``fixed`` 照写的顺序;``shuffle`` 每一趟站点派之前打乱
 #: (随机路线,让人摸不准规律)。

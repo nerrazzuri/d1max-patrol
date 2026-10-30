@@ -1,6 +1,6 @@
 // 报警记录页(W44 第一期,设计 §4.5)。上面:本班出的事、还没处理、有人闯入三个数,上一班留的话(谁、几点),
 // 下班前可以给下一班留话。筛选:本班 / 今天 / 选日期 × 全部 / 有人闯入 / 机器人需要帮忙 / 机器人掉线 × 只看没处理的。
-// 每行:抓拍(录像那一刻的一帧)、时间、什么事、结论和谁处理的、看录像 / 去处理。技术类(给业主的)不列。
+// 每行:抓拍(录像那一刻的一帧)、时间、什么事、结论和谁处理的、看录像 / 去处理。技术类(给管理员的)不列。
 import { useEffect, useState } from "preact/hooks";
 import { api, ApiError } from "./api";
 import { hm, useDutySettings } from "./data";
@@ -15,7 +15,7 @@ type Scope = "shift" | "today" | "date";
 type Kind = "all" | "intrusion" | "help" | "offline";
 interface Note { id: number; at_ms: number; author: string; text: string }
 
-/** 能留话的(站点 HANDLE_ALERTS):业主、保安、家人。 */
+/** 能留话的(站点 HANDLE_ALERTS):管理员、保安、经理。 */
 function canNote(role: string): boolean {
   return role === "admin" || role === "engineer" || role === "guard" || role === "owner";
 }

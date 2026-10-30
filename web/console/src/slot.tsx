@@ -9,7 +9,7 @@ import { robotCams } from "./model";
 import { nameOf } from "./data";
 
 export interface Scene {
-  /** 现场叫什么(「3 号 后花园」)。 */
+  /** 现场叫什么(「3 号 北区」)。 */
   label: string;
   /** 现场画面的地址(固定摄像头直播)。 */
   src: string;

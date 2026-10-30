@@ -152,7 +152,7 @@ export function matches(d: { since_ms: number; until_ms: number } | null, p: { s
   return d != null && p != null && d.since_ms === p.since && d.until_ms === p.until;
 }
 
-// ------------------------------------------------------------------ W44 第二期:业主的报表页(按天汇总)
+// ------------------------------------------------------------------ W44 第二期:管理员的报表页(按天汇总)
 
 export type ReportKind = "week" | "lastweek" | "month" | "custom";
 

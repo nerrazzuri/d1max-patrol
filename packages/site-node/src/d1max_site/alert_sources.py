@@ -187,7 +187,7 @@ class SiteAlertSources:
         if m.pose is not None:
             out["pose"] = dict(m.pose) | {"at_ms": m.pose_ms}
             if self.where_of is not None:
-                # W44 第四期:在哪(命名的区域,没命名用防区名),报警、报表上写「在车库」
+                # W44 第四期:在哪(命名的区域,没命名用防区名),报警、报表上写「在A区」
                 try:
                     w = self.where_of(m.pose)
                 except Exception:                    # 现场拿不到不许挡住告警
@@ -475,7 +475,8 @@ class SiteAlertSources:
                                   title="机器人上的受力门槛文件读不懂,用的是缺省门槛",
                                   detail=f"/etc/d1max/force.json:{str(d.get('reason', ''))[:250]}")
         elif e.kind == "board_thermal" and d.get("level") in ("warn", "shed", "critical"):
-            # W46(决策 74):上装主控板过热。警戒、降负载给业主(P2);危急机器人自己结束这一趟回家,出 P1
+            # W46(决策 74):上装主控板过热。警戒、降负载给管理员(P2);
+            # 危急机器人自己结束这一趟回原点,出 P1
             stopped = "、".join(str(f) for f in d.get("fans_stopped", [])[:5])
             detail = str(d.get("reason", ""))[:200] + (f";停转的风扇:{stopped}" if stopped else "")
             lvl = d.get("level")

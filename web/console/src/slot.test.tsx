@@ -69,7 +69,7 @@ describe("画面位", () => {
 
   it("报警现场:大画面放现场,小窗放这台机器人的前摄像头", () => {
     const { container: c } = render(<VideoSlot u={unit()} now={0} pinned={false} onPin={() => {}} onZoom={() => {}}
-      scene={{ label: "3 号 后花园", src: "/api/cameras/cam3/live", health: "/api/cameras/cam3/health" }} />);
+      scene={{ label: "3 号 北区", src: "/api/cameras/cam3/live", health: "/api/cameras/cam3/health" }} />);
     expect(mainSrc(c)).toBe("/api/cameras/cam3/live");
     expect(pipSrc(c)).toContain("/video/front");
   });
@@ -95,7 +95,7 @@ describe("画面位", () => {
 // ---- 外审 R6:报警现场的固定摄像头跟机器人画面一样:断了写最后画面、已断几秒,自己重连;
 // 静悄悄停帧按站点报的「最后一帧多久了」判(不拿浏览器重载图片的时刻当来了新帧)。
 
-const SCENE = { label: "3 号 后花园", src: "/api/cameras/cam3/live", health: "/api/cameras/cam3/health" };
+const SCENE = { label: "3 号 北区", src: "/api/cameras/cam3/live", health: "/api/cameras/cam3/health" };
 let health: Record<string, { online: boolean; last_frame_age_ms: number | null }>;
 let asked: string[];
 
@@ -136,7 +136,7 @@ describe("外审R6 报警现场断流", () => {
   it("真浏览器查出来的:重连后第一帧没到之前,左下角写正在重连,不写实时;现场写摄像头名字", async () => {
     const r = render(slot(Date.now()));
     const osd = () => r.container.querySelector(".slot-main .osd.bottom")!.textContent;
-    expect(osd()).toContain("3 号 后花园");
+    expect(osd()).toContain("3 号 北区");
     fireEvent.load(sceneImg(r.container)!);
     fireEvent.error(sceneImg(r.container)!);
     await vi.advanceTimersByTimeAsync(3100);                     // 换了地址,还没出帧
@@ -195,7 +195,7 @@ describe("外审R6 报警现场断流", () => {
     const r = render(slot(Date.now()));
     fireEvent.load(sceneImg(r.container)!);
     await vi.advanceTimersByTimeAsync(2100);                        // 问了旧现场,还没回
-    const other = { label: "4 号 车库", src: "/api/cameras/cam4/live", health: "/api/cameras/cam4/health" };
+    const other = { label: "4 号 A区", src: "/api/cameras/cam4/live", health: "/api/cameras/cam4/health" };
     r.rerender(slot(Date.now(), other));
     fireEvent.load(sceneImg(r.container)!);
     late(new Response(JSON.stringify({ online: false, last_frame_age_ms: 9000 }), { headers: { "Content-Type": "application/json" } }));
@@ -247,7 +247,7 @@ describe("W44 复查 R5 健康请求静悄悄挂着", () => {
       peak = Math.max(peak, inflight[url]);
       init?.signal?.addEventListener("abort", () => { inflight[url] -= 1; aborted += 1; rej(new DOMException("aborted", "AbortError")); });
     })) as typeof fetch);
-    const scene = { label: "3 号 后花园", src: "/api/cameras/cam3/live", health: "/api/cameras/cam3/health" };
+    const scene = { label: "3 号 北区", src: "/api/cameras/cam3/live", health: "/api/cameras/cam3/health" };
     const r = render(<VideoSlot u={unit()} now={Date.now()} pinned={false} onPin={() => {}} onZoom={() => {}} scene={scene} />);
     fireEvent.load(r.container.querySelector(".slot-main img.scene")!);
     await vi.advanceTimersByTimeAsync(15_000);

@@ -2,18 +2,18 @@
 不看模式,照常。
 
 - ``armed`` 布防:所有防区都布防。
-- ``home`` 在家:标了「在家时撤防」的防区撤防(院内、屋边),别的(外围)照常布防。
-- ``visitor`` 访客:在「在家」的基础上,再撤掉这次指定的几个防区;**必须有结束时间**(默认 4 小时,
-  最长 24 小时),到点自动回到开访客之前的模式。
+- ``home`` 留守:标了「留守时撤防」的防区撤防(内圈),别的(外围)照常布防。
+- ``visitor`` 临时撤防:在「留守」的基础上,再撤掉这次指定的几个防区;**必须有结束时间**(默认 4 小时,
+  最长 24 小时),到点自动回到开临时撤防之前的模式。
 
 **没配过的防区一律布防**(新接的摄像头报了个没人见过的防区名,宁可多响一次)。新站点默认布防。
 撤防的防区来了入侵:照样记一条(``disarmed``),不派狗、不报告警(事件页看得见)。
 
-谁能切:业主、管理员随便切(``set_mode``);保安只能切到布防(``arm``),撤防是业主的决定。
-哪些防区「在家时撤防」由管理员配(``manage``)。
+谁能切:经理、管理员随便切(``set_mode``);保安只能切到布防(``arm``),撤防是经理的决定。
+哪些防区「留守时撤防」由管理员配(``manage``)。
 
 布防时间表(W44 第二期,:mod:`d1max_site.arming_schedule`):开着的时候按时间表判防区;有人手动切了模式,
-到时间表下一个边界之前按手动(访客按它自己的结束时间),过了回时间表。``view()`` 写明谁说了算
+到时间表下一个边界之前按手动(临时撤防按它自己的结束时间),过了回时间表。``view()`` 写明谁说了算
 (``source``)、整体是布防 / 部分 / 撤防(``state``)、下一次变是几点。时间表管着时 ``mode`` 写成
 ``armed``(全部布防)或 ``home``(有撤防的),老手机、受力、看见人按它照旧能用。
 """
@@ -33,11 +33,11 @@ from d1max_site.sitetime import site_tz
 log = logging.getLogger(__name__)
 
 MODES = ("armed", "home", "visitor")
-LABEL = {"armed": "布防", "home": "在家", "visitor": "访客", "schedule": "按时间表"}
+LABEL = {"armed": "布防", "home": "留守", "visitor": "临时撤防", "schedule": "按时间表"}
 STATE_LABEL = {"armed": "布防", "partial": "部分布防", "disarmed": "撤防"}
 DEFAULT_VISITOR_MIN = 4 * 60
 MAX_VISITOR_MIN = 24 * 60
-#: 访客一次最多撤这么多个防区(一个现场远到不了;防一个请求塞几千个名字进库)。
+#: 临时撤防一次最多撤这么多个防区(一个现场远到不了;防一个请求塞几千个名字进库)。
 MAX_VISITOR_ZONES = 64
 #: 防区名跟事件派遣收的一样:1–128 个字符(摄像头、NVR 报什么就是什么)。
 _ZONE = re.compile(r"[^\x00-\x1f]{1,128}")
@@ -53,7 +53,8 @@ class ArmingDesk:
         self.db = db
         self._now = now_ms
         self._publish = publish
-        #: 访客到点自动退回时(``tick``):``(退回到的模式, 当时的访客那一行)``。站点接到审计上。
+        #: 临时撤防到点自动退回时(``tick``):``(退回到的模式, 当时的临时撤防那一行)``。
+        #: 站点接到审计上。
         self.on_expired: Callable[[str, dict[str, Any]], None] | None = None
         #: 名单(B1c,:class:`d1max_site.authz.AuthzBook`):此刻生效的时段 / 人员授权。站点主程序接上。
         self.authz: Any = None
@@ -86,7 +87,7 @@ class ArmingDesk:
         return r
 
     def _effective(self, r: dict[str, Any]) -> dict[str, Any]:
-        """访客过了点还没被 ``tick`` 收回的那几秒:**按已经退回算**(判防区不等那一拍)。"""
+        """临时撤防过了点还没被 ``tick`` 收回的那几秒:**按已经退回算**(判防区不等那一拍)。"""
         if r["mode"] == "visitor" and r["until_ms"] is not None and self._now() >= r["until_ms"]:
             return r | {"mode": r["prev_mode"] or "armed", "prev_mode": "", "visitor_zones": [],
                         "until_ms": None}
@@ -125,7 +126,7 @@ class ArmingDesk:
         return True, mode
 
     def known_zones(self) -> list[str]:
-        """手机挑防区用:绑过拦截点的、摄像头登记的、配过在家撤防的。"""
+        """手机挑防区用:绑过拦截点的、摄像头登记的、配过留守撤防的。"""
         rows = self.db.query(
             "SELECT zone FROM zones UNION SELECT zone FROM cameras UNION "
             "SELECT zone FROM zone_arming UNION SELECT zone FROM zone_areas UNION "
@@ -135,7 +136,7 @@ class ArmingDesk:
     def robot_armed(self, reliable: bool, zone: str | None) -> bool:
         """机器人此刻所在的地方布不布防(看见人报不报、被抱起响不响警笛;W44 复查 R2)。
 
-        - 手动(不按时间表):老约定,只有「布防」模式才算(在家、访客一律不报)。
+        - 手动(不按时间表):老约定,只有「布防」模式才算(留守、临时撤防一律不报)。
         - 按时间表:各具名防区和「没画到的地方」(``''`` 那份)**全都**撤防才不报;不然位置可靠就按它
           所在防区(不在任何防区里按 ``''`` 那份),位置说不清宁可报。
         整个判断拿着同一把读锁(复查 R1)。"""
@@ -215,7 +216,7 @@ class ArmingDesk:
                 minutes = DEFAULT_VISITOR_MIN
             if isinstance(minutes, bool) or not isinstance(minutes, int) \
                     or not 1 <= minutes <= MAX_VISITOR_MIN:
-                raise ModeError(f"访客要有结束时间:minutes 是 1–{MAX_VISITOR_MIN} 的整数分钟")
+                raise ModeError(f"临时撤防要有结束时间:minutes 是 1–{MAX_VISITOR_MIN} 的整数分钟")
             if zones is None:
                 zones = []
             if not isinstance(zones, list) or not all(
@@ -223,17 +224,17 @@ class ArmingDesk:
                 raise ModeError("zones 要是防区名的列表")
             vz = sorted(set(zones))
             if len(vz) > MAX_VISITOR_ZONES:
-                raise ModeError(f"访客一次最多撤 {MAX_VISITOR_ZONES} 个防区")
+                raise ModeError(f"临时撤防一次最多撤 {MAX_VISITOR_ZONES} 个防区")
             until = self._now() + minutes * 60_000
         elif zones is not None or minutes is not None:
-            raise ModeError("只有访客模式带 zones、minutes")
-        # 时间表开着:手动的管到下一个边界(访客管到它自己的结束时间),过了回时间表
+            raise ModeError("只有临时撤防带 zones、minutes")
+        # 时间表开着:手动的管到下一个边界(临时撤防管到它自己的结束时间),过了回时间表
         manual_until = None
         if self.schedule is not None and self.schedule.enabled():
             manual_until = until if mode == "visitor" else self.schedule.next_boundary(self._now())
         with self.db.tx() as c:
             cur = self._effective(self._raw())
-            # 访客叠访客(延长、改防区):退回的还是开第一次访客之前的那个模式
+            # 临时撤防叠临时撤防(延长、改防区):退回的还是开第一次临时撤防之前的那个模式
             prev = (cur["prev_mode"] if cur["mode"] == "visitor" else cur["mode"]) \
                 if mode == "visitor" else ""
             c.execute("UPDATE site_mode SET mode=?, prev_mode=?, visitor_zones=?, until_ms=?, "
@@ -243,7 +244,7 @@ class ArmingDesk:
         return self._changed()
 
     def set_zone_home(self, zone: Any, home_armed: Any) -> dict[str, Any]:
-        """这个防区「在家」(以及访客)时布不布防。"""
+        """这个防区「留守」(以及临时撤防)时布不布防。"""
         if not isinstance(zone, str) or not _ZONE.fullmatch(zone):
             raise ModeError(f"防区名不合规矩: {zone!r}")
         if not isinstance(home_armed, bool):
@@ -257,7 +258,7 @@ class ArmingDesk:
         return self._changed()
 
     def tick(self) -> bool:
-        """站点告警循环每拍调。访客到点:落库退回到开访客之前的模式(时间表开着就回时间表);手动期过了:
+        """站点告警循环每拍调。临时撤防到点:落库退回到开临时撤防之前的模式(时间表开着就回时间表);手动期过了:
         回时间表;时间表管着时防区的布防状态变了:报给手机、审计。变了回真。"""
         now = self._now()
         expired: tuple[str, dict[str, Any]] | None = None
@@ -274,12 +275,12 @@ class ArmingDesk:
                 c.execute("UPDATE site_mode SET manual_until_ms=NULL WHERE id=1")
                 manual_over = True
         if expired is not None:
-            log.info("访客模式到点,退回%s", LABEL[expired[0]])
+            log.info("临时撤防到点,退回%s", LABEL[expired[0]])
             if self.on_expired is not None:
                 try:
                     self.on_expired(*expired)
                 except Exception:
-                    log.exception("访客到点退回的审计记不下来")
+                    log.exception("临时撤防到点退回的审计记不下来")
         v = self.view()
         fp = (tuple((z["zone"], z["armed"]) for z in v["zones"]) + (v["state"],)
               if v["source"] == "schedule" else None)

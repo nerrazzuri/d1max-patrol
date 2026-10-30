@@ -41,7 +41,7 @@ def pt(name: str, x: float, y: float, yaw: float = 0.0, **more) -> dict:
     return {"name": name, "x": x, "y": y, "yaw": yaw, **more}
 
 
-GOOD = [pt("门", 1.0, 2.0), pt("后院", 6.0, 2.0, 1.57, check="看围栏",
+GOOD = [pt("门", 1.0, 2.0), pt("西区", 6.0, 2.0, 1.57, check="看围栏",
                               actions=[{"type": "dwell", "seconds": 3},
                                        {"type": "photo", "camera": "front"}])]
 
@@ -72,7 +72,7 @@ def test_新建_读回_平的点_修订号从1起(台):
     r = 台.store.put_route("night", body(), by="alice")
     assert (r["id"], r["revision"], r["map_version"], r["bound"]) == ("night", 1, "wide", True)
     assert [(w["name"], w["x"], w["y"]) for w in r["waypoints"]] == [("门", 1.0, 2.0),
-                                                                    ("后院", 6.0, 2.0)]
+                                                                    ("西区", 6.0, 2.0)]
     assert r["waypoints"][1]["yaw"] == pytest.approx(1.57, abs=1e-6)
     assert r["waypoints"][1]["actions"] == [{"type": "dwell", "seconds": 3},
                                             {"type": "photo", "camera": "front"}]

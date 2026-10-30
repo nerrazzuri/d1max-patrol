@@ -24,7 +24,7 @@ def _能设(s):
         and "relocalize" in s.disp.clients["A"].capabilities.tasks)
 
 
-def test_保安给位置_转成命令带上狗加载的图_审计记谁给的_业主不行(站点):
+def test_保安给位置_转成命令带上狗加载的图_审计记谁给的_管理员不行(站点):
     s = 站点
     gina, olga = _登(s, "gina"), _登(s, "olga")
     _能设(s)

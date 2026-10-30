@@ -106,7 +106,7 @@ describe("recordings", () => {
     expect([clockSeconds("00:00"), clockSeconds("2:14"), clockSeconds("02:14:36"), clockSeconds(" 23:59:59 ")]).toEqual([0, 8040, 8076, 86399]);
     expect([clockSeconds("24:00"), clockSeconds("12:60"), clockSeconds("12:00:60"), clockSeconds("1214"), clockSeconds("2 PM"), clockSeconds("")]).toEqual([null, null, null, null, null, null]);
   });
-  it("谁能标留着:管理员、保安;业主不能(跟站点的 review 权限一致)", () => {
+  it("谁能标留着:管理员、保安;管理员不能(跟站点的 review 权限一致)", () => {
     expect([canReview("admin"), canReview("guard"), canReview("owner"), canReview("")]).toEqual([true, true, false, false]);
   });
 });

@@ -34,14 +34,14 @@ def _键(a):
     return quote(a["key"], safe="")
 
 
-def test_狗急停_站点出P1_确认记登录账号_业主也能确认(站点):
+def test_狗急停_站点出P1_确认记登录账号_管理员也能确认(站点):
     s = 站点
     alice, gina, olga = _登(s, "alice"), _登(s, "gina"), _登(s, "olga")
     _等(lambda: s.req("GET", "/api/robots/A", token=alice)[1].get("fresh"))
     s.loop.call(lambda: s.dog.emergency_stop(True))
     a = _等(lambda: _告警(s, olga, "estop_pressed"))
     assert a["level"] == "P1" and a["robot"] == "A" and a["acked_by"] == ""
-    # W20:业主在家时自己看到了,能点「我知道了」
+    # W20:管理员留守时自己看到了,能点「我知道了」
     code, d = s.req("POST", f"/api/alerts/{_键(a)}/ack", {"who": "mallory"}, token=olga)
     assert code == 200 and d["alert"]["acked_by"] == "olga", "确认人取登录账号,不信请求体"
     code, d = s.req("POST", f"/api/alerts/{_键(a)}/resolve", {}, token=gina)

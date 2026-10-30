@@ -23,7 +23,7 @@ def _登(s, name):
     return d["token"]
 
 
-def test_业主只能看和叫停_保安能派不能管_管理员都行(站点):
+def test_管理员只能看和叫停_保安能派不能管_管理员都行(站点):
     s = 站点
     olga, gina, alice = _登(s, "olga"), _登(s, "gina"), _登(s, "alice")
     _等(lambda: s.req("GET", "/api/robots/A", token=alice)[1].get("fresh"))

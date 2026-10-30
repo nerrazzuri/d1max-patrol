@@ -335,7 +335,7 @@ void main() {
       await t.pumpWidget(Container());
     });
 
-    testWidgets('业主能确认、记误报，但没有警笛和全部急停（没有派遣权限）；误报要再问一遍，记了就回去', (t) async {
+    testWidgets('管理员能确认、记误报，但没有警笛和全部急停（没有派遣权限）；误报要再问一遍，记了就回去', (t) async {
       final api = FakeApi('owner')..deterRows = [_session()];
       _portrait(t);
       api.alertRows = <Map<String, dynamic>>[];

@@ -71,9 +71,9 @@ class SafetyContext:
     loc_reset_attempts: int = 0
     ws_down_for_s: float = 0.0
     #: "从现在这个位置走回原点大约要掉多少个点的电"(``homing.estimate_cost_pct``)。
-    #: **默认 0 表示"还没算出来",不表示"回家不要钱"** —— 见 ``return_line_pct``。
+    #: **默认 0 表示"还没算出来",不表示"回原点不要钱"** —— 见 ``return_line_pct``。
     return_cost_pct: float = 0.0
-    #: 回家成本的地板,**必须跟算出发线的那一份是同一个数**。
+    #: 回原点成本的地板,**必须跟算出发线的那一份是同一个数**。
     #: ``ReturnParams`` 是每台引擎可配的(真机标定要改它),而这里原先直接读
     #: ``DEFAULT_RETURN_PARAMS`` —— 两支各按各的地板算,起飞门槛放行了、
     #: 返航线却在同一刻判 ``RETURN_HOME``,狗一起飞就掉头。默认值只是给
@@ -145,17 +145,17 @@ def rule(event: Event | DeviceEvent, ctx: SafetyContext) -> Ruling:
         return _disconnected(ctx)
     if isinstance(event, OverheatEvent):
         if event.level == "critical":
-            # 决策 74:上装严重过热,结束这一趟、回家(回到出发的地方,一般是充电桩)。返航路上再来一次
+            # 决策 74:上装严重过热,结束这一趟、回原点(回到出发的地方,一般是充电桩)。返航路上再来一次
             # 不打断返航(``_apply`` 管)。
-            return Ruling(Decision.RETURN_HOME, f"上装严重过热({event.reason}),结束这一趟、回家")
+            return Ruling(Decision.RETURN_HOME, f"上装严重过热({event.reason}),结束这一趟、回原点")
         return Ruling(Decision.CONTINUE, f"上装温度 {event.level},巡逻照走")
     return Ruling(Decision.CONTINUE, f"{type(event).__name__} 无对应规则,只记录")
 
 
 def _return_cost(ctx: SafetyContext) -> float:
-    """这一刻按多远算的回家成本,**下有地板**。
+    """这一刻按多远算的回原点成本,**下有地板**。
 
-    ``return_cost_pct`` 默认 0 —— 那不是"回家不要钱",是"还没算出来"
+    ``return_cost_pct`` 默认 0 —— 那不是"回原点不要钱",是"还没算出来"
     (原点还没换进来,或者这一趟没有点位)。按 0 用的话返航线就等于中止线。
     """
     return max(ctx.return_cost_pct, ctx.floor_pct)
@@ -168,19 +168,19 @@ def return_line_pct(ctx: SafetyContext) -> float:
     算法只有一句 —— **你必须在"还够走回去、而且走到家时手上还剩着中止线
     那份余量"的时候就掉头**::
 
-        返航线 = max(静态下限, 中止线 + 回家的成本)
+        返航线 = max(静态下限, 中止线 + 回原点的成本)
 
     ``policy.battery_return_pct`` 因此从"返航线"降格成"返航线的静态下限"。
     字段名和 wire 格式都没动 —— 动了要改协议,而它作为下限仍然有意义:
     它挡的是有人把场地配得极小、把返航线压到没有余量。
 
-    ``return_cost_pct`` 为 0 时(还没算出来)回家成本按 ``floor_pct`` 兜底,
+    ``return_cost_pct`` 为 0 时(还没算出来)回原点成本按 ``floor_pct`` 兜底,
     **返回的返航线严格高于中止线** —— 相等跟更低一样死:默认 policy 下两条
     线都是 25,24.9% 判 ABORT、25.0% 判 CONTINUE,中间没有一格是
     ``RETURN_HOME``,那个分支就是永远走不到的死代码。
 
     兜底用的是 ``ctx.floor_pct``(引擎那一份,不是模块默认那一份),理由跟它
-    本身一样:**就算原点就在脚下,起身、站定、对位也要电。** 回家从来不是
+    本身一样:**就算原点就在脚下,起身、站定、对位也要电。** 回原点从来不是
     免费的,0 只可能是"还没算",不可能是"不要钱"。
     """
     dynamic = ctx.policy.battery_abort_pct + _return_cost(ctx)
@@ -200,19 +200,19 @@ def battery_ruling(ctx: SafetyContext) -> Ruling:
                       f"{ctx.policy.battery_abort_pct:.0f}%,原地停止")
     line = return_line_pct(ctx)
     if ctx.battery_pct < line and ctx.policy.on_battery_low == "continue":
-        # 这一趟本身就是回家的路(站点的回程巡检,W00c6b 内审):掉头是往远端走。接着走,到中止线再停。
+        # 这一趟本身就是回原点的路(站点的回程巡检,W00c6b 内审):掉头是往远端走。接着走,到中止线再停。
         return Ruling(Decision.CONTINUE,
                       f"电量 {ctx.battery_pct:.0f}% 低于返航线 {line:.0f}%,"
-                      f"这一趟就是回家的路,接着走")
+                      f"这一趟就是回原点的路,接着走")
     if ctx.battery_pct < line:
         # 这句话是这一关唯一给人的解释,**两支各说各的**。静态下限赢的时候
-        # 照印"中止线 + 回家",人读到的是"低于返航线 60%(中止线 25% +
-        # 回家 3%)"—— 25 加 3 不等于 60,站在狗旁边的人会以为程序算错了。
+        # 照印"中止线 + 回原点",人读到的是"低于返航线 60%(中止线 25% +
+        # 回原点 3%)"—— 25 加 3 不等于 60,站在狗旁边的人会以为程序算错了。
         cost = _return_cost(ctx)
         if line > ctx.policy.battery_abort_pct + cost:
             why = f"静态下限 {ctx.policy.battery_return_pct:.0f}%"
         else:
-            why = f"中止线 {ctx.policy.battery_abort_pct:.0f}% + 回家 {cost:.0f}%"
+            why = f"中止线 {ctx.policy.battery_abort_pct:.0f}% + 回原点 {cost:.0f}%"
         return Ruling(Decision.RETURN_HOME,
                       f"电量 {ctx.battery_pct:.0f}% 低于返航线 {line:.0f}%"
                       f"({why}),返航")

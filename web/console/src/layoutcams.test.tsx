@@ -74,7 +74,7 @@ describe("布置 → 摄像头", () => {
     const ins = Array.from(document.querySelectorAll(".modal input:not([type=checkbox]):not([type=password])")) as HTMLInputElement[];
     fireEvent.input(ins[0], { target: { value: "cam2" } });
     fireEvent.input(ins[1], { target: { value: "http://10.0.0.6" } });
-    fireEvent.input(ins[3], { target: { value: "后院" } });
+    fireEvent.input(ins[3], { target: { value: "西区" } });
     fireEvent.submit(document.querySelector(".modal form")!);
     await new Promise((x) => setTimeout(x, 30));
     expect(said.join(" ")).toContain("还没映射到拦截点");

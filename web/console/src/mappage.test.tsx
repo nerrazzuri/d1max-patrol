@@ -131,9 +131,9 @@ describe("地图页的摄像头图层(W44 第三期)", () => {
 describe("地图上画编辑器里起的区域名(W44 第四期)", () => {
   it("区域名跟防区一起画,同名的不重画", () => {
     const meta = { width: 100, height: 100, m_per_px: 0.1, left_x: 0, top_y: 10,
-      display: { regions: [{ name: "车库", polygon: [[0, 0], [1, 0], [1, 1]] as [number, number][] },
-        { name: "后院", polygon: [[0, 0], [1, 0], [1, 1]] as [number, number][] }] } };
-    const got = mapAreas(meta, [{ zone: "后院", points: [[2, 2], [3, 2], [3, 3]] }]);
-    expect(got.map((a) => a.name)).toEqual(["后院", "车库"]);
+      display: { regions: [{ name: "A区", polygon: [[0, 0], [1, 0], [1, 1]] as [number, number][] },
+        { name: "西区", polygon: [[0, 0], [1, 0], [1, 1]] as [number, number][] }] } };
+    const got = mapAreas(meta, [{ zone: "西区", points: [[2, 2], [3, 2], [3, 3]] }]);
+    expect(got.map((a) => a.name)).toEqual(["西区", "A区"]);
   });
 });

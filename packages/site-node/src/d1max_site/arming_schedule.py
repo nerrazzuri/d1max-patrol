@@ -4,11 +4,12 @@
 「全部防区一样」,单独设过的防区用自己的。再加例外日期(节假日、出远门):那几天(两头都算)全天全站布防或
 撤防,盖过时间段。
 
-谁说了算(跟 :mod:`d1max_site.modes` 合起来):时间表开着、而且不在手动期里 → 按这里;业主手动切了模式,
-到下一个边界(:meth:`ArmingSchedule.next_boundary`)之前按手动;访客到点回时间表。
+谁说了算(跟 :mod:`d1max_site.modes` 合起来):时间表开着、而且不在手动期里 → 按这里;
+管理员手动切了模式,
+到下一个边界(:meth:`ArmingSchedule.next_boundary`)之前按手动;临时撤防到点回时间表。
 
 - 防区有自己的段用自己的;没有用 ``''`` 的;都没有 → 布防(没配过一律布防,跟 ``modes`` 同一条规矩)。
-- 时间表开着、一段都没画 → 全天撤防(业主画的就是这样)。
+- 时间表开着、一段都没画 → 全天撤防(管理员画的就是这样)。
 - 24:00 按明天 0 点算(``datetime.combine`` 下一天);夏令时那一天按墙上的钟。
 """
 
@@ -144,7 +145,7 @@ class ArmingSchedule:
         if ex is not None:
             return ex == "armed"
         if not slots:
-            return False                        # 开着、一段都没画:业主画的就是全天撤防
+            return False                        # 开着、一段都没画:管理员画的就是全天撤防
         mine = [s for s in slots if zone and s["zone"] == zone]
         if not mine:
             mine = [s for s in slots if s["zone"] == ""]

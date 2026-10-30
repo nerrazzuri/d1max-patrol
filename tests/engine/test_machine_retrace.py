@@ -177,8 +177,8 @@ async def test_没返航的一趟_returned是空的(make_engine, nav, device):
     await engine.aclose()
 
 
-async def test_回家这一趟本身_电量到返航线接着往前走_到中止线才停(make_engine, nav, device):
-    """站点的回程巡检(``on_battery_low: continue``):剩下的路就是回家的路。以前电量到线,引擎
+async def test_回原点这一趟本身_电量到返航线接着往前走_到中止线才停(make_engine, nav, device):
+    """站点的回程巡检(``on_battery_low: continue``):剩下的路就是回原点的路。以前电量到线,引擎
     按「从原点出发」倒着走 —— 往远端走、离家更远(内审阻断 2)。"""
     _拒返航(nav)
     _按脚本(nav, [ARRIVED, NEVER])
@@ -194,7 +194,7 @@ async def test_回家这一趟本身_电量到返航线接着往前走_到中止
     await engine.aclose()
 
 
-async def test_回家这一趟本身_低于中止线照样原地停(make_engine, nav, device):
+async def test_回原点这一趟本身_低于中止线照样原地停(make_engine, nav, device):
     _按脚本(nav, [ARRIVED, NEVER])
     engine = make_engine()
     await engine.start(_三点(on_battery_low="continue"), home=_HOME)
@@ -206,9 +206,9 @@ async def test_回家这一趟本身_低于中止线照样原地停(make_engine,
 
 
 @pytest.mark.parametrize("kind,该返航", [("planned", False), ("straight", True)])
-async def test_直线后端_回家的电按沿来路的长度估(make_engine, nav, device, kind, 该返航):
-    """直线后端回家是沿来路倒着走,比直线远得多;返航线按直线估的话掉头太晚,回程走到一半碰中止线。
-    场景:200 m 出去、再折回到原点边上的长 U 形,正往最后一个点走 —— 直线回家 1.4 m(成本取地板
+async def test_直线后端_回原点的电按沿来路的长度估(make_engine, nav, device, kind, 该返航):
+    """直线后端回原点是沿来路倒着走,比直线远得多;返航线按直线估的话掉头太晚,回程走到一半碰中止线。
+    场景:200 m 出去、再折回到原点边上的长 U 形,正往最后一个点走 —— 直线回原点 1.4 m(成本取地板
     3%),沿来路 400 m(约 8.7%)。电量 30%:按直线估返航线 28%,不回;按来路估 33.7%,该回了。"""
     wps = tuple(MissionWaypoint(name=n, pose=_p(x, y))
                 for n, x, y in (("A", 200.0, 0.0), ("B", 200.0, 1.0), ("C", 1.0, 1.0)))

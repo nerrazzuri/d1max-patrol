@@ -19,7 +19,7 @@ beforeEach(() => {
     const u = new URL(url, "https://site");
     if (u.pathname === "/api/alerts") {
       return Promise.resolve(json({ alerts: [
-        { key: "a", kind: "intrusion", level: "P1", robot: "A", title: "后花园有人闯入", detail: "", first_ms: at + 30_000, last_ms: at + 30_000,
+        { key: "a", kind: "intrusion", level: "P1", robot: "A", title: "北区有人闯入", detail: "", first_ms: at + 30_000, last_ms: at + 30_000,
           count: 1, acked_by: "", acked_ms: null, resolved_ms: null, audience: "intrusion" },
         { key: "b", kind: "stuck", level: "P2", robot: "B", title: "被挡", detail: "", first_ms: at + 600_000, last_ms: at + 600_000,
           count: 1, acked_by: "", acked_ms: null, resolved_ms: null, audience: "help" },
@@ -61,7 +61,7 @@ describe("录像页", () => {
     await waitFor(() => expect(c.querySelector(".recpip video")?.getAttribute("src")).toBe("/api/recordings/2/video"));
   });
 
-  it("保安没有导出按钮,业主有", async () => {
+  it("保安没有导出按钮,管理员有", async () => {
     const g = page("guard");
     await waitFor(() => expect(g.container.querySelector("video.feed")).not.toBeNull());
     expect(btn(g.container, "导出这一段")).toBeUndefined();

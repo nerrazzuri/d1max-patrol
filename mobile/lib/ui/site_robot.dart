@@ -1,6 +1,6 @@
 /// 单狗页（W00c4）：状态、派巡检、叫停、回待命点、遥控、画面，管理员的录包、标原点。
 ///
-/// **按钮按角色显示**：业主（owner）只有「叫停」；保安（guard）与管理员（admin）能派单。真正的
+/// **按钮按角色显示**：经理（owner）只有「叫停」；保安（guard）与管理员（admin）能派单。真正的
 /// 权限在站点上（站点回 403），这里只是不给人一个注定被拒的按钮。
 library;
 
@@ -586,7 +586,7 @@ class _SiteRobotPageState extends State<SiteRobotPage> {
         Padding(padding: const EdgeInsets.only(top: Nw.s8), child: NwNotice(text: _msg!, tone: NwTone.neutral)),
       const SizedBox(height: Nw.s16),
     ];
-    // 画面经站点来（W00c5b）：谁都能看（业主也是），站点那头有人看才让狗推。
+    // 画面经站点来（W00c5b）：谁都能看（经理也是），站点那头有人看才让狗推。
     final facts = <Widget>[
       SiteVideo(api: widget.api, robotId: widget.robotId),
       const SizedBox(height: Nw.s16),

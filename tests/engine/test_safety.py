@@ -180,7 +180,7 @@ def test_中止线优先于返航线(ctx):
     assert battery_ruling(replace(c, battery_pct=10.0)).decision is Decision.ABORT
 
 
-def test_返航线是中止线加上回家的成本():
+def test_返航线是中止线加上回原点的成本():
     ctx = SafetyContext(policy=Policy(battery_return_pct=25.0, battery_abort_pct=25.0),
                         battery_pct=80.0, return_cost_pct=8.0)
     assert return_line_pct(ctx) == pytest.approx(33.0)
@@ -224,15 +224,15 @@ def test_返航的理由里要说清楚是按多远算的():
     assert "33" in reason, "人要能从这句话里看出返航线当时是多少"
 
 
-def test_动态那一支赢的时候理由里报的是中止线加回家():
+def test_动态那一支赢的时候理由里报的是中止线加回原点():
     ctx = SafetyContext(policy=Policy(battery_return_pct=25.0, battery_abort_pct=25.0),
                         battery_pct=30.0, return_cost_pct=8.0)
     reason = battery_ruling(ctx).reason
-    assert "中止线 25% + 回家 8%" in reason
+    assert "中止线 25% + 回原点 8%" in reason
 
 
-def test_静态下限赢的时候理由里不能再报中止线加回家():
-    """"低于返航线 60%(中止线 25% + 回家 3%)"—— 25 加 3 不等于 60。
+def test_静态下限赢的时候理由里不能再报中止线加回原点():
+    """"低于返航线 60%(中止线 25% + 回原点 3%)"—— 25 加 3 不等于 60。
 
     这句话是这一关唯一给人的解释,站在狗旁边的人读到它会以为程序算错了。
     """
@@ -240,11 +240,11 @@ def test_静态下限赢的时候理由里不能再报中止线加回家():
                         battery_pct=50.0, return_cost_pct=3.0)
     reason = battery_ruling(ctx).reason
     assert "静态下限 60%" in reason
-    assert "回家" not in reason, "静态下限赢的时候,回家成本没参与这条线"
+    assert "回原点" not in reason, "静态下限赢的时候,回原点成本没参与这条线"
 
 
 def test_返航成本没喂进来时退回静态返航线():
-    # return_cost_pct 默认 0 —— 那不是"回家不要钱",是"还没算出来"。
+    # return_cost_pct 默认 0 —— 那不是"回原点不要钱",是"还没算出来"。
     # 这时必须退回静态那条线,不能算出一条比中止线还低的返航线。
     ctx = SafetyContext(policy=Policy(battery_return_pct=25.0, battery_abort_pct=15.0),
                         battery_pct=24.0)
@@ -254,8 +254,8 @@ def test_返航成本没喂进来时退回静态返航线():
 
 def test_默认策略下返航线必须严格高于中止线():
     # 上面那条测试挑了 abort=15 / return=25 —— 静态那一支自己就高出中止线
-    # 10 个点,回家成本兜不兜底都看不出来。默认 Policy 才是出厂那一份:
-    # 两条线都是 25。回家成本按 0 用的话返航线就等于中止线,24.9% 判 ABORT、
+    # 10 个点,回原点成本兜不兜底都看不出来。默认 Policy 才是出厂那一份:
+    # 两条线都是 25。回原点成本按 0 用的话返航线就等于中止线,24.9% 判 ABORT、
     # 25.0% 判 CONTINUE,中间一格 RETURN_HOME 都没有 —— 那个分支是死代码。
     ctx = SafetyContext(policy=Policy(), battery_pct=26.0)
     assert Policy().battery_return_pct == Policy().battery_abort_pct, (
@@ -265,13 +265,13 @@ def test_默认策略下返航线必须严格高于中止线():
     assert battery_ruling(ctx).decision is Decision.RETURN_HOME
 
 
-def test_默认策略下返航那一格的理由报的是中止线加回家():
-    # 这一格是靠兜底的回家成本撑出来的,理由里就该说是中止线加回家,
+def test_默认策略下返航那一格的理由报的是中止线加回原点():
+    # 这一格是靠兜底的回原点成本撑出来的,理由里就该说是中止线加回原点,
     # 不能报成静态下限 —— 静态下限是 25,人读到"低于返航线 28%(静态下限
     # 25%)"会以为程序算错了。
     ctx = SafetyContext(policy=Policy(), battery_pct=26.0)
     reason = battery_ruling(ctx).reason
-    assert "中止线 25% + 回家 3%" in reason
+    assert "中止线 25% + 回原点 3%" in reason
 
 
 # ----------------------------------------------------------------------- 断连
@@ -322,7 +322,7 @@ def test_规则表不碰后端也不碰io():
         assert banned not in src, f"safety.py 里不该出现 {banned!r}"
 
 
-def test_回家成本的地板跟着引擎那份系数走():
+def test_回原点成本的地板跟着引擎那份系数走():
     """地板是可配的 —— ``ReturnParams`` 真机标定要改它。
 
     这里读死 ``DEFAULT_RETURN_PARAMS`` 的话,配了低地板的引擎在起飞门槛那边
@@ -335,24 +335,24 @@ def test_回家成本的地板跟着引擎那份系数走():
     assert return_line_pct(high) == pytest.approx(33.0)
 
 
-def test_返航理由里的回家成本印的是引擎那份地板():
+def test_返航理由里的回原点成本印的是引擎那份地板():
     """这句话是这一关唯一给人的解释。印一个 3% 而引擎按 8% 在算,站在狗
     旁边的人会照着那个数去判断还能撑多久。"""
     policy = Policy(battery_return_pct=25.0, battery_abort_pct=25.0)
     ctx = SafetyContext(policy=policy, battery_pct=30.0, floor_pct=8.0)
     r = battery_ruling(ctx)
     assert r.decision is Decision.RETURN_HOME
-    assert "回家 8%" in r.reason
+    assert "回原点 8%" in r.reason
 
 
-def test_回家这一趟本身_电量到返航线接着走(ctx):
-    """W00c6b 内审:站点的回程巡检剩下的路就是回家的路;电量到返航线不掉头(掉头是往远端走)。"""
+def test_回原点这一趟本身_电量到返航线接着走(ctx):
+    """W00c6b 内审:站点的回程巡检剩下的路就是回原点的路;电量到返航线不掉头(掉头是往远端走)。"""
     c = replace(ctx, policy=Policy(battery_return_pct=25.0, battery_abort_pct=15.0,
                                     on_battery_low="continue"))
     assert battery_ruling(replace(c, battery_pct=20.0)).decision is Decision.CONTINUE
 
 
-def test_回家这一趟本身_低于中止线照样中止(ctx):
+def test_回原点这一趟本身_低于中止线照样中止(ctx):
     c = replace(ctx, policy=Policy(battery_return_pct=25.0, battery_abort_pct=15.0,
                                     on_battery_low="continue"))
     assert battery_ruling(replace(c, battery_pct=14.0)).decision is Decision.ABORT

@@ -19,7 +19,7 @@ function errText(e: unknown): string {
   return t("failed", { why: e instanceof ApiError ? e.message : String(e) });
 }
 
-/** 模式给人看的名字(网页自己翻,站点的 label 只有中文):按时间表:布防 / 部分布防 / 撤防;手动的:布防 / 在家 / 访客。 */
+/** 模式给人看的名字(网页自己翻,站点的 label 只有中文):按时间表:布防 / 部分布防 / 撤防;手动的:布防 / 留守 / 临时撤防。 */
 export function modeLabel(m: { mode: string; source?: string; state?: string }): string {
   if (m.source === "schedule") {
     return t("armSched", { s: t(m.state === "armed" ? "armStArmed" : m.state === "disarmed" ? "armStDisarmed" : "armStPartial") });

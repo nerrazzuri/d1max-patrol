@@ -40,7 +40,7 @@ export function canReview(role: string): boolean {
   return role === "admin" || role === "engineer" || role === "guard";
 }
 
-/** 导出证据只给业主(最高权限)(站点 permissions.EXPORT)。 */
+/** 导出证据只给管理员(最高权限)(站点 permissions.EXPORT)。 */
 export function canExport(role: string): boolean {
   return role === "admin" || role === "engineer";
 }

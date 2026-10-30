@@ -123,10 +123,10 @@ async def test_位置不可信_有硬禁区就不横移(tmp_path):
 
 
 async def test_普通禁行区不管横移(tmp_path):
-    s = await 台(tmp_path, zones=[Zone("bed", "nogo", POOL, "花坛", hard=False)],
+    s = await 台(tmp_path, zones=[Zone("bed", "nogo", POOL, "高楼楼梯", hard=False)],
                 yaw=math.pi / 2).start()
     await s.开(vy=-0.3, secs=20.0)
-    assert s.r.x > 3.0, "人开的可以进花坛"
+    assert s.r.x > 3.0, "人开的可以进高楼楼梯"
 
 
 def test_遥控能力_能横移才报max_vy_是一半():

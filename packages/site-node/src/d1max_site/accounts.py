@@ -292,11 +292,11 @@ class Accounts:
 
     def remove(self, name: str) -> None:
         """删账号(W44 第二期):连它的会话、登记的手机一起删;做过的事还留在审计里。最后一个启用的
-        业主删不掉。"""
+        管理员删不掉。"""
         with self.db.tx() as c:
             row = self._get(c, name)
             if row["role"] == "admin" and not row["disabled"] and self._other_admins(c, name) == 0:
-                raise AuthError("这是最后一个启用的业主账号,不能删")
+                raise AuthError("这是最后一个启用的管理员账号,不能删")
             c.execute("DELETE FROM sessions WHERE name=?", (name,))
             _drop_push(c, name)
             c.execute("DELETE FROM accounts WHERE name=?", (name,))

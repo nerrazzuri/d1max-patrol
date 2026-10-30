@@ -1,6 +1,6 @@
 """名单第一版:时段 / 人员授权(商业化 B1c)。
 
-一条授权 = 谁(名字,比如「园丁」)、在哪(几个防区,或者全站)、星期几、几点到几点(站点本地时间,可以跨
+一条授权 = 谁(名字,比如「维修工」)、在哪(几个防区,或者全站)、星期几、几点到几点(站点本地时间,可以跨
 午夜)、有效到哪天(可选)。授权生效的时候:
 
 - 摄像头报的那个防区的入侵事件:只记录、不派狗(跟撤防一样,记下是谁的授权);
@@ -61,7 +61,7 @@ class AuthzBook:
             wday = self._local(now / 1000).tm_wday
             for e in out:
                 e["active_now"] = self._live(e, now)
-                # W44 第二期:今天(本地时间)有没有这一条的时间段(「家里的状况」今天的安排)
+                # W44 第二期:今天(本地时间)有没有这一条的时间段(「现场概况」今天的安排)
                 e["on_today"] = bool(e["days"] >> wday & 1) and (
                     e["until_ms"] is None or e["until_ms"] > now)
         return out
@@ -99,7 +99,7 @@ class AuthzBook:
             return c.execute("DELETE FROM authorizations WHERE id=?", (entry_id,)).rowcount > 0
 
     def end_now(self, entry_id: int, *, by: str) -> bool:
-        """此刻生效的那一段提前结束(W44 第二期,「授权和访客」页):这一段剩下的时间不算生效,
+        """此刻生效的那一段提前结束(W44 第二期,「授权和临时撤防」页):这一段剩下的时间不算生效,
         下一段照常。不在生效中(或没有这一条)回 ``False``。"""
         now = self._now()
         e = next((x for x in self.list() if x["id"] == entry_id), None)

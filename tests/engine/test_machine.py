@@ -346,7 +346,7 @@ async def test_飞行中的返航成本用的是引擎自己那份标定系数(m
     标定落地那天出发线换成了实测值,飞行中的返航线还留在默认值上,而今天
     两边都是默认值 —— 不一样的那天没有任何测试会红。
 
-    ``floor_pct=20`` 把回家成本顶到 20:返航线 15 + 20 = 35,35% 的电就该
+    ``floor_pct=20`` 把回原点成本顶到 20:返航线 15 + 20 = 35,35% 的电就该
     掉头;默认的 3.0 算出来是 18,同样的电只会 CONTINUE。
     """
     nav.on_goto = NEVER
@@ -687,7 +687,7 @@ async def test_引擎不认识HTTP(make_engine):
 async def test_后端不支持返航_引擎沿来路倒着回原点(make_engine, nav, device):
     """W04。自建导航(和仿真)的 ``return_home`` 是明确拒绝的,以前引擎收到这个
     拒绝就把整趟按「返航失败」中止 —— 低电时狗原地趴下。现在引擎自己回:已到过的
-    点位倒序走一遍,最后到原点。倒着走来路是为了不穿墙:直线回家会撞上中间的东西。
+    点位倒序走一遍,最后到原点。倒着走来路是为了不穿墙:直线回原点会撞上中间的东西。
 
     时序:P1 到了(index→1),P2 走不到(卡住),电量掉到返航线 → 引擎该发
     ``goto(P1)`` 再 ``goto(原点)``,而不是 ``return_home()``。
@@ -779,7 +779,7 @@ async def test_后端不支持返航_到过两个点就倒着走两段再回原�
 # --------------------------------------------------------------------- 上装过热(W46)
 
 
-async def test_上装严重过热_结束这一趟回家(make_engine, nav, device):
+async def test_上装严重过热_结束这一趟回原点(make_engine, nav, device):
     from d1max_patrol.backends.base import OverheatEvent
     nav.on_goto = NEVER
     engine = make_engine()

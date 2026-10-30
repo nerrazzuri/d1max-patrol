@@ -226,7 +226,7 @@ class _SiteRecordingsPageState extends State<SiteRecordingsPage> {
   @override
   Widget build(BuildContext context) {
     final c = Nw.of(context);
-    final canKeep = widget.api.session?.canReview ?? false; // 站点按 review 查（W20：业主能确认告警，但不能标留着）
+    final canKeep = widget.api.session?.canReview ?? false; // 站点按 review 查（W20：经理能确认告警，但不能标留着）
     final around = widget.aroundMs;
     return Scaffold(
       appBar: AppBar(title: Text(tr('${widget.robotId} · Recordings', '${widget.robotId} · 录像')), actions: [

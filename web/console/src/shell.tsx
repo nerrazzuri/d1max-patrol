@@ -11,7 +11,7 @@ import { Icon } from "./icons";
 import { canDispatch, isOwnerLike, type Mode } from "./model";
 
 export type GuardPage = "duty" | "live" | "map" | "recordings" | "alarms";
-/** 「管理」各页(W44 第二期,设计 §5):常用 = 家里的状况、布防时间、授权和访客、用户、机器人、报表;
+/** 「管理」各页(W44 第二期,设计 §5):常用 = 现场概况、布防时间、授权和临时撤防、用户、机器人、报表;
  *  布置、高级两组先挂现有页面(第三、四期重做)。 */
 export type AdminPage =
   | "admin/home" | "admin/arming" | "admin/access" | "admin/users" | "admin/robots" | "admin/reports"
@@ -60,7 +60,7 @@ export function isAdminPage(p: Page): p is AdminPage {
   return p.startsWith("admin/");
 }
 
-/** 角色的界面名字(设计 §3):admin 叫业主,现在的 owner 叫家人 / 只看,engineer 是工程师(临时)。 */
+/** 角色的界面名字(设计 §3):admin 叫管理员,owner 叫经理,engineer 是工程师(临时)。 */
 export function roleLabel(role: string): Key {
   return role === "admin" ? "roleOwner" : role === "guard" ? "roleGuard" : role === "engineer" ? "roleEngineer" : "roleFamily";
 }
@@ -86,7 +86,7 @@ export function pinFor(p: Page, pref: ThemePref, systemDark: boolean): "dark" | 
   return pref === "system" ? null : schemeFor(p, pref, systemDark);
 }
 
-/** 这个角色能不能开这一页(管理那几页要业主、家人、工程师;「用户」只有业主)。没权限的写清楚,不给空白页(演示站点实测查出)。 */
+/** 这个角色能不能开这一页(管理那几页要管理员、经理、工程师;「用户」只有管理员)。没权限的写清楚,不给空白页(演示站点实测查出)。 */
 export function pageAllowed(p: Page, role: string): boolean {
   if (!isAdminPage(p)) return true;
   if (p === "admin/users") return role === "admin";
@@ -248,7 +248,7 @@ function OwnPassword({ onClose, onDone }: { onClose: () => void; onDone: () => v
   );
 }
 
-/** 「管理」左边一列(设计 §5):三组,高级默认收着(在高级的页里就展开)。用户页只给业主(工程师不能管账号)。 */
+/** 「管理」左边一列(设计 §5):三组,高级默认收着(在高级的页里就展开)。用户页只给管理员(工程师不能管账号)。 */
 export function AdminNav({ page, notices, role }: { page: Page; notices: number; role: string }) {
   const inAdvanced = ADMIN_GROUPS[2].pages.some((p) => p.id === page) || page === "admin/mapedit";
   const [open, setOpen] = useState(inAdvanced);

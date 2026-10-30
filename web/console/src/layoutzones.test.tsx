@@ -26,9 +26,9 @@ beforeEach(() => {
 afterEach(cleanup);
 
 const data: LayerData = {
-  areas: [{ zone: "后花园", points: [[1, 1], [5, 1], [5, 5]] }], nav: null, routes: [], standby: [], robots: [],
+  areas: [{ zone: "北区", points: [[1, 1], [5, 1], [5, 5]] }], nav: null, routes: [], standby: [], robots: [],
   cameras: [{ name: "cam1", zone: "前门", onvif_url: "http://10.0.0.5/onvif", rtsp_url: "", username: "admin", has_password: true, motion: false },
-    { name: "cam2", zone: "后花园", onvif_url: "http://10.0.0.6/onvif", rtsp_url: "", username: "", has_password: false, motion: true }],
+    { name: "cam2", zone: "北区", onvif_url: "http://10.0.0.6/onvif", rtsp_url: "", username: "", has_password: false, motion: true }],
 };
 /** 假地图:一个按钮当点图(预览像素 10,20 → 地图 1,8)。 */
 const FakeMap = (o: OwnLayer) => <div class="fakemap"><button type="button" class="pick" onClick={() => o.onPick?.(10, 20)}>pick</button></div>;
@@ -44,17 +44,17 @@ describe("布置 → 防区", () => {
     fireEvent.click(btn(c, "画一个防区"));
     for (let i = 0; i < 3; i++) fireEvent.click(c.querySelector(".pick")!);
     fireEvent.click(btn(c, "画好了"));
-    fireEvent.input(document.querySelector('.modal input[name="zone"]')!, { target: { value: "车库" } });
+    fireEvent.input(document.querySelector('.modal input[name="zone"]')!, { target: { value: "A区" } });
     fireEvent.submit(document.querySelector(".modal form")!);
     expect(dirty).toBe(true);
-    expect(c.querySelector(".ly-side")!.textContent).toContain("车库");
+    expect(c.querySelector(".ly-side")!.textContent).toContain("A区");
     await save!();
-    expect(posted.find((p) => p.url === "/api/maps/home/3/areas")?.body).toEqual({ zone: "车库", points: [[1, 8], [1, 8], [1, 8]] });
+    expect(posted.find((p) => p.url === "/api/maps/home/3/areas")?.body).toEqual({ zone: "A区", points: [[1, 8], [1, 8], [1, 8]] });
   });
 
   it("选中改摄像头归属", async () => {
     const { container: c } = render(<ZonesTab {...props()} />);
-    fireEvent.click(btn(c, "后花园"));
+    fireEvent.click(btn(c, "北区"));
     const box = c.querySelector('.zone-cams input[value="cam1"]') as HTMLInputElement;
     expect(box.checked).toBe(false);
     expect((c.querySelector('.zone-cams input[value="cam2"]') as HTMLInputElement).checked).toBe(true);
@@ -62,17 +62,17 @@ describe("布置 → 防区", () => {
     expect(dirty).toBe(true);
     await save!();
     const p = posted.find((x) => x.url === "/api/admin/cameras")!.body;
-    expect(p).toMatchObject({ name: "cam1", zone: "后花园", edit: true, onvif_url: "http://10.0.0.5/onvif", username: "admin" });
+    expect(p).toMatchObject({ name: "cam1", zone: "北区", edit: true, onvif_url: "http://10.0.0.5/onvif", username: "admin" });
     expect(p).not.toHaveProperty("password");
   });
 
   it("删防区要确认", async () => {
     const { container: c } = render(<ZonesTab {...props()} />);
-    fireEvent.click(btn(c, "后花园"));
+    fireEvent.click(btn(c, "北区"));
     fireEvent.click(btn(c.querySelector(".ly-side")!, "删除"));
     fireEvent.click(btn(document.querySelector(".modal")!, "删除"));
-    expect(c.querySelector(".ly-side")!.textContent).not.toContain("后花园");
+    expect(c.querySelector(".ly-side")!.textContent).not.toContain("北区");
     await save!();
-    await waitFor(() => expect(posted.find((p) => p.url === "/api/maps/home/3/areas")?.body).toEqual({ zone: "后花园", remove: true }));
+    await waitFor(() => expect(posted.find((p) => p.url === "/api/maps/home/3/areas")?.body).toEqual({ zone: "北区", remove: true }));
   });
 });

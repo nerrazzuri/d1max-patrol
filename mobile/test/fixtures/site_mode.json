@@ -1,6 +1,6 @@
 {
   "default_armed": null,
-  "label": "访客",
+  "label": "临时撤防",
   "manual_until_ms": null,
   "mode": "visitor",
   "next_change_ms": 1793096458977,

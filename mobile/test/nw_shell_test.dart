@@ -74,7 +74,7 @@ void main() {
       await t.pumpWidget(Container());
     });
 
-    testWidgets('保安、业主：没有管理栏，那一栏是「更多」（版本、拦截点、摄像头、天气），没有站点体检', (t) async {
+    testWidgets('保安、管理员：没有管理栏，那一栏是「更多」（版本、拦截点、摄像头、天气），没有站点体检', (t) async {
       _size(t);
       for (final role in ['guard', 'owner']) {
         await _show(t, FakeApi(role));

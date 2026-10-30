@@ -1,7 +1,7 @@
 """值班日报(商业化 C-B3b):一段时间里告警、入侵事件、排程巡逻、运行记录各多少,多久有人确认、
 谁处理的。
 
-值班台的 Reports 页用:保安交班、给业主看。**只读库**,不改任何东西;数是按 SQL 数出来的(不截),
+值班台的 Reports 页用:保安交班、给管理员看。**只读库**,不改任何东西;数是按 SQL 数出来的(不截),
 明细每一样最多带 :data:`ROWS_MAX` 行,截了在回包里写明(``truncated``)。
 
 归到哪一段:告警按**第一次报**的时刻,入侵事件按站点**收到**的时刻,排程按**该跑**的时刻,证据归档按
@@ -149,7 +149,7 @@ _PATROL_OK = "(ack_result IS NULL OR ack_result NOT IN ('rejected', 'expired', '
 
 
 def summary(db: SiteDB, since_ms: Any, until_ms: Any, *, tz: tzinfo) -> dict[str, Any]:
-    """业主的报表页(W44 第二期,设计 §5.1「报表」):``[since, until)`` 里
+    """管理员的报表页(W44 第二期,设计 §5.1「报表」):``[since, until)`` 里
 
     - ``totals``:巡了多少趟(派出去、没被拒的巡逻)、出了几次事(有人闯入、起火过热)、其中误报几次
       (结论 ``false_alarm``)、机器人出问题几次(需要帮忙、掉线);

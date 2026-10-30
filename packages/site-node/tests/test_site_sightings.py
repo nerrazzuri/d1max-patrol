@@ -1,4 +1,4 @@
-"""狗没在驱离时自己看见人(W33,决策 48):布防时报 P1、一回只报一次、在家访客撤防不报、驱离中不报;
+"""狗没在驱离时自己看见人(W33,决策 48):布防时报 P1、一回只报一次、留守临时撤防撤防不报、驱离中不报;
 就地驱离。"""
 
 from __future__ import annotations
@@ -68,7 +68,7 @@ def test_一回看见只报一次_人走了才清_再看见再报_说不清不�
 
 
 @pytest.mark.parametrize("mode", ["home", "visitor"])
-def test_在家访客不报_切回布防人还在就报(台, mode):
+def test_留守临时撤防不报_切回布防人还在就报(台, mode):
     t = 台
     kw = {"zones": ["drive"], "minutes": 30} if mode == "visitor" else {}
     t.arming.set_mode(mode, by="olga", **kw)
@@ -147,7 +147,7 @@ def test_外审R2_部分布防_机器人在布防的门口看见人报P1(台):
     assert [a["kind"] for a in t.w.alerts.raised] == ["dog_sees_person"]
 
 
-def test_外审R2_在撤防的屋边不报_走进布防的门口就报(台):
+def test_外审R2_在撤防的建筑边不报_走进布防的门口就报(台):
     t = _分区台(台)
     _站在(t, 25, 4)
     t.d.persons("A", present=True, count=1)
@@ -160,7 +160,7 @@ def test_外审R2_在撤防的屋边不报_走进布防的门口就报(台):
 
 def test_外审R2_位置说不清_部分布防时宁可报(台):
     t = _分区台(台)
-    _站在(t, 25, 4)                                   # 最后报的位置在撤防的屋边,但已经过期
+    _站在(t, 25, 4)                                   # 最后报的位置在撤防的建筑边,但已经过期
     t.d.telemetry_at["A"] = t.ms[0] - 60_000
     t.d.persons("A", present=True, count=1)
     t.w.tick()
@@ -201,7 +201,7 @@ def test_外审R2_armed_now_给受力警报用(台):
     assert t.w.armed_now("A") is True
     _站在(t, 25, 4)
     assert t.w.armed_now("A") is False
-    t.arming.set_mode("home", by="olga")              # 手动在家:老约定,不报
+    t.arming.set_mode("home", by="olga")              # 手动留守:老约定,不报
     _站在(t, 3, 4)
     assert t.w.armed_now("A") is False
 

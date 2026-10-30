@@ -129,7 +129,7 @@ void main() {
       await t.pump();
       for (final st in ['untrusted', 'unsupported', 'blocked', 'inside']) {
         api.link!.ctl.add(<String, dynamic>{'kind': 'zone_guard', 'state': st,
-          'label': '后院游泳池旁边的那一片落差', 'max_vx': 0.2});
+          'label': '西区游泳池旁边的那一片落差', 'max_vx': 0.2});
         await t.pump();
         await t.pump();
         expect(t.takeException(), isNull, reason: st);
@@ -257,10 +257,10 @@ void main() {
       addTearDown(() => appLang.value = AppLang.zh);
       final api = FakeApi('admin')
         ..zonesView = <String, dynamic>{
-          'revision': 2, 'confirm_text': '水体、落差(台阶下沿、路缘、池边)、陡坡、花坛都已画成禁行区',
+          'revision': 2, 'confirm_text': '水池、高楼楼梯、陡坡、落差(路缘、池边)都已画成禁行区',
           'confirmed': {'revision': 2, 'by': 'alice', 'at_ms': 1, 'current': true, 'how': 'tighten'},
           'zones': <dynamic>[
-            {'id': 'pool', 'kind': 'nogo', 'label': '后院游泳池', 'hard': true,
+            {'id': 'pool', 'kind': 'nogo', 'label': '西区游泳池', 'hard': true,
               'until_ms': 1800000000000, 'polygon': [[0, 0], [1, 0], [1, 1]]},
           ],
           'previous': {'version': '7', 'revision': 9, 'zones': 4},

@@ -970,7 +970,7 @@ describe("地图与防区:换图后才回来的旧回包不进这张图;确认�
   it("弹框以后区域被人改了(同一个修订号、内容不一样也算):不确认,让人重看", async () => {
     installScreenCTM();
     const said: string[] = [];
-    const { posted } = abSite({ bAfter: () => ({ ...B7, zones: [] }) });   // 有人把花坛删了
+    const { posted } = abSite({ bAfter: () => ({ ...B7, zones: [] }) });   // 有人把高楼楼梯删了
     const r = render(<MapsZonesPage say={(s) => said.push(s)} />);
     await ready(r.container);
     fireEvent.change(r.getByLabelText("Map"), { target: { value: "B\u00001" } });   // 一开始选的是 A(列表最后一张)

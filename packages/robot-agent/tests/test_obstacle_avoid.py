@@ -803,7 +803,7 @@ async def test_S7_往前挪_按机身轮廓加σ查禁行区(tmp_path):
     from types import SimpleNamespace
     t = 台子(tmp_path, rear=True, cone=True)
     # 狗在 (3, 4) 朝 +x;禁行区在 y ≥ 4.3、x ≥ 4 —— 机身侧面离它 6 cm,中心线离 0.3 m
-    await t.nav.set_zones(_区域({"id": "bed", "kind": "nogo", "label": "花坛",
+    await t.nav.set_zones(_区域({"id": "bed", "kind": "nogo", "label": "高楼楼梯",
                                "polygon": [[4.0, 4.3], [6.0, 4.3], [6.0, 5.0], [4.0, 5.0]]}))
     await t.start(3.0, 4.0, yaw=0.0)
     await t.nav.goto(Pose.from_xy_yaw(3.0, 6.0))

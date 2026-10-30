@@ -96,7 +96,7 @@ async def test_电量到线_引擎沿来路回原点_不走直线(台子):
     assert near_b < 0.3, "回程先回 B(内审:以前跳过 B 直奔 A 也是绿的)"
     near_a = min(math.hypot(x - 3.0, y) for x, y in track)
     assert near_a < 0.3, "回程经过了 A(沿来路)"
-    # 直线回家会经过 L 的内角(返航起点与原点连线的中点附近)。
+    # 直线回原点会经过 L 的内角(返航起点与原点连线的中点附近)。
     mid = (returned_at[0] / 2, returned_at[1] / 2)
     assert min(math.hypot(x - mid[0], y - mid[1]) for x, y in track) > 1.0, "没有斜穿内角"
 

@@ -544,7 +544,7 @@ describe("地图页:点一点去这里 / 设位置,发出去的就是点的坐�
     expect(Object.keys(posted[0].body).sort()).toEqual(["map_id", "map_version", "x", "y", "yaw"]);
   });
 
-  it("业主、没带角色的看不到这套工具,点图也不选位置", async () => {
+  it("管理员、没带角色的看不到这套工具,点图也不选位置", async () => {
     installScreenCTM();
     for (const role of ["owner", ""]) {
       const { r } = mapPage(META, role);

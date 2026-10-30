@@ -227,7 +227,7 @@ class 故障:
     ),
     故障(
         名字="超时",
-        现场="机器人在地下车库,4G 信号弱,30 秒内没等到回应",
+        现场="机器人在地下A区,4G 信号弱,30 秒内没等到回应",
         装opener=lambda: _抛的opener(TimeoutError("timed out")),
         预期="SinkError",
     ),

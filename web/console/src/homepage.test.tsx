@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-// W44 第二期「家里的状况」(设计 §5.0):要你处理的事(没有就整块不显示)、今天的安排(布防时间、今天的授权、访客到几点、切模式)、
+// W44 第二期「现场概况」(设计 §5.0):要你处理的事(没有就整块不显示)、今天的安排(布防时间、今天的授权、临时撤防到几点、切模式)、
 // 机器人小卡片、这周比上周。
 import { cleanup, fireEvent, render, waitFor } from "@testing-library/preact";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -26,17 +26,17 @@ beforeEach(() => {
   week = { patrols: 20, incidents: 3, false_alarms: 1, robot_problems: 0 };
   lastWeek = { patrols: 18, incidents: 1, false_alarms: 1, robot_problems: 2 };
   schedule = { enabled: true, slots: [], exceptions: [], today: [{ zone: "", windows: [["00:00", "07:00"], ["22:00", "24:00"]] },
-    { zone: "后花园", windows: [["20:00", "24:00"]] }] };
+    { zone: "北区", windows: [["20:00", "24:00"]] }] };
   setFetch(((url: string) => {
     if (url.startsWith("/api/arming/schedule")) return Promise.resolve(json(schedule));
     if (url.startsWith("/api/lists/authorizations")) {
       return Promise.resolve(json({ authorizations: [
-        { id: 1, name: "园丁", zones: ["后花园"], days: 127, start: "09:00", end: "18:00", until_ms: null, note: "", created_by: "o", active_now: true, on_today: true },
+        { id: 1, name: "维修工", zones: ["北区"], days: 127, start: "09:00", end: "18:00", until_ms: null, note: "", created_by: "o", active_now: true, on_today: true },
         { id: 2, name: "保洁", zones: [], days: 96, start: "09:00", end: "12:00", until_ms: null, note: "", created_by: "o", active_now: false, on_today: false },
       ] }));
     }
     if (url.startsWith("/api/robots/overview")) {
-      return Promise.resolve(json({ robots: [{ robot_id: "A", name: "前院", revoked: false, expires_at: 0, online: true, battery_pct: 80, patrols_today: 4,
+      return Promise.resolve(json({ robots: [{ robot_id: "A", name: "南区", revoked: false, expires_at: 0, online: true, battery_pct: 80, patrols_today: 4,
         problems: [], recent_problems: [], agent: "1", compat: "ok", manual_only: false }] }));
     }
     if (url.startsWith("/api/reports/summary")) {
@@ -57,7 +57,7 @@ const page = (alerts: Alert[] = [], m: Mode | null = mode, on: Partial<Record<"a
     onDone={(on.done ?? (() => {})) as (a: Alert) => void} onMode={(on.mode ?? (() => {})) as (m: Mode["mode"]) => void} />);
 const btn = (root: Element, text: string) => Array.from(root.querySelectorAll("button")).find((b) => b.textContent?.trim() === text) as HTMLButtonElement;
 
-describe("家里的状况", () => {
+describe("现场概况", () => {
   it("没有要处理的事,整块不显示", async () => {
     const { container: c } = page([alert({ kind: "stuck", audience: "help" })]);
     await waitFor(() => expect(c.querySelector(".home-today")).not.toBeNull());
@@ -82,17 +82,17 @@ describe("家里的状况", () => {
 
   it("今天的安排:按防区的时间、今天的授权、谁说了算", async () => {
     const { container: c } = page();
-    await waitFor(() => expect(c.querySelector(".home-today")!.textContent).toContain("园丁"));
+    await waitFor(() => expect(c.querySelector(".home-today")!.textContent).toContain("维修工"));
     const s = c.querySelector(".home-today")!.textContent!;
     expect(s).toContain("00:00–07:00");
     expect(s).toContain("22:00–24:00");
-    expect(s).toContain("后花园");
+    expect(s).toContain("北区");
     expect(s).toContain("09:00–18:00");
     expect(s).not.toContain("保洁");
     expect(s).toContain("22:00");
   });
 
-  it("访客开着写到几点", async () => {
+  it("临时撤防开着写到几点", async () => {
     const { container: c } = page([], { mode: "visitor", until_ms: new Date(2026, 9, 28, 18).getTime(), visitor_zones: ["前门"] } as Mode);
     await waitFor(() => expect(c.querySelector(".home-today")!.textContent).toContain("18:00"));
   });
@@ -100,7 +100,7 @@ describe("家里的状况", () => {
   it("切模式交出去(确认在外面)", async () => {
     const m = vi.fn();
     const { container: c } = page([], mode, { mode: m });
-    fireEvent.click(btn(c.querySelector(".home-today")!, "在家"));
+    fireEvent.click(btn(c.querySelector(".home-today")!, "留守"));
     expect(m).toHaveBeenCalledWith("home");
   });
 
@@ -109,7 +109,7 @@ describe("家里的状况", () => {
     await waitFor(() => expect(c.querySelector(".home-robots a")).not.toBeNull());
     const a = c.querySelector(".home-robots a")!;
     expect(a.getAttribute("href")).toBe("#/admin/robots");
-    expect(a.textContent).toContain("前院");
+    expect(a.textContent).toContain("南区");
     expect(a.textContent).toContain("80%");
   });
 

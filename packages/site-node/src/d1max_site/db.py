@@ -327,7 +327,7 @@ CREATE TABLE IF NOT EXISTS nav_zone_proposals (
     closed_ms    INTEGER,
     PRIMARY KEY (map_id, map_version)
 );
--- W20:全站一个当前模式(一行);在家时撤防的防区(没有这一行的防区一律布防)。
+-- W20:全站一个当前模式(一行);留守时撤防的防区(没有这一行的防区一律布防)。
 CREATE TABLE IF NOT EXISTS site_mode (
     id            INTEGER PRIMARY KEY CHECK (id = 1),
     mode          TEXT NOT NULL,
@@ -786,7 +786,7 @@ _ADDED_COLUMNS = (
     ("accounts", "last_login_ms", "INTEGER"),
     # 时间表开着时手动切的模式管到几点(空 = 不在手动期,按时间表)。
     ("site_mode", "manual_until_ms", "INTEGER"),
-    # 业主给机器人起的名字(空 = 用编号)。
+    # 管理员给机器人起的名字(空 = 用编号)。
     ("robots", "display_name", "TEXT NOT NULL DEFAULT ''"),
     # 授权提前结束:这个时刻之前不算生效(这一段结束时刻;下一段照常)。
     ("authorizations", "ended_until_ms", "INTEGER"),

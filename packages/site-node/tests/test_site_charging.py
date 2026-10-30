@@ -211,9 +211,9 @@ def test_接口_看桩_管理员在这儿设桩_删桩_保安只能看(tmp_path)
 
 async def test_电量在返航线下面_去桩前的路上不掉头回原点(站):
     t = 站
-    t.dog.inject_battery(26.5)                            # 高于中止线 25%,低于返航线(25% + 回家)
+    t.dog.inject_battery(26.5)                            # 高于中止线 25%,低于返航线(25% + 回原点)
     await _跑(t, 40)
-    assert abs(t.dog.x - CHARGER[0]) < 0.3, "去充是回家的路:接着走到桩前"
+    assert abs(t.dog.x - CHARGER[0]) < 0.3, "去充是回原点的路:接着走到桩前"
     assert _cmds(t, "dock")
 
 

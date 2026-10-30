@@ -28,7 +28,7 @@ export function saveLayers(s: Set<Layer>): void {
   }
 }
 
-/** 多久没机器人去过算「没巡过」的默认(设计 §11 第 4 条);业主在「布防时间」页改(站点 /api/duty-settings)。 */
+/** 多久没机器人去过算「没巡过」的默认(设计 §11 第 4 条);管理员在「布防时间」页改(站点 /api/duty-settings)。 */
 export const STALE_AFTER_MS = 2 * 3_600_000;
 
 /** 站点设的小时数换成毫秒;没拿到用默认。 */
@@ -73,7 +73,7 @@ export interface ModeView {
 
 export interface AuthzRow { name: string; zones: string[]; end: string; active_now?: boolean }
 
-/** 防区图层上的标签和颜色:布防 / 撤防 / 访客模式到几点,加上此刻生效的授权。 */
+/** 防区图层上的标签和颜色:布防 / 撤防 / 临时撤防到几点,加上此刻生效的授权。 */
 export function zoneDecor(zone: string, mode: ModeView | null, authz: AuthzRow[]): { label: string; tone: "armed" | "off" } {
   const z = mode?.zones?.find((x) => x.zone === zone);
   const armed = z ? z.armed : true;                 // 没配过的防区一律布防(站点 modes 同一条规矩)

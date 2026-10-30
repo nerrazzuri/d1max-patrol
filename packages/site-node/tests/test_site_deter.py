@@ -1,4 +1,4 @@
-"""上装(W21):手机 → 站点 → 代理 → 仿真狗的上装。真 HTTP、真代理。保安、管理员能用,业主不能;
+"""上装(W21):手机 → 站点 → 代理 → 仿真狗的上装。真 HTTP、真代理。保安、管理员能用,管理员不能;
 喇叭的优先级由站点定(请求体里的不认);没装上装的狗回 409;关永远放行;进审计。"""
 
 from __future__ import annotations
@@ -43,7 +43,7 @@ def test_保安开警笛_狗上开了_到点自己关_进审计(站点):
     assert rows and rows[-1]["actor"] == "gina" and rows[-1]["detail"]["output"] == "siren"
 
 
-def test_业主不能用_没登录401_载荷不对400(站点):
+def test_管理员不能用_没登录401_载荷不对400(站点):
     s = 站点
     olga, gina = _登(s, "olga"), _登(s, "gina")
     _新鲜(s, gina)

@@ -236,7 +236,7 @@ def test_站点到狗的帧断了_狗在帧有效期里自己停(站点):
     ph.close()
 
 
-def test_业主不能遥控_没登录401(站点):
+def test_管理员不能遥控_没登录401(站点):
     s = 站点
     olga = _登(s, "olga")
     _新鲜(s, olga)
@@ -299,7 +299,7 @@ def test_狗这头没在推流_帧到了也不动(站点):
     ph.close()
 
 
-def test_halt不走遥控连接_业主也能按_遥控跟着结束(站点):
+def test_halt不走遥控连接_管理员也能按_遥控跟着结束(站点):
     s = 站点
     tok, olga = _登(s), _登(s, "olga")
     _新鲜(s, tok)

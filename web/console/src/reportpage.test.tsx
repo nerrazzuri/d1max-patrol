@@ -24,7 +24,7 @@ function summaryFor(url: string) {
       patrols: 2, incidents: d.getDate() === 27 ? 2 : 0, false_alarms: d.getDate() === 27 ? 1 : 0, robot_problems: 0 });
   }
   return { since_ms: since, until_ms: until, totals: { patrols: 2 * days.length, incidents: 2, false_alarms: 1, robot_problems: 0 }, days,
-    events: [{ key: "i1", kind: "intrusion", level: "P1", robot: "A", title: "后花园有人闯入", first_ms: day0(2026, 10, 27) + 3_600_000,
+    events: [{ key: "i1", kind: "intrusion", level: "P1", robot: "A", title: "北区有人闯入", first_ms: day0(2026, 10, 27) + 3_600_000,
       verdict: "false_alarm", resolved_by: "gina", audience: "intrusion" },
     { key: "s1", kind: "intrusion_unanswered", level: "P1", robot: "site", title: "前门有入侵", first_ms: day0(2026, 10, 27) + 7_200_000,
       verdict: "intruder", resolved_by: "g1", audience: "intrusion", zone: "前门" },

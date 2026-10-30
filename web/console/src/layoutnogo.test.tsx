@@ -51,13 +51,13 @@ describe("布置 → 禁行区", () => {
   it("画禁行区_收紧当场生效", async () => {
     const { container: c } = render(<NogoTab {...props(nav())} />);
     draw(c, "画禁行区", 3);
-    fireEvent.input(document.querySelector('.modal input[name="label"]')!, { target: { value: "花坛" } });
+    fireEvent.input(document.querySelector('.modal input[name="label"]')!, { target: { value: "高楼楼梯" } });
     fireEvent.submit(document.querySelector(".modal form")!);
-    expect(c.querySelector(".ly-side")!.textContent).toContain("花坛");
+    expect(c.querySelector(".ly-side")!.textContent).toContain("高楼楼梯");
     await save!();
     const b = posted.find((p) => p.url === "/api/maps/home/3/zones")!.body;
     expect(b.base_revision).toBe(2);
-    expect((b.zones as { label: string }[]).map((z) => z.label)).toEqual(["泳池", "花坛"]);
+    expect((b.zones as { label: string }[]).map((z) => z.label)).toEqual(["泳池", "高楼楼梯"]);
     expect(reloaded).toContain("nav");
   });
 

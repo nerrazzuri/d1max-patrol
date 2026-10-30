@@ -41,7 +41,7 @@ Future<void> _robotPage(WidgetTester t, FakeApi api) async {
 }
 
 void main() {
-  testWidgets('单机器人页：保安、机器人报了上装才有入口；业主没有；机器人没装没有', (t) async {
+  testWidgets('单机器人页：保安、机器人报了上装才有入口；管理员没有；机器人没装没有', (t) async {
     await _robotPage(t, FakeApi('guard', robotView: _view()));
     expect(find.byKey(const Key('btn-deter')), findsOneWidget);
     await _robotPage(t, FakeApi('owner', robotView: _view()));

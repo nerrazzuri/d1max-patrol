@@ -1,6 +1,6 @@
 """W44 第二期:布防时间表(设计 §5.1「布防时间」、§11 第 5 条)。
 
-一周七天、每个防区的布防时间段,加例外日期;业主手动切了模式,到下一个时间段的边界之前以手动为准;访客到点
+一周七天、每个防区的布防时间段,加例外日期;管理员手动切了模式,到下一个时间段的边界之前以手动为准;临时撤防到点
 回时间表。时间按站点时区(这里一律吉隆坡;主机时区不管)。
 """
 
@@ -78,18 +78,18 @@ def test_时间段到2400(台):
 def test_防区有自己的段用自己的(台):
     sch = 台.schedule
     sch.put({"enabled": True, "slots": [slot(0, "00:00", "24:00"),
-                                        slot(0, "20:00", "24:00", "后花园"),
-                                        slot(0, "00:00", "06:00", "后花园")]}, by="alice")
-    assert sch.scheduled("后花园", kl(*MON, 12)) is False
-    assert sch.scheduled("后花园", kl(*MON, 21)) is True
+                                        slot(0, "20:00", "24:00", "北区"),
+                                        slot(0, "00:00", "06:00", "北区")]}, by="alice")
+    assert sch.scheduled("北区", kl(*MON, 12)) is False
+    assert sch.scheduled("北区", kl(*MON, 21)) is True
     assert sch.scheduled("前门", kl(*MON, 12)) is True
 
 
 def test_没配过的防区一律布防(台):
     sch = 台.schedule
-    sch.put({"enabled": True, "slots": [slot(0, "20:00", "22:00", "后花园")]}, by="alice")
-    assert sch.scheduled("车库", kl(*MON, 12)) is True
-    assert sch.scheduled("后花园", kl(*MON, 12)) is False
+    sch.put({"enabled": True, "slots": [slot(0, "20:00", "22:00", "北区")]}, by="alice")
+    assert sch.scheduled("A区", kl(*MON, 12)) is True
+    assert sch.scheduled("北区", kl(*MON, 12)) is False
 
 
 def test_例外两头都算(台):
@@ -170,10 +170,10 @@ def test_今天的安排(台):
     台.schedule.put({"enabled": True, "slots": [slot(0, "22:00", "24:00"),
                                                 slot(0, "00:00", "06:00"),
                                                 slot(1, "22:00", "24:00"),
-                                                slot(0, "20:00", "24:00", "后花园")]}, by="alice")
+                                                slot(0, "20:00", "24:00", "北区")]}, by="alice")
     today = 台.schedule.view()["today"]
     assert {"zone": "", "windows": [["00:00", "06:00"], ["22:00", "24:00"]]} in today
-    assert {"zone": "后花园", "windows": [["20:00", "24:00"]]} in today
+    assert {"zone": "北区", "windows": [["20:00", "24:00"]]} in today
 
 
 # ------------------------------------------------------------ 跟模式合起来
@@ -206,7 +206,7 @@ def test_手动切到下一个边界为止(台):
     assert 台.armed("前门") == (False, "schedule")
 
 
-def test_访客到点回时间表(台):
+def test_临时撤防到点回时间表(台):
     台.schedule.put({"enabled": True, "slots": [slot(0, "00:00", "24:00")]}, by="alice")
     台.clock.t = kl(*MON, 12)
     台.set_mode("home", by="olga")
@@ -220,7 +220,7 @@ def test_访客到点回时间表(台):
     assert 台.armed("前门") == (True, "schedule")
 
 
-def test_没开时间表_访客到点照旧退回(台):
+def test_没开时间表_临时撤防到点照旧退回(台):
     台.set_mode("home", by="olga")
     台.set_mode("visitor", by="olga", zones=["前门"], minutes=30)
     assert 台.view()["manual_until_ms"] is None
@@ -267,11 +267,11 @@ def test_手动期过了推一次(台):
 
 def test_view_state(台):
     台.schedule.put({"enabled": True, "slots": [slot(0, "00:00", "24:00"),
-                                                slot(0, "20:00", "24:00", "后花园")]}, by="alice")
-    台.set_zone_home("车库", False)        # 让「车库」成为已知防区(没自己的段 → 用 '' 那一份)
+                                                slot(0, "20:00", "24:00", "北区")]}, by="alice")
+    台.set_zone_home("A区", False)        # 让「A区」成为已知防区(没自己的段 → 用 '' 那一份)
     台.clock.t = kl(*MON, 12)
     v = 台.view()
-    assert {z["zone"]: z["armed"] for z in v["zones"]}["后花园"] is False
+    assert {z["zone"]: z["armed"] for z in v["zones"]}["北区"] is False
     assert v["state"] == "partial" and v["mode"] == "home"
     assert "按时间表" in v["label"]
     台.clock.t = kl(*MON, 21)

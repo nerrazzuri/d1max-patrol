@@ -1,4 +1,4 @@
-// 分级驱离（W22）：首页一场驱离一行、推的帧当场换；驱离页按角色出按钮（保安能跳级、业主只能解除）；
+// 分级驱离（W22）：首页一场驱离一行、推的帧当场换；驱离页按角色出按钮（保安能跳级、管理员只能解除）；
 // 跳级、解除；结束了说清楚。横屏 800×360。
 import 'package:d1max_patrol/ui/site_deterrence.dart';
 import 'package:d1max_patrol/ui/site_page.dart';
@@ -70,7 +70,7 @@ void main() {
     expect(find.text('没在驱离'), findsOneWidget);
   });
 
-  testWidgets('业主：只能解除，不能跳级', (t) async {
+  testWidgets('管理员：只能解除，不能跳级', (t) async {
     final api = FakeApi('owner')..deterRows = _rows();
     await _open(t, api);
     expect(find.byKey(SiteDeterrencePage.levelKey(3)), findsNothing);

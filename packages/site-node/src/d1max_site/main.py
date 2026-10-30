@@ -219,7 +219,7 @@ def cmd_vpn(home: Path, args: argparse.Namespace) -> None:
             if ext.is_file() and "IP:172.29.70.1" not in ext.read_text("utf-8"):
                 print("注意:站点证书里没有隧道地址 172.29.70.1(老站点建的),走隧道连会被拒。"
                       "d1max-site vpn reissue-cert 重签 —— 重签以后每部手机要重新添加站点。")
-            print(f"家里的路由器把 UDP {args.port} 转发到这台站点主机。"
+            print(f"现场的路由器把 UDP {args.port} 转发到这台站点主机。"
                   "装上:sudo apt install wireguard-tools,然后")
             print(apply.replace("站点配置改了:", "") + "(第一次用 enable --now)")
         elif args.vpn_cmd == "add":
@@ -1152,7 +1152,7 @@ class Server:
         """告警:每几秒看一次掉线、让 P1 未确认的升档。一拍炸了记下来、下一拍照走。
 
         系统审查 S06:**只对账、不等回执的**每拍直接做(掉线、P1 升档、受力报警、看见人、证据、
-        访客到点);**要等狗回执的**(驱离、回充、受力警笛、天气限速续发)各走各的道(:meth:`_lane`):上一轮还没跑完
+        临时撤防到点);**要等狗回执的**(驱离、回充、受力警笛、天气限速续发)各走各的道(:meth:`_lane`):上一轮还没跑完
         就这一轮跳过,不叠着跑、也不挡别人 —— 一台掉线的狗收尾等回执,不许拖住别的狗的受力报警、
         掉线检查、限速续期。"""
         from d1max_site.alert_sources import STEP_S
@@ -1168,7 +1168,7 @@ class Server:
                                      ("受力", "force", "reconcile"),             # W26
                                      ("证据没封", "evidence_watch", "tick"),     # W30b
                                      ("版本", "compat", "tick"),                 # A7
-                                     ("访客到点退回", "arming", "tick")):        # W20
+                                     ("临时撤防到点退回", "arming", "tick")):        # W20
                 try:
                     getattr(getattr(self, part), meth)()
                 except Exception:
@@ -1339,7 +1339,7 @@ def build_parser() -> argparse.ArgumentParser:
     vp = sub.add_parser("vpn", help="站点 VPN(W45,WireGuard):4G 下的机器人、外面的手机连回站点")
     vsub = vp.add_subparsers(dest="vpn_cmd", required=True)
     vi = vsub.add_parser("init", help="生成站点密钥、记下对外地址"
-                                      "(家里路由器把这个 UDP 端口转发到站点主机)")
+                                      "(现场路由器把这个 UDP 端口转发到站点主机)")
     vi.add_argument("--endpoint", required=True, help="机器人、手机从外面连站点用的域名或公网 IP")
     vi.add_argument("--port", type=int, default=51820)
     va = vsub.add_parser("add", help="加一台机器人或一部手机,写出它的配置文件")

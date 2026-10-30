@@ -57,7 +57,7 @@ def _get_raw(s, path, tok):
         return r.status, r.headers.get("Content-Type"), r.read()
 
 
-def test_业主看得到记录与照片_不能复核不能导出(站点):
+def test_管理员看得到记录与照片_不能复核不能导出(站点):
     s = 站点
     rid, photo = _传一趟(s)
     olga = _登(s, "olga")
@@ -172,7 +172,7 @@ def test_W30_看照片看记录记审计_10分钟内同一样只记一次_下载
     monkeypatch.setattr(api_mod, "VIEW_AUDIT_EVERY_MS", 0)
     _get_raw(s, f"/api/runs/{rid}/photos/{quote(name)}", gina)
     assert ("gina", "VIEW", f"run/{rid}/photo/{name}") in views()
-    # 标「留着」:保安能、业主不能
+    # 标「留着」:保安能、管理员不能
     assert s.req("POST", f"/api/runs/{rid}/keep", {"keep": True}, token=olga)[0] == 403
     code, d = s.req("POST", f"/api/runs/{rid}/keep", {"keep": True}, token=gina)
     assert code == 200 and d == {"id": rid, "keep": True}

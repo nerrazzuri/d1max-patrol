@@ -313,7 +313,7 @@ class FakeApi implements SiteApi {
       'patrols_paused': condition == 'storm'};
     return weatherView;
   }
-  /// 布防模式（W20）：默认用真站点的夹具（访客）；切、改防区记在 [calls] 里、照着改它。
+  /// 布防模式（W20）：默认用真站点的夹具（临时撤防）；切、改防区记在 [calls] 里、照着改它。
   Map<String, dynamic> modeView = Map<String, dynamic>.from(siteFixture('site_mode'));
   SiteError? modeError;
   @override
@@ -421,7 +421,7 @@ class FakeApi implements SiteApi {
   /// 区域（W10）：站点那一份；[zonesConflict] 给了就让下一次存回 409。
   Map<String, dynamic> zonesView = <String, dynamic>{
     'revision': 0, 'zones': <dynamic>[], 'confirmed': null,
-    'confirm_text': '水体、落差(台阶下沿、路缘、池边)、陡坡、花坛都已画成禁行区'};
+    'confirm_text': '水池、高楼楼梯、陡坡、落差(路缘、池边)都已画成禁行区'};
   bool zonesConflict = false;
   final List<List<Map<String, dynamic>>> savedZones = <List<Map<String, dynamic>>>[];
   @override
@@ -864,7 +864,7 @@ void main() {
     expect(api.calls.last, 'patrol A loop');
   });
 
-  testWidgets('业主：只有叫停', (t) async {
+  testWidgets('管理员：只有叫停', (t) async {
     final api = FakeApi('owner', robotView: busyView());
     await openRobot(t, api);
     expect(find.byKey(const Key('btn-patrol')), findsNothing);
@@ -886,7 +886,7 @@ void main() {
     expect(find.textContaining('看见 2 人'), findsOneWidget);
   });
 
-  testWidgets('被叫停了：说清楚，保安有「恢复」，业主没有', (t) async {
+  testWidgets('被叫停了：说清楚，保安有「恢复」，管理员没有', (t) async {
     final held = Map<String, dynamic>.of(siteFixture('site_robot'))
       ..['held'] = <String, dynamic>{'by': 'olga', 'at_ms': 1, 'reason': 'operator'};
     final guard = FakeApi('guard', robotView: held);
