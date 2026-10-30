@@ -542,3 +542,40 @@ async def test_比例上限给到1_旁路也报1才放_后退转向还是0点5()
         got = await hal.set_velocity(_v(vx=1.0))
         assert got.clamped and math.isclose(got.applied_vx, 0.6)
         assert math.isclose(_最后一条(sim, "vel")["fwd"], 0.5)
+
+
+# ------------------------------------------------------------ 横移(2026-10-30,遥控左杆左右)
+
+async def test_横移_配了换算才收_比例按换算_能力里报():
+    async with _台子(lateral_mps_per_unit=1.0) as (sim, hal):
+        caps = hal.hal_capabilities()
+        assert caps.lateral and math.isclose(caps.max_vy, 0.5)
+        r = await hal.set_velocity(_v(vy=0.3))
+        assert not r.rejected
+        assert math.isclose(_最后一条(sim, "vel")["lat"], 0.3)
+        r = await hal.set_velocity(_v(vy=-2.0))
+        assert r.clamped and math.isclose(_最后一条(sim, "vel")["lat"], -0.5)
+        await hal.stop()
+
+
+async def test_横移_没配换算照旧拒_能力不报():
+    async with _台子() as (sim, hal):
+        assert not hal.hal_capabilities().lateral
+        assert hal.hal_capabilities().max_vy == 0.0
+        assert (await hal.set_velocity(_v(vy=0.3))).reason == "no_lateral"
+
+
+async def test_横移_反过来的配置_调头时左右也反():
+    async with _台子(lateral_mps_per_unit=1.0, invert_lateral=True) as (sim, hal):
+        await hal.set_velocity(_v(vy=0.3))
+        assert math.isclose(_最后一条(sim, "vel")["lat"], -0.3)
+        sim.head = 2
+        assert await _等(lambda: _head(hal, "tail"))
+        await hal.set_velocity(_v(vy=0.3))
+        assert math.isclose(_最后一条(sim, "vel")["lat"], 0.3), "SDK 跟着调头:左右也反"
+        await hal.stop()
+
+
+def test_横移换算是负数_起不来():
+    with pytest.raises(ValueError):
+        D1MaxHal(lateral_mps_per_unit=-1.0)

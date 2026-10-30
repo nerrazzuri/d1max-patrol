@@ -92,6 +92,8 @@ INTAKE_PORT = 8444
 #: m/s)。
 D1MAX_DEFAULTS = {"sidecar": ("127.0.0.1", 8090), "mps_per_unit": 1.0, "radps_per_unit": 1.5,
                   "deadband": 0.2, "max_fraction": 0.5, "stopped_eps": 0.02, "fwd_offset": 0.0,
+                  # 横移(2026-10-30):横向比例 1.0 当 1.0 m/s 算(实际慢只是走得慢);0 = 不横移
+                  "lateral_mps_per_unit": 1.0,
                   # S11:旁路进程(协议 9)只收认证过的连接的运动命令;它起来时把令牌写在这
                   "sidecar_token_file": "~/.d1max/sidecar.token"}
 #: 换算系数的合理范围(W12 外审阻断):SDK 文档低速档 1.0 m/s、1.5 rad/s 上下。老模板照抄的 0.4 / 1.0
@@ -208,6 +210,10 @@ def build_parser() -> argparse.ArgumentParser:
     d1.add_argument("--stopped-eps", type=float, default=None,
                     help="里程速度低于它算停了(m/s、rad/s),默认 0.02;要大于站着时的噪声")
     d1.add_argument("--invert-yaw", action="store_true", help="转向方向跟 SDK 相反时翻过来")
+    d1.add_argument("--lateral-mps-per-unit", type=float, default=None,
+                    help="横移比例 1.0 对应的 m/s,默认 1.0;0 = 不横移(遥控左杆左右)")
+    d1.add_argument("--invert-lateral", action="store_true",
+                    help="横移方向跟 SDK 相反时翻过来(真机核:左杆往左推,机器人该往左走)")
     v = p.add_argument_group("视频经站点(W00c5b):站点要看时按需推 SRT")
     # 厂家文档写的 192.168.234.1 是 RK3588 的 WiFi 那一侧(遥控器、笔记本从那边看);代理跑在
     # Orin 上,到那个地址没有路由,要走有线的 192.168.168.168(2026-10-08 C40221 实测:前者不通,
@@ -382,6 +388,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     d1max_only = [k for k in D1MAX_DEFAULTS if getattr(args, k) is not None]
     if args.invert_yaw:
         d1max_only.append("invert_yaw")
+    if args.invert_lateral:
+        d1max_only.append("invert_lateral")
     if args.units_confirmed:
         d1max_only.append("units_confirmed")
     if args.hal == "d1max":
@@ -505,7 +513,7 @@ def build(args: argparse.Namespace) -> Assembled:
         if args.hal == "sim":
             from d1max_adapter_sim.robot import SimRobot
             from d1max_agent.bridges.sim_media import sim_media
-            hal: Any = SimRobot(now_ms=wall_ms, payload=args.sim_payload)
+            hal: Any = SimRobot(now_ms=wall_ms, payload=args.sim_payload, lateral=True)
             media = sim_media(wall_ms)
         else:
             from d1max_adapter_d1max.hal import D1MaxHal
@@ -521,6 +529,8 @@ def build(args: argparse.Namespace) -> Assembled:
                            radps_per_unit=args.radps_per_unit, deadband_mps=args.deadband,
                            max_fraction=args.max_fraction, fwd_offset=args.fwd_offset,
                            invert_yaw=args.invert_yaw,
+                           lateral_mps_per_unit=args.lateral_mps_per_unit,
+                           invert_lateral=args.invert_lateral,
                            stopped_eps=args.stopped_eps, now_ms=wall_ms, payload=payload,
                            token_file=args.sidecar_token_file)
             # 工单 18:到点拍照跟实时画面用同一套 RTSP 相机,每次 ffmpeg 抽一帧 JPEG

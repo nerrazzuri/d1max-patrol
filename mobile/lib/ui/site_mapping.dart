@@ -639,6 +639,15 @@ class SiteMapPreviewPage extends StatefulWidget {
   /// R2：确认一个区域都没有的那一版，多弹的那道提示上的「真的没有」。
   static const Key confirmEmptyKey = Key('zone-confirm-empty');
 
+  /// 2026-10-30 图铺满：右下的菜单按钮、菜单里的「确认」「区域列表与说明」、点开的说明栏和它的收起、
+  /// 左上的状态条（点了也开说明栏）。
+  static const Key menuKey = Key('zone-menu');
+  static const Key confirmMenuKey = Key('zone-menu-confirm');
+  static const Key infoKey = Key('zone-menu-info');
+  static const Key panelKey = Key('zone-panel');
+  static const Key panelCloseKey = Key('zone-panel-close');
+  static const Key statusKey = Key('zone-status');
+
   @override
   State<SiteMapPreviewPage> createState() => _SiteMapPreviewPageState();
 }
@@ -667,6 +676,10 @@ class _SiteMapPreviewPageState extends State<SiteMapPreviewPage> {
 
   /// 带过来的建议里勾上了哪几个（R2）：`zone:id`、`standby:狗/名字`、`intercept:名字`。
   final Set<String> _adopt = <String>{};
+
+  /// 菜单弹开没有；说明栏开着没有（告警现场带着标记进来就先开着：右栏最上面列着那几处）。
+  bool _menuOpen = false;
+  late bool _panelOpen = widget.marks.isNotEmpty;
 
   /// 预览 JSON，再取底图：站点给了平面图先取平面图，取不到退回栅格预览图（[loadMapBase]）。
   Future<(Map<String, dynamic>, Uint8List, bool)> _load() async {
@@ -937,13 +950,13 @@ class _SiteMapPreviewPageState extends State<SiteMapPreviewPage> {
             for (final a in geo.areas) (a.name, [for (final p in a.points) px(p.dx, p.dy)]),
           ];
           final c = Nw.of(context);
-          // 横屏：左边是图（能缩放），右边一栏是待命点、区域和比例。图按站点给的转角摆正：点图加顶点时
-          // 点下去的位置 Flutter 按同一个变换反算回图的像素（GestureDetector 在转过的那一层里头）。
-          // 打开时按有内容的范围放（台账 M7，[MapGeo.contentFit]：图按 k 缩放、往反方向挪，范围在正中；
-          // 站点没给范围就是整张图放进来，跟原来的 FittedBox 一个样）。
-          return Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-            Expanded(
-              child: LayoutBuilder(builder: (context, box) {
+          // 2026-10-30（用户）：图铺满整页（能缩放）；左上一条状态（第几版、确认没有），右下一个菜单按钮
+          // （画禁行区、限速区、虚拟墙、抹掉、确认、区域列表）；画的时候底下浮一条工具；比例、待命点、区域
+          // 列表这些点开才出来（横屏在右边、竖屏在下边）。图按站点给的转角摆正：点图加顶点时点下去的位置
+          // Flutter 按同一个变换反算回图的像素（GestureDetector 在转过的那一层里头）。打开时按有内容的
+          // 范围放（台账 M7，[MapGeo.contentFit]）。
+          final admin = widget.api.session?.canManageMaps ?? false;
+          final map = LayoutBuilder(builder: (context, box) {
                 final (k, shift) = geo.contentFit(box.biggest);
                 return InteractiveViewer(
                   transformationController: _zoom,
@@ -1007,9 +1020,8 @@ class _SiteMapPreviewPageState extends State<SiteMapPreviewPage> {
                     ),
                   ),
                 );
-              }),
-            ),
-            _sidePanel(context, [
+              });
+          final info = <Widget>[
                 for (final m in widget.marks)
                   Text('${m.label}  (${m.x.toStringAsFixed(1)}, ${m.y.toStringAsFixed(1)})',
                       style: TextStyle(color: m.color, fontWeight: FontWeight.bold)),
@@ -1045,12 +1057,177 @@ class _SiteMapPreviewPageState extends State<SiteMapPreviewPage> {
                       '(${(p['x'] as num).toStringAsFixed(1)}, ${(p['y'] as num).toStringAsFixed(1)})'),
                 const Divider(),
                 ..._zonePanel(zones),
-            ]),
-          ]);
+          ];
+          return LayoutBuilder(builder: (context, box) {
+            final wide = box.maxWidth > box.maxHeight;
+            return Stack(children: [
+              Positioned.fill(child: map),
+              // 画的时候不要：点图加点别点到它（底下那条工具已经说了画到第几个点）
+              if (_drawing == null)
+                Positioned(left: Nw.s8, top: Nw.s8, right: 72, child: _statusBar(c)),
+              if (_drawing != null)
+                Positioned(left: Nw.s8, right: Nw.s8, bottom: Nw.s8, child: _drawBar(c)),
+              if (_panelOpen)
+                wide
+                    ? Positioned(top: 0, bottom: 0, right: 0, width: math.min(340.0, box.maxWidth * 0.5),
+                        child: _infoPanel(c, info, wide: true))
+                    : Positioned(left: 0, right: 0, bottom: 0, height: box.maxHeight * 0.6,
+                        child: _infoPanel(c, info, wide: false)),
+              if (_drawing == null && !_panelOpen)
+                Positioned(
+                    right: Nw.s16, bottom: Nw.s16, child: _menu(c, admin, box.maxHeight - Nw.s16 * 2 - 64)),
+            ]);
+          });
         },
       ),
     );
   }
+
+  /// 左上那一条：第几版、确认没有（下发不了要一眼看见）；刚存、刚删的那句话跟在下面。点一下开区域列表。
+  Widget _statusBar(NwColors c) {
+    final conf = _zones?['confirmed'] as Map<String, dynamic>?;
+    final confirmed = conf != null && conf['current'] == true;
+    final text = _zones == null
+        ? (_zonesError != null ? tr('Zones unavailable', '区域取不到') : tr('Loading zones…', '区域取的中…'))
+        : confirmed
+            ? tr('Zones rev $_rev · confirmed', '区域第 $_rev 版 · 已确认')
+            : tr('Zones rev $_rev · not confirmed: cannot be sent to robots',
+                '区域第 $_rev 版 · 没确认：下发不了');
+    return Align(
+      alignment: Alignment.topLeft,
+      child: Material(
+        color: c.surface.withValues(alpha: 0.92),
+        shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(Nw.r8),
+            side: BorderSide(color: confirmed || _zones == null ? c.outline : c.warning)),
+        child: InkWell(
+          key: SiteMapPreviewPage.statusKey,
+          borderRadius: BorderRadius.circular(Nw.r8),
+          onTap: () => setState(() => _panelOpen = true),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: Nw.s8, vertical: Nw.s4 + 2),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+              Text(text,
+                  style: NwText.labelLarge.copyWith(
+                      color: confirmed || _zones == null ? c.text : c.warning, fontWeight: FontWeight.w600)),
+              if (_msg != null) Text(_msg!, style: NwText.bodySmall.copyWith(color: c.textSecondary)),
+            ]),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// 右下的菜单按钮：点开往上弹出几样（管理员才有画、确认）；再点一下或点了哪样就收起来。
+  /// 横屏手机上竖着放不下（[maxH] 是按钮上面还有多高）就往左再排一列。
+  Widget _menu(NwColors c, bool admin, double maxH) {
+    final conf = _zones?['confirmed'] as Map<String, dynamic>?;
+    final confirmed = conf != null && conf['current'] == true;
+    final canEdit = admin && _zones != null && !_busy;
+    Widget item(Key key, IconData icon, String label, VoidCallback? onTap, {bool primary = false}) =>
+        Padding(
+          padding: const EdgeInsets.only(bottom: Nw.s8),
+          child: Material(
+            color: primary ? c.primary : c.surface,
+            elevation: 3,
+            shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(24), side: BorderSide(color: c.outline)),
+            child: InkWell(
+              key: key,
+              borderRadius: BorderRadius.circular(24),
+              onTap: onTap == null
+                  ? null
+                  : () {
+                      setState(() => _menuOpen = false);
+                      onTap();
+                    },
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: Nw.s16, vertical: 10),
+                child: Row(mainAxisSize: MainAxisSize.min, children: [
+                  Icon(icon, size: 20, color: primary ? c.onPrimary : (onTap == null ? c.textSecondary : c.text)),
+                  const SizedBox(width: Nw.s8),
+                  Text(label,
+                      style: NwText.labelLarge.copyWith(
+                          color: primary ? c.onPrimary : (onTap == null ? c.textSecondary : c.text))),
+                ]),
+              ),
+            ),
+          ),
+        );
+    final items = <Widget>[
+        if (admin) ...[
+          item(SiteMapPreviewPage.drawNogoKey, Icons.block_rounded, tr('Draw no-go zone', '画禁行区'),
+              canEdit ? () => _startDrawing('nogo') : null),
+          item(SiteMapPreviewPage.drawSlowKey, Icons.speed_rounded, tr('Draw speed-limit zone', '画限速区'),
+              canEdit ? () => _startDrawing('slow') : null),
+          item(SiteMapPreviewPage.drawWallKey, Icons.fence_rounded, tr('Draw virtual wall', '画虚拟墙'),
+              canEdit ? () => _startDrawing('wall') : null),
+          item(SiteMapPreviewPage.drawEraseKey, Icons.layers_clear_rounded, tr('Erase a region', '抹掉一块'),
+              canEdit ? () => _startDrawing('erase') : null),
+          if (_zones != null && (!confirmed || _proposal != null))
+            item(SiteMapPreviewPage.confirmMenuKey, Icons.verified_rounded,
+                tr('Confirm revision $_rev', '确认第 $_rev 版'),
+                canEdit ? () => _proposal != null ? setState(() => _panelOpen = true) : _confirm() : null,
+                primary: true),
+        ],
+        item(SiteMapPreviewPage.infoKey, Icons.list_alt_rounded, tr('Zones and map info', '区域列表与说明'),
+            () => setState(() => _panelOpen = true)),
+    ];
+    return Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.end, children: [
+      if (_menuOpen)
+        ConstrainedBox(
+          constraints: BoxConstraints(maxHeight: math.max(56.0, maxH)),
+          // 从下往上排（第一样在最上面），一列放不下往左再起一列
+          child: Wrap(
+            direction: Axis.vertical,
+            verticalDirection: VerticalDirection.up,
+            textDirection: TextDirection.rtl,
+            crossAxisAlignment: WrapCrossAlignment.start,
+            runSpacing: Nw.s8,
+            children: items.reversed.toList(),
+          ),
+        ),
+      FloatingActionButton(
+        key: SiteMapPreviewPage.menuKey,
+        tooltip: tr('Menu', '菜单'),
+        onPressed: () => setState(() => _menuOpen = !_menuOpen),
+        child: Icon(_menuOpen ? Icons.close_rounded : Icons.menu_rounded),
+      ),
+    ]);
+  }
+
+  /// 点开的说明栏：比例、待命点、区域列表（删）、带过来的建议、确认。
+  Widget _infoPanel(NwColors c, List<Widget> children, {required bool wide}) => Material(
+        key: SiteMapPreviewPage.panelKey,
+        color: c.surface,
+        elevation: 8,
+        shape: wide
+            ? Border(left: BorderSide(color: c.outline))
+            : const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(Nw.r12))),
+        child: DefaultTextStyle.merge(
+          style: NwText.bodyMedium.copyWith(color: c.text),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(Nw.s16, Nw.s4, Nw.s4, 0),
+              child: Row(children: [
+                Expanded(child: Text(tr('Zones and map info', '区域列表与说明'), style: NwText.titleSmall)),
+                IconButton(
+                    key: SiteMapPreviewPage.panelCloseKey,
+                    tooltip: tr('Close', '收起'),
+                    icon: const Icon(Icons.close_rounded),
+                    onPressed: () => setState(() => _panelOpen = false)),
+              ]),
+            ),
+            const Divider(height: 1),
+            Expanded(
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.all(Nw.s8 + 4),
+                child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: children),
+              ),
+            ),
+          ]),
+        ),
+      );
 
   /// 临时区到期的时刻（决策 66），按手机的钟显示：` · 到 10-14 18:30`。
   static String _untilText(Object? untilMs) {
@@ -1110,6 +1287,106 @@ class _SiteMapPreviewPageState extends State<SiteMapPreviewPage> {
     ];
   }
 
+  /// 画的时候底下浮的那一条（两行，尽量少挡图）：一行是画到第几个点和完成 / 撤销一点 / 不画了，
+  /// 一行是硬禁区、到期、限速。半透明，图还看得见；点图加点照旧。
+  Widget _drawBar(NwColors c) {
+    final kind = _drawing!;
+    final hint = tr(
+        kind == 'wall'
+            ? 'Virtual wall: tap along the line, ${_draft.length} points so far'
+            : '${switch (kind) { 'nogo' => 'No-go zone', 'erase' => 'Erase', _ => 'Speed-limit zone' }}: '
+                'tap the map to add corners, ${_draft.length} so far',
+        kind == 'wall'
+            ? '虚拟墙：沿着墙点，已 ${_draft.length} 个'
+            : '${switch (kind) { 'nogo' => '禁行区', 'erase' => '抹掉', _ => '限速区' }}：点图加顶点，已 ${_draft.length} 个');
+    final small = NwText.bodySmall.copyWith(color: c.text);
+    return Material(
+      color: c.surface.withValues(alpha: 0.92),
+      elevation: 4,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(Nw.r12)),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(Nw.s8 + 4, Nw.s4, Nw.s8, Nw.s4),
+        child: DefaultTextStyle.merge(
+          style: NwText.bodyMedium.copyWith(color: c.text),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, mainAxisSize: MainAxisSize.min, children: [
+            Wrap(
+                spacing: Nw.s4,
+                runSpacing: 0,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                alignment: WrapAlignment.spaceBetween,
+                children: [
+                  Text(hint, style: NwText.labelLarge.copyWith(color: c.text)),
+                  Wrap(spacing: Nw.s4, crossAxisAlignment: WrapCrossAlignment.center, children: [
+                    FilledButton(
+                        key: SiteMapPreviewPage.finishKey,
+                        onPressed: _draft.length >= (kind == 'wall' ? 2 : 3) && !_busy ? _finish : null,
+                        child: Text(tr('Finish zone', '完成'))),
+                    OutlinedButton(
+                        key: SiteMapPreviewPage.undoKey,
+                        onPressed: _draft.isEmpty ? null : () => setState(_draft.removeLast),
+                        child: Text(tr('Undo point', '撤销一点'))),
+                    TextButton(
+                        key: SiteMapPreviewPage.cancelKey,
+                        onPressed: () => setState(() {
+                              _drawing = null;
+                              _draft.clear();
+                            }),
+                        child: Text(tr('Cancel', '不画了'))),
+                  ]),
+                ]),
+            Wrap(spacing: Nw.s16, runSpacing: 0, crossAxisAlignment: WrapCrossAlignment.center, children: [
+              if (kind == 'nogo' || kind == 'erase' || kind == 'wall')
+                InkWell(
+                  key: SiteMapPreviewPage.hardKey,
+                  onTap: () => setState(() => _hard = !_hard),
+                  child: Row(mainAxisSize: MainAxisSize.min, children: [
+                    Checkbox(value: _hard, onChanged: (v) => setState(() => _hard = v ?? false)),
+                    Flexible(
+                      child: Text(tr('Hard no-go (water, drops): remote control also keeps out',
+                          '硬禁区（水体、落差）：遥控也开不进去'), style: small),
+                    ),
+                  ]),
+                ),
+              Row(mainAxisSize: MainAxisSize.min, children: [
+                Text(tr('Expires: ', '到期：'), style: small),
+                DropdownButton<int?>(
+                    key: SiteMapPreviewPage.untilKey,
+                    value: _forS,
+                    isDense: true,
+                    onChanged: (s) => setState(() => _forS = s),
+                    items: [
+                      for (final (s, label) in [
+                        (null, tr('Never', '一直有效')),
+                        (3600, tr('In 1 h', '1 小时后')),
+                        (8 * 3600, tr('In 8 h', '8 小时后')),
+                        (86400, tr('In 1 day', '1 天后')),
+                        (7 * 86400, tr('In 7 days', '7 天后')),
+                      ])
+                        DropdownMenuItem<int?>(key: SiteMapPreviewPage.forKey(s), value: s, child: Text(label)),
+                    ]),
+              ]),
+              if (kind == 'slow')
+                SizedBox(
+                  width: 280,
+                  child: Row(children: [
+                    Text(tr('Limit ${_speed.toStringAsFixed(1)} m/s', '限速 ${_speed.toStringAsFixed(1)} m/s'),
+                        style: small),
+                    Expanded(
+                        child: Slider(
+                            value: _speed,
+                            min: 0.1,
+                            max: 1.0,
+                            divisions: 9,
+                            onChanged: (v) => setState(() => _speed = v))),
+                  ]),
+                ),
+            ]),
+          ]),
+        ),
+      ),
+    );
+  }
+
   List<Widget> _zonePanel(List<Map<String, dynamic>> zones) {
     final admin = widget.api.session?.canManageMaps ?? false;
     if (_zonesError != null) {
@@ -1162,26 +1439,8 @@ class _SiteMapPreviewPageState extends State<SiteMapPreviewPage> {
                                     '删了：第 $next 版（改过要重新确认）'));
                       }),
         ]),
-      if (_msg != null) Text(_msg!),
+      // 刚存、刚删的那句话在左上的状态条里（说明栏开不开都看得见）
       if (admin && _drawing == null) ...[
-        Wrap(spacing: 4, children: [
-          OutlinedButton(
-              key: SiteMapPreviewPage.drawNogoKey,
-              onPressed: _busy ? null : () => _startDrawing('nogo'),
-              child: Text(tr('Draw no-go zone', '画禁行区'))),
-          OutlinedButton(
-              key: SiteMapPreviewPage.drawSlowKey,
-              onPressed: _busy ? null : () => _startDrawing('slow'),
-              child: Text(tr('Draw speed-limit zone', '画限速区'))),
-          OutlinedButton(
-              key: SiteMapPreviewPage.drawWallKey,
-              onPressed: _busy ? null : () => _startDrawing('wall'),
-              child: Text(tr('Draw virtual wall', '画虚拟墙'))),
-          OutlinedButton(
-              key: SiteMapPreviewPage.drawEraseKey,
-              onPressed: _busy ? null : () => _startDrawing('erase'),
-              child: Text(tr('Erase a region', '抹掉一块'))),
-        ]),
         Text(
             tr('Adding or enlarging a zone, a lower limit or the hard mark takes effect at once. Deleting, '
                 'shrinking or raising a limit must be confirmed again before robots are sent out.',
@@ -1207,74 +1466,6 @@ class _SiteMapPreviewPageState extends State<SiteMapPreviewPage> {
                   ? tr('Confirm revision $_rev', '确认第 $_rev 版')
                   : tr('Confirm revision $_rev with the ticked items', '确认第 $_rev 版（带勾上的）'))),
         ],
-      ],
-      if (_drawing != null) ...[
-        Text(tr(
-            _drawing == 'wall'
-                ? 'Virtual wall: tap along the line, ${_draft.length} points so far'
-                : '${switch (_drawing) { 'nogo' => 'No-go zone', 'erase' => 'Erase', _ => 'Speed-limit zone' }}: '
-                    'tap the map to add corners, ${_draft.length} so far',
-            _drawing == 'wall'
-                ? '虚拟墙：沿着墙点，已 ${_draft.length} 个'
-                : '${switch (_drawing) { 'nogo' => '禁行区', 'erase' => '抹掉', _ => '限速区' }}：点图加顶点，已 ${_draft.length} 个')),
-        if (_drawing == 'nogo' || _drawing == 'erase' || _drawing == 'wall')
-          CheckboxListTile(
-              key: SiteMapPreviewPage.hardKey,
-              dense: true,
-              contentPadding: EdgeInsets.zero,
-              value: _hard,
-              onChanged: (v) => setState(() => _hard = v ?? false),
-              title: Text(tr('Hard no-go (water, drops): remote control also keeps out',
-                  '硬禁区（水体、落差）：遥控也开不进去'))),
-        Row(children: [
-          Text(tr('Expires: ', '到期：'), style: NwText.bodySmall),
-          Expanded(
-            child: DropdownButton<int?>(
-                key: SiteMapPreviewPage.untilKey,
-                isExpanded: true,
-                value: _forS,
-                onChanged: (s) => setState(() => _forS = s),
-                items: [
-                  for (final (s, label) in [
-                    (null, tr('Never', '一直有效')),
-                    (3600, tr('In 1 h', '1 小时后')),
-                    (8 * 3600, tr('In 8 h', '8 小时后')),
-                    (86400, tr('In 1 day', '1 天后')),
-                    (7 * 86400, tr('In 7 days', '7 天后')),
-                  ])
-                    DropdownMenuItem<int?>(
-                        key: SiteMapPreviewPage.forKey(s), value: s, child: Text(label)),
-                ]),
-          ),
-        ]),
-        if (_drawing == 'slow')
-          Row(children: [
-            Text(tr('Limit ${_speed.toStringAsFixed(1)} m/s', '限速 ${_speed.toStringAsFixed(1)} m/s')),
-            Expanded(
-                child: Slider(
-                    value: _speed,
-                    min: 0.1,
-                    max: 1.0,
-                    divisions: 9,
-                    onChanged: (v) => setState(() => _speed = v))),
-          ]),
-        Wrap(spacing: 4, children: [
-          FilledButton(
-              key: SiteMapPreviewPage.finishKey,
-              onPressed: _draft.length >= (_drawing == 'wall' ? 2 : 3) && !_busy ? _finish : null,
-              child: Text(tr('Finish zone', '完成'))),
-          OutlinedButton(
-              key: SiteMapPreviewPage.undoKey,
-              onPressed: _draft.isEmpty ? null : () => setState(_draft.removeLast),
-              child: Text(tr('Undo point', '撤销一点'))),
-          TextButton(
-              key: SiteMapPreviewPage.cancelKey,
-              onPressed: () => setState(() {
-                    _drawing = null;
-                    _draft.clear();
-                  }),
-              child: Text(tr('Cancel', '不画了'))),
-        ]),
       ],
     ];
   }

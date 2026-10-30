@@ -528,4 +528,66 @@ void main() {
     expect(api.link!.isClosed, isTrue);
     expect(api.link!.sent, <List<double>>[<double>[0, 0]]);
   });
+
+  // ------------------------------------------------------------ 横移（2026-10-30）
+
+  Future<void> openLateral(WidgetTester t, FakeApi api, {double maxVy = 0.25}) async {
+    await t.pumpWidget(MaterialApp(home: SiteTeleopPage(key: UniqueKey(), api: api, robotId: 'A')));
+    await t.pump();
+    api.link!.ctl.add(<String, dynamic>{'kind': 'granted', 'lease_epoch': 1, 'max_vx': 0.5,
+      'max_wz': 0.75, 'max_vy': maxVy});
+    await t.pump();
+    await t.pump();
+  }
+
+  testWidgets('横移：左杆往左推是往左（vy 为正），往右是负；不前后', (t) async {
+    final api = FakeApi('guard');
+    await openLateral(t, api);
+    final g = await t.startGesture(t.getCenter(find.byType(Joystick).at(0)));
+    await g.moveBy(const Offset(-200, 0));
+    await t.pump(const Duration(milliseconds: 250));
+    expect(api.link!.sentVy.last, closeTo(0.25, 1e-9));
+    expect(api.link!.sent.last, <double>[0, 0]);
+    await g.moveBy(const Offset(400, 0));
+    await t.pump(const Duration(milliseconds: 250));
+    expect(api.link!.sentVy.last, closeTo(-0.25, 1e-9));
+    await g.up();
+    await t.pump(const Duration(milliseconds: 150));
+    expect(api.link!.sentVy.last, 0);
+    expect(find.text('前后 · 横移'), findsOneWidget);
+    await t.pumpWidget(Container());
+  });
+
+  testWidgets('横移：机器人不能横移（没给 max_vy）就只走前后，左右推不发', (t) async {
+    final api = FakeApi('guard');
+    await _open(t, api);
+    final g = await t.startGesture(t.getCenter(find.byType(Joystick).at(0)));
+    await g.moveBy(const Offset(-200, 0));
+    await t.pump(const Duration(milliseconds: 250));
+    expect(api.link!.sentVy.every((v) => v == 0), isTrue);
+    expect(find.text('前后 · 横移'), findsNothing);
+    await g.up();
+    await t.pumpWidget(Container());
+  });
+
+  testWidgets('横移：键盘 Q 往左、E 往右，松开就停；跟 W 一起按只走大的那一个', (t) async {
+    final api = FakeApi('guard');
+    await openLateral(t, api);
+    await t.sendKeyDownEvent(LogicalKeyboardKey.keyQ);
+    await t.pump(const Duration(milliseconds: 250));
+    expect(api.link!.sentVy.last, closeTo(0.25, 1e-9));
+    await t.sendKeyUpEvent(LogicalKeyboardKey.keyQ);
+    await t.pump(const Duration(milliseconds: 250));
+    expect(api.link!.sentVy.last, 0);
+    await t.sendKeyDownEvent(LogicalKeyboardKey.keyE);
+    await t.sendKeyDownEvent(LogicalKeyboardKey.keyW);
+    await t.pump(const Duration(milliseconds: 250));
+    expect(api.link!.sent.last[0], closeTo(0.5, 1e-9), reason: '一样大：走前后');
+    expect(api.link!.sentVy.last, 0);
+    await t.sendKeyUpEvent(LogicalKeyboardKey.keyW);
+    await t.pump(const Duration(milliseconds: 250));
+    expect(api.link!.sentVy.last, closeTo(-0.25, 1e-9));
+    await t.sendKeyUpEvent(LogicalKeyboardKey.keyE);
+    await t.pumpWidget(Container());
+  });
 }

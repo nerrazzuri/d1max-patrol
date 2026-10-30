@@ -70,3 +70,30 @@ def test_遥控任务登记了资源与断线策略():
     assert conflicts("teleop", "patrol") and conflicts("teleop", "goto")
     assert policy_for("teleop").on_disconnect == "stop_and_wait"
     assert resources_for("halt") == frozenset()
+
+
+def test_遥控帧_横移_零不上线_非零来回一样_老帧没有当零():
+    from d1max_contract.teleop import TeleopFrame
+    f = TeleopFrame(lease_epoch=1, seq=2, sent_at=3, ttl_ms=300, vx=0.0, wz=0.0, vy=0.2)
+    assert TeleopFrame.from_wire(f.to_wire()) == f
+    z = TeleopFrame(lease_epoch=1, seq=2, sent_at=3, ttl_ms=300, vx=0.1, wz=0.0)
+    assert "vy" not in z.to_wire(), "老代理照旧收"
+    assert TeleopFrame.from_wire(z.to_wire()).vy == 0.0
+    with pytest.raises(ContractError):
+        TeleopFrame.from_wire({**f.to_wire(), "vy": float("nan")})
+
+
+def test_硬件能力_横移最快_能横移才上线_老的没有当零():
+    from d1max_contract.hal import HalCapabilities
+    base = {"max_vx": 1.0, "max_wz": 1.5, "deadband_vx": 0.05, "control_releasable": True,
+            "recharge_mode": "none",
+            "sensing": {"lidar": False, "depth": False, "thermal": False, "imu": False,
+                        "imu_hz": 0, "joint_effort": False, "foot_force": False},
+            "actuators": {k: False for k in ("light", "strobe", "siren", "speaker", "spotlight",
+                                             "head")}}
+    c = HalCapabilities.from_wire({**base, "lateral": True, "max_vy": 0.5})
+    assert c.max_vy == 0.5 and HalCapabilities.from_wire(c.to_wire()) == c
+    old = HalCapabilities.from_wire({**base, "lateral": False})
+    assert old.max_vy == 0.0 and "max_vy" not in old.to_wire()
+    with pytest.raises(ContractError):
+        HalCapabilities.from_wire({**base, "lateral": True, "max_vy": -1})

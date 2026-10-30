@@ -56,8 +56,11 @@ class SimRobot:
                  max_decel: float = math.inf, require_clearance: bool = False,
                  payload: bool = False,
                  charger: tuple[float, float, float] | None = None,
-                 charge_pct_per_h: float = 60.0, imu: bool = False) -> None:
+                 charge_pct_per_h: float = 60.0, imu: bool = False,
+                 lateral: bool = False, max_vy: float = 0.5) -> None:
         self._now = now_ms
+        #: 横移(2026-10-30):给了才收 ``vy``(机身系左为正),不给照旧拒 ``no_lateral``。
+        self.lateral, self.max_vy = lateral, max_vy
         #: 假 IMU(W26):给了才有(``imu()``、能力里报);姿态、撞击、腿上承重用 :meth:`inject_imu` 改。
         self._imu_on = imu
         self._roll = self._pitch = 0.0
@@ -90,7 +93,8 @@ class SimRobot:
         self._clear_until_ms = {"head": -1, "tail": -1}
         #: 分档许可(W47):两头各自许到多快(m/s;老许可不带 = 不限)。最新的那条说了算。
         self._clear_vmax: dict[str, float] = {"head": math.inf, "tail": math.inf}
-        self._pending: list[tuple[int, float, float, int]] = []    # (生效时刻, vx, wz, 截止)
+        #: (生效时刻, vx, wz, 截止, vy)
+        self._pending: list[tuple[int, float, float, int, float]] = []
         self._gait_left_s: float | None = None
         self._stop_latency_s = stop_latency_s
         self._frame = frame_id
@@ -108,6 +112,7 @@ class SimRobot:
         self.x = self.y = self.yaw = 0.0
         self._vx = self._wz = 0.0                 # 当前实际速度
         self._cmd_vx = self._cmd_wz = 0.0         # 最近一条有效命令
+        self._vy = self._cmd_vy = 0.0             # 横移(只在 lateral 时非零;不建模刹车)
         self._cmd_deadline_ms: int | None = None
         self._stopping_left_s: float | None = None
         # 电池
@@ -180,8 +185,9 @@ class SimRobot:
             return
         now = self._now()
         while self._pending and self._pending[0][0] <= now:      # 链路延迟到了的命令生效
-            _, vx, wz, deadline = self._pending.pop(0)
+            _, vx, wz, deadline, vy = self._pending.pop(0)
             self._cmd_vx, self._cmd_wz, self._cmd_deadline_ms = vx, wz, deadline
+            self._cmd_vy = vy
             self._stopping_left_s = None
         if self._estop or not self._control:
             self._zero()
@@ -191,8 +197,8 @@ class SimRobot:
             self._stopping_left_s -= dt_s
             if self._stopping_left_s <= 1e-9:
                 self._stopping_left_s = None
-                self._vx = self._wz = 0.0
-                self._cmd_vx = self._cmd_wz = 0.0
+                self._vx = self._wz = self._vy = 0.0
+                self._cmd_vx = self._cmd_wz = self._cmd_vy = 0.0
                 self._cmd_deadline_ms = None
         else:
             want_vx, want_wz = self._cmd_vx, self._cmd_wz
@@ -219,15 +225,16 @@ class SimRobot:
                 want_vx = (max(want_vx, self._vx - step) if self._vx > 0
                            else min(want_vx, self._vx + step))
             self._vx, self._wz = want_vx, want_wz
+            self._vy = self._cmd_vy if self._gait_left_s is None else 0.0
         self.yaw = wrap_angle(self.yaw + self._wz * dt_s)
-        self.x += self._vx * math.cos(self.yaw) * dt_s
-        self.y += self._vx * math.sin(self.yaw) * dt_s
+        self.x += (self._vx * math.cos(self.yaw) - self._vy * math.sin(self.yaw)) * dt_s
+        self.y += (self._vx * math.sin(self.yaw) + self._vy * math.cos(self.yaw)) * dt_s
 
     def _zero(self) -> None:
         self._pending.clear()                     # 路上的命令也作废(急停、丢控制权)
         self._gait_left_s = None
-        self._vx = self._wz = 0.0
-        self._cmd_vx = self._cmd_wz = 0.0
+        self._vx = self._wz = self._vy = 0.0
+        self._cmd_vx = self._cmd_wz = self._cmd_vy = 0.0
         self._cmd_deadline_ms = None
         self._stopping_left_s = None
 
@@ -276,18 +283,19 @@ class SimRobot:
             return VelocityResult(0.0, 0.0, clamped=False, rejected=True, reason="no_control")
         if self._estop:
             return VelocityResult(0.0, 0.0, clamped=False, rejected=True, reason="estop")
-        if abs(cmd.vy) > 1e-9:
+        if abs(cmd.vy) > 1e-9 and not self.lateral:
             return VelocityResult(0.0, 0.0, clamped=False, rejected=True, reason="no_lateral")
         if 0.0 < abs(cmd.vx) < self.deadband_vx:
             return VelocityResult(0.0, 0.0, clamped=False, rejected=True, reason="deadband")
         vx = max(-self.max_vx, min(self.max_vx, cmd.vx))
         wz = max(-self.max_wz, min(self.max_wz, cmd.wz))
-        clamped = (vx != cmd.vx) or (wz != cmd.wz)
+        vy = max(-self.max_vy, min(self.max_vy, cmd.vy))
+        clamped = (vx != cmd.vx) or (wz != cmd.wz) or (vy != cmd.vy)
         if self.latency_s > 0:
             at = self._now() + int(self.latency_s * 1000)
-            self._pending.append((at, vx, wz, at + cmd.ttl_ms))
+            self._pending.append((at, vx, wz, at + cmd.ttl_ms, vy))
             return VelocityResult(vx, wz, clamped=clamped, rejected=False)
-        self._cmd_vx, self._cmd_wz = vx, wz
+        self._cmd_vx, self._cmd_wz, self._cmd_vy = vx, wz, vy
         self._cmd_deadline_ms = self._now() + cmd.ttl_ms
         self._stopping_left_s = None
         return VelocityResult(vx, wz, clamped=clamped, rejected=False)
@@ -312,13 +320,15 @@ class SimRobot:
 
     async def stop(self) -> None:
         """停止**请求**。确认要等 ``stop_latency_s`` 的 tick 走完 —— 停止时间是测出来的参数。"""
-        if self._vx == 0.0 and self._wz == 0.0 and self._cmd_vx == 0.0 and self._cmd_wz == 0.0:
+        if self._vx == 0.0 and self._wz == 0.0 and self._vy == 0.0 and self._cmd_vx == 0.0 \
+                and self._cmd_wz == 0.0 and self._cmd_vy == 0.0:
             self._stopping_left_s = None
             return
         self._stopping_left_s = self._stop_latency_s
 
     async def stopped(self) -> bool:
-        return self._vx == 0.0 and self._wz == 0.0 and self._stopping_left_s is None
+        return self._vx == 0.0 and self._wz == 0.0 and self._vy == 0.0 \
+            and self._stopping_left_s is None
 
     async def emergency_stop(self, on: bool) -> None:
         self._estop = on
@@ -490,7 +500,8 @@ class SimRobot:
 
     def hal_capabilities(self) -> HalCapabilities:
         return HalCapabilities(
-            max_vx=self.max_vx, max_wz=self.max_wz, deadband_vx=self.deadband_vx, lateral=False,
+            max_vx=self.max_vx, max_wz=self.max_wz, deadband_vx=self.deadband_vx,
+            lateral=self.lateral, max_vy=self.max_vy if self.lateral else 0.0,
             control_releasable=True,
             recharge_mode="vendor_dock" if self.charger is not None else "none",
             sensing={"lidar": False, "depth": False, "thermal": False, "imu": self._imu_on,

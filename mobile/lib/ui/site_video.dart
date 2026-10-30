@@ -71,7 +71,13 @@ class SiteVideoHealthPoller {
 class SiteVideo extends StatefulWidget {
   final SiteApi api;
   final String robotId;
-  const SiteVideo({super.key, required this.api, required this.robotId});
+
+  /// 铺满给它的整块地方（遥控页，2026-10-30）：画面填满（裁边不拉伸），前后切换浮在底边正中，
+  /// 两边各让出 [sideInset]（摇杆的位置）。不铺满就是原来那样：切换在上、画面 16:9 在下。
+  final bool fullscreen;
+  final double sideInset;
+  const SiteVideo(
+      {super.key, required this.api, required this.robotId, this.fullscreen = false, this.sideInset = 0});
 
   static Key cameraKey(String cam) => Key('site-video-$cam');
 
@@ -93,9 +99,59 @@ class _SiteVideoState extends State<SiteVideo> {
   @override
   Widget build(BuildContext context) {
     final id = Uri.encodeComponent(widget.robotId);
+    final live = LiveVideo(
+      key: ValueKey<String>('site-live-$_camera'),
+      baseUrl: widget.api.baseUrl,
+      camera: _camera,
+      streamPath: '/api/robots/$id/video/$_camera',
+      token: widget.api.session?.token ?? '',
+      openClient: widget.api.pinnedClient,
+      firstFrameGrace: const Duration(seconds: 12),
+      health: _poller.stream,
+    );
+    if (widget.fullscreen) {
+      return Stack(fit: StackFit.expand, children: [
+        const ColoredBox(color: Colors.black),
+        live,
+        Positioned(
+          left: widget.sideInset,
+          right: widget.sideInset,
+          bottom: Nw.s8,
+          child: SafeArea(
+            top: false,
+            child: Center(
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 260),
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                      color: Colors.black.withValues(alpha: 0.45),
+                      borderRadius: BorderRadius.circular(Nw.r8)),
+                  child: _segment(),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ]);
+    }
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-      // 前后（热像）切换：每一格的 Key 在能点的那一层上
-      ValueListenableBuilder<List<String>>(
+      _segment(),
+      const SizedBox(height: 8),
+      // 横屏（app 只许横屏）：整宽的 16:9 比屏幕还高。最高到屏幕高的六成，居中、不拉伸。
+      Center(
+        child: ConstrainedBox(
+          constraints: BoxConstraints(maxHeight: MediaQuery.sizeOf(context).height * 0.6),
+          child: AspectRatio(
+            aspectRatio: 16 / 9,
+            child: ClipRRect(borderRadius: BorderRadius.circular(Nw.r8), child: live),
+          ),
+        ),
+      ),
+    ]);
+  }
+
+  /// 前后（热像）切换：每一格的 Key 在能点的那一层上
+  Widget _segment() => ValueListenableBuilder<List<String>>(
         valueListenable: _poller.cameras,
         builder: (context, cams, _) {
           if (!cams.contains(_camera)) {
@@ -111,30 +167,5 @@ class _SiteVideoState extends State<SiteVideo> {
             keyOf: SiteVideo.cameraKey,
           );
         },
-      ),
-      const SizedBox(height: 8),
-      // 横屏（app 只许横屏）：整宽的 16:9 比屏幕还高。最高到屏幕高的六成，居中、不拉伸。
-      Center(
-        child: ConstrainedBox(
-          constraints: BoxConstraints(maxHeight: MediaQuery.sizeOf(context).height * 0.6),
-          child: AspectRatio(
-            aspectRatio: 16 / 9,
-            child: ClipRRect(
-            borderRadius: BorderRadius.circular(Nw.r8),
-            child: LiveVideo(
-              key: ValueKey<String>('site-live-$_camera'),
-              baseUrl: widget.api.baseUrl,
-              camera: _camera,
-              streamPath: '/api/robots/$id/video/$_camera',
-              token: widget.api.session?.token ?? '',
-              openClient: widget.api.pinnedClient,
-              firstFrameGrace: const Duration(seconds: 12),
-              health: _poller.stream,
-            ),
-            ),
-          ),
-        ),
-      ),
-    ]);
-  }
+      );
 }

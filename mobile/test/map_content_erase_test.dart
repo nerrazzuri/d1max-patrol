@@ -15,6 +15,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'site_page_test.dart' show FakeApi;
+import 'support/zone_ui.dart';
 
 /// FakeApi 那张图（200 × 100 像素、一像素 0.1 m、左边缘 x = -10、上边缘 y = 5）；[extra] 并进预览 JSON。
 class _Api extends FakeApi {
@@ -175,7 +176,7 @@ void main() {
           ..autoConfirm = true;
         await t.pumpWidget(MaterialApp(home: SiteMapPreviewPage(api: api, mapId: 'estate-1', version: '8')));
         await t.pumpAndSettle();
-        await t.tap(find.byKey(SiteMapPreviewPage.drawEraseKey));
+        await tapZoneMenu(t, SiteMapPreviewPage.drawEraseKey);
         await t.pump();
         final b = _box(t, find.byKey(SiteMapPreviewPage.canvasKey));
         const pxs = [Offset(60, 30), Offset(120, 30), Offset(120, 70)];
@@ -199,6 +200,7 @@ void main() {
         }
         expect(api.calls.where((c) => c.startsWith('mapPreview ')).length, greaterThan(before),
             reason: '抹掉区变了：底图重新取');
+        await openZonePanel(t);
         expect(find.text('抹掉 · 抹掉区（z1）'), findsOneWidget);
         final painter = t.widget<CustomPaint>(find.byKey(SiteMapPreviewPage.zonesKey)).painter! as ZonesPainter;
         expect(painter.shapes.single.erase, isTrue);
@@ -209,7 +211,7 @@ void main() {
       final api = _Api('admin')..autoConfirm = true;
       await t.pumpWidget(MaterialApp(home: SiteMapPreviewPage(api: api, mapId: 'estate-1', version: '8')));
       await t.pumpAndSettle();
-      await t.tap(find.byKey(SiteMapPreviewPage.drawEraseKey));
+      await tapZoneMenu(t, SiteMapPreviewPage.drawEraseKey);
       await t.pump();
       expect(find.byKey(SiteMapPreviewPage.hardKey), findsOneWidget);
       await t.tap(find.byKey(SiteMapPreviewPage.hardKey));
@@ -222,9 +224,10 @@ void main() {
       await t.tap(find.byKey(SiteMapPreviewPage.finishKey));
       await t.pumpAndSettle();
       expect(api.savedZones.last.single['hard'], isTrue);
+      await openZonePanel(t);
       expect(find.text('抹掉（硬） · 抹掉区（z1）'), findsOneWidget);
       final previews = api.calls.where((c) => c.startsWith('mapPreview ')).length;
-      await t.tap(find.byKey(SiteMapPreviewPage.drawNogoKey));
+      await tapZoneMenu(t, SiteMapPreviewPage.drawNogoKey);
       await t.pump();
       for (final p in const [Offset(120, 20), Offset(160, 20), Offset(160, 60)]) {
         await t.tapAt(b.localToGlobal(p));
@@ -233,6 +236,7 @@ void main() {
       await t.tap(find.byKey(SiteMapPreviewPage.finishKey));
       await t.pumpAndSettle();
       expect(api.calls.where((c) => c.startsWith('mapPreview ')).length, previews, reason: '抹掉区没变：不重新取');
+      await openZonePanel(t);
       await t.tap(find.byKey(SiteMapPreviewPage.deleteKey('z1')));
       await t.pumpAndSettle();
       expect(api.savedZones.last.map((z) => z['kind']), ['nogo']);

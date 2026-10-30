@@ -1,11 +1,13 @@
 /// 站点模式的遥控页（W00c5c，受决策 7 约束）。
 ///
 /// - **连接就是租约**：进这一页开一条遥控连接；退出、断线都放租，狗停。
-/// - 左杆前后（狗不横移），右杆只转向；按住每 100 ms 发一帧，松手发零速。站点和狗都会再夹限速。
+/// - **画面铺满整屏**（2026-10-30 用户）：两根半透明的杆浮在左下、右下，「停」在右上，状态在上边。
+/// - 左杆上下是前后、左右是横移（能横移的狗才有，站点 `granted` 里给 `max_vy`；推斜了只走大的那一个轴）；
+///   右杆只转向。按住每 100 ms 发一帧，松手发零速。站点和狗都会再夹限速。
 /// - **大红「停」走站点的 halt，不走遥控连接**（连接卡住的时候正是最需要停车的时候）；同时发零速。
 /// - 画面没了、租约结束、连接断了：屏上立刻说，杆变灰。
 /// - **键盘**（W15 桌面版；手机接了蓝牙键盘也一样）：W/↑ 前进、S/↓ 后退、A/← 左转、D/→ 右转，
-///   **松开就停**；Esc 是「停」（同大红按钮）。跟摇杆一样每 100 ms 发一帧、站点和狗再夹限速。
+///   Q/E 往左、往右横移；**松开就停**；Esc 是「停」（同大红按钮）。跟摇杆一样每 100 ms 发一帧、站点和狗再夹限速。
 ///   **按键只在「能开」的那一段里算数**（W15 外审阻断）：系统连发一律不认；不能开的时候按下的不记；
 ///   每过一道边界 —— 拿到遥控、画面断了或回来、切走（失去焦点、inactive、后台）、结束、停车、退出 ——
 ///   都清空键盘输入、发一帧零速。之后要动，得**重新按下**：按着不放等授权到、等画面回来不会接着开。
@@ -87,8 +89,11 @@ class _SiteTeleopPageState extends State<SiteTeleopPage> with WidgetsBindingObse
   bool _granted = false;
   bool _video = true;
   bool _ended = false;
-  double _maxVx = 0, _maxWz = 0;
+  double _maxVx = 0, _maxWz = 0, _maxVy = 0;
   double _fwd = 0, _turn = 0;
+
+  /// 横移杆值（右为正，跟杆的 dx 一样；发出去换成机身系左为正）。
+  double _lat = 0;
 
   /// 硬禁区守卫这会儿说的（决策 65）；null = 没什么要说的。
   String? _zoneNote;
@@ -178,6 +183,7 @@ class _SiteTeleopPageState extends State<SiteTeleopPage> with WidgetsBindingObse
           _granted = true;
           _maxVx = (m['max_vx'] as num?)?.toDouble() ?? 0;
           _maxWz = (m['max_wz'] as num?)?.toDouble() ?? 0;
+          _maxVy = (m['max_vy'] as num?)?.toDouble() ?? 0;
           _status = tr('You are in control (speed limit ${_maxVx.toStringAsFixed(2)} m/s)',
               '你在遥控（限速 ${_maxVx.toStringAsFixed(2)} m/s）');
           _zoneNote = teleopZoneText(m['zone_guard'] as Map<String, dynamic>?);
@@ -189,7 +195,7 @@ class _SiteTeleopPageState extends State<SiteTeleopPage> with WidgetsBindingObse
         if (!ok) {
           // 画面没了：杆变灰，手指抬起会被灰掉的杆吞掉 —— 这里当场归零并发一帧零速，
           // 不让断之前的杆值卡着、等画面回来就开走（W00c5c 内部评审）。
-          _fwd = _turn = 0;
+          _fwd = _turn = _lat = 0;
           _link?.send(0, 0);
         }
         setState(() => _video = ok);
@@ -215,6 +221,8 @@ class _SiteTeleopPageState extends State<SiteTeleopPage> with WidgetsBindingObse
   static final _backKeys = {LogicalKeyboardKey.keyS, LogicalKeyboardKey.arrowDown};
   static final _leftKeys = {LogicalKeyboardKey.keyA, LogicalKeyboardKey.arrowLeft};
   static final _rightKeys = {LogicalKeyboardKey.keyD, LogicalKeyboardKey.arrowRight};
+  static final _latLeftKeys = {LogicalKeyboardKey.keyQ};
+  static final _latRightKeys = {LogicalKeyboardKey.keyE};
 
   KeyEventResult _onKey(FocusNode _, KeyEvent e) {
     final k = e.logicalKey;
@@ -223,7 +231,7 @@ class _SiteTeleopPageState extends State<SiteTeleopPage> with WidgetsBindingObse
       return KeyEventResult.handled;
     }
     final mine = _fwdKeys.contains(k) || _backKeys.contains(k) || _leftKeys.contains(k) ||
-        _rightKeys.contains(k);
+        _rightKeys.contains(k) || _latLeftKeys.contains(k) || _latRightKeys.contains(k);
     if (!mine) return KeyEventResult.ignored;
     if (e is KeyRepeatEvent) return KeyEventResult.handled; // 系统连发：不认，杆值不动
     if (e is KeyDownEvent) {
@@ -236,9 +244,10 @@ class _SiteTeleopPageState extends State<SiteTeleopPage> with WidgetsBindingObse
     if (_canDrive) {
       _fwd = axis(_fwdKeys, _backKeys);
       _turn = axis(_rightKeys, _leftKeys);
+      _lat = axis(_latRightKeys, _latLeftKeys);
     } else {
       _keys.clear();
-      _fwd = _turn = 0;
+      _fwd = _turn = _lat = 0;
     }
     return KeyEventResult.handled;
   }
@@ -246,7 +255,7 @@ class _SiteTeleopPageState extends State<SiteTeleopPage> with WidgetsBindingObse
   /// 清空键盘输入、杆值归零、发一帧零速（W15 外审阻断）。之后要动得重新按下。
   void _clearKeys() {
     _keys.clear();
-    _fwd = _turn = 0;
+    _fwd = _turn = _lat = 0;
     if (!_ended) _link?.send(0, 0);
   }
 
@@ -261,7 +270,10 @@ class _SiteTeleopPageState extends State<SiteTeleopPage> with WidgetsBindingObse
       link.send(0, 0);
       return;
     }
-    link.send(_fwd * _maxVx, -_turn * _maxWz); // 右推 = 顺时针 = wz 为负
+    // 右推 = 顺时针 = wz 为负；横移右推 = 往右 = vy 为负（机身系左为正）。前后、横移只走大的那一个。
+    final fwd = _fwd.abs() >= _lat.abs() ? _fwd : 0.0;
+    final lat = _fwd.abs() >= _lat.abs() ? 0.0 : _lat;
+    link.send(fwd * _maxVx, -_turn * _maxWz, vy: -lat * _maxVy);
   }
 
   void _stopTicking() {
@@ -316,185 +328,193 @@ class _SiteTeleopPageState extends State<SiteTeleopPage> with WidgetsBindingObse
   @override
   Widget build(BuildContext context) {
     final bad = _ended || !_video;
-    // 横屏（app 只许横屏）：两根杆在两边、拇指底下，画面在中间；大红「停」在右上，右手拇指一抬就按到。
-    // 状态钉在画面上头：停车按钮和「现在能不能动」任何时候都一眼看得见，只有画面那一栏会滚。
-    // 杆的圈半径 72：一栏至少 168 宽（去掉边距还放得下一整个圈）。
-    final side = (MediaQuery.sizeOf(context).width * 0.25).clamp(168.0, 240.0);
+    // 2026-10-30（用户）：画面铺满整屏；两根半透明的杆浮在左下、右下（拇指底下），大红「停」在右上，
+    // 关闭、哪台、状态在上边。字都压在半透明的黑底上，看得清又不挡多少画面。
+    // 杆的那一块边长：短边的一半，夹在 168（圈半径 72，放得下一整个圈）到 240 之间。
+    final size = MediaQuery.sizeOf(context);
+    final stick = (size.shortestSide * 0.5).clamp(168.0, 240.0);
     final desktop = {TargetPlatform.linux, TargetPlatform.windows, TargetPlatform.macOS}
         .contains(defaultTargetPlatform);
+    final lateral = _maxVy > 0;
     return Focus(
       autofocus: true,
       onKeyEvent: _onKey,
       onFocusChange: _lostFocus,
-      // 这一页不管系统是浅色深色都是深色的（2026-10-14 重做）：它就是一块画面，两边的杆、上面的字
-      // 都按「压在画面上」配色；没有顶栏，左上一个关闭。
+      // 这一页不管系统是浅色深色都是深色的：它就是一块画面，上面的东西都按「压在画面上」配色。
       child: Theme(
-      data: nwTheme(Brightness.dark),
-      child: Builder(builder: (context) {
-      final c = Nw.of(context);
-      return Scaffold(
-      body: SafeArea(
-        top: false,
-        // 摇杆铺满给它的那块地方：要给定大小（整栏高）。
-        child: Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-          SizedBox(
-            width: side,
-            child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-              // 左上：关闭、画面是不是活的、哪只狗
-              Padding(
-                padding: const EdgeInsets.fromLTRB(4, 4, 8, 0),
-                child: Row(children: [
-                  IconButton(
-                      key: const Key('teleop-close'),
-                      tooltip: MaterialLocalizations.of(context).backButtonTooltip,
-                      icon: Icon(Icons.close_rounded, color: c.onScrim),
-                      onPressed: () => Navigator.maybePop(context)),
-                  Expanded(
-                      child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                        Text(widget.robotId,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: NwText.labelLarge.copyWith(color: c.onScrim)),
-                        const SizedBox(height: 2),
-                        // 这里说的是**遥控权**，不是画面（App 重做外审 M1：原来拿到遥控就写「LIVE」，可这一页
-                        // 不知道本机收没收到画面 —— 画面框里还写着「正在连」）。画面活不活看画面框自己。
-                        NwStatusPill(
-                            label: _ended
-                                ? tr('ENDED', '已结束')
-                                : !_video
-                                    ? tr('NO VIDEO', '无画面')
-                                    : (_granted ? tr('IN CONTROL', '已获控制') : tr('WAITING', '等待')),
-                            tone: _canDrive ? NwTone.success : NwTone.neutral,
-                            dot: _canDrive),
-                      ])),
-                ]),
-              ),
-              Expanded(
-                child: Padding(
-                  padding: const EdgeInsets.all(8),
-                  child: Joystick(
-                    key: SiteTeleopPage.moveStickKey,
-                    axis: JoystickAxis.translate,
-                    enabled: _canDrive,
-                    label: tr('Move', '前后'),
-                    onChanged: (v) => _fwd = v.dy,
-                  ),
-                ),
-              ),
-            ]),
-          ),
-          Expanded(
-            child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-              Padding(
-                padding: const EdgeInsets.fromLTRB(4, 8, 4, 0),
-                child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: Nw.s8, vertical: Nw.s4),
-                  decoration: BoxDecoration(
-                      color: bad ? c.errorSoft : c.surface,
-                      borderRadius: BorderRadius.circular(Nw.r8),
-                      border: Border.all(color: bad ? c.error : c.outline)),
-                  child: Text(
-                    !_video && !_ended
-                        ? tr('No video: do not drive (the joysticks are disabled until video returns)',
-                            '没有画面：不许动（画面回来之前摇杆不起作用）')
-                        : _status,
-                    key: SiteTeleopPage.statusKey,
-                    style: NwText.titleSmall
-                        .copyWith(color: bad ? c.error : c.text, fontWeight: FontWeight.bold),
-                  ),
-                ),
-              ),
-              if (_zoneNote != null && !_ended)
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(4, 4, 4, 0),
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: Nw.s8, vertical: Nw.s4),
-                    decoration: BoxDecoration(
-                        color: c.soft(NwTone.warning),
-                        borderRadius: BorderRadius.circular(Nw.r8),
-                        border: Border.all(color: c.fg(NwTone.warning))),
-                    child: Text(_zoneNote!,
-                        key: SiteTeleopPage.zoneKey,
-                        maxLines: 3,
-                        overflow: TextOverflow.ellipsis,
-                        style: NwText.bodySmall.copyWith(color: c.text, fontWeight: FontWeight.w600)),
-                  ),
-                ),
-              if (desktop)
-                Padding(
-                  key: SiteTeleopPage.keysKey,
-                  padding: const EdgeInsets.fromLTRB(4, 4, 4, 0),
-                  child: Text(
-                      tr('Keyboard: W/S forward/back, A/D turn, release to stop; Esc to stop',
-                          '键盘：W/S 前后，A/D 转向，松开就停；Esc 停车'),
-                      style: NwText.bodySmall.copyWith(color: c.textSecondary)),
-                ),
-              Expanded(
-                child: ListView(padding: const EdgeInsets.symmetric(vertical: 8), children: [
-                  SiteVideo(api: widget.api, robotId: widget.robotId),
-                ]),
-              ),
-            ]),
-          ),
-          SizedBox(
-            width: side,
-            child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-              Padding(
-                padding: const EdgeInsets.fromLTRB(8, 8, 8, 0),
-                child: SizedBox(
-                  height: 72,
-                  // 整个 App 只有这一处有光晕：红的，告诉人「这个最要紧」
-                  child: DecoratedBox(
-                    decoration: BoxDecoration(
-                        borderRadius: BorderRadius.circular(Nw.r12),
-                        boxShadow: [
-                          BoxShadow(
-                              color: c.error.withValues(alpha: 0.27), blurRadius: 20, offset: const Offset(0, 8)),
-                        ]),
-                    child: FilledButton(
-                      key: SiteTeleopPage.stopKey,
-                      style: FilledButton.styleFrom(
-                          backgroundColor: c.error,
-                          foregroundColor: c.onError,
-                          padding: const EdgeInsets.symmetric(horizontal: Nw.s8),
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(Nw.r12))),
-                      onPressed: _halt,
-                      // 栏窄、字大：摆不下就整个缩小，不溢出
-                      child: FittedBox(
-                        fit: BoxFit.scaleDown,
+        data: nwTheme(Brightness.dark),
+        child: Builder(builder: (context) {
+          final c = Nw.of(context);
+          final scrim = Colors.black.withValues(alpha: 0.5);
+          return Scaffold(
+            backgroundColor: Colors.black,
+            body: Stack(fit: StackFit.expand, children: [
+              // 画面铺满（不管安全区：刘海那一块也是画面）；前后切换浮在底边正中、两根杆中间
+              Positioned.fill(
+                  child: SiteVideo(
+                      api: widget.api, robotId: widget.robotId, fullscreen: true, sideInset: stick + Nw.s8)),
+              SafeArea(
+                child: Stack(children: [
+                  // 上边：左关闭和哪台、中间状态、右「停」
+                  Positioned(
+                    left: Nw.s8,
+                    right: Nw.s8,
+                    top: Nw.s8,
+                    child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      Container(
+                        decoration: BoxDecoration(color: scrim, borderRadius: BorderRadius.circular(Nw.r12)),
+                        padding: const EdgeInsets.fromLTRB(0, 0, Nw.s16, 0),
                         child: Row(mainAxisSize: MainAxisSize.min, children: [
-                          const Icon(Icons.front_hand_rounded, size: 28),
-                          const SizedBox(width: Nw.s8),
-                          Text(tr('Stop', '停'),
-                              style: const TextStyle(fontSize: 28, fontWeight: FontWeight.w900)),
+                          IconButton(
+                              key: const Key('teleop-close'),
+                              tooltip: MaterialLocalizations.of(context).backButtonTooltip,
+                              icon: Icon(Icons.close_rounded, color: c.onScrim),
+                              onPressed: () => Navigator.maybePop(context)),
+                          Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Text(widget.robotId,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: NwText.labelLarge.copyWith(color: c.onScrim)),
+                                const SizedBox(height: 2),
+                                // 这里说的是**遥控权**，不是画面（App 重做外审 M1）。画面活不活看画面自己。
+                                NwStatusPill(
+                                    label: _ended
+                                        ? tr('ENDED', '已结束')
+                                        : !_video
+                                            ? tr('NO VIDEO', '无画面')
+                                            : (_granted ? tr('IN CONTROL', '已获控制') : tr('WAITING', '等待')),
+                                    tone: _canDrive ? NwTone.success : NwTone.neutral,
+                                    dot: _canDrive),
+                              ]),
                         ]),
                       ),
-                    ),
+                      const SizedBox(width: Nw.s8),
+                      Expanded(
+                        child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: Nw.s8, vertical: Nw.s4),
+                            decoration: BoxDecoration(
+                                color: bad ? c.error.withValues(alpha: 0.85) : scrim,
+                                borderRadius: BorderRadius.circular(Nw.r8)),
+                            child: Text(
+                              !_video && !_ended
+                                  ? tr('No video: do not drive (the joysticks are disabled until video returns)',
+                                      '没有画面：不许动（画面回来之前摇杆不起作用）')
+                                  : _status,
+                              key: SiteTeleopPage.statusKey,
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                              style: NwText.titleSmall.copyWith(color: Colors.white, fontWeight: FontWeight.bold),
+                            ),
+                          ),
+                          if (_zoneNote != null && !_ended)
+                            Padding(
+                              padding: const EdgeInsets.only(top: Nw.s4),
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(horizontal: Nw.s8, vertical: Nw.s4),
+                                decoration: BoxDecoration(
+                                    color: c.fg(NwTone.warning).withValues(alpha: 0.85),
+                                    borderRadius: BorderRadius.circular(Nw.r8)),
+                                child: Text(_zoneNote!,
+                                    key: SiteTeleopPage.zoneKey,
+                                    maxLines: 3,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: NwText.bodySmall.copyWith(color: Colors.black, fontWeight: FontWeight.w600)),
+                              ),
+                            ),
+                          if (desktop)
+                            Padding(
+                              key: SiteTeleopPage.keysKey,
+                              padding: const EdgeInsets.only(top: Nw.s4),
+                              child: Text(
+                                  lateral
+                                      ? tr('Keyboard: W/S forward/back, Q/E sideways, A/D turn, release to stop; Esc to stop',
+                                          '键盘：W/S 前后，Q/E 横移，A/D 转向，松开就停；Esc 停车')
+                                      : tr('Keyboard: W/S forward/back, A/D turn, release to stop; Esc to stop',
+                                          '键盘：W/S 前后，A/D 转向，松开就停；Esc 停车'),
+                                  style: NwText.bodySmall.copyWith(
+                                      color: Colors.white,
+                                      shadows: const [Shadow(blurRadius: 3)])),
+                            ),
+                        ]),
+                      ),
+                      const SizedBox(width: Nw.s8),
+                      // 大红「停」：实心、带红光（整个 App 只有这一处有光晕），右手拇指一抬就按到
+                      SizedBox(
+                        width: (stick * 0.8).clamp(120.0, 180.0),
+                        height: 64,
+                        child: DecoratedBox(
+                          decoration: BoxDecoration(borderRadius: BorderRadius.circular(Nw.r12), boxShadow: [
+                            BoxShadow(color: c.error.withValues(alpha: 0.35), blurRadius: 20, offset: const Offset(0, 8)),
+                          ]),
+                          child: FilledButton(
+                            key: SiteTeleopPage.stopKey,
+                            style: FilledButton.styleFrom(
+                                backgroundColor: c.error,
+                                foregroundColor: c.onError,
+                                padding: const EdgeInsets.symmetric(horizontal: Nw.s8),
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(Nw.r12))),
+                            onPressed: _halt,
+                            child: FittedBox(
+                              fit: BoxFit.scaleDown,
+                              child: Row(mainAxisSize: MainAxisSize.min, children: [
+                                const Icon(Icons.front_hand_rounded, size: 28),
+                                const SizedBox(width: Nw.s8),
+                                Text(tr('Stop', '停'), style: const TextStyle(fontSize: 28, fontWeight: FontWeight.w900)),
+                              ]),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ]),
                   ),
-                ),
-              ),
-              Expanded(
-                child: Padding(
-                  padding: const EdgeInsets.all(8),
-                  child: Joystick(
-                    key: SiteTeleopPage.turnStickKey,
-                    axis: JoystickAxis.turn,
-                    enabled: _canDrive,
-                    label: tr('Turn', '转向'),
-                    onChanged: (v) => _turn = v.dx,
+                  // 左下：前后 + 横移（能横移的狗）；右下：转向。半透明，浮在画面上
+                  Positioned(
+                    left: Nw.s8,
+                    bottom: Nw.s8,
+                    width: stick,
+                    height: stick,
+                    child: _stickBack(Joystick(
+                      key: SiteTeleopPage.moveStickKey,
+                      axis: JoystickAxis.translate,
+                      enabled: _canDrive,
+                      label: lateral ? tr('Move · sideways', '前后 · 横移') : tr('Move', '前后'),
+                      icon: lateral ? Icons.open_with_rounded : null,
+                      onChanged: (v) {
+                        _fwd = v.dy;
+                        _lat = lateral ? v.dx : 0;
+                      },
+                    )),
                   ),
-                ),
+                  Positioned(
+                    right: Nw.s8,
+                    bottom: Nw.s8,
+                    width: stick,
+                    height: stick,
+                    child: _stickBack(Joystick(
+                      key: SiteTeleopPage.turnStickKey,
+                      axis: JoystickAxis.turn,
+                      enabled: _canDrive,
+                      label: tr('Turn', '转向'),
+                      onChanged: (v) => _turn = v.dx,
+                    )),
+                  ),
+                ]),
               ),
             ]),
-          ),
-        ]),
-      ),
-      );
-      }),
+          );
+        }),
       ),
     );
   }
+
+  /// 杆底下一层淡黑：白的杆压在亮的画面上也看得清，画面还透得过来。
+  static Widget _stickBack(Widget stick) => DecoratedBox(
+        decoration: BoxDecoration(
+            color: Colors.black.withValues(alpha: 0.28), borderRadius: BorderRadius.circular(Nw.r12)),
+        child: stick,
+      );
 }

@@ -24,6 +24,7 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'site_page_test.dart' show FakeApi, busyView;
 import 'support/fake_site.dart' show fakePreviewPng;
+import 'support/zone_ui.dart';
 
 const _w = 800.0, _h = 360.0;
 
@@ -56,7 +57,7 @@ void main() {
     expect(landscapeOnly, hasLength(2));
   });
 
-  testWidgets('遥控：两根杆在两边、画面在中间，「停」整个在屏幕里', (t) async {
+  testWidgets('遥控：画面铺满整屏，两根杆浮在左下、右下，「停」整个在屏幕里', (t) async {
     final api = FakeApi('guard');
     _phone(t);
     await t.pumpWidget(MaterialApp(home: SiteTeleopPage(api: api, robotId: 'A')));
@@ -68,9 +69,13 @@ void main() {
     final move = t.getRect(find.byType(Joystick).at(0));
     final turn = t.getRect(find.byType(Joystick).at(1));
     final video = t.getRect(find.byType(SiteVideo));
-    expect(move.right, lessThanOrEqualTo(video.left), reason: '左杆在画面左边');
-    expect(turn.left, greaterThanOrEqualTo(video.right), reason: '右杆在画面右边');
-    expect(move.height, greaterThan(160), reason: '杆竖着占满，拇指够得着');
+    expect(video, const Rect.fromLTWH(0, 0, _w, _h), reason: '画面铺满整屏');
+    expect(move.left, lessThan(_w / 4), reason: '左杆在左下');
+    expect(move.bottom, greaterThan(_h * 3 / 4));
+    expect(turn.right, greaterThan(_w * 3 / 4), reason: '右杆在右下');
+    expect(turn.bottom, greaterThan(_h * 3 / 4));
+    expect(move.width, greaterThanOrEqualTo(Joystick.radius * 2), reason: '放得下一整个圈');
+    expect(move.overlaps(turn), isFalse);
     final stop = t.getRect(find.byKey(SiteTeleopPage.stopKey));
     expect(stop.top, greaterThanOrEqualTo(0));
     expect(stop.bottom, lessThanOrEqualTo(_h));
@@ -272,10 +277,9 @@ void main() {
           },
         };
       await _show(t, SiteMapPreviewPage(api: api, mapId: 'estate-1', version: '8'));
+      await openZonePanel(t);
       expect(find.byKey(SiteMapPreviewPage.proposalKey), findsOneWidget);
-      await t.ensureVisible(find.byKey(SiteMapPreviewPage.drawNogoKey));    // 右边那一栏能滚
-      await t.pumpAndSettle();
-      await t.tap(find.byKey(SiteMapPreviewPage.drawNogoKey));
+      await tapZoneMenu(t, SiteMapPreviewPage.drawNogoKey);
       await t.pumpAndSettle();
       expect(find.byKey(SiteMapPreviewPage.hardKey), findsOneWidget);
       expect(t.takeException(), isNull);

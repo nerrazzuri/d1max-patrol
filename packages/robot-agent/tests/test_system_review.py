@@ -53,7 +53,7 @@ async def 台(tmp_path, monkeypatch):
         await 走(0.3)
         task = rt.processor.current
         assert task is not None and task.kind == "teleop"
-        task._cmd = (vx, 0.0, rt._mono_ms() + 60_000, 300)
+        task._cmd = (vx, 0.0, rt._mono_ms() + 60_000, 300, 0.0)
         return task
 
     yield rt, r, 走, 命令, 遥控, sent
@@ -74,7 +74,7 @@ async def test_S01_撤任务一直失败_旧遥控还在_受力锁住后HAL收�
     await 走(0.6)
     assert rt.force.state == "lifted" and rt.processor.current is task, "撤不掉:旧任务还在"
     sent.clear()
-    task._cmd = (0.3, 0.2, rt._mono_ms() + 60_000, 300)
+    task._cmd = (0.3, 0.2, rt._mono_ms() + 60_000, 300, 0.0)
     await 走(1.0)
     assert not any(vx or wz for vx, wz in sent), sent
     assert "abort" in rt.force.owed and (await r.odometry()).vx == 0
