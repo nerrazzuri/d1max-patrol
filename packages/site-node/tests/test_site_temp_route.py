@@ -97,3 +97,21 @@ def test_授权此刻生效没有(tmp_path):
               "end": hh((m + 180) % 1440)}, by="alice")
     got = {e["name"]: e["active_now"] for e in book.list(with_active=True)}
     assert got == {"维修工": True, "保洁": False}
+
+
+def test_W53_接口_派之前先看_派出去记成临时巡逻_今天的巡逻里有_能取消排队的(站点, tmp_path):
+    s = 站点
+    alice, gina, olga = _登(s, "alice"), _登(s, "gina"), _登(s, "olga")
+    _图(s, tmp_path, alice)
+    code, p = s.req("GET", "/api/robots/A/patrol-plan?mission_id=loop", token=olga)
+    assert code == 200 and p["estimate_s"] > 0 and p["label"] == "loop", p
+    assert s.req("GET", "/api/robots/A/patrol-plan?mission_id=nope", token=gina)[0] == 404
+    s.accounts.add("vic", PW, role="viewer")
+    assert s.req("GET", "/api/robots/A/patrol-plan?mission_id=loop", token=_登(s, "vic"))[0] == 403
+    code, d = s.req("POST", "/api/robots/A/patrol", {"mission_id": "loop"}, token=gina)
+    assert code == 200 and d["queued"] is False and d["ack"]["result"] == "accepted", d
+    today = s.req("GET", "/api/patrols/today", token=olga)[1]["items"]
+    mine = [x for x in today if x["kind"] == "adhoc"]
+    assert mine and mine[0]["by"] == "gina" and mine[0]["label"] == "loop", today
+    assert s.req("POST", f"/api/adhoc/{mine[0]['adhoc_id']}/cancel", {}, token=gina)[0] == 409, \
+        "开始跑了的不能取消(用叫停)"

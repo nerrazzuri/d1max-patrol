@@ -174,7 +174,7 @@ TEMP_ROUTE_MAX = 20
 TRACK_SPAN_MAX_MS = 86_400_000
 _ROBOT = re.compile(
     r"^/api/robots/([^/]+)"
-    r"(?:/(goto|abort|patrol|standby|standby/return|standby/here|intercept/here))?$")
+    r"(?:/(goto|abort|patrol|patrol-plan|standby|standby/return|standby/here|intercept/here))?$")
 
 
 def _cam_frames(v: Any) -> Iterator[bytes]:
