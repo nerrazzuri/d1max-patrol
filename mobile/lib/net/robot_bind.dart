@@ -168,7 +168,7 @@ class RobotHotspot implements RobotBindLink {
   RobotHotspot(this.sticker, {this.timeout = const Duration(seconds: 15)})
       : _io = HttpClient(context: SecurityContext(withTrustedRoots: false)) {
     _io.connectionTimeout = const Duration(seconds: 5);
-    // 手输的（没有指纹）核不了：接受（界面上已经提示过「能扫码就扫码」）
+    // 手输的（没有指纹）核不了：接受
     _io.badCertificateCallback = (cert, host, port) =>
         sticker.fingerprint.isEmpty || sha256.convert(cert.der).toString().substring(0, 32) == sticker.fingerprint;
   }

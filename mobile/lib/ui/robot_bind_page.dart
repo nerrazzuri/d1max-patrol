@@ -224,16 +224,6 @@ mixin _StickerScan<T extends StatefulWidget> on State<T> {
         ),
       ]);
 
-  /// 手输的贴纸没有证书指纹：提醒一句。
-  Widget? unpinnedNote() => sticker != null && sticker!.fingerprint.isEmpty
-      ? Padding(
-          padding: const EdgeInsets.only(top: Nw.s8),
-          child: NwNotice(
-              key: const Key('bind-unpinned'),
-              tone: NwTone.warning,
-              text: tr("Typed in by hand, so the phone can't check it is really this robot. Scan the sticker when you can.",
-                  '手输的，手机核不了连上的确实是这台机器人。能扫码就扫码。')))
-      : null;
 }
 
 // ------------------------------------------------------------ 添加机器人
@@ -368,7 +358,6 @@ class _RobotAddPageState extends State<RobotAddPage> with _StickerScan<RobotAddP
       if (s == null) scanButton(),
       if (s != null && st == null) ...[
         NwNotice(key: const Key('bind-serial'), text: tr('Robot ${s.serial}', '机器人 ${s.serial}')),
-        ?unpinnedNote(),
         _gap,
         NwField(fieldKey: const Key('bind-ssid'), controller: _ssid, autocorrect: false,
             label: tr('Estate WiFi name', '庄园 WiFi 名')),
@@ -511,8 +500,6 @@ class _RobotWifiPageState extends State<RobotWifiPage> with _StickerScan<RobotWi
       _gap,
       if (sticker == null) scanButton(),
       if (sticker != null && ch == null) ...[
-        ?unpinnedNote(),
-        _gap,
         NwField(fieldKey: const Key('wifi-ssid'), controller: _ssid, autocorrect: false,
             label: tr('New WiFi name', '新的 WiFi 名')),
         _gap,
@@ -619,7 +606,6 @@ class _EngineerUnbindPageState extends State<EngineerUnbindPage> with _StickerSc
       _gap,
       if (sticker == null) scanButton() else
         NwNotice(text: tr('Robot ${sticker!.serial}', '机器人 ${sticker!.serial}')),
-      ?unpinnedNote(),
       const SizedBox(height: Nw.s24),
       if (_done)
         NwNotice(key: const Key('unbind-done'), tone: NwTone.success,
