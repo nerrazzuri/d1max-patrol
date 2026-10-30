@@ -168,7 +168,9 @@ def serve(core: BindCore, *, host: str, port: int, sock: Path, group: str | None
                for s, n in ((https, "bind-https"), (unix, "bind-sock"))]
     for t in threads:
         t.start()
-    log.info("配网服务起来了:热点 https://%s:%d,代理套接字 %s", host, port, sock)
+    # 打到标准输出(systemd 日志、演示站点都等这一行;日志级别可能被别处设成只记警告)
+    print(f"配网服务起来了:热点 https://{host}:{https.server_address[1]},代理套接字 {sock}",
+          flush=True)
     try:
         while not stop.is_set():
             try:
