@@ -148,6 +148,46 @@ mixin _StickerScan<T extends StatefulWidget> on State<T> {
     if (ok == true && mounted) takeSticker(text);
   }
 
+  /// 二维码坏了 / 手动连热点：手输贴纸上印的序列号和绑定码。
+  Future<void> typeSticker() async {
+    final serial = TextEditingController();
+    final code = TextEditingController();
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (c) {
+        final nw = Nw.of(c);
+        return AlertDialog(
+          scrollable: true,
+          backgroundColor: nw.surface,
+          title: Text(tr('Type serial and code', '手输序列号和绑定码'), style: NwText.titleLarge.copyWith(color: nw.text)),
+          content: Column(mainAxisSize: MainAxisSize.min, children: [
+            NwField(fieldKey: const Key('manual-serial'), controller: serial, autocorrect: false,
+                label: tr('Serial number', '序列号')),
+            const SizedBox(height: Nw.s16),
+            NwField(fieldKey: const Key('manual-code'), controller: code, autocorrect: false,
+                enableSuggestions: false, mono: true, hint: 'XXXX-XXXX-XXXX-XXXX',
+                label: tr('Binding code', '绑定码')),
+          ]),
+          actions: [
+            NwButton(label: tr('Cancel', '取消'), variant: NwButtonVariant.ghost,
+                onPressed: () => Navigator.pop(c, false)),
+            NwButton(buttonKey: const Key('manual-ok'), label: tr('Use', '用这个'),
+                onPressed: () => Navigator.pop(c, true)),
+          ],
+        );
+      },
+    );
+    final (sv, cv) = (serial.text, code.text);
+    if (ok != true || !mounted) return;
+    try {
+      final s = manualSticker(sv, cv);
+      setState(() => sticker = s);
+      onSticker(s);
+    } on FormatException catch (e) {
+      say(e.message);
+    }
+  }
+
   void takeSticker(String raw) {
     try {
       final s = parseSticker(raw);
@@ -175,7 +215,25 @@ mixin _StickerScan<T extends StatefulWidget> on State<T> {
           variant: NwButtonVariant.outline,
           label: tr('Paste sticker code', '粘贴贴纸码'),
         ),
+        NwButton(
+          buttonKey: const Key('bind-manual'),
+          onPressed: typeSticker,
+          icon: Icons.keyboard_rounded,
+          variant: NwButtonVariant.ghost,
+          label: tr('Type serial and code', '手输序列号和绑定码'),
+        ),
       ]);
+
+  /// 手输的贴纸没有证书指纹：提醒一句。
+  Widget? unpinnedNote() => sticker != null && sticker!.fingerprint.isEmpty
+      ? Padding(
+          padding: const EdgeInsets.only(top: Nw.s8),
+          child: NwNotice(
+              key: const Key('bind-unpinned'),
+              tone: NwTone.warning,
+              text: tr("Typed in by hand, so the phone can't check it is really this robot. Scan the sticker when you can.",
+                  '手输的，手机核不了连上的确实是这台机器人。能扫码就扫码。')))
+      : null;
 }
 
 // ------------------------------------------------------------ 添加机器人
@@ -310,6 +368,7 @@ class _RobotAddPageState extends State<RobotAddPage> with _StickerScan<RobotAddP
       if (s == null) scanButton(),
       if (s != null && st == null) ...[
         NwNotice(key: const Key('bind-serial'), text: tr('Robot ${s.serial}', '机器人 ${s.serial}')),
+        ?unpinnedNote(),
         _gap,
         NwField(fieldKey: const Key('bind-ssid'), controller: _ssid, autocorrect: false,
             label: tr('Estate WiFi name', '庄园 WiFi 名')),
@@ -452,6 +511,8 @@ class _RobotWifiPageState extends State<RobotWifiPage> with _StickerScan<RobotWi
       _gap,
       if (sticker == null) scanButton(),
       if (sticker != null && ch == null) ...[
+        ?unpinnedNote(),
+        _gap,
         NwField(fieldKey: const Key('wifi-ssid'), controller: _ssid, autocorrect: false,
             label: tr('New WiFi name', '新的 WiFi 名')),
         _gap,
@@ -558,6 +619,7 @@ class _EngineerUnbindPageState extends State<EngineerUnbindPage> with _StickerSc
       _gap,
       if (sticker == null) scanButton() else
         NwNotice(text: tr('Robot ${sticker!.serial}', '机器人 ${sticker!.serial}')),
+      ?unpinnedNote(),
       const SizedBox(height: Nw.s24),
       if (_done)
         NwNotice(key: const Key('unbind-done'), tone: NwTone.success,
