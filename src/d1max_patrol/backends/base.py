@@ -332,8 +332,8 @@ class NavBackend(EventEmitter[Event], ABC):
     @abstractmethod
     async def nav_status(self) -> NavStatus | None: ...
 
-    #: 回家怎么走(W00c6b):``planned`` = 后端自己规划回家(``return_home``);``straight`` = 只会走
-    #: 直线、不认 ``return_home``,引擎沿来路回、按沿来路的长度估回家的电。默认跟默认的
+    #: 回原点怎么走(W00c6b):``planned`` = 后端自己规划回原点(``return_home``);``straight`` = 只会走
+    #: 直线、不认 ``return_home``,引擎沿来路回、按沿来路的长度估回原点的电。默认跟默认的
     #: ``return_home``(拒绝)一致;自己会返航的后端覆盖成 ``planned``。
     PATH_KIND: str = "straight"
 
@@ -406,7 +406,7 @@ class DevicePoseEvent:
 @dataclass(frozen=True)
 class OverheatEvent:
     """上装主控板过热级别变了(W46,决策 74):``ok``、``warn``、``shed``、``critical``。
-    只有 ``critical`` 要引擎管(结束这一趟、回家);前两级的告警、降负载由运行时做。"""
+    只有 ``critical`` 要引擎管(结束这一趟、回原点);前两级的告警、降负载由运行时做。"""
 
     level: str
     reason: str = ""

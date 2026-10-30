@@ -1,4 +1,4 @@
-// 站点模式的运行记录（W00c5d）：列表、一趟、照片、复核（保安、管理员）、重判；业主只看。夹具来自真站点。
+// 站点模式的运行记录（W00c5d）：列表、一趟、照片、复核（保安、管理员）、重判；管理员只看。夹具来自真站点。
 import 'package:d1max_patrol/net/site_client.dart' show SiteError;
 import 'package:d1max_patrol/ui/site_page.dart';
 import 'package:d1max_patrol/ui/site_runs.dart';
@@ -70,7 +70,7 @@ void main() {
     await t.pumpWidget(Container());
   });
 
-  testWidgets('业主只看：没有复核按钮、没有重判、不能标留着', (t) async {
+  testWidgets('管理员只看：没有复核按钮、没有重判、不能标留着', (t) async {
     final api = FakeApi('owner');
     await t.pumpWidget(MaterialApp(home: SiteRunPage(api: api, runId: 1)));
     await t.pumpAndSettle();

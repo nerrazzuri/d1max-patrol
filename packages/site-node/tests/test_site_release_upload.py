@@ -185,7 +185,7 @@ class 回执前插一脚(假派遣):
     async def map_command(self, rid, kind, payload, *, issued_by):
         self.sent.append((rid, kind, payload))
         if len(self.sent) == 1:
-            self.q_box[0].add(rid, "release-B", by="olga")     # 回执还没回来,业主又排了一个
+            self.q_box[0].add(rid, "release-B", by="olga")     # 回执还没回来,管理员又排了一个
         return {"ack": {"result": self.result}}
 
 

@@ -1,5 +1,5 @@
 """W10 规划后端 + 仿真狗 + 栅格世界:绕墙、绕禁行区、限速区、到点对朝向、热更收紧、在禁行区里、
-规划期间叫停、偏离重规划、丢定位、回家。每拍查狗离墙、离禁行区够不够远(不是只看终点)。"""
+规划期间叫停、偏离重规划、丢定位、回原点。每拍查狗离墙、离禁行区够不够远(不是只看终点)。"""
 
 from __future__ import annotations
 
@@ -32,7 +32,7 @@ class 钟:
 
 
 def 画世界(tmp_path, walls=()):
-    """12 × 8 m 的院子,四周是墙;``walls``:地图系里的矩形 (x0, y0, x1, y1)。
+    """12 × 8 m 的现场,四周是墙;``walls``:地图系里的矩形 (x0, y0, x1, y1)。
     返回真值占用(行从下往上)。"""
     h, w = int(H_M / RES), int(W_M / RES)
     occ = np.zeros((h, w), dtype=bool)
@@ -233,7 +233,7 @@ async def test_狗在新禁行区里_原地停_失败_发事件_不往外走(tmp
     for _ in range(30):
         await t.一拍()
     o = await t.在()
-    await t.nav.set_zones(区域({"id": "here", "kind": "nogo", "label": "花坛",
+    await t.nav.set_zones(区域({"id": "here", "kind": "nogo", "label": "高楼楼梯",
                               "polygon": [[o.x - 1, 2], [o.x + 1, 2], [o.x + 1, 6], [o.x - 1, 6]]}))
     assert t.status[-1] is NavStatus.FAILED
     assert t.events and t.events[0][0] == "inside_nogo" and t.events[0][1]["zone"] == "here"
@@ -311,7 +311,7 @@ async def test_丢定位自己停(tmp_path):
     assert NavStatus.FAILED in t.status and NavStatus.SUCCEED not in t.status
 
 
-async def test_回家_规划回去(tmp_path):
+async def test_回原点_规划回去(tmp_path):
     t = 台子(tmp_path, walls=[(5.8, 0.0, 6.2, 6.0)])
     await t.start(10.0, 2.0)
     with pytest.raises(NavRequestError, match="return_to"):
@@ -473,7 +473,7 @@ async def test_核对新区域期间走到头或被叫停_不炸(tmp_path):
 async def test_空闲的狗被新禁行区圈在里面_也发事件(tmp_path):
     t = 台子(tmp_path)
     await t.start(3.0, 3.0)
-    await t.nav.set_zones(区域({"id": "bed", "kind": "nogo", "label": "花坛",
+    await t.nav.set_zones(区域({"id": "bed", "kind": "nogo", "label": "高楼楼梯",
                               "polygon": [[2, 2], [4, 2], [4, 4], [2, 4]]}))
     assert t.events and t.events[0][0] == "inside_nogo" and t.events[0][1]["idle"] is True
     assert t.status == []
@@ -584,9 +584,9 @@ def _区(*zs):
 async def test_S7_回退检查_机身侧面加σ_不是看中心(tmp_path):
     """狗身中心离禁行区 0.27 m(原来 0.25 m 的线外,照走),机身侧面只差 3 cm:σ 0.05 就该刹。"""
     t = 台子(tmp_path)
-    await t.nav.set_zones(_区({"id": "bed", "kind": "nogo", "label": "花坛",
+    await t.nav.set_zones(_区({"id": "bed", "kind": "nogo", "label": "高楼楼梯",
                               "polygon": [[0, 4.27], [12, 4.27], [12, 6], [0, 6]]}))
-    t.nav._v_meas = 0.3                                   # 顺着花坛边往前走
+    t.nav._v_meas = 0.3                                   # 顺着高楼楼梯边往前走
     assert t.nav._backstop(_在(5.0, 4.0, sigma=0.0)) == ("", None)
     v, z = t.nav._backstop(_在(5.0, 4.0, sigma=0.05))
     assert v == "near" and z.id == "bed"
@@ -727,7 +727,7 @@ async def test_工单16_空闲时被遥控器开进禁行区_也报一次_出来
     手持遥控器同样绕开代理。空闲时也每拍查(有可信定位才查)。"""
     t = 台子(tmp_path)
     await t.start(6.0, 3.0)
-    await t.nav.set_zones(区域({"id": "bed", "kind": "nogo", "label": "花坛",
+    await t.nav.set_zones(区域({"id": "bed", "kind": "nogo", "label": "高楼楼梯",
                               "polygon": [[2, 2], [4, 2], [4, 4], [2, 4]]}))
     assert not t.events
     for _ in range(3):

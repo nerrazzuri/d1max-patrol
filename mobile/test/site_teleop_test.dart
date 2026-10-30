@@ -402,7 +402,7 @@ void main() {
     expect(api.link!.released && api.link!.isClosed, isTrue);
   });
 
-  testWidgets('单机器人页：保安有遥控按钮，业主没有', (t) async {
+  testWidgets('单机器人页：保安有遥控按钮，管理员没有', (t) async {
     for (final (role, has) in [('guard', true), ('owner', false)]) {
       final api = FakeApi(role);
       await t.pumpWidget(MaterialApp(home: SiteRobotPage(api: api, robotId: 'A')));

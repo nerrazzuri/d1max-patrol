@@ -82,7 +82,7 @@ class 假录包:
 
 
 def test_真狗_日志经站点给管理员_事件流里不推(tmp_path):
-    """站点的事件流(SSE)谁登录了都收得到(保安、业主也是):查日志的回执**不推** —— 日志只给管理员,
+    """站点的事件流(SSE)谁登录了都收得到(保安、管理员也是):查日志的回执**不推** —— 日志只给管理员,
     手机收到事件流的每一帧都会刷新狗的列表。"""
     logs = tmp_path / "dog-logs"
     logs.mkdir()
@@ -109,7 +109,7 @@ def test_真狗_日志经站点给管理员_事件流里不推(tmp_path):
         assert s.disp.feed is not None and any(
             (f or {}).get("kind") == "ack" for f in [sub.get(timeout=2.0)]), "别的回执照推"
         assert s.req("GET", "/api/robots/A/logs/nope", token=alice)[0] == 404
-        # 内审小问题 3:查询不记进命令账 —— 单狗视图里保安、业主看得到最近 50 条命令(日志名、
+        # 内审小问题 3:查询不记进命令账 —— 单狗视图里保安、管理员看得到最近 50 条命令(日志名、
         # 狗上的路径),
         # 管理员一刷新还会把正经命令挤出去。
         assert not s.db.query("SELECT 1 FROM commands WHERE kind='proc_log'")

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""W09i 开发机仿真录包:前后两台半球雷达(:mod:`d1max_localizer.lidarsim`)在一个院子里,狗先狗头为前
+"""W09i 开发机仿真录包:前后两台半球雷达(:mod:`d1max_localizer.lidarsim`)在一个现场里,狗先狗头为前
 绕一圈、再倒着(狗尾在前)走回去。出 ``/front_lidar``、``/rear_lidar``(``PointCloud2``,10 Hz)的录包、
 真值轨迹(前雷达在世界系的位姿,TUM)、两台雷达的真值外参(``lidars_truth.json``)。
 
@@ -27,8 +27,8 @@ SPEED = 0.5                                      # m/s
 TURN = 0.6                                       # rad/s
 
 
-def 院子() -> list[ls.Box]:
-    """20 × 14 m 的院子:四面墙、一栋小屋、几根柱子、箱子、一段矮墙。"""
+def 现场() -> list[ls.Box]:
+    """20 × 14 m 的现场:四面墙、一栋小屋、几根柱子、箱子、一段矮墙。"""
     return ls.room(w=20.0, h=14.0, height=2.5, extra=(
         ls.Box((6.0, 9.0, 0.0), (10.0, 13.8, 3.0)),          # 小屋
         ls.Box((14.0, 3.0, 0.0), (14.4, 3.4, 2.2)),          # 柱子
@@ -91,7 +91,7 @@ def main(argv: list[str] | None = None) -> int:
     if bag.exists():
         print(f"{bag} 已经有了", file=sys.stderr)
         return 1
-    world, poses = 院子(), 路线()
+    world, poses = 现场(), 路线()
     w = rosbag2_py.SequentialWriter()
     w.open(rosbag2_py.StorageOptions(uri=str(bag), storage_id="sqlite3"),
            rosbag2_py.ConverterOptions("", ""))

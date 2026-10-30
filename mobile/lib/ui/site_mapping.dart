@@ -9,7 +9,7 @@
 /// - **图的预览**（`SiteMapPreviewPage`，谁都能看）：站点把建好的栅格图渲染成 PNG，这里能缩放，画上这张图上
 ///   登记的待命点 —— 建出来的图对不对、待命点落在哪。
 /// - **禁行区、限速区**（W10，同一页；管理员画、删、确认）：点图加顶点画多边形，存的时候带看到的修订号（别人
-///   先改了站点回 409）；**发布前人工确认**水体、落差、陡坡、花坛都画了，没确认的图下发不了。
+///   先改了站点回 409）；**发布前人工确认**水池、高楼楼梯、陡坡、落差都画了，没确认的图下发不了。
 library;
 
 import 'dart:async';
@@ -844,7 +844,7 @@ class _SiteMapPreviewPageState extends State<SiteMapPreviewPage> {
                         '${had > 0 ? ' (version ${prev?['version']} had $had)' : ''}. Confirm only if there '
                         'really is no water, drop, steep slope or flower bed anywhere on this map.',
                     '这一版一个禁行区、限速区都没有${had > 0 ? '（上一版第 ${prev?['version']} 版画了 $had 个）' : ''}。'
-                        '确认之前再看一眼：水体、落差、陡坡、花坛真的一处都没有吗？')),
+                        '确认之前再看一眼：水池、高楼楼梯、陡坡、落差真的一处都没有吗？')),
                 actions: [
                   TextButton(
                       onPressed: () => Navigator.pop(c, false),

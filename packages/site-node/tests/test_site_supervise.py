@@ -83,7 +83,7 @@ def test_保安开监护_心跳转到狗上_之后goto收下_放了又不收(监
     assert code == 409, d
 
 
-def test_业主不能开监护_动作不对400(监护站):
+def test_管理员不能开监护_动作不对400(监护站):
     s = 监护站
     olga = _登(s, "olga")
     code, _ = _心跳(s, olga)

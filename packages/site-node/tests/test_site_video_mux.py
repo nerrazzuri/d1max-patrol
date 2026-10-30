@@ -334,7 +334,7 @@ def test_端到端_起不来的那一路回原因_别的照常(视频站):
         w.close()
 
 
-def test_没登录401_业主能看(tmp_path):
+def test_没登录401_管理员能看(tmp_path):
     from test_site_api import PW, 站
     s = 站(tmp_path)
     try:
@@ -342,7 +342,7 @@ def test_没登录401_业主能看(tmp_path):
         s.accounts.add("olga", PW, role="owner")
         tok = s.req("POST", "/api/login", {"name": "olga", "password": PW})[1]["token"]
         w = 网页(s, tok)
-        assert w.status == 101, "业主能看画面(view)"
+        assert w.status == 101, "管理员能看画面(view)"
         w.close()
     finally:
         s.close()

@@ -135,7 +135,7 @@ FINAL_STATES = frozenset({RunState.DONE, RunState.ABORTED})
 #:
 #: ``RETURNING`` 原来在这儿(挂账 56),2026-09-10 移走了:走廊被堵、地上有水,
 #: 人在返航路上要把狗牵开是个真需求。移走的前提是那条路真接得住继续 ——
-#: 见 ``_ResumeReturnHome``:人接管完是从狗**现在**停的地方重新规划回家,
+#: 见 ``_ResumeReturnHome``:人接管完是从狗**现在**停的地方重新规划回原点,
 #: 不是接着跑发起返航时那一次 ``return_home``。
 #: **直线后端(W00c6b)这个前提不成立**:它不规划,接管完引擎沿来路接着走当前这一段 —— 从人把狗
 #: 放下的地方直线奔这一段的终点,那一小段没走过。人刚开过、人在场,记在已知限制里。
@@ -228,7 +228,7 @@ class SuspendPoint:
     #: 进挂起之前引擎在哪个状态。**"人接管完之后该往哪走"只认这一个字段。**
     #:
     #: 从跑点位挂起的,继续时重发当前点;从返航路上挂起的,继续时得重新规划
-    #: 回家(任务 13)。这件事必须显式记下来:``reason`` 是人打的一句话,拿
+    #: 回原点(任务 13)。这件事必须显式记下来:``reason`` 是人打的一句话,拿
     #: 它去猜状态就是把控制流建在自由文本上 —— 现场随手写一句"返航路上有
     #: 水",引擎就会走上完全不同的一支。
     #:
@@ -341,7 +341,7 @@ class _RetryWaypoint(Exception):
 
 
 class _ResumeReturnHome(Exception):
-    """返航途中被人接管,现在人还回来了 —— **从狗现在停的地方重新规划回家**。
+    """返航途中被人接管,现在人还回来了 —— **从狗现在停的地方重新规划回原点**。
 
     自成一个类型,两条都不能复用:
 
@@ -836,7 +836,7 @@ class MissionEngine(EventEmitter[RunSnapshot]):
         await self._transition(RunState.ABORTED, reason)
 
     async def _go_home(self, reason: str) -> None:
-        """回家。**是一个循环,不是一次性的**(任务 13)。
+        """回原点。**是一个循环,不是一次性的**(任务 13)。
 
         循环的唯一理由是"返航途中被人接管过":人接管完点继续,狗已经不在发起
         返航时那个位置了,得重新走一遍这个循环 —— 重新停、重新等 StandBy、
@@ -863,7 +863,8 @@ class MissionEngine(EventEmitter[RunSnapshot]):
                 await self._stop_nav_quietly()
                 # 返航也是一次 start_nav,一样只在 StandBy 下受理。
                 await self._await_nav_standby(self._clock() + NAV_STANDBY_TIMEOUT_S)
-                # 后端会返航的(规划器上线后,W10),这一圈从狗**当下**的位置重新规划回家 —— 人接管过、
+                # 后端会返航的(规划器上线后,W10),这一圈从狗**当下**的位置重新规划回原点 ——
+                # 人接管过、
                 # 狗被挪开了,重新规划的起点就是新位置(W08 决定 6)。现在代理唯一的导航桥是直线桥,它
                 # 不认 ``return_home``(W00c6b),引擎走下面的沿来路回。
                 # (以前这里押的是厂商导航 ``start_nav_return_home`` 会不会重新规划;
@@ -878,8 +879,8 @@ class MissionEngine(EventEmitter[RunSnapshot]):
                     try:
                         await return_to(self._home.pose)
                     except NavNotLocalizedError as exc:
-                        # 回家时没有可信定位:同样先恢复定位,恢复了从这儿重新规划回家(W10 外审 3)
-                        await self._recover_localization(f"规划回家时没有可信定位: {exc.message}")
+                        # 回原点时没有可信定位:同样先恢复定位,恢复了从这儿重新规划回原点(W10 外审 3)
+                        await self._recover_localization(f"规划回原点时没有可信定位: {exc.message}")
                     await self._wait_nav_terminal(self._clock() + self._return_budget_s())
                     break
                 try:
@@ -888,7 +889,7 @@ class MissionEngine(EventEmitter[RunSnapshot]):
                     # **后端不会返航,引擎自己回(W04)。** 自建导航和仿真的
                     # ``return_home`` 是明确拒绝的;以前这个拒绝直接把整趟按
                     # 「返航失败」中止 —— 低电时狗原地趴下,而这正是最不该
-                    # 趴下的时候。沿来路倒着走回去:直线回家会穿墙。
+                    # 趴下的时候。沿来路倒着走回去:直线回原点会穿墙。
                     log.info("后端不支持返航(%s),引擎沿来路回原点", exc)
                     await self._retrace_home()
                     break
@@ -896,7 +897,7 @@ class MissionEngine(EventEmitter[RunSnapshot]):
                 # (跟 ``_do_waypoint`` 里"到点超时按这一次尝试算"同一个道理)。
                 await self._wait_nav_terminal(self._clock() + RETURN_TIMEOUT_S)
             except (_ResumeReturnHome, _RetryWaypoint):
-                # **两个信号在这儿是同一件事:有人 resume 了,重新规划回家。**
+                # **两个信号在这儿是同一件事:有人 resume 了,重新规划回原点。**
                 #
                 # ``_ResumeReturnHome`` 是直接从 ``RETURNING`` 让开腿那一支
                 # (``SuspendPoint.from_state is RETURNING``)。
@@ -918,7 +919,7 @@ class MissionEngine(EventEmitter[RunSnapshot]):
                 #
                 # 状态在这儿翻回 ``RETURNING``。``_ResumeReturnHome`` 那一支
                 # **全程不经过 RUNNING**(闪一下 RUNNING 会让订阅方以为任务又
-                # 在跑点位了,而这条狗从头到尾只是在回家路上);绕道 ``_Retry
+                # 在跑点位了,而这条狗从头到尾只是在回原点路上);绕道 ``_Retry
                 # Waypoint`` 那两支会先被上游翻成 RUNNING 再翻回来。
                 #
                 # **这一闪是安全的,论证如下:** ``_suspend_until_resumed``
@@ -954,7 +955,7 @@ class MissionEngine(EventEmitter[RunSnapshot]):
         await self._transition(RunState.DONE, reason)
 
     def _return_budget_s(self) -> float:
-        """规划回家的超时(W08 决定 9):按规划出的路长、巡航速度的一半算,再加 60 s;
+        """规划回原点的超时(W08 决定 9):按规划出的路长、巡航速度的一半算,再加 60 s;
         没有路长照旧 300 s。"""
         length = getattr(self._nav, "planned_length_m", None)
         if not isinstance(length, (int, float)) or not math.isfinite(length) or length < 0:
@@ -1309,7 +1310,7 @@ class MissionEngine(EventEmitter[RunSnapshot]):
         **位置用"当前正要去的那个点",不用实时位姿。** 正要去的那个点比实际位置更远 —— 往更费电的
         方向偏,正是我们要的方向。
 
-        **直线后端按沿来路的长度算**(W00c6b 内审):它回家是沿来路倒着走,比直线远得多;按直线估的话
+        **直线后端按沿来路的长度算**(W00c6b 内审):它回原点是沿来路倒着走,比直线远得多;按直线估的话
         掉头太晚,回程走到一半碰中止线。
 
         没标原点时返回 0,由 ``return_line_pct`` 退回静态返航线。
@@ -1535,7 +1536,7 @@ class MissionEngine(EventEmitter[RunSnapshot]):
         从一个没人知道的位置出发。
 
         **"重发当前点"只是跑点位那一支的做法。** 从返航路上挂起的,回来要重新
-        规划回家(任务 13),这两支靠 ``SuspendPoint.from_state`` 分开 —— 显式
+        规划回原点(任务 13),这两支靠 ``SuspendPoint.from_state`` 分开 —— 显式
         字段,不是去解析 ``reason`` 里那句人话。
         """
         live = self._live
@@ -1635,7 +1636,7 @@ class MissionEngine(EventEmitter[RunSnapshot]):
             # 主体里正常写"累加"这一句。
             live.suspend_total_ms += int((self._clock() - started) * 1000)
         if point.from_state is RunState.RETURNING:
-            # 返航路上接管的那一支:交给 ``_go_home`` 重新规划回家,不在这儿
+            # 返航路上接管的那一支:交给 ``_go_home`` 重新规划回原点,不在这儿
             # 翻状态 —— 它自己那一圈会把状态翻回 RETURNING。
             raise _ResumeReturnHome
         await self._transition(RunState.RUNNING, "人工接管结束")

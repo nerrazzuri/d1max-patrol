@@ -15,8 +15,8 @@ const unit = (id: string, state: RobotState, o: Partial<UnitInfo> = {}): UnitInf
   state, battery: 80, task: "", ...o,
 });
 const alert = (o: Partial<Alert>): Alert => ({
-  key: "k1", kind: "intrusion", level: "P1", robot: "A", title: "后花园有人闯入", detail: "", first_ms: 1, last_ms: 1, count: 1,
-  acked_by: "", acked_ms: null, resolved_ms: null, audience: "intrusion", context: { zone: "后花园" }, ...o,
+  key: "k1", kind: "intrusion", level: "P1", robot: "A", title: "北区有人闯入", detail: "", first_ms: 1, last_ms: 1, count: 1,
+  acked_by: "", acked_ms: null, resolved_ms: null, audience: "intrusion", context: { zone: "北区" }, ...o,
 });
 
 let posts: { url: string; body: unknown }[] = [];
@@ -32,7 +32,7 @@ beforeEach(() => {
       posts.push({ url, body: JSON.parse(String(init.body ?? "{}")) });
       return Promise.resolve(url.endsWith("/resolve") && resolveStatus !== 200 ? json({ error: "没有这条告警" }, resolveStatus) : json({}));
     }
-    if (url.startsWith("/api/cameras")) return Promise.resolve(json({ cameras: [{ name: "cam3", zone: "后花园", rtsp: true }] }));
+    if (url.startsWith("/api/cameras")) return Promise.resolve(json({ cameras: [{ name: "cam3", zone: "北区", rtsp: true }] }));
     return Promise.resolve(json({}, 404));
   }) as typeof fetch);
 });
@@ -49,8 +49,8 @@ const btn = (c: Element, text: string) => Array.from(c.querySelectorAll("button"
 
 describe("值班页的报警横幅", () => {
   it("实测查出:站点给的「在哪」(命名区域)写在横幅上", () => {
-    const { container: c } = page([alert({ kind: "stuck", audience: "help", robot: "A", title: "卡住了", context: { where: "车库" } as never })]);
-    expect(c.querySelector(".banner")!.textContent).toContain("在车库");
+    const { container: c } = page([alert({ kind: "stuck", audience: "help", robot: "A", title: "卡住了", context: { where: "A区" } as never })]);
+    expect(c.querySelector(".banner")!.textContent).toContain("在A区");
   });
 
   it("确认有人发 intruder", async () => {

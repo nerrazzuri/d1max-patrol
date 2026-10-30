@@ -64,7 +64,7 @@ Alert _intrusion({Map<String, dynamic>? context}) => Alert.fromWire(<String, dyn
 
 void main() {
   group('值守首页：布防模式三段', () {
-    testWidgets('业主：写着现在是什么模式；切到在家先问一遍，走的是 setMode', (t) async {
+    testWidgets('管理员：写着现在是什么模式；切到留守先问一遍，走的是 setMode', (t) async {
       final api = FakeApi('owner')..modeView = _mode('armed');
       await _duty(t, api);
       expect(find.text('现在：布防'), findsOneWidget);
@@ -80,19 +80,19 @@ void main() {
       await t.tap(find.byKey(SiteModeBar.homeGoKey));
       await t.pumpAndSettle();
       expect(api.calls.where((c) => c.startsWith('mode')), ['mode home']);
-      expect(find.text('现在：在家'), findsOneWidget);
+      expect(find.text('现在：留守'), findsOneWidget);
       await t.tap(find.byKey(SiteModeBar.armKey));
       await t.pumpAndSettle();
       expect(api.calls.last, 'mode armed', reason: '布防不用问');
       expect(find.text('现在：布防'), findsOneWidget);
     });
 
-    testWidgets('保安：只能布防；在家、访客点不动，说了要业主切', (t) async {
+    testWidgets('保安：只能布防；留守、临时撤防点不动，说了要管理员切', (t) async {
       final api = FakeApi('guard')..modeView = _mode('home');
       await _duty(t, api);
       expect(_canTap(t, SiteModeBar.homeKey), isFalse);
       expect(_canTap(t, SiteModeBar.visitorKey), isFalse);
-      expect(find.text('撤防（在家、访客）要业主切'), findsOneWidget);
+      expect(find.text('撤防（留守、临时撤防）要管理员或经理切'), findsOneWidget);
       await t.tap(find.byKey(SiteModeBar.homeKey), warnIfMissed: false);
       await t.tap(find.byKey(SiteModeBar.visitorKey), warnIfMissed: false);
       await t.pumpAndSettle();
@@ -112,10 +112,10 @@ void main() {
       await t.pumpAndSettle();
       expect(find.byKey(SiteModeBar.msgKey), findsOneWidget);
       expect(find.textContaining('切到布防没成'), findsOneWidget);
-      expect(find.text('现在：在家'), findsOneWidget);
+      expect(find.text('现在：留守'), findsOneWidget);
     });
 
-    testWidgets('访客要挑防区和时长：进模式页', (t) async {
+    testWidgets('临时撤防要挑防区和时长：进模式页', (t) async {
       final api = FakeApi('owner')..modeView = _mode('armed');
       await _duty(t, api);
       await t.tap(find.byKey(SiteModeBar.visitorKey));
@@ -141,7 +141,7 @@ void main() {
       expect(find.textContaining('现在：'), findsNothing);
       slow.gates.single.complete(slow.modeView);
       await t.pumpAndSettle();
-      expect(find.text('现在：在家'), findsOneWidget);
+      expect(find.text('现在：留守'), findsOneWidget);
       // 之后读不到了：上一次的不再当成现在的
       slow
         ..hold = false
@@ -157,7 +157,7 @@ void main() {
       await _duty(t, api);
       api.sse.add(<String, dynamic>{'kind': 'mode', 'mode': _mode('home')});
       await t.pump(const Duration(milliseconds: 50));
-      expect(find.text('现在：在家'), findsOneWidget);
+      expect(find.text('现在：留守'), findsOneWidget);
       expect(_canTap(t, SiteModeBar.armKey), isTrue);
       final old = api.sse;
       api.sse = StreamController<Map<String, dynamic>>.broadcast();

@@ -78,10 +78,10 @@ describe("机器人页", () => {
     await waitFor(() => expect(cardOf(c, "A")).not.toBeNull());
     fireEvent.click(cardOf(c, "A"));
     const d = c.querySelector(".robot-detail")!;
-    fireEvent.input(d.querySelector('input[name="name"]')!, { target: { value: "前院" } });
+    fireEvent.input(d.querySelector('input[name="name"]')!, { target: { value: "南区" } });
     fireEvent.click(btn(d, "保存名字"));
-    await waitFor(() => expect(posted.find((p) => p.url === "/api/admin/robots/A/name")?.body).toEqual({ name: "前院" }));
-    await waitFor(() => expect(cardOf(c, "A").textContent).toContain("前院"));
+    await waitFor(() => expect(posted.find((p) => p.url === "/api/admin/robots/A/name")?.body).toEqual({ name: "南区" }));
+    await waitFor(() => expect(cardOf(c, "A").textContent).toContain("南区"));
   });
 
   it("详情里有最近的毛病", async () => {
@@ -121,14 +121,14 @@ describe("机器人页", () => {
     fireEvent.click(btn(row, "批准"));
     const form = document.querySelector("form.bind-approve")!;
     expect(form.textContent).toContain("042917");
-    fireEvent.input(form.querySelector('input:not([type="password"])')!, { target: { value: "后院" } });
+    fireEvent.input(form.querySelector('input:not([type="password"])')!, { target: { value: "西区" } });
     fireEvent.input(form.querySelector('input[type="password"]')!, { target: { value: "wrong" } });
     fireEvent.submit(form);
     await waitFor(() => expect(document.querySelector("form.bind-approve .error")?.textContent).toContain("密码不对"));
     fireEvent.input(form.querySelector('input[type="password"]')!, { target: { value: "pw" } });
     fireEvent.submit(form);
     await waitFor(() => expect(said.join()).toContain("D1M-7 已加入站点"));
-    expect(posted.at(-1)).toEqual({ url: "/api/admin/bind/ab12/approve", body: { confirm_password: "pw", name: "后院" } });
+    expect(posted.at(-1)).toEqual({ url: "/api/admin/bind/ab12/approve", body: { confirm_password: "pw", name: "西区" } });
     await waitFor(() => expect(c.querySelector(".bind-pending")).toBeNull());
   });
 
@@ -166,10 +166,10 @@ describe("机器人页", () => {
   });
 
   it("保安页用起的名字", () => {
-    robotNames.value = { A: "前院" };
+    robotNames.value = { A: "南区" };
     const u: UnitInfo = { robot: { robot_id: "A", active: true, fresh: true, revoked: false, held: null, status: { online: true, last_seen: 0 }, capabilities: null },
       state: "idle", battery: 50, task: "" };
     const { container: c } = render(<LiveWall units={[u]} alerts={[]} now={0} onZoom={() => {}} />);
-    expect(c.querySelector(".lw-card .slot-name")!.textContent).toBe("前院");
+    expect(c.querySelector(".lw-card .slot-name")!.textContent).toBe("南区");
   });
 });

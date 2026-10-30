@@ -154,7 +154,7 @@ LEVEL_OF: dict[str, Level] = {
     "payload_spotlight": Level.P1,
     # 功放(W40,上装 V1.2):关不上只是费电发热,开不了喇叭就哑了(驱离少一档)—— 今天之内去看
     "payload_amp": Level.P2,
-    # 上装主控板过热(W46,决策 74):偏高、降负载今天之内看风扇;严重过热机器人自己回家,要人去看
+    # 上装主控板过热(W46,决策 74):偏高、降负载今天之内看风扇;严重过热机器人自己回原点,要人去看
     "board_hot": Level.P2,
     "board_overheat": Level.P1,
     # 热像镜头被挡(W46):夜里找人、看起火少了一只眼,今天之内擦一下
@@ -311,7 +311,7 @@ class Alert:
             "shelved_ms": self.shelved_ms,
             "shelved_until_ms": self.shelved_until_ms,
             "shelved_reason": self.shelved_reason,
-            # W44:给谁看(保安四类 / 业主),网页、推送按它分
+            # W44:给谁看(保安四类 / 管理员),网页、推送按它分
             "audience": audience(self.kind),
             "verdict": self.verdict,
         }

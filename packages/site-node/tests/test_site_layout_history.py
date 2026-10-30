@@ -19,7 +19,7 @@ from d1max_site.layout_history import KEEP, LayoutHistory
 
 POND = {"id": "pond", "kind": "nogo", "label": "池子",
         "polygon": [[5, 5], [6, 5], [6, 6], [5, 6]]}
-BED = {"id": "bed", "kind": "nogo", "label": "花坛",
+BED = {"id": "bed", "kind": "nogo", "label": "高楼楼梯",
        "polygon": [[1, 1], [2, 1], [2, 2], [1, 2]]}
 SQ = [[0, 0], [4, 0], [4, 4], [0, 4]]
 SQ2 = [[10, 10], [14, 10], [14, 14], [10, 14]]
@@ -108,7 +108,7 @@ def test_退回禁行区_放宽的照样要确认(站点):
     s.req("POST", zp, {"zones": [POND, BED], "base_revision": 1}, token=tok)   # 收紧,当场算确认
     rows = _hist(s, tok, "nogo")
     assert len(rows) == 2
-    # 退回到只有泳池的那一份 = 删花坛 = 放宽:要确认,在生效的照旧有花坛
+    # 退回到只有泳池的那一份 = 删高楼楼梯 = 放宽:要确认,在生效的照旧有高楼楼梯
     code, d = _restore(s, tok, rows[1]["id"])
     assert code == 200, d
     v = s.req("GET", zp, token=tok)[1]

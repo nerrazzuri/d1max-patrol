@@ -61,8 +61,8 @@ def test_挂申请_批准_拿开通码_领证书包_回复丢了能再领(台):
     assert desk.poll(r["request_id"], r["poll_secret"]) == {"state": "pending"}
     [p] = desk.pending()
     assert p["serial"] == "D1M-1" and p["check"] == r["check"] and p["source"] == "10.0.0.5"
-    desk.approve(r["request_id"], by="owner", name="前院一号")
-    assert names == {"D1M-1": "前院一号"}
+    desk.approve(r["request_id"], by="owner", name="南区一号")
+    assert names == {"D1M-1": "南区一号"}
     assert a.resolved == [("D1M-1", "bind_request", "owner")]
     got = desk.poll(r["request_id"], r["poll_secret"])
     assert got["state"] == "approved"
@@ -206,7 +206,7 @@ def test_接口_机器人不用登录_批准要manage和密码(tmp_path, 台):
         assert code == 200 and d["requests"][0]["serial"] == "D1M-9"
         assert s.req("POST", f"/api/admin/bind/{rid}/approve", {}, token=tok)[0] == 403
         code, d = s.req("POST", f"/api/admin/bind/{rid}/approve",
-                        {"confirm_password": PW, "name": "后院"}, token=tok)
+                        {"confirm_password": PW, "name": "西区"}, token=tok)
         assert code == 200 and d["state"] == "approved", d
         # 测试台的库跟站点目录的库是两个:站点目录里登记的这一代,抄进测试台的库(真站点是同一个库)
         hd = SiteDB(home / "site.db")

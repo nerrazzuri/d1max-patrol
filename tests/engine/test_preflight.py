@@ -413,7 +413,7 @@ def test_出发线永远不低于同一刻的返航线(sample_mission, floor):
     """
     params = ReturnParams(floor_pct=floor)
     line = departure_line_pct(sample_mission, _HOME, params=params)
-    # 刚起飞那一刻站在原点上,回家成本是 0 —— 返航线取的正是地板那一支。
+    # 刚起飞那一刻站在原点上,回原点成本是 0 —— 返航线取的正是地板那一支。
     ctx = SafetyContext(policy=sample_mission.policy, battery_pct=line,
                         return_cost_pct=0.0, floor_pct=floor)
     assert return_line_pct(ctx) <= line
@@ -453,8 +453,8 @@ def test_出发线从出发点算():
         < departure_line_pct(m, _HOME)
 
 
-async def test_起飞检查用狗当前在哪_回家这一趟只算单程(tmp_path, fake_device):
-    """内审应修 1 的实验:狗在 200 m 外、电量 36.8%,直线回家大约只要 4%;以前回程巡检的出发线按
+async def test_起飞检查用狗当前在哪_回原点这一趟只算单程(tmp_path, fake_device):
+    """内审应修 1 的实验:狗在 200 m 外、电量 36.8%,直线回原点大约只要 4%;以前回程巡检的出发线按
     「原点出发 + 回原点」算成 38.0%,被拒,狗困在远端。"""
     m = _回程(on_battery_low="continue", battery_return_pct=25.0, battery_abort_pct=25.0)
     far = Pose.from_xy_yaw(150.0, 0.0)

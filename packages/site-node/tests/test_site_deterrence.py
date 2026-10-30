@@ -288,7 +288,7 @@ async def test_只有部分路_只开有的_没话术不放(tmp_path):
 # ------------------------------------------------------------ 接口(真 HTTP → 真代理 → 仿真狗)
 
 
-def test_接口_保安跳级_狗上真开了_业主能解除不能跳级_没在驱离404(tmp_path):
+def test_接口_保安跳级_狗上真开了_管理员能解除不能跳级_没在驱离404(tmp_path):
     from test_site_api import PW, _等, 站
 
     from d1max_site.standby import StandbyManager
@@ -1131,7 +1131,7 @@ async def test_W33_就地驱离_有人在遥控_没上装_不知道在哪_都开
     assert "A" not in t.desk.sessions
 
 
-def test_W33_接口_就地驱离_保安能开_业主不能_狗上真开了灯(tmp_path):
+def test_W33_接口_就地驱离_保安能开_管理员不能_狗上真开了灯(tmp_path):
     from test_site_api import PW, _等, 站
 
     from d1max_site.standby import StandbyManager

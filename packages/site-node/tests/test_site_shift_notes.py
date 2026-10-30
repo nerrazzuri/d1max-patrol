@@ -47,7 +47,7 @@ def test_交班留言_最新一条(tmp_path):
     t = [1000]
     notes = ShiftNotes(SiteDB(tmp_path / "s.db"), now_ms=lambda: t[0])
     assert notes.latest() is None
-    notes.add("li", "后花园东边的灯坏了")
+    notes.add("li", "北区东边的灯坏了")
     t[0] = 2000
     notes.add("wang", "  3 号摄像头误报多  ")
     assert notes.latest() == {"id": 2, "at_ms": 2000, "author": "wang", "text": "3 号摄像头误报多"}
@@ -81,7 +81,7 @@ def _登(s, name):
 
 
 def _一条(s, kind="intrusion"):
-    a = s.loop.call(lambda: _sync(s.desk.raise_alert, kind=kind, robot="A", title="后花园有人闯入"))
+    a = s.loop.call(lambda: _sync(s.desk.raise_alert, kind=kind, robot="A", title="北区有人闯入"))
     return quote(a.key, safe="")
 
 
@@ -110,7 +110,7 @@ def test_结论只认三种_不带也行(站点):
     assert code == 200 and d["alert"]["verdict"] == ""
 
 
-def test_家人账号也能下结论(站点):
+def test_经理账号也能下结论(站点):
     s = 站点
     olga = _登(s, "olga")
     code, d = s.req("POST", f"/api/alerts/{_一条(s)}/resolve", {"verdict": "intruder"}, token=olga)
@@ -121,11 +121,11 @@ def test_交班留言接口_作者取登录账号(站点):
     s = 站点
     gina, alice = _登(s, "gina"), _登(s, "alice")
     assert s.req("GET", "/api/shift-notes", token=alice) == (200, {"latest": None})
-    code, d = s.req("POST", "/api/shift-notes", {"text": "后花园东边的灯坏了", "author": "mallory"},
+    code, d = s.req("POST", "/api/shift-notes", {"text": "北区东边的灯坏了", "author": "mallory"},
                     token=gina)
     assert code == 200 and d["note"]["author"] == "gina"
     code, d = s.req("GET", "/api/shift-notes", token=alice)
-    assert d["latest"]["text"] == "后花园东边的灯坏了" and d["latest"]["author"] == "gina"
+    assert d["latest"]["text"] == "北区东边的灯坏了" and d["latest"]["author"] == "gina"
     audit = s.req("GET", "/api/audit", token=alice)[1]["audit"]
     assert any(r["actor"] == "gina" and "/api/shift-notes" in r["action"] for r in audit)
 

@@ -86,7 +86,7 @@ class Registry:
         return was
 
     def names(self) -> dict[str, str]:
-        """业主起的名字(W44 第二期):``{robot_id: 名字}``,没起名的不在里面。"""
+        """管理员起的名字(W44 第二期):``{robot_id: 名字}``,没起名的不在里面。"""
         return {r["robot_id"]: r["display_name"] for r in self.db.query(
             "SELECT robot_id, display_name FROM robots WHERE display_name<>''")}
 

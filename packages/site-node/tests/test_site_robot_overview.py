@@ -1,4 +1,4 @@
-"""W44 第二期:机器人概览(「机器人」页的卡片、「家里的状况」的小卡片)、起名、解绑要再输密码。"""
+"""W44 第二期:机器人概览(「机器人」页的卡片、「现场概况」的小卡片)、起名、解绑要再输密码。"""
 
 from __future__ import annotations
 
@@ -130,8 +130,8 @@ def test_概览_只能手动派(台):
 
 def test_起名(台):
     d, db = 台
-    d.registry.set_name("A", "  前院  ")
-    assert d.registry.names() == {"A": "前院"} and _one(d, db)["name"] == "前院"
+    d.registry.set_name("A", "  南区  ")
+    assert d.registry.names() == {"A": "南区"} and _one(d, db)["name"] == "南区"
     d.registry.set_name("A", "")
     assert d.registry.names() == {} and _one(d, db)["name"] == ""
 
@@ -144,7 +144,7 @@ def test_起名_不合规矩(台, bad):
 
 def test_起名_没这台(台):
     with pytest.raises(RegistryError):
-        台[0].registry.set_name("Z", "前院")
+        台[0].registry.set_name("Z", "南区")
 
 
 # ------------------------------------------------------------ 接口
@@ -172,12 +172,12 @@ def test_概览权限(站点):
 def test_接口起名_robots回包带name(站点):
     s = 站点
     alice = _登(s, "alice")
-    assert s.req("POST", "/api/admin/robots/A/name", {"name": "前院"}, token=_登(s, "gina"))[0] \
+    assert s.req("POST", "/api/admin/robots/A/name", {"name": "南区"}, token=_登(s, "gina"))[0] \
         == 403
-    code, d = s.req("POST", "/api/admin/robots/A/name", {"name": "前院"}, token=alice)
+    code, d = s.req("POST", "/api/admin/robots/A/name", {"name": "南区"}, token=alice)
     assert code == 200, d
     robots = s.req("GET", "/api/robots", token=alice)[1]["robots"]
-    assert robots[0]["name"] == "前院"
+    assert robots[0]["name"] == "南区"
     assert s.req("POST", "/api/admin/robots/A/name", {"name": "字" * 33}, token=alice)[0] == 400
     assert s.req("POST", "/api/admin/robots/Z/name", {"name": "x"}, token=alice)[0] == 404
 

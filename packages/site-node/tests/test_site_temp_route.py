@@ -74,7 +74,7 @@ def test_临时路线_点不成形400带第几个(站点):
     assert code == 400 and d["errors"][0]["index"] == 1
 
 
-def test_临时路线_家人账号403(站点):
+def test_临时路线_经理账号403(站点):
     s = 站点
     olga = _登(s, "olga")
     code, _ = s.req("POST", "/api/robots/A/patrol", {"points": [{"x": 0, "y": 0}], "map_id": "m",
@@ -90,9 +90,9 @@ def test_授权此刻生效没有(tmp_path):
     lt = time.localtime(now / 1000)
     m = lt.tm_hour * 60 + lt.tm_min
     hh = lambda x: f"{(x // 60) % 24:02d}:{x % 60:02d}"  # noqa: E731
-    book.add({"name": "园丁", "zones": ["后花园"], "days": 127, "start": hh(max(0, m - 1)),
+    book.add({"name": "维修工", "zones": ["北区"], "days": 127, "start": hh(max(0, m - 1)),
               "end": hh(min(1439, m + 2))}, by="alice")
     book.add({"name": "保洁", "zones": ["主楼"], "days": 127, "start": hh((m + 120) % 1440),
               "end": hh((m + 180) % 1440)}, by="alice")
     got = {e["name"]: e["active_now"] for e in book.list(with_active=True)}
-    assert got == {"园丁": True, "保洁": False}
+    assert got == {"维修工": True, "保洁": False}

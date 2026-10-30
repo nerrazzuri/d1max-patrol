@@ -36,7 +36,7 @@ export function mapAreas(meta: PreviewMeta, sec: { zone: string; points: Pt[] }[
     seen.add(s.zone);
     named.push({ name: s.zone, pts: s.points, kind: "area" });
   }
-  // W44 第四期:地图编辑器里起的区域名(车库、后花园……)也画上
+  // W44 第四期:地图编辑器里起的区域名(A区、北区……)也画上
   for (const r of meta.display?.regions ?? []) {
     if (!r.name || seen.has(r.name) || !Array.isArray(r.polygon) || r.polygon.length < 3) continue;
     seen.add(r.name);
@@ -236,7 +236,7 @@ export function MapPage(props: {
   const [authz, setAuthz] = useState<AuthzRow[]>([]);
   const [recent, setRecent] = useState<Alert[]>([]);
   const [standby, setStandby] = useState<{ name: string; x: number; y: number }[]>([]);
-  // W44 第三期:固定摄像头放在图上的(业主在「布置 → 摄像头」放的);点了看实时画面
+  // W44 第三期:固定摄像头放在图上的(管理员在「布置 → 摄像头」放的);点了看实时画面
   const [cams, setCams] = useState<PlacedCam[]>([]);
   const [liveCam, setLiveCam] = useState<string | null>(null);
   useEffect(() => {

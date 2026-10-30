@@ -35,7 +35,7 @@ Future<void> _open(WidgetTester t, FakeApi api) async {
 int _count(FakeApi api, String action) => api.calls.where((c) => c == 'supervise A $action').length;
 
 void main() {
-  testWidgets('要人监护的机器人、保安才有开关；可自主的机器人、业主没有', (t) async {
+  testWidgets('要人监护的机器人、保安才有开关；可自主的机器人、管理员没有', (t) async {
     await _open(t, FakeApi('guard', robotView: _view('supervised')));
     expect(find.byKey(SupervisionSwitch.switchKey), findsOneWidget);
     await _open(t, FakeApi('guard', robotView: _view('autonomous')));

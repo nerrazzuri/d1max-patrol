@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-// W44 第一期:新外壳(顶栏、路由、主题、业主的临时提醒页)。真的把 Console 渲染出来看。
+// W44 第一期:新外壳(顶栏、路由、主题、管理员的临时提醒页)。真的把 Console 渲染出来看。
 import { cleanup, fireEvent, render, waitFor } from "@testing-library/preact";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { setFetch } from "./api";
@@ -94,7 +94,7 @@ describe("新外壳", () => {
     await waitFor(() => expect(c.container.querySelector('main[data-page="duty"]')).not.toBeNull());
   });
 
-  it("保安看不到管理,业主看得到", () => {
+  it("保安看不到管理,管理员看得到", () => {
     const g = render(<Console me={me("guard")} onOut={() => {}} />);
     expect(g.container.querySelector(".tabsnav")!.textContent).not.toContain("管理");
     cleanup();
@@ -102,7 +102,7 @@ describe("新外壳", () => {
     expect(a.container.querySelector(".tabsnav")!.textContent).toContain("管理");
   });
 
-  it("管理入口指家里的状况", () => {
+  it("管理入口指现场概况", () => {
     const a = render(<Console me={me("admin")} onOut={() => {}} />);
     const link = Array.from(a.container.querySelectorAll(".tabsnav a")).find((x) => x.textContent === "管理")!;
     expect(link.getAttribute("href")).toBe("#/admin/home");
@@ -134,7 +134,7 @@ describe("新外壳", () => {
     expect(e.container.querySelector('.adminnav a[href="#/admin/robots"]')).not.toBeNull();
   });
 
-  it("家人看不到管理", () => {
+  it("经理看不到管理", () => {
     location.hash = "#/admin/home";
     const f = render(<Console me={me("owner")} onOut={() => {}} />);
     expect(f.container.querySelector(".tabsnav")!.textContent).not.toContain("管理");
@@ -173,7 +173,7 @@ describe("新外壳", () => {
     c.unmount();
   });
 
-  it("家里的状况只列技术类的要你处理的事,保安进不去", async () => {
+  it("现场概况只列技术类的要你处理的事,保安进不去", async () => {
     alerts = [alert({ key: "a", kind: "cert_expiring", level: "P2", title: "证书快到期", audience: "owner" }),
       alert({ key: "b", kind: "stuck", title: "卡住了", audience: "help" })];
     location.hash = "#/admin/notices";

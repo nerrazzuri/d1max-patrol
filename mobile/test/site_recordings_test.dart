@@ -47,7 +47,7 @@ void main() {
     await t.pumpAndSettle();
     expect(api.calls, contains('recording-bytes 11'));
     expect(p.played.single, endsWith(' 3'));
-    expect(find.byKey(SiteRecordingsPage.keepKey(10)), findsNothing, reason: '业主不能标留着');
+    expect(find.byKey(SiteRecordingsPage.keepKey(10)), findsNothing, reason: '管理员不能标留着');
   });
 
   testWidgets('按相机筛；更早、更晚按 30 分钟翻', (t) async {

@@ -52,7 +52,7 @@ class Box:
 
 def room(w: float = 12.0, h: float = 8.0, wall: float = 0.2, height: float = 2.5,
          extra: tuple[Box, ...] = ()) -> list[Box]:
-    """四面墙的院子 + 额外的箱子。"""
+    """四面墙的现场 + 额外的箱子。"""
     return [Box((0, 0, 0), (w, wall, height)), Box((0, h - wall, 0), (w, h, height)),
             Box((0, 0, 0), (wall, h, height)), Box((w - wall, 0, 0), (w, h, height)),
             *extra]

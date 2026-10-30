@@ -18,7 +18,7 @@ beforeEach(() => {
   posted = [];
   schedule = { enabled: true, slots: [{ zone: "", day: 0, start: "22:00", end: "24:00" }], exceptions: [], today: [] };
   mode = { mode: "armed", label: "按时间表:布防", source: "schedule", state: "armed", next_change_ms: at(22), manual_until_ms: null,
-    zones: [{ zone: "后花园", armed: true, home_armed: true }] };
+    zones: [{ zone: "北区", armed: true, home_armed: true }] };
   setFetch(((url: string, init?: RequestInit) => {
     if (init?.method === "POST") {
       const body = JSON.parse(String(init.body ?? "{}"));
@@ -97,15 +97,15 @@ describe("布防时间页", () => {
     const { container: c } = page();
     await waitFor(() => expect(row(c, 0).querySelector(".armblock")).not.toBeNull());
     fireEvent.click(btn(c, "每个防区单独设"));
-    fireEvent.click(btn(c, "后花园"));
+    fireEvent.click(btn(c, "北区"));
     expect(c.textContent).toContain("跟全部防区一样");
     fireEvent.click(btn(c, "单独设这个防区"));
     drag(row(c, 2).querySelector(".armtrack")!, 480, 600);
     fireEvent.click(c.querySelector(".arm-save")!);
     await waitFor(() => expect(posted.some((p) => p.url === "/api/arming/schedule")).toBe(true));
     const slots = posted.find((p) => p.url === "/api/arming/schedule")!.body.slots as { zone: string; day: number }[];
-    expect(slots).toContainEqual({ zone: "后花园", day: 0, start: "22:00", end: "24:00" });
-    expect(slots).toContainEqual({ zone: "后花园", day: 2, start: "08:00", end: "10:00" });
+    expect(slots).toContainEqual({ zone: "北区", day: 0, start: "22:00", end: "24:00" });
+    expect(slots).toContainEqual({ zone: "北区", day: 2, start: "08:00", end: "10:00" });
     expect(slots.filter((x) => x.zone === "")).toEqual([{ zone: "", day: 0, start: "22:00", end: "24:00" }]);
   });
 
@@ -143,10 +143,10 @@ describe("布防时间页", () => {
   });
 
   it("写明现在谁说了算", async () => {
-    mode = { ...mode, source: "manual", label: "在家", mode: "home", manual_until_ms: at(22) };
+    mode = { ...mode, source: "manual", label: "留守", mode: "home", manual_until_ms: at(22) };
     const { container: c } = page();
     await waitFor(() => expect(c.querySelector(".arm-who")!.textContent).toContain("22:00"));
-    expect(c.querySelector(".arm-who")!.textContent).toContain("在家");
+    expect(c.querySelector(".arm-who")!.textContent).toContain("留守");
     expect(c.querySelector(".arm-who")!.textContent).toContain("回时间表");
   });
 });

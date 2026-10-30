@@ -301,7 +301,7 @@ void main() {
     expect(find.byKey(SiteRouteEditorPage.pointKey(2)), findsOneWidget);
   });
 
-  testWidgets('路线列表：业主 / 保安没有「新路线」；没有路线时说没有', (t) async {
+  testWidgets('路线列表：管理员 / 保安没有「新路线」；没有路线时说没有', (t) async {
     final api = RoutesApi('guard')..routesBody = <String, dynamic>{'revision': 1, 'routes': <dynamic>[], 'schedules': <dynamic>[]};
     await t.pumpWidget(MaterialApp(home: SiteRoutesPage(api: api)));
     await t.pumpAndSettle();
@@ -462,7 +462,7 @@ void main() {
       expect(find.textContaining('choose again'), findsOneWidget);
     });
 
-    testWidgets('业主：没有这套工具，点图也不选位置', (t) async {
+    testWidgets('管理员：没有这套工具，点图也不选位置', (t) async {
       final api = Rot23Api('owner');
       final c = await pumpTab(t, api);
       expect(find.byKey(PoseBar.barKey), findsNothing);

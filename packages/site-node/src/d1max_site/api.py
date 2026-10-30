@@ -594,7 +594,7 @@ class _Handler(TlsHandlerMixin):
             if method == "GET" and path == "/api/video/ws":
                 return self._video_ws(user)               # W51:网页的多路画面走一条 WebSocket
             if method == "GET" and path == "/api/robots/overview":
-                # W44 第二期:业主看的机器人卡片(今天几趟、毛病、电量)
+                # W44 第二期:经理看的机器人卡片(今天几趟、毛病、电量)
                 self._need(user, MANAGE)
                 from d1max_site.robot_overview import overview
                 from d1max_site.sitetime import site_tz
@@ -1536,7 +1536,7 @@ class _Handler(TlsHandlerMixin):
 
     def _deterrence(self, method: str, path: str, user) -> None:
         """分级驱离(W22)。看:``view``;就地开一场(W33,``start``)、跳级、往回退:``dispatch``(保安、管理员);解除:``abort``
-        (保安、管理员、业主,同「叫停」)。"""
+        (保安、管理员、经理,同「叫停」)。"""
         from d1max_site.deterrence import DeterrenceError
         desk = self.site.deterrence
         if desk is None:
@@ -1574,8 +1574,8 @@ class _Handler(TlsHandlerMixin):
                             or "落库没成" in str(exc) else 400, str(exc)) from exc
 
     def _mode(self, method: str, path: str, user) -> None:
-        """布防模式(W20)。看:``view``。切到布防:``arm``(保安也行);切到在家、访客:``set_mode``
-        (业主、管理员)。哪些防区在家时撤防:``manage``。"""
+        """布防模式(W20)。看:``view``。切到布防:``arm``(保安也行);切到留守、临时撤防:``set_mode``
+        (经理、管理员)。哪些防区留守时撤防:``manage``。"""
         from d1max_site.modes import ModeError
         desk = self.site.arming
         if desk is None:
@@ -1855,7 +1855,7 @@ class _Handler(TlsHandlerMixin):
         return self._send_json(200, {"ok": True, "providers": sorted(desk.senders)})
 
     def _weather(self, method: str, user) -> None:
-        """天气(W29)。看:``view``。手动切(正常 / 下雨 / 雷暴 / 回到自动):``arm``(值班的保安、业主、
+        """天气(W29)。看:``view``。手动切(正常 / 下雨 / 雷暴 / 回到自动):``arm``(值班的保安、经理、
         管理员都能;切成雷暴会停巡检,切回正常会恢复,都记审计)。"""
         from d1max_site.weather import WeatherError
         desk = self.site.weather
@@ -1990,7 +1990,7 @@ class _Handler(TlsHandlerMixin):
         raise HttpError(404, f"没有 {method} {path}")
 
     def _halt(self, robot_id: str, user) -> None:
-        """停车(W00c5c):走 cmd,不走遥控连接。``abort`` 权限 —— 业主也能按。"""
+        """停车(W00c5c):走 cmd,不走遥控连接。``abort`` 权限 —— 经理也能按。"""
         self._need(user, ABORT)
         self._body()
         self._audit_target = robot_id
@@ -2012,7 +2012,7 @@ class _Handler(TlsHandlerMixin):
         return self._send_json(200, r)
 
     def _resume(self, robot_id: str, user) -> None:
-        """解除叫停(W00c5e):之后站点才重新给这只狗派单。``dispatch`` 权限 —— 业主能停,不能恢复
+        """解除叫停(W00c5e):之后站点才重新给这只狗派单。``dispatch`` 权限 —— 经理能停,不能恢复
         (能不能让它再动,是会派它的人的事)。"""
         self._need(user, DISPATCH)
         self._body()
@@ -2343,7 +2343,7 @@ class _Handler(TlsHandlerMixin):
 
     def _supervise(self, robot_id: str, user) -> None:
         """监护心跳(W00c6i):``{"action": "renew"|"release"}``。``dispatch`` 权限 —— 保安、
-        管理员;业主不行(在现场看着狗动,是会派它的人的事)。审计只记开始与结束,续着的心跳不记。"""
+        管理员;经理不行(在现场看着狗动,是会派它的人的事)。审计只记开始与结束,续着的心跳不记。"""
         self._need(user, DISPATCH)
         d = self._body()
         action = d.get("action") if isinstance(d, dict) else None
@@ -2427,7 +2427,7 @@ class _Handler(TlsHandlerMixin):
             ws.close(1000, session.end_reason)     # 别的线程排给它的「结束了」由这条线程发出去
 
     def _runs(self, method: str, path: str, user) -> None:
-        """运行记录(W00c5d,决策 8:证据都在站点)。看:``view``(业主也能看);判读、复核:``review``
+        """运行记录(W00c5d,决策 8:证据都在站点)。看:``view``(经理也能看);判读、复核:``review``
         (管理员、保安);导出:``export``(管理员)。"""
         from d1max_site.runs import RunError
         desk = self.site.runs
@@ -2591,7 +2591,7 @@ class _Handler(TlsHandlerMixin):
         ``POST /api/robots/<id>/map`` 和地图管理页(``maps_admin_api``)共用同一套条件。"""
         if self.site.zones is not None and not self.site.zones.confirmed_current(ref.map_id,
                                                                        ref.version):
-            # W10(W08 决定 5):发布前人工确认水体、落差、陡坡、花坛都画成禁行区了
+            # W10(W08 决定 5):发布前人工确认水池、高楼楼梯、陡坡、落差都画成禁行区了
             raise HttpError(409, f"{ref.map_id}:{ref.version} 的禁行区还没确认(或改过之后"
                                  "没重新确认):先在地图页画好、确认再下发",
                             extra={"reason": "zones_unconfirmed"})
@@ -2752,7 +2752,7 @@ class _Handler(TlsHandlerMixin):
         if not zones.current(map_id, version).zones and not n_adopt and empty_ok is not True:
             prev = zones.view(map_id, version).get("previous")
             raise HttpError(409, f"{map_id}:{version} 一个禁行区、限速区都没有:确认之前再看一眼 ——"
-                                 "水体、落差、陡坡、花坛真的一处都没有吗?"
+                                 "水池、高楼楼梯、陡坡、落差真的一处都没有吗?"
                                  + (f"(上一版第 {prev['version']} 版画了 {prev['zones']} 个)"
                                     if prev and prev.get("zones") else "")
                                  + "真的没有就带上 empty_ok",
@@ -3167,7 +3167,7 @@ class _Handler(TlsHandlerMixin):
         return _cam_frames(v)
 
     def _report(self, method: str, user, path: str = "/api/reports/daily") -> None:
-        """值班日报(C-B3b)、按天汇总(W44 第二期):能看的都能看(保安交班、业主)。"""
+        """值班日报(C-B3b)、按天汇总(W44 第二期):能看的都能看(保安交班、经理)。"""
         from d1max_site.reports import ReportError, daily, summary
         from d1max_site.sitetime import site_tz
         if method != "GET":

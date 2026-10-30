@@ -1,7 +1,8 @@
 """W44 第二期:工程师临时账号、删账号、最后登录、敏感操作再输一次密码
 (设计 §3、§5.1「用户」、§5.2 第 4 条)。
 
-工程师 = 业主开的、4 小时或 24 小时到点自动失效的账号;权限等于业主,但不能管账号(不能给自己续命)。
+工程师 = 管理员开的、4 小时或 24 小时到点自动失效的账号;权限等于管理员,
+但不能管账号(不能给自己续命)。
 """
 
 from __future__ import annotations
@@ -32,7 +33,7 @@ def acc(tmp_path):
     db.close()
 
 
-def test_工程师的权限是业主减去管账号():
+def test_工程师的权限是管理员减去管账号():
     assert ROLES["engineer"] == ROLES["admin"] - {MANAGE_ACCOUNTS}
     assert not allowed("engineer", MANAGE_ACCOUNTS)
 
@@ -106,7 +107,7 @@ def test_删账号(acc):
         a.remove("gina")
 
 
-def test_最后一个业主删不掉(acc):
+def test_最后一个管理员删不掉(acc):
     a, _ = acc
     with pytest.raises(AuthError, match="最后一个"):
         a.remove("alice")
@@ -201,7 +202,7 @@ def test_接口_工程师到点_令牌立刻失效(站点):
         s.accounts._now = real
 
 
-def test_接口_工程师能做业主的事_不能管账号(站点):
+def test_接口_工程师能做管理员的事_不能管账号(站点):
     s = 站点
     alice = _登(s, "alice")
     d = _开(s, alice)[1]
@@ -234,7 +235,7 @@ def test_接口_删账号(站点):
     assert s.req("POST", "/api/accounts/gina/remove", {}, token=alice)[0] == 404
 
 
-def test_接口_不能删自己_最后一个业主(站点):
+def test_接口_不能删自己_最后一个管理员(站点):
     s = 站点
     alice = _登(s, "alice")
     code, d = s.req("POST", "/api/accounts/alice/remove", {}, token=alice)

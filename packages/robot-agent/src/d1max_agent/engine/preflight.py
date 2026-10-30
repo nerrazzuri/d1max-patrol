@@ -141,7 +141,7 @@ def departure_line_pct(mission: Mission, home: HomePoint, *,
     这样这条线才解释得清:**出发时的电,够走完全程,回到家时还高于中止线。**
 
     **出发线必须同时高过返航线的两支。** 返航线是
-    ``max(battery_return_pct, 中止线 + 回家成本)``(见 ``safety.return_line_pct``)
+    ``max(battery_return_pct, 中止线 + 回原点成本)``(见 ``safety.return_line_pct``)
     —— 上面那条式子只压过了动态那一支,静态那一支(``battery_return_pct``)
     完全没进来。而 ``abort=25 / return=60`` 这组参数是过得了 ``Mission``
     校验的(它只查 ``abort <= return``):出发线算出来 29.5%,返航线 60%,
@@ -149,7 +149,7 @@ def departure_line_pct(mission: Mission, home: HomePoint, *,
     所以这里再取一次 ``max``。
 
     ``start``、``back`` 见 ``route_length_m``(W00c6b 内审):从狗现在在哪算起;直线后端回来是沿来路
-    倒着走;这一趟本身就是回家的路(``on_battery_low: continue``)就不算回来那段。
+    倒着走;这一趟本身就是回原点的路(``on_battery_low: continue``)就不算回来那段。
     """
     poses = [w.pose for w in mission.waypoints]
     cost = estimate_cost_pct(route_length_m(home.pose, poses, start=start, back=back), params)

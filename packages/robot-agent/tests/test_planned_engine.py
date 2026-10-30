@@ -1,5 +1,5 @@
 """W10 引擎 + 规划后端 + 仿真狗:点位被规划拒 → 这个点失败(不再整趟中止);电量返航规划回原点、
-绕墙不沿来路;回家规划不出来 → 原地停、按返航失败中止;返航超时按路长;电量按规划路长。"""
+绕墙不沿来路;回原点规划不出来 → 原地停、按返航失败中止;返航超时按路长;电量按规划路长。"""
 
 from __future__ import annotations
 
@@ -154,12 +154,12 @@ async def test_电量返航_规划回原点_绕墙_不沿来路(台子):
     assert math.hypot(o.x - 2.0, o.y - 2.0) < 0.3
     # 一路没穿墙
     assert not [(x, y) for x, y in track if 5.3 < x < 6.7 and y < 6.0]
-    # 规划回家,不沿来路(沿来路要先回到 A 再回出发点)
+    # 规划回原点,不沿来路(沿来路要先回到 A 再回出发点)
     back = track[hit["at"]:]
     assert min(math.hypot(x - 10.0, y - 2.0) for x, y in back) > 0.8
 
 
-async def test_回家规划不出来_原地停_按返航失败中止(台子):
+async def test_回原点规划不出来_原地停_按返航失败中止(台子):
     c, r, parts = 台子
     await parts.engine.start(_任务([("A", 10.0, 2.0), ("B", 10.0, 5.0)], battery_return_pct=40.0,
                                    battery_abort_pct=15.0), home=parts.home)
@@ -167,7 +167,7 @@ async def test_回家规划不出来_原地停_按返航失败中止(台子):
         await _一拍(c, r, parts)
         if parts.engine._live.results:
             break
-    # 到了 A 之后:口子封死、再掉电 → 回家规划不出来
+    # 到了 A 之后:口子封死、再掉电 → 回原点规划不出来
     await parts.nav.set_zones(ZoneSet.from_wire({
         "map_id": "m", "map_version": "v", "revision": 1,
         "zones": [{"id": "gap", "kind": "nogo",

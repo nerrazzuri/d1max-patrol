@@ -15,13 +15,13 @@ describe("时间段运算", () => {
   });
 
   it("加一段:相接、相交的合并,别的防区、别的天不动", () => {
-    let x = [s(0, 20 * H, 22 * H), s(1, 20 * H, 22 * H), s(0, 0, 6 * H, "后花园")];
+    let x = [s(0, 20 * H, 22 * H), s(1, 20 * H, 22 * H), s(0, 0, 6 * H, "北区")];
     x = addBlock(x, "", 0, 22 * H, 24 * H);
     expect(x).toContainEqual(s(0, 20 * H, 24 * H));
     x = addBlock(x, "", 0, 19 * H, 21 * H);
     expect(x.filter((y) => y.zone === "" && y.day === 0)).toEqual([s(0, 19 * H, 24 * H)]);
     expect(x).toContainEqual(s(1, 20 * H, 22 * H));
-    expect(x).toContainEqual(s(0, 0, 6 * H, "后花园"));
+    expect(x).toContainEqual(s(0, 0, 6 * H, "北区"));
   });
 
   it("加一段:倒着拖也行,太短的不加", () => {
@@ -45,11 +45,11 @@ describe("时间段运算", () => {
   });
 
   it("复制一天盖掉目标那天原来的段", () => {
-    const x = [s(0, 20 * H, 24 * H), s(0, 0, 6 * H), s(2, 8 * H, 9 * H), s(2, 8 * H, 9 * H, "后花园")];
+    const x = [s(0, 20 * H, 24 * H), s(0, 0, 6 * H), s(2, 8 * H, 9 * H), s(2, 8 * H, 9 * H, "北区")];
     const y = copyDay(x, "", 0, [1, 2]);
     expect(y.filter((v) => v.zone === "" && v.day === 2)).toEqual([s(2, 0, 6 * H), s(2, 20 * H, 24 * H)]);
     expect(y.filter((v) => v.zone === "" && v.day === 1)).toHaveLength(2);
-    expect(y).toContainEqual(s(2, 8 * H, 9 * H, "后花园"));
+    expect(y).toContainEqual(s(2, 8 * H, 9 * H, "北区"));
   });
 
   it("跟站点来回:HH:MM,24:00", () => {

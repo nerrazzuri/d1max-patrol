@@ -30,7 +30,7 @@ void main() {
     expect(api.alertsCalls, greaterThan(before));
   });
 
-  testWidgets('业主看得见告警，也能确认、解决（W20：在家时自己看到了点「我知道了」）', (t) async {
+  testWidgets('管理员看得见告警，也能确认、解决（W20：留守时自己看到了点「我知道了」）', (t) async {
     final api = FakeApi('owner');
     await _open(t, api);
     expect(find.textContaining('急停被按下'), findsOneWidget);

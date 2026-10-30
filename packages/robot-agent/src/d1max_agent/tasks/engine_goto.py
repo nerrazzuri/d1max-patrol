@@ -220,7 +220,7 @@ class EngineGotoTask(EngineMissionTask):
                          parts=parts, events=events, now_ms=now_ms, priority=priority)
         self.target = target
         self.photo = photo
-        #: 去充电桩的这一趟(W13):本身就是「回家的路」—— 低电量不掉头回原点、接着走,到中止线才停;
+        #: 去充电桩的这一趟(W13):本身就是「回原点的路」—— 低电量不掉头回原点、接着走,到中止线才停;
         #: 出发线也不算回来那一段(同站点的回程巡检,``on_battery_low: continue``)。
         self.charge = charge
         self._last_reported_m: float | None = None

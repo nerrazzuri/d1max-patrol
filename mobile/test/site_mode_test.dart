@@ -1,4 +1,4 @@
-// 布防模式（W20）：首页那一行；保安只能切到布防、业主能切在家和访客（挑防区、挑时长）、管理员改「在家时撤防」；
+// 布防模式（W20）：首页那一行；保安只能切到布防、管理员能切留守和临时撤防（挑防区、挑时长）、管理员改「留守时撤防」；
 // 站点推「模式变了」当场换；事件页的「撤防中」说人话。横屏 800×360。
 import 'dart:async';
 
@@ -20,22 +20,22 @@ Future<void> _open(WidgetTester t, FakeApi api) async {
 }
 
 void main() {
-  test('站点夹具：访客模式带结束时间、防区带现在布不布防', () {
+  test('站点夹具：临时撤防带结束时间、防区带现在布不布防', () {
     final m = siteFixture('site_mode');
     expect(m['mode'], 'visitor');
-    expect(modeText(m), startsWith('访客（到 '));
+    expect(modeText(m), startsWith('临时撤防（到 '));
     expect(modeText(<String, dynamic>{'mode': 'armed'}), '布防');
-    expect(modeText(<String, dynamic>{'mode': 'home'}), '在家');
+    expect(modeText(<String, dynamic>{'mode': 'home'}), '留守');
     final z = (m['zones'] as List).first as Map;
     expect(z.keys, containsAll(<String>['zone', 'armed', 'home_armed']));
     expect(incidentOutcomeText('disarmed'), contains('撤防'));
   });
 
-  test('按时间表管着时（W44 第二期）：写按时间表，不写在家', () {
+  test('按时间表管着时（W44 第二期）：写按时间表，不写留守', () {
     expect(modeText(<String, dynamic>{'mode': 'home', 'source': 'schedule', 'state': 'partial'}), '按时间表：部分布防');
     expect(modeText(<String, dynamic>{'mode': 'armed', 'source': 'schedule', 'state': 'armed'}), '按时间表：布防');
     expect(modeText(<String, dynamic>{'mode': 'home', 'source': 'schedule', 'state': 'disarmed'}), '按时间表：撤防');
-    expect(modeText(<String, dynamic>{'mode': 'home', 'source': 'manual', 'state': 'partial'}), '在家');
+    expect(modeText(<String, dynamic>{'mode': 'home', 'source': 'manual', 'state': 'partial'}), '留守');
   });
 
   testWidgets('按时间表管着时，副标题写按时间表切的', (t) async {
@@ -47,12 +47,12 @@ void main() {
     expect(find.textContaining('按时间表切的'), findsOneWidget);
   });
 
-  testWidgets('保安：只有「布防」，没有在家、访客，也改不了防区', (t) async {
+  testWidgets('保安：只有「布防」，没有留守、临时撤防，也改不了防区', (t) async {
     final api = FakeApi('guard');
     await _open(t, api);
     expect(find.byKey(SiteModePage.homeKey), findsNothing);
     expect(find.byKey(SiteModePage.visitorKey), findsNothing);
-    expect(find.text('撤防（在家、访客）要业主切'), findsOneWidget);
+    expect(find.text('撤防（留守、临时撤防）要管理员或经理切'), findsOneWidget);
     expect(find.byKey(const Key('mode-zone-home-yard')), findsNothing);
     await t.tap(find.byKey(SiteModePage.armKey));
     await t.pumpAndSettle();
@@ -60,11 +60,11 @@ void main() {
     expect(find.text('现在：布防'), findsOneWidget);
   });
 
-  testWidgets('业主：开访客，挑防区、挑时长', (t) async {
+  testWidgets('管理员：开临时撤防，挑防区、挑时长', (t) async {
     final api = FakeApi('owner')..modeView = <String, dynamic>{
       ...siteFixture('site_mode'), 'mode': 'home', 'visitor_zones': <String>[], 'until_ms': null};
     await _open(t, api);
-    expect(find.text('现在：在家'), findsOneWidget);
+    expect(find.text('现在：留守'), findsOneWidget);
     await t.tap(find.byKey(SiteModePage.visitorKey));
     await t.pumpAndSettle();
     await t.tap(find.byKey(const Key('visitor-zone-yard')));
@@ -75,10 +75,10 @@ void main() {
     await t.tap(find.byKey(const Key('visitor-go')));
     await t.pumpAndSettle();
     expect(api.calls, contains('mode visitor yard 120'));
-    expect(find.textContaining('现在：访客（到 '), findsOneWidget);
+    expect(find.textContaining('现在：临时撤防（到 '), findsOneWidget);
   });
 
-  testWidgets('业主：访客默认 4 小时；切到在家', (t) async {
+  testWidgets('管理员：临时撤防默认 4 小时；切到留守', (t) async {
     final api = FakeApi('owner')..modeView = <String, dynamic>{...siteFixture('site_mode'), 'mode': 'armed'};
     await _open(t, api);
     await t.tap(find.byKey(SiteModePage.visitorKey));
@@ -91,7 +91,7 @@ void main() {
     expect(api.calls.last, 'mode home');
   });
 
-  testWidgets('业主改不了防区，管理员能改「在家时也布防」', (t) async {
+  testWidgets('管理员改不了防区，管理员能改「留守时也布防」', (t) async {
     await _open(t, FakeApi('owner'));
     expect(find.byKey(const Key('mode-zone-home-yard')), findsNothing);
     final api = FakeApi('admin');
@@ -100,7 +100,7 @@ void main() {
     await t.tap(find.byKey(const Key('mode-zone-home-yard')));
     await t.pumpAndSettle();
     expect(api.calls, contains('zone-home yard true'));
-    expect(find.descendant(of: find.byKey(const Key('mode-zone-yard')), matching: find.text('在家时也布防')),
+    expect(find.descendant(of: find.byKey(const Key('mode-zone-yard')), matching: find.text('留守时也布防')),
         findsOneWidget);
   });
 
@@ -110,7 +110,7 @@ void main() {
     api.modeError = const SiteError(403, 'owner 没有 set_mode 权限');
     await t.tap(find.byKey(SiteModePage.homeKey));
     await t.pumpAndSettle();
-    expect(find.textContaining('切到在家没成'), findsOneWidget);
+    expect(find.textContaining('切到留守没成'), findsOneWidget);
     await _open(t, FakeApi('owner')..modeError = const SiteError(404, '没开'));
     expect(find.text('这个站点没开布防模式'), findsOneWidget);
   });
@@ -122,7 +122,7 @@ void main() {
     expect(t.widget<ButtonStyleButton>(find.byKey(SiteModePage.armKey)).onPressed, isNull);
     api.sse.add(<String, dynamic>{'kind': 'mode', 'mode': <String, dynamic>{...api.modeView, 'mode': 'home'}});
     await t.pump(const Duration(milliseconds: 50));
-    expect(find.text('现在：在家'), findsOneWidget);
+    expect(find.text('现在：留守'), findsOneWidget);
     expect(t.widget<ButtonStyleButton>(find.byKey(SiteModePage.armKey)).onPressed, isNotNull);
   });
 
@@ -132,11 +132,11 @@ void main() {
     final opened = api.eventsOpened;
     final old = api.sse;
     api.sse = StreamController<Map<String, dynamic>>.broadcast();
-    api.modeView = <String, dynamic>{...api.modeView, 'mode': 'home'}; // 断线期间业主撤防了
+    api.modeView = <String, dynamic>{...api.modeView, 'mode': 'home'}; // 断线期间管理员撤防了
     await old.close();
     await t.pump(const Duration(seconds: 6));
     expect(api.eventsOpened, greaterThan(opened));
-    expect(find.text('现在：在家'), findsOneWidget);
+    expect(find.text('现在：留守'), findsOneWidget);
   });
 
   testWidgets('首页：模式那一行；站点推「模式变了」当场换；点进去是模式页', (t) async {
@@ -145,7 +145,7 @@ void main() {
     addTearDown(() => t.binding.setSurfaceSize(null));
     await t.pumpWidget(MaterialApp(home: SiteRobotsPage(api: api)));
     await t.pumpAndSettle();
-    expect(find.textContaining('模式：访客（到 '), findsOneWidget);
+    expect(find.textContaining('模式：临时撤防（到 '), findsOneWidget);
     api.modeView = <String, dynamic>{...api.modeView, 'mode': 'armed', 'until_ms': null};
     api.sse.add(<String, dynamic>{'kind': 'mode', 'mode': api.modeView});
     await t.pump(const Duration(milliseconds: 100)); // 不等那半秒的合并刷新：是推的那一帧换的
@@ -164,7 +164,7 @@ void main() {
     expect(find.byKey(SiteRobotsPage.modeKey), findsNothing);
   });
 
-  test('权限：业主能确认告警、能切模式；保安只能布防；业主不能标录像留着', () {
+  test('权限：管理员能确认告警、能切模式；保安只能布防；管理员不能标录像留着', () {
     const owner = SiteSession('t', 'o', 'owner', displayName: '张三');
     const guard = SiteSession('t', 'g', 'guard');
     expect(owner.canHandleAlerts && owner.canSetMode && owner.canArm, isTrue);

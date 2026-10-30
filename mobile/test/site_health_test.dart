@@ -306,7 +306,7 @@ void main() {
 
   // 2026-10-14 重做：入口从狗列表顶栏的「⋮」菜单挪到了底部导航 —— 「站点体检」是管理栏（只有管理员
   // 有），「排程」是记录栏的一个分段（谁都有）。
-  testWidgets('入口：管理员的底部导航有管理栏（站点体检），点了进去；保安、业主没有', (t) async {
+  testWidgets('入口：管理员的底部导航有管理栏（站点体检），点了进去；保安、管理员没有', (t) async {
     _portrait(t);
     final api = FakeApi('admin');
     await t.pumpWidget(MaterialApp(theme: nwTheme(Brightness.dark), home: NwShell(api: api)));

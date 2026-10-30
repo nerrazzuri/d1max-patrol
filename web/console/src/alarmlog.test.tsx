@@ -13,7 +13,7 @@ const at = (h: number, m = 0) => new Date(2026, 9, 27, h, m).getTime();
 const NOW = at(23, 10);
 
 const alert = (o: Partial<Alert>): Alert => ({
-  key: "k", kind: "intrusion", level: "P1", robot: "A", title: "后花园有人闯入", detail: "3 号摄像头", first_ms: at(21, 46), last_ms: at(21, 46),
+  key: "k", kind: "intrusion", level: "P1", robot: "A", title: "北区有人闯入", detail: "3 号摄像头", first_ms: at(21, 46), last_ms: at(21, 46),
   count: 1, acked_by: "", acked_ms: null, resolved_ms: null, audience: "intrusion", ...o,
 });
 
@@ -54,10 +54,10 @@ const chip = (c: Element, text: string) => Array.from(c.querySelectorAll(".chip"
 describe("报警记录页", () => {
   it("实测查出:站点给的「在哪」写在那一行", async () => {
     duty = null;
-    alerts = [alert({ key: "w", kind: "robot_offline_idle", audience: "offline", robot: "A", title: "机器人掉线了", detail: "", context: { where: "车库" } as never, first_ms: at(21, 50) })];
+    alerts = [alert({ key: "w", kind: "robot_offline_idle", audience: "offline", robot: "A", title: "机器人掉线了", detail: "", context: { where: "A区" } as never, first_ms: at(21, 50) })];
     const { container: c } = page();
     await waitFor(() => expect(rows(c).length).toBe(1));
-    expect(rows(c)[0].textContent).toContain("在车库");
+    expect(rows(c)[0].textContent).toContain("在A区");
   });
 
   it("交班时间按站点设置", async () => {
@@ -140,9 +140,9 @@ describe("报警记录页", () => {
   });
 
   it("留话写进去显示成上一班的", async () => {
-    note = { id: 1, at_ms: at(19, 2), author: "li", text: "后花园东边的灯坏了" };
+    note = { id: 1, at_ms: at(19, 2), author: "li", text: "北区东边的灯坏了" };
     const { container: c } = page();
-    await waitFor(() => expect(c.querySelector(".note")!.textContent).toContain("后花园东边的灯坏了"));
+    await waitFor(() => expect(c.querySelector(".note")!.textContent).toContain("北区东边的灯坏了"));
     expect(c.querySelector(".note")!.textContent).toContain("li");
     expect(c.querySelector(".note")!.textContent).toContain("19:02");
     fireEvent.input(c.querySelector(".note textarea")!, { target: { value: "3 号摄像头误报多" } });
@@ -151,7 +151,7 @@ describe("报警记录页", () => {
     expect(posted).toEqual([{ text: "3 号摄像头误报多" }]);
   });
 
-  it("家人账号不能留话", async () => {
+  it("经理账号不能留话", async () => {
     const { container: c } = render(<AlarmLogPage now={NOW} role="viewer" />);
     await waitFor(() => expect(c.querySelector(".note")).not.toBeNull());
     expect(c.querySelector(".note textarea")).toBeNull();

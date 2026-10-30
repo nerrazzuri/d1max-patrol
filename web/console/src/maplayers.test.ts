@@ -67,22 +67,22 @@ describe("下一个巡检点几分钟到", () => {
 });
 
 describe("防区的标签", () => {
-  const authz = [{ name: "园丁", zones: ["后花园"], end: "18:00", active_now: true }, { name: "保洁", zones: ["主楼"], end: "11:00", active_now: false }];
+  const authz = [{ name: "维修工", zones: ["北区"], end: "18:00", active_now: true }, { name: "保洁", zones: ["主楼"], end: "11:00", active_now: false }];
   it("布防的写布防、带正在生效的授权", () => {
-    expect(zoneDecor("后花园", { mode: "armed", until_ms: null, zones: [{ zone: "后花园", armed: true }] }, authz))
-      .toEqual({ label: "后花园 · 布防 · 园丁授权到 18:00", tone: "armed" });
+    expect(zoneDecor("北区", { mode: "armed", until_ms: null, zones: [{ zone: "北区", armed: true }] }, authz))
+      .toEqual({ label: "北区 · 布防 · 维修工授权到 18:00", tone: "armed" });
   });
   it("没生效的授权不写", () => {
     expect(zoneDecor("主楼", { mode: "armed", until_ms: null, zones: [{ zone: "主楼", armed: true }] }, authz).label).toBe("主楼 · 布防");
   });
-  it("访客模式撤掉的写到几点", () => {
+  it("临时撤防撤掉的写到几点", () => {
     const until = new Date(2026, 9, 27, 23, 30).getTime();
-    expect(zoneDecor("车库", { mode: "visitor", until_ms: until, zones: [{ zone: "车库", armed: false }] }, []))
-      .toEqual({ label: "车库 · 访客模式（到 23:30）", tone: "off" });
+    expect(zoneDecor("A区", { mode: "visitor", until_ms: until, zones: [{ zone: "A区", armed: false }] }, []))
+      .toEqual({ label: "A区 · 临时撤防（到 23:30）", tone: "off" });
   });
-  it("在家撤掉的写撤防", () => {
-    expect(zoneDecor("院子", { mode: "home", until_ms: null, zones: [{ zone: "院子", armed: false }] }, []))
-      .toEqual({ label: "院子 · 撤防", tone: "off" });
+  it("留守撤掉的写撤防", () => {
+    expect(zoneDecor("现场", { mode: "home", until_ms: null, zones: [{ zone: "现场", armed: false }] }, []))
+      .toEqual({ label: "现场 · 撤防", tone: "off" });
   });
   it("模式里没有这个防区:没配过的一律布防(跟站点一样)", () => {
     expect(zoneDecor("新防区", { mode: "armed", until_ms: null, zones: [] }, []).tone).toBe("armed");

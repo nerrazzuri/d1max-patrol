@@ -17,7 +17,7 @@ from .agent_server import SimAgentServer
 from .nav_server import SimNavServer
 
 #: ``--full`` 用的端口,跟真机一样:对不齐就得两边都带参数,而每多一个参数就多一处
-#: "现场跟在家不一样"。
+#: "现场跟留守不一样"。
 FULL_NAV_PORT = 10010
 FULL_AGENT_PORT = 8090
 

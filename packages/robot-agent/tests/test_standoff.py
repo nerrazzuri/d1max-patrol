@@ -149,16 +149,16 @@ def _离矩形(x, y, r):
 async def test_外审3_禁行区贴着前侧_带弧扫进去的那一边不走_落点没事也不行():
     zone = (0.0, 0.45, 0.8, 1.0)                          # 机身左前方 0.21 m
     s = 台(target=(0.0, 2.0), blocked=lambda vx, wz: "扫过区有挡" if wz == 0.0 else "",
-          nogo=lambda x, y, d: "禁行区「花坛」" if _离矩形(x, y, zone) <= d else "")
+          nogo=lambda x, y, d: "禁行区「高楼楼梯」" if _离矩形(x, y, zone) <= d else "")
     await s.task.start()
     await s.拍()
     assert s.task.mode == "retreat" and s.dog.cmds[-1] == (-RETREAT_V, -RETREAT_W), \
-        "往左带弧机身角会扫到花坛边上:只能往右"
+        "往左带弧机身角会扫到高楼楼梯边上:只能往右"
     s2 = 台(target=(0.0, 2.0), blocked=lambda vx, wz: "扫过区有挡" if wz <= 0.0 else "",
-           nogo=lambda x, y, d: "禁行区「花坛」" if _离矩形(x, y, zone) <= d else "")
+           nogo=lambda x, y, d: "禁行区「高楼楼梯」" if _离矩形(x, y, zone) <= d else "")
     await s2.task.start()
     await s2.拍()
-    assert s2.task.mode == "cornered" and "花坛" in s2.task.why
+    assert s2.task.mode == "cornered" and "高楼楼梯" in s2.task.why
 
 
 async def test_外审2_补派_重启_拴绳中心都是拦截点_退过的不清零():

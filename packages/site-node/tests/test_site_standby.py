@@ -210,7 +210,7 @@ async def test_巡检跑完_直线狗沿来路回待命点(站):
     assert all("actions" not in w for w in wps), "回程不拍照、不停留"
     pol = back["payload"]["mission"]["policy"]
     assert pol["on_waypoint_failed"] == "abort", "内审阻断 3:跳过一点就是一条没走过的直线"
-    assert pol["on_battery_low"] == "continue", "内审阻断 2:剩下的路就是回家的路"
+    assert pol["on_battery_low"] == "continue", "内审阻断 2:剩下的路就是回原点的路"
     await t.run(400)
     assert len(_cmds(t, "patrol")) == 2, "回程结束不再回"
     o = await t.dog.odometry()
@@ -381,7 +381,7 @@ async def test_原巡检的地图版本跟待命点对不上_不回(站):
 
 async def test_遥控放租之后_直线狗不自动回待命点_也不报(站):
     """内审应修 4:遥控放租报 ``task_done("teleop-N")``,以前站点照样派一条直线 goto —— 起点最随意
-    的一种自动回家。直线的狗不回(人刚开完,人知道狗在哪);会规划的狗照旧回。"""
+    的一种自动回原点。直线的狗不回(人刚开完,人知道狗在哪);会规划的狗照旧回。"""
     t = 站
     t.stb.set("A", "dock", map_id="estate-1", map_version="7", x=0.0, y=0.0, yaw=0.0, default=True)
     sub = t.site.feed.subscribe()

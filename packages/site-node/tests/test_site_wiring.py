@@ -52,8 +52,8 @@ def test_告警用派遣器的钟差估计_站点只有一份(srv):
     assert srv.alert_sources._skew_of == srv.dispatcher.clock_skew_s
 
 
-def test_布防模式接到事件派遣和接口上_访客到点退回记审计(srv):
-    """W20:事件派遣、接口用同一份模式台;访客到点退回时记一笔审计(谁都没点,是站点自己退的)。"""
+def test_布防模式接到事件派遣和接口上_临时撤防到点退回记审计(srv):
+    """W20:事件派遣、接口用同一份模式台;临时撤防到点退回时记一笔审计(谁都没点,是站点自己退的)。"""
     assert srv.incidents.arming is srv.arming and srv.api.arming is srv.arming
     t = [srv.arming._now()]
     srv.arming._now = lambda: t[0]

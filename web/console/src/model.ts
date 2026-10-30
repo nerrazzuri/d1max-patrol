@@ -20,7 +20,7 @@ export interface Alert {
   shelved_ms?: number | null;
   shelved_until_ms?: number | null;
   shelved_reason?: string;
-  /** 给谁看(W44,站点 alert_audience):intrusion / fire / help / offline 给保安,owner 给业主。老站点没有。 */
+  /** 给谁看(W44,站点 alert_audience):intrusion / fire / help / offline 给保安,owner 给管理员。老站点没有。 */
   audience?: string;
   /** 结论(W44):intruder 确认有人 / false_alarm 误报 / handled 处理好了;空 = 没说。 */
   verdict?: string;
@@ -35,7 +35,7 @@ export interface Alert {
 
 export interface Robot {
   robot_id: string;
-  /** 业主起的名字(W44 第二期);没起是空串、老站点没有。 */
+  /** 管理员起的名字(W44 第二期);没起是空串、老站点没有。 */
   name?: string;
   active: boolean;
   fresh: boolean;
@@ -105,7 +105,7 @@ export interface Summary {
 
 export interface Mode {
   mode: "armed" | "home" | "visitor";
-  /** 访客模式到几点(站点 modes.view)。 */
+  /** 临时撤防到几点(站点 modes.view)。 */
   until_ms?: number | null;
   /** 每个防区此刻布没布防(站点 modes.view)。 */
   zones?: { zone: string; armed: boolean }[];
@@ -173,7 +173,7 @@ export function robotMap(r: Robot): { map_id: string; version: string } | null {
   return p?.map_id && p.map_version ? { map_id: p.map_id, version: p.map_version } : null;
 }
 
-/** 业主或工程师(临时):权限一样,只是工程师不能管账号(W44 第二期,设计 §3)。 */
+/** 管理员或工程师(临时):权限一样,只是工程师不能管账号(W44 第二期,设计 §3)。 */
 export function isOwnerLike(role: string): boolean {
   return role === "admin" || role === "engineer";
 }

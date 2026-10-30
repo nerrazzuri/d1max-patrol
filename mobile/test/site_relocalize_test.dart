@@ -158,7 +158,7 @@ void main() {
     expect(double.parse(parts[4]), closeTo(pi / 2, 1e-9));
   });
 
-  testWidgets('业主没有设位置', (t) async {
+  testWidgets('管理员没有设位置', (t) async {
     final owner = FakeApi('owner', robotView: _view({'anchored': false, 'reason': 'x'}));
     await t.pumpWidget(MaterialApp(home: SiteRobotPage(api: owner, robotId: 'A')));
     await t.pumpAndSettle();

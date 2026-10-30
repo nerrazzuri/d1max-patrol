@@ -2,12 +2,12 @@
 ///
 /// 全站一个当前模式，决定入侵来了派不派狗、响不响铃（巡检、狗自己的告警不看模式）：
 /// - **布防**：所有防区都布防。谁都能切到布防。
-/// - **在家**：标了「在家时撤防」的防区撤防，别的照常。业主、管理员能切。
-/// - **访客**：在「在家」的基础上再撤几个防区，必须有结束时间（默认 4 小时），到点自动回去。业主、管理员能切。
+/// - **留守**：标了「留守时撤防」的防区撤防，别的照常。经理、管理员能切。
+/// - **临时撤防**：在「留守」的基础上再撤几个防区，必须有结束时间（默认 4 小时），到点自动回去。经理、管理员能切。
 ///
-/// 下面列每个防区现在布不布防；管理员能改「在家时也布防」。撤防的防区来了入侵只记录（事件页看得见）。
+/// 下面列每个防区现在布不布防；管理员能改「留守时也布防」。撤防的防区来了入侵只记录（事件页看得见）。
 ///
-/// 别的手机切了、访客到点退回：站点推一帧 `mode`，这一页当场换（W20 外审）；断了 5 秒后重连并重新拉一次，
+/// 别的手机切了、临时撤防到点退回：站点推一帧 `mode`，这一页当场换（W20 外审）；断了 5 秒后重连并重新拉一次，
 /// 另外每 30 秒再问一次兜底。
 library;
 
@@ -35,7 +35,7 @@ class SiteModePage extends StatefulWidget {
   State<SiteModePage> createState() => _SiteModePageState();
 }
 
-/// 访客能挑的时长（小时）。
+/// 临时撤防能挑的时长（小时）。
 const List<int> visitorHours = <int>[1, 2, 4, 8, 12, 24];
 
 class _SiteModePageState extends State<SiteModePage> {
@@ -121,10 +121,10 @@ class _SiteModePageState extends State<SiteModePage> {
       builder: (c) => StatefulBuilder(
         builder: (c, set) => AlertDialog(
           scrollable: true, // 横屏
-          title: Text(tr('Visitor mode: which zones to disarm in addition to Home?',
-              '访客模式：在「在家」的基础上，再撤哪几个防区？')),
+          title: Text(tr('Temp disarm: which zones to disarm in addition to Stay?',
+              '临时撤防：在「留守」的基础上，再撤哪几个防区？')),
           content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-            if (zones.isEmpty) Text(tr('No zones yet (disarms as in Home only)', '还没有防区（只按「在家」撤防）')),
+            if (zones.isEmpty) Text(tr('No zones yet (disarms as in Stay only)', '还没有防区（只按「留守」撤防）')),
             Wrap(spacing: 6, children: [
               for (final z in zones)
                 FilterChip(
@@ -147,7 +147,7 @@ class _SiteModePageState extends State<SiteModePage> {
           ]),
           actions: [
             TextButton(onPressed: () => Navigator.pop(c, false), child: Text(tr('Cancel', '算了'))),
-            FilledButton(key: const Key('visitor-go'), onPressed: () => Navigator.pop(c, true), child: Text(tr('Start visitor mode', '开访客'))),
+            FilledButton(key: const Key('visitor-go'), onPressed: () => Navigator.pop(c, true), child: Text(tr('Start temp disarm', '开始临时撤防'))),
           ],
         ),
       ),
@@ -155,7 +155,7 @@ class _SiteModePageState extends State<SiteModePage> {
     if (ok != true) return;
     final list = picked.toList()..sort();
     await _run(() => widget.api.setMode('visitor', zones: list, minutes: hours * 60),
-        tr('Start visitor mode for $hours h', '开访客 $hours 小时'));
+        tr('Start temp disarm for $hours h', '开始临时撤防 $hours 小时'));
   }
 
   @override
@@ -193,8 +193,8 @@ class _SiteModePageState extends State<SiteModePage> {
                       tr(
                           '${m['source'] == 'schedule' ? 'Switched by the schedule' : m['set_by'] == 'site:visitor_expired' ? 'Reverted automatically when visitor mode ended' : 'Set by ${m['set_by']}'}'
                               '${(m['visitor_zones'] as List? ?? const []).isNotEmpty ? ' · visitor mode disarmed ${(m['visitor_zones'] as List).join(', ')}' : ''}',
-                          '${m['source'] == 'schedule' ? '按时间表切的' : m['set_by'] == 'site:visitor_expired' ? '访客到点自动回来的' : '${m['set_by']} 切的'}'
-                              '${(m['visitor_zones'] as List? ?? const []).isNotEmpty ? ' · 访客撤了 ${(m['visitor_zones'] as List).join('、')}' : ''}'),
+                          '${m['source'] == 'schedule' ? '按时间表切的' : m['set_by'] == 'site:visitor_expired' ? '临时撤防到点自动回来的' : '${m['set_by']} 切的'}'
+                              '${(m['visitor_zones'] as List? ?? const []).isNotEmpty ? ' · 临时撤防撤了 ${(m['visitor_zones'] as List).join('、')}' : ''}'),
                       style: NwText.bodyMedium.copyWith(color: c.textSecondary)),
                 )),
             const SizedBox(height: Nw.s8),
@@ -209,18 +209,18 @@ class _SiteModePageState extends State<SiteModePage> {
                 NwButton(
                     buttonKey: SiteModePage.homeKey,
                     variant: NwButtonVariant.outline,
-                    onPressed: m['mode'] == 'home' ? null : () => _run(() => widget.api.setMode('home'), tr('Switch to Home', '切到在家')),
+                    onPressed: m['mode'] == 'home' ? null : () => _run(() => widget.api.setMode('home'), tr('Switch to Stay', '切到留守')),
                     icon: Icons.home_rounded,
-                    label: tr('Home', '在家')),
+                    label: tr('Stay', '留守')),
                 NwButton(
                     buttonKey: SiteModePage.visitorKey,
                     variant: NwButtonVariant.outline,
                     onPressed: _visitor,
                     icon: Icons.people_rounded,
-                    label: tr('Visitor…', '访客…')),
+                    label: tr('Temp disarm…', '临时撤防…')),
               ],
               if (!canSet)
-                Text(tr('Disarming (Home, Visitor) needs the owner', '撤防（在家、访客）要业主切'),
+                Text(tr('Disarming (Stay, Temp disarm) needs an administrator or manager', '撤防（留守、临时撤防）要管理员或经理切'),
                     style: NwText.bodySmall.copyWith(color: c.textSecondary)),
             ]),
             const SizedBox(height: Nw.s16),
@@ -245,8 +245,8 @@ class _SiteModePageState extends State<SiteModePage> {
                             style: NwText.titleSmall.copyWith(color: c.text)),
                         subtitle: Text(
                             z['home_armed'] == true
-                                ? tr('Armed in Home mode too', '在家时也布防')
-                                : tr('Disarmed in Home mode', '在家时撤防'),
+                                ? tr('Armed in Stay mode too', '留守时也布防')
+                                : tr('Disarmed in Stay mode', '留守时撤防'),
                             style: NwText.bodySmall.copyWith(color: c.textSecondary)),
                         trailing: manage
                             ? Switch(
@@ -254,7 +254,7 @@ class _SiteModePageState extends State<SiteModePage> {
                                 value: z['home_armed'] == true,
                                 onChanged: (v) => _run(() => widget.api.setZoneHome('${z['zone']}', v),
                                     tr('${z['zone']} ${v ? 'armed' : 'disarmed'} in Home mode',
-                                        '${z['zone']} 在家时${v ? '布防' : '撤防'}')))
+                                        '${z['zone']} 留守时${v ? '布防' : '撤防'}')))
                             : null,
                       ),
                   ])),
@@ -271,18 +271,18 @@ IconData modeIcon(String mode) => switch (mode) {
       _ => Icons.shield_rounded,
     };
 
-/// 布防、在家、访客都是正常状态：不上色。认不出的模式是异常：提示色。颜色跟着浅色 / 深色走：把
+/// 布防、留守、临时撤防都是正常状态：不上色。认不出的模式是异常：提示色。颜色跟着浅色 / 深色走：把
 /// `Nw.of(context)` 传进来（不传按浅色那一套）。
 Color modeColor(String mode, [NwColors c = NwColors.light]) => switch (mode) {
       'armed' || 'home' || 'visitor' => c.textSecondary,
       _ => c.info,
     };
 
-/// 值守首页上的布防模式三段（App 重做 P2）：布防 / 在家 / 访客，下面一行写现在是什么。
+/// 值守首页上的布防模式三段（App 重做 P2）：布防 / 留守 / 临时撤防，下面一行写现在是什么。
 ///
-/// **调用和权限跟 [SiteModePage] 一样**：布防 = `setMode('armed')`，谁都能；在家 = `setMode('home')`，
-/// 业主、管理员；访客要挑防区和时长，进 [SiteModePage] 去开。保安的在家、访客两格是灰的。
-/// 首页上一碰就撤防太容易：**切到在家先问一遍**（布防不用问）。
+/// **调用和权限跟 [SiteModePage] 一样**：布防 = `setMode('armed')`，谁都能；留守 = `setMode('home')`，
+/// 经理、管理员；临时撤防要挑防区和时长，进 [SiteModePage] 去开。保安的留守、临时撤防两格是灰的。
+/// 首页上一碰就撤防太容易：**切到留守先问一遍**（布防不用问）。
 ///
 /// 跟模式页一样自己听站点推的 `mode`、断了 5 秒后重连并重新拉、每 30 秒再问一次。
 /// **读不到、还没读到的时候不说现在是哪个模式**（哪一格都不亮）：上一次读到的不当成现在的。
@@ -414,17 +414,17 @@ class _SiteModeBarState extends State<SiteModeBar> {
         builder: (c) => AlertDialog(
               content: Text(tr(
                   'Switch to Home? Zones marked "disarmed in Home mode" stop dispatching robots and ringing.',
-                  '切到在家？标了「在家时撤防」的防区来了入侵就不派机器人、不响铃了。')),
+                  '切到留守？标了「留守时撤防」的防区来了入侵就不派机器人、不响铃了。')),
               actions: [
                 TextButton(onPressed: () => Navigator.pop(c, false), child: Text(tr('Cancel', '算了'))),
                 FilledButton(
                     key: SiteModeBar.homeGoKey,
                     onPressed: () => Navigator.pop(c, true),
-                    child: Text(tr('Switch to Home', '切到在家'))),
+                    child: Text(tr('Switch to Stay', '切到留守'))),
               ],
             ));
     if (ok != true || !mounted) return;
-    await _run(() => widget.api.setMode('home'), tr('Switch to Home', '切到在家'));
+    await _run(() => widget.api.setMode('home'), tr('Switch to Stay', '切到留守'));
   }
 
   Future<void> _visitor() async {
@@ -455,13 +455,13 @@ class _SiteModeBarState extends State<SiteModeBar> {
         NwChoice(
             key: SiteModeBar.homeKey,
             icon: Icons.home_rounded,
-            label: tr('Home', '在家').toUpperCase(),
+            label: tr('Stay', '留守').toUpperCase(),
             selected: now == 'home',
             onTap: !canSet || _busy || now == 'home' ? null : _home),
         NwChoice(
             key: SiteModeBar.visitorKey,
             icon: Icons.people_rounded,
-            label: tr('Visitor…', '访客…').toUpperCase(),
+            label: tr('Temp disarm…', '临时撤防…').toUpperCase(),
             selected: now == 'visitor',
             onTap: !canSet || _busy ? null : _visitor),
       ]),
@@ -474,7 +474,7 @@ class _SiteModeBarState extends State<SiteModeBar> {
             key: SiteModeBar.nowKey, style: small)
       else
         Text(tr('Arming mode not loaded yet', '布防模式还没读到'), key: SiteModeBar.nowKey, style: small),
-      if (!canSet) Text(tr('Disarming (Home, Visitor) needs the owner', '撤防（在家、访客）要业主切'), style: small),
+      if (!canSet) Text(tr('Disarming (Stay, Temp disarm) needs an administrator or manager', '撤防（留守、临时撤防）要管理员或经理切'), style: small),
       if (_msg.isNotEmpty)
         Padding(
             padding: const EdgeInsets.only(top: Nw.s4),

@@ -1,4 +1,4 @@
-"""布防模式(W20):布防、在家、访客;撤防的防区来了入侵只记账、不派狗、不报告警;谁能切。"""
+"""布防模式(W20):布防、留守、临时撤防;撤防的防区来了入侵只记账、不派狗、不报告警;谁能切。"""
 
 from __future__ import annotations
 
@@ -37,10 +37,10 @@ def test_新站点默认布防_所有防区都布防(台):
     assert 台.view()["mode"] == "armed"
     assert 台.armed("front-yard") == (True, "armed")
     台.set_zone_home("garden", False)
-    assert 台.armed("garden") == (True, "armed"), "布防时在家撤防的防区也布防"
+    assert 台.armed("garden") == (True, "armed"), "布防时留守撤防的防区也布防"
 
 
-def test_在家_标了在家撤防的撤_没配过的防区照样布防(台):
+def test_留守_标了留守撤防的撤_没配过的防区照样布防(台):
     台.set_zone_home("garden", False)
     台.set_mode("home", by="olga")
     assert 台.armed("garden") == (False, "home")
@@ -49,7 +49,7 @@ def test_在家_标了在家撤防的撤_没配过的防区照样布防(台):
     assert 台.armed("garden") == (True, "home")
 
 
-def test_访客_在家的基础上再撤指定防区_到点退回原来的模式(台):
+def test_临时撤防_留守的基础上再撤指定防区_到点退回原来的模式(台):
     台.set_zone_home("garden", False)
     台.set_mode("home", by="olga")
     台.set_mode("visitor", by="olga", zones=["drive"], minutes=60)
@@ -69,7 +69,7 @@ def test_访客_在家的基础上再撤指定防区_到点退回原来的模式
     assert 台.pushed[-1] == {"kind": "mode", "mode": v}
 
 
-def test_访客叠访客_退回的还是开访客之前的模式(台):
+def test_临时撤防叠临时撤防_退回的还是开临时撤防之前的模式(台):
     台.set_mode("visitor", by="olga", zones=["drive"], minutes=30)
     台.set_mode("visitor", by="olga", zones=["drive", "garden"], minutes=90)
     assert 台.view()["prev_mode"] == "armed"
@@ -78,7 +78,7 @@ def test_访客叠访客_退回的还是开访客之前的模式(台):
     assert 台.view()["mode"] == "armed"
 
 
-def test_访客不填时长默认4小时_时长和防区不合规矩都拒(台):
+def test_临时撤防不填时长默认4小时_时长和防区不合规矩都拒(台):
     台.set_mode("visitor", by="olga")
     assert 台.view()["until_ms"] == 台.clock.t + 4 * 3_600_000
     for bad in (0, 24 * 60 + 1, True, 1.5, "60"):
@@ -135,7 +135,7 @@ async def test_撤防的防区来了入侵_只记账_不派狗_不报告警(事�
     t.desk.arming.set_mode("home", by="olga")
     await t.run(12)
     r = await _报(t, "e1")
-    assert r["outcome"] == "disarmed" and "在家" in r["note"]
+    assert r["outcome"] == "disarmed" and "留守" in r["note"]
     assert not _gotos(t) and told == []
     assert t.desk.retell() == 0, "撤防的不补报"
     t.desk.arming.set_mode("armed", by="gina")
@@ -144,7 +144,7 @@ async def test_撤防的防区来了入侵_只记账_不派狗_不报告警(事�
     assert [x["outcome"] for x in told] == ["dispatched"]
 
 
-async def test_访客撤的防区不派_别的防区照派(事件台):
+async def test_临时撤防撤的防区不派_别的防区照派(事件台):
     t = 事件台
     t.desk.map_zone("back", "gate")
     t.desk.arming = ArmingDesk(t.db, now_ms=t.clock)
@@ -183,7 +183,7 @@ async def test_W20外审_合并之后撤防_首单派失败_并进来的都不�
     t.desk.arming = ArmingDesk(t.db, now_ms=t.clock)
     t.desk.arming.set_zone_home("front-yard", False)
     fake, h1 = await _首单卡住_并进几条(t, monkeypatch, n=2)
-    t.desk.arming.set_mode("home", by="olga")        # 业主撤防
+    t.desk.arming.set_mode("home", by="olga")        # 管理员撤防
     await _放行首单(t, fake, h1)
     assert len(fake.calls) == 1, "撤防之后不许再派"
     rows = {r["event_id"]: r for r in t.desk.list()}
@@ -193,7 +193,7 @@ async def test_W20外审_合并之后撤防_首单派失败_并进来的都不�
     assert not t.desk._open_incident_robots(), "撤防的不占着机器人"
 
 
-async def test_W20外审_访客撤的是别的防区_首单派失败照样提升(事件台, monkeypatch):
+async def test_W20外审_临时撤防撤的是别的防区_首单派失败照样提升(事件台, monkeypatch):
     t = 事件台
     t.desk.arming = ArmingDesk(t.db, now_ms=t.clock)
     fake, h1 = await _首单卡住_并进几条(t, monkeypatch, n=2)
@@ -208,7 +208,7 @@ async def test_W20外审_访客撤的是别的防区_首单派失败照样提升
 # ------------------------------------------------------------ 审计
 
 
-def test_W20外审_访客防区很多_审计照样读得出来(台):
+def test_W20外审_临时撤防的防区很多_审计照样读得出来(台):
     from d1max_site.audit import AuditLog
     log = AuditLog(台.db, now_ms=台.clock)
     zones = [f"zone-{i:02d}-" + "x" * 110 for i in range(25)]
@@ -242,7 +242,7 @@ def test_审计详情_放得下原样_放不下先缩_再放不下只留键名_�
     assert rows[0]["detail"]["unreadable"] is True
 
 
-def test_访客一次最多撤64个防区(台):
+def test_临时撤防一次最多撤64个防区(台):
     with pytest.raises(ModeError):
         台.set_mode("visitor", by="olga", zones=[f"z{i}" for i in range(65)], minutes=60)
     台.set_mode("visitor", by="olga", zones=[f"z{i}" for i in range(64)], minutes=60)
@@ -267,7 +267,7 @@ def _登(s, name):
     return d["token"], d
 
 
-def test_保安只能切到布防_业主随便切_防区配置只有管理员(站点):
+def test_保安只能切到布防_管理员随便切_防区配置只有管理员(站点):
     s = 站点
     (gina, _), (olga, _), (alice, _) = _登(s, "gina"), _登(s, "olga"), _登(s, "alice")
     assert s.req("GET", "/api/mode", token=gina) == (200, s.api.arming.view())
@@ -288,7 +288,7 @@ def test_保安只能切到布防_业主随便切_防区配置只有管理员(�
     assert ("gina", "POST /api/mode", "armed") in actions
 
 
-def test_W20外审_经接口开带25个长防区名的访客_审计接口照样能读(站点):
+def test_W20外审_经接口开带25个长防区名的临时撤防_审计接口照样能读(站点):
     s = 站点
     olga, alice = _登(s, "olga")[0], _登(s, "alice")[0]
     zones = [f"zone-{i:02d}-" + "x" * 110 for i in range(25)]
@@ -304,7 +304,7 @@ def test_没开布防模式的站点_接口404(站点):
     assert s.req("GET", "/api/mode", token=_登(s, "alice")[0])[0] == 404
 
 
-def test_业主能确认告警_保安照旧(站点):
+def test_管理员能确认告警_保安照旧(站点):
     from d1max_site.permissions import HANDLE_ALERTS, SET_MODE, allowed
     assert allowed("owner", HANDLE_ALERTS) and allowed("guard", HANDLE_ALERTS)
     assert not allowed("guard", SET_MODE)

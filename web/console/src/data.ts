@@ -41,7 +41,7 @@ export async function fetchSite(): Promise<SiteData> {
   return { robots: r.robots, alerts: a.alerts, mode: m, deter: d, summary: s };
 }
 
-/** 业主给机器人起的名字(W44 第二期,站点 /api/robots 带 name);每次拉站点数据都更新。 */
+/** 管理员给机器人起的名字(W44 第二期,站点 /api/robots 带 name);每次拉站点数据都更新。 */
 export const robotNames = signal<Record<string, string>>({});
 
 /** 给人看的机器人名字:起了名用名字,没起用编号。 */
