@@ -950,7 +950,8 @@ polygon.me-op.obstacle { fill: var(--c-text); stroke: none; }
 .setup-list li.done { opacity: .7; }
 .setup-mark { width: 18px; text-align: center; color: var(--c-success); }
 .setup-text { flex: 1; display: flex; flex-direction: column; }
-.help { display: flex; flex-direction: column; gap: 12px; min-width: min(520px, 86vw); }
+.help { display: flex; flex-direction: column; gap: 12px; width: min(480px, 80vw); max-width: 100%; box-sizing: border-box; }
+.help .seg { align-self: flex-start; }
 .help-step p { margin: 6px 0; line-height: 1.6; }
 .help-faq details { border-bottom: 1px solid var(--c-outline); padding: 6px 0; }
 .help-faq summary { cursor: pointer; font-weight: 600; }
