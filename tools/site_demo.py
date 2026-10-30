@@ -227,6 +227,43 @@ def _seed_w53(base: str, password: str, robots: list[str]) -> list[str]:
     return out
 
 
+def _send_maps(base: str, password: str, robots: list[str]) -> list[str]:
+    """``--nav planned``:给每台下发这张图(机器人拿到图才有规划栅格,才绕得开墙)。"""
+    import json
+    import ssl
+    import urllib.request
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+
+    def req(path: str, body: dict, token: str = "") -> tuple[int, dict]:
+        head = {"Content-Type": "application/json"}
+        if token:
+            head["Authorization"] = f"Bearer {token}"
+        r = urllib.request.Request(base + path, method="POST", headers=head,
+                                   data=json.dumps(body).encode())
+        try:
+            with urllib.request.urlopen(r, context=ctx, timeout=30) as resp:
+                return resp.status, json.loads(resp.read() or b"{}")
+        except urllib.error.HTTPError as exc:
+            return exc.code, json.loads(exc.read() or b"{}")
+
+    _, d = req("/api/login", {"name": "demo", "password": password})
+    tok = d.get("token", "")
+    out = []
+    import time
+    for r in robots:
+        for _ in range(30):                # 刚起来钟差还不知道,站点先不派:等一会儿再试
+            code, d = req(f"/api/robots/{r}/map", {"map_id": "estate-1", "version": "7",
+                                                   "without_home": True}, tok)
+            if code != 409 or "钟差" not in str(d.get("error", "")):
+                break
+            time.sleep(3)
+        why = "好了" if code == 200 else f"没成 {code} {d.get('error', '')}"
+        out.append(f"  {r} 下发地图(规划绕墙):{why}")
+    return out
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     # 默认不放仓库里:仓库路径带空格(「D1 Max」),Mosquitto 的配置按空白切词,路径里不许有空格
@@ -247,6 +284,11 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--unbound", type=int, default=0, choices=range(0, 5), metavar="N",
                     help="W42:再起 N 台出厂状态、还没绑定的机器人(配网服务 + 假路由器),打印贴纸码;"
                          "站点上批准以后演示脚本起它的代理,解绑以后收掉")
+    ap.add_argument("--nav", choices=("straight", "planned"), default="straight",
+                    help="仿真机器人怎么走:straight 点到点直线(会穿墙);planned 在图上规划、绕墙"
+                         "(起来以后站点给每台下发这张图)")
+    ap.add_argument("--reuse", action="store_true",
+                    help="接着用上一次的站点目录(证书指纹、账号、数据都不变,手机不用重新加站点)")
     ap.add_argument("--w53", action="store_true",
                     help="W53:加保安 gina、经理 olga、只看 vic、一条账号申请、"
                          "一条路线和 15 分钟后的日程")
@@ -254,15 +296,40 @@ def main(argv: list[str] | None = None) -> int:
     mosq = shutil.which("mosquitto") or "/usr/sbin/mosquitto"
     if not Path(mosq).exists():
         raise SystemExit("没有 mosquitto:sudo apt-get install mosquitto")
-    if a.dir.exists():
-        shutil.rmtree(a.dir)
     home, logs = a.dir / "site", a.dir / "logs"
-    logs.mkdir(parents=True)
-    bport = _free_port()
-    _site(home, "init", "--site-id", "demo", "--hostname", a.host, "--broker-port", str(bport))
     names = [chr(ord("A") + i) for i in range(a.robots)]
-    for n in names:
-        _site(home, "enroll", n, "--days", "30")
+    reuse = a.reuse and (home / "site.json").exists()
+    if reuse:
+        import json
+        bport = int(json.loads((home / "site.json").read_text())["broker_port"])
+        logs.mkdir(parents=True, exist_ok=True)
+        fp = _site(home, "fingerprint").strip()
+    else:
+        if a.dir.exists():
+            shutil.rmtree(a.dir)
+        logs.mkdir(parents=True)
+        bport = _free_port()
+        _site(home, "init", "--site-id", "demo", "--hostname", a.host, "--broker-port", str(bport))
+        for n in names:
+            _site(home, "enroll", n, "--days", "30")
+    if not reuse:
+        fp = _setup_rest(a, home, names)
+
+    procs: list[subprocess.Popen] = []
+    agents: dict[str, subprocess.Popen] = {}       # W42:绑定好了的出厂机器人的代理
+
+    def start(name: str, argv: list[str], ready: str) -> None:
+        log = logs / f"{name}.log"
+        if log.exists():                   # 上一次的挪开:等「起来了」那一行要等这一次的
+            log.replace(log.with_suffix(".prev.log"))
+        p = subprocess.Popen(argv, stdout=open(log, "wb"), stderr=subprocess.STDOUT, env=ENV)
+        procs.append(p)
+        _wait(log, ready, p)
+
+    return _run(a, home, logs, names, bport, fp, procs, agents, start, reuse)
+
+
+def _setup_rest(a, home: Path, names: list[str]) -> str:
     if a.backup:
         import json
         keys = a.dir / "keys"
@@ -294,16 +361,12 @@ def main(argv: list[str] | None = None) -> int:
     fp = _site(home, "fingerprint").strip()
     if a.recordings > 0:
         _seed_recordings(home, a.dir, a.recordings)
+    return fp
 
-    procs: list[subprocess.Popen] = []
-    agents: dict[str, subprocess.Popen] = {}       # W42:绑定好了的出厂机器人的代理
 
-    def start(name: str, argv: list[str], ready: str) -> None:
-        log = logs / f"{name}.log"
-        p = subprocess.Popen(argv, stdout=open(log, "wb"), stderr=subprocess.STDOUT, env=ENV)
-        procs.append(p)
-        _wait(log, ready, p)
-
+def _run(a, home: Path, logs: Path, names: list[str], bport: int, fp: str, procs: list,
+         agents: dict, start, reuse: bool) -> int:
+    mosq = shutil.which("mosquitto") or "/usr/sbin/mosquitto"
     try:
         start("mosquitto", [mosq, "-c", str(home / "broker" / "mosquitto.conf")],
               "mosquitto version")
@@ -319,11 +382,20 @@ def main(argv: list[str] | None = None) -> int:
                                   "--tls-key", str(crt / "robot.key"), "--hal", "sim",
                                   "--registration", str(crt / "registration.json"),
                                   "--store-dir", str(a.dir / f"agent{sub}"),
-                                  "--runs-root", str(a.dir / f"runs{sub}"),
-                                  "--map", "estate-1:7", "--home", f"{i * 1.0},0,0"],
+                                  *([] if a.nav == "planned"
+                                    else ["--runs-root", str(a.dir / f"runs{sub}")]),
+                                  "--map", "estate-1:7", "--home", f"{i * 1.0},0,0",
+                                  "--nav", a.nav,
+                                  # 规划要图:站点下发地图走发件箱 + 接收口(真机器人也是这么配的)
+                                  *(["--outbox", str(a.dir / f"outbox{sub}"),
+                                     "--intake", f"https://{a.host}:8444"]
+                                    if a.nav == "planned" else [])],
                   "d1max-agent 起来了")
         fresh = _unbound(a, logs, start) if a.unbound else []
-        seeded = _seed_w53(f"https://{a.host}:{a.api_port}", a.password, names) if a.w53 else []
+        base = f"https://{a.host}:{a.api_port}"
+        seeded = _seed_w53(base, a.password, names) if a.w53 and not reuse else []
+        if a.nav == "planned":
+            seeded += _send_maps(base, a.password, names)
         print(f"演示站点起来了(日志在 {logs}):\n"
               f"  地址  https://{a.host}:{a.api_port}\n"
               f"  指纹  {fp}\n"
