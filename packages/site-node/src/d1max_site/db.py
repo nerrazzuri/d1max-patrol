@@ -17,7 +17,7 @@ from typing import Any
 #: 58 路线库(站点存的路线、排程是唯一真理源);59 运营可视化:定位历史 loc_episodes(只加表);
 #: 60 区域「在生效的那一份」nav_zones.effective_body(外审 R1,2026-10-15);
 #: 61 W44:告警结论 alerts.verdict、交班留言 shift_notes、位置轨迹 pose_track(只加列、加表)。
-SCHEMA_VERSION = 67
+SCHEMA_VERSION = 68
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -711,6 +711,39 @@ CREATE TABLE IF NOT EXISTS map_display (
     updated_ms  INTEGER NOT NULL,
     PRIMARY KEY (map_id, map_version)
 );
+-- W53:临时巡逻(保安、经理手动派的,不进日程;撞日程就排在后面)。adhoc.py。
+CREATE TABLE IF NOT EXISTS adhoc_queue (
+    id            TEXT PRIMARY KEY,
+    robot         TEXT NOT NULL,
+    mission       TEXT NOT NULL,
+    label         TEXT NOT NULL,
+    by            TEXT NOT NULL,
+    created_ms    INTEGER NOT NULL,
+    not_before_ms INTEGER NOT NULL,
+    estimate_s    INTEGER NOT NULL,
+    state         TEXT NOT NULL,
+    task_id       TEXT NOT NULL DEFAULT '',
+    started_ms    INTEGER,
+    ended_ms      INTEGER,
+    note          TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS adhoc_queue_state ON adhoc_queue(state, not_before_ms);
+CREATE INDEX IF NOT EXISTS adhoc_queue_task ON adhoc_queue(task_id);
+-- W52:App 上申请账号(不用登录),管理员批准时选权限。account_requests.py。
+CREATE TABLE IF NOT EXISTS account_requests (
+    id          TEXT PRIMARY KEY,
+    name        TEXT NOT NULL,
+    display     TEXT NOT NULL,
+    salt        BLOB NOT NULL,
+    pw_hash     BLOB NOT NULL,
+    source      TEXT NOT NULL DEFAULT '',
+    created_ms  INTEGER NOT NULL,
+    expires_ms  INTEGER NOT NULL,
+    state       TEXT NOT NULL DEFAULT 'pending',
+    role        TEXT NOT NULL DEFAULT '',
+    decided_by  TEXT NOT NULL DEFAULT '',
+    decided_ms  INTEGER
+);
 """
 
 
@@ -799,6 +832,8 @@ _ADDED_COLUMNS = (
     ("cameras", "fov_deg", "REAL"),
     # W42 外审 2-B:绑定申请批准时那一代证书(早一点的开发版建的表没有这一列)
     ("bind_requests", "cert_fp", "TEXT NOT NULL DEFAULT ''"),
+    # W53:上手向导看过哪一版、开站清单收没收起来(JSON);老账号空着 = 没看过
+    ("accounts", "guide", "TEXT NOT NULL DEFAULT '{}'"),
 )
 
 

@@ -578,7 +578,7 @@ def test_TLS握手在每条连接自己的线程里_不发ClientHello的挡不�
         api.stop()
 
 
-def test_叫停之后站点不再派它_人点恢复才派_管理员能停不能恢复(站点):
+def test_叫停之后站点不再派它_人点恢复才派_只看的不能恢复(站点):
     """W00c5e 内部评审:以前狗上的软急停按下去要人解除才能再动;站点的 halt 只是当场停车、中止
     任务 —— 30 秒之后排程照样把它派出去。现在:叫停之后站点**不再给这只狗派任何会让它动的东西**
     (派单、事件派遣、回待命点、遥控),直到有人(管理员、保安)点「恢复」。管理员能按停,不能恢复。"""
@@ -601,7 +601,10 @@ def test_叫停之后站点不再派它_人点恢复才派_管理员能停不能
                                          lease_ttl_ms=5000, issued_by="alice")
     with pytest.raises(DispatchRefused, match="叫停"):
         s.loop.call(开遥控, timeout_s=10)
-    assert s.req("POST", "/api/robots/A/resume", {}, token=olga)[0] == 403
+    # W53:经理能派单,也就能恢复;只看的不能
+    s.accounts.add("vic", PW, role="viewer")
+    vic = s.req("POST", "/api/login", {"name": "vic", "password": PW})[1]["token"]
+    assert s.req("POST", "/api/robots/A/resume", {}, token=vic)[0] == 403
     assert s.req("POST", "/api/robots/A/resume", {}, token=alice)[0] == 200
     assert s.req("GET", "/api/robots/A", token=alice)[1]["held"] is None
     code, d = s.req("POST", "/api/robots/A/goto", {"target": target(1.0)}, token=alice)
@@ -613,11 +616,12 @@ def test_叫停之后站点不再派它_人点恢复才派_管理员能停不能
 def test_W33_只许手动派_设成要dispatch_接自动要manage_手动派照收(站点):
     s = 站点
     alice = s.login()
-    s.accounts.add("olga", PW, role="owner")
-    olga = s.req("POST", "/api/login", {"name": "olga", "password": PW})[1]["token"]
     _等(lambda: s.req("GET", "/api/robots/A", token=alice)[1].get("fresh"))
     assert s.req("GET", "/api/robots/A", token=alice)[1]["manual_only"] is None
-    assert s.req("POST", "/api/robots/A/service", {"manual_only": True}, token=olga)[0] == 403
+    # W53:经理能派单(dispatch),也就能设「只许手动派」;只看的不能
+    s.accounts.add("vic", PW, role="viewer")
+    vic = s.req("POST", "/api/login", {"name": "vic", "password": PW})[1]["token"]
+    assert s.req("POST", "/api/robots/A/service", {"manual_only": True}, token=vic)[0] == 403
     s.accounts.add("gus", PW, role="guard")
     gus = s.req("POST", "/api/login", {"name": "gus", "password": PW})[1]["token"]
     assert s.req("POST", "/api/robots/A/service", {"manual_only": True}, token=gus)[0] == 200, \

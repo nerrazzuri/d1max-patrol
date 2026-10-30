@@ -13,6 +13,7 @@ def 站点(tmp_path):
     s = 站(tmp_path)
     s.accounts.add("gina", PW, role="guard")
     s.accounts.add("olga", PW, role="owner")
+    s.accounts.add("vic", PW, role="viewer")
     yield s
     s.close()
 
@@ -23,12 +24,23 @@ def _登(s, name):
     return d["token"]
 
 
-def test_管理员只能看和叫停_保安能派不能管_管理员都行(站点):
+def test_只看只能看_经理能派能排日程不能遥控_保安能派不能管_管理员都行(站点):
     s = 站点
-    olga, gina, alice = _登(s, "olga"), _登(s, "gina"), _登(s, "alice")
+    olga, gina, alice, vic = _登(s, "olga"), _登(s, "gina"), _登(s, "alice"), _登(s, "vic")
     _等(lambda: s.req("GET", "/api/robots/A", token=alice)[1].get("fresh"))
+    assert s.req("GET", "/api/robots", token=vic)[0] == 200
+    assert s.req("POST", "/api/robots/A/goto", {"target": target(0.3)}, token=vic)[0] == 403
+    assert s.req("POST", "/api/robots/A/abort", {"task_id": "x"}, token=vic)[0] == 403
+    assert s.req("POST", "/api/route-schedules/e1", {}, token=vic)[0] == 403
+    # W53:经理能派、能排日程(请求体不对是 400,不是 403),不能遥控、不能改路线
+    assert s.req("POST", "/api/route-schedules/e1", {}, token=olga)[0] != 403
+    assert s.req("POST", "/api/routes/r1", {}, token=olga)[0] == 403
+    from d1max_site.permissions import TELEOP, allowed
+    assert not allowed("owner", TELEOP) and allowed("guard", TELEOP)
+    code, d = s.req("POST", "/api/robots/A/goto", {"target": target(0.3)}, token=olga)
+    assert code == 200, d
+    assert s.req("POST", "/api/robots/A/abort", {"task_id": d["task_id"]}, token=olga)[0] == 200
     assert s.req("GET", "/api/robots", token=olga)[0] == 200
-    assert s.req("POST", "/api/robots/A/goto", {"target": target(0.3)}, token=olga)[0] == 403
     code, d = s.req("POST", "/api/robots/A/goto", {"target": target(0.3)}, token=gina)
     assert code == 200, d
     assert s.req("POST", "/api/robots/A/abort", {"task_id": d["task_id"]}, token=olga)[0] == 200

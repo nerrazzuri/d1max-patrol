@@ -368,13 +368,21 @@ def load_sender(cfg: dict[str, Any]) -> tuple[Any, str]:
 #: (离线试新 WiFi 只等 30 分钟)。只推这两类人,标题不写「P1」。
 MANAGE_KINDS = frozenset({"bind_request", "wifi_change"})
 MANAGE_ROLES = ("admin", "engineer")
+#: W53 / W52:别的不是 P1 也要推的 —— 种类 → (推给哪几种角色,标题)。角色写 ``None`` = 只推给告警
+#: ``context.to`` 那个账号(临时巡逻排上了、起跑了、作废了:告诉派的人)。
+PUSH_ROUTES: dict[str, tuple[tuple[str, ...] | None, str]] = {
+    **{k: (MANAGE_ROLES, "等你批准") for k in MANAGE_KINDS},
+    "account_request": (("admin",), "等你批准"),
+    "adhoc_patrol": (("owner", "admin"), "临时巡逻"),
+    "adhoc_queue": (None, "临时巡逻"),
+}
 
 
 def enqueue(tx: Any, alert: Any, now_ms: int) -> None:
     """告警写库的那个事务里调:没确认、没解决的 P1(和 :data:`MANAGE_KINDS`),这一条这一档还没排过
     就排上。"""
     if (getattr(alert.level, "name", str(alert.level)) != "P1"
-            and getattr(alert, "kind", "") not in MANAGE_KINDS) \
+            and getattr(alert, "kind", "") not in PUSH_ROUTES) \
             or alert.acked_ms is not None or alert.resolved_ms is not None:
         return
     tx.execute("INSERT OR IGNORE INTO push_outbox(alert_key, tier, robot, title, created_ms, "
@@ -457,16 +465,18 @@ class PushDesk:
 
     # ------------------------------------------------------------ 发
 
-    def _devices(self, roles: tuple[str, ...] | None = None) -> dict[str, list[str]]:
+    def _devices(self, roles: tuple[str, ...] | None = None, *,
+                 account: str | None = None) -> dict[str, list[str]]:
         """推给谁,按通道分:名单里的、账号没停用的、站点配了那个通道的。退出登录、停用、改权限时名单里
         的行已经删了(A 阶段外审 I2);**登录闲置过期不删**:App 被系统清掉、半小时没请求,照样推。
 
         同一次登录(同一部手机)两个通道都登记了:只走 :data:`PROVIDERS` 里排前面的那个,不推两遍。"""
         rows = [r for r in self.db.query(
-            "SELECT d.reg_id, d.provider, d.session, a.role FROM push_devices d "
+            "SELECT d.reg_id, d.provider, d.session, d.account, a.role FROM push_devices d "
             "JOIN accounts a ON a.name = d.account "
             "WHERE a.disabled = 0 AND d.session != '' ORDER BY d.reg_id")   # 没绑登录的老数据不推
-            if roles is None or r["role"] in roles]
+            if (roles is None or r["role"] in roles)
+            and (account is None or r["account"] == account)]
         best: dict[str, str] = {}
         for r in rows:
             if r["provider"] in self.senders and (
@@ -495,10 +505,21 @@ class PushDesk:
                 continue
             if not self.senders:
                 continue                              # 没配:留着(配好了、一小时内的还能推)
-            kind = self.db.query("SELECT kind FROM alerts WHERE key=?", (row["alert_key"],))
-            manage = bool(kind) and kind[0]["kind"] in MANAGE_KINDS
-            title = (f"{self.site_name} · 等你批准" if self.site_name else "等你批准") if manage \
-                else (f"{self.site_name} · P1" if self.site_name else "P1 告警")
+            kind = self.db.query("SELECT kind, context FROM alerts WHERE key=?",
+                                 (row["alert_key"],))
+            route = PUSH_ROUTES.get(kind[0]["kind"]) if kind else None
+            roles: tuple[str, ...] | None = None
+            account: str | None = None
+            if route is not None:
+                roles, what = route
+                title = f"{self.site_name} · {what}" if self.site_name else what
+                if roles is None:
+                    try:
+                        account = str(json.loads(kind[0]["context"] or "{}").get("to") or "")
+                    except (ValueError, AttributeError):
+                        account = ""
+            else:
+                title = f"{self.site_name} · P1" if self.site_name else "P1 告警"
             extras = {"alert_key": row["alert_key"], "tier": str(row["tier"])}
             got = {r["reg_id"] for r in self.db.query(
                 "SELECT reg_id FROM push_sent WHERE outbox_id=?", (row["id"],))}
@@ -509,7 +530,7 @@ class PushDesk:
             # 另一个通道这才轮得上 —— 原来名单只算一次、没有要发的通道也记成「发完了」,那部手机两头
             # 都没收到。**发没发过只看逐台的账**(``push_sent``),不看通道的「发完」标记。
             for _ in range(RECOUNT_MAX):
-                devices = self._devices(MANAGE_ROLES if manage else None)
+                devices = self._devices(roles, account=account)
                 gone = 0
                 done = []
                 for name in PROVIDERS:                    # 一个通道没发出去,不耽误另一个

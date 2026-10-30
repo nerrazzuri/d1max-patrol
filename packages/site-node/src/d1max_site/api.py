@@ -70,6 +70,7 @@ from d1max_site.permissions import (
     MANAGE,
     MANAGE_ACCOUNTS,
     REVIEW,
+    SCHEDULE,
     SET_MODE,
     TELEOP,
     VIEW,
@@ -90,6 +91,7 @@ _ACCOUNT = re.compile(r"^/api/accounts/([A-Za-z0-9._-]{1,64})$")
 _ACCOUNT_RM = re.compile(r"^/api/accounts/([A-Za-z0-9._-]{1,64})/remove$")
 #: 防区多边形(商业化 B1c)、名单(时段 / 人员授权)。
 #: 路线库:路线 ``/api/routes/<名>[/delete]``、排程 ``/api/route-schedules/<id>[/delete]``。
+_ADHOC = re.compile(r"^/api/adhoc/([^/]{1,32})/cancel$")
 _ROUTE = re.compile(r"^/api/routes/([^/]{1,64})(/delete)?$")
 _ROUTE_SCHED = re.compile(r"^/api/route-schedules(?:/([^/]{1,64})(/delete)?)?$")
 _AREAS = re.compile(r"^/api/maps/([^/]{1,64})/([^/]{1,32})/areas$")
@@ -273,6 +275,8 @@ class SiteApi:
         self.home: Path | None = None
         #: W42 绑定申请台(``binding.BindDesk``;有站点目录时第一次用现建)。
         self.bind: Any = None
+        #: W53 临时巡逻台(``adhoc.AdhocDesk``);站点主程序接上,没接的第一次用时现建。
+        self.adhoc: Any = None
         #: W42:解绑后重启 broker(让它重读吊销名单);站点主程序接上,回做没做到。
         self.broker_restart: Callable[[], bool] | None = None
         #: 网页值班台的静态文件目录(商业化 B1;None = 包里带的 web/,测试换成别的)。
@@ -619,6 +623,15 @@ class _Handler(TlsHandlerMixin):
                 if self.site.scheduler is None:
                     raise HttpError(404, "这个站点没开排程")
                 return self._send_json(200, self.site.scheduler.view())
+            if method == "GET" and path == "/api/patrols/today":
+                self._need(user, VIEW)
+                from d1max_site.today import today_view
+                desk = self._adhoc()
+                return self._send_json(200, self.site.loop.call(lambda: _sync(
+                    today_view, self.site.dispatcher.db, now_ms=self.site._now(), adhoc=desk)))
+            m = _ADHOC.match(path)
+            if m is not None:
+                return self._adhoc_cancel(method, unquote(m.group(1)), user)
             if path == "/api/shift-notes":
                 return self._shift_notes(method, user)
             if path == "/api/duty-settings":
@@ -1100,6 +1113,8 @@ class _Handler(TlsHandlerMixin):
             if method != "POST":
                 raise HttpError(405, "只支持 POST")
             return self._intercept_here(robot_id, user)
+        if action == "patrol-plan":
+            return self._patrol_plan(method, robot_id, user)
         if method != "POST":
             raise HttpError(405, "只支持 POST")
         d = self._body()
@@ -1123,19 +1138,14 @@ class _Handler(TlsHandlerMixin):
             target = {"schema": CONTRACT_SCHEMA, **target}
             result = self.site.dispatch(lambda: disp.goto(
                 robot_id, target, speed, issued_by=str(user), priority=MANUAL))
-        elif action == "patrol" and "points" in d:
-            result = self._temp_patrol(robot_id, d, user)
         elif action == "patrol":
-            mid = d.get("mission_id")
-            if not isinstance(mid, str) or not mid:
-                raise HttpError(400, "要 mission_id")
-            from d1max_site.catalog import active_bundle
-            act = active_bundle(disp.db)
-            if act is None or mid not in act.missions:
-                raise HttpError(404, f"路线库里没有路线 {mid!r}")
-            wire = act.missions[mid].to_wire()
-            result = self.site.dispatch(lambda: disp.patrol(robot_id, wire, issued_by=str(user),
-                                                            priority=MANUAL))
+            # W53:手动派的巡逻都是临时巡逻 —— 估时、撞日程就排在日程后面、通知经理和管理员
+            wire, label = self._patrol_wire(d)
+            if not d.get("points"):
+                self._audit_detail = {"mission": label}
+            desk = self._adhoc()
+            result = self.site.dispatch(lambda: desk.submit(robot_id, wire, label=label,
+                                                            by=str(user)))
         else:
             task_id = d.get("task_id")
             if not isinstance(task_id, str) or not task_id:
@@ -1143,7 +1153,61 @@ class _Handler(TlsHandlerMixin):
             result = self.site.dispatch(lambda: disp.abort(robot_id, task_id, issued_by=str(user)))
         self._send_json(200, result)
 
-    def _temp_patrol(self, robot_id: str, d: dict[str, Any], user: str) -> Any:
+    def _adhoc(self) -> Any:
+        """临时巡逻台(W53)。站点主程序接了就用它的(排队的每拍由它派);测试里第一次用时现建。"""
+        site = self.site
+        if site.adhoc is None:
+            from d1max_site.adhoc import AdhocDesk
+            site.adhoc = AdhocDesk(site.dispatcher.db, site.dispatcher, now_ms=site._now,
+                                   alerts=site.alerts)
+        return site.adhoc
+
+    def _patrol_wire(self, d: dict[str, Any]) -> tuple[dict[str, Any], str]:
+        """派巡逻的请求体 → (整份任务, 给人看的名字)。``points`` 是临时路线,否则 ``mission_id``。"""
+        if "points" in d:
+            m = self._temp_mission(d)
+            self._audit_detail = {"temp": True, "points": len(m.waypoints), "mission": m.mission}
+            return m.to_wire(), f"临时路线 {len(m.waypoints)} 个点"
+        mid = d.get("mission_id")
+        if not isinstance(mid, str) or not mid:
+            raise HttpError(400, "要 mission_id")
+        from d1max_site.catalog import active_bundle
+        act = active_bundle(self.site.dispatcher.db)
+        if act is None or mid not in act.missions:
+            raise HttpError(404, f"路线库里没有路线 {mid!r}")
+        return act.missions[mid].to_wire(), mid
+
+    def _adhoc_cancel(self, method: str, aid: str, user) -> None:
+        """取消排队中的临时巡逻(W53):派的人自己、经理、管理员。"""
+        from d1max_site.adhoc import AdhocError
+        if method != "POST":
+            raise HttpError(405, "只支持 POST")
+        self._need(user, DISPATCH)
+        self._audit_target = aid
+        desk = self._adhoc()
+        others = allowed(getattr(user, "role", ""), SCHEDULE)
+        try:
+            self.site.loop.call(lambda: _sync(desk.cancel, aid, by=str(user), may_others=others))
+        except AdhocError as exc:
+            raise HttpError(409 if "不在排队" in str(exc) else 404, str(exc)) from exc
+        except PermissionError as exc:
+            raise HttpError(403, str(exc)) from exc
+        self._send_json(200, {"ok": True})
+
+    def _patrol_plan(self, method: str, robot_id: str, user) -> None:
+        """派之前先看(W53):``GET ?mission_id=`` → 估时、能不能马上走、撞了哪趟日程。"""
+        if method != "GET":
+            raise HttpError(405, "只支持 GET")
+        self._need(user, DISPATCH)
+        if robot_id not in self.site.dispatcher.clients:
+            raise HttpError(404, f"没有登记过 {robot_id}")
+        q = parse_qs(self.path.split("?", 1)[1] if "?" in self.path else "")
+        wire, label = self._patrol_wire({"mission_id": (q.get("mission_id") or [""])[0]})
+        desk = self._adhoc()
+        got = self.site.loop.call(lambda: _sync(desk.plan, robot_id, wire))
+        self._send_json(200, {**got, "label": label})
+
+    def _temp_mission(self, d: dict[str, Any]) -> Any:
         """保安的临时路线(W44,用户选的):按顺序的 1–20 个点,走一趟,**不进路线库**。校验跟存路线同一套
         (点成不成形、在不在图上、走不走得到);朝向:每个点朝下一个点,最后一个跟前一个一样。"""
         from d1max_site.routes import RouteError
@@ -1168,13 +1232,9 @@ class _Handler(TlsHandlerMixin):
         name = f"temp-{self.site._now()}"
         body = {"map_id": d.get("map_id"), "map_version": d.get("map_version"), "waypoints": flat}
         try:
-            m = self.site.routes.build_mission(name, body)
+            return self.site.routes.build_mission(name, body)
         except RouteError as exc:
             raise HttpError(400, str(exc), extra={"errors": exc.errors}) from exc
-        self._audit_detail = {"temp": True, "points": len(flat), "mission": name}
-        wire = m.to_wire()
-        return self.site.dispatch(lambda: self.site.dispatcher.patrol(
-            robot_id, wire, issued_by=str(user), priority=MANUAL))
 
     def _nearest(self, method: str, user) -> None:
         """让最近的机器人过去看看(W44):``GET ?map_id=&map_version=&x=&y=`` → 谁、多少米、约几秒。
@@ -1619,7 +1679,7 @@ class _Handler(TlsHandlerMixin):
         if method != "POST":
             raise HttpError(405, "只支持 GET/POST" if path == "/api/arming/schedule"
                             else "只支持 POST")
-        self._need(user, MANAGE)
+        self._need(user, SCHEDULE)          # W53:布防时间经理也能排
         d = self._body()
         try:
             if path == "/api/arming/schedule":
@@ -1928,7 +1988,8 @@ class _Handler(TlsHandlerMixin):
         store = self.site.routes
         mr, ms = _ROUTE.match(path), _ROUTE_SCHED.match(path)
         read = method == "GET"
-        self._need(user, VIEW if read else MANAGE)
+        # W53:日程(``/api/route-schedules``)经理也能改;路线、时区、导出还是 manage
+        self._need(user, VIEW if read else SCHEDULE if ms is not None else MANAGE)
         try:
             if read:
                 if path == "/api/routes":
