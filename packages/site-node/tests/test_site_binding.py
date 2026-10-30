@@ -52,7 +52,7 @@ def _挂(desk, serial="D1M-1", nonce=NONCE, source="10.0.0.5"):
                         source=source, host="192.168.1.10")
 
 
-def test_挂申请_批准_拿开通码_领证书包_之后回done(台):
+def test_挂申请_批准_拿开通码_领证书包_回复丢了能再领(台):
     desk, home, db, clock, a, names = 台
     r = _挂(desk)
     assert r["check"] == check_digits(NONCE)
@@ -71,8 +71,39 @@ def test_挂申请_批准_拿开通码_领证书包_之后回done(台):
     assert code["mqtt"].startswith("mqtts://192.168.1.10:")
     files = site.claim(db, home, "D1M-1", code["t"], now_ms=NOW)
     assert "robot.key" in files
-    assert desk.poll(r["request_id"], r["poll_secret"]) == {"state": "done"}
+    # 外审 I7:领证的回复丢了 / 写到一半断电:再问一次给一个新码(同一代证书),旧码作废
+    again = site.decode(desk.poll(r["request_id"], r["poll_secret"])["code"])
+    assert again["t"] != code["t"]
+    assert site.claim(db, home, "D1M-1", again["t"], now_ms=NOW)["robot.crt"] == files["robot.crt"]
+    clock["t"] += bd.CLAIM_WINDOW_MS + 1
+    assert desk.poll(r["request_id"], r["poll_secret"]) == {"state": "expired"}
     assert desk.pending() == []
+
+
+def test_外审C1_解绑重新绑定以后_旧申请的口令领不到新私钥(台):
+    desk, home, db, *_ = 台
+    old = _挂(desk)
+    desk.approve(old["request_id"], by="owner")
+    site_main.cmd_revoke(home, "D1M-1")
+    assert desk.poll(old["request_id"], old["poll_secret"]) == {"state": "replaced"}
+    new = _挂(desk, nonce="c" * 32, source="10.0.0.9")
+    desk.approve(new["request_id"], by="owner")
+    assert desk.poll(old["request_id"], old["poll_secret"]) == {"state": "replaced"}
+    assert desk.poll(new["request_id"], new["poll_secret"])["state"] == "approved"
+
+
+@pytest.mark.parametrize("serial", ["..", ".", ".x", "-x"])
+def test_外审C3_序列号不许点打头(台, serial):
+    with pytest.raises(bd.BindRefused) as e:
+        _挂(台[0], serial=serial)
+    assert e.value.status == 400
+
+
+def test_外审C3_CA不收全是点的编号(tmp_path):
+    from d1max_site.ca import CAError, check_robot_id
+    for bad in ("..", "."):
+        with pytest.raises(CAError):
+            check_robot_id("e", bad)
 
 
 def test_口令不对_没这条_一律404(台):
@@ -150,7 +181,8 @@ def test_证书还算不算(台):
     fp = db.query("SELECT fingerprint FROM robots WHERE robot_id='D1M-1'")[0]["fingerprint"]
     assert desk.cert_state("D1M-1", fp) == "active"
     assert desk.cert_state("D1M-1", fp.removeprefix("sha256:").upper()) == "active"
-    assert desk.cert_state("D1M-1", "sha256:" + "0" * 64) == "revoked"     # 换过证书的旧证书
+    # 外审 C2:登记的是另一张(续签了、机器人还没换上)不算吊销,机器人别清机
+    assert desk.cert_state("D1M-1", "sha256:" + "0" * 64) == "unknown"
     site_main.cmd_revoke(home, "D1M-1")
     assert desk.cert_state("D1M-1", fp) == "revoked"
     assert desk.cert_state("../x", fp) == "unknown"
@@ -176,10 +208,17 @@ def test_接口_机器人不用登录_批准要manage和密码(tmp_path, 台):
         code, d = s.req("POST", f"/api/admin/bind/{rid}/approve",
                         {"confirm_password": PW, "name": "后院"}, token=tok)
         assert code == 200 and d["state"] == "approved", d
+        # 测试台的库跟站点目录的库是两个:站点目录里登记的这一代,抄进测试台的库(真站点是同一个库)
+        hd = SiteDB(home / "site.db")
+        fp = hd.query("SELECT fingerprint FROM robots WHERE robot_id='D1M-9'")[0]["fingerprint"]
+        hd.close()
+        s.reg.enroll("D1M-9", fingerprint=fp, issued_at=0, expires_at=NOW * 2, now_ms=0)
+        with s.db.tx() as c:
+            c.execute("UPDATE bind_requests SET cert_fp=? WHERE id=?", (fp, rid))
         code, d = s.req("GET", f"/api/bind/request/{rid}?secret={sec}")
         assert d["state"] == "approved" and d["code"].startswith("D1MAX1."), d
         assert s.req("GET", "/api/bind/state?serial=A&cert=sha256:a")[1] == {"state": "active"}
-        assert s.req("GET", "/api/bind/state?serial=A&cert=sha256:b")[1] == {"state": "revoked"}
+        assert s.req("GET", "/api/bind/state?serial=A&cert=sha256:b")[1] == {"state": "unknown"}
         assert s.req("GET", "/api/bind/state?serial=NOPE&cert=x")[1] == {"state": "unknown"}
         assert s.req("POST", "/api/bind/request", {"serial": "A", "nonce": NONCE})[0] == 409
     finally:

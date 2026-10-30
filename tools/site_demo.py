@@ -120,9 +120,9 @@ def _unbound(a: argparse.Namespace, logs: Path, start) -> list[dict]:
         etc, data = base / "etc", base / "data"
         data.mkdir(parents=True)
         router = f"fake:{base / 'router.json'}"
-        _patrol("factory", "burn", "--etc", str(etc), "--data-root", str(data), "--router", router,
-                "--serial", serial, "--unbind-pub", str(keys / "unbind-pub.pem"),
-                "--out", str(base / "label"))
+        _patrol("factory", "--no-service", "burn", "--etc", str(etc), "--data-root", str(data),
+                "--router", router, "--serial", serial,
+                "--unbind-pub", str(keys / "unbind-pub.pem"), "--out", str(base / "label"))
         line = next(x for x in (base / "label" / f"{serial}.txt").read_text().splitlines()
                     if x.startswith("二维码 "))
         st = decode_sticker(line.split(" ", 1)[1])

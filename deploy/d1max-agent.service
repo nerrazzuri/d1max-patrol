@@ -6,6 +6,8 @@ Wants=network-online.target
 StartLimitIntervalSec=0
 # 没有站点签发的注册文件就不起(W00c 才签发):不然 enable 之后每 5 秒崩一次、日志刷屏。
 ConditionPathExists=/etc/d1max/registration.json
+# W42:正在清机(解绑 = 恢复出厂,半路断电了)就不起,等配网服务清完
+ConditionPathExists=!/etc/d1max/bind/wiping
 
 [Service]
 Type=simple

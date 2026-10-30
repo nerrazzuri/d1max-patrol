@@ -6,7 +6,8 @@ vivo、荣耀这些厂商的通道接好了,站点只调极光一个接口。
 - **谁收**:手机登录站点(或值守令牌)以后,把自己的推送号(极光的 ``registration_id``)报给站点
   (``POST /api/push/devices``),记在 ``push_devices``;退出时注销(``POST /api/push/devices/remove``),
   停用了的账号不推。
-- **推什么**:只推 **P1**(决策 53),只推**标题**(「<站点> · P1:<告警标题>」),不带照片、位置;点开
+- **推什么**:只推 **P1**(决策 53;W42 起另有「等你批准」两类只推给管理员、工程师,
+  见 MANAGE_KINDS),只推**标题**(「<站点> · P1:<告警标题>」),不带照片、位置;点开
   通知进 App 看详情。新起一条推一次;没人确认、升到下一档再推一次(同一条同一档只推一次)。
 - **怎么推**:告警写库的同一个事务里排进 ``push_outbox``(告警记下了,推送就一定在队里);站点循环里
   单独一条道往外发(:meth:`PushDesk.tick`),发不出去退避重试;已经有人确认、解决了的不发;一个
@@ -363,10 +364,18 @@ def load_sender(cfg: dict[str, Any]) -> tuple[Any, str]:
     return out.get("jpush"), "" if "jpush" in out else why
 
 
+#: 不是 P1、但要推给能批的人(管理员、工程师)的(W42 外审 I11):机器人等批准加入、机器人换 WiFi 等确认
+#: (离线试新 WiFi 只等 30 分钟)。只推这两类人,标题不写「P1」。
+MANAGE_KINDS = frozenset({"bind_request", "wifi_change"})
+MANAGE_ROLES = ("admin", "engineer")
+
+
 def enqueue(tx: Any, alert: Any, now_ms: int) -> None:
-    """告警写库的那个事务里调:没确认、没解决的 P1,这一条这一档还没排过就排上。"""
-    if getattr(alert.level, "name", str(alert.level)) != "P1" or alert.acked_ms is not None \
-            or alert.resolved_ms is not None:
+    """告警写库的那个事务里调:没确认、没解决的 P1(和 :data:`MANAGE_KINDS`),这一条这一档还没排过
+    就排上。"""
+    if (getattr(alert.level, "name", str(alert.level)) != "P1"
+            and getattr(alert, "kind", "") not in MANAGE_KINDS) \
+            or alert.acked_ms is not None or alert.resolved_ms is not None:
         return
     tx.execute("INSERT OR IGNORE INTO push_outbox(alert_key, tier, robot, title, created_ms, "
                "next_ms) VALUES (?,?,?,?,?,?)",
@@ -448,15 +457,16 @@ class PushDesk:
 
     # ------------------------------------------------------------ 发
 
-    def _devices(self) -> dict[str, list[str]]:
+    def _devices(self, roles: tuple[str, ...] | None = None) -> dict[str, list[str]]:
         """推给谁,按通道分:名单里的、账号没停用的、站点配了那个通道的。退出登录、停用、改权限时名单里
         的行已经删了(A 阶段外审 I2);**登录闲置过期不删**:App 被系统清掉、半小时没请求,照样推。
 
         同一次登录(同一部手机)两个通道都登记了:只走 :data:`PROVIDERS` 里排前面的那个,不推两遍。"""
-        rows = self.db.query(
-            "SELECT d.reg_id, d.provider, d.session FROM push_devices d "
+        rows = [r for r in self.db.query(
+            "SELECT d.reg_id, d.provider, d.session, a.role FROM push_devices d "
             "JOIN accounts a ON a.name = d.account "
             "WHERE a.disabled = 0 AND d.session != '' ORDER BY d.reg_id")   # 没绑登录的老数据不推
+            if roles is None or r["role"] in roles]
         best: dict[str, str] = {}
         for r in rows:
             if r["provider"] in self.senders and (
@@ -485,7 +495,10 @@ class PushDesk:
                 continue
             if not self.senders:
                 continue                              # 没配:留着(配好了、一小时内的还能推)
-            title = f"{self.site_name} · P1" if self.site_name else "P1 告警"
+            kind = self.db.query("SELECT kind FROM alerts WHERE key=?", (row["alert_key"],))
+            manage = bool(kind) and kind[0]["kind"] in MANAGE_KINDS
+            title = (f"{self.site_name} · 等你批准" if self.site_name else "等你批准") if manage \
+                else (f"{self.site_name} · P1" if self.site_name else "P1 告警")
             extras = {"alert_key": row["alert_key"], "tier": str(row["tier"])}
             got = {r["reg_id"] for r in self.db.query(
                 "SELECT reg_id FROM push_sent WHERE outbox_id=?", (row["id"],))}
@@ -496,7 +509,7 @@ class PushDesk:
             # 另一个通道这才轮得上 —— 原来名单只算一次、没有要发的通道也记成「发完了」,那部手机两头
             # 都没收到。**发没发过只看逐台的账**(``push_sent``),不看通道的「发完」标记。
             for _ in range(RECOUNT_MAX):
-                devices = self._devices()
+                devices = self._devices(MANAGE_ROLES if manage else None)
                 gone = 0
                 done = []
                 for name in PROVIDERS:                    # 一个通道没发出去,不耽误另一个

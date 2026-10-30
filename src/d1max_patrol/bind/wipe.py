@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import shutil
 import subprocess
 from collections.abc import Callable, Sequence
@@ -33,11 +34,23 @@ SITE_FILES = ("tls", "registration.json", "evidence-pub.key")
 Run = Callable[[Sequence[str]], int]
 
 
+#: 停服务最多等多久:代理停在线建图要存盘,单元给了 420 s(外审 I8),这里多等一点。
+STOP_TIMEOUT_S = 450
+
+
 def _run(cmd: Sequence[str]) -> int:
     try:
-        return subprocess.run(list(cmd), capture_output=True, timeout=120).returncode
+        return subprocess.run(list(cmd), capture_output=True, timeout=STOP_TIMEOUT_S).returncode
     except (OSError, subprocess.SubprocessError):
         return 127
+
+
+def mountpoint(path: Path) -> Path:
+    """``path`` 所在的挂载点(``fstrim`` 要挂载点,给子目录不认;外审 I9)。"""
+    p = Path(path).resolve()
+    while not os.path.ismount(p) and p != p.parent:
+        p = p.parent
+    return p
 
 
 def stop_services(run: Run = _run) -> list[str]:
@@ -71,7 +84,8 @@ def wipe(paths: BindPaths, *, router: Router, run: Run = _run) -> list[str]:
     failed: list[str] = []
     bad = stop_services(run)
     if bad:
-        failed.append(f"停不下:{'、'.join(bad)}")
+        # 外审 I8:服务没停下就不删(它们还在写);下一轮整套再来
+        return [f"停不下:{'、'.join(bad)}(数据还没删)"]
     for d in (paths.data_root, *paths.extra_data):
         try:
             _clear_dir(d)
@@ -98,9 +112,12 @@ def wipe(paths: BindPaths, *, router: Router, run: Run = _run) -> list[str]:
         router.forget_wifi()
     except Exception as exc:  # noqa: BLE001 - 路由器那份失败记下来,下一拍再来
         failed.append(f"路由器忘 WiFi:{exc}")
-    for d in {"/", str(paths.data_root), *map(str, paths.extra_data)}:
-        if Path(d).exists() and run(["fstrim", d]) != 0:
-            log.warning("fstrim %s 没成(盘不支持?);文件已经删了", d)
+    mounts = {mountpoint(d) for d in (Path("/"), paths.data_root, *paths.extra_data)
+              if Path(d).exists()}
+    for m in sorted(mounts):
+        if run(["fstrim", str(m)]) != 0:
+            # 盘不支持 trim 也不能卡在清机里出不来:文件已经删了,记下来
+            log.warning("fstrim %s 没成(盘不支持?);文件已经删了", m)
     if failed:
         log.error("清机没清干净:%s", ";".join(failed))
     return failed

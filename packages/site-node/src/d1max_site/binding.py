@@ -33,6 +33,9 @@ TTL_MS = 24 * 3600_000
 RATE_PER_MIN = 5
 #: 告警种类(给业主:今天之内批一下)。
 ALERT_KIND = "bind_request"
+#: 批准以后多久之内机器人还能凭轮询口令(重新)领开通码:领证的回复丢了、机器人写证书写到一半断电,
+#: 都靠再领一次(外审 I7)。只领得到批准时那一代证书。
+CLAIM_WINDOW_MS = 24 * 3600_000
 
 
 class BindRefused(Exception):
@@ -90,7 +93,7 @@ class BindDesk:
             if row is not None and not row["revoked"]:
                 raise BindRefused(409, f"{serial} 已经在这个站点了:要重新绑定,先在站点上解绑")
             c.execute("UPDATE bind_requests SET state='replaced' "
-                      "WHERE serial=? AND state='pending'", (serial,))
+                      "WHERE serial=? AND state IN ('pending', 'approved')", (serial,))
             n = c.execute("SELECT COUNT(*) FROM bind_requests WHERE state='pending'").fetchone()[0]
             if n >= MAX_PENDING:
                 raise BindRefused(429, f"已经有 {MAX_PENDING} 台在等批准了:先在站点上处理掉一些")
@@ -107,8 +110,11 @@ class BindDesk:
                 "expires_ms": now + TTL_MS}
 
     def poll(self, rid: str, secret: str) -> dict[str, Any]:
-        """``pending`` / ``rejected`` / ``expired`` / ``replaced`` / ``approved``(带开通码)/
-        ``done``。"""
+        """``pending`` / ``rejected`` / ``expired`` / ``replaced`` / ``approved``(带开通码)。
+
+        批了以后 :data:`CLAIM_WINDOW_MS` 之内,每问一次出一个新开通码(旧的作废):领证的回复丢了、
+        写到一半断电,机器人再问一次就是。**只出批准时那一代**(外审 C1):这台后来吊销了、重新登记了,
+        旧申请回 ``replaced``,领不到新私钥。"""
         now = self._now()
         rows = self.db.query("SELECT * FROM bind_requests WHERE id=?", (str(rid)[:32],))
         if not rows or not isinstance(secret, str) \
@@ -121,9 +127,13 @@ class BindDesk:
             state = "expired"
         if state != "approved":
             return {"state": state}
-        used = self.db.query("SELECT used_ms FROM enroll_claims WHERE robot_id=?", (r["serial"],))
-        if used and used[0]["used_ms"] is not None and used[0]["used_ms"] >= (r["decided_ms"] or 0):
-            return {"state": "done"}
+        reg = self.db.query("SELECT fingerprint, revoked FROM robots WHERE robot_id=?",
+                            (r["serial"],))
+        if not reg or reg[0]["revoked"] or not r["cert_fp"] \
+                or not hmac.compare_digest(str(reg[0]["fingerprint"]), str(r["cert_fp"])):
+            return {"state": "replaced"}
+        if now > (r["decided_ms"] or 0) + CLAIM_WINDOW_MS:
+            return {"state": "expired"}
         try:
             code = self._issue(r["serial"], r["host"])
         except Exception as exc:  # 原因原样告诉机器人(它会记日志、再问)
@@ -131,8 +141,9 @@ class BindDesk:
         return {"state": "approved", "code": code}
 
     def cert_state(self, serial: Any, cert: Any) -> str:
-        """``active``:这张证书在这儿还算;``revoked``:这台在这儿吊销了 / 换了别的证书;
-        ``unknown``:这儿没这台(站点重装了):机器人别动。"""
+        """``active``:这张证书在这儿还算;``revoked``:这台在这儿**明确吊销了**(解绑);
+        ``unknown``:这儿没这台(站点重装了)、或者登记的是另一张证书(续签了、机器人还没换上):
+        机器人别动(外审 C2:续签不能被当成解绑去清机)。"""
         try:
             check_serial(serial)
         except BindingError:
@@ -141,8 +152,10 @@ class BindDesk:
         if not rows:
             return "unknown"
         r = rows[0]
-        if r["revoked"] or not hmac.compare_digest(str(r["fingerprint"]).lower(), _fp(cert)):
+        if r["revoked"]:
             return "revoked"
+        if not hmac.compare_digest(str(r["fingerprint"]).lower(), _fp(cert)):
+            return "unknown"
         return "active"
 
     # ------------------------------------------------------------ 站点上的人(manage)
@@ -161,8 +174,10 @@ class BindDesk:
         serial = r["serial"]
         self._enroll(serial)                       # 失败抛出去(站点那头的原因原样给人看)
         with self.db.tx() as c:
-            c.execute("UPDATE bind_requests SET state='approved', decided_by=?, decided_ms=? "
-                      "WHERE id=?", (by, self._now(), rid))
+            fp = c.execute("SELECT fingerprint FROM robots WHERE robot_id=?", (serial,)).fetchone()
+            c.execute("UPDATE bind_requests SET state='approved', decided_by=?, decided_ms=?, "
+                      "cert_fp=? WHERE id=?", (by, self._now(), fp["fingerprint"] if fp else "",
+                                               rid))
         if isinstance(name, str) and name.strip() and self._set_name is not None:
             try:
                 self._set_name(serial, name.strip()[:64])

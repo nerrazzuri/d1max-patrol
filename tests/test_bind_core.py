@@ -54,6 +54,7 @@ class 台:
         self.router = FakeRouter(reachable={"Estate", "New"}, has_4g=has_4g)
         self.site = 假站点()
         self.provisioned, self.started, self.wiped = [], 0, 0
+        self.prov_fail = 0
         self.wipe_fails: list[str] = []
         self.core = c.BindCore(self.paths, router=self.router, site=self.site,
                                provision=self._prov, wipe=self._wipe,
@@ -61,6 +62,9 @@ class 台:
 
     def _prov(self, code):
         self.provisioned.append(code)
+        if self.prov_fail:
+            self.prov_fail -= 1
+            raise RuntimeError("连接断了")
         self.paths.robot_cert.parent.mkdir(parents=True, exist_ok=True)
         self.paths.robot_cert.write_bytes(PEM)
         return "D1M-1"
@@ -280,3 +284,32 @@ def test_没烧写过_起不来(tmp_path):
     with pytest.raises(RuntimeError, match="factory burn"):
         c.BindCore(BindPaths(etc=tmp_path), router=FakeRouter(), site=None,
                    provision=str, wipe=list, start_services=lambda: None, now_ms=lambda: 0)
+
+
+def test_外审I7_领证没成_下一次轮询再领(机):
+    机.core.bind(CODE, {"wifi": {"ssid": "Estate", "psk": "12345678"}, "site": SITE})
+    机.tick()
+    机.prov_fail = 1
+    机.site.answer = {"state": "approved", "code": "D1MAX1.a"}
+    机.tick(c.POLL_MS)
+    assert 机.core.s["state"] == "pending" and "领证书没成" in 机.core.s["error"]
+    机.site.answer = {"state": "approved", "code": "D1MAX1.b"}
+    机.tick(c.POLL_MS)
+    assert 机.core.s["state"] == "bound" and 机.provisioned == ["D1MAX1.a", "D1MAX1.b"]
+
+
+def test_外审I8_清机期间有标记_清完删掉(机):
+    机.bound()
+    机.core.site_unbind(c.cert_fp(PEM))
+    assert 机.paths.wiping_marker.exists(), "服务单元看到它就不起"
+    机.tick()
+    assert not 机.paths.wiping_marker.exists() and 机.core.s["state"] == "unbound"
+
+
+def test_外审I13_改动最后怎样了_进遥测(机):
+    机.bound()
+    ch = 机.core.wifi(CODE, {"ssid": "New", "psk": "abcdefgh"})["change"]
+    机.core.wifi_confirm(ch["id"], False)
+    v = 机.core.net_view()["wifi"]
+    assert v["change"] is None and v["result"] == {"id": ch["id"], "result": "rejected"}
+    assert b.wifi_view({"wifi": v})["result"] == v["result"]

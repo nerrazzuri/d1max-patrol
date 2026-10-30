@@ -50,6 +50,9 @@ def check_robot_id(site_id: str, robot_id: str) -> None:
         raise CAError(f"robot_id 不合规矩: {exc}") from exc
     if robot_id.startswith("site:"):
         raise CAError(f"robot_id {robot_id!r} 是站点的保留名")
+    if robot_id.strip(".") == "":
+        # W42 外审 C3:「.」「..」会让证书包目录指到 issued 自己或它上一层(重签时整个删掉)
+        raise CAError(f"robot_id 不许全是点: {robot_id!r}")
 
 
 def site_principal(site_id: str) -> str:
@@ -225,6 +228,8 @@ class SiteCA:
     def _issue(self, robot_id: str, *, days: int, now_ms: int) -> RobotBundle:
         site_id = self.site_id
         d = self.robot_dir(robot_id)
+        if d.resolve().parent != (self.root / "issued").resolve():
+            raise CAError(f"robot_id {robot_id!r} 的证书包目录不在 issued 下面")
         if d.exists():
             shutil.rmtree(d)                     # 上一张已吊销或续签换下;旧证书留在 newcerts/
         d.mkdir(parents=True)

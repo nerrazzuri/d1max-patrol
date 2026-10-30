@@ -524,7 +524,9 @@ CREATE TABLE IF NOT EXISTS bind_requests (
     expires_ms  INTEGER NOT NULL,
     state       TEXT NOT NULL DEFAULT 'pending',
     decided_by  TEXT NOT NULL DEFAULT '',
-    decided_ms  INTEGER
+    decided_ms  INTEGER,
+    -- 外审 C1:批准时签的那一代证书的指纹。只给这一代出开通码(吊销、重新登记以后旧申请领不到新私钥)
+    cert_fp     TEXT NOT NULL DEFAULT ''
 );
 -- W33(C40221 真机):只许手动派的机器人。站点自己发起的动作(排程、入侵派遣、回充、
 -- 任务完了自动回待命点)

@@ -8,6 +8,7 @@ import json
 import socket
 import ssl
 import threading
+from pathlib import Path
 
 import pytest
 
@@ -155,7 +156,16 @@ def test_热点口和代理套接字(出厂, tmp_path):
     unix = sv.make_unix(core, sock)
     threading.Thread(target=unix.serve_forever, daemon=True).start()
     try:
+        idle = socket.create_connection(("127.0.0.1", port))   # 外审 I6:不握手的连接堵不住别人
         assert _req(port, st.fingerprint, "GET", "/status", "WRONG")[0] == 403
+        ctx = ssl.create_default_context()
+        ctx.check_hostname, ctx.verify_mode = False, ssl.CERT_NONE
+        with ctx.wrap_socket(socket.create_connection(("127.0.0.1", port)),
+                             server_hostname="x") as raw:   # 外审 C5:负数长度拒
+            raw.sendall(b"POST /bind HTTP/1.1\r\nHost: x\r\nContent-Length: -1\r\n\r\n"
+                        + b"x" * 4096)
+            assert raw.recv(64).startswith(b"HTTP/1.0 400")
+        idle.close()
         code, d = _req(port, st.fingerprint, "GET", "/status", st.code)
         assert code == 200 and d["state"] == "unbound" and d["serial"] == "D1M-000123"
         code, d = _req(port, st.fingerprint, "POST", "/bind", st.code,
@@ -178,3 +188,18 @@ def test_热点口和代理套接字(出厂, tmp_path):
     finally:
         srv.shutdown()
         unix.shutdown()
+
+
+def test_外审I8_服务停不下就不删(出厂):
+    paths, router, *_ = 出厂
+    paths.data_root.mkdir(parents=True, exist_ok=True)
+    (paths.data_root / "x").write_text("x")
+    failed = wp.wipe(paths, router=router,
+                     run=lambda cmd: 1 if cmd[:2] == ["systemctl", "stop"] else 0)
+    assert failed and "数据还没删" in failed[0]
+    assert (paths.data_root / "x").exists()
+
+
+def test_外审I9_fstrim给挂载点(tmp_path):
+    assert wp.mountpoint(tmp_path / "a" / "b") == wp.mountpoint(tmp_path)
+    assert wp.mountpoint(Path("/")) == Path("/")

@@ -37,6 +37,7 @@ def add_args(sub: argparse._SubParsersAction) -> None:
     p.add_argument("--dry-system", action="store_true", help=argparse.SUPPRESS)
 
     f = sub.add_parser("factory", help="出厂:烧写、检验、重做贴纸(W42,生产线上以 root 跑)")
+    f.add_argument("--no-service", action="store_true", help=argparse.SUPPRESS)  # 演示:不碰 systemd
     fs = f.add_subparsers(dest="factory_command", required=True)
     b = fs.add_parser("burn", help="生成绑定码、热点、配网证书,写进机器人和路由器,出贴纸文件")
     paths_args(b)
@@ -114,9 +115,13 @@ def _serve(args: argparse.Namespace) -> int:
     return 0
 
 
+SERVICE = "d1max-bind.service"
+
+
 def _factory(args: argparse.Namespace) -> int:
     from d1max_contract.binding import pretty_code
     from d1max_patrol.bind import factory as fa
+    from d1max_patrol.bind import wipe as wp
     paths = _paths(args)
     try:
         if args.factory_command == "check":
@@ -127,11 +132,22 @@ def _factory(args: argparse.Namespace) -> int:
                 print("  PASS  贴纸跟机器人里存的对得上")
             return 1 if bad else 0
         router = _router(args.router)
+        svc = not args.no_service
         if args.factory_command == "burn":
             st = fa.burn(paths, args.serial, router=router, unbind_pub=Path(args.unbind_pub),
                          model=args.model, force=args.force)
+            if svc and wp._run(["systemctl", "enable", "--now", SERVICE]) != 0:
+                print(f"注意:{SERVICE} 没起来(systemctl enable --now {SERVICE} 看原因)")
         else:
-            st = fa.rekey(paths, router=router)
+            # 外审 I10:配网服务在跑的话它记着旧绑定码、旧证书:先停,换完再起,新贴纸才生效
+            was = svc and wp._run(["systemctl", "is-active", "--quiet", SERVICE]) == 0
+            if was:
+                wp._run(["systemctl", "stop", SERVICE])
+            try:
+                st = fa.rekey(paths, router=router)
+            finally:
+                if was and wp._run(["systemctl", "start", SERVICE]) != 0:
+                    print(f"注意:{SERVICE} 没起来,新贴纸要等它起来才能用")
     except fa.FactoryError as exc:
         print(f"没成:{exc}", file=sys.stderr)
         return 1
