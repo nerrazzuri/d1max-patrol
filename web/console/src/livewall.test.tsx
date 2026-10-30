@@ -18,7 +18,7 @@ const help = (robot: string): Alert => ({
   acked_by: "", acked_ms: null, resolved_ms: null, audience: "help",
 });
 const cards = (c: Element) => Array.from(c.querySelectorAll(".lw-card")).map((x) => x.getAttribute("data-robot"));
-const srcs = (card: Element) => Array.from(card.querySelectorAll("img.feed")).map((i) => i.getAttribute("src") ?? "");
+const srcs = (card: Element) => Array.from(card.querySelectorAll("img.feed")).map((i) => i.getAttribute("data-src") ?? "");
 
 beforeEach(() => {
   lang.value = "zh";

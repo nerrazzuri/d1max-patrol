@@ -48,11 +48,11 @@ import re
 import ssl
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from concurrent.futures import TimeoutError as FutureTimeout
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qs, quote, unquote
+from urllib.parse import parse_qs, quote, unquote, urlparse
 
 from d1max_contract import SCHEMA as CONTRACT_SCHEMA
 from d1max_contract.dispatch import DispatchTimeout
@@ -166,6 +166,27 @@ TRACK_SPAN_MAX_MS = 86_400_000
 _ROBOT = re.compile(
     r"^/api/robots/([^/]+)"
     r"(?:/(goto|abort|patrol|standby|standby/return|standby/here|intercept/here))?$")
+
+
+def _cam_frames(v: Any) -> Iterator[bytes]:
+    """固定摄像头的画面(``CctvView.frames`` 外面包一层):第一帧之前出的错换成 :class:`HttpError`
+    (504 没出画面、502 拉不下来,带摄像头报的原因);之后断了就结束。"""
+    frames = v.frames()
+    first = True
+    try:
+        while True:
+            try:
+                f = next(frames)
+            except TimeoutError as exc:
+                raise HttpError(504, f"摄像头没出画面:{v.error or exc}") from exc
+            except StopIteration:
+                if first:
+                    raise HttpError(502, f"摄像头画面拉不下来:{v.error}") from None
+                return
+            first = False
+            yield f
+    finally:
+        frames.close()
 
 
 class HttpError(Exception):
@@ -551,6 +572,8 @@ class _Handler(TlsHandlerMixin):
             if method == "GET" and path == "/api/robots":
                 self._need(user, VIEW)
                 return self._send_json(200, {"robots": self.site.dispatcher.robots_view()})
+            if method == "GET" and path == "/api/video/ws":
+                return self._video_ws(user)               # W51:网页的多路画面走一条 WebSocket
             if method == "GET" and path == "/api/robots/overview":
                 # W44 第二期:业主看的机器人卡片(今天几趟、毛病、电量)
                 self._need(user, MANAGE)
@@ -2969,7 +2992,6 @@ class _Handler(TlsHandlerMixin):
     def _cameras(self, method: str, path: str, user) -> None:
         """固定摄像头(W19):列出、状态(``view``,不带口令);实时画面 MJPEG(``view``)。加、删只走
         命令行。"""
-        from d1max_site.cctv import CctvView
         if method != "GET":
             raise HttpError(405, "只收 GET(加、删摄像头在站点主机上用命令行)")
         self._need(user, VIEW)
@@ -2985,6 +3007,13 @@ class _Handler(TlsHandlerMixin):
                                                      for c in mgr.view()]})
         m = _CAM.match(path)
         assert m is not None
+        if m.group(2) == "live":
+            frames = self._camera_frames(m.group(1))
+            first = next(frames)                         # 起不来:HttpError(504 / 502)
+            if self._still():
+                frames.close()
+                return self._send_bytes(first, "image/jpeg")
+            return self._mjpeg(frames, first)
         cam = mgr.camera(m.group(1))
         if cam is None:
             raise HttpError(404, "没有这台摄像头")
@@ -2994,6 +3023,18 @@ class _Handler(TlsHandlerMixin):
                 v = self.site._cctv_views.get(cam.name)
             return self._send_json(200, v.health() if v is not None and v.cam == cam
                                    else {"online": False, "last_frame_age_ms": None})
+        raise HttpError(404, "没有这个摄像头接口")
+
+    def _camera_frames(self, name: str):
+        """一台固定摄像头的画面生成器(HTTP 长连、W51 的 WebSocket 共用)。第一帧等不到:``next``
+        抛 ``TimeoutError``;拉不下来:``StopIteration``。"""
+        from d1max_site.cctv import CctvView
+        mgr = self.site.cctv
+        if mgr is None:
+            raise HttpError(404, "这个站点没开摄像头")
+        cam = mgr.camera(name)
+        if cam is None:
+            raise HttpError(404, "没有这台摄像头")
         if not cam.rtsp_url:
             raise HttpError(404, "这台摄像头没登记画面地址(camera-add --rtsp)")
         with self.site._cctv_lock:
@@ -3005,17 +3046,7 @@ class _Handler(TlsHandlerMixin):
                 make = self.site.cctv_view_factory or CctvView
                 v = self.site._cctv_views[cam.name] = make(cam)
         self._audit_view(f"camera/{cam.name}")
-        frames = v.frames()
-        try:
-            first = next(frames)
-        except TimeoutError as exc:
-            raise HttpError(504, f"摄像头没出画面:{v.error or exc}") from exc
-        except StopIteration as exc:
-            raise HttpError(502, f"摄像头画面拉不下来:{v.error}") from exc
-        if self._still():
-            frames.close()
-            return self._send_bytes(first, "image/jpeg")
-        self._mjpeg(frames, first)
+        return _cam_frames(v)
 
     def _report(self, method: str, user, path: str = "/api/reports/daily") -> None:
         """值班日报(C-B3b)、按天汇总(W44 第二期):能看的都能看(保安交班、业主)。"""
@@ -3209,6 +3240,58 @@ class _Handler(TlsHandlerMixin):
             frames.close()                     # 取一张就走;那一路还留 idle_s 秒,下一张接得上
             return self._send_bytes(first, "image/jpeg")
         self._mjpeg(frames, first, VideoError)
+
+    def _video_ws(self, user) -> None:
+        """W51:网页的多路画面走一条 WebSocket(:mod:`d1max_site.video_mux`)。权限跟 HTTP 那条一样
+        (``view``);每一路照原来的规矩开(狗的画面、固定摄像头,含审计)。靠 cookie 认的,还要
+        ``Origin`` 是这个站点自己(别的网站的页面开不了这条)。令牌每隔一会儿复查。"""
+        from d1max_site.video_mux import VideoMux
+        from d1max_site.ws import WsClosed, check_upgrade, upgrade
+        self._need(user, VIEW)
+        if check_upgrade(self.headers) is None:
+            raise HttpError(400, "要 WebSocket 升级请求")
+        if self._via_cookie:
+            origin = urlparse(self.headers.get("Origin") or "")
+            if not origin.netloc or origin.netloc != (self.headers.get("Host") or ""):
+                raise HttpError(403, "画面连接要从站点自己的网页开")
+        ws = upgrade(self, ping_every_s=5.0, dead_after_s=30.0, send_timeout_s=15.0)
+        if ws is None:
+            return
+        mux = VideoMux(ws.send_binary, ws.send_text, self._mux_open)
+        token = self._token()
+        checked = time.monotonic()
+        try:
+            while not self.site.stopping:
+                msg = ws.recv(timeout_s=0.03)
+                if msg is not None:
+                    mux.on_message(msg)
+                mux.pump()
+                if time.monotonic() - checked >= self.site.sse_recheck_s:
+                    checked = time.monotonic()
+                    who = self.site.accounts.check(token)
+                    if who is None or not allowed(who.role, VIEW):
+                        break                            # 注销、过期、停用:画面跟着断
+        except WsClosed:
+            pass
+        finally:
+            mux.close()
+            ws.close(1000, "")
+
+    def _mux_open(self, stream_id: str) -> Iterator[bytes]:
+        """W51:一路画面的地址(跟 HTTP 那条一样)→ 画面生成器。"""
+        m = _VIDEO.match(stream_id)
+        if m is not None and m.group(2) != "health":
+            robot_id = unquote(m.group(1))
+            if not SAFE_ID.match(robot_id):
+                raise HttpError(404, "没有这台机器人")
+            hub = self.site.video
+            if hub is None:
+                raise HttpError(404, "这个站点没开视频")
+            return hub.stream(robot_id, m.group(2))
+        m = _CAM.match(stream_id)
+        if m is not None and m.group(2) == "live":
+            return self._camera_frames(m.group(1))
+        raise HttpError(404, f"没有这一路画面:{stream_id[:80]}")
 
     def _still(self) -> bool:
         """``?still=1``:只要一张 JPEG(演示站点实测:四台机器人 8 路长连占满浏览器对一个站点的 6 条
