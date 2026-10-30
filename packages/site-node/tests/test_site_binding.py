@@ -261,6 +261,8 @@ def test_端到端_换WiFi站点确认_解绑先叫机器人清机(tmp_path, 台
         v = 等(lambda: (s.req("GET", "/api/robots/A", token=tok)[1].get("wifi") or {})
               .get("change"))
         assert v["id"] == ch["id"] and v["ssid"] == "New"
+        ov = s.req("GET", "/api/robots/overview", token=tok)[1]["robots"]
+        assert [r["wifi"]["change"]["id"] for r in ov if r["robot_id"] == "A"] == [ch["id"]]
         a = 等(lambda: [x for x in s.desk.book.open() if x.kind == "wifi_change"])
         assert "New" in a[0].detail
         assert router.ssid == "", "没确认,路由器没动"

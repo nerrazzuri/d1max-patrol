@@ -11,6 +11,7 @@ from __future__ import annotations
 from datetime import tzinfo
 from typing import Any
 
+from d1max_contract.binding import wifi_view
 from d1max_site.alert_audience import audience
 from d1max_site.dispatcher import battery_pct
 from d1max_site.sitetime import local_day_start
@@ -55,5 +56,8 @@ def overview(dispatcher: Any, db: Any, *, now_ms: int, tz: tzinfo) -> list[dict[
                     "manual_only": reg.manual_only(rid) is not None,
                     "patrols_today": n["n"], "problems": problems, "recent_problems": recent,
                     "agent": getattr(caps, "agent", None),
-                    "compat": _robot(rid, c)["verdict"] if c is not None else "unknown"})
+                    "compat": _robot(rid, c)["verdict"] if c is not None else "unknown",
+                    # W42:连的哪个 WiFi、走哪条线、有没有等确认的 WiFi 改动(老机器人是 None)
+                    "wifi": wifi_view(c.telemetry.net)
+                    if c is not None and c.telemetry is not None else None})
     return out
