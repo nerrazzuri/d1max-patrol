@@ -94,6 +94,32 @@ def test_W42外审I11_等批准加入_换WiFi等确认_也推_只推给管理员
         (("rid-ada",), "翠湖庄园 · 等你批准"), (("rid-ada",), "翠湖庄园 · 等你批准")]
 
 
+def test_W53_临时巡逻推经理和管理员_排队结果只推派的人_账号申请只推管理员(台):
+    desk, p, j, clock, db = 台
+    with db.tx() as c:
+        for name, role in (("ada", "admin"), ("olga", "owner"), ("eng", "engineer")):
+            c.execute("INSERT INTO accounts(name, role, salt, pw_hash, created_at, disabled) "
+                      "VALUES (?, ?, x'00', x'00', 0, 0)", (name, role))
+            c.execute("INSERT INTO sessions(token_hash, name, created_at, last_used) "
+                      "VALUES (?, ?, 0, 0)", ("s-" + name, name))
+    for name in ("ada", "olga", "eng"):
+        p.register(name, "rid-" + name, "android", session="s-" + name)
+    desk.raise_alert(kind="adhoc_patrol", robot="A", title="gina 派 A 走「loop」(临时)")
+    p.tick()
+    assert sorted(r for reg, title, _, _ in j.sent for r in reg) == ["rid-ada", "rid-olga"]
+    assert {title for _, title, _, _ in j.sent} == {"翠湖庄园 · 临时巡逻"}
+    j.sent.clear()
+    desk.raise_alert(kind="adhoc_queue", robot="A", title="排队的临时巡逻开始了",
+                     context={"to": "gina"})
+    desk.raise_alert(kind="adhoc_queue", robot="B", title="没人收", context={})
+    p.tick()
+    assert [reg for reg, _, _, _ in j.sent] == [["rid-gina"]]
+    j.sent.clear()
+    desk.raise_alert(kind="account_request", robot="site", title="王小明申请账号")
+    p.tick()
+    assert [(reg, title) for reg, title, _, _ in j.sent] == [(["rid-ada"], "翠湖庄园 · 等你批准")]
+
+
 def test_已经确认或解决的不推_一小时没发出去作废_没有手机作废(台):
     desk, p, j, clock, db = 台
     a = desk.raise_alert(kind="dog_sees_person", robot="A", title="x")

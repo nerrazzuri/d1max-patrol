@@ -200,12 +200,17 @@ LEVEL_OF: dict[str, Level] = {
     # W42:机器人等批准加入站点 / 机器人上有人提了换 WiFi:要有 manage 权限的人今天之内批一下。
     "bind_request": Level.P2,
     "wifi_change": Level.P2,
+    # W52:有人在 App 上申请账号,等管理员批准。
+    "account_request": Level.P2,
     # P3:只记录。日常的正常事件,不需要谁去处理什么。
     "run_done": Level.P3,
     "run_start": Level.P3,
     "battery_swap": Level.P3,
     # B1c:授权在场(名单)——狗看见人,但人在授权的防区和时段里:不报 P1,留一条记录
     "authorized_person": Level.P3,
+    # W53:有人手动派了临时巡逻(告诉经理、管理员);排队的那一趟起跑了、作废了(告诉派的人)。
+    "adhoc_patrol": Level.P3,
+    "adhoc_queue": Level.P3,
 }
 
 

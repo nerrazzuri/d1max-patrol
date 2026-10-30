@@ -496,7 +496,7 @@ def _b(**kw):
     return {"map_id": MAP[0], "map_version": MAP[1], "waypoints": GOOD, "base_revision": 0, **kw}
 
 
-def test_接口_权限_看谁都能_改只管理员(站点):
+def test_接口_权限_看谁都能_路线只管理员_日程经理也能(站点):
     s = 站点
     alice, gina, olga = _登(s, "alice"), _登(s, "gina"), _登(s, "olga")
     assert s.req("GET", "/api/routes")[0] == 401
@@ -506,7 +506,9 @@ def test_接口_权限_看谁都能_改只管理员(站点):
         assert s.req("POST", "/api/routes/night", _b(base_revision=1), token=tok)[0] == 403
         assert s.req("POST", "/api/routes/night/delete", {"base_revision": 1}, token=tok)[0] == 403
         assert s.req("POST", "/api/route-timezone", {"timezone": "UTC"}, token=tok)[0] == 403
-        assert s.req("POST", "/api/route-schedules/s1", _sched(), token=tok)[0] == 403
+        # W53:日程经理也能排,保安不能
+        code = s.req("POST", "/api/route-schedules/s1", _sched(), token=tok)[0]
+        assert (code == 403) == (tok == gina), code      # 经理过了权限这一关(版本号不对是 400)
         assert s.req("POST", "/api/route-export", {}, token=tok)[0] == 403
         code, d = s.req("GET", "/api/routes", token=tok)
         assert code == 200 and [r["id"] for r in d["routes"]] == ["night"]

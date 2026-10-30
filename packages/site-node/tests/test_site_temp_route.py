@@ -74,12 +74,13 @@ def test_临时路线_点不成形400带第几个(站点):
     assert code == 400 and d["errors"][0]["index"] == 1
 
 
-def test_临时路线_经理账号403(站点):
+def test_临时路线_只看账号403_经理能派(站点):
     s = 站点
-    olga = _登(s, "olga")
-    code, _ = s.req("POST", "/api/robots/A/patrol", {"points": [{"x": 0, "y": 0}], "map_id": "m",
-                                                     "map_version": "1"}, token=olga)
-    assert code == 403
+    s.accounts.add("vic", PW, role="viewer")
+    body = {"points": [{"x": 0, "y": 0}], "map_id": "m", "map_version": "1"}
+    assert s.req("POST", "/api/robots/A/patrol", body, token=_登(s, "vic"))[0] == 403
+    # W53:经理能派(过了权限这一关;后面被别的拦下不是 403)
+    assert s.req("POST", "/api/robots/A/patrol", body, token=_登(s, "olga"))[0] != 403
 
 
 def test_授权此刻生效没有(tmp_path):

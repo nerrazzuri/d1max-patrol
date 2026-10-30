@@ -800,6 +800,9 @@ class Server:
         self.alert_sources = SiteAlertSources(self.alerts, now_ms=wall_ms,
                                               skew_of=self.dispatcher.clock_skew_s)   # W09d:同一份
         self.alert_sources.attach(self.dispatcher)
+        # W53:临时巡逻(手动派的巡逻;撞日程排在后面,排队的跟排程同一拍派)
+        from d1max_site.adhoc import AdhocDesk
+        self.adhoc = AdhocDesk(self.db, self.dispatcher, now_ms=wall_ms, alerts=self.alerts)
         # 运营可视化:规划路径 / 轨迹 / 被挡(内存)、定位历史(库 58)
         from d1max_site.loc_history import LocHistory
         from d1max_site.runviz import RunViz
@@ -995,6 +998,7 @@ class Server:
         self.force.armed_for = self.sightings.armed_now          # W44 外审 R2
         self.api.deterrence = self.deterrence
         self.api.weather = self.weather
+        self.api.adhoc = self.adhoc
         from d1max_site.push import PushDesk, load_senders
         senders, why_off = load_senders(cfg)
         if why_off:
@@ -1140,6 +1144,12 @@ class Server:
             except Exception as exc:
                 self.scheduler.last_error = f"{type(exc).__name__}: {exc}"
                 log.exception("排程这一拍没办成")
+            try:
+                await self.adhoc.tick()                    # W53:排队的临时巡逻
+            except Exception as exc:
+                self.scheduler.last_error = (self.scheduler.last_error
+                                             or f"临时巡逻:{type(exc).__name__}: {exc}")
+                log.exception("临时巡逻这一拍没办成")
             try:
                 self.alert_sources.on_site_error("schedule", self.scheduler.last_error)
             except Exception:
@@ -1454,11 +1464,11 @@ def build_parser() -> argparse.ArgumentParser:
     a.add_argument("name")
     aa = sub.add_parser("add-account", help="加账号(带角色)")
     aa.add_argument("name")
-    aa.add_argument("--role", required=True, choices=("admin", "guard", "owner"))
+    aa.add_argument("--role", required=True, choices=("admin", "guard", "owner", "viewer"))
     aa.add_argument("--display-name", default="", help="给人看的真名(W20)")
     sr = sub.add_parser("set-role", help="改账号的角色")
     sr.add_argument("name")
-    sr.add_argument("role", choices=("admin", "guard", "owner"))
+    sr.add_argument("role", choices=("admin", "guard", "owner", "viewer"))
     for verb in ("disable", "enable"):
         sub.add_parser(verb, help=f"{verb} 账号").add_argument("name")
     s = sub.add_parser("serve", help="跑站点:派遣器 + 站点 API")
