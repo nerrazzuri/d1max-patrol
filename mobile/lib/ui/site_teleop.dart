@@ -514,7 +514,7 @@ class _SiteTeleopPageState extends State<SiteTeleopPage> with WidgetsBindingObse
   /// 杆底下一层淡黑：白的杆压在亮的画面上也看得清，画面还透得过来。
   static Widget _stickBack(Widget stick) => DecoratedBox(
         decoration: BoxDecoration(
-            color: Colors.black.withValues(alpha: 0.28), borderRadius: BorderRadius.circular(Nw.r12)),
+            color: Colors.black.withValues(alpha: 0.38), borderRadius: BorderRadius.circular(Nw.r12)),
         child: stick,
       );
 }
