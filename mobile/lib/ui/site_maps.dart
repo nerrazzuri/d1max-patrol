@@ -606,7 +606,7 @@ class _SiteMapTabState extends State<SiteMapTab> {
           return Column(children: [
             NwHeader(
                 overline: tr('Map', '地图'),
-                title: v?.mapId == null ? tr('Estate map', '庄园地图') : v!.tag,
+                title: v?.mapId == null ? tr('Site map', '地图') : v!.tag,
                 subtitle:
                     v?.mapId == null ? null : tr('$onMap robot(s) on this map', '这张图上 $onMap 台机器人'),
                 trailing: [

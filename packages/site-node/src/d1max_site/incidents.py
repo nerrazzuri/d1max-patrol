@@ -56,7 +56,7 @@ TYPES = frozenset({"intrusion"})
 ALERT_OUTCOMES = frozenset({"dispatched", "merged", "no_robot", "unmapped", "dispatch_failed",
                             "unreachable"})
 #: 每个事件源每分钟最多收这么多条(W16,W00c2c 取舍 6):摄像头抽风、密钥漏了被人刷,不能把站点和狗
-#: 拖垮。超了回 429,记日志,报一次告警(``on_throttled``)。一个庄园的入侵事件远到不了这个数。
+#: 拖垮。超了回 429,记日志,报一次告警(``on_throttled``)。一个现场的入侵事件远到不了这个数。
 RATE_PER_MIN = 30
 #: 狗到了拦截点拍一张,用哪个相机(W17:现场照片挂在告警上)。狗没报能拍就不拍。
 ARRIVAL_CAMERA = "front"

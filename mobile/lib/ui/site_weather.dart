@@ -5,7 +5,7 @@
 /// - **下雨**：照常巡、照常派，全狗限速 0.3 m/s（湿地防打滑）。
 /// - **雷暴**（大雨也算）：排程巡检暂停、在外巡的狗回待命点；**有入侵照样派狗**（告警里写明雷暴中出动）；限速。
 ///
-/// 天气是站点联网查的（配了庄园坐标才查），也可以在这里手动切（保安、业主、管理员都能），**以手动为准**，
+/// 天气是站点联网查的（配了站点坐标才查），也可以在这里手动切（保安、业主、管理员都能），**以手动为准**，
 /// 到点回到自动。别的手机切了：站点推一帧 `weather`，这一页当场换。
 library;
 
@@ -46,7 +46,7 @@ String weatherText(Map<String, dynamic> w) {
     final a = w['auto'];
     parts.add(a is Map && a['enabled'] == true
         ? tr('Weather unavailable, treated as normal', '天气查不到，按正常管')
-        : tr('No site coordinates set, manual only', '没配庄园坐标，只能手动切'));
+        : tr('No site coordinates set, manual only', '没配站点坐标，只能手动切'));
   }
   return parts.join(' · ');
 }
@@ -164,7 +164,7 @@ class _SiteWeatherPageState extends State<SiteWeatherPage> {
                                   '${'${a['error'] ?? ''}'.isEmpty ? '' : ' (last lookup failed: ${a['error']})'}',
                               '联网查的：${a['condition'] == null ? '还没查到' : (_names[a['condition']] ?? a['condition'])}'
                                   '${'${a['error'] ?? ''}'.isEmpty ? '' : '（上次查不到：${a['error']}）'}')
-                          : tr('No site coordinates set, no online lookup', '没配庄园坐标，不联网查'),
+                          : tr('No site coordinates set, no online lookup', '没配站点坐标，不联网查'),
                       style: NwText.bodySmall.copyWith(color: nw.textSecondary)),
                 ])),
               ])),

@@ -98,8 +98,8 @@ Future<bool> leaveRobotHotspot(
         title: Text(tr('Switch back to your network', '切回平时的网络'),
             style: NwText.titleLarge.copyWith(color: nw.text)),
         content: Text(
-            tr('Open the phone WiFi settings, leave \u201c$ssid\u201d and join the estate WiFi (or use mobile data), then come back.',
-                '打开手机的 WiFi 设置，断开「$ssid」，连回庄园 WiFi（或者用移动数据），再回来。'),
+            tr('Open the phone WiFi settings, leave \u201c$ssid\u201d and join the WiFi you normally use (or use mobile data), then come back.',
+                '打开手机的 WiFi 设置，断开「$ssid」，连回平时用的 WiFi（或者用移动数据），再回来。'),
             style: NwText.bodyMedium.copyWith(color: nw.text)),
         actions: [
           NwButton(label: tr('Cancel', '取消'), variant: NwButtonVariant.ghost,
@@ -400,8 +400,8 @@ class _RobotAddPageState extends State<RobotAddPage> with _StickerScan<RobotAddP
     final waiting = st != null && st['state'] == 'pending' && st['phase'] == 'waiting';
     return _Frame(title: tr('Add robot', '添加机器人'), children: [
       Text(tr(
-          'Stand next to the robot. Scan the sticker on its payload, enter the estate WiFi, then approve it on the site.',
-          '站在机器人旁边：扫上装上的贴纸，填庄园 WiFi，然后在站点上批准。'),
+          'Stand next to the robot. Scan the sticker on its payload, enter the WiFi it should use, then approve it on the site.',
+          '站在机器人旁边：扫上装上的贴纸，填机器人要连的 WiFi，然后在站点上批准。'),
           style: NwText.bodySmall.copyWith(color: c.textSecondary)),
       _gap,
       if (s == null) scanButton(),
@@ -409,13 +409,13 @@ class _RobotAddPageState extends State<RobotAddPage> with _StickerScan<RobotAddP
         NwNotice(key: const Key('bind-serial'), text: tr('Robot ${s.serial}', '机器人 ${s.serial}')),
         _gap,
         NwField(fieldKey: const Key('bind-ssid'), controller: _ssid, autocorrect: false,
-            label: tr('Estate WiFi name', '庄园 WiFi 名')),
+            label: tr('WiFi name', 'WiFi 名')),
         _gap,
         NwField(fieldKey: const Key('bind-psk'), controller: _psk, obscureText: true, autocorrect: false,
             enableSuggestions: false, label: tr('WiFi password', 'WiFi 密码')),
         const SizedBox(height: Nw.s8),
-        Text(tr('2.4 GHz WiFi only. If the estate only has 5 GHz, turn on 2.4 GHz on its router first.',
-            '只支持 2.4 GHz 的 WiFi。庄园只有 5 GHz 的，先在庄园路由器上把 2.4 GHz 打开。'),
+        Text(tr('2.4 GHz WiFi only. If there is only 5 GHz, turn on 2.4 GHz on the WiFi router first.',
+            '只支持 2.4 GHz 的 WiFi。只有 5 GHz 的，先在 WiFi 路由器上把 2.4 GHz 打开。'),
             style: NwText.bodySmall.copyWith(color: c.textSecondary)),
         const SizedBox(height: Nw.s24),
         NwButton(buttonKey: const Key('bind-send'), label: tr('Send to robot', '发给机器人'),

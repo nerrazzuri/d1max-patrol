@@ -28,7 +28,7 @@ ROBOT_RADIUS_M = 0.52
 INFLATE_MARGIN_M = 0.05
 SOFT_BAND_M = 0.3
 SOFT_MAX = 100
-#: 规划栅格最多多少格(0.1 m 下 400 万格 = 4 万 m²,庄园约 1.1 万 m²)。
+#: 规划栅格最多多少格(0.1 m 下 400 万格 = 4 万 m²,现场约 1.1 万 m²)。
 MAX_CELLS = 4_000_000
 LETHAL = 255
 

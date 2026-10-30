@@ -61,7 +61,7 @@ systemctl disable --now mosquitto.service 2>/dev/null || true
 # 站点主机当狗的时间服务器(W09d):只给私网发;自己连不上外网也照样发它的钟(狗跟站点对上最要紧)。
 install -d -m 0755 /etc/chrony/conf.d
 cat > /etc/chrony/conf.d/d1max-site.conf <<'对时'
-# D1 Max 站点(W09d):给庄园局域网里的狗发时间
+# D1 Max 站点(W09d):给现场局域网里的机器人发时间
 allow 10.0.0.0/8
 allow 172.16.0.0/12
 allow 192.168.0.0/16

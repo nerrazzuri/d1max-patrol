@@ -342,7 +342,7 @@ class _SiteLoginPageState extends State<SiteLoginPage> {
                                   textAlign: TextAlign.center,
                                   style: NwText.titleLarge.copyWith(color: c.text, fontWeight: FontWeight.w700)),
                               const SizedBox(height: Nw.s4),
-                              Text(tr('Estate Security Command', '庄园安防指挥'),
+                              Text(tr('Security Command', '安防指挥'),
                                   textAlign: TextAlign.center,
                                   style: NwText.bodySmall.copyWith(color: c.textSecondary)),
                               const SizedBox(height: Nw.s32),

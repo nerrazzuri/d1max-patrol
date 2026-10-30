@@ -23,7 +23,7 @@ void main() {
     expect(weatherText(<String, dynamic>{'condition': 'unknown', 'label': '不知道', 'source': 'none',
       'auto': <String, dynamic>{'enabled': true}}), '天气：不知道 · 天气查不到，按正常管');
     expect(weatherText(<String, dynamic>{'condition': 'unknown', 'label': '不知道', 'source': 'none',
-      'auto': <String, dynamic>{'enabled': false}}), '天气：不知道 · 没配庄园坐标，只能手动切');
+      'auto': <String, dynamic>{'enabled': false}}), '天气：不知道 · 没配站点坐标，只能手动切');
   });
 
   testWidgets('首页有天气一行，点进去切雷暴 6 小时、再回到自动', (t) async {

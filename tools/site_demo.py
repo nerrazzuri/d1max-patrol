@@ -260,7 +260,7 @@ def main(argv: list[str] | None = None) -> int:
               f"  地址  https://{a.host}:{a.api_port}\n"
               f"  指纹  {fp}\n"
               f"  账号  demo / {a.password}\n"
-              f"  狗    {'、'.join(names)}(仿真)\n"
+              f"  机器人 {'、'.join(names)}(仿真)\n"
               + "".join(f"  没绑定 {r['serial']}  贴纸码 {r['sticker']}\n" for r in fresh)
               + "Ctrl+C 全部收掉。", flush=True)
         # 等 Ctrl+C:用处理函数立个旗,不用屏蔽信号(屏蔽会被子进程继承,收掉时它们就不理 SIGTERM)

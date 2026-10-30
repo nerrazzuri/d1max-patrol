@@ -90,7 +90,7 @@ RobotSticker parseSticker(String raw) {
   return RobotSticker(s, c, w, p, f, addr: a is String ? a : defaultBindAddr);
 }
 
-/// 庄园 WiFi 名和密码对不对（跟机器人那头同一个规矩）：对 → null；不对 → 给人看的理由。
+/// 现场 WiFi 名和密码对不对（跟机器人那头同一个规矩）：对 → null；不对 → 给人看的理由。
 String? checkWifi(String ssid, String psk) {
   final n = utf8.encode(ssid).length;
   if (n < 1 || n > 32) return tr('Enter the WiFi name (at most 32 bytes)', '填 WiFi 名（最长 32 字节）');
