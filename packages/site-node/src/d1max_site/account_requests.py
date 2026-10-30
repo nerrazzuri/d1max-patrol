@@ -41,8 +41,11 @@ class RequestRefused(Exception):
 
 
 class AccountRequests:
-    def __init__(self, db: Any, *, now_ms: Callable[[], int], alerts: Any = None) -> None:
-        self.db = db
+    def __init__(self, accounts: Accounts, *, now_ms: Callable[[], int],
+                 alerts: Any = None) -> None:
+        #: 账号表只由 ``accounts.Accounts`` 写(一张表一个模块);批准时经它建账号。
+        self.accounts = accounts
+        self.db = accounts.db
         self._now = now_ms
         self.alerts = alerts
         self._lock = threading.Lock()
@@ -129,9 +132,8 @@ class AccountRequests:
                 raise RequestRefused(409, "这条申请已经处理过了或者过期了")
             if c.execute("SELECT 1 FROM accounts WHERE name=?", (r["name"],)).fetchone():
                 raise RequestRefused(409, f"账号 {r['name']} 已经有了")
-            c.execute("INSERT INTO accounts(name, role, salt, pw_hash, created_at, display_name) "
-                      "VALUES (?,?,?,?,?,?)",
-                      (r["name"], role, r["salt"], r["pw_hash"], now, r["display"]))
+            self.accounts.add_hashed(r["name"], role=role, salt=r["salt"], pw_hash=r["pw_hash"],
+                                     display_name=r["display"], tx=c)
             c.execute("UPDATE account_requests SET state='approved', role=?, decided_by=?, "
                       "decided_ms=? WHERE id=?", (role, by, now, r["id"]))
         self._settle(by)

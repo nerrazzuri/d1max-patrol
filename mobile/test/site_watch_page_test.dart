@@ -4,6 +4,7 @@ import 'dart:async';
 import 'package:d1max_patrol/model/alert.dart';
 import 'package:d1max_patrol/model/site_watch.dart';
 import 'package:d1max_patrol/net/site_client.dart' show SiteError;
+import 'package:d1max_patrol/ui/site_duty_page.dart';
 import 'package:d1max_patrol/ui/site_page.dart';
 import 'package:d1max_patrol/ui/site_watch_page.dart';
 import 'package:flutter/material.dart';
@@ -137,10 +138,10 @@ void main() {
     await t.pump(const Duration(seconds: 1));
     await t.tap(find.byKey(NwShell.dogsKey));
     await t.pumpAndSettle();
-    expect(find.byType(SiteWatchPage), findsNothing);
+    expect(find.byType(SiteDutyPage), findsNothing);
     await t.tap(find.byKey(const Key('open-watch')));
     await t.pumpAndSettle();
-    expect(find.byType(SiteWatchPage), findsOneWidget);
+    expect(find.byType(SiteDutyPage), findsOneWidget, reason: 'W53：值守栏是新的值守页');
   });
 
   test('交接班那一张：三种局面的形状都在（真站点的夹具）', () {

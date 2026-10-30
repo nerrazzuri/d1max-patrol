@@ -115,6 +115,6 @@ void main() {
     await t.pumpWidget(MaterialApp(home: SiteRobotsPage(api: api)));
     await t.pumpAndSettle();
     expect(find.byKey(const Key('deterrence-A')), findsNothing);
-    expect(find.byKey(SiteRobotsPage.modeKey), findsOneWidget, reason: '别的照常');
+    expect(find.byKey(const Key('robots-fleet')), findsOneWidget, reason: '别的照常');
   });
 }

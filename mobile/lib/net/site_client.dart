@@ -114,39 +114,72 @@ class SiteSession {
   final String displayName;
   const SiteSession(this.token, this.name, this.role, {this.displayName = ''});
 
-  bool get canDispatch => role == 'admin' || role == 'guard';
+  /// 管理员、工程师（工程师 = 管理员减去管账号，W44 第二期）。
+  bool get _manage => role == 'admin' || role == 'engineer';
+
+  /// 只看（W53 / W52）：什么按钮都不给。
+  bool get isViewer => role == 'viewer';
+
+  /// 派单（去这里、回待命点、上装、设位置、监护……）：保安、管理员、工程师。
+  bool get canDispatch => _manage || role == 'guard';
+
+  /// 派巡逻（临时巡逻，W53）：能派单的，加上经理。
+  bool get canPatrol => canDispatch || role == 'owner';
 
   /// 确认、解决告警（W00c5a）：值班的人（保安、管理员）；经理也行（W20：留守时自己看到了点「我知道了」）。
-  bool get canHandleAlerts => role == 'admin' || role == 'guard' || role == 'owner';
+  bool get canHandleAlerts => _manage || role == 'guard' || role == 'owner';
 
-  /// 切到布防（W20）：谁都能。
-  bool get canArm => role == 'admin' || role == 'guard' || role == 'owner';
+  /// 切到布防（W20）：只看的以外谁都能。
+  bool get canArm => _manage || role == 'guard' || role == 'owner';
 
   /// 切到留守、临时撤防（撤防，W20）：经理、管理员；保安不能。
-  bool get canSetMode => role == 'admin' || role == 'owner';
+  bool get canSetMode => _manage || role == 'owner';
+
+  /// 排巡逻日程、布防时间（W53）：经理、管理员、工程师。
+  bool get canSchedule => _manage || role == 'owner';
 
   /// 遥控（W00c5c，决策 7）：保安、管理员；经理没有（经理能按「停」）。
-  bool get canTeleop => role == 'admin' || role == 'guard';
+  bool get canTeleop => _manage || role == 'guard';
 
   /// 强制接管别人的遥控：只有管理员，而且要写理由。
   bool get canTakeover => role == 'admin';
 
   /// 判读、复核照片（W00c5d）：值班的人（保安、管理员）；经理只看。
-  bool get canReview => role == 'admin' || role == 'guard';
+  bool get canReview => _manage || role == 'guard';
 
-  /// 下发地图、录包、重建（W00c5d 第二部分）：只有管理员。
-  bool get canManageMaps => role == 'admin';
+  /// 下发地图、录包、重建（W00c5d 第二部分）：管理员、工程师。
+  bool get canManageMaps => _manage;
 
-  /// 改巡检路线、排程（站点的 manage 权限）：管理员。看路线谁都能；派一趟要 [canDispatch]。
-  bool get canManageRoutes => role == 'admin';
+  /// 改巡检路线（站点的 manage 权限）：管理员、工程师。看路线谁都能；派一趟要 [canDispatch]；
+  /// 改日程要 [canSchedule]。
+  bool get canManageRoutes => _manage;
 
-  /// 站点体检、诊断包（商业化 A1）：只有管理员。
-  bool get canSeeHealth => role == 'admin';
+  /// 站点体检、诊断包（商业化 A1）、管理栏：管理员、工程师。
+  bool get canSeeHealth => _manage;
+
+  /// 批准账号申请、改权限（W52）：只有管理员。
+  bool get canManageAccounts => role == 'admin';
 
   /// W42：批准机器人加入、确认机器人换 WiFi（站点的 manage 权限：管理员、工程师）。添加（扫贴纸配网）谁都能做，
   /// 批准要这个。
-  bool get canManageRobots => role == 'admin' || role == 'engineer';
-  bool get canAbort => role == 'admin' || role == 'guard' || role == 'owner';
+  bool get canManageRobots => _manage;
+  bool get canAbort => _manage || role == 'guard' || role == 'owner';
+}
+
+/// 角色给人看的名字（代号不变；W42 用户 10-30 改的叫法）。
+String roleName(String role) => switch (role) {
+      'admin' => tr('Administrator', '管理员'),
+      'owner' => tr('Manager', '经理'),
+      'guard' => tr('Guard', '保安'),
+      'engineer' => tr('Engineer', '工程师'),
+      'viewer' => tr('View only', '只看'),
+      _ => role,
+    };
+
+/// 站点回的拒绝（409）按语言说：中文界面照站点原话；英文界面有 `reason_en` 就用它（W53 D10）。
+String refusalText(SiteError e) {
+  final en = e.body['reason_en'];
+  return tr(en is String && en.isNotEmpty ? en : e.message, e.message);
 }
 
 /// 这台狗报的能力里有没有这种任务（`robots()`、`robot()` 给的那一份）。没这个能力的按钮不显示：
@@ -524,7 +557,48 @@ abstract class SiteApi {
   Future<List<Map<String, dynamic>>> locEpisodes(
       {String? mapId, String? mapVersion, String? robot, int? sinceMs, int limit = 200});
   Future<Map<String, dynamic>> robot(String id);
+  /// 派巡逻（W53：都是临时巡逻）。撞上日程不派、排到后面：回 `{queued: true, start_after_ms, estimate_s,
+  /// because, adhoc_id}`；马上派了回 `{task_id, ack, queued: false, estimate_s, adhoc_id}`。
   Future<Map<String, dynamic>> patrol(String id, String missionId);
+
+  /// 派之前先看（W53）：`{estimate_s, start_ms, queued, because, label}`。不派。
+  Future<Map<String, dynamic>> patrolPlan(String robotId, String missionId);
+
+  /// 今天的巡逻（W53）：`{date, timezone, items: [{at_ms, kind, label, robot, by, state, reason, end_ms,
+  /// adhoc_id, ...}]}`。
+  Future<Map<String, dynamic>> patrolsToday();
+
+  /// 取消排队中的临时巡逻（派的人、经理、管理员）。
+  Future<void> cancelAdhoc(String id);
+
+  /// 开站清单（W53，管理员）：`{items: [{id, done, skipped, ...}], done, total}`。
+  Future<Map<String, dynamic>> setup();
+
+  /// 我是谁、我的向导记录（W53）：`{name, role, display_name, guide: {tour, setup_hidden, skip}}`。
+  Future<Map<String, dynamic>> me();
+
+  /// 改我的向导记录（合进去）：`tour`、`setup_hidden`、`skip`。回整份。
+  Future<Map<String, dynamic>> setGuide(Map<String, dynamic> patch);
+
+  /// 巡逻日程（W53：经理、管理员在 App 里排）：`{timezone, revision, schedules: [{id, mission, at, days,
+  /// robot?, window_min, on_missed, revision, ...}]}`。
+  Future<Map<String, dynamic>> routeSchedules();
+
+  /// 存一条日程（新建 `base_revision` 0）。站点校验不过 400、别人改过 409。
+  Future<Map<String, dynamic>> saveSchedule(String id, Map<String, dynamic> body);
+
+  /// 删一条日程。
+  Future<void> deleteSchedule(String id, int baseRevision);
+
+  /// 申请账号（W52，不用登录）：名字给管理员看，账号名、密码自己定。
+  Future<Map<String, dynamic>> applyAccount(String name, String display, String password);
+
+  /// 等批准的账号申请（W52，管理员）：`[{id, name, display, created_ms, expires_ms}]`。
+  Future<List<Map<String, dynamic>>> accountRequests();
+
+  /// 批准（要再输一次自己的密码；[role] 默认只看）、拒绝。
+  Future<Map<String, dynamic>> approveAccount(String id, String role, String password);
+  Future<void> rejectAccount(String id);
 
   /// 巡检路线库（2026-10-14，站点存的路线、排程是唯一真理源）：路线（按地图号、版本筛）、排程、时区、修订号。
   Future<Map<String, dynamic>> routes({String? mapId, String? version});
@@ -1485,6 +1559,67 @@ class SiteClient implements SiteApi {
           '遥控握手没完成：${e.message}'));
     }
   }
+
+  @override
+  Future<Map<String, dynamic>> patrolPlan(String robotId, String missionId) async => _map(await _send(
+      'GET', '/api/robots/${Uri.encodeComponent(robotId)}/patrol-plan?mission_id=${Uri.encodeQueryComponent(missionId)}'));
+
+  @override
+  Future<Map<String, dynamic>> patrolsToday() async {
+    final d = _map(await _send('GET', '/api/patrols/today'));
+    if (d['items'] is! List) {
+      throw FormatException(tr('Site reply has no "items" field', '站点回的东西里没有 items'));
+    }
+    return d;
+  }
+
+  @override
+  Future<void> cancelAdhoc(String id) async =>
+      _send('POST', '/api/adhoc/${Uri.encodeComponent(id)}/cancel', <String, dynamic>{});
+
+  @override
+  Future<Map<String, dynamic>> setup() async => _map(await _send('GET', '/api/setup'));
+
+  @override
+  Future<Map<String, dynamic>> me() async => _map(await _send('GET', '/api/me'));
+
+  @override
+  Future<Map<String, dynamic>> setGuide(Map<String, dynamic> patch) async =>
+      _map(await _send('POST', '/api/me/guide', patch));
+
+  @override
+  Future<Map<String, dynamic>> routeSchedules() async => _map(await _send('GET', '/api/route-schedules'));
+
+  @override
+  Future<Map<String, dynamic>> saveSchedule(String id, Map<String, dynamic> body) async =>
+      _map(await _send('POST', '/api/route-schedules/${Uri.encodeComponent(id)}', body));
+
+  @override
+  Future<void> deleteSchedule(String id, int baseRevision) async => _send(
+      'POST', '/api/route-schedules/${Uri.encodeComponent(id)}/delete', <String, dynamic>{'base_revision': baseRevision});
+
+  @override
+  Future<Map<String, dynamic>> applyAccount(String name, String display, String password) async =>
+      _map(await _send('POST', '/api/account-requests',
+          <String, dynamic>{'name': name, 'display': display, 'password': password}));
+
+  @override
+  Future<List<Map<String, dynamic>>> accountRequests() async {
+    final rows = _map(await _send('GET', '/api/account-requests'))['requests'];
+    if (rows is! List) {
+      throw FormatException(tr('Site reply has no "requests" field', '站点回的东西里没有 requests'));
+    }
+    return rows.whereType<Map<String, dynamic>>().toList();
+  }
+
+  @override
+  Future<Map<String, dynamic>> approveAccount(String id, String role, String password) async =>
+      _map(await _send('POST', '/api/account-requests/${Uri.encodeComponent(id)}/approve',
+          <String, dynamic>{'confirm_password': password, 'role': role}));
+
+  @override
+  Future<void> rejectAccount(String id) async =>
+      _send('POST', '/api/account-requests/${Uri.encodeComponent(id)}/reject', <String, dynamic>{});
 
   @override
   Future<List<Map<String, dynamic>>> bindRequests() async {

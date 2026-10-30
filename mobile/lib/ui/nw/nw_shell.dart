@@ -1,16 +1,15 @@
-/// 登录之后的外壳（2026-10-14 重做）：底部五栏 —— 值守、狗、地图、记录、管理（只有管理员有；别的
-/// 角色这一栏是「更多」）。原来狗列表顶栏上那一排去别的页面的图标挪到了这里，Key 跟着走
-/// （`open-watch`、`open-maps`、`open-runs`、`open-health`；`open-incidents`、`open-schedule` 是记录栏
-/// 的分段，`open-releases` 在管理 / 更多栏里）。
+/// 登录之后的外壳：底部五栏 —— 值守、机器人、地图、记录，第 5 栏按角色（W53，用户 2026-10-30）：
+/// 管理员、工程师是「管理」，经理是「日程」，保安和只看的是「我的」。
 ///
-/// **站点级的事还在狗列表（[SiteRobotsPage]）身上，一个字没搬**：事件流、响铃、后台值守、登录过期
-/// 退回站点列表。所以它从进站点起就一直活着（`IndexedStack` 里不显示也在），切到哪一栏都照样响铃。
-/// 别的几栏只在显示的时候才建、切走就拆 —— 跟原来「推进去、退出来」一样：值守屏自己的轮询和事件流
-/// 不在背后空跑，切回来看到的是现读的。
+/// **站点级的事还在狗列表（[SiteRobotsPage]）身上**：事件流、响铃、后台值守、登录过期退回站点列表。
+/// 所以它从进站点起就一直活着（`IndexedStack` 里不显示也在），切到哪一栏都照样响铃。别的几栏只在显示的
+/// 时候才建、切走就拆：值守屏自己的轮询和事件流不在背后空跑，切回来看到的是现读的。
 ///
-/// 地图、记录、管理三栏是第四批（P4）换的：地图栏是当前这张图（[SiteMapTab]，地图列表从它右上角进）；
-/// 记录栏是三个分段当页头、下面嵌各自那一页；管理栏是站点体检，最下面接那几个入口。
+/// 值守栏是 W53 的 [SiteDutyPage]（跟着一台机器人走）；它建好以后外壳查这个账号看没看过上手导览。
+/// 记录栏三段：巡逻 / 事件 / 报警。
 library;
+
+import 'dart:async';
 
 import 'package:flutter/material.dart';
 
@@ -19,20 +18,15 @@ import '../../net/background_watch.dart';
 import '../../net/push.dart';
 import '../../net/site_client.dart';
 import '../../store/site_store.dart';
-import '../site_cameras.dart';
-import '../site_health.dart';
+import '../alarm_log.dart';
+import '../guide.dart';
+import '../site_duty_page.dart';
 import '../site_incidents.dart';
-import '../site_intercepts.dart';
 import '../site_maps.dart';
-import '../site_releases.dart';
 import '../site_robots.dart';
 import '../site_runs.dart';
-import '../site_schedule.dart';
-import '../site_watch_page.dart';
-import '../site_routes.dart';
-import '../site_weather.dart';
-import 'nw_button.dart';
-import 'nw_p4_admin.dart';
+import '../site_tabs.dart';
+import 'nw_p4_admin.dart' show nwSideInset;
 import 'nw_theme.dart';
 import 'nw_widgets.dart';
 
@@ -121,10 +115,16 @@ class NwShell extends StatefulWidget {
   static const Key adminKey = Key('open-health');
   static const Key moreKey = Key('open-more');
 
+  /// 经理的第 5 栏：日程（W53）。
+  static const Key planKey = Key('open-plan');
+
   /// 记录栏的三个分段。
   static const Key runsKey = Key('history-runs');
   static const Key incidentsKey = Key('open-incidents');
   static const Key scheduleKey = Key('open-schedule');
+
+  /// 记录栏的「报警」分段（W53，原来的「排程」分段挪到了日程页）。
+  static const Key alarmsKey = Key('history-alarms');
 
   /// 管理 / 更多栏里的入口。
   static const Key releasesKey = Key('open-releases');
@@ -144,26 +144,82 @@ class _NwShellState extends State<NwShell> {
   /// 进来先看值守。
   int _tab = 0;
 
-  Widget _page(int tab, bool admin) => switch (tab) {
-        0 => SiteWatchPage(api: widget.api, title: widget.title),
+  /// 上手导览（W53 §8.2）：这一次进站点查过没有；「使用教程」要再走一遍。
+  bool _tourChecked = false;
+  bool _replay = false;
+
+  @override
+  void initState() {
+    super.initState();
+    replayTour = () async {
+      _replay = true;
+      if (_tab == 0) {
+        // 已经在值守页：值守页不会再建一次，直接在它上面走
+        final t = _targets, ctx = _dutyContext;
+        _replay = false;
+        if (t != null && ctx != null && ctx.mounted) await runTour(ctx, widget.api, t);
+      } else {
+        setState(() => _tab = 0);
+      }
+    };
+  }
+
+  @override
+  void dispose() {
+    replayTour = null;
+    super.dispose();
+  }
+
+  DutyTargets? _targets;
+  BuildContext? _dutyContext;
+
+  void _onDutyReady(BuildContext ctx, DutyTargets t) {
+    _targets = t;
+    _dutyContext = ctx;
+    if (_replay) {
+      _replay = false;
+      unawaited(runTour(ctx, widget.api, t));
+      return;
+    }
+    if (_tourChecked) return;
+    _tourChecked = true;
+    unawaited(maybeStartTour(ctx, widget.api, t));
+  }
+
+  /// 第 5 栏是什么：管理员、工程师「管理」；经理「日程」；保安、只看「我的」。
+  String get _fifth {
+    final s = widget.api.session;
+    if (s?.canSeeHealth ?? false) return 'admin';
+    if (s?.role == 'owner') return 'plan';
+    return 'me';
+  }
+
+  Widget _page(int tab) => switch (tab) {
+        0 => SiteDutyPage(api: widget.api, title: widget.title, onReady: _onDutyReady),
         2 => SiteMapTab(api: widget.api),
         3 => _HistoryTab(api: widget.api),
-        _ => admin ? _AdminTab(api: widget.api) : _MoreTab(api: widget.api),
+        _ => switch (_fifth) {
+            'admin' => AdminHomeTab(
+                api: widget.api, entry: widget.entry, switchTab: (i) => setState(() => _tab = i)),
+            'plan' => SchedulePage(api: widget.api, embedded: true),
+            _ => MeTab(api: widget.api, entry: widget.entry),
+          },
       };
 
   @override
   Widget build(BuildContext context) {
-    final admin = widget.api.session?.canSeeHealth ?? false;
+    final fifth = _fifth;
     final items = <NwNavItem>[
       NwNavItem(key: NwShell.dutyKey, icon: Icons.shield_rounded, label: tr('Duty', '值守')),
       NwNavItem(key: NwShell.dogsKey, icon: Icons.smart_toy_rounded, label: tr('Robots', '机器人')),
       NwNavItem(key: NwShell.mapKey, icon: Icons.map_rounded, label: tr('Map', '地图')),
       NwNavItem(key: NwShell.historyKey, icon: Icons.history_rounded, label: tr('History', '记录')),
-      if (admin)
-        NwNavItem(
-            key: NwShell.adminKey, icon: Icons.admin_panel_settings_rounded, label: tr('Admin', '管理'))
-      else
-        NwNavItem(key: NwShell.moreKey, icon: Icons.more_horiz_rounded, label: tr('More', '更多')),
+      switch (fifth) {
+        'admin' => NwNavItem(
+            key: NwShell.adminKey, icon: Icons.admin_panel_settings_rounded, label: tr('Admin', '管理')),
+        'plan' => NwNavItem(key: NwShell.planKey, icon: Icons.event_rounded, label: tr('Schedule', '日程')),
+        _ => NwNavItem(key: NwShell.moreKey, icon: Icons.person_rounded, label: tr('Me', '我的')),
+      },
     ];
     return Scaffold(
       body: IndexedStack(index: _tab == _dogs ? 0 : 1, sizing: StackFit.expand, children: [
@@ -178,7 +234,7 @@ class _NwShellState extends State<NwShell> {
         if (_tab == _dogs)
           const SizedBox.shrink()
         else
-          KeyedSubtree(key: ValueKey<int>(_tab), child: _page(_tab, admin)),
+          KeyedSubtree(key: ValueKey<int>(_tab), child: _page(_tab)),
       ]),
       bottomNavigationBar:
           NwBottomNav(items: items, index: _tab, onTap: (i) => setState(() => _tab = i)),
@@ -188,7 +244,7 @@ class _NwShellState extends State<NwShell> {
 
 // ------------------------------------------------------------ 记录栏
 
-enum _History { runs, incidents, schedule }
+enum _History { runs, incidents, alarms }
 
 /// 记录栏：巡检记录 / 事件 / 排程三个分段当页头，下面是各自那一页的内容（嵌着，不带自己的顶栏）。
 class _HistoryTab extends StatefulWidget {
@@ -222,12 +278,12 @@ class _HistoryTabState extends State<_HistoryTab> {
                           labelOf: (v) => switch (v) {
                                 _History.runs => tr('Patrols', '巡检'),
                                 _History.incidents => tr('Incidents', '事件'),
-                                _History.schedule => tr('Schedule', '排程'),
+                                _History.alarms => tr('Alarms', '报警'),
                               },
                           keyOf: (v) => switch (v) {
                                 _History.runs => NwShell.runsKey,
                                 _History.incidents => NwShell.incidentsKey,
-                                _History.schedule => NwShell.scheduleKey,
+                                _History.alarms => NwShell.alarmsKey,
                               }))))),
       Expanded(
           // 刘海已经让上面那一条躲开了
@@ -239,84 +295,8 @@ class _HistoryTabState extends State<_HistoryTab> {
                   child: switch (_seg) {
                     _History.runs => SiteRunsPage(api: widget.api, embedded: true),
                     _History.incidents => SiteIncidentsPage(api: widget.api, embedded: true),
-                    _History.schedule => SiteSchedulePage(api: widget.api, embedded: true),
+                    _History.alarms => AlarmLogPage(api: widget.api),
                   }))),
     ]);
-  }
-}
-
-// ------------------------------------------------------------ 管理栏、更多栏
-
-/// 管理 / 更多栏里去别的页面的入口：版本、拦截点、摄像头、天气（这几页谁都能看，能改的只有管理员，
-/// 各页自己管）。
-List<(Key, IconData, String, Widget Function())> _entries(SiteApi api) => [
-      (NwShell.releasesKey, Icons.system_update_rounded, tr('Releases', '版本'), () => SiteReleasesPage(api: api)),
-      (NwShell.interceptsKey, Icons.fence_rounded, tr('Intercept points', '拦截点'), () => SiteInterceptsPage(api: api)),
-      (NwShell.camerasKey, Icons.videocam_rounded, tr('Cameras', '摄像头'), () => SiteCamerasPage(api: api)),
-      (NwShell.routesKey, Icons.route_rounded, tr('Patrol routes', '巡检路线'), () => SiteRoutesPage(api: api)),
-      (NwShell.weatherKey, Icons.cloud_rounded, tr('Weather', '天气'), () => SiteWeatherPage(api: api)),
-    ];
-
-void _go(BuildContext context, Widget Function() page) =>
-    Navigator.push(context, MaterialPageRoute<void>(builder: (_) => page()));
-
-/// 管理栏（管理员）：站点体检（站点状态、版本、诊断包），最下面是去版本、拦截点、摄像头、天气的入口 ——
-/// 跟体检在同一页里一起滚。
-class _AdminTab extends StatelessWidget {
-  final SiteApi api;
-  const _AdminTab({required this.api});
-
-  @override
-  Widget build(BuildContext context) {
-    return SiteHealthPage(
-        api: api,
-        embedded: true,
-        footer: Column(crossAxisAlignment: CrossAxisAlignment.stretch, mainAxisSize: MainAxisSize.min, children: [
-          NwSectionLabel(tr('Site settings', '站点设置')),
-          nwGap8,
-          // 竖屏的手机一行一个（两个并排「Intercept points」摆不下）；宽了并排
-          NwGrid(minTile: 220, children: [
-            for (final e in _entries(api))
-              NwButton(
-                  buttonKey: e.$1,
-                  icon: e.$2,
-                  label: e.$3,
-                  variant: NwButtonVariant.outline,
-                  size: NwButtonSize.large,
-                  fullWidth: true,
-                  onPressed: () => _go(context, e.$4)),
-          ]),
-        ]));
-  }
-}
-
-/// 更多栏（不是管理员）：那几个入口，没有站点体检。
-class _MoreTab extends StatelessWidget {
-  final SiteApi api;
-  const _MoreTab({required this.api});
-
-  @override
-  Widget build(BuildContext context) {
-    final entries = _entries(api);
-    return Scaffold(
-        appBar: AppBar(title: Text(tr('More', '更多'))),
-        body: ListView(padding: const EdgeInsets.all(Nw.s16), children: [
-          for (var i = 0; i < entries.length; i += 2)
-            Padding(
-                padding: const EdgeInsets.only(bottom: Nw.s8),
-                child: Row(children: [
-                  for (var j = i; j < i + 2; j++) ...[
-                    if (j > i) const SizedBox(width: Nw.s8),
-                    Expanded(
-                        child: j < entries.length
-                            ? NwActionTile(
-                                tileKey: entries[j].$1,
-                                icon: entries[j].$2,
-                                label: entries[j].$3,
-                                onTap: () => _go(context, entries[j].$4))
-                            : const SizedBox.shrink()),
-                  ],
-                ])),
-        ]));
   }
 }

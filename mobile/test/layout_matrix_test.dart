@@ -11,7 +11,11 @@ import 'package:d1max_patrol/store/site_store.dart';
 import 'package:d1max_patrol/ui/nw/nw_theme.dart';
 import 'package:d1max_patrol/ui/site_health.dart';
 import 'package:d1max_patrol/ui/robot_bind_page.dart';
+import 'package:d1max_patrol/ui/alarm_log.dart';
+import 'package:d1max_patrol/ui/guide.dart';
 import 'package:d1max_patrol/ui/site_add.dart';
+import 'package:d1max_patrol/ui/site_duty_page.dart';
+import 'package:d1max_patrol/ui/site_tabs.dart';
 import 'package:d1max_patrol/ui/site_alert_scene.dart';
 import 'package:d1max_patrol/ui/site_cameras.dart';
 import 'package:d1max_patrol/ui/site_deter.dart';
@@ -35,6 +39,22 @@ import 'package:flutter_test/flutter_test.dart';
 import 'support/fake_site.dart';
 import 'site_page_test.dart' show FakeApi, busyView;
 import 'support/fake_map.dart' show Rot23Api;
+
+/// W53：今天有几趟巡逻（含临时的、排队的、没完成的），机器人有名字。
+FakeApi _w53Api(String role) => FakeApi(role)
+  ..today = <String, dynamic>{
+    'date': '2027-03-15',
+    'timezone': 'UTC',
+    'items': <dynamic>[
+      <String, dynamic>{'at_ms': 1800000000000, 'kind': 'schedule', 'label': 'Perimeter loop north side',
+        'robot': 'A', 'by': '', 'state': 'done', 'reason': '', 'end_ms': 1800000900000, 'adhoc_id': ''},
+      <String, dynamic>{'at_ms': 1800001000000, 'kind': 'adhoc', 'label': 'Temporary route 3 points',
+        'robot': 'A', 'by': 'night.guard.long.name', 'state': 'queued', 'reason': 'schedule first',
+        'end_ms': 1800001600000, 'adhoc_id': 'x1'},
+      <String, dynamic>{'at_ms': 1800002000000, 'kind': 'schedule', 'label': 'Main building floor 1',
+        'robot': 'B', 'by': '', 'state': 'failed', 'reason': 'Blocked at point 3', 'end_ms': null, 'adhoc_id': ''},
+    ],
+  };
 
 const _portrait = Size(390, 844);
 const _landscape = Size(800, 360);
@@ -79,9 +99,30 @@ final _pages = <String, Widget Function()>{
   'login': () => SiteLoginPage(
       site: SiteEntry(name: 'East Gate Estate', url: 'https://192.168.100.200:8443',
           fingerprint: 'ab' * 32, username: 'night.guard'),
-      signIn: (_, _) async => FakeApi('guard')),
+      signIn: (_, _) async => FakeApi('guard'),
+      apply: (_, _, _) async {}),
   'shell (admin)': () => NwShell(api: FakeApi('admin'), title: 'East Gate Estate'),
   'shell (owner)': () => NwShell(api: FakeApi('owner'), title: 'East Gate Estate'),
+  // W53：按角色的外壳、值守页、管理栏、日程、我的、账号审批、申请账号、报警练习、常见问题、报警记录
+  'shell (guard)': () => NwShell(api: FakeApi('guard'), title: 'East Gate Estate'),
+  'shell (viewer)': () => NwShell(api: FakeApi('viewer'), title: 'East Gate Estate'),
+  'duty (guard, today)': () => SiteDutyPage(api: _w53Api('guard'), title: 'East Gate Estate'),
+  'duty (owner)': () => SiteDutyPage(api: _w53Api('owner'), title: 'East Gate Estate'),
+  'duty (viewer)': () => SiteDutyPage(api: _w53Api('viewer'), title: 'East Gate Estate'),
+  'admin tab': () => AdminHomeTab(api: _w53Api('admin'), switchTab: (_) {}),
+  'schedule (W53, owner)': () => SchedulePage(api: _w53Api('owner')),
+  'me (guard)': () => MeTab(api: FakeApi('guard')),
+  'accounts': () => AccountsPage(
+      api: FakeApi('admin')
+        ..acctReqs = <Map<String, dynamic>>[
+          <String, dynamic>{'id': 'r1', 'name': 'wang.xiaoming.night', 'display': 'Wang Xiaoming (night shift)'}
+        ]),
+  'apply account': () => AccountApplyPage(
+      site: SiteEntry(name: 'East Gate Estate', url: 'https://192.168.100.200:8443', fingerprint: 'ab' * 32, username: ''),
+      apply: (_, _, _) async {}),
+  'practice alarm': () => const PracticeAlarmPage(),
+  'help (guard)': () => const HelpPage(role: 'guard'),
+  'alarm log': () => Scaffold(body: AlarmLogPage(api: FakeApi('guard'))),
   'robots': () => SiteRobotsPage(api: FakeApi('admin'), title: 'East Gate Estate'),
   'robot (admin, busy)': () => SiteRobotPage(api: FakeApi('admin', robotView: busyView()), robotId: 'A'),
   'robot (guard)': () => SiteRobotPage(api: FakeApi('guard'), robotId: 'A'),

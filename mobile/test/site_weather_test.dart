@@ -1,5 +1,5 @@
 // 天气（W29）：首页一行说人话、点进去手动切（带时长）、回到自动、站点推了当场换；横屏 800x360。
-import 'package:d1max_patrol/ui/site_page.dart';
+import 'package:d1max_patrol/ui/site_duty_page.dart';
 import 'package:d1max_patrol/ui/site_weather.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -8,9 +8,9 @@ import 'site_page_test.dart' show FakeApi;
 import 'support/fake_site.dart';
 
 Future<void> _home(WidgetTester t, FakeApi api) async {
-  await t.binding.setSurfaceSize(const Size(800, 360));
+  await t.binding.setSurfaceSize(const Size(800, 600));
   addTearDown(() => t.binding.setSurfaceSize(null));
-  await t.pumpWidget(MaterialApp(home: SiteRobotsPage(api: api)));
+  await t.pumpWidget(MaterialApp(home: SiteDutyPage(api: api)));
   await t.pumpAndSettle();
 }
 
@@ -29,9 +29,10 @@ void main() {
   testWidgets('首页有天气一行，点进去切雷暴 6 小时、再回到自动', (t) async {
     final api = FakeApi('guard');
     await _home(t, api);
-    expect(find.descendant(of: find.byKey(SiteRobotsPage.weatherKey), matching: find.textContaining('下雨')),
+    // W53：天气在值守页最上面那一行
+    expect(find.descendant(of: find.byKey(SiteDutyPage.modeKey), matching: find.textContaining('下雨')),
         findsOneWidget);
-    await t.tap(find.byKey(SiteRobotsPage.weatherKey));
+    await t.tap(find.descendant(of: find.byKey(SiteDutyPage.modeKey), matching: find.textContaining('天气')));
     await t.pumpAndSettle();
     await t.tap(find.byKey(SiteWeatherPage.hoursKey(6)));
     await t.pumpAndSettle();

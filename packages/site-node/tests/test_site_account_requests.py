@@ -109,10 +109,12 @@ def test_七天没人批作废_登录说过期了_有提醒批完解决(tmp_path
         def resolve_all(self, robot, kind, *, who):
             self.resolved.append((robot, kind, who))
 
+    from d1max_site.accounts import Accounts
     db = SiteDB(tmp_path / "s.db")
     clock = [1_000_000]
     a = 告警()
-    desk = ar.AccountRequests(db, now_ms=lambda: clock[0], alerts=a)
+    desk = ar.AccountRequests(Accounts(db, now_ms=lambda: clock[0]), now_ms=lambda: clock[0],
+                              alerts=a)
     desk.submit({"name": "x1", "display": "甲", "password": "pass-word-123"}, source="1.2.3.4")
     assert a.raised[0]["kind"] == "account_request" and "甲" in a.raised[0]["title"]
     clock[0] += ar.TTL_MS + 1

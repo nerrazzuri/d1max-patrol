@@ -1,6 +1,7 @@
 // 站点模式的版本（W00c5d 第三部分）：管理员给狗装、切、退；切、退要确认；别的角色只看。
 import 'package:d1max_patrol/ui/site_page.dart';
 import 'package:d1max_patrol/ui/site_releases.dart';
+import 'package:d1max_patrol/ui/site_tabs.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -82,13 +83,15 @@ void main() {
   });
 
   // 2026-10-14 重做：入口从狗列表的顶栏挪到了底部导航的「更多」栏（管理员是「管理」栏）。
-  testWidgets('进了站点有「版本」入口', (t) async {
-    final api = FakeApi('owner');
-    await t.pumpWidget(MaterialApp(home: NwShell(api: api, title: '庄园')));
+  testWidgets('W53：管理栏有「软件升级」入口', (t) async {
+    final api = FakeApi('admin');
+    await t.binding.setSurfaceSize(const Size(400, 1400));
+    addTearDown(() => t.binding.setSurfaceSize(null));
+    await t.pumpWidget(MaterialApp(home: NwShell(api: api, title: '站点')));
     await t.pumpAndSettle();
-    await t.tap(find.byKey(NwShell.moreKey));
+    await t.tap(find.byKey(NwShell.adminKey));
     await t.pumpAndSettle();
-    await t.tap(find.byKey(const Key('open-releases')));
+    await t.tap(find.byKey(AdminHomeTab.entryKey('releases')));
     await t.pumpAndSettle();
     expect(find.byType(SiteReleasesPage), findsOneWidget);
   });

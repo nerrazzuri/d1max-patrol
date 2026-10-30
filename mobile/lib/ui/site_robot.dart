@@ -16,6 +16,8 @@ import 'nw/nw_theme.dart';
 import 'nw/nw_widgets.dart';
 import 'robot_events.dart';
 import 'robot_bind_page.dart';
+import 'patrol_dispatch.dart';
+import 'refusal.dart';
 import 'site_deter.dart';
 import 'site_logs.dart';
 import 'site_mapping.dart';
@@ -109,7 +111,11 @@ class _SiteRobotPageState extends State<SiteRobotPage> {
           ? tr('$what: $res', '$what：$res')
           : tr('$what: $res (${ackReasonText(reason)})', '$what：$res（${ackReasonText(reason)}）');
     } on SiteError catch (e) {
-      msg = tr('$what failed: $e', '$what 没成：$e');
+      msg = tr('$what failed: ${refusalText(e)}', '$what 没成：${refusalText(e)}');
+      if (e.status == 409 && e.body['reason_code'] is String && mounted) {
+        // W53：常见的拒绝说清楚、给去处理的按钮
+        await showRefusal(context, widget.api, e, robotId: widget.robotId, title: what, onChanged: _reload);
+      }
     }
     if (!mounted) return ok; // 派单要等回执，人可能早就退出这一页了
     setState(() => _msg = msg);
@@ -343,56 +349,11 @@ class _SiteRobotPageState extends State<SiteRobotPage> {
     await _do(() => widget.api.abort(widget.robotId, tid), tr('Stop', '叫停'));
   }
 
+  /// 派巡逻（W53）：底部弹框，带估时、撞日程排队、被拒说原因。
   Future<void> _patrol() async {
-    List<String> missions;
-    try {
-      final s = await widget.api.schedule();
-      missions = (s['missions'] as List? ?? const []).map((e) => '$e').toList();
-    } on SiteError catch (e) {
-      if (mounted) setState(() => _msg = tr("Can't load tasks: $e", '拿不到任务：$e'));
-      return;
-    }
-    if (!mounted) return;
-    final pick = await showDialog<String>(
-      context: context,
-      builder: (c) => SimpleDialog(title: Text(tr('Choose a patrol', '派哪趟巡检')), children: [
-        if (missions.isEmpty)
-          Padding(
-              padding: const EdgeInsets.all(16),
-              child: Text(tr('No task bundle on the site yet', '站点上还没有任务包'))),
-        for (final m in missions)
-          SimpleDialogOption(onPressed: () => Navigator.pop(c, m), child: Text(m)),
-      ]),
-    );
-    if (pick == null) return;
-    await _do(() => widget.api.patrol(widget.robotId, pick),
-        tr('Dispatch patrol $pick', '派巡检 $pick'));
-  }
-
-  /// 诊断卡的各行：只放狗自己报的（代理、适配器、当前版本、兼容级、传感器、上装）和站点估的钟差。
-  /// 没报的那一行不出；一行都没有就不出这张卡。
-  List<(IconData, String, String)> _diagnostics(Map<String, dynamic>? v) {
-    final caps = v?['capabilities'];
-    if (caps is! Map) return const [];
-    final tasks = caps['tasks'];
-    final rel = tasks is Map ? tasks['release_install'] : null;
-    final compat = tasks is Map ? tasks['compat'] : null;
-    String on(Object? m) =>
-        m is Map ? [for (final e in m.entries) if (e.value == true) '${e.key}'].join(', ') : '';
-    final skew = v?['clock_skew_s'];
-    return [
-      if (caps['agent'] is String) (Icons.memory_rounded, tr('Agent version', '代理版本'), '${caps['agent']}'),
-      if (caps['adapter'] is String) (Icons.settings_input_component_rounded, tr('Adapter', '适配器'), '${caps['adapter']}'),
-      if (rel is Map && rel['current'] is String)
-        (Icons.system_update_rounded, tr('Installed release', '当前版本'), '${rel['current']}'),
-      if (compat is Map && compat['level'] != null)
-        (Icons.handshake_rounded, tr('Compatibility level', '兼容级'), '${compat['level']}'),
-      if (on(caps['sensing']).isNotEmpty) (Icons.sensors_rounded, tr('Sensors', '传感器'), on(caps['sensing'])),
-      if (on(caps['actuators']).isNotEmpty) (Icons.campaign_rounded, tr('Payload', '上装'), on(caps['actuators'])),
-      if (skew is num)
-        (Icons.schedule_rounded, tr('Clock offset', '钟差'), tr('${skew.toStringAsFixed(1)} s', '${skew.toStringAsFixed(1)} 秒')),
-      if (v?['wifi'] is Map) (Icons.wifi_rounded, 'WiFi', robotWifiLine(v!['wifi'] as Map)),
-    ];
+    final msg = await showPatrolSheet(context, widget.api, widget.robotId);
+    if (msg != null && mounted) setState(() => _msg = msg);
+    await _reload();
   }
 
   /// W42 §6：机器人上有人提了换 WiFi —— 说清楚，给有管理权限的人「确认 / 不换」。
@@ -452,11 +413,11 @@ class _SiteRobotPageState extends State<SiteRobotPage> {
     final wide = MediaQuery.sizeOf(context).width >= 700;
 
     final ops = <Widget>[
-      if (dispatch)
+      if (s?.canPatrol ?? false)
         NwOpTile(
             tileKey: const Key('btn-patrol'),
             icon: Icons.explore_rounded,
-            label: tr('Dispatch patrol', '派巡检'),
+            label: tr('Patrol', '派巡逻'),
             onTap: _patrol),
       if (dispatch)
         NwOpTile(
@@ -544,7 +505,6 @@ class _SiteRobotPageState extends State<SiteRobotPage> {
             label: tr('Mapping logs', '建图日志'),
             onTap: () => go(() => SiteProcLogsPage(api: widget.api, robotId: widget.robotId))),
     ];
-    final diag = _diagnostics(v);
     final battery = robotBattery(v);
     final caps = v?['capabilities'] is Map ? (v!['capabilities'] as Map).cast<String, dynamic>() : null;
 
@@ -620,6 +580,14 @@ class _SiteRobotPageState extends State<SiteRobotPage> {
             padding: const EdgeInsets.only(top: Nw.s8),
             child: Text(navText((v['nav'] as Map).cast<String, dynamic>()),
                 key: const Key('robot-nav'), style: NwText.bodyMedium.copyWith(color: c.warning))),
+      if (v?['wifi'] is Map)
+        Padding(
+            padding: const EdgeInsets.only(top: Nw.s8),
+            child: Row(key: const Key('robot-wifi'), children: [
+              Icon(Icons.wifi_rounded, size: 18, color: c.textSecondary),
+              const SizedBox(width: Nw.s8),
+              Expanded(child: Text(robotWifiLine(v!['wifi'] as Map), style: NwText.bodyMedium.copyWith(color: c.text))),
+            ])),
       if (v?['rtk'] is Map)
         Padding(
             padding: const EdgeInsets.only(top: Nw.s8),
@@ -654,19 +622,6 @@ class _SiteRobotPageState extends State<SiteRobotPage> {
         NwSectionLabel(tr('Admin', '管理')),
         const SizedBox(height: Nw.s8),
         NwTileGrid(columns: wide ? 4 : 3, children: admin),
-        const SizedBox(height: Nw.s16),
-      ],
-    ];
-    final diagnostics = <Widget>[
-      if (diag.isNotEmpty) ...[
-        NwSectionLabel(tr('Diagnostics', '诊断')),
-        const SizedBox(height: Nw.s8),
-        NwCard(
-            key: const Key('robot-diagnostics'),
-            padding: EdgeInsets.zero,
-            child: Column(mainAxisSize: MainAxisSize.min, children: [
-              for (final d in diag) NwDiagnosticRow(icon: d.$1, label: d.$2, value: d.$3),
-            ])),
         const SizedBox(height: Nw.s16),
       ],
     ];
@@ -714,7 +669,7 @@ class _SiteRobotPageState extends State<SiteRobotPage> {
               Expanded(
                   flex: 5,
                   child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch, children: [...facts, ...diagnostics])),
+                      crossAxisAlignment: CrossAxisAlignment.stretch, children: facts)),
               const SizedBox(width: Nw.s16),
               Expanded(
                   flex: 6, child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: actions)),
@@ -722,7 +677,6 @@ class _SiteRobotPageState extends State<SiteRobotPage> {
           else ...[
             ...facts,
             ...actions,
-            ...diagnostics,
           ],
           if (events.isNotEmpty) NwSectionLabel(tr('Recent events', '最近的事件')),
           for (final e in events.take(30))

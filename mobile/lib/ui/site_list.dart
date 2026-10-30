@@ -113,6 +113,15 @@ class _SiteListPageState extends State<SiteListPage> {
               }
               account0 = account;
               return api;
+            },
+            // W52：没有账号就在这里申请（不用登录），管理员批了直接用这个账号登录
+            apply: (name, display, password) async {
+              final api = widget.apiFactory(s);
+              try {
+                await api.applyAccount(name, display, password);
+              } finally {
+                api.close();
+              }
             })));
     if (api == null) return;
     final a = api;
@@ -261,7 +270,22 @@ class _SiteListPageState extends State<SiteListPage> {
 
 /// 登录这个站点：拿口令去登，登上了回连好的客户端，登不上抛（原因给人看）。
 /// 用账号、口令登录（账号添加站点时不填，第一次登录时输，之后记着；用户 10-30）。
+/// 登录失败时站点说的申请状态（W52，站点原话是中文）按语言说。
+String applyStateText(String site) {
+  if (site.contains('等管理员批准')) {
+    return tr('This account is still waiting for an administrator to approve it.', site);
+  }
+  if (site.contains('拒')) return tr('An administrator turned down this account application.', site);
+  if (site.contains('过期')) {
+    return tr('This account application expired (nobody approved it in 7 days). Apply again.', site);
+  }
+  return site;
+}
+
 typedef SiteSignIn = Future<SiteApi> Function(String account, String password);
+
+/// 申请账号（W52）：账号名、给管理员看的名字、密码。
+typedef SiteApply = Future<void> Function(String name, String display, String password);
 
 /// 登录页（2026-10-14 重做，原来是弹窗）：品牌、要登的是哪个站点、口令。账号是加站点时存下的，这里
 /// 只填口令。登上了带着客户端退回去（`Navigator.pop(context, api)`）；登不上留在这一页说原因。
@@ -269,7 +293,11 @@ typedef SiteSignIn = Future<SiteApi> Function(String account, String password);
 class SiteLoginPage extends StatefulWidget {
   final SiteEntry site;
   final SiteSignIn signIn;
-  const SiteLoginPage({super.key, required this.site, required this.signIn});
+  /// 给了就有「申请账号」（W52）。
+  final SiteApply? apply;
+  const SiteLoginPage({super.key, required this.site, required this.signIn, this.apply});
+
+  static const Key applyKey = Key('login-apply');
 
   @override
   State<SiteLoginPage> createState() => _SiteLoginPageState();
@@ -307,7 +335,9 @@ class _SiteLoginPageState extends State<SiteLoginPage> {
       if (mounted) {
         setState(() {
           _busy = false;
-          _error = tr("Can't sign in: $e", '登录不了：$e');
+          _error = e is SiteError && e.body['apply'] is String
+              ? applyStateText(e.message)
+              : tr("Can't sign in: $e", '登录不了：$e');
         });
       }
       return;
@@ -429,7 +459,153 @@ class _SiteLoginPageState extends State<SiteLoginPage> {
                                   size: NwButtonSize.large,
                                   fullWidth: true,
                                   onPressed: _busy ? null : _submit),
+                              if (widget.apply != null) ...[
+                                const SizedBox(height: Nw.s16),
+                                Center(
+                                  child: NwButton(
+                                      buttonKey: SiteLoginPage.applyKey,
+                                      variant: NwButtonVariant.ghost,
+                                      label: tr('New Account Registration', '新账号注册'),
+                                      onPressed: _busy
+                                          ? null
+                                          : () => Navigator.push(
+                                              context,
+                                              MaterialPageRoute<void>(
+                                                  builder: (_) => AccountApplyPage(site: s, apply: widget.apply!)))),
+                                ),
+                              ],
                             ]))))),
+      ),
+    );
+  }
+}
+
+
+// ------------------------------------------------------------ W52：申请账号
+
+/// 申请账号（W52）：名字（给管理员看）、账号、密码。交了就等管理员批准，批了在登录页用这个账号登录。
+class AccountApplyPage extends StatefulWidget {
+  final SiteEntry site;
+  final SiteApply apply;
+  const AccountApplyPage({super.key, required this.site, required this.apply});
+
+  static const Key nameKey = Key('apply-display');
+  static const Key accountKey = Key('apply-account');
+  static const Key passwordKey = Key('apply-password');
+  static const Key submitKey = Key('apply-submit');
+  static const Key doneKey = Key('apply-done');
+
+  @override
+  State<AccountApplyPage> createState() => _AccountApplyPageState();
+}
+
+class _AccountApplyPageState extends State<AccountApplyPage> {
+  final _display = TextEditingController();
+  final _account = TextEditingController();
+  final _pw = TextEditingController();
+  bool _busy = false;
+  bool _done = false;
+  String? _error;
+
+  @override
+  void dispose() {
+    _display.dispose();
+    _account.dispose();
+    _pw.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submit() async {
+    final name = _account.text.trim(), display = _display.text.trim();
+    if (display.isEmpty || name.isEmpty) {
+      setState(() => _error = tr('Fill in your name and an account name', '填你的名字和账号'));
+      return;
+    }
+    if (_pw.text.length < 10) {
+      setState(() => _error = tr('Password needs at least 10 characters', '密码至少 10 个字符'));
+      return;
+    }
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    try {
+      await widget.apply(name, display, _pw.text);
+      if (mounted) setState(() => _done = true);
+    } on SiteError catch (e) {
+      if (mounted) setState(() => _error = e.message);
+    } catch (e) {
+      if (mounted) setState(() => _error = '$e');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final c = Nw.of(context);
+    return Scaffold(
+      appBar: AppBar(title: Text(tr('New Account Registration', '新账号注册'))),
+      body: SafeArea(
+        child: Center(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.all(Nw.s24),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 420),
+              child: _done
+                  ? Column(key: AccountApplyPage.doneKey, mainAxisSize: MainAxisSize.min, children: [
+                      Icon(Icons.hourglass_top_rounded, size: 48, color: c.primary),
+                      const SizedBox(height: Nw.s16),
+                      Text(
+                          tr('Sent. An administrator of ${widget.site.name} has to approve it. '
+                              'Once approved, sign in with account "${_account.text.trim()}" and the password you chose.',
+                              '交上去了。要「${widget.site.name}」的管理员批准；批了就用账号「${_account.text.trim()}」和你设的密码登录。'),
+                          textAlign: TextAlign.center,
+                          style: NwText.bodyLarge.copyWith(color: c.text)),
+                      const SizedBox(height: Nw.s24),
+                      NwButton(label: tr('Back to sign in', '回到登录'), onPressed: () => Navigator.pop(context)),
+                    ])
+                  : Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                      Text(tr('The administrator sees your name and decides what you can do.', '管理员看到你的名字，再决定你能做什么。'),
+                          style: NwText.bodyMedium.copyWith(color: c.textSecondary)),
+                      const SizedBox(height: Nw.s16),
+                      NwField(
+                          fieldKey: AccountApplyPage.nameKey,
+                          controller: _display,
+                          label: tr('Your name (for the administrator)', '你的名字（给管理员看）'),
+                          icon: Icons.badge_outlined),
+                      const SizedBox(height: Nw.s16),
+                      NwField(
+                          fieldKey: AccountApplyPage.accountKey,
+                          controller: _account,
+                          label: tr('Account name (letters, digits)', '账号（字母、数字）'),
+                          icon: Icons.person_outline_rounded,
+                          autocorrect: false,
+                          enableSuggestions: false),
+                      const SizedBox(height: Nw.s16),
+                      NwField(
+                          fieldKey: AccountApplyPage.passwordKey,
+                          controller: _pw,
+                          label: tr('Password (at least 10 characters)', '密码（至少 10 个字符）'),
+                          icon: Icons.lock_outline_rounded,
+                          obscureText: true,
+                          autocorrect: false,
+                          enableSuggestions: false),
+                      if (_error != null) ...[
+                        const SizedBox(height: Nw.s16),
+                        NwNotice(text: _error!, tone: NwTone.error),
+                      ],
+                      const SizedBox(height: Nw.s24),
+                      NwButton(
+                          buttonKey: AccountApplyPage.submitKey,
+                          size: NwButtonSize.large,
+                          fullWidth: true,
+                          label: _busy ? tr('Sending…', '正在提交…') : tr('Send application', '提交申请'),
+                          onPressed: _busy ? null : _submit),
+                    ]),
+            ),
+          ),
+        ),
       ),
     );
   }

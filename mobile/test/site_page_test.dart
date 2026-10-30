@@ -8,6 +8,8 @@ import 'package:d1max_patrol/model/alert.dart';
 import 'package:d1max_patrol/net/push.dart';
 import 'package:d1max_patrol/net/site_client.dart';
 import 'package:d1max_patrol/store/site_store.dart';
+import 'package:d1max_patrol/ui/patrol_dispatch.dart';
+import 'package:d1max_patrol/ui/refusal.dart';
 import 'package:d1max_patrol/ui/site_page.dart';
 import 'package:d1max_patrol/ui/site_video.dart';
 import 'package:d1max_patrol/ui/widget/live_video.dart';
@@ -160,7 +162,7 @@ class FakeApi implements SiteApi {
   Future<Map<String, dynamic>> patrol(String id, String m) async {
     calls.add('patrol $id $m');
     if (patrolError != null) throw patrolError!;
-    return siteFixture('site_dispatch');
+    return patrolReply ?? siteFixture('site_dispatch');
   }
   @override
   Future<Map<String, dynamic>> abort(String id, String t) async {
@@ -653,6 +655,112 @@ class FakeApi implements SiteApi {
     return binds;
   }
 
+  // ------------------------------------------------------------ W53 / W52
+
+  /// 派之前看（W53）：按路线给；没给的回「马上走、约 10 分钟」。
+  Map<String, Map<String, dynamic>> plans = <String, Map<String, dynamic>>{};
+  Map<String, dynamic>? patrolReply;
+  Map<String, dynamic> today = <String, dynamic>{'date': '2027-03-15', 'timezone': 'UTC', 'items': <dynamic>[]};
+  Object? todayError;
+  Map<String, dynamic> setupBody = <String, dynamic>{
+    'items': <dynamic>[
+      <String, dynamic>{'id': 'robots', 'done': true, 'skipped': false, 'count': 1},
+      <String, dynamic>{'id': 'zones', 'done': false, 'skipped': false, 'maps': <dynamic>['m1:3']},
+    ],
+    'done': 1, 'total': 2,
+  };
+  Map<String, dynamic> guide = <String, dynamic>{'tour': 99, 'setup_hidden': false, 'skip': <dynamic>[]};
+  List<Map<String, dynamic>> acctReqs = <Map<String, dynamic>>[];
+  SiteError? applyError;
+
+  @override
+  Future<Map<String, dynamic>> patrolPlan(String robotId, String missionId) async {
+    calls.add('patrolPlan $robotId $missionId');
+    return plans[missionId] ??
+        <String, dynamic>{'estimate_s': 600, 'start_ms': 0, 'queued': false, 'because': '', 'label': missionId};
+  }
+
+  @override
+  Future<Map<String, dynamic>> patrolsToday() async {
+    calls.add('patrolsToday');
+    if (todayError != null) throw todayError!;
+    return today;
+  }
+
+  @override
+  Future<void> cancelAdhoc(String id) async => calls.add('cancelAdhoc $id');
+
+  @override
+  Future<Map<String, dynamic>> setup() async {
+    calls.add('setup');
+    return setupBody;
+  }
+
+  @override
+  Future<Map<String, dynamic>> me() async => <String, dynamic>{
+        'name': session?.name, 'role': session?.role, 'display_name': '', 'guide': guide};
+
+  @override
+  Future<Map<String, dynamic>> setGuide(Map<String, dynamic> patch) async {
+    calls.add('setGuide ${patch.keys.join(',')}');
+    guide = <String, dynamic>{...guide, ...patch};
+    return guide;
+  }
+
+  Map<String, dynamic> schedules = <String, dynamic>{'timezone': 'UTC', 'revision': 1, 'schedules': <dynamic>[]};
+  SiteError? saveScheduleError;
+
+  @override
+  Future<Map<String, dynamic>> routeSchedules() async {
+    calls.add('routeSchedules');
+    return schedules;
+  }
+
+  @override
+  Future<Map<String, dynamic>> saveSchedule(String id, Map<String, dynamic> body) async {
+    calls.add('saveSchedule $id ${body['mission']} ${body['at']} ${body['robot'] ?? ''}');
+    if (saveScheduleError != null) throw saveScheduleError!;
+    final rows = (schedules['schedules'] as List).where((e) => (e as Map)['id'] != id).toList()
+      ..add(<String, dynamic>{...body, 'id': id, 'revision': 1});
+    schedules = <String, dynamic>{...schedules, 'schedules': rows};
+    return schedules;
+  }
+
+  @override
+  Future<void> deleteSchedule(String id, int baseRevision) async {
+    calls.add('deleteSchedule $id');
+    schedules = <String, dynamic>{
+      ...schedules,
+      'schedules': (schedules['schedules'] as List).where((e) => (e as Map)['id'] != id).toList(),
+    };
+  }
+
+  @override
+  Future<Map<String, dynamic>> applyAccount(String name, String display, String password) async {
+    calls.add('applyAccount $name $display');
+    if (applyError != null) throw applyError!;
+    return <String, dynamic>{'request_id': 'r1', 'expires_ms': 1};
+  }
+
+  @override
+  Future<List<Map<String, dynamic>>> accountRequests() async {
+    calls.add('accountRequests');
+    return acctReqs;
+  }
+
+  @override
+  Future<Map<String, dynamic>> approveAccount(String id, String role, String password) async {
+    calls.add('approveAccount $id $role $password');
+    acctReqs = acctReqs.where((r) => r['id'] != id).toList();
+    return <String, dynamic>{'name': id, 'role': role};
+  }
+
+  @override
+  Future<void> rejectAccount(String id) async {
+    calls.add('rejectAccount $id');
+    acctReqs = acctReqs.where((r) => r['id'] != id).toList();
+  }
+
   @override
   Future<Map<String, dynamic>> approveBind(String id, String password, {String name = ''}) async {
     calls.add('approveBind $id $password $name');
@@ -857,17 +965,20 @@ void main() {
     await t.tap(find.byKey(const Key('btn-abort')));
     await t.pumpAndSettle();
     expect(api.calls, ['abort A ${busyTaskId()}']);
+    // W53：派巡逻是底部弹框（估时、撞日程排队）
     await t.tap(find.byKey(const Key('btn-patrol')));
     await t.pumpAndSettle();
-    await t.tap(find.text('loop'));
+    await t.tap(find.byKey(patrolRouteKey('loop')));
     await t.pumpAndSettle();
-    expect(api.calls.last, 'patrol A loop');
+    await t.tap(find.byKey(patrolSendKey));
+    await t.pumpAndSettle();
+    expect(api.calls, contains('patrol A loop'));
   });
 
-  testWidgets('管理员：只有叫停', (t) async {
+  testWidgets('经理：叫停、派巡逻（W53），没有回待命点', (t) async {
     final api = FakeApi('owner', robotView: busyView());
     await openRobot(t, api);
-    expect(find.byKey(const Key('btn-patrol')), findsNothing);
+    expect(find.byKey(const Key('btn-patrol')), findsOneWidget);
     expect(find.byKey(const Key('btn-standby')), findsNothing);
     expect(find.byKey(const Key('btn-abort')), findsOneWidget);
   });
@@ -961,10 +1072,13 @@ void main() {
     await openRobot(t, api);
     await t.tap(find.byKey(const Key('btn-patrol')));
     await t.pumpAndSettle();
-    await t.tap(find.text('loop'));
+    await t.tap(find.byKey(patrolRouteKey('loop')));
     await t.pumpAndSettle();
-    expect(find.textContaining('没成'), findsOneWidget);
-    expect(find.textContaining('403'), findsOneWidget);
+    await t.tap(find.byKey(patrolSendKey));
+    await t.pumpAndSettle();
+    // W53：被拒弹框说站点的原话
+    expect(find.byKey(refusalDialogKey), findsOneWidget);
+    expect(find.textContaining('没有 dispatch 权限'), findsOneWidget);
   });
 
   testWidgets('事件来了就刷新；事件流断了显示提示并重连', (t) async {

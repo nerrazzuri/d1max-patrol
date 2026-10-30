@@ -48,38 +48,54 @@ enum HotspotJoin { auto, manual }
 
 /// 连热点：自动连上回 [HotspotJoin.auto]；连不上把热点名、密码摆出来，人在系统设置里连好了点「已经连上」
 /// 回 [HotspotJoin.manual]，取消回 null。
-Future<HotspotJoin?> joinRobotHotspot(BuildContext context, HotspotJoiner joiner, RobotSticker s) async {
-  if (await joiner.join(s.ssid, s.psk)) return HotspotJoin.auto;
-  if (!context.mounted) return null;
-  final ok = await showDialog<bool>(
-    context: context,
-    builder: (c) {
-      final nw = Nw.of(c);
-      return AlertDialog(
-        scrollable: true,
-        backgroundColor: nw.surface,
-        title: Text(tr("Connect to the robot's hotspot", '连机器人的热点'),
-            style: NwText.titleLarge.copyWith(color: nw.text)),
-        content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text(tr('Open the phone WiFi settings and join this network, then come back.',
-              '打开手机的 WiFi 设置，连上这个网络，再回来。'),
-              style: NwText.bodyMedium.copyWith(color: nw.text)),
-          const SizedBox(height: Nw.s16),
-          SelectableText(tr('Network: ${s.ssid}', '网络：${s.ssid}'),
-              key: const Key('hotspot-ssid'), style: NwText.bodyMedium.copyWith(fontFamily: NwFont.mono, color: nw.text)),
-          SelectableText(tr('Password: ${s.psk}', '密码：${s.psk}'),
-              key: const Key('hotspot-psk'), style: NwText.bodyMedium.copyWith(fontFamily: NwFont.mono, color: nw.text)),
-        ]),
-        actions: [
-          NwButton(label: tr('Cancel', '取消'), variant: NwButtonVariant.ghost,
-              onPressed: () => Navigator.pop(c, false)),
-          NwButton(buttonKey: const Key('hotspot-joined'), label: tr("I'm connected", '已经连上'),
-              onPressed: () => Navigator.pop(c, true)),
-        ],
-      );
-    },
-  );
-  return ok == true ? HotspotJoin.manual : null;
+Future<HotspotJoin?> joinRobotHotspot(BuildContext context, HotspotJoiner joiner, RobotSticker s,
+    {Duration settle = const Duration(milliseconds: 700)}) async {
+  for (var tries = 0; tries < 5; tries++) {
+    if (await joiner.join(s.ssid, s.psk)) return HotspotJoin.auto;
+    // W53：等安卓自己的「连接设备」框收起来再弹我们的（两个框叠在一起，人不知道该看哪个）
+    await Future<void>.delayed(settle);
+    if (!context.mounted) return null;
+    final what = await showDialog<String>(
+      context: context,
+      builder: (c) {
+        final nw = Nw.of(c);
+        return AlertDialog(
+          key: const Key('hotspot-failed'),
+          scrollable: true,
+          backgroundColor: nw.surface,
+          title: Text(tr("Couldn't find the robot's hotspot", '没找到机器人的热点'),
+              style: NwText.titleLarge.copyWith(color: nw.text)),
+          content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(
+                tr('Hotspot ${s.ssid}. Make sure the robot is on, its payload light is on, and you are right next to it, then try again.',
+                    '热点 ${s.ssid}。确认机器人开着、上装亮着灯、你就在它旁边，再试一次。'),
+                style: NwText.bodyMedium.copyWith(color: nw.text)),
+            const SizedBox(height: Nw.s16),
+            Text(
+                tr('Still no luck: join it by hand in the phone WiFi settings, then come back and tap "I\'m connected".',
+                    '还是不行：在手机的 WiFi 设置里手动连上，回来点「已经连上」。'),
+                style: NwText.bodySmall.copyWith(color: nw.textSecondary)),
+            const SizedBox(height: Nw.s8),
+            SelectableText(tr('Network: ${s.ssid}', '网络：${s.ssid}'),
+                key: const Key('hotspot-ssid'), style: NwText.bodyMedium.copyWith(fontFamily: NwFont.mono, color: nw.text)),
+            SelectableText(tr('Password: ${s.psk}', '密码：${s.psk}'),
+                key: const Key('hotspot-psk'), style: NwText.bodyMedium.copyWith(fontFamily: NwFont.mono, color: nw.text)),
+          ]),
+          actions: [
+            NwButton(label: tr('Cancel', '取消'), variant: NwButtonVariant.ghost,
+                onPressed: () => Navigator.pop(c)),
+            NwButton(buttonKey: const Key('hotspot-retry'), label: tr('Try again', '再试一次'),
+                variant: NwButtonVariant.outline, onPressed: () => Navigator.pop(c, 'retry')),
+            NwButton(buttonKey: const Key('hotspot-joined'), label: tr("I'm connected", '已经连上'),
+                onPressed: () => Navigator.pop(c, 'joined')),
+          ],
+        );
+      },
+    );
+    if (what == 'joined') return HotspotJoin.manual;
+    if (what != 'retry') return null;
+  }
+  return null;
 }
 
 /// 离开热点、回到平时的网络（之后要找站点）。手动连的热点 App 断不了：教人去系统设置里切回去，点了

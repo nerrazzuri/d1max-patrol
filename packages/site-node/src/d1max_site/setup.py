@@ -61,19 +61,22 @@ def setup_view(db: Any, dispatcher: Any, *, skip: set[str] | None = None) -> dic
     return {"items": items, "done": len(items) - len(left), "total": len(items)}
 
 
-def read_guide(db: Any, name: str) -> dict[str, Any]:
-    rows = db.query("SELECT guide FROM accounts WHERE name=?", (name,))
+def _parse(raw: str) -> dict[str, Any]:
     try:
-        g = json.loads(rows[0]["guide"]) if rows else {}
+        g = json.loads(raw) if raw else {}
     except (ValueError, TypeError):
         g = {}
-    if not isinstance(g, dict):
-        g = {}
+    return g if isinstance(g, dict) else {}
+
+
+def read_guide(accounts: Any, name: str) -> dict[str, Any]:
+    """``accounts`` 是 ``accounts.Accounts``(账号表只由它写)。"""
+    g = _parse(accounts.guide(name))
     return {"tour": int(g.get("tour") or 0), "setup_hidden": bool(g.get("setup_hidden")),
             "skip": [s for s in g.get("skip") or [] if s in ITEMS]}
 
 
-def write_guide(db: Any, name: str, patch: Any) -> dict[str, Any]:
+def write_guide(accounts: Any, name: str, patch: Any) -> dict[str, Any]:
     """合进去(只认 ``tour``、``setup_hidden``、``skip``)。"""
     if not isinstance(patch, dict) or not patch or set(patch) - set(_GUIDE_KEYS):
         raise GuideError(f"只认 {'、'.join(_GUIDE_KEYS)}")
@@ -86,17 +89,10 @@ def write_guide(db: Any, name: str, patch: Any) -> dict[str, Any]:
     if "skip" in patch and (len(patch["skip"]) > len(ITEMS)
                             or any(s not in ITEMS for s in patch["skip"])):
         raise GuideError(f"skip 只能是 {'、'.join(ITEMS)}")
-    with db.tx() as c:
-        row = c.execute("SELECT guide FROM accounts WHERE name=?", (name,)).fetchone()
-        if row is None:
-            raise GuideError("没有这个账号")
-        try:
-            g = json.loads(row["guide"] or "{}")
-        except ValueError:
-            g = {}
-        if not isinstance(g, dict):
-            g = {}
+    def merge(raw: str) -> str:
+        g = _parse(raw)
         g.update(patch)
-        c.execute("UPDATE accounts SET guide=? WHERE name=?",
-                  (json.dumps(g, ensure_ascii=False), name))
-    return read_guide(db, name)
+        return json.dumps(g, ensure_ascii=False)
+    if not accounts.set_guide(name, merge):
+        raise GuideError("没有这个账号")
+    return read_guide(accounts, name)
