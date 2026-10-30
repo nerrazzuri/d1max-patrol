@@ -15,6 +15,7 @@ import 'nw/nw_p3_robots.dart';
 import 'nw/nw_theme.dart';
 import 'nw/nw_widgets.dart';
 import 'robot_events.dart';
+import 'robot_bind_page.dart';
 import 'site_deter.dart';
 import 'site_logs.dart';
 import 'site_mapping.dart';
@@ -53,6 +54,17 @@ String taskLabel(Map task) {
   if (task['kind'] == 'dock') return tr('Charging (docking, charging, undocking)', '充电中（对桩、充电、出桩）');
   if (task['kind'] == 'goto' && id.startsWith('charge-')) return tr('Going to charge', '去充电');
   return '${task['kind']} ${task['state']}';
+}
+
+/// 机器人连的 WiFi 一行：`Estate · 走 4G`（W42）。
+String robotWifiLine(Map w) {
+  final link = switch (w['link']) {
+    'wifi' => tr('on WiFi', '走 WiFi'),
+    '4g' => tr('on 4G', '走 4G'),
+    _ => tr('no network', '没网'),
+  };
+  final ssid = '${w['ssid'] ?? ''}';
+  return ssid.isEmpty ? link : '$ssid · $link';
 }
 
 class SiteRobotPage extends StatefulWidget {
@@ -379,7 +391,50 @@ class _SiteRobotPageState extends State<SiteRobotPage> {
       if (on(caps['actuators']).isNotEmpty) (Icons.campaign_rounded, tr('Payload', '上装'), on(caps['actuators'])),
       if (skew is num)
         (Icons.schedule_rounded, tr('Clock offset', '钟差'), tr('${skew.toStringAsFixed(1)} s', '${skew.toStringAsFixed(1)} 秒')),
+      if (v?['wifi'] is Map) (Icons.wifi_rounded, 'WiFi', robotWifiLine(v!['wifi'] as Map)),
     ];
+  }
+
+  /// W42 §6：机器人上有人提了换 WiFi —— 说清楚，给有管理权限的人「确认 / 不换」。
+  Widget? _wifiChange(NwColors c, Map<String, dynamic>? v, bool manage) {
+    final w = v?['wifi'];
+    final ch = w is Map ? w['change'] : null;
+    if (ch is! Map) return null;
+    final trial = ch['mode'] == 'trial';
+    return Padding(
+      padding: const EdgeInsets.only(top: Nw.s8),
+      child: NwCard(
+        key: const Key('robot-wifi-change'),
+        tone: NwTone.warning,
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(
+              trial
+                  ? tr("The robot lost the site and is trying WiFi \u201c${ch['ssid']}\u201d. Approve within 30 minutes to keep it, otherwise it switches back.",
+                      '机器人连不上站点，正在试 WiFi「${ch['ssid']}」。30 分钟内确认就留下，不然退回原来的。')
+                  : tr("Someone at the robot asked to switch its WiFi to \u201c${ch['ssid']}\u201d. Nothing changes until it is approved.",
+                      '有人在机器人那里提了把 WiFi 换成「${ch['ssid']}」。确认了才换。'),
+              style: NwText.bodyMedium.copyWith(color: c.text)),
+          if (manage) ...[
+            const SizedBox(height: Nw.s8),
+            Wrap(spacing: Nw.s8, children: [
+              NwButton(
+                  buttonKey: const Key('btn-wifi-approve'),
+                  size: NwButtonSize.small,
+                  label: tr('Approve WiFi change', '确认换 WiFi'),
+                  onPressed: () => _do(() => widget.api.confirmRobotWifi(widget.robotId, '${ch['id']}', true),
+                      tr('Approve WiFi change', '确认换 WiFi'))),
+              NwButton(
+                  buttonKey: const Key('btn-wifi-reject'),
+                  size: NwButtonSize.small,
+                  variant: NwButtonVariant.ghost,
+                  label: tr("Don't change", '不换'),
+                  onPressed: () => _do(() => widget.api.confirmRobotWifi(widget.robotId, '${ch['id']}', false),
+                      tr("Don't change WiFi", '不换 WiFi'))),
+            ]),
+          ],
+        ]),
+      ),
+    );
   }
 
   @override
@@ -449,6 +504,13 @@ class _SiteRobotPageState extends State<SiteRobotPage> {
                 api: widget.api, robotId: widget.robotId, canMarkHere: robotCanStandbyHere(v)))),
     ];
     final admin = <Widget>[
+      // W42：换 WiFi（站在机器人旁边扫贴纸；站点上确认了才生效）。机器人报了 wifi_confirm 才有
+      if ((s?.canManageRobots ?? false) && robotCan(v, 'wifi_confirm'))
+        NwOpTile(
+            tileKey: const Key('btn-change-wifi'),
+            icon: Icons.wifi_rounded,
+            label: tr('Change WiFi', '换 WiFi'),
+            onTap: () => go(() => RobotWifiPage(api: widget.api, robotId: widget.robotId))),
       if (maps && robotCan(v, 'mapping')) ...[
         NwOpTile(
             tileKey: const Key('btn-record-start'),
@@ -490,6 +552,7 @@ class _SiteRobotPageState extends State<SiteRobotPage> {
     final top = <Widget>[
       Text(v == null ? tr('Loading…', '加载中…') : robotStatusLine(v),
           key: const Key('robot-status'), style: NwText.bodyMedium.copyWith(color: c.textSecondary)),
+      ?_wifiChange(c, v, s?.canManageRobots ?? false),
       // 叫停之后站点不再派它（W00c5e）：说清楚，给能派单的人一个「恢复」。
       if (v?['held'] is Map)
         Padding(

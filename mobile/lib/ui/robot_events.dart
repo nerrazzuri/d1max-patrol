@@ -44,6 +44,8 @@ String? _title(String kind) => switch (kind) {
       'outbox_retry' => tr('Resending', '重发'),
       'archive_write_failed' => tr('Archive write failed', '存档写失败'),
       'map_integrity_failed' => tr('Map files damaged', '地图文件损坏'),
+      'unbind' => tr('Unbound (factory reset)', '解绑（恢复出厂）'),
+      'wifi_confirm' => tr('WiFi change answered', '换 WiFi 已答复'),
       _ => null,
     };
 

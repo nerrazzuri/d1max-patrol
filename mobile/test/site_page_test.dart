@@ -643,6 +643,37 @@ class FakeApi implements SiteApi {
     calls.add('review $id $photo $verdict $note');
     return <String, dynamic>{'photo': photo, 'verdict': verdict, 'reviewed': 1};
   }
+  /// W42：等待批准加入的机器人（测试往里塞）。
+  List<Map<String, dynamic>> binds = <Map<String, dynamic>>[];
+  SiteError? approveError;
+
+  @override
+  Future<List<Map<String, dynamic>>> bindRequests() async {
+    calls.add('bindRequests');
+    return binds;
+  }
+
+  @override
+  Future<Map<String, dynamic>> approveBind(String id, String password, {String name = ''}) async {
+    calls.add('approveBind $id $password $name');
+    if (approveError != null) throw approveError!;
+    binds = binds.where((b) => b['id'] != id).toList();
+    return <String, dynamic>{'id': id, 'state': 'approved'};
+  }
+
+  @override
+  Future<Map<String, dynamic>> rejectBind(String id) async {
+    calls.add('rejectBind $id');
+    binds = binds.where((b) => b['id'] != id).toList();
+    return <String, dynamic>{'id': id, 'state': 'rejected'};
+  }
+
+  @override
+  Future<Map<String, dynamic>> confirmRobotWifi(String robotId, String changeId, bool approve) async {
+    calls.add('confirmRobotWifi $robotId $changeId $approve');
+    return <String, dynamic>{'ack': <String, dynamic>{'result': 'accepted'}};
+  }
+
   @override
   Future<Map<String, dynamic>> halt(String robotId) async {
     calls.add('halt $robotId');

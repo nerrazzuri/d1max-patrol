@@ -39,6 +39,18 @@ class MainActivity : FlutterActivity() {
                 else -> result.notImplemented()
             }
         }
+        // W42:连机器人的热点(添加机器人、换 WiFi、工程师解绑)
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "d1max/hotspot").setMethodCallHandler { call, result ->
+            when (call.method) {
+                "join" -> RobotHotspot.join(applicationContext, call.argument<String>("ssid") ?: "",
+                    call.argument<String>("psk") ?: "") { ok -> result.success(ok) }
+                "leave" -> {
+                    RobotHotspot.leave(applicationContext)
+                    result.success(null)
+                }
+                else -> result.notImplemented()
+            }
+        }
         // RC 加固 H9:FCM 的推送号。Firebase 的参数由 Dart 那边带过来(打包时 --dart-define 给的)。
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "d1max/push").setMethodCallHandler { call, result ->
             when (call.method) {

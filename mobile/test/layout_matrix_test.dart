@@ -10,6 +10,7 @@ import 'package:d1max_patrol/model/alert.dart';
 import 'package:d1max_patrol/store/site_store.dart';
 import 'package:d1max_patrol/ui/nw/nw_theme.dart';
 import 'package:d1max_patrol/ui/site_health.dart';
+import 'package:d1max_patrol/ui/robot_bind_page.dart';
 import 'package:d1max_patrol/ui/site_add.dart';
 import 'package:d1max_patrol/ui/site_alert_scene.dart';
 import 'package:d1max_patrol/ui/site_cameras.dart';
@@ -51,6 +52,20 @@ final _pages = <String, Widget Function()>{
             fingerprint: 'ab' * 32, username: 'night.guard')
       ])),
   'add site': () => SiteAddPage(scanner: (_) async => null),
+  // W42：添加机器人、换 WiFi、工程师解绑（第一屏：扫贴纸 / 填解绑令）
+  'add robot': () => RobotAddPage(
+      api: FakeApi('admin'),
+      site: SiteEntry(name: 'East Gate Estate', url: 'https://192.168.100.200:8443',
+          fingerprint: 'ab' * 32, username: 'night.guard'),
+      scanner: (_) async => null),
+  'change wifi': () => RobotWifiPage(api: FakeApi('admin'), robotId: 'A', scanner: (_) async => null),
+  'engineer unbind': () => EngineerUnbindPage(scanner: (_) async => null),
+  'robots (bind pending)': () => SiteRobotsPage(
+      api: FakeApi('admin')
+        ..binds = <Map<String, dynamic>>[
+          <String, dynamic>{'id': 'ab12', 'serial': 'D1M-000123', 'check': '042917', 'source': '192.168.1.20'}
+        ],
+      title: 'East Gate Estate'),
   'login': () => SiteLoginPage(
       site: SiteEntry(name: 'East Gate Estate', url: 'https://192.168.100.200:8443',
           fingerprint: 'ab' * 32, username: 'night.guard'),

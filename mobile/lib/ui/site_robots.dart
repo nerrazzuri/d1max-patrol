@@ -16,9 +16,11 @@ import '../net/background_watch.dart';
 import '../net/push.dart';
 import '../net/site_client.dart';
 import '../store/site_store.dart';
+import 'nw/nw_button.dart';
 import 'nw/nw_p3_robots.dart';
 import 'nw/nw_theme.dart';
 import 'nw/nw_widgets.dart';
+import 'robot_bind_page.dart';
 import 'site_deterrence.dart';
 import 'site_mode.dart';
 import 'site_robot.dart';
@@ -405,6 +407,9 @@ class _SiteRobotsPageState extends State<SiteRobotsPage> {
                               builder: (_) => SiteDeterrencePage(api: widget.api, robotId: e.key))),
                     )),
               if (_mode != null || _weather != null || _deter.isNotEmpty) const SizedBox(height: Nw.s8),
+              // W42：等待批准加入的机器人（有管理权限的人才看得到、才批得了）
+              if (widget.api.session?.canManageRobots == true)
+                BindApprovals(key: const Key('bind-approvals-host'), api: widget.api),
               // 筛选、一只狗一张卡（Key 是 robot-<编号>）。**要带 Key**：上面的横幅多一条少一条，它在列表里
               // 的位置就变了，不带 Key 的话它的状态（选的哪一格）会被换掉。
               NwFleet(
@@ -415,6 +420,25 @@ class _SiteRobotsPageState extends State<SiteRobotsPage> {
                   loadSummary: widget.api.watchSummary,
                   onOpen: (id) => Navigator.push(context,
                       MaterialPageRoute<void>(builder: (_) => SiteRobotPage(api: widget.api, robotId: id)))),
+              // W42：添加机器人（扫贴纸配网，谁都能做；站点上批准要管理权限）
+              if (widget.entry != null)
+                Padding(
+                  padding: const EdgeInsets.only(top: Nw.s16),
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: NwButton(
+                      buttonKey: const Key('robot-add'),
+                      icon: Icons.add_rounded,
+                      variant: NwButtonVariant.outline,
+                      label: tr('Add robot', '添加机器人'),
+                      onPressed: () async {
+                        await Navigator.push(context, MaterialPageRoute<void>(
+                            builder: (_) => RobotAddPage(api: widget.api, site: widget.entry!)));
+                        await _reload();
+                      },
+                    ),
+                  ),
+                ),
             ]),
           ),
         ),
