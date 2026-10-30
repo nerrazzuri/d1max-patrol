@@ -148,7 +148,8 @@ def _code_text(code: str) -> str:
             "'<上面那一行>'")
 
 
-def cmd_enroll_code(home: Path, robot_id: str, host: str | None, hours: float) -> str:
+def cmd_enroll_code(home: Path, robot_id: str, host: str | None, hours: float, *,
+                    expect_fp: str | None = None) -> str:
     """给已登记的狗出一个开通码(商业化 A4):一次性、``hours`` 小时有效,旧码作废。"""
     from d1max_site.provision import ProvisionError, issue_code
     cfg = _load(home)
@@ -161,7 +162,8 @@ def cmd_enroll_code(home: Path, robot_id: str, host: str | None, hours: float) -
         try:
             return issue_code(db, cfg, home, robot_id,
                               fingerprint=ca.fingerprint(home / "ca" / "server" / "server.crt"),
-                              now_ms=wall_ms(), host=host, ttl_ms=int(hours * 3600_000))
+                              now_ms=wall_ms(), host=host, ttl_ms=int(hours * 3600_000),
+                              expect_fp=expect_fp)
         except ProvisionError as exc:
             raise SiteError(str(exc)) from exc
     finally:

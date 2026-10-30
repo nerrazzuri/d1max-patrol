@@ -797,6 +797,8 @@ _ADDED_COLUMNS = (
     ("cameras", "y", "REAL"),
     ("cameras", "yaw", "REAL"),
     ("cameras", "fov_deg", "REAL"),
+    # W42 外审 2-B:绑定申请批准时那一代证书(早一点的开发版建的表没有这一列)
+    ("bind_requests", "cert_fp", "TEXT NOT NULL DEFAULT ''"),
 )
 
 

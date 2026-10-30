@@ -59,8 +59,11 @@ def decode(code: str) -> dict[str, Any]:
 
 def issue_code(db: Any, cfg: dict[str, Any], home: Path, robot_id: str, *, fingerprint: str,
                now_ms: int, host: str | None = None, api_port: int = 8443,
-               ttl_ms: int = TTL_MS) -> str:
-    """给已经签发了证书包的 ``robot_id`` 出一个开通码(同一只狗以前的码作废)。"""
+               ttl_ms: int = TTL_MS, expect_fp: str | None = None) -> str:
+    """给已经签发了证书包的 ``robot_id`` 出一个开通码(同一只狗以前的码作废)。
+
+    ``expect_fp``(W42 外审 2-A):只给这一代证书出码 —— 绑定申请批准时记下的那一代。跟登记表、
+    证书包的核对在同一个事务里,批准以后有人解绑、重新登记了,旧申请拿不到新这一代。"""
     bundle = Path(home) / "ca" / "issued" / robot_id
     missing = [n for n in REQUIRED if not (bundle / n).is_file()]
     if missing:
@@ -72,7 +75,8 @@ def issue_code(db: Any, cfg: dict[str, Any], home: Path, robot_id: str, *, finge
         # A 阶段外审 I1:码绑这一代证书。登记表里的、证书包里的必须是同一代,而且没吊销
         row = c.execute("SELECT fingerprint, revoked FROM robots WHERE robot_id=?",
                         (robot_id,)).fetchone()
-        if row is None or row["revoked"] or row["fingerprint"] != cert_fp:
+        if row is None or row["revoked"] or row["fingerprint"] != cert_fp \
+                or (expect_fp is not None and row["fingerprint"] != expect_fp):
             raise ProvisionError(f"{robot_id} 没登记、已吊销,或者证书包不是登记的这一代:先 enroll")
         c.execute("INSERT INTO enroll_claims(robot_id, token_hash, created_ms, expires_ms, "
                   "used_ms, cert_fp) VALUES (?,?,?,?,NULL,?) ON CONFLICT(robot_id) DO UPDATE SET "

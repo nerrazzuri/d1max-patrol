@@ -139,15 +139,19 @@ def _factory(args: argparse.Namespace) -> int:
             if svc and wp._run(["systemctl", "enable", "--now", SERVICE]) != 0:
                 print(f"注意:{SERVICE} 没起来(systemctl enable --now {SERVICE} 看原因)")
         else:
-            # 外审 I10:配网服务在跑的话它记着旧绑定码、旧证书:先停,换完再起,新贴纸才生效
+            # 外审 I10 / 2-E:配网服务在跑的话它记着旧绑定码、旧证书:先停(停不下就不换),
+            # 换完再起(起不来算没成:新贴纸要它起来才能用)
             was = svc and wp._run(["systemctl", "is-active", "--quiet", SERVICE]) == 0
-            if was:
-                wp._run(["systemctl", "stop", SERVICE])
-            try:
-                st = fa.rekey(paths, router=router)
-            finally:
-                if was and wp._run(["systemctl", "start", SERVICE]) != 0:
-                    print(f"注意:{SERVICE} 没起来,新贴纸要等它起来才能用")
+            if was and (wp._run(["systemctl", "stop", SERVICE]) != 0
+                        or wp._run(["systemctl", "is-active", "--quiet", SERVICE]) == 0):
+                print(f"没成:{SERVICE} 停不下来,没换贴纸(旧贴纸照旧能用)", file=sys.stderr)
+                return 1
+            st = fa.rekey(paths, router=router)
+            if was and wp._run(["systemctl", "start", SERVICE]) != 0:
+                files = fa.label_files(st, Path(args.out))
+                print(f"贴纸已经换了(打印文件:{'、'.join(map(str, files))}),但 {SERVICE} 没起来:"
+                      f"systemctl start {SERVICE} 起来以后新贴纸才能用", file=sys.stderr)
+                return 1
     except fa.FactoryError as exc:
         print(f"没成:{exc}", file=sys.stderr)
         return 1

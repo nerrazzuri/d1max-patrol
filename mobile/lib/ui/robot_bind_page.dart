@@ -608,6 +608,38 @@ class _RobotWifiPageState extends State<RobotWifiPage> with _StickerScan<RobotWi
     }
   }
 
+  /// 经热点直接问机器人这个改动最后怎样了（机器人连不上站点、结果送不到站点的时候）。
+  Future<void> _askRobot() async {
+    final s = sticker, id = _change?['id'];
+    if (s == null || id == null) return;
+    setState(() => _busy = true);
+    RobotBindLink? link;
+    HotspotJoin? how;
+    try {
+      how = await joinRobotHotspot(context, widget.joiner, s);
+      if (how == null) return;
+      link = widget.link(s);
+      final st = await link.status();
+      final r = st['change_result'];
+      final pending = st['change'];
+      if (!mounted) return;
+      if (r is Map && r['id'] == id) {
+        _watch?.cancel();
+        setState(() => _result = '${r['result']}');
+      } else if (pending is Map && pending['id'] == id) {
+        say(tr('The robot is still waiting for this change (${pending['phase']}).', '机器人那边这个改动还在进行（${pending['phase']}）。'));
+      } else {
+        say(tr("The robot doesn't know this change any more. Set the WiFi again.", '机器人那边已经没有这个改动了，重新配一次 WiFi。'));
+      }
+    } on RobotBindError catch (e) {
+      say(e.message);
+    } finally {
+      link?.close();
+      if (how != null && mounted) await leaveRobotHotspot(context, widget.joiner, how, s.ssid);
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
   /// 没换成：回到表单再改一次。
   void _again() => setState(() {
         _change = null;
@@ -678,6 +710,17 @@ class _RobotWifiPageState extends State<RobotWifiPage> with _StickerScan<RobotWi
           _gap,
           NwButton(buttonKey: const Key('wifi-confirm'), label: tr('Approve WiFi change', '确认换 WiFi'),
               onPressed: _confirm),
+        ],
+        // 外审 2-F：机器人连不上站点时结果送不到站点 —— 走到机器人旁边，经热点问它；也随时能重新配
+        if (_result == null) ...[
+          _gap,
+          Wrap(spacing: Nw.s8, runSpacing: Nw.s8, children: [
+            NwButton(buttonKey: const Key('wifi-ask-robot'), label: tr('Ask the robot directly', '到机器人旁边问结果'),
+                variant: NwButtonVariant.outline, icon: Icons.wifi_tethering_rounded,
+                onPressed: _busy ? null : _askRobot),
+            NwButton(buttonKey: const Key('wifi-again-now'), label: tr('Set the WiFi again', '重新配 WiFi'),
+                variant: NwButtonVariant.ghost, onPressed: _again),
+          ]),
         ],
       ],
     ]);

@@ -97,7 +97,8 @@ def test_清机_删客户数据_留出厂的_env回出厂值(出厂, tmp_path):
     router.connect_wifi("Estate", "12345678")
     ran = []
     p2 = BindPaths(etc=paths.etc, data_root=paths.data_root, extra_data=(outbox,))
-    assert wp.wipe(p2, router=router, run=lambda cmd: ran.append(list(cmd)) or 0) == []
+    assert wp.wipe(p2, router=router, run=lambda cmd: ran.append(list(cmd)) or 0,
+                   trim=lambda m: ran.append(["fstrim", m]) or (0, "")) == []
     assert list(paths.data_root.iterdir()) == [] and list(outbox.iterdir()) == []
     assert paths.data_root.is_dir(), "目录本身留着(属主、权限是装机脚本定的)"
     assert not (paths.etc / "tls").exists() and not (paths.etc / "registration.json").exists()
@@ -119,7 +120,7 @@ def test_清机_一步失败照做完别的_报出来(出厂):
     (paths.data_root).mkdir(parents=True, exist_ok=True)
     (paths.data_root / "x").write_text("x")
     failed = wp.wipe(paths, router=router,
-                     run=lambda cmd: 1 if cmd[0] == "journalctl" else 0)
+                     run=lambda cmd: 1 if cmd[0] == "journalctl" else 0, trim=lambda m: (0, ""))
     assert failed == ["清系统日志"]
     assert not (paths.data_root / "x").exists()
 
@@ -200,7 +201,8 @@ def test_外审I8_服务停不下就不删(出厂):
     paths.data_root.mkdir(parents=True, exist_ok=True)
     (paths.data_root / "x").write_text("x")
     failed = wp.wipe(paths, router=router,
-                     run=lambda cmd: 1 if cmd[:2] == ["systemctl", "stop"] else 0)
+                     run=lambda cmd: 1 if cmd[:2] == ["systemctl", "stop"] else 0,
+                     trim=lambda m: (0, ""))
     assert failed and "数据还没删" in failed[0]
     assert (paths.data_root / "x").exists()
 
@@ -208,3 +210,43 @@ def test_外审I8_服务停不下就不删(出厂):
 def test_外审I9_fstrim给挂载点(tmp_path):
     assert wp.mountpoint(tmp_path / "a" / "b") == wp.mountpoint(tmp_path)
     assert wp.mountpoint(Path("/")) == Path("/")
+
+
+def test_外审2D_trim真出错不算清完_盘不支持不卡住(出厂):
+    paths, router, *_ = 出厂
+    paths.data_root.mkdir(parents=True, exist_ok=True)
+    ok = lambda cmd: 0  # noqa: E731
+    assert wp.wipe(paths, router=router, run=ok,
+                   trim=lambda m: (1, "fstrim: /: the discard operation is not supported")) == []
+    bad = wp.wipe(paths, router=router, run=ok,
+                  trim=lambda m: (1, "fstrim: /: FITRIM ioctl failed: I/O error"))
+    assert bad and "fstrim" in bad[0]
+
+
+def test_外审2C_清机标记挡住所有业务服务():
+    from pathlib import Path as P
+    deploy = P(__file__).resolve().parents[1] / "deploy"
+    for u in wp.UNITS:
+        text = (deploy / f"{u}.service").read_text(encoding="utf-8")
+        assert "ConditionPathExists=!/etc/d1max/bind/wiping" in text, u
+
+
+def test_外审2E_重做贴纸_配网服务停不下就不换(出厂, tmp_path, monkeypatch, capsys):
+    import argparse
+
+    from d1max_patrol.bind import cli as bc
+    from d1max_patrol.bind import wipe as wpm
+    paths, router, st, _ = 出厂
+    before = read_json(paths.device)["code_hash"]
+    calls = []
+
+    def 跑(cmd):
+        calls.append(list(cmd))
+        return 1 if cmd[:2] == ["systemctl", "stop"] else 0      # 在跑,停不下
+    monkeypatch.setattr(wpm, "_run", 跑)
+    args = argparse.Namespace(etc=str(paths.etc), data_root=str(paths.data_root), outbox="",
+                              router="fake", no_service=False, factory_command="rekey",
+                              out=str(tmp_path / "out"))
+    assert bc._factory(args) == 1
+    assert read_json(paths.device)["code_hash"] == before, "停不下就不换"
+    assert "停不下来" in capsys.readouterr().err
