@@ -54,7 +54,7 @@ log = logging.getLogger(__name__)
 MAP_KINDS = frozenset({"map_activate", "mapping", "map_build",
                        "release_install", "release_activate", "release_rollback",
                        "release_precheck", "outbox_retry", "relocalize", "mark_home",
-                       "zones_set", "route_net_set"})
+                       "zones_set", "route_net_set", "unbind", "wifi_confirm"})
 
 #: 只读查询(W00c6g 建图进程日志、W00c6h 录包轨迹、W09f 建图预览):也交给 ``map_hook``,但**不进幂等
 #: 记录** —— 回执里带着上百 KB 的日志、轨迹每 2 s 查一次,记下来代理起来要全量重放;重投的再查一次

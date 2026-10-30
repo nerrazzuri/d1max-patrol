@@ -21,7 +21,11 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# W42:生产线上烧写时画贴纸二维码(纯 Python,没有别的依赖)
+factory = ["segno>=1.5"]
 dev = [
+    # W42:出厂工具画贴纸二维码(测试要跑到它)
+    "segno>=1.5",
     "pytest>=8.0",
     "pytest-asyncio>=0.24",
     "ruff>=0.6",

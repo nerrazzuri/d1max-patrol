@@ -35,6 +35,7 @@ set -euo pipefail
 # @写盘 /etc/systemd/system/d1max-lidar-merge.service                     前后雷达合并单元(W09i;只装不 enable)
 # @写盘 /etc/systemd/system/d1max-sidecar.service                         运动控制旁路单元(工单 7;只装不 enable;程序在机器上编)
 # @写盘 /etc/systemd/system/d1max-zenohd.service                          自带算力板的 zenoh 路由(A5;只装不 enable;没填网关不起)
+# @写盘 /etc/systemd/system/d1max-bind.service                            配网服务(W42;只装,factory burn 才 enable;没烧写不起)
 # @写盘 /etc/systemd/timesyncd.conf.d/d1max.conf                          对时配置:向站点主机对时(W09d)
 # @写盘 /etc/chrony/conf.d/d1max.conf                                     对时归 chrony 管的狗:向站点主机对时(决策 61)
 #
@@ -46,6 +47,7 @@ set -euo pipefail
 # @也删 /etc/systemd/system/multi-user.target.wants/d1max-nav2.service    Nav2 单元的自启链(同上)
 # @也删 /etc/systemd/system/multi-user.target.wants/d1max-lidar-merge.service 前后雷达合并的自启链(同上)
 # @也删 /etc/systemd/system/multi-user.target.wants/d1max-zenohd.service zenoh 路由的自启链(同上)
+# @也删 /etc/systemd/system/multi-user.target.wants/d1max-bind.service   配网服务的自启链(factory burn 时 enable 的)
 # @也删 /etc/systemd/system/multi-user.target.wants/d1max-sidecar.service 运动控制旁路的自启链(同上)
 # @也删 /etc/systemd/system/d1max-bootguard.service 老的守卫单元
 # @也删 /etc/systemd/system/d1max-patrol.service 老服务(W00c5e 退役)
@@ -400,6 +402,11 @@ fi
 # **只装、不 enable**;`/etc/d1max/env` 里没填 D1MAX_GATEWAY(装在厂商 Orin 上)它自己就不起。老包没带就跳过。
 if [[ -f "$PKG/deploy/d1max-zenohd.service" ]]; then
   install -m 0644 "$PKG/deploy/d1max-zenohd.service" /etc/systemd/system/
+fi
+# 配网服务单元(W42):**只装**;生产线烧写(d1max-patrol factory burn)时 enable。没烧写过(没有
+# /etc/d1max/device.json)它自己就不起。老包没带就跳过。
+if [[ -f "$PKG/deploy/d1max-bind.service" ]]; then
+  install -m 0644 "$PKG/deploy/d1max-bind.service" /etc/systemd/system/
 fi
 # **老服务清掉。** 两个进程抢同一个旁路进程的控制权会出事,两个服务共用在途标记还会互相数
 # 开机次数、替对方提交。失败不致命:新机器上本来就没有这些。

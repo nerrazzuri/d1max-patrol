@@ -17,7 +17,7 @@ from typing import Any
 #: 58 路线库(站点存的路线、排程是唯一真理源);59 运营可视化:定位历史 loc_episodes(只加表);
 #: 60 区域「在生效的那一份」nav_zones.effective_body(外审 R1,2026-10-15);
 #: 61 W44:告警结论 alerts.verdict、交班留言 shift_notes、位置轨迹 pose_track(只加列、加表)。
-SCHEMA_VERSION = 66
+SCHEMA_VERSION = 67
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -507,6 +507,24 @@ CREATE TABLE IF NOT EXISTS person_sightings (
     -- B 阶段外审 I1:这一回记成了什么。'p1' = 报过 P1;'authorized' = 授权在场只记了 P3
     -- (授权失效、机器人走出授权区、位置说不清了而人还在,要补报一次 P1)。
     kind       TEXT NOT NULL DEFAULT 'p1'
+);
+-- W42(库 67):机器人自己来挂的绑定申请(手机扫贴纸配网后,机器人连上站点挂一条,等人批准)。
+-- state:pending 等批 / approved 批了(机器人轮询拿开通码) / rejected 拒了 /
+-- replaced 同一序列号又来了一条 / expired 没人批作废了。
+CREATE TABLE IF NOT EXISTS bind_requests (
+    id          TEXT PRIMARY KEY,
+    serial      TEXT NOT NULL,
+    nonce       TEXT NOT NULL,
+    model       TEXT NOT NULL DEFAULT '',
+    version     TEXT NOT NULL DEFAULT '',
+    source      TEXT NOT NULL DEFAULT '',
+    host        TEXT NOT NULL DEFAULT '',
+    secret_hash TEXT NOT NULL,
+    created_ms  INTEGER NOT NULL,
+    expires_ms  INTEGER NOT NULL,
+    state       TEXT NOT NULL DEFAULT 'pending',
+    decided_by  TEXT NOT NULL DEFAULT '',
+    decided_ms  INTEGER
 );
 -- W33(C40221 真机):只许手动派的机器人。站点自己发起的动作(排程、入侵派遣、回充、
 -- 任务完了自动回待命点)

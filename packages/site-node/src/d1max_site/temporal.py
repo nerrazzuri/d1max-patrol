@@ -18,7 +18,10 @@ from typing import Any
 GATED, SAFE, READ = "gated", "safe", "read"
 
 #: 始终放行的(停下、撤销、退回)。
-_SAFE_KINDS = frozenset({"halt", "abort", "release_rollback", "outbox_retry"})
+#: W42:解绑(机器人只认现在这张证书,晚到的旧命令不清)、确认换 WiFi(只认挂着的那一条)也放行 ——
+#: 钟不准的时候正要靠它们解绑、修网。
+_SAFE_KINDS = frozenset({"halt", "abort", "release_rollback", "outbox_retry", "unbind",
+                         "wifi_confirm"})
 #: 只读查询。
 _READ_KINDS = frozenset({"proc_log", "mapping_trail", "mapping_preview", "release_precheck"})
 

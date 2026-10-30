@@ -39,6 +39,16 @@ def wall_ms() -> int:
     return int(time.time() * 1000)
 
 
+def _bindlink() -> Any:
+    """W42:烧写过的机器人(有 ``device.json``)或者配网服务的套接字已经在:接上本机配网服务。
+    配网服务后起也没事(每次问的时候才连)。``D1MAX_BIND_SOCK`` 可以换套接字地址(演示站点用)。"""
+    from d1max_agent.bindlink import SOCK, BindLink
+    sock = Path(os.environ.get("D1MAX_BIND_SOCK") or SOCK)
+    if sock.exists() or Path("/etc/d1max/device.json").exists():
+        return BindLink(sock)
+    return None
+
+
 def _map_arg(text: str) -> tuple[str, str]:
     map_id, sep, version = text.rpartition(":")
     if not sep or not map_id or not version:
@@ -607,6 +617,9 @@ def build(args: argparse.Namespace) -> Assembled:
             runtime._outbox_retry = pump.retry_refused
             runtime._unsealed = pump.unsealed
             runtime.upload_hold = pump.set_hold         # W46:过热降负载时暂停上传
+        bind = _bindlink()
+        if bind is not None:
+            runtime.bind = bind                         # W42:WiFi 状态、解绑、确认换 WiFi
         board = _board(args)
         if board is not None:
             runtime.attach_board(board)

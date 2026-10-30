@@ -244,6 +244,14 @@
     "en": "Site refused an upload",
     "zh": "站点不收上传"
   },
+  "bind_request": {
+    "en": "Robot waiting to join the site",
+    "zh": "有机器人等批准加入站点"
+  },
+  "wifi_change": {
+    "en": "Robot WiFi change waiting for approval",
+    "zh": "机器人换 WiFi 等确认"
+  },
   "release_failed": {
     "en": "Software update failed",
     "zh": "升级没成"

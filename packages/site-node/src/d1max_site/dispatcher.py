@@ -19,6 +19,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from typing import Any
 
+from d1max_contract.binding import wifi_view
 from d1max_contract.bundle_format import unbound_mission_text
 from d1max_contract.dispatch import DispatchClient, DispatchTimeout
 from d1max_contract.errors import ContractError
@@ -350,7 +351,10 @@ class Dispatcher:
                # 电量(整数百分数):跟机器人卡片(``robot_overview``)一个口径,不新鲜就是 None
                "battery_pct": battery_pct(c, fresh=self._fresh(c)),
                # W40:设备健康(最近一份;老狗、没装上装的狗是 None)
-               "devices": self.devices_view(robot_id)}
+               "devices": self.devices_view(robot_id),
+               # W42:连的哪个 WiFi、走 WiFi 还是 4G、有没有等确认的 WiFi 改动(老狗是 None)
+               "wifi": wifi_view(c.telemetry.net) if c is not None and c.telemetry is not None
+               else None}
         # 运营可视化:被挡多久、为什么、重规划几次(``runviz.RunViz``);没有被挡 / 重规划就没有这个键
         nav = self.runviz.nav_summary(robot_id) if self.runviz is not None else None
         if nav:
