@@ -19,6 +19,7 @@ import subprocess
 from pathlib import Path
 
 from d1max_contract.binding import (
+    DEFAULT_BIND_ADDR,
     BindingError,
     Sticker,
     check_serial,
@@ -93,6 +94,11 @@ def burn(paths: BindPaths, serial: str, *, router: Router, unbind_pub: Path,
     os.chmod(paths.unbind_pub, 0o644)
     for k, v in FACTORY_ENV.items():
         set_env(paths.env, k, v)
+    env = paths.env.read_text(encoding="utf-8")
+    if not any(line.startswith("D1MAX_BIND_HOST=") and line.strip() != "D1MAX_BIND_HOST="
+               for line in env.splitlines()):
+        # 3588 在路由器 LAN1 上的地址(出厂配置定死;贴纸不带地址时手机就找它)
+        set_env(paths.env, "D1MAX_BIND_HOST", DEFAULT_BIND_ADDR.split(":")[0])
     write_json(paths.state, {"state": "unbound", "error": ""})
     return _new_secrets(paths, serial, router, ssid=f"NW-{serial[-6:]}", model=model)
 
