@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any
 
 PLATFORMS = ("android", "linux", "windows", "macos")
-_FILE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,99}\.(apk|tar\.gz|zip|dmg|msix|exe)$")
+_FILE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]{0,119}\.(apk|tar\.gz|zip|dmg|msix|exe)$")
 _VERSION = re.compile(r"^\d{1,4}\.\d{1,4}\.\d{1,4}\+(\d{1,9})$")
 MAX_BYTES = 300 * 1024 * 1024
 

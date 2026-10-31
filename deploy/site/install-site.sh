@@ -208,3 +208,11 @@ cat <<TXT
   sudo -u d1max-site $VENV/bin/d1max-site --home $HOME_DIR keys-export <U 盘上的文件>
 恢复步骤见 docs/备份恢复与灾备演练.md 第四节。
 TXT
+if [[ $NO_VPN -eq 0 ]]; then
+  cat <<TXT
+
+工程师远程运维要站点 VPN(W55,决策 71;只放行工程师到 22 端口):初始化一次,填对外地址(域名或公网 IP + 端口,路由器上转发这个 UDP 端口):
+  sudo -u d1max-site $VENV/bin/d1max-site --home $HOME_DIR vpn init --endpoint <域名或公网IP>          # UDP 端口默认 51820,--port 改
+之后在网页「账号」给工程师开临时账号时勾选「同时发放 VPN 配置」。见 docs/远程运维手册.md。
+TXT
+fi

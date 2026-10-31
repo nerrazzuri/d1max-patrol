@@ -323,9 +323,18 @@ def run(args: argparse.Namespace, *, now_ms: int) -> int:
             dest = out / f"{manifest['name']}-android-{name}+{args.build_number}.apk"
             shutil.copy2(apk, dest)
             files.append(dest)
+            # W55:站点分发 App 要的签名清单(同一把发行钥匙;网页「软件升级 → App 安装包」连安装包一起传)
+            app_man = {"name": dest.name, "version": f"{name}+{args.build_number}",
+                       "requires_mission_schema": 1, "content_sha256": sha256(dest)}
+            app_man["signature"] = relsign.sign(app_man, key)
+            man_path = out / f"{dest.name}.manifest.json"
+            man_path.write_text(json.dumps(app_man, ensure_ascii=False, indent=2) + "\n",
+                                encoding="utf-8")
+            files.append(man_path)
             record["android"] = {"file": dest.name, "version": name,
                                  "build_number": args.build_number, "signer": dn,
-                                 "cert_sha256": digest, "sha256": sha256(dest)}
+                                 "cert_sha256": digest, "sha256": sha256(dest),
+                                 "site_manifest": man_path.name}
         write_record(out, record, files)
     except ReleaseFail as exc:
         print(f"没成: {exc}", file=sys.stderr)
