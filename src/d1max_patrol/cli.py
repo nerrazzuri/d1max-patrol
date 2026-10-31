@@ -200,6 +200,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_sg = rel_sub.add_parser("sign", help="给打好的包签名(写进 release.json 的 signature)")
     p_sg.add_argument("package", help="包目录(release pack 打出来的)")
     p_sg.add_argument("--key", required=True, help="私钥")
+    p_sa = rel_sub.add_parser(
+        "sign-app", help="给 App 安装包签名(W55:站点分发 App 用),写出 <文件>.manifest.json")
+    p_sa.add_argument("file", help="安装包(.apk / .tar.gz / .zip …)")
+    p_sa.add_argument("--version", required=True, help="版本,写成 主.次.修+构建号(同 pubspec)")
+    p_sa.add_argument("--key", required=True, help="私钥")
     p_act = rel_sub.add_parser("activate", help="切到某一版,下次起来自检")
     p_act.add_argument("name", help="版本名")
     _root_arg(p_act)
@@ -610,7 +615,7 @@ def _cmd_release(args: argparse.Namespace) -> int:
     # 那台机器上根本没有 /opt/d1max,连算一次默认版本根都是多余的。
     if args.release_command == "pack":
         return _cmd_release_pack(args, now_ms)
-    if args.release_command in ("keygen", "sign"):
+    if args.release_command in ("keygen", "sign", "sign-app"):
         return _cmd_release_sign(args)
 
     layout = Layout(root=_release_root(getattr(args, "root", None)))
@@ -719,6 +724,20 @@ def _cmd_release_sign(args: argparse.Namespace) -> int:
             print(f"私钥 {args.private}(离线保管,丢了就再也签不了;"
                   "泄露了要换钥匙、重装所有狗的公钥)")
             print(f"公钥 {args.public}(提交到仓库 deploy/release-pub.pem)")
+            return 0
+        if args.release_command == "sign-app":
+            import hashlib
+            import re
+            if not re.fullmatch(r"\d{1,4}\.\d{1,4}\.\d{1,4}\+\d{1,9}", args.version):
+                raise ValueError("版本要写成 主.次.修+构建号(例如 1.2.0+12)")
+            f = Path(args.file)
+            manifest = {"name": f.name, "version": args.version, "requires_mission_schema": 1,
+                        "content_sha256": hashlib.sha256(f.read_bytes()).hexdigest()}
+            manifest["signature"] = relsign.sign(manifest, Path(args.key))
+            out = f.with_name(f.name + ".manifest.json")
+            out.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
+                           encoding="utf-8")
+            print(f"签好了: {out}(在网页「系统 → App 安装包」上传安装包和这份清单)")
             return 0
         path = Path(args.package) / "release.json"
         manifest = json.loads(path.read_text(encoding="utf-8"))
