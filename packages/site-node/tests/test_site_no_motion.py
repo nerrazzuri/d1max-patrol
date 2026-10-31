@@ -39,6 +39,8 @@ ALLOWED_KINDS = frozenset({
     "route_net_set",
     # W42:解绑(机器人恢复出厂)、确认 / 不同意换 WiFi。都是维护级,不动腿
     "unbind", "wifi_confirm",
+    # W55 远程运维:证书续签(机器人生成申请 → 站点签 → 机器人换上)。维护级,不动腿
+    "cert_csr", "cert_install",
 })
 #: 直接速度、运动原语:站点永远不许发。
 FORBIDDEN_KINDS = frozenset({"vel", "walk", "move", "stand", "lie", "estop_off", "gait"})

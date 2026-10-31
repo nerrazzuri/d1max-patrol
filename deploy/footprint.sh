@@ -46,6 +46,8 @@ SURVEY_DIRS=(
   "/etc/systemd/timesyncd.conf.d:1"
   # 对时归 chrony 管的狗:站点对时的片段写在这儿(决策 61)。
   "/etc/chrony/conf.d:1"
+  # W55:日志留盘 14 天、最多 500 MB 的设置写在这儿
+  "/etc/systemd/journald.conf.d:1"
   "/etc:1"
   "/usr/local/bin:1"
   "/usr/local/lib:2"
@@ -239,8 +241,13 @@ function is_ours(p) {
   if (p ~ /^\/var\/lib\/d1max($|\/)/) return 1
   if (p == "/etc/systemd/timesyncd.conf.d/d1max.conf") return 1
   if (p == "/etc/chrony/conf.d/d1max.conf") return 1
-  if (p ~ /^\/etc\/systemd\/system\/d1max-[^\/]*\.service$/) return 1
-  if (p ~ /^\/etc\/systemd\/system\/[^\/]*\.target\.wants\/d1max-[^\/]*\.service$/) return 1
+  # W55:特权执行器(目录、配置、请求结果目录)、日志留盘设置
+  if (p ~ /^\/usr\/local\/lib\/d1max($|\/)/) return 1
+  if (p == "/etc/d1max-ops.json") return 1
+  if (p ~ /^\/var\/lib\/d1max-ops($|\/)/) return 1
+  if (p == "/etc/systemd/journald.conf.d/d1max.conf") return 1
+  if (p ~ /^\/etc\/systemd\/system\/d1max-[^\/]*\.(service|path)$/) return 1
+  if (p ~ /^\/etc\/systemd\/system\/[^\/]*\.target\.wants\/d1max-[^\/]*\.(service|path)$/) return 1
   return 0
 }
 # 被勘察的那几处目录**自己**。在它们底下加一个文件, 父目录的 mtime 必然跟着
@@ -249,6 +256,7 @@ function is_ours(p) {
 function is_parent(p) {
   if (p == "/etc" || p == "/opt" || p == "/var/lib") return 1
   if (p == "/etc/systemd/system" || p == "/etc/systemd/timesyncd.conf.d") return 1
+  if (p == "/etc/systemd/journald.conf.d") return 1
   if (p == "/etc/chrony/conf.d" || p == "/etc/chrony") return 1
   if (p == "/usr/local/bin" || p == "/usr/local/lib") return 1
   if (p == "/usr/local/sbin" || p == "/etc/sudoers.d") return 1

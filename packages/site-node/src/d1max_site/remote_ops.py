@@ -14,8 +14,9 @@ from typing import Any
 
 log = logging.getLogger(__name__)
 
-#: 证书剩这么多天以内就自动续(机器人上的证书一年一签)。
-RENEW_WITHIN_DAYS = 30
+#: 证书剩这么多天以内就自动续(机器人上的证书一年一签)。要早于体检的「快到期」告警(30 天):
+#: 告警只在自动续签一直不成时才出现。
+RENEW_WITHIN_DAYS = 45
 CERT_DAYS = 365
 DAY_MS = 86_400_000
 #: 同一台失败了,隔多久再试。

@@ -173,7 +173,7 @@ function DiagView({ d }: { d: Diag }) {
 
 interface Metric { ts: number; key: string; value: number }
 const METRICS: { key: string; label: Key }[] = [
-  { key: "site_disk_free", label: "mtDisk" }, { key: "robots_online", label: "mtOnline" },
+  { key: "site_disk_free", label: "mtDisk" },              // 站点报的是剩余比例(0–1) { key: "robots_online", label: "mtOnline" },
   { key: "upload_backlog", label: "mtBacklog" }, { key: "loop_lag_s", label: "mtLag" },
   { key: "alerts_open_P1", label: "mtP1" },
 ];
@@ -205,7 +205,7 @@ export function SiteMetrics() {
           <div key={key} class="sys-row metric" data-metric={key}>
             <span class="muted">{t(label)}</span>
             <Spark pts={pts} />
-            <b>{last == null ? "—" : key === "site_disk_free" ? gb(last) : String(Math.round(last * 100) / 100)}</b>
+            <b>{last == null ? "—" : key === "site_disk_free" ? `${Math.round(last * 100)}%` : String(Math.round(last * 100) / 100)}</b>
           </div>
         );
       })}

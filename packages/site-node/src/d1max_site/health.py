@@ -201,8 +201,10 @@ class HealthDesk:
             if days < CERT_WARN_DAYS:
                 renewed = "在用的证书" in who
                 soon.append(f"{who}还有 {max(days, 0):.0f} 天到期"
-                            + ("(新证书已签发,拷到机器人上、重启代理)" if renewed else
-                               "(d1max-site renew 续签)" if who.startswith("机器人") else ""))
+                            + ("(新证书已签发、机器人未换上:诊断页「立即续签证书」;"
+                               "老代理拷到机器人上、重启代理)" if renewed else
+                               "(自动续签未成:诊断页「立即续签证书」或 d1max-site renew)"
+                               if who.startswith("机器人") else ""))
         out["certs"] = {"ok": not soon, "value": None if worst is None else round(worst, 1),
                         "detail": ";".join(soon)[:300] or (f"证书最近的还有 {worst:.0f} 天到期"
                                                           if worst is not None else "没有证书")}
