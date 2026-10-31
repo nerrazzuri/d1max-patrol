@@ -288,7 +288,8 @@ if [[ "$(cat "$ROOT_SENTINEL" 2>/dev/null)" != "$ROOT_SENTINEL_WANT" ]]; then
       "$TMP_PKG/packages/adapter-d1max" \
       "$TMP_PKG/packages/robot-agent"
   fi
-  printf '%s\n' "$ROOT_SENTINEL_WANT" > "$ROOT_SENTINEL"
+  # 外审 W55-3 N1:哨兵在机器人账号的目录里 —— 以它写(root 写会跟着它布下的链接写到别处)
+  printf '%s\n' "$ROOT_SENTINEL_WANT" | sudo -u "$RUN_USER" tee "$ROOT_SENTINEL" >/dev/null
 else
   echo "  根下这一版的依赖已经装齐了($REL_NAME),跳过 —— 离线重跑不需要网。"
 fi
@@ -368,8 +369,7 @@ if [[ ! -e "$SENTINEL" ]]; then
   fi
   # **最后一行才落哨兵。** 上面任何一步断了,set -e 会在这之前就退出,
   # 哨兵不在,下一趟整段重来 —— 这就是"依赖装完没有"这个判据的全部。
-  printf 'd1max_patrol %s\n' "$REL_NAME" > "$SENTINEL"
-  chown "$RUN_USER":"$RUN_USER" "$SENTINEL"
+  printf 'd1max_patrol %s\n' "$REL_NAME" | sudo -u "$RUN_USER" tee "$SENTINEL" >/dev/null
 fi
 
 say "5/7 装代理单元与环境文件;清掉老服务"

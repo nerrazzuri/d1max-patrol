@@ -516,7 +516,7 @@ def test_槽内venv的幂等判据看哨兵不看解释器(装机脚本):
     # 半成品一律推倒重来 —— 不推的话 pip 会认为装了一半的包已经装上了。
     assert 'rm -rf "$SLOT/venv"' in 装机脚本
     # **顺序是这条护栏的全部**:哨兵落在最后一条 pip install 之后。
-    落哨兵 = 装机脚本.index('> "$SENTINEL"')
+    落哨兵 = 装机脚本.index('tee "$SENTINEL"')                   # W55-3 N1:以 $RUN_USER 写
     最后一条pip = 装机脚本.rindex("-m pip install")
     assert 最后一条pip < 落哨兵, "哨兵落在 pip 之前 —— 中途断了它照样在盘上"
 

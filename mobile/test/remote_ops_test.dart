@@ -3,6 +3,7 @@
 // （按构建号问、下载核对后交给系统装、名字不对不下载、登录后底部提示「更新」）。
 import 'dart:convert';
 import 'dart:io';
+import 'dart:ui' show PlatformDispatcher;
 
 import 'package:d1max_patrol/l10n.dart';
 import 'package:d1max_patrol/net/app_update.dart';
@@ -151,6 +152,22 @@ void main() {
       await log.flush();
       expect(b.errorReports.single.map((e) => e['message']), <String>['in B']);
       log.detach(b);
+    });
+
+    test('外审 W55-3：没接住的异步异常说不清是哪个站点的，不上传', () async {
+      final log = ErrorLog();
+      final api = FakeApi('admin');
+      log.attach(api);
+      final prev = PlatformDispatcher.instance.onError;
+      final prevFlutter = FlutterError.onError;
+      installErrorHooks(log);
+      PlatformDispatcher.instance.onError!(StateError('late async'), StackTrace.empty);
+      PlatformDispatcher.instance.onError = prev;
+      FlutterError.onError = prevFlutter;
+      log.note('flutter', 'build error');
+      await log.flush();
+      expect(api.errorReports.single.map((e) => e['message']), <String>['build error']);
+      log.detach(api);
     });
 
     test('外审 W55-1：按字节分批，站点收不下的那一批扔掉不卡住', () async {

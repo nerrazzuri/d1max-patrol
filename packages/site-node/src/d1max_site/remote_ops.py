@@ -116,6 +116,10 @@ class CertRenewer:
         return out
 
     async def _renew(self, rid: str, by: str) -> dict[str, Any]:
+        # 外审 W55-3 I2:旧身份在第一次异步之前取 —— 期间解绑、重登过,挂起和转正都不认
+        first = self.registry.get(rid)
+        if first is None or first.revoked:
+            raise RenewError(f"{rid} 未登记或已解绑")
         got = await self.dispatcher.map_command(rid, "cert_csr", {}, issued_by=by)
         ack = got.get("ack", {})
         if ack.get("result") != "accepted":
@@ -124,10 +128,10 @@ class CertRenewer:
         now = self._now()
         cert, reg, fp = await asyncio.to_thread(self.ca.sign_robot_csr, rid, csr, days=CERT_DAYS,
                                                 now_ms=now)
-        old = self.registry.get(rid)
-        self.registry.stage(rid, fingerprint=fp, issued_at=reg.issued_at,
-                            expires_at=reg.expires_at, now_ms=now,
-                            old_fingerprint=old.fingerprint if old is not None else "")
+        if not self.registry.stage(rid, fingerprint=fp, issued_at=reg.issued_at,
+                                   expires_at=reg.expires_at, now_ms=now,
+                                   old_fingerprint=first.fingerprint):
+            raise RenewError(f"{rid} 在续签期间解绑或重新登记过,这次续签作废")
         try:
             got = await self.dispatcher.map_command(
                 rid, "cert_install", {"cert": cert, "registration": reg.to_wire()}, issued_by=by)
@@ -145,7 +149,8 @@ class CertRenewer:
             if reason.startswith("busy"):
                 raise RenewBusy(f"机器人正忙,未换证书:{reason}")
             raise RenewError(f"机器人未换上新证书:{reason}")
-        self.registry.promote(rid, fp)
+        if not self.registry.promote(rid, fp):
+            raise RenewError(f"{rid} 的登记已变(解绑或重新登记过),新证书未生效")
         log.info("%s 证书已续签,到期 %s", rid, reg.expires_at)
         return {"robot_id": rid, "expires_at": reg.expires_at, "fingerprint": fp}
 

@@ -38,7 +38,7 @@ class PrivTimeout(PrivOpsError):
 
 class PrivOps(Protocol):
     def call(self, action: str, args: dict[str, Any] | None = None, *,
-             timeout_s: float = 60.0) -> dict[str, Any]: ...
+             timeout_s: float = 60.0, rid: str | None = None) -> dict[str, Any]: ...
 
     def submit(self, action: str, args: dict[str, Any] | None = None) -> str: ...
 
@@ -69,8 +69,9 @@ class SpoolOps:
         return got if isinstance(got, dict) else None
 
     def call(self, action: str, args: dict[str, Any] | None = None, *,
-             timeout_s: float = 60.0) -> dict[str, Any]:
-        rid = self._write(action, args)
+             timeout_s: float = 60.0, rid: str | None = None) -> dict[str, Any]:
+        """``rid``:调用方先定好请求号(先把它记下来再发,中途进程没了也查得到)。"""
+        rid = self._write(action, args, rid)
         done = self.spool / "done" / f"{rid}.json"
         end = self._mono() + timeout_s
         while self._mono() < end:
@@ -97,8 +98,9 @@ class SpoolOps:
             return False
         return True
 
-    def _write(self, action: str, args: dict[str, Any] | None) -> str:
-        rid = secrets.token_hex(12)
+    def _write(self, action: str, args: dict[str, Any] | None, rid: str | None = None) -> str:
+        if rid is None or not (8 <= len(rid) <= 32 and all(c in "0123456789abcdef" for c in rid)):
+            rid = secrets.token_hex(12)
         req = self.spool / "req"
         body = json.dumps({"id": rid, "action": action, "args": args or {}},
                           ensure_ascii=False).encode()
@@ -135,7 +137,7 @@ class SimOps:
         return False
 
     def call(self, action: str, args: dict[str, Any] | None = None, *,
-             timeout_s: float = 60.0) -> dict[str, Any]:
+             timeout_s: float = 60.0, rid: str | None = None) -> dict[str, Any]:
         self.calls.append((action, dict(args or {})))
         if action in self.fail:
             return {"action": action, "ok": False, "error": self.fail[action]}

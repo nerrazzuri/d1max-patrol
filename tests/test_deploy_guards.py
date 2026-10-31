@@ -793,7 +793,7 @@ def test_根下装依赖那一步有哨兵挡着重跑():
     脚本 = (DEPLOY / "install.sh").read_text(encoding="utf-8")
     assert 'ROOT_SENTINEL="$ROOT/bin-venv/.deps-ok"' in 脚本
     行们 = 脚本.split("\n")
-    落哨兵 = [i for i, 行 in enumerate(行们) if '> "$ROOT_SENTINEL"' in 行]
+    落哨兵 = [i for i, 行 in enumerate(行们) if 'tee "$ROOT_SENTINEL"' in 行]  # W55-3 N1
     装包 = [i for i, 行 in enumerate(行们)
             if '-m pip install --quiet $PIP_ARGS "$TMP_PKG"' in 行]
     assert len(落哨兵) == 1 and len(装包) == 1

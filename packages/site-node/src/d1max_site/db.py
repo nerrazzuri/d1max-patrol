@@ -860,6 +860,7 @@ _ADDED_COLUMNS = (
     ("bind_requests", "cert_fp", "TEXT NOT NULL DEFAULT ''"),
     # W53:上手向导看过哪一版、开站清单收没收起来(JSON);老账号空着 = 没看过
     ("accounts", "guide", "TEXT NOT NULL DEFAULT '{}'"),
+    ("cert_pending", "old_fingerprint", "TEXT NOT NULL DEFAULT ''"),  # W55 外审 3 N2
 )
 
 

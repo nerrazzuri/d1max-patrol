@@ -476,3 +476,44 @@ def test_外审W55_2_C3_机器人上执行器结果未知_挂着的新证书留�
         asyncio.run(r.renew("A", by="site:cert"))
     assert reg.pending("A") is not None, "可能已经换上了:留着,连上来时转正"
     db.close()
+
+
+def test_外审W55_3_N2_老的挂起证书表没有旧指纹列_打开就补上(tmp_path):
+    import sqlite3
+    db_path = tmp_path / "site.db"
+    SiteDB(db_path).close()
+    con = sqlite3.connect(db_path)                     # 做成第二轮那版的样子:没有 old_fingerprint
+    con.execute("DROP TABLE cert_pending")
+    con.execute("CREATE TABLE cert_pending (robot_id TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, "
+                "issued_at INTEGER NOT NULL, expires_at INTEGER NOT NULL, "
+                "created_ms INTEGER NOT NULL)")
+    con.execute("INSERT INTO cert_pending VALUES ('x', 'sha256:a', 1, 2, 3)")
+    con.commit()
+    con.close()
+    db = SiteDB(db_path)
+    cols = {r["name"] for r in db.query("PRAGMA table_info(cert_pending)")}
+    assert "old_fingerprint" in cols
+    assert db.query("SELECT old_fingerprint FROM cert_pending")[0]["old_fingerprint"] == ""
+    db.close()
+
+
+def test_外审W55_3_I2_拿到申请以后解绑重登_这次续签作废_新身份不动(tmp_path):
+    now = 1_800_000_000_000
+    ca, reg, db = _ca_reg(tmp_path, 10 * 86_400_000, now)
+    d, al = _Disp(tmp_path), _Alerts()
+    orig = d.map_command
+
+    async def 中途重登(rid, kind, payload, *, issued_by):
+        got = await orig(rid, kind, payload, issued_by=issued_by)
+        if kind == "cert_csr":                          # 申请拿到了,这时管理员解绑、重新登记
+            reg.revoke("A")
+            reg.enroll("A", fingerprint="sha256:fresh", issued_at=now,
+                       expires_at=now + 30 * 86_400_000)
+        return got
+    d.map_command = 中途重登
+    r = CertRenewer(dispatcher=d, registry=reg, ca=ca, alerts=al, now_ms=lambda: now)
+    with pytest.raises(Exception, match="解绑或重新登记"):
+        asyncio.run(r.renew("A", by="site:cert"))
+    assert reg.get("A").fingerprint == "sha256:fresh" and reg.pending("A") is None
+    assert ("A", "cert_install") not in d.calls, "作废了就不往机器人上装"
+    db.close()
