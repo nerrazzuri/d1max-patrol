@@ -154,6 +154,17 @@ def build_parser() -> argparse.ArgumentParser:
     sc = sub.add_parser("selfcheck", help="出厂自检:证书、env、连站点、对时、盘、服务(商业化 A4)")
     sc.add_argument("--etc", default="/etc/d1max", help=argparse.SUPPRESS)
     sc.add_argument("--user", default=os.environ.get("D1MAX_USER", "robot"))
+    pl = sub.add_parser("payload",
+                        help="上装继电器板(W56:生产设置、看状态;先停代理,串口只能一个人用)")
+    pl_sub = pl.add_subparsers(dest="payload_command", required=True)
+    for name, hlp in (("relay-setup", "设置断线自动全关(保持寄存器 0x0030,硬件组定 50 = 5 秒);"
+                                      "断电不丢,重新上电生效"),
+                      ("relay-status", "读继电器板:四路输出、四路输入、断线全关的值")):
+        pp = pl_sub.add_parser(name, help=hlp)
+        pp.add_argument("--config", default="/etc/d1max/payload.json", help="上装配置")
+        if name == "relay-setup":
+            pp.add_argument("--watchdog-ds", type=int, default=50,
+                            help="断线多久全关(×0.1 秒;缺省 50 = 5 秒)")
     rel = sub.add_parser("release", help="装机、升级、回滚")
     rel_sub = rel.add_subparsers(dest="release_command", required=True)
 
@@ -341,6 +352,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.command in ("bind-serve", "factory", "unbind-token"):
         from d1max_patrol.bind.cli import run
         return run(args)
+
+    if args.command == "payload":
+        return _cmd_payload(args)
 
     if args.command == "release":
         # 跟 sim 同一条道理:装机时机器上根本没有后端可连,boot-guard 更是
@@ -753,6 +767,39 @@ def _cmd_release_sign(args: argparse.Namespace) -> int:
         return 2
     print(f"签好了: {manifest['name']}")
     return 0
+
+
+def _cmd_payload(args: argparse.Namespace) -> int:
+    """``payload relay-setup`` / ``relay-status``(W56,硬件组 10-31):生产时设一次断线全关,
+    装机时看板子。"""
+    from d1max_adapter_d1max.payload import ModbusRelay, PayloadConfig, PayloadError, relay_setup
+    from d1max_contract.serialport import open_serial
+    try:
+        cfg = PayloadConfig.load(args.config)
+        relay = ModbusRelay(lambda: open_serial(cfg.port, cfg.baud), slave=cfg.slave)
+        try:
+            if args.payload_command == "relay-setup":
+                got = relay_setup(relay, watchdog_ds=args.watchdog_ds,
+                                  reg=cfg.watchdog_reg if cfg.watchdog_reg >= 0 else 0x30)
+                print(got["note"])
+                return 0
+            coils = (relay.read_coils(min(cfg.coils.values()), len(cfg.coils))
+                     if cfg.coils else [])
+            print("输出:", " ".join(f"CH{i + 1}={'开' if on else '关'}"
+                                   for i, on in enumerate(coils)))
+            if cfg.inputs_reg >= 0:
+                bits = relay.read_input_registers(cfg.inputs_reg, 1)[0]
+                print("输入:", " ".join(f"IN{i + 1}={bits >> i & 1}" for i in range(4)))
+            if cfg.watchdog_reg >= 0:
+                v = relay.read_holding(cfg.watchdog_reg, 1)[0]
+                ok = "" if v == cfg.watchdog_ds else f"(应为 {cfg.watchdog_ds}:用 relay-setup 设置)"
+                print(f"断线全关:0x{cfg.watchdog_reg:04X} = {v}{ok}")
+            return 0
+        finally:
+            relay.close()
+    except (PayloadError, OSError) as exc:
+        print(f"没成: {exc}", file=sys.stderr)
+        return 2
 
 
 def _cmd_release_pack(args: argparse.Namespace, now_ms: int) -> int:
