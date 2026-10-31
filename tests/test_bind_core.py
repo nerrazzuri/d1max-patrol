@@ -372,7 +372,8 @@ def test_W57_签解绑令_记台账(tmp_path, capsys):
                               str(tmp_path / "unbind-pub.pem")])) == 0
     ledger = tmp_path / "解绑令台账.csv"
     argv = ["unbind-token", "sign", "--private", str(k), "--serial", "D1M-1"]
-    assert run(ap.parse_args([*argv, "--ledger", str(ledger)])) == 1, "记台账要写申请人、核对人、用途"
+    assert run(ap.parse_args([*argv, "--ledger", str(ledger)])) == 1, \
+        "记台账要写申请人、核对人、用途"
     assert run(ap.parse_args([*argv, "--ledger", str(ledger), "--requester", "客户 A 管理员",
                               "--checker", "liang", "--purpose", "站点主机损坏无备份"])) == 0
     tok = capsys.readouterr().out.strip().splitlines()[-1]
