@@ -1586,7 +1586,8 @@ class _Handler(TlsHandlerMixin):
                     raise HttpError(400, "证书有效天数要是 1–3650 的整数")
                 self._audit_target, self._audit_detail = rid, {"days": days}
                 site_main.cmd_enroll(home, rid, days)
-                code = site_main.cmd_enroll_code(home, rid, d.get("host") or None, 24.0)
+                code = site_main.cmd_enroll_code(home, rid, d.get("host") or None, 24.0,
+                                                 api_port=self._api_port())
                 return self._send_json(200, {"robot_id": rid, "code": code, "hours": 24,
                                              "manual_only": True})
             rid = unquote(robot_id or "")
@@ -1598,7 +1599,8 @@ class _Handler(TlsHandlerMixin):
                 if not isinstance(hours, (int, float)) or isinstance(hours, bool) \
                         or not 0.25 <= hours <= 168:
                     raise HttpError(400, "开通码有效小时数要在 0.25–168 之间")
-                code = site_main.cmd_enroll_code(home, rid, d.get("host") or None, float(hours))
+                code = site_main.cmd_enroll_code(home, rid, d.get("host") or None, float(hours),
+                                                 api_port=self._api_port())
                 return self._send_json(200, {"robot_id": rid, "code": code, "hours": hours})
             wiped = self._unbind_robot(rid, user)
             summary = site_main.cmd_revoke(home, rid)
@@ -1852,9 +1854,13 @@ class _Handler(TlsHandlerMixin):
                 site.dispatcher.db, now_ms=site._now, alerts=alerts,
                 enroll=lambda serial: site_main.cmd_enroll(home, serial, 365),
                 issue=lambda serial, host, fp: site_main.cmd_enroll_code(
-                    home, serial, host or None, 1.0, expect_fp=fp),
+                    home, serial, host or None, 1.0, expect_fp=fp, api_port=self._api_port()),
                 set_name=site.dispatcher.registry.set_name)
         return site.bind
+
+    def _api_port(self) -> int:
+        """站点接口实际听的端口(开通码里写它;不总是 8443)。"""
+        return int(self.server.server_address[1])
 
     def _attest_desk(self) -> Any:
         """W63 设备身份核对台(站点主程序接了站点目录才有;第一次用时现建)。"""

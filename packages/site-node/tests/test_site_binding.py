@@ -221,6 +221,8 @@ def test_接口_机器人不用登录_批准要manage和密码(tmp_path, 台):
             c.execute("UPDATE bind_requests SET cert_fp=? WHERE id=?", (fp, rid))
         code, d = s.req("GET", f"/api/bind/request/{rid}?secret={sec}")
         assert d["state"] == "approved" and d["code"].startswith("D1MAX1."), d
+        port = s.api.httpd.server_address[1]          # 开通码里的接口端口是站点实际听的那个
+        assert site.decode(d["code"])["api"].endswith(f":{port}"), site.decode(d["code"])["api"]
         assert s.req("GET", "/api/bind/state?serial=A&cert=sha256:a")[1] == {"state": "active"}
         assert s.req("GET", "/api/bind/state?serial=A&cert=sha256:b")[1] == {"state": "unknown"}
         assert s.req("GET", "/api/bind/state?serial=NOPE&cert=x")[1] == {"state": "unknown"}
