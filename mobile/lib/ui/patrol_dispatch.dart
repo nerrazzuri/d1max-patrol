@@ -191,7 +191,7 @@ class _PatrolSheetState extends State<_PatrolSheet> {
           else if (rs.isEmpty)
             NwNotice(
                 text: tr('No patrol routes yet. An administrator adds them under Admin → Patrol routes.',
-                    '还没有巡逻路线，请管理员在「管理 → 巡逻路线」中添加。'))
+                    '暂无巡逻路线，请管理员在「管理 → 巡逻路线」中添加。'))
           else
             ConstrainedBox(
               constraints: BoxConstraints(maxHeight: MediaQuery.sizeOf(context).height * 0.45),

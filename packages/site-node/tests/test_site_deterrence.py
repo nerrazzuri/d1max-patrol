@@ -116,7 +116,7 @@ async def test_到了拦截点开一场_L0什么都不开_待命点先别回_事
     await t.desk.tick()
     assert t.disp.on() == set() and t.desk.busy() == {"A"}
     assert {p["output"] for _, p, _ in t.disp.sent} == {"strobe", "siren", "spotlight",
-                                                         "speaker"}, "L0:没确认关过的都先关一遍"
+                                                         "speaker"}, "L0:未确认关过的都先关一遍"
     assert t.disp.pushed[-1]["kind"] == "deterrence"
 
 
@@ -146,7 +146,7 @@ async def test_每30秒自动升_最多到L3_按级开声光_话术轮放_优先
         await t.desk.tick()
     clips = [p["clip"] for _, p, _ in t.disp.sent if p["output"] == "speaker" and p["on"]]
     assert clips[3:] == ["notified-zh", "notified-en", "notified-zh"], \
-        "L3 放「已通知保安」;没录马来文的就跳过"
+        "L3 放「已通知保安」;未录马来文的就跳过"
     t.clock.go(120)
     await t.desk.tick()
     assert t.desk.sessions["A"].level == 3, "自动最多到 L3,L4 只能人进"
@@ -160,7 +160,7 @@ async def test_声光每20秒续一次_不多发(台):
     n = len(t.disp.sent)
     t.clock.go(5)
     await t.desk.tick()
-    assert len(t.disp.sent) == n, "没到 20 秒不续"
+    assert len(t.disp.sent) == n, "未到达 20 秒不续"
     t.clock.go(16)
     await t.desk.tick()
     renewed = [p["output"] for _, p, _ in t.disp.sent[n:] if p["on"]]
@@ -183,7 +183,7 @@ async def test_人跳级往回退_不再自动升_不该开的关掉(台):
     for bad in (5, -1, "2", True):
         with pytest.raises(DeterrenceError):
             await t.desk.set_level("A", bad, by="gina")
-    with pytest.raises(DeterrenceError, match="没在驱离"):
+    with pytest.raises(DeterrenceError, match="未在驱离"):
         await t.desk.set_level("B", 1, by="gina")
 
 
@@ -234,7 +234,7 @@ async def test_站点重启接着管(台, tmp_path):
     await desk2.tick()
     assert {p["output"] for _, p, _ in t.disp.sent[n:] if p["on"]} >= {"strobe", "spotlight",
                                                                        "speaker"}, \
-        "重启后的第一拍把该开的重新开上(新的台没记着发过什么)"
+        "重启后的第一拍把该开的重新开上(新的台未记着发过什么)"
 
 
 async def test_发不出去_下一拍再发(台):
@@ -417,7 +417,7 @@ async def test_外审2_开的回执丢了_降级照样关(台):
     assert t.disp.on() == {"strobe", "spotlight"}, "机器人上其实开了"
     t.disp.deter = real
     await t.desk.set_level("A", 0, by="gina")
-    assert t.disp.on() == set(), "没记到成了,不等于没开"
+    assert t.disp.on() == set(), "未记到成了,不等于未开启"
 
 
 async def test_外审3_解除时库整个写不进_先全关_标收尾中_回报错_下一拍接着收(台, monkeypatch):
@@ -432,9 +432,9 @@ async def test_外审3_解除时库整个写不进_先全关_标收尾中_回报
             raise RuntimeError("库锁住了")
         return real()
     monkeypatch.setattr(t.db, "tx", tx)
-    with pytest.raises(DeterrenceError, match="没落进库"):
+    with pytest.raises(DeterrenceError, match="未落进库"):
         await t.desk.release("A", by="olga")              # 解除回报错:让人知道没落进库
-    assert t.disp.on() == set(), "删库没成也先全关"
+    assert t.disp.on() == set(), "删库失败也先全关"
     assert t.desk.view() == [] and t.desk.busy() == {"A"}, "收尾中:不显示、也不派别的活"
     assert t.stb.back == [] and t.db.query("SELECT level FROM deter_sessions")[0]["level"] == 3
     with pytest.raises(DeterrenceError):
@@ -491,7 +491,7 @@ async def test_复查_解除时删库没成_马上重启_只接着收尾_不再�
         await desk2.set_level("A", 3, by="gina")
     bad["on"] = False
     await desk2.tick()
-    assert desk2.busy() == set() and t.stb.back == ["A"], "库好了:收完、派回程"
+    assert desk2.busy() == set() and t.stb.back == ["A"], "库完成:收完、派回程"
     assert not t.db.query("SELECT 1 FROM deter_sessions")
 
 
@@ -514,11 +514,11 @@ def test_复查_接口_解除没落进库回503_切级落库没成也是503(tmp_
 
     class 库坏了的台:
         async def release(self, rid, *, by):
-            raise DeterrenceError("声光已全关,但「解除」没落进库(站点重启可能恢复这一场):"
+            raise DeterrenceError("声光已全关,但「解除」未落进库(站点重启可能恢复这一场):"
                                   "稍后再按一次")
 
         async def set_level(self, rid, level, *, by):
-            raise DeterrenceError("落库没成,级别没改: 库锁住了")
+            raise DeterrenceError("落库失败,级别未改: 库锁住了")
     s = 站(tmp_path)
     try:
         s.api.deterrence = 库坏了的台()
@@ -541,12 +541,12 @@ async def test_外审3_切级落库没成_不改_自动升落库没成_下一拍
             raise RuntimeError("库锁住了")
         return real()
     monkeypatch.setattr(t.db, "tx", tx)
-    with pytest.raises(DeterrenceError, match="落库没成"):
+    with pytest.raises(DeterrenceError, match="落库失败"):
         await t.desk.set_level("A", 3, by="gina")
     assert t.desk.sessions["A"].level == 0 and t.desk.sessions["A"].auto is True
     t.clock.go(30)
     await t.desk.tick()
-    assert t.desk.sessions["A"].level == 0, "落库没成就不升"
+    assert t.desk.sessions["A"].level == 0, "落库失败就不升"
     bad["on"] = False
     await t.desk.tick()
     assert t.desk.sessions["A"].level == 1
@@ -559,7 +559,7 @@ async def test_外审3_开场落不了库_不开_照常回待命点(台, monkeyp
     monkeypatch.setattr(t.db, "tx", lambda: (_ for _ in ()).throw(RuntimeError("库锁住了")))
     _到了(t.disp)
     await asyncio.sleep(0.05)
-    assert t.desk.busy() == set() and t.stb.back == ["A"], "待命点那头没派回程:这里派"
+    assert t.desk.busy() == set() and t.stb.back == ["A"], "待命点那头未派回程:这里派"
 
 
 async def test_外审1_解除时每一路都发关_不信记录_保安手动开过的也关(台):
@@ -626,7 +626,7 @@ class 假告警台:
     def raise_alert(self, **kw):
         if self.fail:
             self.fail -= 1
-            raise RuntimeError("告警库写不进")
+            raise RuntimeError("告警库无法写入")
         self.raised.append(kw)
 
     def has_open(self, robot, kind):
@@ -707,7 +707,7 @@ async def test_W24_没看到过人_确认没人也不收_不知道也不收(台)
     await t.desk.tick()
     _人员(t, None)                                        # 不知道
     await t.desk.tick()
-    assert "A" in t.desk.sessions, "不知道不收"
+    assert "A" in t.desk.sessions, "未知不收"
 
 
 async def test_W24_人接手了_近不升_没人不收_只显示(台):
@@ -746,7 +746,7 @@ async def test_W24复查3_告警没报成_人马上走了_会话收了_告警照
     _人员(t, False)
     await t.desk.tick()                                   # 确认没人:收场
     assert "A" not in t.desk.sessions
-    assert len(t.desk.alerts.raised) == 1, "会话收了,没报成的告警照样报"
+    assert len(t.desk.alerts.raised) == 1, "会话收了,未上报成的告警照样报"
     assert t.desk.alerts.raised[0]["context"]["task_id"] == "incident-abc"
     assert not t.db.query("SELECT 1 FROM pending_alerts")
 
@@ -826,7 +826,7 @@ async def test_W24复查二2_真告警台_告警报成删待报没成_保安解�
     await t.desk.tick()
     monkeypatch.setattr(t.desk, "_flush_alerts", orig)
     [a] = t.desk.alerts.open()
-    assert len(t.db.query("SELECT 1 FROM pending_alerts")) == 1, "删待报没成"
+    assert len(t.db.query("SELECT 1 FROM pending_alerts")) == 1, "删待报失败"
     t.desk.alerts.resolve(a["key"], who="gina")           # 保安解决了
     desk2 = DeterrenceDesk(t.db, t.disp, now_ms=t.clock, standby=t.stb)   # 站点重启
     desk2.alerts = AlertDesk(t.db, now_ms=t.clock)
@@ -859,7 +859,7 @@ def _会守(t, *, fail=False, report=True, abort_fail=0):
         t.disp.aborts.append((rid, task_id))
         if left[0]:
             left[0] -= 1
-            raise RuntimeError("回执没到")
+            raise RuntimeError("回执未到达")
         return {"ack": {"result": "accepted"}}
     t.disp.standoff, t.disp.abort = standoff, abort
 
@@ -1034,7 +1034,7 @@ async def test_W25复查_升级前的旧会话_拦截点是空的_狗上旧任�
     assert desk2.sessions["A"].center == ""
     await desk2.release("A", by="gina")
     assert t.disp.aborts == [("A", "standoff-incident-abc")]
-    assert "A" in desk2.sessions and t.stb.back == [], "回执没到:不删,停在收尾中"
+    assert "A" in desk2.sessions and t.stb.back == [], "回执未到达:不删,停在收尾中"
     t.clock.go(15)
     await desk2.tick()
     assert "A" not in desk2.sessions and t.stb.back == ["A"] and len(t.disp.aborts) == 2
@@ -1101,7 +1101,7 @@ async def test_W33_就地驱离_狗空着_从L1开_拴绳中心是狗此刻的�
     t.clock.go(31)
     await t.desk.tick()
     assert t.desk.sessions["A"].level == 2, "照常每 30 秒升"
-    with pytest.raises(DeterrenceError, match="已经在驱离"):
+    with pytest.raises(DeterrenceError, match="正在驱离"):
         await t.desk.start_here("A", by="gina")
 
 
@@ -1122,7 +1122,7 @@ async def test_W33_就地驱离_有人在遥控_没上装_不知道在哪_都开
         await t.desk.start_here("A", by="gina")
     _在这儿(t)
     t.disp.clients["A"].telemetry = None
-    with pytest.raises(DeterrenceError, match="不知道在哪"):
+    with pytest.raises(DeterrenceError, match="位置未知"):
         await t.desk.start_here("A", by="gina")
     t.disp.clients["A"].capabilities.tasks.pop("deter")
     _在这儿(t)
@@ -1154,7 +1154,7 @@ def test_W33_接口_就地驱离_保安能开_管理员不能_狗上真开了灯
         code, d = s.req("POST", "/api/deterrence/A/start", {}, token=gina)
         assert code == 200 and d["session"]["level"] == 1, d
         _等(lambda: s.dog.deter_on("strobe") and s.dog.deter_on("spotlight"))
-        assert s.req("POST", "/api/deterrence/A/start", {}, token=gina)[0] == 400, "已经在驱离"
+        assert s.req("POST", "/api/deterrence/A/start", {}, token=gina)[0] == 400, "已在驱离"
         acts = [(r["actor"], r["action"]) for r in s.api.audit.list()]
         assert ("gina", "POST /api/deterrence/A/start") in acts
     finally:
@@ -1171,7 +1171,7 @@ async def test_W33外审1_撤巡检被拒或超时_每拍接着撤_撤成之前�
     async def 撤不掉(rid, tid, *, issued_by):
         tries.append(tid)
         if how == "timeout":
-            raise TimeoutError("回执没到")
+            raise TimeoutError("回执未到达")
         return {"ack": {"result": "rejected", "reason": "busy"}}
     t.disp.abort = 撤不掉
     await t.desk.start_here("A", by="gina")
@@ -1189,7 +1189,7 @@ async def test_W33外审1_撤巡检被拒或超时_每拍接着撤_撤成之前�
     await again.tick()
     row = t.db.query("SELECT withdraw, level_ms FROM deter_sessions")[0]
     assert again.sessions["A"].withdraw == "" and row["withdraw"] == ""
-    assert row["level_ms"] == t.clock(), "停下了:升级从这一刻起算(落库,重启也照这个)"
+    assert row["level_ms"] == t.clock(), "停下了:升级从这一刻起算(落库,重启也照此)"
     t.clock.go(31)
     await again.tick()
     assert again.sessions["A"].level == 2, "停下了:照常升"
@@ -1235,7 +1235,7 @@ async def test_W33复查1_没撤成_有人靠近也不升L3_不开警笛_撤成�
         "state": "ok", "present": True, "near": True, "count": 1, "nearest_m": 3.0}
     t.clock.go(5)
     await t.desk.tick()
-    assert t.desk.sessions["A"].level == 1, "旧巡检还在跑:人靠近也不自动升"
+    assert t.desk.sessions["A"].level == 1, "旧巡检还正在运行:人靠近也不自动升"
     assert not any(p.get("output") == "siren" and p.get("on") for _, p, _ in t.disp.sent)
     t.disp.clients["A"].status.task = None               # 终于停了
     t.clock.go(5)
@@ -1270,7 +1270,7 @@ async def test_W33复查3_状态不新鲜_空的task不算撤成_接着撤(台):
     t.disp.clients["A"].status.task = None
     t.clock.go(5)
     await t.desk.tick()
-    assert t.desk.sessions["A"].withdraw == "sched-1" and len(tries) >= 2, "说不清:接着撤"
+    assert t.desk.sessions["A"].withdraw == "sched-1" and len(tries) >= 2, "无法确定:接着撤"
     t.disp.clients["A"].status.online = False
     t.clock.go(5)
     await t.desk.tick()
@@ -1345,7 +1345,7 @@ async def test_警笛没发出去_不算开着_续不上过了保持时间也不
     _到了(t.disp)
     t.disp.fail = True
     v = await t.desk.set_level("A", 3, by="gina")
-    assert v["level"] == 3 and v["active"] == [], "级别到了 3,但机器人没收到:不说开着"
+    assert v["level"] == 3 and v["active"] == [], "级别到了 3,但机器人未收到:不说开着"
     t.disp.fail = False
     await t.desk.tick()
     assert "siren" in t.desk.view()[0]["active"]
@@ -1353,7 +1353,7 @@ async def test_警笛没发出去_不算开着_续不上过了保持时间也不
     t.clock.go(44.9)
     assert "siren" in t.desk.view()[0]["active"]
     t.clock.go(0.1)
-    assert t.desk.view()[0]["active"] == [], "保持时间(45 秒)到了没续上:不再说开着"
+    assert t.desk.view()[0]["active"] == [], "保持时间(45 秒)到了未续上:不再说开着"
 
 
 async def test_狗没装警笛_给人看的说得出来_能力不知道是None(tmp_path):
@@ -1367,7 +1367,7 @@ async def test_狗没装警笛_给人看的说得出来_能力不知道是None(t
     v = await desk.set_level("A", 3, by="gina")
     assert v["outputs"] == ["speaker", "strobe"] and "siren" not in v["active"]
     disp.clients["A"].capabilities = None
-    assert desk.view()[0]["outputs"] is None, "机器人的能力还没报上来:不知道,不是没有"
+    assert desk.view()[0]["outputs"] is None, "机器人的能力尚未报上来:未知,不是没有"
     del disp.clients["A"]
     assert desk.view()[0]["outputs"] is None
     db.close()
@@ -1384,7 +1384,7 @@ async def test_警笛开成了_续开没成_马上不算开着_下一拍重发_�
     assert "siren" in v["active"]
     t.clock.go(19.9)
     await t.desk.tick()
-    assert "siren" in t.desk.view()[0]["active"], "还没到续的时候:照旧"
+    assert "siren" in t.desk.view()[0]["active"], "尚未到续的时候:照旧"
     t.clock.go(0.1)                                     # 20 秒:该续了,这一次狗没做
     if how == "rejected":
         t.disp.reject = {"siren"}

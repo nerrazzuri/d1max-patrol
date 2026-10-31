@@ -61,7 +61,7 @@ class ObsBridgeServer:
     async def start(self) -> None:
         if self.path.exists() or self.path.is_symlink():
             if not stat.S_ISSOCK(os.lstat(self.path).st_mode):
-                raise FileExistsError(f"{self.path} 已经有了,而且不是套接字:不动它")
+                raise FileExistsError(f"{self.path} 已存在,而且不是套接字:不动它")
             self.path.unlink()
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._server = await asyncio.start_unix_server(self._on_conn, str(self.path),
@@ -80,7 +80,7 @@ class ObsBridgeServer:
     def tick(self) -> None:
         """每拍:感知没声太久就当它断了。"""
         if self._writer is not None and self._now() - self._heard > HB_DEAD_S:
-            self._drop(f"{self.PEER} {self._now() - self._heard:.1f} 秒没声,当它断了")
+            self._drop(f"{self.PEER} {self._now() - self._heard:.1f} 秒无响应,视为已断开")
 
     @staticmethod
     def _peer_uid(writer: asyncio.StreamWriter) -> int | None:
@@ -134,13 +134,13 @@ class ObsBridgeServer:
             writer.close()
             return
         if self._busy():
-            self._refuse(writer, f"已经有一个{self.PEER}连着")
+            self._refuse(writer, f"已有一个{self.PEER}连着")
             return
         try:
             first = await asyncio.wait_for(reader.readline(), HELLO_TIMEOUT_S)
             hello = self.BRIDGE.parse(first) if first else None
         except (asyncio.TimeoutError, ValueError, ContractError, ConnectionError, OSError) as exc:
-            self._refuse(writer, f"握手不对:{exc}"[:200])
+            self._refuse(writer, f"握手失败:{exc}"[:200])
             return
         if not isinstance(hello, self.BRIDGE.Hello) or hello.proto != self.BRIDGE.PROTO:
             self._refuse(writer, f"第一行要是 hello(协议版本 {self.BRIDGE.PROTO})")
@@ -151,9 +151,9 @@ class ObsBridgeServer:
             self._refuse(writer, why)
             return
         if self._busy():
-            self._refuse(writer, f"已经有一个{self.PEER}连着")
+            self._refuse(writer, f"已有一个{self.PEER}连着")
             return
-        self._drop(f"新的{self.PEER}连上来了,旧的没声了")
+        self._drop(f"新的{self.PEER}连上来了,旧的无响应")
         self._writer, self._heard, self._seq = writer, self._now(), 0
         try:
             writer.write(self._hello_reply(hello, writer))
@@ -191,7 +191,7 @@ class ObsBridgeServer:
                     self._other(msg)
         finally:
             if self._writer is writer:
-                self._drop(f"{self.PEER}断开了")
+                self._drop(f"{self.PEER}已断开")
 
     def _hello_reply(self, hello: Any, writer: asyncio.StreamWriter) -> bytes:
         """回给对端的 hello(子类可以加东西,比如跨板人员桥的签名)。"""

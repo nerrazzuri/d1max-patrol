@@ -50,7 +50,7 @@ async def 等一拍(eng: MissionEngine, *, timeout_s: float = 2.0) -> None:
     deadline = asyncio.get_running_loop().time() + timeout_s
     while not eng._queue.empty():
         if asyncio.get_running_loop().time() > deadline:
-            raise AssertionError("引擎没把队列吃完")
+            raise AssertionError("引擎未把队列吃完")
         await asyncio.sleep(0)
 
 
@@ -184,7 +184,7 @@ async def 跑起来的引擎_喂过位姿(跑起来的引擎, device):
     deadline = asyncio.get_running_loop().time() + 2.0
     while eng._live is None or eng._live.last_pose is None:
         if asyncio.get_running_loop().time() > deadline:
-            raise AssertionError("位姿没被引擎收到")
+            raise AssertionError("位姿未被引擎收到")
         await asyncio.sleep(0)
     return eng
 
@@ -351,7 +351,7 @@ async def test_挂起期间位姿事件不逐条落盘(跑起来的引擎, devic
     while (eng._live is None or eng._live.last_pose is None
            or eng._live.last_pose.position.x != float(N - 1)):
         if asyncio.get_running_loop().time() > deadline:
-            raise AssertionError("位姿事件没被引擎收完")
+            raise AssertionError("位姿事件未被引擎收完")
         await asyncio.sleep(0)
     # 队列是单消费者、严格 FIFO:最后一条位姿(i = N - 1)已经被处理完,
     # 说明它之前排队的每一条电量事件也早处理完了,不用再单独等一拍。
@@ -372,14 +372,14 @@ async def test_busy_check炸了当成busy不放行(跑起来的引擎):
     eng = 跑起来的引擎
 
     def 租约簿还没接好() -> str:
-        raise RuntimeError("租约簿还没初始化")
+        raise RuntimeError("租约簿尚未初始化")
 
     eng.add_busy_check(租约簿还没接好)
     await eng.suspend("人来开")
     await eng.wait_state(RunState.SUSPENDED)
     await eng.resume()
     await 等一拍(eng)
-    assert eng.state is RunState.SUSPENDED, "回调炸了不许被当成没人占用"
+    assert eng.state is RunState.SUSPENDED, "回调炸了不许被当成无人占用"
     assert "安全检查出错" in eng.snapshot.reason
     assert "RuntimeError" in eng.snapshot.reason
     assert "租约簿还没接好" in eng.snapshot.reason
@@ -401,7 +401,7 @@ async def _等到拒绝(engine: MissionEngine, timeout_s: float = 2.0) -> list[d
         if found:
             return found
         if asyncio.get_running_loop().time() > deadline:
-            raise AssertionError("没等到 suspend_refused")
+            raise AssertionError("未等到 suspend_refused")
         await asyncio.sleep(0)
 
 
@@ -560,7 +560,7 @@ async def test_接管完狗不在地图里点继续会报错(跑起来的引擎,
     await until(lambda: "不在地图里" in eng.snapshot.reason)
     # 状态不许离开 SUSPENDED —— 报错不等于中止,人还能补救
     assert eng.state is RunState.SUSPENDED
-    assert "找不到下一个点" in eng.snapshot.reason
+    assert "未找到下一个点" in eng.snapshot.reason
 
 
 async def test_接管完狗还在地图里点继续就接着跑(跑起来的引擎, nav):
@@ -633,7 +633,7 @@ async def test_继续之后规划不出路的话跟不在地图里说的不一�
     await engine.wait_done(timeout_s=5.0)
 
     assert engine.state is RunState.ABORTED
-    assert "到不了下一个点" in engine.snapshot.reason
+    assert "无法到达下一个点" in engine.snapshot.reason
     assert "不在地图里" not in engine.snapshot.reason
     await engine.aclose()
 
@@ -750,7 +750,7 @@ async def test_那张表现在是空的_但闸一分没少(表里塞回一项, �
     闸立刻生效。
     """
     assert _SUSPEND_UNSAFE_STATES == {RunState.LOCALIZING: 表里塞回一项}, \
-        "除了这条用例自己塞回去的那一项,表里不该再有别的"
+        "除了此条用例自己塞回去的那一项,表里不该再有别的"
     eng = 重定位中的引擎
     await eng.suspend("试试")
     await until(lambda: 表里塞回一项 in eng.snapshot.reason)
@@ -783,7 +783,7 @@ async def test_重定位中先按暂停再点让开腿_这道闸照样拦得住(
     await eng.suspend("门口有箱子")
     拒绝 = await _等到拒绝(eng)
     await 等一拍(eng)
-    assert eng.state is RunState.PAUSED, "从暂停这条侧门被绕进了 SUSPENDED"
+    assert eng.state is RunState.PAUSED, "从暂停此条侧门被绕进了 SUSPENDED"
     assert 拒绝[-1]["reason"] == 表里塞回一项
     # 记「暂停之前在重定位」而不是「现在是 PAUSED」:记成 PAUSED 的话,事后
     # 翻 events.jsonl 的人会看到一条"因为暂停所以不能挂起"的胡话。
@@ -839,12 +839,12 @@ async def test_返航中暂停再让开腿再继续_也重新规划回原点(返
     await eng.wait_state(RunState.SUSPENDED)
     点 = eng.snapshot.suspended_at
     assert 点 is not None
-    assert 点.from_state is RunState.PAUSED, "侧门这一幕的前提没摆出来"
+    assert 点.from_state is RunState.PAUSED, "侧门这一幕的前提未摆出来"
     nav.清空下发记录()
 
     await eng.resume()
     await until(lambda: nav.下发过的目标点)
-    assert nav.下发过的目标点[-1] == 原点, "没重新规划回原点"
+    assert nav.下发过的目标点[-1] == 原点, "未重新规划回原点"
     # 中止是立刻发生的(``_do_abort`` 里没有等待),给半秒的窗口足够看清。
     with pytest.raises((TimeoutError, asyncio.TimeoutError)):
         await eng.wait_done(timeout_s=0.5)
@@ -875,7 +875,7 @@ async def test_返航还没发出去就让开腿_继续之后照样发得出去(
         await eng.wait_state(RunState.RETURNING)
         await eng.suspend("门口有箱子")
         await eng.wait_state(RunState.SUSPENDED)
-        assert nav.home_calls == 0, "停靠点站错了:return_home 已经发出去了"
+        assert nav.home_calls == 0, "停靠点站错了:return_home 已发出去了"
         assert eng.snapshot.suspended_at is not None
 
         nav.nav = NavStatus.STANDBY                  # 人挪完了,导航也回落了
@@ -946,7 +946,7 @@ async def test_同一趟返航里反复短接管_挂起时长会累计(返航中
         await until(lambda: nav.下发过的目标点)      # 重新规划回原点了
         await until(lambda: eng.state is RunState.RETURNING)
 
-    assert 记下的[0] == 0, "第一次让开腿之前这一趟还没挂起过"
+    assert 记下的[0] == 0, "第一次让开腿之前本次任务尚未挂起过"
     # ``>=`` 而不是 ``==``:累计量是拿 ``clock()`` 的差算的,里面还夹着真
     # monotonic 走掉的那几毫秒。上界拦的是"多加了一圈"这种错。
     assert 4 * 60_000 <= 记下的[1] < 5 * 60_000, 记下的
@@ -974,7 +974,7 @@ async def test_新一趟返航开始时挂起累计清零(make_engine, nav, devi
         await eng.resume()
         await until(lambda: eng.state is RunState.RUNNING)
         assert eng._live.suspend_total_ms >= 4 * 60_000, \
-            "这一次接管压根没记账,下面那个 0 是恒真的空话"
+            "这一次接管压根未记账,下面那个 0 是恒真的空话"
 
         device.emit(BatteryEvent(percent=20.0))      # 返航线 25,中止线 15
         await eng.wait_state(RunState.RETURNING)
@@ -1021,7 +1021,7 @@ async def test_跨趟真的不带账(make_engine, nav, device, clock):
         await eng.resume()
         await until(lambda: eng.state is RunState.RUNNING)
         assert eng._live.suspend_total_ms >= 4 * 60_000, \
-            "第一趟压根没记上账,后面那个 0 就没什么好证明的"
+            "第一趟压根未记上账,后面那个 0 就没有什么好证明的"
         await eng.abort("第一趟收尾")
         await eng.wait_done(timeout_s=5.0)
 
@@ -1177,7 +1177,7 @@ async def test_引擎给的现在和挂起时刻能直接相减(make_engine, nav
     nav.on_goto = NEVER
     墙钟 = _假墙钟(1_757_000_000_000)
     eng = make_engine(wall_ms=墙钟)
-    assert eng.now_ms() == 墙钟.ms, "没在跑的时候该直接回墙钟"
+    assert eng.now_ms() == 墙钟.ms, "未运行的时候该直接回墙钟"
 
     await eng.start(make_mission(), home=_HOME)
     try:
@@ -1227,7 +1227,7 @@ async def test_等定位时按暂停再继续_整趟还能跑完(等定位收敛
     # ABORTED。等"其中之一发生"才能让红的那一次报出真实原因,而不是超时。
     await until(lambda: eng.state is RunState.LOCALIZING or not eng.running)
     assert eng.state is RunState.LOCALIZING, \
-        f"继续之后没回到「接着等定位」: {eng.state.value} / {eng.snapshot.reason}"
+        f"继续之后未返回到「接着等定位」: {eng.state.value} / {eng.snapshot.reason}"
 
     nav.emit_loc(LocStatus.CONTINUOUS_LOC)           # 定位收敛了
     assert await eng.wait_done(timeout_s=5.0) is RunState.DONE, eng.snapshot.reason
@@ -1297,7 +1297,7 @@ async def test_等定位时让开腿再继续_整趟还能跑完(等定位收敛
     await eng.resume()
     await until(lambda: eng.state is RunState.LOCALIZING or not eng.running)
     assert eng.state is RunState.LOCALIZING, \
-        f"接管完没回到「接着等定位」: {eng.state.value} / {eng.snapshot.reason}"
+        f"接管完未返回到「接着等定位」: {eng.state.value} / {eng.snapshot.reason}"
 
     nav.emit_loc(LocStatus.CONTINUOUS_LOC)
     assert await eng.wait_done(timeout_s=5.0) is RunState.DONE, eng.snapshot.reason

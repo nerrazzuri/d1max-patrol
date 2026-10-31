@@ -134,10 +134,10 @@ class MapCatalog:
             check_name(version, "版本")
             check_name(rel, "文件名")
         except (ValueError, ContractError) as exc:
-            raise PathRefused(f"地图的路径不对:{run!r}/{rel!r}") from exc
+            raise PathRefused(f"地图的路径错误:{run!r}/{rel!r}") from exc
         if not self._build_issued(robot_id, map_id, version):
             # 只收站点让它建的那张(W00c5d 内部评审:不然随便哪台登记过的狗都能塞一张图进目录)。
-            raise PathRefused(f"站点没让 {robot_id} 建 {map_id}:{version}")
+            raise PathRefused(f"站点未让 {robot_id} 建 {map_id}:{version}")
         path = safe_join(self.incoming, robot_id, map_id, version, rel)
         got = self.writer.write(path, offset=offset, data=data, total=total)
         # 收完一个文件:记下收块时算好的整个文件的哈希(狗也拿它核过),登记时不再重算(W09c 决定 9);
@@ -196,7 +196,7 @@ class MapCatalog:
             check_name(run, "包名")
             check_name(rel, "文件名")
         except ContractError as exc:
-            raise PathRefused(f"录包的路径不对:{run!r}/{rel!r}") from exc
+            raise PathRefused(f"录包的路径错误:{run!r}/{rel!r}") from exc
         path = safe_join(self.bags_root, robot_id, run, rel)
         got = self.writer.write(path, offset=offset, data=data, total=total)
         if got.size >= total:
@@ -214,7 +214,7 @@ class MapCatalog:
         rows = self.db.query("SELECT files FROM maps WHERE map_id=? AND version=?",
                              (map_id, version))
         if not rows:
-            raise MapError(f"没有这张图:{map_id}:{version}")
+            raise MapError(f"地图不存在:{map_id}:{version}")
         return MapRef.from_wire({"map_id": map_id, "version": version,
                                  "files": json.loads(rows[0]["files"])})
 
@@ -226,7 +226,7 @@ class MapCatalog:
         except ContractError as exc:
             raise MapError(str(exc)) from exc
         if name not in {f.name for f in ref.files}:
-            raise MapError(f"这张图里没有 {name}")
+            raise MapError(f"此地图里没有 {name}")
         return self.root / map_id / version / name
 
     def preview(self, map_id: str, version: str,
@@ -292,7 +292,7 @@ class MapCatalog:
         d = self.root / map_id / version
         yamls = sorted(n for n in names if n.endswith(".yaml"))
         if not yamls:
-            raise mp.NoRaster(f"{map_id}:{version} 没有栅格(.yaml + .pgm),没法预览")
+            raise mp.NoRaster(f"{map_id}:{version} 没有栅格(.yaml + .pgm),无法预览")
         yp = d / yamls[0]
         yst = yp.stat()
         if yst.st_size > mp.MAX_YAML_BYTES:
@@ -300,7 +300,7 @@ class MapCatalog:
         meta = mp.parse_map_yaml(yp.read_text("utf-8", errors="replace"))
         image = Path(meta["image"]).name
         if image not in names:
-            raise mp.PreviewError(f"{yamls[0]} 说图是 {image},这张图里没有它")
+            raise mp.PreviewError(f"{yamls[0]} 说图是 {image},此地图里没有它")
         ip = d / image
         try:
             with open(ip, "rb") as fh:
@@ -386,7 +386,7 @@ class MapCatalog:
                 return (f"{name} 离建图时走过的地方 {gap:.1f} m(超过 {COVERAGE_RADIUS_M:g} m),"
                         "那里定位不可靠:先把那里建进图")
             if not free(x, y):
-                return f"{name} 在图上不是可通行的地方(墙、障碍或没扫到)"
+                return f"{name} 在图上不是可通行的地方(墙、障碍或未扫到)"
         return ""
 
     def _reach(self, map_id: str, version: str) -> tuple[Coverage, Callable[[float, float], bool]
@@ -416,16 +416,16 @@ class MapCatalog:
                 meta = mp.parse_map_yaml((d / "floor.yaml").read_text("utf-8"))
                 image = Path(meta["image"]).name
                 if image not in names:
-                    raise MapError(f"floor.yaml 说图是 {image},这一版里没有它")
+                    raise MapError(f"floor.yaml 说图是 {image},此版本里没有它")
                 with open(d / image, "rb") as fh:
                     limit = mp.pgm_limit(fh.read(4096))
                 if (d / image).stat().st_size > limit:
                     raise MapError(f"{image} 比头里说的大")
                 w, h, px = mp.parse_pgm((d / image).read_bytes())
             except MapError as exc:
-                raise MapError(f"{map_id}:{version} 的「哪里有图」读不了:{exc}") from exc
+                raise MapError(f"{map_id}:{version} 的「哪里有图」无法读取:{exc}") from exc
             except (OSError, ValueError, ContractError, mp.PreviewError) as exc:
-                raise MapError(f"{map_id}:{version} 的 coverage.json / 栅格读不了:{exc}") from exc
+                raise MapError(f"{map_id}:{version} 的 coverage.json / 栅格无法读取:{exc}") from exc
             ox, oy = meta["origin"]
             res = meta["resolution"]
             # map_server 的判法:占据概率 = (255 - 灰度) / 255(negate 反过来),低于 free_thresh 才算空
@@ -495,7 +495,7 @@ class MapCatalog:
             if not p.is_file() or p.stat().st_size < f.size:
                 return None                        # 还没收齐(还在传)
             if p.stat().st_size != f.size or _digest_of(p) != f.sha256:
-                raise MapError(f"{robot_id} 传来的 {map_id}:{version} 里 {f.name} 跟清单对不上")
+                raise MapError(f"{robot_id} 传来的 {map_id}:{version} 里 {f.name} 与清单不匹配")
         with self._lock:
             dst = self._fresh_dir(map_id, version)
             tmp = dst.with_name(dst.name + ".taking")
@@ -524,7 +524,7 @@ class MapCatalog:
         dst = self.root / map_id / version
         if dst.exists() or self.db.query("SELECT 1 FROM maps WHERE map_id=? AND version=?",
                                          (map_id, version)):
-            raise MapError(f"{map_id}:{version} 已经有了;换一个版本号(机器人上可能正用着它)")
+            raise MapError(f"{map_id}:{version} 已存在;换一个版本号(机器人上可能正用着它)")
         dst.parent.mkdir(parents=True, exist_ok=True)
         return dst
 
@@ -544,7 +544,7 @@ class MapCatalog:
             n = c.execute("UPDATE maps SET note=? WHERE map_id=? AND version=?",
                           (note, map_id, version)).rowcount
         if not n:
-            raise MapError(f"没有这张图:{map_id}:{version}")
+            raise MapError(f"地图不存在:{map_id}:{version}")
         return note
 
     def build_info(self, map_id: str, version: str) -> dict[str, Any] | None:
@@ -590,7 +590,7 @@ class MapCatalog:
             rows = self.db.query("SELECT files FROM maps WHERE map_id=? AND version=?",
                                  (map_id, version))
             if not rows:
-                raise MapError(f"没有这张图:{map_id}:{version}")
+                raise MapError(f"地图不存在:{map_id}:{version}")
             try:
                 size = sum(int(f.get("size", 0)) for f in json.loads(rows[0]["files"]))
             except (ValueError, AttributeError, TypeError):

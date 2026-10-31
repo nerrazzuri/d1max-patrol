@@ -63,19 +63,19 @@ async def test_零样本_不派_goto_巡检_遥控_视频_监护_换图(台):
     await t.run(3)
     _no_samples(t)
     assert t.site.clock_skew_s("A") is None
-    with pytest.raises(DispatchRefused, match="钟差还不知道"):
+    with pytest.raises(DispatchRefused, match="钟差未知"):
         await t.site.goto("A", target(1.0), 0.8, issued_by="alice")
-    assert "钟差还不知道" in t.site.dispatchable("A", "patrol")
-    with pytest.raises(DispatchRefused, match="钟差还不知道"):
+    assert "钟差未知" in t.site.dispatchable("A", "patrol")
+    with pytest.raises(DispatchRefused, match="钟差未知"):
         await t.site.teleop_grant("A", lease_epoch=1, operator="gina", lease_ttl_ms=1500,
                                   issued_by="gina")
-    with pytest.raises(DispatchRefused, match="钟差还不知道"):
+    with pytest.raises(DispatchRefused, match="钟差未知"):
         await t.site.teleop_lease("A", TeleopLease(action="renew", lease_epoch=1,
                                                    lease_ttl_ms=1500), timeout_s=1.0)
-    with pytest.raises(DispatchRefused, match="钟差还不知道"):
+    with pytest.raises(DispatchRefused, match="钟差未知"):
         await t.site.video("A", VideoRequest(camera="front", url="srt://x", passphrase="p" * 16,
                                              ttl_ms=10_000), timeout_s=1.0)
-    with pytest.raises(DispatchRefused, match="钟差还不知道"):
+    with pytest.raises(DispatchRefused, match="钟差未知"):
         await t.site.supervise("A", Supervise(action="renew", ttl_ms=3000, operator="gina",
                                               session="s", seq=1), timeout_s=1.0)
     caps = t.site.clients["A"].capabilities
@@ -83,7 +83,7 @@ async def test_零样本_不派_goto_巡检_遥控_视频_监护_换图(台):
         caps.tasks.setdefault(kind, {})
     for kind, payload in (("map_activate", {}), ("mapping", {"action": "start"}),
                           ("release_install", {}), ("relocalize", {}), ("mark_home", {})):
-        with pytest.raises(DispatchRefused, match="钟差还不知道"):
+        with pytest.raises(DispatchRefused, match="钟差未知"):
             await t.site.map_command("A", kind, payload, issued_by="alice")
 
 
@@ -95,7 +95,7 @@ async def test_狗慢样本不够10条_不派_够了恢复(台):
     for _ in range(5):
         _tele(t, -500)                                   # 狗慢 0.5 s
     assert t.site.clock_skew_s("A") is None
-    with pytest.raises(DispatchRefused, match="钟差还不知道"):
+    with pytest.raises(DispatchRefused, match="钟差未知"):
         await t.site.goto("A", target(1.0), 0.8, issued_by="alice")
     for _ in range(5):
         _tele(t, -500)
@@ -116,7 +116,7 @@ async def test_样本超过60秒失效_状态还新鲜_不派(台):
     await t.broker.drain()
     assert t.site.is_stale("A") is False
     assert t.site.clock_skew_s("A") is None
-    with pytest.raises(DispatchRefused, match="钟差还不知道"):
+    with pytest.raises(DispatchRefused, match="钟差未知"):
         await t.site.goto("A", target(1.0), 0.8, issued_by="alice")
 
 
@@ -178,7 +178,7 @@ async def test_门槛按这条命令的有效期_授予几秒_狗慢10秒就拒_
     for _ in range(10):
         _tele(t, -10_000)
     assert t.site.clock_skew_s("A") == pytest.approx(-10.0)
-    with pytest.raises(DispatchRefused, match=r"钟差 -10 秒:这条命令的有效期 7 秒"):
+    with pytest.raises(DispatchRefused, match=r"钟差 -10 秒:此条命令的有效期 7 秒"):
         await t.site.teleop_grant("A", lease_epoch=1, operator="gina", lease_ttl_ms=1500,
                                   issued_by="gina")
     r = await t.send(t.site.goto("A", target(1.0), 0.8, issued_by="alice"))

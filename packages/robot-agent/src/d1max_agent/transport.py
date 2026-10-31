@@ -39,12 +39,12 @@ class GuardedTransport:
     async def publish(self, topic: str, payload: bytes, *, qos: int = 1,
                       retain: bool = False) -> None:
         if not self._acl.may_publish(topic):
-            raise PermissionError(f"这台机器人不许发到 {topic}")
+            raise PermissionError(f"此机器人不许发到 {topic}")
         await self._inner.publish(topic, payload, qos=qos, retain=retain)
 
     async def subscribe(self, topic_filter: str, handler: Handler, *, qos: int = 1) -> None:
         if not self._acl.may_subscribe(topic_filter):
-            raise PermissionError(f"这台机器人不许订 {topic_filter}")
+            raise PermissionError(f"此机器人不许订 {topic_filter}")
         await self._inner.subscribe(topic_filter, handler, qos=qos)
 
     def on_connection(self, cb: ConnectionCallback) -> None:

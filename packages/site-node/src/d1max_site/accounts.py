@@ -226,7 +226,7 @@ class Accounts:
     @staticmethod
     def _check_password(password: str) -> None:
         if not isinstance(password, str) or len(password) < MIN_PASSWORD:
-            raise AuthError(f"口令至少 {MIN_PASSWORD} 个字符")
+            raise AuthError(f"密码至少 {MIN_PASSWORD} 个字符")
 
     def list(self) -> list[dict]:
         now = self._now()
@@ -267,7 +267,7 @@ class Accounts:
             row = self._get(c, name)
             if row["role"] == ENGINEER and (role is not None or password is not None
                                             or disabled is False):
-                raise AuthError("工程师临时账号只能提前关或删,不能改角色、口令,也不能再打开")
+                raise AuthError("工程师临时账号只能提前关或删,不能改角色、密码,也不能再打开")
             new_role = role if role is not None else row["role"]
             new_disabled = disabled if disabled is not None else bool(row["disabled"])
             was_admin = row["role"] == "admin" and not row["disabled"]
@@ -384,11 +384,11 @@ class Accounts:
                 self._fails[name] = []
         rows = self.db.query("SELECT salt, pw_hash FROM accounts WHERE name=?", (name,))
         if not rows:
-            raise AuthError("账号或口令不对")
+            raise AuthError("账号或密码错误")
         with self._hash_slots:
             ok = hmac.compare_digest(_hash(old, rows[0]["salt"]), rows[0]["pw_hash"])
         if not ok:
-            raise AuthError("旧口令不对")
+            raise AuthError("旧密码错误")
         with self._lock:
             self._fails.pop(name, None)
             self._locked_until.pop(name, None)
@@ -420,7 +420,7 @@ class Accounts:
         ok = hmac.compare_digest(digest, stored) and bool(rows) and not rows[0]["disabled"] \
             and (rows[0]["expires_ms"] is None or now < rows[0]["expires_ms"])
         if not ok:
-            raise AuthError("账号或口令不对")
+            raise AuthError("账号或密码错误")
         with self._lock:
             # 成功:这个名字的失败计数与锁都清掉(占位的那次也算不上失败)。
             self._fails.pop(name, None)

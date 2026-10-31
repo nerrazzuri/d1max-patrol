@@ -54,7 +54,7 @@ async def test_协议9_hello说要令牌():
         await b.connect()
         try:
             assert b.hello.auth is True and b.hello.proto == PROTO_VERSION
-            assert not b.authorized, "没给令牌:只读"
+            assert not b.authorized, "未提供令牌:只读"
         finally:
             await b.close()
 
@@ -75,7 +75,7 @@ async def test_没认证的连接_开不了车_停车急停照收(tmp_path):
             await b.halt()
             await b.emergency_stop(True)
             assert sim.estop_software.value == "Stop", "急停按下去了"
-            assert sim.distance == 0.0 and sim.motion.value == "LieDown", "机器人一下没动"
+            assert sim.distance == 0.0 and sim.motion.value == "LieDown", "机器人一下未动"
         finally:
             await b.close()
 
@@ -101,7 +101,7 @@ async def test_令牌不对_连接就抛_不留半条链路(tmp_path):
     async with _sim() as sim:
         b = SidecarDeviceBackend("127.0.0.1", sim.port, ack_timeout_s=2.0,
                                  token_file=_token_file(tmp_path, "cd" * 32))
-        with pytest.raises(DeviceBackendError, match="认证没过") as ei:
+        with pytest.raises(DeviceBackendError, match="认证未通过") as ei:
             await b.connect()
         assert TOKEN not in str(ei.value), "报错里不带旁路进程的令牌"
         assert not b.connected and not b.authorized
@@ -181,7 +181,7 @@ async def test_老代理认3到8_连9号旁路进程握手就拒(monkeypatch):
     monkeypatch.setattr(sidecar_device, "PROTO_VERSION", 8)
     async with _sim() as sim:
         b = SidecarDeviceBackend("127.0.0.1", sim.port, ack_timeout_s=2.0)
-        with pytest.raises(DeviceBackendError, match="协议版本对不上"):
+        with pytest.raises(DeviceBackendError, match="协议版本不匹配"):
             await b.connect()
 
 

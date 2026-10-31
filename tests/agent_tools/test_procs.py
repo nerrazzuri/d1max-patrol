@@ -83,8 +83,8 @@ async def test_没写环境变量的进程也拿得到PATH(mgr):
 
 
 async def test_起不来的命令报得出是哪个(mgr):
-    with pytest.raises(ProcError, match="没这个命令"):
-        await mgr.start(ProcSpec("没这个命令", ("d1max-绝对不存在的可执行文件",)))
+    with pytest.raises(ProcError, match="未此命令"):
+        await mgr.start(ProcSpec("未此命令", ("d1max-绝对不存在的可执行文件",)))
     assert mgr.running() == []
 
 
@@ -137,7 +137,7 @@ async def test_就绪判据是正则(mgr):
 
 async def test_重名的进程被拒(mgr):
     await mgr.start(ProcSpec("dup", _py("import time;time.sleep(30)")))
-    with pytest.raises(ProcError, match="已经在跑"):
+    with pytest.raises(ProcError, match="已在运行"):
         await mgr.start(ProcSpec("dup", _py("import time;time.sleep(30)")))
 
 
@@ -185,7 +185,7 @@ async def test_停的信号可以指定_在线建图的_MOLA_只认_SIGINT(mgr, 
 
 
 async def test_停一个不认识的名字不会炸(mgr):
-    await mgr.stop("从来没起过")
+    await mgr.stop("从来未起过")
 
 
 async def test_stop_all_把所有都收掉(mgr):
@@ -251,7 +251,7 @@ async def test_先好好说再动手(mgr):
 
 async def test_等一个不认识的名字会说清楚(mgr):
     with pytest.raises(ProcError, match="没有叫"):
-        await mgr.wait("从来没起过")
+        await mgr.wait("从来未起过")
 
 
 async def test_等超时了抛而不是永远挂着(mgr):
@@ -293,8 +293,8 @@ async def test_tail_在进程退了之后收尾(mgr):
 
 
 async def test_日志目录不存在会自己建(tmp_path):
-    ProcManager(tmp_path / "还没有" / "这一层")
-    assert (tmp_path / "还没有" / "这一层").is_dir()
+    ProcManager(tmp_path / "尚无" / "这一层")
+    assert (tmp_path / "尚无" / "这一层").is_dir()
 
 
 async def test_进程管理不认识ROS也不认识建图():

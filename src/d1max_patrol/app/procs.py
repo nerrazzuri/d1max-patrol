@@ -132,7 +132,7 @@ class ProcManager:
         """
         self._reap()
         if spec.name in self._procs:
-            raise ProcError(f"进程 {spec.name!r} 已经在跑了")
+            raise ProcError(f"进程 {spec.name!r} 已在运行了")
 
         log = self.log_path(spec.name)
         handle = log.open("wb")
@@ -174,12 +174,12 @@ class ProcManager:
                 return
             if entry.proc.returncode is not None:
                 raise ProcError(
-                    f"{entry.spec.name!r} 还没就绪就退了(returncode="
+                    f"{entry.spec.name!r} 尚未就绪就退了(returncode="
                     f"{entry.proc.returncode}),日志见 {entry.log}")
             if time.monotonic() >= deadline:
                 raise ProcError(
                     f"等 {entry.spec.name!r} 就绪超时("
-                    f"{entry.spec.ready_timeout_s:g}s 没等到 "
+                    f"{entry.spec.ready_timeout_s:g}s 未等到 "
                     f"{entry.spec.ready_pattern!r}),日志见 {entry.log}")
             await asyncio.sleep(_POLL_S)
 

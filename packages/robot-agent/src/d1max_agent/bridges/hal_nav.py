@@ -41,7 +41,7 @@ POSITION_TOL_M = 0.1
 #: 待命点的朝向决定相机对着哪)。跟规划后端一样。
 YAW_TOL_RAD = 0.15
 #: HAL 拒速度命令的原因 → 任务失败原因里的话(W34;C40221 急停时只写了「导航回了 Failed」)。
-_REJECT_TEXT = {"estop": "急停按下了", "no_control": "没控制权(遥控器或厂家 App 拿着)",
+_REJECT_TEXT = {"estop": "急停按下了", "no_control": "无控制权(遥控器或厂家 App 拿着)",
                 "fault": "机器人报故障"}
 #: 里程锚定丢了定位,引擎等人给位置等多久(秒)。过渡期有人监护(W00c6i),监护一断任务本来就中止。
 HUMAN_RELOCALIZE_WAIT_S = 600.0
@@ -198,7 +198,7 @@ class HalNavBackend(NavBackend):
             return ""
         if self.head == "tail":
             return "机器人尾为前:要后雷达标过、配了避障才能自己走"
-        return "头尾方向不知道"
+        return "头尾方向未知"
 
     # ------------------------------------------------------------ 导航
 
@@ -280,7 +280,7 @@ class HalNavBackend(NavBackend):
         if x < self._caps.deadband_vx:
             # 速度环发出去的命令低于死区,HAL 会拒(或机器根本不动):任务会卡在 Active 里
             # 一直走不到,不如在这里说清楚。
-            raise NavRequestError("set_speed", f"前进上限 {x!r} 低于这台机器的死区 "
+            raise NavRequestError("set_speed", f"前进上限 {x!r} 低于此设备的死区 "
                                                f"{self._caps.deadband_vx!r} m/s")
         self._vmax = min(float(x), self._caps.max_vx)
         if z is not None:

@@ -62,7 +62,7 @@ log = logging.getLogger(__name__)
 
 #: 自动回程碰上这些暂时性的拒绝(W09h 钟差还不知道;代理重连时状态还不新鲜 / 还没报在线)限时再试:
 #: 每 2 s 一次、最多 7 次(约 15 s,够攒齐钟差样本)。别的拒绝(没人监护、忙、地图对不上)不再试。
-_TRANSIENT_REFUSALS = ("钟差还不知道", "不新鲜", "不在线")
+_TRANSIENT_REFUSALS = ("钟差未知", "不新鲜", "不在线")
 STANDBY_TRANSIENT_RETRIES = 7
 STANDBY_RETRY_EVERY_S = 2.0
 
@@ -137,7 +137,7 @@ class StandbyManager:
         这个版本上还没有待命点,顺手用它建一个(这台狗没有默认待命点、或者默认的在别的图上,就设成默认)。
         回执、``home_marked`` 事件都走这里(同样的值登记两遍没事)。"""
         if not isinstance(data, dict):
-            raise StandbyError("机器人没报位置")
+            raise StandbyError("机器人未上报位置")
         mid, ver = data["map_id"], data["map_version"]
         with self._mark_lock:
             self.set_home(robot_id, name, map_id=mid, map_version=ver, x=data["x"], y=data["y"],
@@ -198,7 +198,7 @@ class StandbyManager:
         """狗在当前位置报了位置、只标待命点(W13a):登记成待命点,原点不动。``default=None``:这台狗
         还没有默认待命点(或者默认的在别的图上)就设成默认,不然不动原来的默认标记。"""
         if not isinstance(data, dict) or data.get("target") != "standby":
-            raise StandbyError("机器人没按「只标待命点」回(老代理会把它当成标原点)")
+            raise StandbyError("机器人未按「只标待命点」回(老代理会把它当成标原点)")
         mid, ver = data["map_id"], data["map_version"]
         if default is None:
             d = self.default(robot_id)
@@ -224,7 +224,7 @@ class StandbyManager:
             log.warning("%s 标了原点,站点补登记原点没成: %s", robot_id, exc)
             self.dispatcher.feed.publish({"kind": "standby_failed", "robot_id": robot_id,
                                           "after": d.get("task_id"),
-                                          "reason": "机器人上的原点已经换了,站点登记原点没成: "
+                                          "reason": "机器人上的原点已更换,站点登记原点失败: "
                                                     f"{exc}"})
 
     def remove(self, robot_id: str, name: str) -> None:
@@ -266,11 +266,11 @@ class StandbyManager:
         caps = c.capabilities.tasks.get("patrol", {}) if c and c.capabilities else {}
         loaded = (caps.get("map_id"), caps.get("map_version"))
         if loaded[0] is None:
-            raise DispatchRefused(f"{robot_id} 没报已加载的地图")
+            raise DispatchRefused(f"{robot_id} 未上报已加载的地图")
         if loaded != (p["map_id"], p["map_version"]):
             raise DispatchRefused(f"{robot_id} 加载的地图是 {loaded[0]}:{loaded[1]},待命点 "
                                   f"{p['name']} 登记在 {p['map_id']}:{p['map_version']}"
-                                  f"(地图或版本对不上)")
+                                  f"(地图或版本不匹配)")
         return p
 
     async def return_to(self, robot_id: str, *, issued_by: str,
@@ -329,7 +329,7 @@ class StandbyManager:
                              "AND kind IN ('patrol', 'goto') ORDER BY issued_at DESC LIMIT 1",
                              (task_id, robot_id))
         if not rows:
-            raise StandbyError(f"直线的机器人要沿来路回待命点,{task_id} 的命令记录没了,来路不明")
+            raise StandbyError(f"直线的机器人要沿来路回待命点,{task_id} 的命令记录已丢失,来路不明")
         if rows[0]["kind"] == "goto":
             return None
         try:
@@ -337,16 +337,16 @@ class StandbyManager:
             m = parse_mission(payload["mission"])
             version = payload.get("map_version")
         except (ValueError, KeyError, TypeError, MissionError, ContractError) as exc:
-            raise StandbyError(f"直线的机器人要沿来路回待命点,取不到 {task_id} 的来路: "
+            raise StandbyError(f"直线的机器人要沿来路回待命点,无法获取 {task_id} 的来路: "
                                f"{exc}") from exc
         p = self._checked_default(robot_id, name)
         if (m.map_id, version) != (p["map_id"], p["map_version"]):
             raise StandbyError(f"{task_id} 跑在 {m.map_id}:{version},待命点 {p['name']} 登记在 "
-                               f"{p['map_id']}:{p['map_version']}(地图或版本对不上,来路坐标不可信)")
+                               f"{p['map_id']}:{p['map_version']}(地图或版本不匹配,来路坐标不可信)")
         want = len(m.waypoints) * m.policy.loops
         got = self._arrived(robot_id, task_id)
         if got != want:
-            raise StandbyError(f"{task_id} 只报了 {got}/{want} 个点到了,不知道机器人停在哪,不回")
+            raise StandbyError(f"{task_id} 只报了 {got}/{want} 个点到了,无法确定机器人位置,不回")
         return m
 
     def _arrived(self, robot_id: str, task_id: str) -> int:
@@ -398,7 +398,8 @@ class StandbyManager:
             ack = r.get("ack", {}) if isinstance(r, dict) else {}
             if ack.get("result") not in (None, "accepted", "duplicate"):
                 # 狗拒收(没人监护、忙……)不是异常,以前不推;值守的人要看得见狗没回去(W00c6i 内审)。
-                raise StandbyError(f"机器人没收回待命点: {ack.get('reason') or ack.get('result')}")
+                raise StandbyError(f"机器人未接受回待命点命令:"
+                                    f" {ack.get('reason') or ack.get('result')}")
         except Exception as exc:  # noqa: BLE001 - 回不去:记日志、推给值守的人,下次任务完成再试
             log.warning("%s 在 %s 结束后回待命点没派成: %s", robot_id, after, exc)
             self.dispatcher.feed.publish({"kind": "standby_failed", "robot_id": robot_id,

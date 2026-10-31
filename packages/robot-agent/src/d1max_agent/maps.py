@@ -102,13 +102,14 @@ class MapKeeper:
         except FileNotFoundError:
             return None
         except OSError as exc:
-            raise MapIntegrityError(f"active.json 读不了: {exc}") from exc
+            raise MapIntegrityError(f"active.json 无法读取: {exc}") from exc
         try:
             # 断电、坏盘写出来的乱码:不是 UTF-8(UnicodeDecodeError 是 ValueError)、嵌套深到递归
             # 超限 —— 都是「坏了」,不能让代理起不来(W09g 内审阻断 1)
             return MapRef.from_wire(json.loads(raw.decode("utf-8")))
         except (ValueError, RecursionError, ContractError) as exc:
-            raise MapIntegrityError(f"active.json 坏了: {type(exc).__name__}: {exc}"[:200]) from exc
+            raise MapIntegrityError((f"active.json 已损坏:"
+                                     f" {type(exc).__name__}: {exc}")[:200]) from exc
 
     def previous(self) -> MapRef | None:
         """上一张正在用的图(R5,``previous.json``):还留在本地库里、清单文件在、而且不是现在这张才回;
@@ -162,11 +163,11 @@ class MapKeeper:
         try:
             have = MapRef.from_wire(json.loads((d / MANIFEST).read_text("utf-8")))
         except (OSError, ValueError, ContractError) as exc:
-            return f"的清单 {MANIFEST} 读不了或坏了: {exc}"[:200]
+            return f"的清单 {MANIFEST} 无法读取或已损坏: {exc}"[:200]
         # 按内容比(W41:原来整个比,同一版在站点重新登记、文件顺序不一样,就整张重下 19 s)
         if (have.map_id, have.version) != (ref.map_id, ref.version) \
                 or map_digest(have) != map_digest(ref):
-            return f"的清单 {MANIFEST} 跟声明的不一样"
+            return f"的清单 {MANIFEST} 与声明的不同"
         for f in ref.files:
             p = d / f.name                          # 名字契约里限死了(不许 / 与点开头):落在目录里
             try:
@@ -176,14 +177,14 @@ class MapKeeper:
             if not stat.S_ISREG(fst.st_mode):
                 return f"的 {f.name} 不是普通文件(符号链接、目录、设备都不认)"
             if fst.st_size != f.size:
-                return f"的 {f.name} 大小不对({fst.st_size},应为 {f.size})"
+                return f"的 {f.name} 大小错误({fst.st_size},应为 {f.size})"
             try:
                 digest = _sha256(p)
             except OSError as exc:
                 # 坏扇区、权限:读不了也是「坏了」,好让重新下来修(W09g 内审阻断 2)
-                return f"的 {f.name} 读不了: {exc}"[:200]
+                return f"的 {f.name} 无法读取: {exc}"[:200]
             if digest != f.sha256:
-                return f"的 {f.name} sha256 不对(内容坏了)"
+                return f"的 {f.name} sha256 错误(内容已损坏)"
         return ""
 
     def dir_of(self, ref: MapRef) -> Path:
@@ -277,12 +278,12 @@ class MapKeeper:
                                 if n > f.size:
                                     raise MapInstallError(f"{f.name} 比清单里说的大")
                                 if time.monotonic() > deadline:
-                                    raise MapInstallError(f"下载超过 {limit:g} s 没下完")
+                                    raise MapInstallError(f"下载超过 {limit:g} s 未下完")
                                 h.update(chunk)
                                 fh.write(chunk)
                                 fails = 0
                             if n < f.size:
-                                raise ConnectionError(f"连接断了,收到 {n}/{f.size} 字节")
+                                raise ConnectionError(f"连接已断开,收到 {n}/{f.size} 字节")
                             break
                         except MapInstallError:
                             raise
@@ -298,7 +299,7 @@ class MapKeeper:
                     fh.flush()
                     os.fsync(fh.fileno())
                 if n != f.size or h.hexdigest() != f.sha256:
-                    raise MapInstallError(f"{f.name} 大小或哈希对不上")
+                    raise MapInstallError(f"{f.name} 大小或哈希不匹配")
             (tmp / MANIFEST).write_text(json.dumps(ref.to_wire(), ensure_ascii=False),
                                         encoding="utf-8")
             with self._lock:

@@ -156,7 +156,7 @@ class ChunkWriter:
 
     def write(self, path: Path, *, offset: int, data: bytes, total: int) -> Stored:
         if offset < 0 or total < 0 or offset + len(data) > total:
-            raise ValueError(f"偏移或总长不对:offset={offset} len={len(data)} total={total}")
+            raise ValueError(f"偏移或总长错误:offset={offset} len={len(data)} total={total}")
         if total > MAX_FILE_BYTES:
             raise PathRefused(f"文件太大({total} 字节,上限 {MAX_FILE_BYTES})")
         here = path.parent
@@ -214,7 +214,7 @@ def open_sealed(path: Path, dst: Path, key: bytes | None) -> str:
     只剩一个没登记的明文,补解再也找不到它。"""
     from d1max_contract.evseal import SealError, open_file
     if key is None:
-        return "站点没配证据私钥(/etc/d1max-site/evidence.key)"
+        return "站点未配置证据私钥(/etc/d1max-site/evidence.key)"
     try:
         open_file(path, dst, key)
     except (SealError, OSError) as exc:
@@ -487,9 +487,9 @@ class EvidencePlainWatch:
                     if not self.alerts.has_open(rid, "evidence_seal_failed"):
                         self.alerts.raise_alert(
                             kind="evidence_seal_failed", robot=rid,
-                            title=f"机器人上 {n} 个照片、录像封不上,扣着没传",
-                            detail="多半是机器人上 openssl 坏了或者盘写不进(看代理日志);"
-                                   "机器人每分钟重封一次,封上了自动传、这条告警自动解决")
+                            title=f"机器人上 {n} 个照片、录像无法加密,扣着未上传",
+                            detail="多半是机器人上 openssl 已损坏或者盘无法写入(看代理日志);"
+                                   "机器人每分钟重封一次,封上了自动传、此条告警自动解决")
                     with self.db.tx() as tx:
                         tx.execute("INSERT OR IGNORE INTO evidence_unsealed(robot_id, created_ms) "
                                    "VALUES (?,?)", (rid, self._now()))
@@ -523,7 +523,7 @@ class EvidencePlainWatch:
                     tx.execute("INSERT OR REPLACE INTO evidence_plain(robot_id, created_ms) "
                                "VALUES (?,?)", (rid, now))
                     queue(tx, kind="evidence_plain", robot=rid,
-                          title="机器人上的照片、录像没加密",
+                          title="机器人上的照片、录像未加密",
                           detail="机器人上没有站点的证据公钥(/etc/d1max/evidence-pub.key):照片、截图、"
                                  "录像明文存在机器人上。从证书包拷过去、重启代理",
                           context={}, now_ms=now)

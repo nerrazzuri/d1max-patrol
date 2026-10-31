@@ -870,7 +870,7 @@ describe("地图与防区:网页画禁行区、限速区、虚拟墙;列出机�
     expect(r.container.querySelector('[data-navzone="w3"]')!.textContent).toContain("Virtual wall · hard");
     expect(r.container.querySelector('[data-navzone="pool"]')!.textContent).toContain("No-go zone");
     expect(r.container.querySelector('[data-nav-status="ok"]')!.textContent).toContain("alice");
-    expect(r.queryByText("Confirm this revision")).toBeNull();
+    expect(r.queryByText("Confirm this version")).toBeNull();
   });
 
   it("没确认:写明机器人照旧守着哪些;确认这一版带修订号;删一个是整份存回去少它", async () => {
@@ -880,10 +880,10 @@ describe("地图与防区:网页画禁行区、限速区、虚拟墙;列出机�
     await ready(r.container);
     await waitFor(() => expect(r.container.querySelector('[data-nav-status="unconfirmed"]')).not.toBeNull());
     expect(r.container.querySelector("[data-nav-held]")!.textContent).toContain("Pool");
-    fireEvent.click(r.getByText("Confirm this revision"));
+    fireEvent.click(r.getByText("Confirm this version"));
     await tick();
     expect(r.container.ownerDocument.querySelector("dialog")!.textContent).toContain("WATER");
-    fireEvent.click([...r.container.ownerDocument.querySelectorAll("dialog button")].find((b) => b.textContent === "Confirm this revision")!);
+    fireEvent.click([...r.container.ownerDocument.querySelectorAll("dialog button")].find((b) => b.textContent === "Confirm this version")!);
     await waitFor(() => expect(posted.length).toBe(1));
     expect(posted[0].url).toContain("/zones/confirm");
     expect(posted[0].body).toEqual({ revision: 7, confirm: true });
@@ -899,10 +899,10 @@ describe("地图与防区:网页画禁行区、限速区、虚拟墙;列出机�
     const posted = site({ revision: 0, zones: [], confirmed: null });
     const r = render(<MapsZonesPage say={() => {}} />);
     await ready(r.container);
-    await waitFor(() => expect(r.queryByText("Confirm this revision")).not.toBeNull());
-    fireEvent.click(r.getByText("Confirm this revision"));
+    await waitFor(() => expect(r.queryByText("Confirm this version")).not.toBeNull());
+    fireEvent.click(r.getByText("Confirm this version"));
     await tick();
-    fireEvent.click([...r.container.ownerDocument.querySelectorAll("dialog button")].find((b) => b.textContent === "Confirm this revision")!);
+    fireEvent.click([...r.container.ownerDocument.querySelectorAll("dialog button")].find((b) => b.textContent === "Confirm this version")!);
     await waitFor(() => expect(posted.length).toBe(1));
     expect(posted[0].body).toEqual({ revision: 0, confirm: true, empty_ok: true });
     cleanup();
@@ -910,7 +910,7 @@ describe("地图与防区:网页画禁行区、限速区、虚拟墙;列出机�
     const r2 = render(<MapsZonesPage say={() => {}} />);
     await ready(r2.container);
     await waitFor(() => expect(r2.container.querySelector("[data-navzones]")).not.toBeNull());
-    expect(r2.queryByText("Confirm this revision")).toBeNull();
+    expect(r2.queryByText("Confirm this version")).toBeNull();
     expect(r2.container.textContent).toContain("Check them in the phone app first");
   });
 });
@@ -944,7 +944,7 @@ describe("地图与防区:换图后才回来的旧回包不进这张图;确认�
     return { held, posted };
   }
   const panel = (c: Element) => c.querySelector("[data-navzones]")?.textContent ?? "";
-  const confirmYes = (c: Element) => [...c.ownerDocument.querySelectorAll("dialog button")].find((b) => b.textContent === "Confirm this revision")!;
+  const confirmYes = (c: Element) => [...c.ownerDocument.querySelectorAll("dialog button")].find((b) => b.textContent === "Confirm this version")!;
 
   it("A 的区域晚到:列表、确认框都还是 B 的;确认发到 B、带 B 看过的修订", async () => {
     installScreenCTM();
@@ -959,7 +959,7 @@ describe("地图与防区:换图后才回来的旧回包不进这张图;确认�
     await new Promise((res) => setTimeout(res, 20));
     expect(panel(r.container)).toContain("B-flower");
     expect(panel(r.container)).not.toContain("A-pool");
-    fireEvent.click(r.getByText("Confirm this revision"));
+    fireEvent.click(r.getByText("Confirm this version"));
     await tick();
     expect(r.container.ownerDocument.querySelector("dialog")!.textContent).toContain("B safety check");
     fireEvent.click(confirmYes(r.container));
@@ -975,7 +975,7 @@ describe("地图与防区:换图后才回来的旧回包不进这张图;确认�
     await ready(r.container);
     fireEvent.change(r.getByLabelText("Map"), { target: { value: "B\u00001" } });   // 一开始选的是 A(列表最后一张)
     await waitFor(() => expect(panel(r.container)).toContain("B-flower"));
-    fireEvent.click(r.getByText("Confirm this revision"));
+    fireEvent.click(r.getByText("Confirm this version"));
     await tick();
     fireEvent.click(confirmYes(r.container));
     await waitFor(() => expect(said.some((s) => s.includes("look again"))).toBe(true));
@@ -990,7 +990,7 @@ describe("地图与防区:换图后才回来的旧回包不进这张图;确认�
     await ready(r.container);
     fireEvent.change(r.getByLabelText("Map"), { target: { value: "B\u00001" } });   // 一开始选的是 A(列表最后一张)
     await waitFor(() => expect(panel(r.container)).toContain("B-flower"));
-    fireEvent.click(r.getByText("Confirm this revision"));
+    fireEvent.click(r.getByText("Confirm this version"));
     await tick();
     expect(r.container.ownerDocument.querySelector("dialog")).not.toBeNull();
     fireEvent.change(r.getByLabelText("Map"), { target: { value: "A\u00001" } });

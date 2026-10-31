@@ -92,12 +92,12 @@ class BindDesk:
         with self.db.tx() as c:
             row = c.execute("SELECT revoked FROM robots WHERE robot_id=?", (serial,)).fetchone()
             if row is not None and not row["revoked"]:
-                raise BindRefused(409, f"{serial} 已经在这个站点了:要重新绑定,先在站点上解绑")
+                raise BindRefused(409, f"{serial} 已在此站点了:要重新绑定,先在站点上解绑")
             c.execute("UPDATE bind_requests SET state='replaced' "
                       "WHERE serial=? AND state IN ('pending', 'approved')", (serial,))
             n = c.execute("SELECT COUNT(*) FROM bind_requests WHERE state='pending'").fetchone()[0]
             if n >= MAX_PENDING:
-                raise BindRefused(429, f"已经有 {MAX_PENDING} 台在等批准了:先在站点上处理掉一些")
+                raise BindRefused(429, f"已有 {MAX_PENDING} 台在等批准了:先在站点上处理掉一些")
             c.execute("INSERT INTO bind_requests(id, serial, nonce, model, version, source, host, "
                       "secret_hash, created_ms, expires_ms) VALUES (?,?,?,?,?,?,?,?,?,?)",
                       (rid, serial, nonce, model, version, source[:64], host[:200], _h(secret),
@@ -120,7 +120,7 @@ class BindDesk:
         rows = self.db.query("SELECT * FROM bind_requests WHERE id=?", (str(rid)[:32],))
         if not rows or not isinstance(secret, str) \
                 or not hmac.compare_digest(rows[0]["secret_hash"], _h(secret)):
-            raise BindRefused(404, "没有这条申请")
+            raise BindRefused(404, "没有此条申请")
         r = rows[0]
         state = r["state"]
         if state == "pending" and now > r["expires_ms"]:
@@ -202,7 +202,7 @@ class BindDesk:
         rows = self.db.query("SELECT * FROM bind_requests WHERE id=? AND state='pending'",
                              (str(rid)[:32],))
         if not rows:
-            raise BindRefused(404, "没有这条申请(可能已经处理过、过期了,或者机器人又重新申请了)")
+            raise BindRefused(404, "没有此条申请(可能已处理过、已过期,或者机器人又重新申请了)")
         return rows[0]
 
     def _expire(self, now: int) -> None:

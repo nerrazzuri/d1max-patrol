@@ -477,7 +477,7 @@ class AlertBook:
         就失去了"停下来"的依据,所以直接抛 ``ValueError``。
         """
         if not who:
-            raise ValueError("ack 需要非空姓名,空姓名等于没人确认")
+            raise ValueError("ack 需要非空姓名,空姓名等于无人确认")
         existing = self._by_key.get(key)
         if existing is None:
             raise AlertNotFound(key)
@@ -514,7 +514,7 @@ class AlertBook:
         if existing.level is not Level.P2:
             raise ValueError("只有 P2 能搁置;P1 要处理")
         if existing.resolved_ms is not None:
-            raise ValueError("这条已经解决了")
+            raise ValueError("此条已解决")
         reason = (reason or "").strip()
         if not who or not reason:
             raise ValueError("搁置要写原因")

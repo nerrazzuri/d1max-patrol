@@ -99,7 +99,7 @@ class _MapManagePageState extends State<MapManagePage> {
         final go = await showDialog<bool>(
           context: context,
           builder: (c) => AlertDialog(
-            title: Text(tr('$robot has no origin on this version', '$robot 在这一版上还没有原点')),
+            title: Text(tr('$robot has no origin on this version', '$robot 在此版本上尚未标原点')),
             content: Text(tr(
                 'The robot takes no patrols until its origin is marked. Drive it in front of the dock and tap "Mark origin here" on its page.',
                 '标原点之前机器人不执行巡逻。请将机器人开到充电桩前，在机器人页点「在这儿标原点」。')),
@@ -129,7 +129,7 @@ class _MapManagePageState extends State<MapManagePage> {
     final ok = await showDialog<bool>(
       context: context,
       builder: (c) => AlertDialog(
-        title: Text(tr('Delete this version?', '删掉这一版？')),
+        title: Text(tr('Delete this version?', '删除此版本？')),
         content: Text(tr("This can't be undone. No robot is using this version.", '删除后无法恢复。当前没有机器人使用此版本。')),
         actions: [
           TextButton(onPressed: () => Navigator.pop(c, false), child: Text(tr('Cancel', '取消'))),

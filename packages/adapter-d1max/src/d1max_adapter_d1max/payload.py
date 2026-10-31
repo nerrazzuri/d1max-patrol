@@ -109,7 +109,7 @@ class ModbusRelay:
     def _ask(self, body: bytes, want: int) -> bytes:
         """发一帧、收 ``want`` 字节的应答(含 CRC),核站号、功能码、CRC。
         异常应答(功能码 | 0x80)报错。"""
-        last = "没回"
+        last = "未返回"
         for _ in range(1 + self.retries):
             with self._lock:
                 if self._fd is None:
@@ -136,10 +136,10 @@ class ModbusRelay:
                 last = f"应答不全({len(got)}/{want} 字节)"
                 continue
             if got[0] != self.slave or got[1] != body[1]:
-                last = f"应答对不上(站号 {got[0]}、功能码 {got[1]})"
+                last = f"应答不匹配(站号 {got[0]}、功能码 {got[1]})"
                 continue
             if struct.unpack("<H", got[-2:])[0] != crc16(got[:-2]):
-                last = "应答 CRC 不对"
+                last = "应答 CRC 错误"
                 continue
             return got
         raise PayloadError(f"继电器板(站号 {self.slave}):{last}")
@@ -148,14 +148,14 @@ class ModbusRelay:
         body = struct.pack(">BBHH", self.slave, 0x05, coil, 0xFF00 if on else 0x0000)
         got = self._ask(body, 8)
         if got[:6] != body:                           # 05 的应答原样回显请求
-            raise PayloadError("继电器板的回显跟请求对不上")
+            raise PayloadError("继电器板的回显与请求不匹配")
 
     def read_coils(self, start: int, count: int) -> list[bool]:
         body = struct.pack(">BBHH", self.slave, 0x01, start, count)
         nbytes = (count + 7) // 8
         got = self._ask(body, 5 + nbytes)
         if got[2] != nbytes:
-            raise PayloadError("继电器板读线圈的字节数不对")
+            raise PayloadError("继电器板读线圈的字节数错误")
         bits = int.from_bytes(got[3:3 + nbytes], "little")
         return [bool(bits >> i & 1) for i in range(count)]
 
@@ -277,7 +277,7 @@ class PayloadConfig:
             raise PayloadError("spotlight 要么只写 both(一路),要么 left、right 都写")
         for c in self.strobe_colors:
             if not _COLOR.fullmatch(c):
-                raise PayloadError(f"strobe.colors 的颜色名不对:{c!r}")
+                raise PayloadError(f"strobe.colors 的颜色名错误:{c!r}")
         if self.strobe_colors and self.strobe_default not in self.strobe_colors:
             raise PayloadError(f"strobe.default {self.strobe_default!r} 不在 colors 里")
         if self.blink_s and not BLINK_MIN_S <= self.blink_s <= BLINK_MAX_S:
@@ -293,7 +293,7 @@ class PayloadConfig:
                 raise PayloadError(f"audio.mute.chip:{exc}") from exc
             if isinstance(self.mute_line, bool) or not isinstance(self.mute_line, int) \
                     or self.mute_line < 0:
-                raise PayloadError("audio.mute.line 还没填(按 GPIO 引脚方案写;装机时 gpioinfo 查)")
+                raise PayloadError("audio.mute.line 尚未填(按 GPIO 引脚方案写;装机时 gpioinfo 查)")
             if self.mute_level not in ("high", "low"):
                 raise PayloadError("audio.mute.mute_level 只认 high 或 low(哪个电平是静音)")
             if self.amp_coil:
@@ -320,7 +320,7 @@ class PayloadConfig:
                 seen[c] = role
         spare = sorted(set(self.coils) - set(seen))
         if spare:
-            raise PayloadError(f"线圈 {spare} 没有哪一路用它(不认识的线圈不开关;没接就删掉)")
+            raise PayloadError(f"线圈 {spare} 没有哪一路用它(不认识的线圈不开关;未接入就删掉)")
 
     @property
     def strobe_coils(self) -> frozenset[str]:
@@ -344,7 +344,7 @@ class PayloadConfig:
         try:
             d = json.loads(Path(path).read_text(encoding="utf-8"))
         except (OSError, ValueError) as exc:
-            raise PayloadError(f"上装配置读不了: {exc}") from exc
+            raise PayloadError(f"上装配置无法读取: {exc}") from exc
         if not isinstance(d, dict):
             raise PayloadError("上装配置要是 JSON 对象")
         relay = d.get("relay") or {}
@@ -374,7 +374,7 @@ class PayloadConfig:
             lead = float(audio.get("amp_lead_s", -1.0))
             baud, slave = int(relay.get("baud", cls.baud)), int(relay.get("slave", cls.slave))
         except (TypeError, ValueError) as exc:
-            raise PayloadError(f"上装配置的数字不对: {exc}") from exc
+            raise PayloadError(f"上装配置的数字错误: {exc}") from exc
         if not all(isinstance(siren.get(k, ""), str) for k in ("coil", "clip")) \
                 or not isinstance(audio.get("amp", ""), str) \
                 or not isinstance(strobe.get("default", ""), str):
@@ -643,7 +643,7 @@ class Payload:
             elif side in cfg.spotlight:
                 cs = cfg.spotlight[side]
             else:
-                raise PayloadError("这台狗的聚光灯不分左右")
+                raise PayloadError("此机器人的聚光灯不分左右")
             return (cs, ()) if on else ((), cs)
         if output == "strobe":
             every = tuple(c for c in cfg.coils if c in cfg.strobe_coils)
@@ -669,7 +669,7 @@ class Payload:
             await self._siren_sound(on, max_s)
             return
         if not self.has(output):
-            raise PayloadError(f"上装没接 {output}")
+            raise PayloadError(f"上装未接入 {output}")
         both = output == "siren" and bool(self.cfg.siren_clip)
         if both and not on:
             await self._siren_sound(False, 0)          # 关:喇叭先停,继电器关不上也不许接着放
@@ -712,7 +712,7 @@ class Payload:
                         self._until[c] = None
                 if isinstance(failed, PayloadError):
                     raise failed
-                raise PayloadError(f"继电器板写不进去: {failed}") from failed
+                raise PayloadError(f"继电器板无法写入: {failed}") from failed
 
     def state(self) -> dict[str, bool | None]:
         """每个线圈板子确认过的状态(None = 不明),加上喇叭在不在出声。"""
@@ -754,13 +754,13 @@ class Payload:
             roles.setdefault(self._output_of(c), []).append(self.cfg.role_of(c))
         extra: dict[str, list[str]] = {}
         if self.siren_error and self.siren_on():
-            extra.setdefault("siren", []).append(f"喇叭警笛放不出来:{self.siren_error}")
+            extra.setdefault("siren", []).append(f"喇叭警笛无法播放:{self.siren_error}")
         if self.amp_error:
-            extra.setdefault("amp", []).append(f"功放 MUTE 脚写不进去:{self.amp_error}")
+            extra.setdefault("amp", []).append(f"功放 MUTE 脚无法写入:{self.amp_error}")
         text = {}
         for o in dict.fromkeys([*roles, *extra]):
-            parts = ([f"上装{'、'.join(dict.fromkeys(roles[o]))}状态不明或关不上"
-                      "(继电器板没确认,正在接着关)"] if o in roles else []) + extra.get(o, [])
+            parts = ([f"上装{'、'.join(dict.fromkeys(roles[o]))}状态不明或无法关闭"
+                      "(继电器板未确认,正在接着关)"] if o in roles else []) + extra.get(o, [])
             text[o] = ";".join(parts)
         return text
 
@@ -778,10 +778,10 @@ class Payload:
                                   f"继电器板读不回来(掉电、断线?):{self.relay_error}"))
             elif len(unknown) == len(self.cfg.coils):
                 out.append(device("relay", "offline",
-                                  "继电器板一直没确认(串口、站号、板子供电?)"))
+                                  "继电器板一直未确认(串口、站号、板子供电?)"))
             elif unknown or stuck:
                 names = "、".join(dict.fromkeys(self.cfg.role_of(c) for c in unknown + stuck))
-                out.append(device("relay", "error", f"{names}没确认或关不上,正在接着关"))
+                out.append(device("relay", "error", f"{names}未确认或无法关闭,正在接着关"))
             else:
                 out.append(device("relay", "online", f"{len(self.cfg.coils)} 个线圈都确认过"))
         if self.cfg.audio_device:
@@ -795,13 +795,13 @@ class Payload:
                 out.append(device("speaker", "online", self.cfg.audio_device))
         if self.cfg.mute_chip:
             where = f"{self.cfg.mute_chip}:{self.cfg.mute_line}"
-            out.append(device("amp", "error", f"功放 MUTE 脚 {where} 写不进去:{self.amp_error}")
+            out.append(device("amp", "error", f"功放 MUTE 脚 {where} 无法写入:{self.amp_error}")
                        if self.amp_error else device("amp", "online", f"MUTE 脚 {where}"))
         if self.cfg.siren_clip and not self.cfg.siren_coil:
             if not self._siren_wav().is_file():
                 out.append(device("siren", "error", f"没有警笛声文件 {self._siren_wav()}"))
             elif self.siren_error:
-                out.append(device("siren", "error", f"喇叭警笛放不出来:{self.siren_error}"))
+                out.append(device("siren", "error", f"喇叭警笛无法播放:{self.siren_error}"))
             else:
                 out.append(device("siren", "online", "喇叭放警笛声"))
         return out
@@ -831,7 +831,7 @@ class Payload:
                 await self._write(a, True)
             except Exception as exc:
                 self._until[a] = None
-                raise PayloadError(f"功放开不了(继电器板): {exc}") from exc
+                raise PayloadError(f"功放无法开启(继电器板): {exc}") from exc
         if self.cfg.amp_lead_s:
             await asyncio.sleep(self.cfg.amp_lead_s)
 
@@ -842,12 +842,12 @@ class Payload:
             return
         try:
             if self.mute is None:
-                raise OSError(self.amp_error or "没拿到这根线")
+                raise OSError(self.amp_error or "未拿到这根线")
             self.mute.set(not self._muted_level)
         except Exception as exc:
             self._amp_until = None
             self.amp_error = str(exc)
-            raise PayloadError(f"功放开不了(MUTE 脚): {exc}") from exc
+            raise PayloadError(f"功放无法开启(MUTE 脚): {exc}") from exc
         self.amp_error = ""
         self._amp_open = True
         if self.cfg.amp_lead_s:
@@ -973,7 +973,7 @@ class Payload:
             _, _, rest = clip_or_tts.partition(":")
             lang, _, text = rest.partition(":")
             if not self.cfg.tts_command:
-                raise PayloadError("这台狗没配 TTS:只能放录好的话术")
+                raise PayloadError("此机器人未配置 TTS:只能放录好的话术")
             if not _LANG.fullmatch(lang) or not text.strip() or len(text) > MAX_TTS_CHARS:
                 raise PayloadError(f"TTS 要写成 tts:<语言>:<文字>(文字 1–{MAX_TTS_CHARS} 字)")
             wav = f"/tmp/d1max-tts-{os.getpid()}.wav"
@@ -993,7 +993,7 @@ class Payload:
         合成失败、播放器退出码不对、放完、到点都回调 ``on_sound_end``;被新的一段打断、被关的不回调,
         正在合成的被关掉就不再起播放。喇叭警笛正响着:掐掉这一遍,说完接着响。"""
         if not self.cfg.audio_device:
-            raise PayloadError("上装没接喇叭")
+            raise PayloadError("上装未接入喇叭")
         if not 0 < max_s <= MAX_ON_S:
             raise PayloadError(f"max_s 要在 0–{MAX_ON_S:.0f} 秒之间")
         tts, wav = self._resolve(clip_or_tts)
@@ -1013,7 +1013,7 @@ class Payload:
                                         stderr=asyncio.subprocess.DEVNULL)
             except OSError as exc:
                 self._amp_release()
-                raise PayloadError(f"喇叭放不出来: {exc}") from exc
+                raise PayloadError(f"喇叭无法播放: {exc}") from exc
             self._proc = first
             self._sound = loop.create_task(self._play(first, wav if tts else None, deadline))
         finally:
@@ -1042,11 +1042,11 @@ class Payload:
                         pass
                     raise
                 except OSError as exc:
-                    raise _Ended(False, f"喇叭放不出来: {exc}") from exc
+                    raise _Ended(False, f"喇叭无法播放: {exc}") from exc
                 self._proc = proc
             rc = await asyncio.wait_for(proc.wait(), max(0.1, deadline - loop.time()))
             if rc != 0:
-                raise _Ended(False, f"播放器退出码 {rc}(设备不对、文件坏了?)")
+                raise _Ended(False, f"播放器退出码 {rc}(设备错误、文件已损坏?)")
         except _Ended as e:
             ok, why = e.ok, e.why
             self.sound_error = why

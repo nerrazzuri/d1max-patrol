@@ -116,7 +116,7 @@ def _header(data: bytes) -> tuple[bytes, int, int, int, int]:
     except ValueError:
         raise PreviewError("PGM 头里的宽、高、最大值不是整数") from None
     if w < 1 or h < 1 or not 1 <= maxval <= 255:
-        raise PreviewError(f"PGM 的宽高或最大值不对({w}×{h},{maxval})")
+        raise PreviewError(f"PGM 的宽高或最大值错误({w}×{h},{maxval})")
     if w * h > MAX_PIXELS:
         raise PreviewError(f"PGM 太大({w}×{h})")
     return magic, w, h, maxval, pos
@@ -197,7 +197,7 @@ def parse_seen(data: bytes, w: int, h: int):
     except ValueError:
         raise PreviewError("seen.pbm 头里的宽、高不是整数") from None
     if (mw, mh) != (w, h):
-        raise PreviewError(f"seen.pbm 跟栅格不一样大({mw}×{mh},栅格 {w}×{h})")
+        raise PreviewError(f"seen.pbm 与栅格不同大({mw}×{mh},栅格 {w}×{h})")
     row = -(-w // 8)
     body = data[pos + 1:]
     if len(body) < row * h or len(body) > row * h + _P4_SLACK:
@@ -301,7 +301,7 @@ def render(pgm: bytes, meta: dict[str, Any], *, seen=None,
     if has_seen is not None:
         info["seen"] = True
     if meta.get("origin_yaw"):
-        info["warning"] = (f"地图 origin 带转角 {meta['origin_yaw']:.3f} rad,预览没按转角转:"
+        info["warning"] = (f"地图 origin 带转角 {meta['origin_yaw']:.3f} rad,预览未按转角转:"
                            "待命点画的位置可能不准")
     return _png(info["width"], info["height"], rows), info
 

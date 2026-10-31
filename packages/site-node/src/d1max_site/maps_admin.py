@@ -54,7 +54,7 @@ class MapAdmin:
     @property
     def cat(self) -> Any:
         if self.site.maps is None:
-            raise AdminError(404, "这个站点没开地图目录")
+            raise AdminError(404, "此站点未启用地图目录")
         return self.site.maps
 
     @property
@@ -307,7 +307,7 @@ class MapAdmin:
         try:
             yname, meta, image, data, _, _ = self.cat._raster(map_id, version)
         except (MapError, mp.PreviewError) as exc:
-            raise AdminError(409, f"{map_id}:{version} 没法清噪点:{exc}") from exc
+            raise AdminError(409, f"{map_id}:{version} 无法清噪点:{exc}") from exc
         return yname, meta, image, data
 
     def noise(self, map_id: str, version: str) -> dict[str, Any]:
@@ -337,11 +337,11 @@ class MapAdmin:
             raise AdminError(400, "skip 要是编号的列表")
         _, meta, image, data = self._grid(map_id, version)
         if digest != dn.digest(data):
-            raise AdminError(409, "这一版的栅格在你看过之后换了:重新打开清噪点再看一遍",
+            raise AdminError(409, "此版本的栅格在你看过之后换了:重新打开清噪点再看一遍",
                              reason="stale")
         specks = [s for s in dn.find_specks(data, meta) if s["id"] not in set(skip)]
         if not specks:
-            raise AdminError(409, "没有要清的(都去掉了,或者没找到)", reason="nothing")
+            raise AdminError(409, "没有要清的(都去掉了,或者未找到)", reason="nothing")
         new = self._next_version(map_id, version)
         src = self.cat.root / map_id / version
         tmp = Path(tempfile.mkdtemp(prefix="denoise-", dir=self.cat.root))
@@ -380,7 +380,7 @@ class MapAdmin:
             raise AdminError(400, str(exc)) from exc
         _, meta, image, data = self._grid(map_id, version)
         if digest != dn.digest(data):
-            raise AdminError(409, "这一版的地图在你打开以后换了:重新打开再编辑", reason="stale")
+            raise AdminError(409, "此版本的地图在你打开以后换了:重新打开再编辑", reason="stale")
         try:
             new_pgm, stats = me.apply_ops(data, meta, clean)
         except me.EditError as exc:
@@ -425,7 +425,7 @@ class MapAdmin:
         map_id, version = self._names(map_id, version)
         rows = [m for m in self.cat.list() if m["map_id"] == map_id]
         if not any(m["version"] == version for m in rows):
-            raise AdminError(404, f"没有这张图:{map_id}:{version}")
+            raise AdminError(404, f"地图不存在:{map_id}:{version}")
         users = self._in_use().get((map_id, version), [])
         if users:
             who = "、".join(users)
@@ -486,13 +486,13 @@ class MapAdmin:
                     got = map_diff.diff_grids(mp.grid_ranks(data_a, meta_a), meta_a,
                                               mp.grid_ranks(data_b, meta_b), meta_b)
                 except mp.PreviewError as exc:
-                    raise AdminError(500, f"对比不了:{exc}") from exc
+                    raise AdminError(500, f"无法对比:{exc}") from exc
         except mp.NoRaster as exc:
             raise AdminError(404, str(exc)) from exc
         except MapError as exc:
             raise AdminError(404, str(exc)) from exc
         except mp.PreviewError as exc:
-            raise AdminError(500, f"对比不了:{exc}") from exc
+            raise AdminError(500, f"无法对比:{exc}") from exc
         except map_diff.DiffError as exc:
             raise AdminError(422, str(exc)) from exc
         self._diffs[key] = got

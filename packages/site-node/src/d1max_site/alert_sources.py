@@ -60,18 +60,18 @@ SITE = "site"
 #: ``busy`` 不在表里。
 _SCHEDULE_ALERTS: dict[str, tuple[str, str]] = {
     "no_robot": ("schedule_missed", "到点没有能派的机器人"),
-    "ambiguous": ("schedule_missed", "能派的机器人不止一台,排程没写派哪台"),
+    "ambiguous": ("schedule_missed", "能派的机器人不止一台,排程未写派哪台"),
     "skew": ("schedule_missed", "站点的钟不可信,不起"),
-    "dispatch_failed": ("schedule_missed", "派了,机器人没收"),
+    "dispatch_failed": ("schedule_missed", "派了,机器人未接收"),
     "alarm": ("schedule_missed", "错过了(排程要求报警)"),
-    "lost": ("schedule_missed", "派出去了,回执超时,机器人一直没接"),
-    "skip": ("schedule_skipped", "错过了,按排程跳过这一轮"),
-    "supervised": ("schedule_blocked", "机器人要人现场监护,排程派不了"),
+    "lost": ("schedule_missed", "派出去了,回执超时,机器人一直未接收"),
+    "skip": ("schedule_skipped", "错过了,按排程跳过本轮"),
+    "supervised": ("schedule_blocked", "机器人要人现场监护,排程无法派单"),
     # W14:被事件派遣、手动派单、遥控打断了,不续(W00c2b 决定 D2A,用户 2026-10-02 维持)
-    "preempted": ("schedule_interrupted", "跑到一半被更优先的任务打断了,这一轮没巡完、不续"),
+    "preempted": ("schedule_interrupted", "跑到一半被更优先的任务打断了,本轮未巡完、不续"),
 }
-_SCHEDULE_TITLE = {"schedule_missed": "这一轮没跑", "schedule_skipped": "跳过了一轮",
-                   "schedule_blocked": "派不了", "schedule_interrupted": "这一轮没巡完"}
+_SCHEDULE_TITLE = {"schedule_missed": "本轮未执行", "schedule_skipped": "跳过了一轮",
+                   "schedule_blocked": "无法派单", "schedule_interrupted": "本轮未巡完"}
 
 #: 站点主循环多久调一次 :meth:`SiteAlertSources.step`(秒)。升级时限是分钟级,5 s 够细。
 STEP_S = 5.0
@@ -272,7 +272,7 @@ class SiteAlertSources:
         estop = not s.ready.estop_clear
         if estop and not m.estop:
             self.desk.raise_alert(kind="estop_pressed", robot=rid, title="急停被按下",
-                                  detail="机器人报急停没解除")
+                                  detail="机器人报急停未解除")
         m.estop = estop
         # 代理的引擎丢定位就暂停(W29,决策 41):「跑着任务 + 定位不行」= 定位变差或打滑(跟里程对不上),
         # 狗原地停、等恢复。先报 P2;**30 秒还没好**再报 P1「定位丢失后暂停」叫人(``tick`` 里看)。
@@ -281,8 +281,8 @@ class SiteAlertSources:
             m.loc_since, m.loc_p1 = self._now(), False
             self.desk.raise_alert(kind="loc_degraded", robot=rid,
                                   title="定位变差或打滑:原地停下等恢复",
-                                  detail=f"任务 {s.task.task_id} 在跑,机器人报定位不行;"
-                                         f"{LOC_P1_S} 秒内恢复就接着走")
+                                  detail=f"任务 {s.task.task_id} 正在运行,机器人报定位不行;"
+                                         f"{LOC_P1_S} 秒内恢复就继续执行")
         if not loc:
             m.loc_since = None
         elif m.loc_since is None:
@@ -322,12 +322,12 @@ class SiteAlertSources:
             return
         try:
             if not self.desk.has_open(rid, "loc_lost_idle"):
-                detail = (f"已经 {(now - m.loc_idle_since) // 60_000} 分钟多;"
+                detail = (f"已 {(now - m.loc_idle_since) // 60_000} 分钟多;"
                           f"机器人说:{m.loc_reason or '没说为什么'}。"
                           "到场设位置(手机单机器人页「设位置」),"
-                          "或者查定位器;好了这条自己解决")
+                          "或者查定位器;完成此条自动解除")
                 self.desk.raise_alert(kind="loc_lost_idle", robot=rid,
-                                      title="空闲的机器人定位不可信:派不了单", detail=detail[:300])
+                                      title="空闲的机器人定位不可信:无法派单", detail=detail[:300])
         except Exception:
             log.exception("%s 空闲丢定位 P2 报不出去,下一拍再报", rid)
             return
@@ -351,7 +351,7 @@ class SiteAlertSources:
                     and self._now() - m.loc_since >= LOC_P1_S * 1000:
                 try:                                      # 30 秒还没恢复:叫人(W29)
                     self.desk.raise_alert(kind="loc_lost_paused", robot=rid,
-                                          title="定位丢失后暂停,30 秒没恢复:要人到场",
+                                          title="定位丢失后暂停,30 秒未恢复:要人到场",
                                           detail="机器人原地停着,不靠不准的定位自己走;到场重新给位置,"
                                                  "或者遥控挪到看得清的地方")
                 except Exception:                         # 写不进去:不标报过,下一拍再报(外审 3)
@@ -372,10 +372,10 @@ class SiteAlertSources:
             log.info("%s 回来不到 %d s 又掉线:算同一次,不另起告警", rid, OFFLINE_REARM_MS // 1000)
             return
         if m.running:
-            self.desk.raise_alert(kind="robot_offline", robot=rid, title="机器人掉线了(跑着任务)",
-                                  detail=f"最后在跑 {m.started}")
+            self.desk.raise_alert(kind="robot_offline", robot=rid, title="机器人已离线(跑着任务)",
+                                  detail=f"最后正在运行 {m.started}")
         else:
-            self.desk.raise_alert(kind="robot_offline_idle", robot=rid, title="机器人掉线了")
+            self.desk.raise_alert(kind="robot_offline_idle", robot=rid, title="机器人已离线")
 
     # ------------------------------------------------------------ 事件
 
@@ -383,7 +383,7 @@ class SiteAlertSources:
         d = e.data if isinstance(e.data, dict) else {}
         tid = d.get("task_id", "")
         if e.kind == "task_done":
-            self.desk.raise_alert(kind="run_done", robot=rid, title=f"跑完了:{tid}")
+            self.desk.raise_alert(kind="run_done", robot=rid, title=f"已完成:{tid}")
         elif e.kind == "task_failed":
             reason = str(d.get("reason", ""))
             # 站点自己派的回待命点那一趟(回程巡检)失败,狗停在半路;标题别说「整趟中止」
@@ -396,19 +396,19 @@ class SiteAlertSources:
             else:
                 # 人点的中止是 task_aborted,不报;失败(引擎自己收的尾)一律报,认不出原因也报。
                 self.desk.raise_alert(kind="run_abort", robot=rid,
-                                      title="回待命点没成,停在半路" if back else "整趟中止了",
+                                      title="回待命点失败,停在半路" if back else "整趟中止了",
                                       detail=reason)
         elif e.kind in ("release_install_failed", "release_activate_failed",
                         "release_rollback_failed"):
             what = {"release_install_failed": "装版本", "release_activate_failed": "切版本",
                     "release_rollback_failed": "退版本"}[e.kind]
             self.desk.raise_alert(kind="release_failed", robot=rid,
-                                  title=f"{what}没成:{d.get('name', '')}",
+                                  title=f"{what}失败:{d.get('name', '')}",
                                   detail=str(d.get("reason", ""))[:300])
         elif e.kind == "release_rolled_back" and d.get("no_fallback"):
             # 上一版是老服务那一代,退不回去,开机守卫把狗留在了新版(W00c5e 内部评审)。
             self.desk.raise_alert(kind="release_failed", robot=rid,
-                                  title=f"新版 {d.get('from', '?')} 一直没坐实,上一版退不回去,"
+                                  title=f"新版 {d.get('from', '?')} 一直未坐实,上一版无法回退,"
                                         "机器人留在新版",
                                   detail=f"开机守卫数了 {d.get('attempts', '?')} 次;"
                                          "看机器人到站点的"
@@ -423,7 +423,7 @@ class SiteAlertSources:
             # W09e:RTK 核对定位器
             gap = d.get("gap_m")
             title = {"rtk_disagree": f"RTK 说定位差 {gap} m:定位器不可信,在按 RTK 重定位",
-                     "rtk_gave_up": f"按 RTK 请了 {d.get('relocs', '?')} 次还对不上:交给人看"
+                     "rtk_gave_up": f"按 RTK 请了 {d.get('relocs', '?')} 次还不匹配:交给人看"
                                     "(RTK 假固定,还是定位器错了)",
                      "rtk_base_moved": f"基站坐标跟建图时差 {d.get('moved_m')} m:不再拿 RTK 核对"
                                        ",基站要用固定坐标、或者重新建图配准"}[e.kind]
@@ -438,15 +438,15 @@ class SiteAlertSources:
                                   title=f"机器人在禁行区「{zone}」里,原地停着等人",
                                   detail=f"位置 ({d.get('x', '?')}, {d.get('y', '?')}),图 "
                                          f"{d.get('map_id', '?')}:{d.get('map_version', '?')};"
-                                         "人到场把它挪出来(遥控),或者核一下区域、定位;"
-                                         "机器人离开禁行区、或者区域删了生效以后,这条自己解决")
+                                         "人到场把它挪出来(遥控),或者核对区域、定位;"
+                                         "机器人离开禁行区、或者区域删了生效以后,此条自动解除")
         elif e.kind == "map_integrity_failed":
             # W09g:狗起来时正在用的图校验不过 —— 没载、不宣告能自主(不退回命令行的图)。
             which = f"{d.get('map_id', '?')}:{d.get('version', '?')}"
             self.desk.raise_alert(kind="map_integrity", robot=rid,
-                                  title=f"机器人上正在用的图坏了:{which},不能自主",
+                                  title=f"机器人上正在用的图已损坏:{which},不能自主",
                                   detail=f"{str(d.get('reason', ''))[:240]};"
-                                         "重新下发这一版(同一版也会重新下载、逐个核对)")
+                                         "重新下发此版本(同一版也会重新下载、逐个核对)")
         elif e.kind == "map_activated":
             # 对账 S6:换了图,定位器要人在新图上给初始位置 —— 空闲丢定位宽限一阵
             m = self._m(rid)
@@ -454,22 +454,22 @@ class SiteAlertSources:
         elif e.kind in ("map_activate_failed", "map_build_failed"):
             what = "换图" if e.kind == "map_activate_failed" else "重建"
             which = f"{d.get('map_id', '?')}:{d.get('version', '?')}"
-            self.desk.raise_alert(kind="map_failed", robot=rid, title=f"{what}没成:{which}",
+            self.desk.raise_alert(kind="map_failed", robot=rid, title=f"{what}失败:{which}",
                                   detail=str(d.get("reason", ""))[:300])
         elif e.kind == "agent_args_skipped":
             # W32(决策 47):/etc/d1max/env 的 D1MAX_AGENT_ARGS 里有这一版不认识的参数(多半是
             # 退回了老版、参数是新版加的):代理跳过照起,但那几项设置没生效
             args = "、".join(str(a) for a in d.get("args", [])[:10])
             self.desk.raise_alert(kind="agent_args_skipped", robot=rid,
-                                  title="机器人上的代理有几个启动参数这一版不认识,跳过了",
+                                  title="机器人上的代理有几个启动参数此版本不认识,跳过了",
                                   detail=f"代理 {d.get('version', '?')} 跳过:{args}"[:300]
-                                         + ";多半是退回了老版本,这几项设置没生效")
+                                         + ";多半是退回了老版本,这几项设置未生效")
         elif e.kind == "force_bump":
             # W26(决策 52):狗被撞、被推、被踢了一下(没倒);任务照跑。翻倒、抱起来按能力对账(force.py)
             g = d.get("shock_g", "?")
-            self.desk.raise_alert(kind="force_bump", robot=rid, title=f"机器人被撞了一下({g} g)",
-                                  detail="受力异常但没倒,任务照跑;位置看告警现场,录像看这个时刻前后"
-                                         "(门槛没在真机器人上标定前误报会多)")
+            self.desk.raise_alert(kind="force_bump", robot=rid, title=f"机器人受到撞击({g} g)",
+                                  detail="受力异常但未倒,任务照常执行;位置看告警现场,录像看此时刻前后"
+                                         "(门槛未在真机器人上标定前误报会多)")
         elif e.kind == "force_config_bad":
             self.desk.raise_alert(kind="force_config_bad", robot=rid,
                                   title="机器人上的受力门槛文件读不懂,用的是缺省门槛",
@@ -482,14 +482,14 @@ class SiteAlertSources:
             lvl = d.get("level")
             if lvl == "critical":
                 self.desk.raise_alert(kind="board_overheat", robot=rid,
-                                      title="机器人上装严重过热,结束这一趟、回去了",
+                                      title="机器人上装严重过热,结束本次任务、回去了",
                                       detail=detail + ";看风扇、进风口,凉下来之前不接新的巡逻")
             else:
                 self.desk.raise_alert(
                     kind="board_hot", robot=rid,
                     title="机器人上装过热,已降负载(停热像录像、暂停上传)" if lvl == "shed"
                     else "机器人上装温度偏高",
-                    detail=detail + ";巡逻照走,今天之内看一下风扇、进风口")
+                    detail=detail + ";巡逻照常进行,今天之内检查风扇、进风口")
         elif e.kind == "thermal_lens_blocked":
             # W46:热像镜头被雨水、脏东西挡住,夜里找人、看起火就瞎了一半
             self.desk.raise_alert(kind="lens_blocked", robot=rid,
@@ -500,29 +500,30 @@ class SiteAlertSources:
         elif e.kind == "recording_failed":
             # W18:这一路录像断了(相机不通、盘写不进),狗每 10 s 重试;录回来报 recording_ok
             self.desk.raise_alert(kind="recording_failed", robot=rid,
-                                  title=f"{d.get('camera', '?')} 录像断了",
+                                  title=f"{d.get('camera', '?')} 录像中断",
                                   detail=str(d.get("reason", ""))[:300])
         elif e.kind == "recording_dropped":
             why = "机器人的盘紧" if d.get("reason") == "disk" else "攒满配额"
             # W18:断网太久,狗上攒的录像超了配额(或盘紧),删了最旧的几段 —— 那几段站点上没有
             self.desk.raise_alert(kind="recording_dropped", robot=rid,
-                                  title=f"机器人上的录像没传到站点,删了 {d.get('count', '?')} 段",
+                                  title=f"机器人上的录像未上传到站点,删了 {d.get('count', '?')} 段",
                                   detail=f"从 {d.get('oldest', '?')} 起;"
-                                         f"{why}:WiFi 断了太久,或者站点收不进")
+                                         f"{why}:WiFi 已断开太久,或者站点无法接收")
         elif e.kind == "archive_write_failed":
             # 盘满、只读重挂(W00c6a):那一趟照跑,但照片、记录没存下 —— 证据缺了,多半是盘满或盘坏了。
             self.desk.raise_alert(kind="archive_failed", robot=rid,
-                                  title=f"机器人上这一趟的记录写不进去:{tid}",
+                                  title=f"机器人上本次任务的记录无法写入:{tid}",
                                   detail=str(d.get("reason", ""))[:300])
         elif e.kind == "patrol_waypoint" and d.get("ok") is False \
-                and str(d.get("note", "")).startswith("照片存不下"):
+                and str(d.get("note", "")).startswith("照片无法保存"):
             # 到了、只是照片存不下(W00c6a 内审):不是「没到」;跟「记录写不进去」并成一类,
             # 不每个点刷一条。
             self.desk.raise_alert(kind="archive_failed", robot=rid,
-                                  title=f"点位 {d.get('name', '?')} 的照片存不下",
+                                  title=f"点位 {d.get('name', '?')} 的照片无法保存",
                                   detail=str(d.get("note", "")))
         elif e.kind == "patrol_waypoint" and d.get("ok") is False:
-            self.desk.raise_alert(kind="stuck", robot=rid, title=f"点位 {d.get('name', '?')} 没到",
+            self.desk.raise_alert(kind="stuck", robot=rid, title=(f"点位 "
+                                                                  f"{d.get('name', '?')} 未到达"),
                                   detail=str(d.get("note", "")))
         elif e.kind == "robot_fault":
             try:
@@ -534,7 +535,7 @@ class SiteAlertSources:
             text = "; ".join(f"[{f.code}] {f.text}" for f in faults)
             fallen = _hit(text, FALLEN_WORDS)
             if fallen and not m.fallen:
-                self.desk.raise_alert(kind="fallen", robot=rid, title="机器人跌倒了", detail=text)
+                self.desk.raise_alert(kind="fallen", robot=rid, title="机器人跌倒", detail=text)
             m.fallen = fallen
             # 先记下全集(事件已经落库,重投会被去重跳过:告警这一下没成,只能靠每拍对账补)
             self._payload[rid] = frozenset(f.code for f in faults if f.code.startswith("payload_"))
@@ -588,10 +589,10 @@ class SiteAlertSources:
             if kind in present:
                 if not self.desk.has_open(rid, kind):
                     self.desk.raise_alert(
-                        kind=kind, robot=rid, title=f"上装{name}关不上或状态不明",
-                        detail="继电器板没确认(串口、板子供电?);机器人上在接着关。去现场看是不是还开着"
+                        kind=kind, robot=rid, title=f"上装{name}无法关闭或状态不明",
+                        detail="继电器板未确认(串口、板子供电?);机器人上在接着关。去现场看是不是还开着"
                         if out != "siren" else
-                        "继电器板没确认,或者喇叭警笛放不出来(声卡、警笛声文件?);去现场看")
+                        "继电器板未确认,或者喇叭警笛无法播放(声卡、警笛声文件?);去现场看")
             else:
                 self.desk.resolve_all(rid, kind, who="site:payload_ok")
 
@@ -630,7 +631,7 @@ class SiteAlertSources:
         ch = w["change"] if w is not None else None
         cid = ch["id"] if ch is not None else ""
         if cid and cid != m.wifi_change:
-            note = ("机器人现在连不上站点,正在试新 WiFi;30 分钟内没人确认就退回"
+            note = ("机器人现在无法连接站点,正在试新 WiFi;30 分钟内无人确认就退回"
                     if ch["mode"] == "trial" else "确认了才换")
             self.desk.raise_alert(kind="wifi_change", robot=rid, title="机器人要换 WiFi,等确认",
                                   detail=f"换成「{ch['ssid']}」:{note}")
@@ -676,15 +677,15 @@ class SiteAlertSources:
         if f.disk_used_ratio >= WARN_RATIO and not m.disk80:
             m.disk80 = True
             self.desk.raise_alert(
-                kind="disk_80", robot=rid, title="机器人的发件箱所在的盘快满了",
-                detail=f"已用 {f.disk_used_ratio:.0%};到 90% 机器人就不接新的巡检(不删没传完的)")
+                kind="disk_80", robot=rid, title="机器人的发件箱所在的盘即将写满",
+                detail=f"已用 {f.disk_used_ratio:.0%};到 90% 机器人就不接新的巡检(不删未传完的)")
         elif f.disk_used_ratio < DISK_CLEAR_RATIO:
             m.disk80 = False
         oldest = f.oldest_backlog_s or 0
         if oldest >= BACKLOG_ALARM_S and not m.backlog:
             m.backlog = True
             self.desk.raise_alert(
-                kind="upload_backlog", robot=rid, title="机器人上的证据半小时没传上来",
+                kind="upload_backlog", robot=rid, title="机器人上的证据半小时未上传",
                 detail=f"积压 {f.backlog_files} 个文件、{f.backlog_bytes // 1024} KB,"
                        f"最老的等了 {oldest // 60} 分钟")
         elif oldest < BACKLOG_CLEAR_S:
@@ -728,8 +729,8 @@ class SiteAlertSources:
                 what += "(雷暴中出动)"                     # W29:雷暴照派,写明
         elif outcome in ("no_robot", "unmapped", "dispatch_failed", "merged"):
             kind, robot = "intrusion_unanswered", SITE
-            what = {"no_robot": "没有能派的机器人", "unmapped": "这个防区没设机器人去的拦截点",
-                    "dispatch_failed": "派了,机器人没收"}.get(str(outcome), "没机器人去")
+            what = {"no_robot": "没有能派的机器人", "unmapped": "此防区未设置机器人去的拦截点",
+                    "dispatch_failed": "派了,机器人未接收"}.get(str(outcome), "无机器人去")
         else:
             return
         prev = self.desk.absorbing(robot, kind)
@@ -738,7 +739,7 @@ class SiteAlertSources:
             zones.append(zone)
         names = "、".join(zones[:5]) + (f" 等 {len(zones)} 个防区" if len(zones) > 5 else "")
         title = (f"防区 {names} 有入侵:{what}" if kind == "intrusion"
-                 else f"防区 {names} 有入侵,没机器人去:{what}")
+                 else f"防区 {names} 有入侵,无机器人去:{what}")
         # 给保安看的说明(演示站点实测记下):谁报的、怎么回事,不写事件源编号、事件类型这些技术用语
         src = str(row.get("source") or "?")
         who = f"摄像头 {src[5:]}" if src.startswith("cctv-") else src
@@ -765,7 +766,7 @@ class SiteAlertSources:
         if item.get("kind") != "standby_failed":
             return
         self.desk.raise_alert(kind="standby_failed", robot=str(item.get("robot_id", SITE)),
-                              title="没回待命点",
+                              title="未返回待命点",
                               detail=f"{item.get('after', '?')} 结束后:"
                                      f"{item.get('reason', '')}"[:300])
 
@@ -774,5 +775,5 @@ class SiteAlertSources:
         before = self._site_errors.get(what, "")
         self._site_errors[what] = error
         if error and not before and what == "schedule":
-            self.desk.raise_alert(kind="schedule_died", robot=SITE, title="排程没办成",
-                                  detail=f"到点可能没人起跑:{error}")
+            self.desk.raise_alert(kind="schedule_died", robot=SITE, title="排程未完成",
+                                  detail=f"到点可能无人起跑:{error}")

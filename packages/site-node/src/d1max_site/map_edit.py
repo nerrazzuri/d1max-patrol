@@ -69,7 +69,7 @@ def _value(lut: bytes, rank: int, prefer: tuple[int, ...], what: str | None) -> 
         if lut[v] == rank:
             return v
     if what is not None:
-        raise EditError(f"这张图的 floor.yaml 阈值下没有哪个灰度算{what},改不了")
+        raise EditError(f"此地图的 floor.yaml 阈值下没有哪个灰度算{what},无法修改")
     return 0
 
 

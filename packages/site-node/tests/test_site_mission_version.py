@@ -65,9 +65,9 @@ async def test_任务绑的版本跟狗加载的对不上_不派_不记账(台):
 async def test_没绑版本的任务_不派_不拿狗的版本去补(台):
     t = 台
     await t.run(3)
-    with pytest.raises(DispatchRefused, match="没写 map_version") as ei:
+    with pytest.raises(DispatchRefused, match="未写 map_version") as ei:
         await t.site.patrol("A", _任务(map_version=None), issued_by="alice")
-    assert "第 7 版" not in str(ei.value), "说的是没绑版本,不是拿机器人的第 7 版去比"
+    assert "第 7 版" not in str(ei.value), "说的是未绑版本,不是拿机器人的第 7 版去比"
     assert not _patrols(t)
 
 
@@ -131,7 +131,7 @@ def test_老包_任务没绑版本_不导入_报错列出站点上这张图有�
         import_bundle(db, _老包(tmp_path, 老), imported_by="alice", now_ms=1)
     msg = str(ei.value)
     assert "loop.json" in msg and "map_version" in msg and "8、7" in msg, msg
-    assert active_bundle(db) is None, "没导入"
+    assert active_bundle(db) is None, "未导入"
     db.close()
 
 
@@ -173,7 +173,7 @@ async def test_排程_任务绑的版本跟狗的不一样_不派_记no_robot写
     [run] = t.sched.runs("nightly")
     assert run["outcome"] == "no_robot" and "第 6 版" in run["note"] and "第 7 版" in run["note"]
     assert not _patrols(t)
-    assert t.heard == [], "跟图不对一样:宽限期里先不说"
+    assert t.heard == [], "跟图错误一样:宽限期里先不说"
     t.clock.ms = 毫秒(22, 6)
     await t.send(t.sched.tick())
     assert [(e, o) for e, _, o, _ in t.heard] == [("nightly", "no_robot")]
@@ -195,7 +195,7 @@ async def test_排程_升级前导入的老任务没绑版本_不派_当场报(�
     老 = {k: v for k, v in 任务.items() if k != "map_version"}
     with t.db.tx() as c:
         c.execute("UPDATE routes SET definition=?, map_version=''", (json.dumps(老),))
-    assert active_bundle(t.db).missions["loop"].map_version == "", "老行读得出来,算没绑"
+    assert active_bundle(t.db).missions["loop"].map_version == "", "老行读得出来,算未绑"
     await _到点(t)
     [run] = t.sched.runs("nightly")
     assert run["outcome"] == "dispatch_failed" and "map_version" in run["note"]

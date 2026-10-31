@@ -53,8 +53,8 @@ async def test_没站准_对不上桩_超时失败_不发出桩():
     c, dog, t = _台(at=(2.0, 0.0, 0.0), dock_timeout_s=60)
     await t.start()
     await _跑(c, t, 70)
-    assert t.state is TaskState.FAILED and "没对上桩" in t.detail["reason"]
-    assert dog.undock_calls == 0, "没上过桩:不发出桩(厂家的出桩不在桩上也会往后退)"
+    assert t.state is TaskState.FAILED and "未对上桩" in t.detail["reason"]
+    assert dog.undock_calls == 0, "未上过桩:不发出桩(厂家的出桩不在桩上也会往后退)"
 
 
 async def test_充着被抢_先出桩再交():
@@ -87,7 +87,7 @@ async def test_充着充着断了_出桩_失败():
     dog.docked = False                                    # 被碰掉了
     dog._rebase_battery()
     await _跑(c, t, 40)
-    assert t.state is TaskState.FAILED and "充电断了" in t.detail["reason"]
+    assert t.state is TaskState.FAILED and "充电已断开" in t.detail["reason"]
 
 
 async def test_出不了桩_超时失败():
@@ -99,7 +99,7 @@ async def test_出不了桩_超时失败():
         dog.undock_calls += 1
     dog.undock = 出不来
     await _跑(c, t, 200)
-    assert t.state is TaskState.FAILED and "出不了桩" in t.detail["reason"]
+    assert t.state is TaskState.FAILED and "无法离开桩" in t.detail["reason"]
 
 
 async def test_回充起不来_直接失败():
@@ -153,7 +153,7 @@ async def test_出桩_不充了还要稳5秒才算出了桩():
     for _ in range(4):
         c.ms += 1000
         await t.step(1.0)
-    assert not dog.docked and not t.done, "刚不充:还没稳"
+    assert not dog.docked and not t.done, "刚不充:尚未稳"
     await _跑(c, t, 10)
     assert t.state is TaskState.DONE
 
@@ -173,7 +173,7 @@ async def test_外审1_停对桩失败_狗照样上了桩_改走出桩_确认离
     await _跑(c, t, 2)
 
     async def 停不了():
-        raise OSError("串口没回")
+        raise OSError("串口未返回")
     dog.recharge_stop = 停不了
     await t.abort("preempted")
     await _跑(c, t, 8)                                    # 停没停成,狗 5 秒时上了桩
@@ -203,8 +203,8 @@ async def test_外审2_出不了桩_超时挂桩上危险_才结束():
         dog.undock_calls += 1
     dog.undock = 出不来
     await _跑(c, t, 300)
-    assert t.state is TaskState.FAILED and "出不了桩" in t.detail["reason"]
-    assert got and "出不了桩" in got[0] and dog.docked
+    assert t.state is TaskState.FAILED and "无法离开桩" in t.detail["reason"]
+    assert got and "无法离开桩" in got[0] and dog.docked
 
 
 async def test_外审3_电池一直读不到_期限照样到_停对桩确认不了就挂危险():
@@ -213,11 +213,11 @@ async def test_外审3_电池一直读不到_期限照样到_停对桩确认不�
     await t.start()
 
     async def 读不到():
-        raise OSError("旁路进程没回")
+        raise OSError("旁路进程未返回")
     dog.battery = 读不到
     await _跑(c, t, 200)
     assert t.state is TaskState.FAILED and "停不住对桩" in t.detail["reason"], t.detail
-    assert got, "说不清:挂桩上危险"
+    assert got, "无法确定:挂桩上危险"
 
 
 async def test_外审3_出桩命令一直发不出去_期限照样到():
@@ -295,7 +295,7 @@ async def test_外审2_真代理_出不了桩_排着的入侵任务不许起跑_
         failed = [e for e in ears.by["event"] if e["kind"] == "task_failed"
                   and e["data"]["task_id"] == "g1"]
         assert failed and "on_dock" in failed[0]["data"]["reason"], "排着的入侵任务不许起跑"
-        assert abs(dog.x) < 0.01, "机器人没动"
+        assert abs(dog.x) < 0.01, "机器人未动"
         assert "hazard" in ears.by["capabilities"][-1]["tasks"]["dock"]
         await rt._on_cmd(_cmd("goto", {"target": target}, "g1b", c, priority=80))
         await broker.drain()
@@ -304,7 +304,7 @@ async def test_外审2_真代理_出不了桩_排着的入侵任务不许起跑_
         dog.docked = False                                # 人把狗挪下了桩
         dog._rebase_battery()
         await 跑(20)
-        assert rt._dock_hazard, "刚离桩:还没稳 5 秒,不摘"
+        assert rt._dock_hazard, "刚离桩:尚未稳 5 秒,不摘"
         await 跑(50)
         assert "hazard" not in ears.by["capabilities"][-1]["tasks"]["dock"]
         await rt._on_cmd(_cmd("goto", {"target": target}, "g2", c, priority=80))
@@ -319,7 +319,7 @@ async def test_外审2_真代理_出不了桩_排着的入侵任务不许起跑_
 
 def _状态读不到(dog):
     async def 读不到():
-        raise OSError("回充状态读不到")
+        raise OSError("回充状态无法读取")
     dog.recharge_status = 读不到
 
 
@@ -331,7 +331,7 @@ async def test_复查_停对桩后状态一直读不到_不在充也不交_到�
     _状态读不到(dog)
     await t.abort("preempted")
     await _跑(c, t, 30)
-    assert not t.done, "不在充 ≠ 离了桩:状态读不到就不交"
+    assert not t.done, "不在充 ≠ 离了桩:状态无法读取就不交"
     await _跑(c, t, 200)
     assert t.state is TaskState.FAILED and got, "到期:失败、挂桩上危险"
 
@@ -347,7 +347,7 @@ async def test_复查_出桩后状态读不到_不交():
         await t.step(1.0)
     _状态读不到(dog)
     await _跑(c, t, 30)
-    assert not t.done and not dog.docked, "电池说不充了,可状态读不到:不算离桩"
+    assert not t.done and not dog.docked, "电池说不充了,可状态无法读取:不算离桩"
     await _跑(c, t, 200)
     assert t.state is TaskState.FAILED and got
 
@@ -368,13 +368,13 @@ async def test_复查_真代理_挂着危险时状态读不到_不充也不摘�
                       odom_identity=True)
     await rt.start()
     try:
-        rt._set_dock_hazard("出不了桩")
+        rt._set_dock_hazard("无法离开桩")
         _状态读不到(dog)
         for _ in range(100):                               # 10 秒,不在充
             await rt.step(0.1)
             c.ms += 100
             c.mono += 0.1
-        assert rt._dock_hazard and rt._on_dock is None and rt._motion_gate(), "读不到:锁着"
+        assert rt._dock_hazard and rt._on_dock is None and rt._motion_gate(), "无法读取:锁着"
         del dog.recharge_status                            # 状态读得到了、确实不在桩上
         for _ in range(70):
             await rt.step(0.1)
@@ -407,7 +407,7 @@ async def test_W26外审2_充着时翻倒抱起来_停对桩不出桩_已经在�
     await t.force_stop("lifted")                          # 重复调没事
     await _跑(c, t, 200)
     assert dog.undock_calls == 0, "受力故障:一次都不发出桩"
-    assert t.state is TaskState.FAILED and "确认不了离了桩" in t.detail["reason"], \
+    assert t.state is TaskState.FAILED and "无法确认离了桩" in t.detail["reason"], \
         "还在桩上:挂桩上危险锁住,等人"
     c, dog, t = _台()
     await t.start()

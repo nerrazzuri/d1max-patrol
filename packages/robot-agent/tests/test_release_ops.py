@@ -120,7 +120,7 @@ def test_切到正在跑的那版_直接拒(ops, tmp_path):
     o, served, restarts, built, layout = ops
     (layout.release_dir(OLD) / "venv").mkdir(parents=True, exist_ok=True)
     (layout.release_dir(OLD) / "venv" / SENTINEL).write_text("ok")
-    with pytest.raises(ReleaseOpError, match="在跑"):          # engine.release 自己就拒
+    with pytest.raises(ReleaseOpError, match="正在运行"):          # engine.release 自己就拒
         o.activate(OLD)
     assert restarts == [] and rel.read_pending(layout) is None
 
@@ -142,7 +142,7 @@ def test_装了好几版不切_多的删掉_在跑的上一版刚装的留着(op
         o.install(_ref(served, n, _tar(_包(tmp_path, n))))
         assert n in set(rel.installed(layout)), "刚装的不许被删"
     left = set(rel.installed(layout))
-    assert OLD in left and names[-1] in left, "在跑的、刚装的都留着"
+    assert OLD in left and names[-1] in left, "正在运行的、刚装的都留着"
     assert len(left) <= rel.KEEP_RELEASES + 1
 
 
@@ -340,7 +340,7 @@ def test_新版在跑_点名切回老服务那一代的槽_拒_不切不重启(o
     o.install(_ref(served, NEW, _tar(_包(tmp_path, NEW))))
     o.activate(NEW)
     assert o.commit_if_pending() == NEW and restarts == [1]
-    assert o.ready(OLD), "前提:老槽是「装好了」的"
+    assert o.ready(OLD), "前提:老槽是「已安装」的"
     assert not o.can_switch_to(OLD)
     with pytest.raises(ReleaseOpError, match="启动脚本"):
         o.activate(OLD)
@@ -389,7 +389,7 @@ def test_装好了的再装一次_不重下_执行位照样补(ops, tmp_path):
     served[NEW] = b"not downloaded again"
     o.install(ref)
     assert start.stat().st_mode & 0o111 == 0o111 and o.can_switch_to(NEW)
-    assert built == [(NEW, NEW)], "装好了的不重建"
+    assert built == [(NEW, NEW)], "已安装的不重建"
 
 
 # ------------------------------------------------------------ W30:发行方签名(决策 43)
@@ -431,13 +431,13 @@ def test_W30_没签名_签名不对_别人的钥匙签的_改过的_都不装(op
         o.install(_ref(served, NEW, _tar(_包(tmp_path, NEW))))
     other = (tmp_path / "evil.key", tmp_path / "evil.pub")
     relsign.keygen(*other)
-    with pytest.raises(ReleaseOpError, match="签名对不上"):
+    with pytest.raises(ReleaseOpError, match="签名不匹配"):
         o.install(_ref(served, NEW, _tar(_签(_包(tmp_path, NEW), other[0]))))
     pkg = _签(_包(tmp_path, NEW), 钥匙[0])
     m = json.loads((pkg / "release.json").read_text())
     m["requires_mission_schema"] = 2                       # 改了签名覆盖的一项
     (pkg / "release.json").write_text(json.dumps(m))
-    with pytest.raises(ReleaseOpError, match="签名对不上"):
+    with pytest.raises(ReleaseOpError, match="签名不匹配"):
         o.install(_ref(served, NEW, _tar(pkg)))
     assert not o.ready(NEW) and built == [], "验不过:一个字节都不落槽、不建 venv"
 
@@ -445,7 +445,7 @@ def test_W30_没签名_签名不对_别人的钥匙签的_改过的_都不装(op
 def test_W30_狗上没装公钥_不装_开发放行才装(ops, tmp_path):
     o, served, restarts, built, layout = ops
     _验(o, tmp_path / "nope.pub")
-    with pytest.raises(ReleaseOpError, match="没装发行公钥"):
+    with pytest.raises(ReleaseOpError, match="未安装发行公钥"):
         o.install(_ref(served, NEW, _tar(_包(tmp_path, NEW))))
     _验(o, tmp_path / "nope.pub", allow=True)
     o.install(_ref(served, NEW, _tar(_包(tmp_path, NEW))))
@@ -474,4 +474,4 @@ def test_W30_命令行_keygen_sign_install验签(tmp_path, 钥匙):
     assert got.returncode == 0 and (nk.stat().st_mode & 0o777) == 0o600
     assert cli("keygen", str(nk), str(tmp_path / "k3.pub")).returncode == 2, "私钥在了不盖"
     got = cli("install", "--pubkey", str(tmp_path / "none.pub"), str(_包(tmp_path, OLD)))
-    assert got.returncode == 2 and "没装发行公钥" in got.stderr
+    assert got.returncode == 2 and "未安装发行公钥" in got.stderr

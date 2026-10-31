@@ -68,7 +68,7 @@ class RunDesk:
     def _run(self, run_id: int) -> dict[str, Any]:
         r = self.store.run(run_id)
         if r is None:
-            raise RunError(f"没有这一趟: {run_id}")
+            raise RunError(f"任务记录不存在: {run_id}")
         return r
 
     def detail(self, run_id: int) -> dict[str, Any]:
@@ -90,7 +90,7 @@ class RunDesk:
         except PathRefused as exc:
             raise RunError(str(exc)) from exc
         if not p.is_file():
-            raise RunError(f"这一趟里没有这张照片: {name}")
+            raise RunError(f"本次任务里没有这张照片: {name}")
         return p
 
     # ------------------------------------------------------------ 判读
@@ -204,11 +204,11 @@ class RunDesk:
         (大的要好几分钟,手机等不起),先回一份 ``state: building`` 的说明;``wait`` 为真就打完再回。
         每个文件的 sha256 是**写进 zip 的那份字节**算的(不是回头再读一遍)。不设条数上限。"""
         if until_ms <= since_ms:
-            raise RunError("导出的时间段不对")
+            raise RunError("导出的时间段错误")
         runs = self.store.runs_in(robot_id=robot_id, since_stamp=_stamp_of(since_ms),
                                   until_stamp=_stamp_of(until_ms))
         if not runs:
-            raise RunError("这个时间段里没有记录")
+            raise RunError("此时间段里没有记录")
         self.exports_dir.mkdir(parents=True, exist_ok=True)
         self._prune_exports()
         name = f"export-{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime(self._now() / 1000))}-" \

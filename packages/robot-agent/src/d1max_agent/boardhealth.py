@@ -109,7 +109,7 @@ class BoardConfig:
         out: list[FanCfg] = []
         for f in raw:
             if not isinstance(f, dict) or set(f) - {"name", "chip", "line", "pulses", "min_rpm"}:
-                raise BoardConfigError(f"风扇写法不对:{f!r}")
+                raise BoardConfigError(f"风扇写法错误:{f!r}")
             name, line = f.get("name"), f.get("line")
             pulses, min_rpm = f.get("pulses", 2), f.get("min_rpm", 300)
             if not isinstance(name, str) or not _NAME.fullmatch(name):
@@ -132,7 +132,7 @@ class BoardConfig:
         try:
             d = json.loads(Path(path).read_text(encoding="utf-8"))
         except (OSError, ValueError) as exc:
-            raise BoardConfigError(f"板子配置读不了: {exc}") from exc
+            raise BoardConfigError(f"板子配置无法读取: {exc}") from exc
         if not isinstance(d, dict) or set(d) - {"fans", "log_dir", "limits", "period_s"}:
             raise BoardConfigError("板子配置只认 fans、log_dir、limits、period_s")
         lim = d.get("limits") or {}
@@ -145,7 +145,7 @@ class BoardConfig:
             limits = Limits(**lim).check()
             period = float(d.get("period_s", PERIOD_S))
         except (TypeError, ValueError) as exc:
-            raise BoardConfigError(f"板子配置的数字不对: {exc}") from exc
+            raise BoardConfigError(f"板子配置的数字错误: {exc}") from exc
         if not 1 <= period <= 300:
             raise BoardConfigError("period_s 要在 1–300 秒")
         return cls(fans=cls.parse_fans(d.get("fans") or []),
@@ -277,7 +277,7 @@ def classify(soc: float | None, nvme: float | None, stopped: int, prev: str,
         parts.append(f"NVMe {nvme:.0f} °C")
     if stopped:
         parts.append(f"{stopped} 只风扇停了")
-    return LEVELS[lvl], ",".join(parts) or "读不到温度"
+    return LEVELS[lvl], ",".join(parts) or "无法读取温度"
 
 
 # ------------------------------------------------------------ 监视
@@ -338,7 +338,7 @@ class BoardMonitor:
                 log.error("风扇测速线拿不到(%s):%s", chip, exc)
                 for fan in self._fans:
                     if fan.cfg.chip == chip:
-                        fan.error = f"测速线拿不到:{exc}"
+                        fan.error = f"测速线无法获取:{exc}"
         self._last = self._mono()
 
     def close(self) -> None:
@@ -416,7 +416,7 @@ class BoardMonitor:
         if lost and LEVELS.index(lvl) < LEVELS.index(self.level):
             lvl = self.level
         if lost:
-            why = f"读不到 {'、'.join(lost)},按最后的读数算;{why}"
+            why = f"无法读取 {'、'.join(lost)},按最后的读数算;{why}"
         self.reason = why
         self.sampled = True
         self._log(soc_max, lvl)
@@ -461,11 +461,11 @@ class BoardMonitor:
         from d1max_contract.devices import device
         out = []
         if not self.sampled:
-            out.append(device("board", "offline", "还没读过温度"))
+            out.append(device("board", "offline", "尚未读过温度"))
         elif not self.soc and self.nvme is None:
             cn = {"warn": "警戒", "shed": "降负载", "critical": "严重过热"}.get(self.level)
             held = f";保持「{cn}」的保护,等读到低温再解除" if cn else ""
-            out.append(device("board", "offline", f"读不到温度(温区、NVMe 都没有){held}"))
+            out.append(device("board", "offline", f"无法读取温度(温区、NVMe 都没有){held}"))
         else:
             state = {"ok": "online", "warn": "degraded"}.get(self.level, "error")
             name = {"ok": "", "warn": "警戒:", "shed": "过热,已降负载:",
@@ -480,5 +480,5 @@ class BoardMonitor:
             elif f.cfg.name in stopped:
                 out.append(device(fid, "error", f"停转了({f.rpm} rpm)"))
             else:
-                out.append(device(fid, "online", "还没测" if f.rpm is None else f"{f.rpm} rpm"))
+                out.append(device(fid, "online", "尚未测" if f.rpm is None else f"{f.rpm} rpm"))
         return out

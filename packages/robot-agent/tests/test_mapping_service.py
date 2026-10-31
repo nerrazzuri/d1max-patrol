@@ -69,7 +69,7 @@ async def test_录包_停了重建过才算安定_重建出一张图_清单最�
         await svc.start("again")
     assert not svc.bag_settled(svc.bags_root / bag), "还在录"
     await svc.stop()
-    assert not svc.bag_settled(svc.bags_root / bag), "录完了没重建:留着当原料"
+    assert not svc.bag_settled(svc.bags_root / bag), "录完了未重建:留着当原料"
     ref = await svc.build(bag, "estate-1", "9")
     assert svc.bag_settled(svc.bags_root / bag), "重建过了:传完就可以删"
     out = svc.maps_out / "estate-1" / "9"
@@ -91,7 +91,7 @@ async def test_重建失败了放开_包照样留着(svc):
     svc.orch.fail = "MOLA 起不来"
     with pytest.raises(RuntimeError):
         await svc.build(bag, "estate-1", "9")
-    assert not svc.held and not svc.bag_settled(svc.bags_root / bag), "没重建成:原料留着"
+    assert not svc.held and not svc.bag_settled(svc.bags_root / bag), "未重建成:原料留着"
     assert not (svc.maps_out / "estate-1" / "9").exists()
     import os as _os
     old = (svc.bags_root / bag / DONE).stat().st_mtime - 8 * 86400
@@ -194,7 +194,7 @@ async def test_盘紧了传完的包不留着备重建(svc):
     await svc.start("yard")
     await svc.stop()
     bag = svc.bags_root / svc.last_bag
-    assert not svc.bag_settled(bag), "没重建、不满 7 天:留着"
+    assert not svc.bag_settled(bag), "未重建、不满 7 天:留着"
     facts = {"f": StorageFacts(disk_used_ratio=0.5, outbox_bytes=40, outbox_cap_bytes=100,
                                backlog_files=0, backlog_bytes=0, oldest_backlog_s=None)}
     svc.pressure = lambda: storage_pressure(facts["f"])
@@ -238,11 +238,11 @@ async def test_建图用的哪种射线_记下来给事件用(svc):
 
     async def 出图(bag, map_id):
         out = await real(bag, map_id)
-        (out / "build.json").write_text(json.dumps({"grid": {"rays": "synthetic:没给录包"}}))
+        (out / "build.json").write_text(json.dumps({"grid": {"rays": "synthetic:未提供录包"}}))
         return out
     svc.orch.rebuild = 出图
     await svc.build(svc.last_bag, "estate-1", "9")
-    assert svc.last_rays == "synthetic:没给录包"
+    assert svc.last_rays == "synthetic:未提供录包"
 
 
 async def test_边走边建_开录带目标_停下之后打包在线建好的_放进本地库(svc):
@@ -264,7 +264,7 @@ async def test_边走边建_开录带目标_停下之后打包在线建好的_�
 async def test_在线那份打不成_退回从录包建(svc):
     await svc.start("yard", target=("estate-1", "5"))
     await svc.stop()
-    svc.orch.package_fail = "建图没出 traj.tum"
+    svc.orch.package_fail = "建图未出 traj.tum"
     ref, mode = await svc.finish()
     assert mode == "bag" and svc.orch.mode == "bag" and ref.version == "5"
     assert "traj.tum" in svc.last_fallback
@@ -283,7 +283,7 @@ async def test_退回从录包建也不成_这一版没建成_包留着(svc):
 
 async def test_边走边建的版本狗上已经有一份在传_开录就拒(svc):
     (svc.maps_out / "estate-1" / "5").mkdir(parents=True)
-    with pytest.raises(MappingError, match="已经有一份"):
+    with pytest.raises(MappingError, match="已有一份"):
         await svc.start("yard", target=("estate-1", "5"))
     assert not svc.recording
 
@@ -336,7 +336,7 @@ async def test_上一趟还在打包_开录就拒_收尾时版本已在传也算
     with pytest.raises(MappingError, match="还在打包"):
         await svc.start("yard2")
     (svc.maps_out / "estate-1" / "5").mkdir(parents=True)
-    with pytest.raises(MappingError, match="已经有一份"):
+    with pytest.raises(MappingError, match="已有一份"):
         await svc.finish()
     assert svc.pending is None and not svc.held
 
@@ -419,9 +419,9 @@ async def test_预览_边走边建还没第一张_有了带图_since_相同不�
     assert d["png"] == doc["png"] and d["seq"] == 3 and d["age_s"] == 4.3
     for k in ("run", "res", "origin", "width", "height", "pose", "trail", "frames", "dropped"):
         assert d[k] == doc[k], k
-    assert "written_at" not in d, "给的是多久没更新,不是机器人的钟"
+    assert "written_at" not in d, "给的是多久未更新,不是机器人的钟"
     d = svc.preview(3)
-    assert "png" not in d and d["seq"] == 3 and d["trail"] == doc["trail"], "没新图:说明照给"
+    assert "png" not in d and d["seq"] == 3 and d["trail"] == doc["trail"], "未新图:说明照给"
     assert "png" in svc.preview(2)
 
 

@@ -122,8 +122,8 @@ class LocalNavParams:
                 f"xy_tol={self.xy_tol} 小于死区允许的最小一步 {floor_xy:.3f} m。"
                 f"控制量不能低于 min_fwd={self.min_fwd}(低于就不动了,清单 #37),"
                 f"脉冲不能短于 min_pulse_s={self.min_pulse_s},"
-                f"所以一步至少这么长;容差比它还小就永远收不了敛。"
-                f"要收紧容差得先想办法压低死区,不是改这个数。")
+                f"所以一步至少这么长;容差比它还小就永远收无法完成敛。"
+                f"要收紧容差得先想办法压低死区,不是改此数。")
         floor_yaw = self.min_yaw * self.yaw_speed_rps * self.min_pulse_s
         if self.yaw_tol < floor_yaw:
             raise ValueError(
@@ -198,8 +198,8 @@ class LocalNavBackend(NavBackend):
                 self._pose_host, self._pose_port)
         except OSError as exc:
             raise NavConnectionError(
-                f"连不上定位桥 {self._pose_host}:{self._pose_port}: {exc}。"
-                f"先确认 ROS 侧的 tools/ros2_pose_bridge.py 在跑") from exc
+                f"无法连接定位桥 {self._pose_host}:{self._pose_port}: {exc}。"
+                f"先确认 ROS 侧的 tools/ros2_pose_bridge.py 正在运行") from exc
         self._pump = asyncio.create_task(self._pump_frames())
         self._watchdog = asyncio.create_task(self._watch_loc())
 
@@ -325,7 +325,7 @@ class LocalNavBackend(NavBackend):
     def _fresh_pose(self, operation: str = "goto") -> Pose:
         self._refresh_loc()
         if self._pose is None:
-            raise NavRequestError(operation, "还没收到过任何位姿,定位桥连上了吗")
+            raise NavRequestError(operation, "尚未收到过任何位姿,定位桥连上了吗")
         if self._loc is not LocStatus.CONTINUOUS_LOC:
             raise NavRequestError(
                 operation, f"定位不可用({self._loc.value}),拒绝行走")
@@ -387,7 +387,7 @@ class LocalNavBackend(NavBackend):
         """
         path = self._maps_dir / f"{map_id}.yaml"
         if not path.exists():
-            raise NavRequestError("get_map_grid", f"没有这张图: {path}")
+            raise NavRequestError("get_map_grid", f"地图不存在: {path}")
         meta: dict[str, Any] = {
             "resolution": 0.05,
             "origin": [0.0, 0.0, 0.0],
@@ -413,9 +413,9 @@ class LocalNavBackend(NavBackend):
     async def start_mapping(self) -> None:
         raise NavRequestError(
             "start_mapping",
-            "自建导航不经这个口建图 —— 建图是 ROS 侧 slam_toolbox 的事,"
+            "自建导航不经此口建图 —— 建图是 ROS 侧 slam_toolbox 的事,"
             "见 docs/建图定位与巡检管线.md 第二节。这里明确抛错而不是假装"
-            "成功,免得上层以为图已经在建了")
+            "成功,免得上层以为图已在建了")
 
     async def stop_mapping(self) -> None:
         raise NavRequestError("stop_mapping", "理由同 start_mapping")
@@ -499,11 +499,11 @@ class LocalNavBackend(NavBackend):
         语义与 ``VendorNavBackend.goto`` 对齐 —— 契约测试两边共用。
         """
         if self._runner is not None and not self._runner.done():
-            raise NavRequestError("goto", "上一次导航还在跑,先 stop")
+            raise NavRequestError("goto", "上一次导航还正在运行,先 stop")
         if not self.connected:
-            raise NavConnectionError("定位桥没连上")
+            raise NavConnectionError("定位桥未连接")
         if self._current_map is None:
-            raise NavRequestError("goto", "还没 load_map,不知道这个坐标属于哪张图")
+            raise NavRequestError("goto", "尚未 load_map,未知此坐标属于哪张图")
         self._fresh_pose()          # 定位不可用就当场拒绝,别等跑起来才发现
         self._resumed.set()
         self._abort = None
@@ -669,7 +669,7 @@ class LocalNavBackend(NavBackend):
             raise NavRequestError(
                 "set_speed",
                 f"前进上限 {x} m/s 低于死区({p.min_fwd * p.fwd_speed_mps:.2f} m/s),"
-                f"这台机走不动;要停用 stop")
+                f"此机器人机无法行走;要停用 stop")
         if y is not None and abs(float(y)) > 1e-9:
             raise NavRequestError("set_speed", "自建导航不做侧移,y 只能是 0")
         yaw_cap = self._yaw_cap
@@ -713,7 +713,7 @@ def _read_pgm(path: Path) -> tuple[int, int, bytes]:
     解析。P2(ASCII)会被明确拒掉,而不是解出一堆看似合理的垃圾。
     """
     if not path.exists():
-        raise NavRequestError("get_map_grid", f"没有这个 pgm: {path}")
+        raise NavRequestError("get_map_grid", f"没有此 pgm: {path}")
     blob = path.read_bytes()
     if not blob.startswith(b"P5"):
         raise NavRequestError("get_map_grid", f"不是二进制 P5 格式的 pgm: {path}")

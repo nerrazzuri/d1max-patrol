@@ -153,18 +153,18 @@ class HealthDesk:
                 c.execute("INSERT OR REPLACE INTO meta VALUES ('health_ping', ?)", (str(now),))
             out["db"] = {"ok": True, "detail": "库能写"}
         except Exception as exc:  # noqa: BLE001
-            out["db"] = {"ok": False, "detail": f"库写不进去:{exc}"[:200]}
+            out["db"] = {"ok": False, "detail": f"库无法写入:{exc}"[:200]}
         lag = self._loop_lag() if self._loop_lag is not None else None
-        out["loop"] = ({"ok": True, "detail": "没接(命令行)"} if lag is None else
+        out["loop"] = ({"ok": True, "detail": "未接入(命令行)"} if lag is None else
                        {"ok": lag < LOOP_STUCK_S, "value": round(lag, 2),
                         "detail": f"事件循环 {lag:.1f} 秒前转过"
-                                  + ("" if lag < LOOP_STUCK_S else ":卡住了")})
+                                  + ("" if lag < LOOP_STUCK_S else ":卡住")})
         t = getattr(self.dispatcher, "_t", None) if self.dispatcher is not None else None
         conn = getattr(t, "connected", None)
-        out["broker"] = ({"ok": True, "detail": "没接(命令行)"} if conn is None else
-                         {"ok": bool(conn), "detail": "连着 MQTT" if conn else "MQTT 断了"})
+        out["broker"] = ({"ok": True, "detail": "未接入(命令行)"} if conn is None else
+                         {"ok": bool(conn), "detail": "连着 MQTT" if conn else "MQTT 已断开"})
         free = self._free(self.home)
-        out["disk"] = ({"ok": False, "detail": "量不了站点盘"} if free is None else
+        out["disk"] = ({"ok": False, "detail": "无法测量站点盘"} if free is None else
                        {"ok": free >= DISK_LOW, "value": round(free, 3),
                         "detail": f"站点盘还剩 {free:.0%}"})
         dest = getattr(self.backup, "dest", None) if self.backup is not None else None
@@ -176,11 +176,11 @@ class HealthDesk:
                 and ver.get("ok", True)
             out["backup"] = {"ok": ok, "value": bfree,
                              "detail": "备份盘" + (f"还剩 {bfree:.0%}" if bfree is not None
-                                                   else "量不了")
-                             + (";备份过期了" if st.get("stale") else "")
-                             + (";上次校验没过" if ver and not ver.get("ok") else "")}
+                                                   else "无法测量")
+                             + (";备份已过期" if st.get("stale") else "")
+                             + (";上次校验未通过" if ver and not ver.get("ok") else "")}
         else:
-            out["backup"] = {"ok": False, "detail": "没配备份:站点主机坏了数据就没了"}
+            out["backup"] = {"ok": False, "detail": "未配置备份:站点主机损坏将导致数据丢失"}
         if self.push is not None:
             v = self.push.view()
             out["push"] = {"ok": bool(v["configured"]) and not v["error"],
@@ -194,14 +194,14 @@ class HealthDesk:
         soon, worst = [], None
         for who, end in self._certs():
             if end is None:
-                soon.append(f"{who}读不了到期时间")
+                soon.append(f"{who}无法读取到期时间")
                 continue
             days = (end - now) / 86_400_000
             worst = days if worst is None else min(worst, days)
             if days < CERT_WARN_DAYS:
                 renewed = "在用的证书" in who
                 soon.append(f"{who}还有 {max(days, 0):.0f} 天到期"
-                            + ("(新证书签好了,拷到机器人上、重启代理)" if renewed else
+                            + ("(新证书已签发,拷到机器人上、重启代理)" if renewed else
                                "(d1max-site renew 续签)" if who.startswith("机器人") else ""))
         out["certs"] = {"ok": not soon, "value": None if worst is None else round(worst, 1),
                         "detail": ";".join(soon)[:300] or (f"证书最近的还有 {worst:.0f} 天到期"
@@ -212,7 +212,7 @@ class HealthDesk:
         lanes = self._lanes() if self._lanes is not None else {}
         stuck = [n for n, t0 in lanes.items() if self._mono() - t0 > LANE_STUCK_S]
         out["lanes"] = {"ok": not stuck,
-                        "detail": ("卡住了:" + "、".join(stuck)) if stuck else "后台道都在转"}
+                        "detail": ("卡住:" + "、".join(stuck)) if stuck else "后台道都在转"}
         return out
 
     @staticmethod
@@ -221,7 +221,7 @@ class HealthDesk:
             return v["why_off"]
         text = f"推送已配({'、'.join(v.get('providers') or [])}),{v['devices']} 台手机登记了"
         if v.get("devices_unreachable"):
-            text += f";其中 {v['devices_unreachable']} 台登记的通道站点没配,收不到"
+            text += f";其中 {v['devices_unreachable']} 台登记的通道站点未配置,无法接收"
         if v["why_off"]:
             text += f";{v['why_off']}"
         return text
@@ -251,9 +251,9 @@ class HealthDesk:
             return
         c = self.checks()
         done = True
-        for kind, key, title in (("cert_expiring", "certs", "证书快到期了"),
-                                 ("site_disk_low", "disk", "站点盘快满了"),
-                                 ("lane_stuck", "lanes", "站点后台有活卡住了")):
+        for kind, key, title in (("cert_expiring", "certs", "证书即将到期"),
+                                 ("site_disk_low", "disk", "站点盘即将写满"),
+                                 ("lane_stuck", "lanes", "站点后台有活卡住")):
             try:
                 open_ = self.alerts.has_open(SITE, kind)
                 if not c[key]["ok"] and not open_:
@@ -332,9 +332,9 @@ def _journal(unit: str, hours: int) -> str:
         got = subprocess.run(["journalctl", "-u", unit, "--since", f"-{hours}h", "--no-pager",
                               "-o", "short-iso"], capture_output=True, text=True, timeout=60)
     except (OSError, subprocess.TimeoutExpired) as exc:
-        return f"(读不了 {unit} 的日志:{exc})\n"
+        return f"(无法读取 {unit} 的日志:{exc})\n"
     if got.returncode != 0 and not got.stdout:
-        return f"(读不了 {unit} 的日志:{got.stderr.strip()[:300]})\n"
+        return f"(无法读取 {unit} 的日志:{got.stderr.strip()[:300]})\n"
     return got.stdout
 
 
@@ -348,7 +348,7 @@ def support_bundle(out: Path, *, home: Path, db: Any, health: HealthDesk | None,
         files[name] = (obj if isinstance(obj, bytes) else
                        json.dumps(obj, ensure_ascii=False, indent=1, default=str).encode())
     put("README.txt", ("Nexus Warden 站点诊断包。不含密钥、令牌、库文件、照片录像、机器人的位置;"
-                       "站点配置里像口令、密钥的值打了码,"
+                       "站点配置里像密码、密钥的值打了码,"
                        "日志里长串十六进制只留前 8 位。\n").encode())
     put("versions.json", {"site": site_version(), "python": platform.python_version(),
                           "os": platform.platform(), "generated_ms": now_ms,
@@ -363,7 +363,7 @@ def support_bundle(out: Path, *, home: Path, db: Any, health: HealthDesk | None,
         cfg = json.loads((home / "site.json").read_text(encoding="utf-8"))
         put("site.json", redact_cfg(cfg))
     except (OSError, ValueError) as exc:
-        put("site.json", {"error": f"读不了:{exc}"})
+        put("site.json", {"error": f"无法读取:{exc}"})
     tables = [r["name"] for r in db.query(
         "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")]
     put("db_counts.json", {t: db.query(f'SELECT COUNT(*) AS n FROM "{t}"')[0]["n"]

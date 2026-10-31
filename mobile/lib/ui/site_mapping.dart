@@ -810,8 +810,8 @@ class _SiteMapPreviewPageState extends State<SiteMapPreviewPage> {
               content: Text(tr(
                   '${_zones?['confirm_text'] ?? ''}.\nThe map can be sent to robots only after you confirm.'
                       '${prop == null ? '' : '\nCopied from version ${prop['from_version']}: adopting the $picked ticked item(s) of $offered; the rest are dropped.'}',
-                  '${_zones?['confirm_text'] ?? ''}。\n确认之后这张图才能下发给机器人。'
-                      '${prop == null ? '' : '\n从第 ${prop['from_version']} 版带过来的 $offered 个里，采纳勾上的 $picked 个，没勾的不要了。'}')),
+                  '${_zones?['confirm_text'] ?? ''}。\n确认后此地图才能下发给机器人。'
+                      '${prop == null ? '' : '\n从第 ${prop['from_version']} 版带入的 $offered 项中，采纳已勾选的 $picked 项，其余放弃。'}')),
               actions: [
                 TextButton(
                     onPressed: () => Navigator.pop(c, false),
@@ -1042,7 +1042,7 @@ class _SiteMapPreviewPageState extends State<SiteMapPreviewPage> {
                           '原点 · ${p['robot_id']} · ${p['name']}  '
                               '(${(p['x'] as num).toStringAsFixed(1)}, ${(p['y'] as num).toStringAsFixed(1)})'),
                       style: TextStyle(color: Nw.of(context).tertiary)),
-                if (pts.isEmpty) Text(tr('No standby points on this map yet', '此地图上还没有待命点')),
+                if (pts.isEmpty) Text(tr('No standby points on this map yet', '此地图上暂无待命点')),
                 for (final p in pts)
                   Text('${p['robot_id']} · ${p['name']}${p['default'] == true ? tr(' (default)', '（默认）') : ''}  '
                       '(${(p['x'] as num).toStringAsFixed(1)}, ${(p['y'] as num).toStringAsFixed(1)})'),

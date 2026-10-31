@@ -89,7 +89,7 @@ class MolaBackend:
     async def load_prior(self, map_ref: tuple[str, str], dir: str) -> str:
         d = Path(dir) if dir else self.default_prior_dir
         if d is None:
-            return "代理没有给先验目录,本机也没配默认的"
+            return "代理没有给先验目录,本机也未配置默认的"
         mm, fj = d / PRIOR_FILE, d / FRAMES_FILE
         if not mm.is_file():
             return f"{d} 里没有 {PRIOR_FILE}"
@@ -118,7 +118,7 @@ class MolaBackend:
                          req: int | None = None, human: bool = True) -> str:
         """请 MOLA 重定位;收下(或者先记着)回空串,不收回原因。"""
         if self._frames is None:
-            return "先验还没载好"
+            return "先验尚未载好"
         want = RelocWant(float(x), float(y), float(yaw), float(sigma), req, human)
         if not self._alive:
             self._queue(want)
@@ -148,7 +148,7 @@ class MolaBackend:
         else:
             self._reloc_errs = 0
         if not ok:
-            return "定位程序没收下重定位", False
+            return "定位程序未接收下重定位", False
         if not self.core.relocalized(req=w.req, x=w.x, y=w.y, yaw=w.yaw, sigma=w.sigma,
                                      human=w.human):
             self._queue(w)                               # 核心这会儿收不了(在换图):记着(W09b 内审)
@@ -187,7 +187,7 @@ class MolaBackend:
         if self.core.lidar_blocked:
             return
         if self.core.take_restart():
-            self._spawn(self.supervisor.restart("定位程序卡住了,在重启"), "重启 MOLA")
+            self._spawn(self.supervisor.restart("定位程序卡住,在重启"), "重启 MOLA")
             return
         if self._pending is not None and self._now() - self._pending_at > PENDING_MAX_S:
             log.warning("人给的位置记了 %g 秒还没用上,扔掉", PENDING_MAX_S)

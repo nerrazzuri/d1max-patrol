@@ -84,7 +84,7 @@ def test_合并_后雷达的点换进前雷达系_跟同一个世界对得上():
     near_ground = np.abs(w[:, 2]) < 0.02
     assert near_ground.mean() > 0.4 and w[:, 2].min() > -0.02, "后雷达的地面点也落在地面上"
     xs = transform(Twf, transform(ls.T_FRONT_REAR, r))[:, 0]
-    assert xs.min() < 1.0, "后雷达看见了狗身后的墙(前雷达看不见)"
+    assert xs.min() < 1.0, "后雷达看见了机器人身后的墙(前雷达看不见)"
     assert len(voxel_down(m, 0.05)) < len(m)
 
 
@@ -141,7 +141,7 @@ def test_标定_后雷达的点是乱的_拒():
     rng = np.random.default_rng(3)
     junk = [(Twf, f, rng.uniform(-10, 10, (len(r), 3))) for Twf, f, r in fr]
     r = calib.calibrate(junk, ls.T_FRONT_REAR)
-    assert not r.ok and ("对上的点" in r.why or "对不上" in r.why or "残差" in r.why), r.why
+    assert not r.ok and ("对上的点" in r.why or "不匹配" in r.why or "残差" in r.why), r.why
 
 
 def test_标定_没有帧():

@@ -23,7 +23,7 @@ class ResourceLedger:
         for r in resources_for(kind):
             held = self._holder.get(r)
             if held is not None and held != task_id:
-                raise RuntimeError(f"{r} 被 {held} 占着,{task_id} 拿不到")
+                raise RuntimeError(f"{r} 被 {held} 占着,{task_id} 无法获取")
             self._holder[r] = task_id
 
     def release(self, task_id: str) -> None:

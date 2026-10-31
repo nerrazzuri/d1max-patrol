@@ -151,7 +151,7 @@ class _Handler(TlsHandlerMixin):
                 return self._refuse(404, str(exc))
             return self._stream(path)
         if len(parts) != 5 or parts[1] != "maps" or self.site.maps is None:
-            return self._refuse(404, "没有这个")
+            return self._refuse(404, "没有此")
         try:
             path = self.site.maps.file_path(unquote(parts[2]), unquote(parts[3]),
                                             unquote(parts[4]))
@@ -197,7 +197,7 @@ class _Handler(TlsHandlerMixin):
         if kind is None or (kind in ("maps", "bags") and self.site.maps is None) \
                 or (kind == "video" and self.site.recordings is None):
             self._drain()
-            return self._refuse(404, "没有这个")
+            return self._refuse(404, "没有此")
         robot = self.site.robot_for(self.connection.getpeercert(binary_form=True))
         if robot is None:
             self._drain()
@@ -215,7 +215,7 @@ class _Handler(TlsHandlerMixin):
         data = self.rfile.read(n)
         if len(data) != n:
             self.close_connection = True
-            return self._refuse(400, "body 没读全")
+            return self._refuse(400, "body 未读全")
         run = unquote(self.headers.get(H_RUN, ""))
         rel = unquote(self.headers.get(H_REL, ""))
         put = {"runs": self.site.store.put,
@@ -239,11 +239,11 @@ class _Handler(TlsHandlerMixin):
             return self._refuse(400, str(exc))
         except OSError as exc:
             log.warning("证据库写不进去: %s", exc)
-            return self._later(507, f"站点盘写不进去: {exc}")
+            return self._later(507, f"站点盘无法写入: {exc}")
         if got.discarded:
             # 删过了(PR #87 复查 R3):一个字节没收,叫狗当传完(新代理认 discarded)
             return self._reply(200, {"ok": True, "stored": total, "sha256": "", "discarded": True,
-                                     "message": "这份证据站点上已经删过了:不收"})
+                                     "message": "这份证据站点上已删过了:不收"})
         self._reply(200, {"ok": True, "stored": got.size, "sha256": got.sha256, "message": ""})
 
     def _drain(self) -> None:

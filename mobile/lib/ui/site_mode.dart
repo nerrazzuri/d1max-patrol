@@ -124,7 +124,7 @@ class _SiteModePageState extends State<SiteModePage> {
           title: Text(tr('Temp disarm: which zones to disarm in addition to Stay?',
               '临时撤防：在「留守」基础上，还要撤防哪些防区？')),
           content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-            if (zones.isEmpty) Text(tr('No zones yet (disarms as in Stay only)', '还没有防区（仅按「留守」撤防）')),
+            if (zones.isEmpty) Text(tr('No zones yet (disarms as in Stay only)', '暂无防区（仅按「留守」撤防）')),
             Wrap(spacing: 6, children: [
               for (final z in zones)
                 FilterChip(
@@ -228,7 +228,7 @@ class _SiteModePageState extends State<SiteModePage> {
                 style: NwText.labelMedium.copyWith(color: c.textSecondary)),
             const SizedBox(height: Nw.s8),
             if (_zones.isEmpty)
-              Text(tr('No zones yet', '还没有防区'), style: NwText.bodyMedium.copyWith(color: c.textSecondary)),
+              Text(tr('No zones yet', '暂无防区'), style: NwText.bodyMedium.copyWith(color: c.textSecondary)),
             if (_zones.isNotEmpty)
               NwCard(
                   padding: EdgeInsets.zero,

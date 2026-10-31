@@ -51,7 +51,7 @@ void main() {
   });
 
   testWidgets('管理员：机器人拒了说原因', (t) async {
-    final api = _api('admin')..interceptError = const SiteError(409, '机器人没标:moving');
+    final api = _api('admin')..interceptError = const SiteError(409, '机器人标记失败:moving');
     await _open(t, api);
     await t.tap(find.byKey(SiteInterceptsPage.hereKey));
     await t.pumpAndSettle();

@@ -50,7 +50,7 @@ def decode(code: str) -> dict[str, Any]:
     try:
         d = json.loads(base64.urlsafe_b64decode(body + "=" * (-len(body) % 4)))
     except (ValueError, TypeError) as exc:
-        raise ProvisionError("开通码坏了(抄错了?)") from exc
+        raise ProvisionError("开通码无效(请检查是否输错)") from exc
     for k in ("api", "fp", "mqtt", "id", "t"):
         if not isinstance(d.get(k), str) or not d[k]:
             raise ProvisionError(f"开通码里缺 {k}")
@@ -77,7 +77,7 @@ def issue_code(db: Any, cfg: dict[str, Any], home: Path, robot_id: str, *, finge
                         (robot_id,)).fetchone()
         if row is None or row["revoked"] or row["fingerprint"] != cert_fp \
                 or (expect_fp is not None and row["fingerprint"] != expect_fp):
-            raise ProvisionError(f"{robot_id} 没登记、已吊销,或者证书包不是登记的这一代:先 enroll")
+            raise ProvisionError(f"{robot_id} 未登记、已吊销,或者证书包不是登记的这一代:先 enroll")
         c.execute("INSERT INTO enroll_claims(robot_id, token_hash, created_ms, expires_ms, "
                   "used_ms, cert_fp) VALUES (?,?,?,?,NULL,?) ON CONFLICT(robot_id) DO UPDATE SET "
                   "token_hash=excluded.token_hash, created_ms=excluded.created_ms, "
@@ -90,7 +90,7 @@ def issue_code(db: Any, cfg: dict[str, Any], home: Path, robot_id: str, *, finge
 
 
 #: 对不上一律这一句(不说是没这只狗、令牌不对、过期了还是用过了)。
-DENIED = "开通码不对、过期了或者已经用过了:在站点上重新出一个"
+DENIED = "开通码错误、已过期或者已用过了:在站点上重新出一个"
 
 
 def _cert_fp(pem: bytes) -> str:
@@ -140,5 +140,5 @@ def claim(db: Any, home: Path, robot_id: str, token: str, *, now_ms: int) -> dic
             raise ProvisionError(DENIED)
         c.execute("UPDATE enroll_claims SET used_ms=? WHERE robot_id=?", (now_ms, robot_id))
     if snap is None or any(n not in snap for n in REQUIRED):
-        raise ProvisionError("站点上这台机器人的证书包不全:重新 enroll")
+        raise ProvisionError("站点上此机器人的证书包不全:重新 enroll")
     return {n: base64.b64encode(v).decode("ascii") for n, v in snap.items()}

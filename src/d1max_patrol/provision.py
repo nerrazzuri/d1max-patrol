@@ -57,7 +57,7 @@ def decode(code: str) -> dict[str, Any]:
     try:
         d = json.loads(base64.urlsafe_b64decode(body + "=" * (-len(body) % 4)))
     except (ValueError, TypeError) as exc:
-        raise ProvisionError("开通码坏了(抄错了?)") from exc
+        raise ProvisionError("开通码无效(请检查是否输错)") from exc
     for k in ("api", "fp", "mqtt", "id", "t"):
         if not isinstance(d.get(k), str) or not d[k]:
             raise ProvisionError(f"开通码里缺 {k}")
@@ -68,7 +68,7 @@ def claim(code: dict[str, Any], *, timeout_s: float = 20.0) -> dict[str, bytes]:
     """连站点接口、**先核证书指纹**、再拿令牌领证书包。回 ``{文件名: 内容}``。"""
     u = urlparse(code["api"])
     if u.scheme != "https" or not u.hostname:
-        raise ProvisionError(f"站点接口地址不对:{code['api']}")
+        raise ProvisionError(f"站点接口地址错误:{code['api']}")
     ctx = ssl.create_default_context()
     ctx.check_hostname = False
     ctx.verify_mode = ssl.CERT_NONE                     # 不靠 CA 链:靠下面钉住的指纹
@@ -77,12 +77,12 @@ def claim(code: dict[str, Any], *, timeout_s: float = 20.0) -> dict[str, bytes]:
         try:
             conn.connect()
         except OSError as exc:
-            raise ProvisionError(f"连不上站点 {u.hostname}:{u.port}:{exc}") from exc
+            raise ProvisionError(f"无法连接站点 {u.hostname}:{u.port}:{exc}") from exc
         der = conn.sock.getpeercert(binary_form=True) or b""
         got = hashlib.sha256(der).hexdigest()
         if got != code["fp"].lower():
-            raise ProvisionError(f"站点证书指纹对不上(开通码里是 {code['fp'][:16]}…,"
-                                 f"连上的是 {got[:16]}…):不是那个站点,没发令牌")
+            raise ProvisionError(f"站点证书指纹不匹配(开通码里是 {code['fp'][:16]}…,"
+                                 f"连上的是 {got[:16]}…):不是那个站点,未发令牌")
         body = json.dumps({"robot_id": code["id"], "token": code["t"]}).encode()
         conn.request("POST", "/api/enroll/claim", body=body,
                      headers={"Content-Type": "application/json"})
@@ -160,8 +160,8 @@ def provision(code_text: str, *, etc: Path = ETC, user: str | None = "robot", fo
         except (OSError, ValueError):
             old = None
         if old and old != code["id"]:
-            raise ProvisionError(f"这台狗已经开通成 {old} 了,开通码是给 {code['id']} 的:"
-                                 "一台狗只该有一个身份;确定要换加 --force")
+            raise ProvisionError(f"此机器人已开通成 {old} 了,开通码是给 {code['id']} 的:"
+                                 "一台机器人只该有一个身份;确定要换加 --force")
     owner = _owner(user)
     files = claimer(code)
     for name, data in files.items():
@@ -196,7 +196,7 @@ def _mqtt_tls(url: str, etc: Path, timeout_s: float = 10.0) -> str:
     """用自己的证书跟站点 MQTT 做一次 TLS 握手。回空串 = 通了。"""
     u = urlparse(url)
     if not u.hostname:
-        return f"地址不对:{url}"
+        return f"地址错误:{url}"
     try:
         ctx = ssl.create_default_context(cafile=str(etc / "tls" / "ca.crt"))
         ctx.check_hostname = True
@@ -234,13 +234,13 @@ def selfcheck(*, etc: Path = ETC, user: str | None = "robot",
     rid = ""
     try:
         rid = json.loads((etc / "registration.json").read_text(encoding="utf-8"))["robot_id"]
-        out.append(Check("PASS", "注册文件", f"狗的编号 {rid}"))
+        out.append(Check("PASS", "注册文件", f"机器人的编号 {rid}"))
     except (OSError, ValueError, KeyError) as exc:
-        out.append(Check("FAIL", "注册文件", f"读不了 registration.json:{exc}(还没开通?)"))
+        out.append(Check("FAIL", "注册文件", f"无法读取 registration.json:{exc}(尚未开通?)"))
     for name in ("ca.crt", "robot.crt", "robot.key"):
         p = etc / "tls" / name
         if not p.is_file():
-            out.append(Check("FAIL", f"证书 {name}", "没有(还没开通?)"))
+            out.append(Check("FAIL", f"证书 {name}", "没有(尚未开通?)"))
     key = etc / "tls" / "robot.key"
     if key.is_file():
         st = key.stat()
@@ -249,7 +249,7 @@ def selfcheck(*, etc: Path = ETC, user: str | None = "robot",
         if bad:
             out.append(Check("FAIL", "私钥权限", f"{oct(st.st_mode & 0o777)}:别的用户读得到"))
         elif own is not None and st.st_uid != own[0]:
-            out.append(Check("FAIL", "私钥权限", f"属主不是 {user}:代理读不了自己的私钥"))
+            out.append(Check("FAIL", "私钥权限", f"属主不是 {user}:代理无法读取自己的私钥"))
         else:
             out.append(Check("PASS", "私钥权限", oct(st.st_mode & 0o777)))
     pub = etc / "release-pub.pem"
@@ -260,13 +260,14 @@ def selfcheck(*, etc: Path = ETC, user: str | None = "robot",
         out.append(Check("WARN", "发行公钥",
                          "没有:站点下发的升级会被拒(包里带上 deploy/release-pub.pem 重装)"))
     out.append(Check("PASS", "证据公钥", "照片、录像封着存") if (etc / "evidence-pub.key").is_file()
-               else Check("WARN", "证据公钥", "没有:照片、录像明文存在狗上(站点没配证据私钥?)"))
+               else Check("WARN", "证据公钥", ("没有:"
+                                           "照片、录像明文存在机器人上(站点未配置证据私钥?)")))
     env = _env(etc)
     for k in ("D1MAX_SITE_MQTT", "D1MAX_MAP", "D1MAX_HOME"):
         if env.get(k):
             out.append(Check("PASS", f"env {k}", env[k]))
         else:
-            out.append(Check("FAIL", f"env {k}", "没填:代理不起"))
+            out.append(Check("FAIL", f"env {k}", "未填:代理不起"))
     if env.get("D1MAX_SITE_MQTT") and all((etc / "tls" / n).is_file()
                                           for n in ("ca.crt", "robot.crt", "robot.key")):
         why = mqtt_probe(env["D1MAX_SITE_MQTT"], etc)
@@ -277,22 +278,23 @@ def selfcheck(*, etc: Path = ETC, user: str | None = "robot",
         # 商业化 A5:装在自带算力板上,雷达、相机话题从厂商 Orin(网关)的 zenoh 路由拉
         raw = env.get("D1MAX_GATEWAY_ZENOH_PORT") or "7447"
         port = int(raw) if raw.isdigit() else 0
-        why = tcp_probe(gw, port) if port else f"端口不对:{raw}"
-        out.append(Check("FAIL", "网关", f"{gw}:{port} 的 zenoh 连不上({why}):板子接进狗内网了吗?"
-                                         "网关地址对吗?") if why
+        why = tcp_probe(gw, port) if port else f"端口错误:{raw}"
+        out.append(Check("FAIL", "网关", f"{gw}:{port} 的 zenoh "
+                                       f"无法连接({why}):板子接进机器人内网了吗?"
+                                       "网关地址对吗?") if why
                    else Check("PASS", "网关", f"{gw}:{port} 的 zenoh 连得上;记得 "
                                               "systemctl enable --now d1max-zenohd"))
     rc, txt = run(["timedatectl", "show", "-p", "NTPSynchronized", "--value"])
     out.append(Check("PASS", "对时", "已同步") if rc == 0 and txt == "yes"
-               else Check("WARN", "对时", f"没同步({txt or rc}):录像、告警的时间会不准"))
+               else Check("WARN", "对时", f"未同步({txt or rc}):录像、告警的时间会不准"))
     try:
         u = disk_usage(Path("/"))
         free = u.free / u.total
         out.append(Check("PASS" if free >= 0.15 else "WARN", "盘", f"还剩 {free:.0%}"))
     except OSError as exc:
-        out.append(Check("WARN", "盘", f"量不了:{exc}"))
+        out.append(Check("WARN", "盘", f"无法测量:{exc}"))
     rc, txt = run(["systemctl", "is-active", "d1max-agent"])
-    out.append(Check("PASS", "代理服务", "在跑") if txt == "active"
+    out.append(Check("PASS", "代理服务", "正在运行") if txt == "active"
                else Check("WARN", "代理服务", f"{txt or rc}:开通、填好 env 以后 "
                                                "sudo systemctl restart d1max-agent"))
     return out

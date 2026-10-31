@@ -79,7 +79,7 @@ async def test_第一张照片时盘满_引擎照样走完_这个点按照片存
     assert state in FINAL_STATES, "引擎不许卡在 RUNNING"
     assert engine.snapshot.state is state, "对外快照也是终态"
     first = engine.snapshot.results[0]
-    assert not first.ok and "照片存不下" in first.note
+    assert not first.ok and "照片无法保存" in first.note
     assert "No space" in engine.archive_error
     await engine.aclose()
 
@@ -148,7 +148,7 @@ async def test_停导航抛非导航错_中止照样走完_原因不丢(make_eng
 
     async def 停不了():
         nav.stop_calls += 1
-        raise TimeoutError("旁路进程回不了停车回执")
+        raise TimeoutError("旁路进程回无法完成停车回执")
     monkeypatch.setattr(nav, "stop", 停不了)
     await engine.abort("人工中止")
     state = await engine.wait_done(timeout_s=3.0)

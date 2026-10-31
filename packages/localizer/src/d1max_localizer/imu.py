@@ -150,7 +150,7 @@ def fit_axes(w_body: Any, gyro: Any) -> AxesFit:
     std = wb_c.std(axis=0)
     k = int(np.argmax(std))
     if std[k] < MIN_RATE_STD:
-        return AxesFit(False, f"这段没怎么转(角速度标准差最大 {std[k]:.3f} rad/s,"
+        return AxesFit(False, f"这段未怎么转(角速度标准差最大 {std[k]:.3f} rad/s,"
                               f"要 ≥ {MIN_RATE_STD}):录一段原地左右转", frames=n)
     u, _, vt = np.linalg.svd(g_c.T @ wb_c)
     d = np.sign(np.linalg.det(vt.T @ u.T)) or 1.0
@@ -158,7 +158,7 @@ def fit_axes(w_body: Any, gyro: Any) -> AxesFit:
     pred = g_c @ r.T
     corr = float(np.corrcoef(wb_c[:, k], pred[:, k])[0, 1])
     if not corr > MIN_CORR:
-        return AxesFit(False, f"陀螺仪跟机身的转动对不上(相关 {corr:.2f},要 > {MIN_CORR}):"
+        return AxesFit(False, f"陀螺仪与机身的转动不匹配(相关 {corr:.2f},要 > {MIN_CORR}):"
                               "IMU 话题选对了吗、时间对得上吗", yaw_corr=corr, frames=n)
     # 24 种直角装法各算残差:原地转的录包只有一根轴转得强,自由拟合在另两根上会漂(真包漂过 20°),
     # 挑残差最小的;最小的两个分不出来 = 另两根轴定不下来
@@ -168,14 +168,14 @@ def fit_axes(w_body: Any, gyro: Any) -> AxesFit:
     off = _angle_deg(best, r)
     weak = bool(np.sort(std)[-2] < WEAK_RATIO * std[k])
     if r2 - r1 < MIN_MARGIN * max(r1, 1e-12) + 1e-12:
-        return AxesFit(False, "只转了朝向、机身几乎没晃:另两根轴定不下来(录一段走动的)",
+        return AxesFit(False, "只转了朝向、机身几乎未晃:另两根轴定不下来(录一段走动的)",
                        yaw_corr=corr, frames=n)
     if off > SNAP_DEG and weak:
         free = float(np.sum((wb_c - g_c @ r.T) ** 2))
         shake = float(np.sum(np.delete(wb_c, k, axis=1) ** 2))
         if r1 - free > WEAK_EXCESS * shake:
             clear = r1 - free > WEAK_EXCESS_NOISE * free / (3 * n)
-            what = ("直角装法明显对不上" if clear else
+            what = ("直角装法明显不匹配" if clear else
                     "陀螺仪噪声大,分不清是装歪了还是噪声")
             return AxesFit(False, f"另两根轴晃得少,拟合值离最近的直角装法 {off:.1f}°、{what}:"
                                   "定不下来(录一段走动的、上下坡或侧倾的)",

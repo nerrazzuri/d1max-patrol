@@ -109,7 +109,7 @@ def load_home(maps_dir: Path | str, map_id: str) -> HomePoint:
     """
     path = home_path(maps_dir, map_id)
     if not path.is_file():
-        raise HomeError(f"地图 {map_id!r} 没标过原点(应有 {path.name})")
+        raise HomeError(f"地图 {map_id!r} 未标原点(应有 {path.name})")
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
@@ -117,7 +117,7 @@ def load_home(maps_dir: Path | str, map_id: str) -> HomePoint:
     home = HomePoint.from_wire(raw)
     if home.map_id != map_id:
         # 文件名和内容对不上,说明有人拷贝改名过。信哪个都是猜。
-        raise HomeError(f"{path.name} 里记的是 {home.map_id!r},跟要读的 {map_id!r} 对不上")
+        raise HomeError(f"{path.name} 里记的是 {home.map_id!r},跟要读的 {map_id!r} 不匹配")
     return home
 
 

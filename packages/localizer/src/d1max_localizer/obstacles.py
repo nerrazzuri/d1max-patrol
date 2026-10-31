@@ -166,7 +166,7 @@ class RearMount:
 def _unit(v: Sequence[float]) -> tuple[float, float, float]:
     n = math.sqrt(sum(c * c for c in v))
     if not n or not math.isfinite(n):
-        raise ValueError(f"外参:向量长度不对 {v!r}")
+        raise ValueError(f"外参:向量长度错误 {v!r}")
     return (v[0] / n, v[1] / n, v[2] / n)
 
 
@@ -682,7 +682,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     ap.add_argument("--socket", type=Path, default=Path("/var/lib/d1max/agent/obs.sock"))
     ap.add_argument("--front-topic", default="/front_lidar")
     ap.add_argument("--rear-topic", default="",
-                    help="后雷达(空 = 不用;没标定只用它的「挡」,标过「空」也用)")
+                    help="后雷达(空 = 不用;未标定只用它的「挡」,标过「空」也用)")
     ap.add_argument("--lidars", type=Path, default=None,
                     help="后雷达外参 lidars.json(默认 /etc/d1max/lidars.json;没有 = 几何初值)")
     ap.add_argument("--sidecar", default="", help="旁路进程 host:port(发净空许可;空 = 不发)")

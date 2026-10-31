@@ -27,7 +27,7 @@ class SiteLink:
               body: dict[str, Any] | None = None) -> dict[str, Any]:
         u = urlparse(str(site.get("url") or ""))
         if u.scheme != "https" or not u.hostname:
-            raise LinkError(f"站点地址不对:{site.get('url')}")
+            raise LinkError(f"站点地址错误:{site.get('url')}")
         ctx = ssl.create_default_context()
         ctx.check_hostname = False
         ctx.verify_mode = ssl.CERT_NONE                 # 不靠 CA 链:靠下面钉住的指纹
@@ -37,11 +37,11 @@ class SiteLink:
             try:
                 conn.connect()
             except OSError as exc:
-                raise LinkError(f"连不上站点 {u.hostname}:{u.port or 443}:{exc}") from exc
+                raise LinkError(f"无法连接站点 {u.hostname}:{u.port or 443}:{exc}") from exc
             der = conn.sock.getpeercert(binary_form=True) or b""
             want = str(site.get("fp") or "").lower().removeprefix("sha256:")
             if hashlib.sha256(der).hexdigest() != want:
-                raise LinkError("站点证书指纹对不上:不是手机上配对的那个站点")
+                raise LinkError("站点证书指纹不匹配:不是手机上配对的那个站点")
             data = json.dumps(body).encode() if body is not None else None
             conn.request(method, path, body=data, headers={"Content-Type": "application/json"})
             resp = conn.getresponse()
@@ -49,7 +49,7 @@ class SiteLink:
         except (OSError, http.client.HTTPException) as exc:
             if isinstance(exc, LinkError):
                 raise
-            raise LinkError(f"跟站点说话断了:{exc}") from exc
+            raise LinkError(f"跟站点说话已断开:{exc}") from exc
         finally:
             conn.close()
         try:

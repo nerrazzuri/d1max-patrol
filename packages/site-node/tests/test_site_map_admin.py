@@ -140,7 +140,7 @@ def test_发布_每只狗一个结果_禁行区没确认拒_确认后狗换上_�
     assert code == 200
     by = {r["robot_id"]: r for r in d["results"]}
     assert by["A"]["state"] == "refused" and by["A"]["code"] == "zones_unconfirmed", by
-    assert by["ghost"]["state"] == "refused" and "没有这台机器人" in by["ghost"]["reason"]
+    assert by["ghost"]["state"] == "refused" and "机器人不存在" in by["ghost"]["reason"]
     _確认(s, alice, "8")
     code, d = _publish(s, alice, "8", ("A", "ghost"))
     by = {r["robot_id"]: r for r in d["results"]}
@@ -183,7 +183,7 @@ def test_回退_狗本地留着上一张_不向站点下载一个字节(站点, 
     assert code == 200 and d["result"]["ok"] and d["target"]["local"] is True, d
     _wait_loaded(s, "8")
     _等(lambda: _rc(s).get("previous") == [MAP[0], "9"])
-    assert reads == [], "回退用机器人本地留着的那张:站点没被要过任何文件"
+    assert reads == [], "回退用机器人本地留着的那张:站点未被要过任何文件"
     # 审计是回完请求才写的:等那一条写进来(原来直接取最新一条,偶尔取到上面 ghost 那次的,时灵时不灵)
     q = "SELECT target, detail FROM audit WHERE action LIKE '%/rollback' AND target='A'"
     _等(lambda: s.db.query(q))
@@ -276,7 +276,7 @@ def test_换图状态_从命令账和事件推_老代理的成功标出没等定
     cmd(2, now - 4000)
     ev(2, "map_activated", {"task_id": "t2", "confirmed": "localizer"})
     cmd(3, now - 3000)
-    ev(3, "map_activate_failed", {"task_id": "t3", "reason": "定位器不收这张图的先验:坏了"})
+    ev(3, "map_activate_failed", {"task_id": "t3", "reason": "定位器不收此地图的先验:已损坏"})
     cmd(4, now - 2000, ack="rejected", reason="busy")
     cmd(5, now - 1000)
     cmd(6, now - 50 * 60_000)

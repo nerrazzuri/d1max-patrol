@@ -170,9 +170,9 @@ def test_v2_caster_分块传输也认():
 
 
 @pytest.mark.parametrize("head, 说", [
-    (b"HTTP/1.1 401 Unauthorized\r\n\r\n", "账号密码不对"),
+    (b"HTTP/1.1 401 Unauthorized\r\n\r\n", "账号密码错误"),
     (b"SOURCETABLE 200 OK\r\nContent-Type: text/plain\r\n\r\nSTR;X;\r\nENDSOURCETABLE\r\n",
-     "挂载点不对"),
+     "挂载点错误"),
     (b"HTTP/1.1 503 Busy\r\n\r\n", "503"),
 ])
 def test_caster_拒了_说人话_密码不进错误(monkeypatch, head, 说):

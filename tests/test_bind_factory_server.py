@@ -203,7 +203,7 @@ def test_外审I8_服务停不下就不删(出厂):
     failed = wp.wipe(paths, router=router,
                      run=lambda cmd: 1 if cmd[:2] == ["systemctl", "stop"] else 0,
                      trim=lambda m: (0, ""))
-    assert failed and "数据还没删" in failed[0]
+    assert failed and "数据尚未删" in failed[0]
     assert (paths.data_root / "x").exists()
 
 

@@ -84,7 +84,7 @@ class OdomAnchor:
         self._last: tuple[float, float, float] | None = None
         #: 仿真里人设过位置:不再是「按原样」。
         self._moved = False
-        self.reason = "还没设位置:开机、换图之后要人给一次(或者说「机器人在原点」)"
+        self.reason = "尚未设位置:开机、换图之后要人给一次(或者说「机器人在原点」)"
 
     @property
     def source(self) -> str:
@@ -178,9 +178,9 @@ class OdomAnchor:
     def why_not(self, odom_ok: bool) -> str:
         """为什么不可信;可信是空串。"""
         if not self.anchored:
-            return self.reason or "还没设位置"
+            return self.reason or "尚未设位置"
         if not odom_ok:
-            return "运控里程不新鲜(旁路进程断了?)"
+            return "运控里程不新鲜(旁路进程已断开?)"
         if self.sigma_xy > SIGMA_LOST_M:
             return (f"设位置之后走了 {self._dist:.1f} m,位置偏差可能到 {self.sigma_xy:.1f} m,"
                     f"要重新设位置")

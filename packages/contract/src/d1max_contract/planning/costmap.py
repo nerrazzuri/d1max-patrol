@@ -99,7 +99,7 @@ def parse_pgm(data: bytes) -> np.ndarray:
     except ValueError:
         raise CostmapError("floor.pgm 头里的宽、高、最大值不是整数") from None
     if w < 1 or h < 1 or not 1 <= maxval <= 255:
-        raise CostmapError(f"floor.pgm 的宽高或最大值不对({w}×{h},{maxval})")
+        raise CostmapError(f"floor.pgm 的宽高或最大值错误({w}×{h},{maxval})")
     body = data[pos + 1:pos + 1 + w * h]
     if len(body) != w * h:
         raise CostmapError(f"floor.pgm 短了:要 {w * h} 字节,只有 {len(body)}")

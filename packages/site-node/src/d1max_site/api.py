@@ -187,7 +187,7 @@ def _cam_frames(v: Any) -> Iterator[bytes]:
             try:
                 f = next(frames)
             except TimeoutError as exc:
-                raise HttpError(504, f"摄像头没出画面:{v.error or exc}") from exc
+                raise HttpError(504, f"摄像头未出画面:{v.error or exc}") from exc
             except StopIteration:
                 if first:
                     raise HttpError(502, f"摄像头画面拉不下来:{v.error}") from None
@@ -209,7 +209,7 @@ class HttpError(Exception):
 
 def check_exposure(host: str, tls: tuple[Path, Path] | None) -> None:
     if host not in LOCAL_HOSTS and tls is None:
-        raise SystemExit(f"拒绝启动:站点 API 绑到 {host} 会把账号口令明文暴露在网络上。"
+        raise SystemExit(f"拒绝启动:站点 API 绑到 {host} 会把账号密码明文暴露在网络上。"
                          "加 --tls-cert/--tls-key(站点服务证书),或只绑 127.0.0.1。")
 
 
@@ -463,7 +463,7 @@ class _Handler(TlsHandlerMixin):
         try:
             d = json.loads(raw or b"{}")
         except (ValueError, UnicodeDecodeError) as exc:
-            raise HttpError(400, f"JSON 解析不了: {exc}") from exc
+            raise HttpError(400, f"JSON 无法解析: {exc}") from exc
         if not isinstance(d, dict):
             raise HttpError(400, "请求体要是 JSON 对象")
         return d
@@ -489,7 +489,7 @@ class _Handler(TlsHandlerMixin):
     def _user(self) -> str:
         name = self.site.accounts.check(self._token())
         if name is None:
-            raise HttpError(401, "没登录或登录已过期")
+            raise HttpError(401, "未登录或登录已过期")
         self._csrf_ok()
         self._actor = name
         return name
@@ -652,7 +652,7 @@ class _Handler(TlsHandlerMixin):
             if method == "GET" and path == "/api/schedule":
                 self._need(user, VIEW)
                 if self.site.scheduler is None:
-                    raise HttpError(404, "这个站点没开排程")
+                    raise HttpError(404, "此站点未启用排程")
                 return self._send_json(200, self.site.scheduler.view())
             if method == "GET" and path == "/api/patrols/today":
                 self._need(user, VIEW)
@@ -730,7 +730,7 @@ class _Handler(TlsHandlerMixin):
             if m is not None:
                 robot_id = unquote(m.group(1))
                 if not SAFE_ID.match(robot_id):
-                    raise HttpError(404, "没有这台机器人")
+                    raise HttpError(404, "机器人不存在")
                 if m.group(2) == "halt" and method == "POST":
                     return self._halt(robot_id, user)
                 if m.group(2) == "resume" and method == "POST":
@@ -752,19 +752,19 @@ class _Handler(TlsHandlerMixin):
             if m is not None and method == "GET":
                 robot_id = unquote(m.group(1))
                 if not SAFE_ID.match(robot_id):
-                    raise HttpError(404, "没有这台机器人")
+                    raise HttpError(404, "机器人不存在")
                 return self._mapping_read(robot_id, m.group(2), user)
             m = _LOGS.match(path)
             if m is not None and method == "GET":
                 robot_id = unquote(m.group(1))
                 if not SAFE_ID.match(robot_id):
-                    raise HttpError(404, "没有这台机器人")
+                    raise HttpError(404, "机器人不存在")
                 return self._proc_logs(robot_id, m.group(2), user)
             m = _VIDEO.match(path)
             if m is not None and method == "GET":
                 robot_id = unquote(m.group(1))
                 if not SAFE_ID.match(robot_id):
-                    raise HttpError(404, "没有这台机器人")
+                    raise HttpError(404, "机器人不存在")
                 return self._video(robot_id, m.group(2), user)
             if path == "/api/robots/nearest":
                 return self._nearest(method, user)
@@ -772,7 +772,7 @@ class _Handler(TlsHandlerMixin):
             if m is not None:
                 robot_id = unquote(m.group(1))
                 if not SAFE_ID.match(robot_id):
-                    raise HttpError(404, "没有这台机器人")
+                    raise HttpError(404, "机器人不存在")
                 return self._robot(method, robot_id, m.group(2), user)
             raise HttpError(404, f"没有 {method} {path}")
         except HttpError as exc:
@@ -793,7 +793,7 @@ class _Handler(TlsHandlerMixin):
     def _alerts(self, method: str, path: str, user) -> None:
         """告警与值守(W00c5a)。看:``view``;确认、解决:``handle_alerts``,人取登录账号。"""
         if self.site.alerts is None:
-            raise HttpError(404, "这个站点没开告警")
+            raise HttpError(404, "此站点未启用告警")
         from d1max_site.alerts import AlertNotFound
         if method == "GET" and path == "/api/alerts":
             self._need(user, VIEW)
@@ -846,7 +846,7 @@ class _Handler(TlsHandlerMixin):
                 a = self.site.loop.call(
                     lambda: _sync(self.site.alerts.resolve, key, who=str(user), verdict=verdict))
         except AlertNotFound as exc:
-            raise HttpError(404, "没有这条告警") from exc
+            raise HttpError(404, "没有此条告警") from exc
         except ValueError as exc:
             raise HttpError(400, str(exc)) from exc
         return self._send_json(200, {"alert": a.to_wire()})
@@ -859,7 +859,7 @@ class _Handler(TlsHandlerMixin):
         self._need(user, VIEW)
         pt = self.site.pose_track
         if pt is None:
-            raise HttpError(404, "这个站点没开位置轨迹")
+            raise HttpError(404, "此站点未启用位置轨迹")
         q = parse_qs(self.path.split("?", 1)[1] if "?" in self.path else "")
 
         def num(k: str) -> int:
@@ -888,7 +888,7 @@ class _Handler(TlsHandlerMixin):
         作者取登录账号)。"""
         notes = self.site.shift_notes
         if notes is None:
-            raise HttpError(404, "这个站点没开交班留言")
+            raise HttpError(404, "此站点未启用交班留言")
         if method == "GET":
             self._need(user, VIEW)
             return self._send_json(200, {"latest": notes.latest()})
@@ -947,7 +947,7 @@ class _Handler(TlsHandlerMixin):
         from d1max_site.layout_history import HistoryError
         h = self.site.layout_history
         if h is None:
-            raise HttpError(404, "这个站点没开历史版本")
+            raise HttpError(404, "此站点未启用历史版本")
         self._need(user, MANAGE)
         if hid is None:
             if method != "GET":
@@ -965,13 +965,13 @@ class _Handler(TlsHandlerMixin):
         body = self._body()
         row = h.get(int(hid))
         if row is None:
-            raise HttpError(404, "没有这一版")
+            raise HttpError(404, "版本不存在")
         # 外审 R3:请求要说清是哪一层、哪张图的哪一版(人在页面上看的那个);跟这一条对不上就拒绝,
         # 不按编号悄悄去改别的图
         exp = body.get("expect") if isinstance(body, dict) else None
         if not isinstance(exp, dict) or (exp.get("kind"), exp.get("map_id"), exp.get("version")) \
                 != (row["kind"], row["map_id"], row["map_version"]):
-            raise HttpError(409, "这一版不是你现在看的那张图、那一层的:刷新历史再退")
+            raise HttpError(409, "此版本不是你现在看的那张图、那一层的:请刷新历史后再回退")
         self._audit_target = f"{row['kind']}:{row['map_id']}:{row['map_version']}/{row['item']}"
         self._audit_detail = {"restore": row["id"]}
         warnings = self._restore(row, user)
@@ -1027,7 +1027,7 @@ class _Handler(TlsHandlerMixin):
                 warnings = self._restore_cameras(body or [])
         except (AreaError, ZonesError, RouteError, ValueError) as exc:
             code = 409 if isinstance(exc, (ZonesConflict, RouteConflict)) else 400
-            raise HttpError(code, f"退不回去:{exc}") from exc
+            raise HttpError(code, f"无法回退:{exc}") from exc
         return warnings
 
     def _restore_cameras(self, body: list[dict[str, Any]]) -> list[dict[str, str]]:
@@ -1064,7 +1064,7 @@ class _Handler(TlsHandlerMixin):
         from d1max_site.site_settings import SettingsError
         st = self.site.settings
         if st is None:
-            raise HttpError(404, "这个站点没开设置")
+            raise HttpError(404, "此站点未启用设置")
         if method == "GET":
             self._need(user, VIEW)
             return self._send_json(200, st.duty())
@@ -1252,7 +1252,7 @@ class _Handler(TlsHandlerMixin):
         if not isinstance(pts, list) or not 1 <= len(pts) <= TEMP_ROUTE_MAX:
             raise HttpError(400, f"points 要是 1–{TEMP_ROUTE_MAX} 个点")
         if self.site.routes is None:
-            raise HttpError(404, "这个站点没开路线库")
+            raise HttpError(404, "此站点未启用路线库")
         flat: list[dict[str, Any]] = []
         for i, p in enumerate(pts):
             q = p if isinstance(p, dict) else {}
@@ -1309,20 +1309,20 @@ class _Handler(TlsHandlerMixin):
                  if c[1] == map_id and c[2] == version]
         reach = getattr(self.site.incidents, "reach", None)
         if not cands:
-            raise HttpError(404, "这张图上没有能派的机器人")
+            raise HttpError(404, "此地图上没有能派的机器人")
         if reach is None:
-            raise HttpError(404, "站点没有这张图的规划栅格,算不了谁最近")
+            raise HttpError(404, "站点没有此地图的规划栅格,无法确定最近的机器人")
         from d1max_site.nearest import nearest
         got = nearest(reach, cands, map_id, version, x, y)
         if got is None:
-            raise HttpError(404, "这张图上没有能派的机器人")
+            raise HttpError(404, "此地图上没有能派的机器人")
         return self._send_json(200, got)
 
     def _standby(self, method: str, robot_id: str, action: str, user: str) -> None:
         from d1max_site.standby import StandbyError
         stb = self.site.standby
         if stb is None:
-            raise HttpError(404, "这个站点没开待命点")
+            raise HttpError(404, "此站点未启用待命点")
         if action == "standby/return":
             if method != "POST":
                 raise HttpError(405, "只支持 POST")
@@ -1370,7 +1370,7 @@ class _Handler(TlsHandlerMixin):
         except LockedOut as exc:
             raise HttpError(429, str(exc)) from exc
         if not ok:
-            raise HttpError(403, "密码不对")
+            raise HttpError(403, "密码错误")
 
     def _accounts(self, method: str, path: str, user=None) -> None:
         acc = self.site.accounts
@@ -1429,7 +1429,7 @@ class _Handler(TlsHandlerMixin):
             {"display_name": str(d["display_name"])[:64]} if "display_name" in d else {})
         if "password" in d and name == str(self._actor):
             # 管理员的令牌被偷了,也不能靠这条路不验旧口令就把自己的账号改走。
-            raise HttpError(400, "改自己的口令走 /api/me/password(要旧口令)")
+            raise HttpError(400, "改自己的密码走 /api/me/password(要旧密码)")
         try:
             acc.update(name, role=d.get("role"), disabled=d.get("disabled"),
                        password=d.get("password"), display_name=d.get("display_name"))
@@ -1443,7 +1443,7 @@ class _Handler(TlsHandlerMixin):
         from d1max_site.areas import AreaError
         book = self.site.areas
         if book is None:
-            raise HttpError(404, "这个站点没开防区")
+            raise HttpError(404, "此站点未启用防区")
         if method == "GET":
             self._need(user, VIEW)
             return self._send_json(200, {"areas": book.list(map_id, version)})
@@ -1456,7 +1456,7 @@ class _Handler(TlsHandlerMixin):
         try:
             if d.get("remove") is True:
                 if not book.remove(map_id, version, str(zone)):
-                    raise HttpError(404, "这张图上没有这个防区")
+                    raise HttpError(404, "此地图上没有此防区")
             else:
                 book.set(map_id, version, zone, d.get("points"), by=str(user))
         except AreaError as exc:
@@ -1470,7 +1470,7 @@ class _Handler(TlsHandlerMixin):
         from d1max_site.authz import AuthzError
         book = self.site.authz
         if book is None:
-            raise HttpError(404, "这个站点没开名单")
+            raise HttpError(404, "此站点未启用名单")
         if method == "GET" and entry_id is None:
             self._need(user, VIEW)
             return self._send_json(200, {"authorizations": book.list(with_active=True),
@@ -1505,7 +1505,7 @@ class _Handler(TlsHandlerMixin):
         from d1max_site.pairing import PairingError, encode
         home = self.site.home
         if home is None:
-            raise HttpError(404, "这个站点没接站点目录")
+            raise HttpError(404, "此站点未接入站点目录")
         q = parse_qs(self.path.split("?", 1)[1] if "?" in self.path else "")
         url = (q.get("url") or [""])[0]
         name = self.site.site_name or "Nexus Warden"
@@ -1540,7 +1540,7 @@ class _Handler(TlsHandlerMixin):
             self._confirm(user, d)
         home = self.site.home
         if home is None:
-            raise HttpError(404, "这个站点没接站点目录")
+            raise HttpError(404, "此站点未接入站点目录")
         from d1max_site import main as site_main
         try:
             if action is None:                                     # 登记新狗 + 出开通码
@@ -1557,7 +1557,7 @@ class _Handler(TlsHandlerMixin):
                                              "manual_only": True})
             rid = unquote(robot_id or "")
             if not SAFE_ID.match(rid):
-                raise HttpError(404, "没有这台机器人")
+                raise HttpError(404, "机器人不存在")
             self._audit_target = rid
             if action == "code":
                 hours = d.get("hours", 24)
@@ -1576,8 +1576,9 @@ class _Handler(TlsHandlerMixin):
             return self._send_json(200, out)
         except site_main.SiteError as exc:
             msg = str(exc)
-            raise HttpError(409 if ("已登记" in msg or "没登记" in msg or "没有" in msg) else 400,
-                            msg) from exc
+            # 命令行那边(main.py)的原话没改,新旧两种说法都认
+            conflict = any(k in msg for k in ("已登记", "未登记", "没登记", "没有"))
+            raise HttpError(409 if conflict else 400, msg) from exc
 
     def _change_own_password(self, user: str) -> None:
         d = self._body()
@@ -1588,11 +1589,11 @@ class _Handler(TlsHandlerMixin):
             raise HttpError(429, str(exc)) from exc
         except AuthError as exc:
             raise HttpError(400, str(exc)) from exc
-        self._send_json(200, {"ok": True, "note": "口令改了;所有会话已吊销,请重新登录"})
+        self._send_json(200, {"ok": True, "note": "密码改了;所有会话已吊销,请重新登录"})
 
     def _desk(self):
         if self.site.incidents is None:
-            raise HttpError(404, "这个站点没开事件派遣")
+            raise HttpError(404, "此站点未启用事件派遣")
         return self.site.incidents
 
     def _raw_body(self) -> bytes:
@@ -1616,15 +1617,15 @@ class _Handler(TlsHandlerMixin):
         except IncidentAuthError as exc:
             # 对外只说「验签没过」:具体哪一步没过只进日志(不让人探出哪些源登记过)。
             log.warning("事件回调验签没过(%s):%s", self.client_address[0], exc)
-            raise HttpError(401, "验签没过") from exc
+            raise HttpError(401, "验签未通过") from exc
         try:
             body = json.loads(raw or b"{}")
         except (ValueError, UnicodeDecodeError) as exc:
-            raise HttpError(400, f"JSON 解析不了: {exc}") from exc
+            raise HttpError(400, f"JSON 无法解析: {exc}") from exc
         source = self.headers.get("X-D1MAX-Source") or ""
         self._actor = f"source:{source}"
         if not desk.allow(source):                       # W16:每个事件源每分钟有上限
-            raise HttpError(429, "这个事件源一分钟内报得太多,超出的不收")
+            raise HttpError(429, "此事件源一分钟内报得太多,超出的不收")
         try:
             desk.parse(body)
         except IncidentError as exc:
@@ -1638,7 +1639,7 @@ class _Handler(TlsHandlerMixin):
         from d1max_site.deterrence import DeterrenceError
         desk = self.site.deterrence
         if desk is None:
-            raise HttpError(404, "这个站点没开驱离")
+            raise HttpError(404, "此站点未启用驱离")
         if path == "/api/deterrence":
             if method != "GET":
                 raise HttpError(405, "只支持 GET")
@@ -1668,8 +1669,8 @@ class _Handler(TlsHandlerMixin):
             self.site.loop.call(lambda: desk.release(robot_id, by=str(user)), timeout_s=30)
             return self._send_json(200, {"ok": True})
         except DeterrenceError as exc:
-            raise HttpError(404 if "没在驱离" in str(exc) else 503 if "落进库" in str(exc)
-                            or "落库没成" in str(exc) else 400, str(exc)) from exc
+            raise HttpError(404 if "未在驱离" in str(exc) else 503 if "落进库" in str(exc)
+                            or "落库失败" in str(exc) else 400, str(exc)) from exc
 
     def _mode(self, method: str, path: str, user) -> None:
         """布防模式(W20)。看:``view``。切到布防:``arm``(保安也行);切到留守、临时撤防:``set_mode``
@@ -1677,7 +1678,7 @@ class _Handler(TlsHandlerMixin):
         from d1max_site.modes import ModeError
         desk = self.site.arming
         if desk is None:
-            raise HttpError(404, "这个站点没开布防模式")
+            raise HttpError(404, "此站点未启用布防模式")
         if method == "GET":
             if path != "/api/mode":
                 raise HttpError(405, "只支持 POST")
@@ -1710,7 +1711,7 @@ class _Handler(TlsHandlerMixin):
         desk = self.site.arming
         sch = getattr(desk, "schedule", None)
         if sch is None:
-            raise HttpError(404, "这个站点没开布防时间表")
+            raise HttpError(404, "此站点未启用布防时间表")
         if method == "GET" and path == "/api/arming/schedule":
             self._need(user, VIEW)
             return self._send_json(200, sch.view())
@@ -1745,7 +1746,7 @@ class _Handler(TlsHandlerMixin):
         from d1max_site.charging import ChargeError
         desk = self.site.charge
         if desk is None:
-            raise HttpError(404, "这个站点没开自动回充")
+            raise HttpError(404, "此站点未启用自动回充")
         if path == "/api/chargers":
             if method != "GET":
                 raise HttpError(405, "只支持 GET")
@@ -1755,7 +1756,7 @@ class _Handler(TlsHandlerMixin):
         assert m is not None
         rid = unquote(m.group(1))
         if not SAFE_ID.match(rid):
-            raise HttpError(404, "没有这台机器人")
+            raise HttpError(404, "机器人不存在")
         self._need(user, MANAGE)
         self._audit_target = rid
         if method != "POST":
@@ -1791,7 +1792,7 @@ class _Handler(TlsHandlerMixin):
         rid = str(d.get("robot_id") or "")[:64]
         self._actor, self._audit_target = f"robot:{rid}", rid
         if self.site.home is None:
-            raise HttpError(404, "这个站点没开开通码")
+            raise HttpError(404, "此站点未启用开通码")
         try:
             # 吊销、证书代次在 claim 的事务里跟登记表核(A 阶段外审 I1)
             files = claim(self.site.dispatcher.db, self.site.home, rid,
@@ -1804,7 +1805,7 @@ class _Handler(TlsHandlerMixin):
         """W42 绑定申请台(站点主程序接了站点目录才有;第一次用时现建)。"""
         site = self.site
         if site.home is None or site.dispatcher is None:
-            raise HttpError(404, "这个站点没开绑定")
+            raise HttpError(404, "此站点未启用绑定")
         if site.bind is None:
             from d1max_site import main as site_main
             from d1max_site.binding import BindDesk
@@ -1916,7 +1917,7 @@ class _Handler(TlsHandlerMixin):
     def _robot_wifi(self, robot_id: str, user) -> None:
         """W42 §6:``{"id": 改动编号, "approve": true/false}`` → 发给机器人(它挂着那一条才认)。"""
         if not SAFE_ID.match(robot_id):
-            raise HttpError(404, "没有这台机器人")
+            raise HttpError(404, "机器人不存在")
         d = self._body()
         cid, ok = d.get("id"), d.get("approve")
         if not isinstance(cid, str) or not re.fullmatch(r"[0-9a-f]{8,32}", cid) \
@@ -1951,7 +1952,7 @@ class _Handler(TlsHandlerMixin):
         """体检、指标历史、诊断包(商业化 A1)。体检和诊断包要管理员;指标历史能看的都能看。"""
         desk = self.site.health
         if desk is None:
-            raise HttpError(404, "这个站点没开体检")
+            raise HttpError(404, "此站点未启用体检")
         if method != "GET":
             raise HttpError(405, "只支持 GET")
         if path == "/api/metrics":
@@ -1977,7 +1978,7 @@ class _Handler(TlsHandlerMixin):
         这个账号名下。"""
         desk = self.site.push
         if desk is None:
-            raise HttpError(404, "这个站点没开推送")
+            raise HttpError(404, "此站点未启用推送")
         self._need(user, VIEW)
         d = self._body()
         reg = str(d.get("registration_id") or "")
@@ -1991,7 +1992,7 @@ class _Handler(TlsHandlerMixin):
                 if not desk.register(str(user), reg, str(d.get("platform") or "android"),
                                      session=_token_hash(self._token() or ""),
                                      provider=str(d.get("provider") or "jpush")):
-                    raise HttpError(401, "这次登录已经退出了:重新登录再登记推送")
+                    raise HttpError(401, "这次登录已退出了:重新登录再登记推送")
         except ValueError as exc:
             raise HttpError(400, str(exc)) from exc
         # providers:站点配了哪几个通道(手机拿来提示「登记了但站点没配这个通道,收不到」)
@@ -2003,7 +2004,7 @@ class _Handler(TlsHandlerMixin):
         from d1max_site.weather import WeatherError
         desk = self.site.weather
         if desk is None:
-            raise HttpError(404, "这个站点没开天气")
+            raise HttpError(404, "此站点未启用天气")
         if method == "GET":
             self._need(user, VIEW)
             return self._send_json(200, desk.view())
@@ -2086,7 +2087,7 @@ class _Handler(TlsHandlerMixin):
                     return self._send_json(200, {"timezone": v["timezone"],
                                                  "revision": v["revision"],
                                                  "schedules": v["schedules"]})
-                raise HttpError(405, "这个接口不能 GET")
+                raise HttpError(405, "此接口不能 GET")
             if method != "POST":
                 raise HttpError(405, "只支持 GET/POST")
             d = self._body()
@@ -2096,7 +2097,7 @@ class _Handler(TlsHandlerMixin):
                                                                by=str(user)))
             if path == "/api/route-export":
                 if self.site.home is None:
-                    raise HttpError(404, "这个站点没配站点目录,导不出任务包")
+                    raise HttpError(404, "此站点未配置站点目录,无法导出任务包")
                 got = store.export_bundle(self.site.home / "route-exports", by=str(user))
                 self._audit_target = f"{got['bundle_id']} v{got['version']}"
                 return self._send_json(200, got)
@@ -2148,11 +2149,11 @@ class _Handler(TlsHandlerMixin):
         except DispatchRefused as exc:
             raise HttpError(409, str(exc)) from exc
         except (DispatchTimeout, TimeoutError, FutureTimeout) as exc:
-            raise HttpError(504, "机器人没回停车的回执:看不到它停了没有,按机身急停") from exc
+            raise HttpError(504, "机器人未返回停车的回执:无法确认是否已停止,按机身急停") from exc
         ack = r.get("ack") if isinstance(r, dict) else None
         if isinstance(ack, dict) and ack.get("result") != "accepted":
             # 狗说停车没成(W00c5e 内部评审):任务它中止了,腿停没停住不知道。
-            raise HttpError(502, f"机器人说停车没成({ack.get('reason', '')}):按机身急停")
+            raise HttpError(502, f"机器人说停车失败({ack.get('reason', '')}):按机身急停")
         return self._send_json(200, r)
 
     def _resume(self, robot_id: str, user) -> None:
@@ -2162,7 +2163,7 @@ class _Handler(TlsHandlerMixin):
         self._body()
         self._audit_target = robot_id
         if self.site.dispatcher.registry.get(robot_id) is None:
-            raise HttpError(404, "没有这台机器人")
+            raise HttpError(404, "机器人不存在")
         was = self.site.dispatcher.resume(robot_id, by=str(user))
         return self._send_json(200, {"robot_id": robot_id, "was_held": was})
 
@@ -2179,7 +2180,7 @@ class _Handler(TlsHandlerMixin):
         self._audit_detail = {"manual_only": on, **({"note": note[:200]} if note else {})}
         reg = self.site.dispatcher.registry
         if reg.get(robot_id) is None:
-            raise HttpError(404, "没有这台机器人")
+            raise HttpError(404, "机器人不存在")
         was = reg.set_manual_only(robot_id, on, by=str(user), now_ms=self.site.dispatcher._now(),
                                   note=note)
         return self._send_json(200, {"robot_id": robot_id, "manual_only": reg.manual_only(robot_id),
@@ -2252,7 +2253,7 @@ class _Handler(TlsHandlerMixin):
             have = (caps["map_id"], caps.get("map_version"))
             if want is not None and want != have:
                 raise HttpError(409, f"位置是在 {want[0]} v{want[1]} 上点的,{robot_id} 加载的是 "
-                                     f"{have[0]} v{have[1]}:换到这台机器人的图上重新点")
+                                     f"{have[0]} v{have[1]}:换到此机器人的图上重新点")
             payload |= {"map_id": have[0], "map_version": have[1]}
         elif want is not None:
             payload |= {"map_id": want[0], "map_version": want[1]}   # 狗没报图:让狗自己核
@@ -2283,7 +2284,7 @@ class _Handler(TlsHandlerMixin):
         self._audit_target = robot_id
         stb = self.site.standby
         if stb is None:
-            raise HttpError(404, "这个站点没开待命点")
+            raise HttpError(404, "此站点未启用待命点")
         d = self._body()
         if not isinstance(d, dict):
             raise HttpError(400, "要一个对象")
@@ -2312,7 +2313,7 @@ class _Handler(TlsHandlerMixin):
                 ttl_ms=VIDEO_COMMAND_TTL_MS))
         except HttpError as exc:
             if exc.status == 504:
-                raise HttpError(504, "等机器人回话超时:机器人可能已经标了 —— "
+                raise HttpError(504, "等机器人回话超时:机器人可能已标了 —— "
                                      "标了的话站点收到机器人的消息会自动"
                                      "登记待命点,过一会儿刷新看看") from exc
             raise
@@ -2320,7 +2321,7 @@ class _Handler(TlsHandlerMixin):
         got = ack if ack.get("result") != "duplicate" else (ack.get("original") or {})
         self._audit_detail |= {"command_id": r.get("command_id"), "task_id": r.get("task_id")}
         if got.get("result") != "accepted":
-            raise HttpError(409, f"机器人没标:{got.get('reason') or got.get('result')}")
+            raise HttpError(409, f"机器人标记失败:{got.get('reason') or got.get('result')}")
         data = got.get("data")
         if isinstance(data, dict):
             self._audit_detail |= {"map": f"{data.get('map_id')}:{data.get('map_version')}",
@@ -2328,7 +2329,7 @@ class _Handler(TlsHandlerMixin):
         try:
             stb.mark(robot_id, name, data)
         except (StandbyError, KeyError, TypeError) as exc:
-            raise HttpError(500, f"机器人上的原点已经换了,站点登记原点没成:{exc}。"
+            raise HttpError(500, f"机器人上的原点已更换,站点登记原点失败:{exc}。"
                                  "按下面的位置手工登记",
                             extra={"command_id": r.get("command_id"), "task_id": r.get("task_id"),
                                    "data": data}) from exc
@@ -2343,7 +2344,7 @@ class _Handler(TlsHandlerMixin):
         c = self.site.dispatcher.clients.get(robot_id)
         caps = c.capabilities.tasks if c and c.capabilities else {}
         if not (caps.get("mark_home") or {}).get("standby"):
-            raise HttpError(409, f"{robot_id} 的代理报不了「只要位置」(老代理会把它当成标原点):"
+            raise HttpError(409, f"{robot_id} 的代理无法上报「只要位置」(老代理会把它当成标原点):"
                                  "先升级机器人上的版本")
         try:
             r = self.site.dispatch(lambda: self.site.dispatcher.map_command(
@@ -2351,16 +2352,16 @@ class _Handler(TlsHandlerMixin):
                 issued_by=str(user), ttl_ms=VIDEO_COMMAND_TTL_MS))
         except HttpError as exc:
             if exc.status == 504:
-                raise HttpError(504, "等机器人回话超时:机器人上什么都没改,再按一次") from exc
+                raise HttpError(504, "等机器人回话超时:机器人上什么都未改,再按一次") from exc
             raise
         ack = r["ack"]
         got = ack if ack.get("result") != "duplicate" else (ack.get("original") or {})
         self._audit_detail |= {"command_id": r.get("command_id"), "task_id": r.get("task_id")}
         if got.get("result") != "accepted":
-            raise HttpError(409, f"机器人没标:{got.get('reason') or got.get('result')}")
+            raise HttpError(409, f"机器人标记失败:{got.get('reason') or got.get('result')}")
         data = got.get("data")
         if not isinstance(data, dict) or data.get("target") != "standby":
-            raise HttpError(500, "机器人没按「只要位置」回(老代理会把它当成标原点),什么都没登记")
+            raise HttpError(500, "机器人未按「只要位置」回(老代理会把它当成标原点),什么都未登记")
         return data
 
     def _intercept_here(self, robot_id: str, user) -> None:
@@ -2385,7 +2386,7 @@ class _Handler(TlsHandlerMixin):
             # W23:狗站的这个位置走不到、站不下、不在图上:不收,原因原样给人
             raise HttpError(409, str(exc), extra={"data": data}) from exc
         except KeyError as exc:
-            raise HttpError(500, f"站点登记拦截点没成:{exc}", extra={"data": data}) from exc
+            raise HttpError(500, f"站点登记拦截点失败:{exc}", extra={"data": data}) from exc
         self._audit_detail |= {"map": f"{data['map_id']}:{data['map_version']}",
                                "x": data["x"], "y": data["y"]}
         return self._send_json(200, {"ack": {"result": "accepted", "data": data}}
@@ -2403,7 +2404,7 @@ class _Handler(TlsHandlerMixin):
         self._audit_target = robot_id
         stb = self.site.standby
         if stb is None:
-            raise HttpError(404, "这个站点没开待命点")
+            raise HttpError(404, "此站点未启用待命点")
         d = self._body()
         if not isinstance(d, dict):
             raise HttpError(400, "要一个对象")
@@ -2418,7 +2419,7 @@ class _Handler(TlsHandlerMixin):
         try:
             stb.mark_standby(robot_id, name, data, default)
         except (StandbyError, KeyError, TypeError) as exc:
-            raise HttpError(500, f"站点登记待命点没成:{exc}",
+            raise HttpError(500, f"站点登记待命点失败:{exc}",
                             extra={"data": data}) from exc
         if isinstance(data, dict):
             self._audit_detail |= {"map": f"{data.get('map_id')}:{data.get('map_version')}",
@@ -2446,7 +2447,7 @@ class _Handler(TlsHandlerMixin):
         ack = r["ack"]
         if ack.get("result") != "accepted":
             reason = ack.get("reason") or ack.get("result")
-            raise HttpError(409, f"机器人没给:{reason}",
+            raise HttpError(409, f"机器人未提供:{reason}",
                             extra={"unsupported": True} if reason == "unsupported" else None)
         data = ack.get("data")
         if not isinstance(data, dict):
@@ -2479,7 +2480,7 @@ class _Handler(TlsHandlerMixin):
         ack = r["ack"]
         if ack.get("result") != "accepted":
             reason = ack.get("reason") or ack.get("result")
-            raise HttpError(404 if reason == "no_such_log" else 409, f"机器人没给:{reason}")
+            raise HttpError(404 if reason == "no_such_log" else 409, f"机器人未提供:{reason}")
         data = ack.get("data")
         if not isinstance(data, dict):
             raise HttpError(502, "机器人的回执里没有日志")
@@ -2500,7 +2501,7 @@ class _Handler(TlsHandlerMixin):
             raise HttpError(400, "要 seq(≥1 的整数)")
         self._audit_target = robot_id
         if self.site.dispatcher.registry.get(robot_id) is None:
-            raise HttpError(404, "没有这台机器人")
+            raise HttpError(404, "机器人不存在")
         desk = self.site.supervision
         try:
             if action == "renew":
@@ -2523,7 +2524,7 @@ class _Handler(TlsHandlerMixin):
         self._need(user, TELEOP)
         desk = self.site.teleop
         if desk is None:
-            raise HttpError(404, "这个站点没开遥控")
+            raise HttpError(404, "此站点未启用遥控")
         if check_upgrade(self.headers) is None:
             # 先查升级头再开租约:一个普通 GET 不许授予租约、抢占正在跑的巡检(W00c5c 内部评审)。
             raise HttpError(400, "要 WebSocket 升级请求")
@@ -2577,7 +2578,7 @@ class _Handler(TlsHandlerMixin):
         from d1max_site.runs import RunError
         desk = self.site.runs
         if desk is None:
-            raise HttpError(404, "这个站点没开证据库")
+            raise HttpError(404, "此站点未启用证据库")
         q = parse_qs(self.path.split("?", 1)[1] if "?" in self.path else "")
 
         def num(k: str) -> int | None:
@@ -2618,7 +2619,7 @@ class _Handler(TlsHandlerMixin):
                     try:
                         return self._send_json(200, self.site.privacy.set_keep(rid, d["keep"]))
                     except KeyError as exc:
-                        raise HttpError(404, "没有这一趟") from exc
+                        raise HttpError(404, "任务记录不存在") from exc
                 if method == "POST" and what == "judge" and arg is None:
                     self._need(user, REVIEW)
                     self._body()
@@ -2655,7 +2656,8 @@ class _Handler(TlsHandlerMixin):
                 return self._send_file(p, "application/zip")
         except RunError as exc:
             msg = str(exc)
-            raise HttpError(404 if msg.startswith(("没有", "这一趟里没有")) else 400, msg) from exc
+            missing = msg.startswith(("没有", "任务记录不存在", "本次任务里没有"))
+            raise HttpError(404 if missing else 400, msg) from exc
         raise HttpError(404, f"没有 {method} {path}")
 
     def _maps(self, method: str, path: str, user) -> None:
@@ -2666,7 +2668,7 @@ class _Handler(TlsHandlerMixin):
         from d1max_site.maps import MapError
         cat = self.site.maps
         if cat is None:
-            raise HttpError(404, "这个站点没开地图目录")
+            raise HttpError(404, "此站点未启用地图目录")
         if path == "/api/maps" and method == "GET":
             self._need(user, VIEW)
             return self._send_json(200, {"maps": cat.list(), "bags": cat.bags()})
@@ -2687,7 +2689,7 @@ class _Handler(TlsHandlerMixin):
         self._need(user, MANAGE)
         robot_id, what = unquote(m.group(1)), m.group(2)
         if not SAFE_ID.match(robot_id):
-            raise HttpError(404, "没有这台机器人")
+            raise HttpError(404, "机器人不存在")
         self._audit_target = robot_id
         d = self._body()
         try:
@@ -2732,7 +2734,7 @@ class _Handler(TlsHandlerMixin):
         from d1max_site.map_wizard import MapWizard, WizardError
         cat, settings = self.site.maps, self.site.settings
         if cat is None or settings is None:
-            raise HttpError(404, "这个站点没开地图目录")
+            raise HttpError(404, "此站点未启用地图目录")
         reg = self.site.dispatcher.registry
 
         def known(rid: str) -> bool:
@@ -2769,8 +2771,8 @@ class _Handler(TlsHandlerMixin):
         if self.site.zones is not None and not self.site.zones.confirmed_current(ref.map_id,
                                                                        ref.version):
             # W10(W08 决定 5):发布前人工确认水池、高楼楼梯、陡坡、落差都画成禁行区了
-            raise HttpError(409, f"{ref.map_id}:{ref.version} 的禁行区还没确认(或改过之后"
-                                 "没重新确认):先在地图页画好、确认再下发",
+            raise HttpError(409, f"{ref.map_id}:{ref.version} 的禁行区尚未确认(或改过之后"
+                                 "未重新确认):先在地图页画好、确认再下发",
                             extra={"reason": "zones_unconfirmed"})
         payload = ref.to_wire()
         # 这台狗在这张图上的原点:站点原点表里的是权威(W13a),有就下发、盖过图里的 home.json
@@ -2786,7 +2788,7 @@ class _Handler(TlsHandlerMixin):
         elif not any(f.name == "home.json" for f in ref.files):
             if not without:
                 raise HttpError(
-                    409, f"{robot_id} 在 {ref.map_id}:{ref.version} 上还没有原点:下发之后机器人"
+                    409, f"{robot_id} 在 {ref.map_id}:{ref.version} 上尚无原点:下发之后机器人"
                          "不接 goto、巡检,要先把机器人开到原点(充电桩前)、设好位置、"
                          "「在这儿标原点」。确认要这样下发就带上 without_home",
                     extra={"reason": "no_home"})
@@ -2802,7 +2804,7 @@ class _Handler(TlsHandlerMixin):
         from d1max_site.maps import MapError
         from d1max_site.nav_zones import ZonesConflict, ZonesError
         if self.site.zones is None:
-            raise HttpError(404, "这个站点没开地图目录")
+            raise HttpError(404, "此站点未启用地图目录")
         try:
             self.site.maps.get(map_id, version)
         except MapError as exc:
@@ -2851,7 +2853,7 @@ class _Handler(TlsHandlerMixin):
         from d1max_site.route_nets import RouteNetConflict, RouteNetError
         rn = getattr(self.site, "route_nets", None)
         if rn is None:
-            raise HttpError(404, "这个站点没开地图目录")
+            raise HttpError(404, "此站点未启用地图目录")
         try:
             self.site.maps.get(map_id, version)
         except MapError as exc:
@@ -2960,13 +2962,13 @@ class _Handler(TlsHandlerMixin):
         """把上一版的一个待命点搬到这一版(同样的坐标,人核过了):上一版那个改过、删了就不搬。"""
         from d1max_site.standby import StandbyError
         if getattr(self.site, "standby", None) is None:
-            return "这个站点没开待命点"
+            return "此站点未启用待命点"
         rows = self.site.dispatcher.db.query(
             "SELECT map_id, map_version, x, y, yaw FROM standby_points WHERE robot_id=? AND "
             "name=?", (p["robot_id"], p["name"]))
         if not rows or (rows[0]["map_id"], rows[0]["map_version"], rows[0]["x"], rows[0]["y"],
                         rows[0]["yaw"]) != (map_id, src, p["x"], p["y"], p["yaw"]):
-            return "上一版的这个待命点后来改过或删了:没搬,在新图上重新设"
+            return "上一版的此待命点后来改过或删了:未迁移,在新图上重新设"
         try:
             self.site.standby.set(p["robot_id"], p["name"], map_id=map_id, map_version=version,
                                   x=p["x"], y=p["y"], yaw=p["yaw"])
@@ -2978,12 +2980,12 @@ class _Handler(TlsHandlerMixin):
         """把上一版的一个拦截点搬到这一版:照样查走不走得到(W23),不过的不搬、说原因。"""
         from d1max_site.incidents import IncidentError
         if getattr(self.site, "incidents", None) is None:
-            return "这个站点没开拦截点"
+            return "此站点未启用拦截点"
         rows = self.site.dispatcher.db.query(
             "SELECT map_id, map_version, x, y, yaw FROM intercepts WHERE name=?", (p["name"],))
         if not rows or (rows[0]["map_id"], rows[0]["map_version"], rows[0]["x"], rows[0]["y"],
                         rows[0]["yaw"]) != (map_id, src, p["x"], p["y"], p["yaw"]):
-            return "上一版的这个拦截点后来改过或删了:没搬,在新图上重新设"
+            return "上一版的此拦截点后来改过或删了:未迁移,在新图上重新设"
         try:
             self.site.incidents.set_intercept(p["name"], map_id=map_id, map_version=version,
                                               x=p["x"], y=p["y"], yaw=p["yaw"])
@@ -2998,7 +3000,7 @@ class _Handler(TlsHandlerMixin):
             raise HttpError(400, "地图号最多 40 个字符、版本最多 16 个(文件名里还要加后缀)")
         if any(r["map_id"] == map_id and r["version"] == version for r in cat.list()) \
                 or cat.build_in_flight(map_id, version):
-            raise HttpError(409, f"{map_id}:{version} 已经有了(或正在建),换个版本号")
+            raise HttpError(409, f"{map_id}:{version} 已存在(或正在建),换个版本号")
 
     def _map_preview(self, map_id: str, version: str, what: str) -> None:
         """建好的图的预览(W00c6h,``view``):``preview`` 是坐标换算 + 这张图这一版上登记的待命点
@@ -3028,7 +3030,7 @@ class _Handler(TlsHandlerMixin):
         except (MapError, NoRaster) as exc:
             raise HttpError(404, str(exc)) from exc
         except (PreviewError, OSError) as exc:
-            raise HttpError(500, f"这张图预览不了:{exc}") from exc
+            raise HttpError(500, f"此地图无法预览:{exc}") from exc
         if what != "preview":
             return self._send_bytes(png, "image/png")
         rows = self.site.dispatcher.db.query(
@@ -3079,7 +3081,7 @@ class _Handler(TlsHandlerMixin):
         from d1max_site.releases import ReleaseCatalogError
         cat = self.site.releases
         if cat is None:
-            raise HttpError(404, "这个站点没开发布目录")
+            raise HttpError(404, "此站点未启用发布目录")
         if path == "/api/releases" and method == "GET":
             self._need(user, VIEW)
             robots = {rid: ((c.capabilities.tasks.get("release_install") or {}).get("current")
@@ -3092,7 +3094,7 @@ class _Handler(TlsHandlerMixin):
         self._need(user, MANAGE)
         robot_id = unquote(m.group(1))
         if not SAFE_ID.match(robot_id):
-            raise HttpError(404, "没有这台机器人")
+            raise HttpError(404, "机器人不存在")
         self._audit_target = robot_id
         d = self._body()
         action = d.get("action")
@@ -3119,7 +3121,7 @@ class _Handler(TlsHandlerMixin):
                     c = self.site.dispatcher.clients.get(robot_id)
                     caps = getattr(c, "capabilities", None)
                     if caps is not None and "release_activate" not in caps.tasks:
-                        raise HttpError(409, f"{robot_id} 不支持换版本(代理太老或没开发布槽)",
+                        raise HttpError(409, f"{robot_id} 不支持换版本(代理版本过旧或未开启发布槽)",
                                         extra={"unsupported": True})
                     self.site.release_queue.add(robot_id, payload["name"], by=str(user))
                     self._audit_detail = {"action": "activate", "name": payload["name"],
@@ -3153,13 +3155,13 @@ class _Handler(TlsHandlerMixin):
         from d1max_site.releases import ReleaseCatalog, ReleaseCatalogError
         self._need(user, MANAGE)
         if self.site.home is None or self.site.releases is None:
-            raise HttpError(404, "这个站点没开发布目录")
+            raise HttpError(404, "此站点未启用发布目录")
         try:
             n = int(self.headers.get("Content-Length") or 0)
         except ValueError as exc:
             raise HttpError(400, "Content-Length 不是数") from exc
         if n <= 0:
-            raise HttpError(400, "没收到文件")
+            raise HttpError(400, "未收到文件")
         if n > self.MAX_UPLOAD:
             raise HttpError(413, "升级包太大了(最多 500 MB)")
         tmp = Path(tempfile.mkdtemp(prefix="upload-", dir=self.site.releases.root))
@@ -3170,7 +3172,7 @@ class _Handler(TlsHandlerMixin):
                 while left > 0:
                     chunk = self.rfile.read(min(left, 1 << 20))
                     if not chunk:
-                        raise HttpError(400, "文件没传完")
+                        raise HttpError(400, "文件未传完")
                     fh.write(chunk)
                     left -= len(chunk)
             # 先收完再验密码:没读完就回 403,浏览器那边多半只看到「连接断了」,看不到「密码不对」
@@ -3199,12 +3201,12 @@ class _Handler(TlsHandlerMixin):
                                      ).add(tops[0], note=note or "网页上传")
             except ReleaseCatalogError as exc:
                 msg = str(exc)
-                if "已经登记过了" in msg:
-                    raise HttpError(409, "这个版本已经有了") from exc
+                if "已登记" in msg:
+                    raise HttpError(409, "此版本已存在") from exc
                 if "签名" in msg or "公钥" in msg:
-                    raise HttpError(400, f"升级包的签名对不上,不是公司发的({msg})") from exc
+                    raise HttpError(400, f"升级包的签名不匹配,不是公司发的({msg})") from exc
                 if "指纹" in msg:
-                    raise HttpError(400, "升级包坏了(文件跟清单对不上)") from exc
+                    raise HttpError(400, "升级包已损坏(文件与清单不匹配)") from exc
                 raise HttpError(400, msg) from exc
             except site_main.SiteError as exc:
                 raise HttpError(500, str(exc)) from exc
@@ -3244,15 +3246,15 @@ class _Handler(TlsHandlerMixin):
         st = b.status() if b is not None else {"configured": False}
         if not st.get("configured"):
             out.append({"name": "backup", "ok": False, "blocking": False,
-                        "detail": "站点没配备份盘 —— 建议先配上(提示,不拦)"})
+                        "detail": "站点未配置备份盘 —— 建议先配上(提示,不拦)"})
         elif st.get("last_ok_ms") is None:
             out.append({"name": "backup", "ok": False, "blocking": False,
-                        "detail": "站点还没成功备份过 —— 建议先备份一次(提示,不拦)"})
+                        "detail": "站点尚未成功备份过 —— 建议先备份一次(提示,不拦)"})
         else:
             hours = max(0.0, (self.site._now() - st["last_ok_ms"]) / 3_600_000)
             out.append({"name": "backup", "ok": not st.get("stale"), "blocking": False,
                         "detail": f"站点上次备份是 {hours:.1f} 小时前"
-                                  + (" —— 过期了,建议先备份一次(提示,不拦)"
+                                  + (" —— 已过期,建议先备份一次(提示,不拦)"
                                      if st.get("stale") else "")})
         return out
 
@@ -3262,7 +3264,7 @@ class _Handler(TlsHandlerMixin):
             issued_by=str(user)))
         ack = r["ack"]
         if ack["result"] not in ("accepted", "duplicate"):
-            raise HttpError(409, f"机器人没查:{ack.get('reason') or ack['result']}")
+            raise HttpError(409, f"机器人未检查:{ack.get('reason') or ack['result']}")
         data = ack.get("data") if ack["result"] == "accepted" else \
             (ack.get("original") or {}).get("data")
         if not isinstance(data, dict) or not isinstance(data.get("checks"), list):
@@ -3292,7 +3294,7 @@ class _Handler(TlsHandlerMixin):
         self._need(user, VIEW)
         mgr = self.site.cctv
         if mgr is None:
-            raise HttpError(404, "这个站点没开摄像头")
+            raise HttpError(404, "此站点未启用摄像头")
         if path == "/api/cameras":
             # W44 第三期:带上放在图上的位置(保安地图页的摄像头图层)
             from d1max_site.cctv import placement_of
@@ -3311,14 +3313,14 @@ class _Handler(TlsHandlerMixin):
             return self._mjpeg(frames, first)
         cam = mgr.camera(m.group(1))
         if cam is None:
-            raise HttpError(404, "没有这台摄像头")
+            raise HttpError(404, "摄像头不存在")
         if m.group(2) == "health":
             # 外审 R6:画面健康(最后一帧多久了),网页按这个标「画面断了」。没人在看:没在拉
             with self.site._cctv_lock:
                 v = self.site._cctv_views.get(cam.name)
             return self._send_json(200, v.health() if v is not None and v.cam == cam
                                    else {"online": False, "last_frame_age_ms": None})
-        raise HttpError(404, "没有这个摄像头接口")
+        raise HttpError(404, "没有此摄像头接口")
 
     def _camera_frames(self, name: str):
         """一台固定摄像头的画面生成器(HTTP 长连、W51 的 WebSocket 共用)。第一帧等不到:``next``
@@ -3326,12 +3328,12 @@ class _Handler(TlsHandlerMixin):
         from d1max_site.cctv import CctvView
         mgr = self.site.cctv
         if mgr is None:
-            raise HttpError(404, "这个站点没开摄像头")
+            raise HttpError(404, "此站点未启用摄像头")
         cam = mgr.camera(name)
         if cam is None:
-            raise HttpError(404, "没有这台摄像头")
+            raise HttpError(404, "摄像头不存在")
         if not cam.rtsp_url:
-            raise HttpError(404, "这台摄像头没登记画面地址(camera-add --rtsp)")
+            raise HttpError(404, "此摄像头未登记画面地址(camera-add --rtsp)")
         with self.site._cctv_lock:
             v = self.site._cctv_views.get(cam.name)
             if v is not None and v.cam != cam:           # 改过地址、口令:旧的收干净再换
@@ -3393,7 +3395,7 @@ class _Handler(TlsHandlerMixin):
         from d1max_site.recordings import SEGMENT_S
         store = self.site.recordings
         if store is None:
-            raise HttpError(404, "这个站点没开录像")
+            raise HttpError(404, "此站点未启用录像")
         if path == "/api/recordings":
             if method != "GET":
                 raise HttpError(405, "只收 GET")
@@ -3419,14 +3421,14 @@ class _Handler(TlsHandlerMixin):
         self._audit_target = f"recording/{rid}"
         row = store.get(rid)
         if row is None:
-            raise HttpError(404, "没有这一段(过了留存期删了?)")
+            raise HttpError(404, "没有此段(过了留存期删了?)")
         if what == "video":
             if method != "GET":
                 raise HttpError(405, "只收 GET")
             self._need(user, VIEW)
             p = store.path(row)
             if not p.is_file():
-                raise HttpError(404, "这一段的文件不在了")
+                raise HttpError(404, "此段的文件不在了")
             self._audit_view(f"recording/{rid}")
             return self._send_file(p, "video/mp4", ranged=True)
         if method != "POST":
@@ -3464,7 +3466,7 @@ class _Handler(TlsHandlerMixin):
         from d1max_site.webui import SECURITY_HEADERS, WEB_DIR, resolve
         hit = resolve(path, getattr(self.site, "web_dir", None) or WEB_DIR)
         if hit is None:
-            raise HttpError(404, "没有这个页面(网页值班台没装?)")
+            raise HttpError(404, "页面不存在(网页值班台未安装?)")
         f, typ, immutable = hit
         raw = f.read_bytes()
         self._status = 200
@@ -3519,7 +3521,7 @@ class _Handler(TlsHandlerMixin):
         self._need(user, VIEW)
         hub = self.site.video
         if hub is None:
-            raise HttpError(404, "这个站点没开视频")
+            raise HttpError(404, "此站点未启用视频")
         if what == "health":
             try:
                 cams = hub.health(robot_id)
@@ -3578,15 +3580,15 @@ class _Handler(TlsHandlerMixin):
         if m is not None and m.group(2) != "health":
             robot_id = unquote(m.group(1))
             if not SAFE_ID.match(robot_id):
-                raise HttpError(404, "没有这台机器人")
+                raise HttpError(404, "机器人不存在")
             hub = self.site.video
             if hub is None:
-                raise HttpError(404, "这个站点没开视频")
+                raise HttpError(404, "此站点未启用视频")
             return hub.stream(robot_id, m.group(2))
         m = _CAM.match(stream_id)
         if m is not None and m.group(2) == "live":
             return self._camera_frames(m.group(1))
-        raise HttpError(404, f"没有这一路画面:{stream_id[:80]}")
+        raise HttpError(404, f"视频源不存在:{stream_id[:80]}")
 
     def _still(self) -> bool:
         """``?still=1``:只要一张 JPEG(演示站点实测:四台机器人 8 路长连占满浏览器对一个站点的 6 条

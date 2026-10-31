@@ -187,7 +187,7 @@ class Recorder:
     def camera_health(self) -> dict[str, str]:
         """每一路录着没有(W40 设备健康):相机名 → 空串(在录,或者故意停着,见 :attr:`held`)
         或断了的原因。"""
-        return {c: (s.why or "录像断了") if s.failed and c not in self.held else ""
+        return {c: (s.why or "录像中断") if s.failed and c not in self.held else ""
                 for c, s in self._cams.items()}
 
     def hold(self, cameras: set[str]) -> None:

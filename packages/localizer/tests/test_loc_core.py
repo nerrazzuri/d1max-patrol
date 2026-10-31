@@ -83,7 +83,7 @@ def test_先验没载好_没给初值_都在初始化_不出位姿():
     c = 钟()
     core = LocalizerCore(monotonic=c)
     core.tick()
-    assert core.drain() == [State(seq=1, state="initializing", reason="还没有先验")]
+    assert core.drain() == [State(seq=1, state="initializing", reason="尚无先验")]
     core.prior_loading(M)
     core.tick()
     assert [m.reason for m in core.drain()] == ["在载入先验"]
@@ -275,7 +275,7 @@ def test_雷达没数据_丢定位_来了恢复():
         t.step(0.25, 0.0, scan=False, est=False)
     state, reason = t.states()[-1]
     assert state == "lost" and "雷达" in reason
-    assert t.core.take_restart() is False, "雷达没数据不重启 MOLA(开盖子、雷达起来才有数据)"
+    assert t.core.take_restart() is False, "雷达未数据不重启 MOLA(开盖子、雷达起来才有数据)"
     t.walk(3, x0=0.25)
     assert t.states()[-1] == ("tracking", "")
     assert t.core.take_restart() is False
@@ -287,12 +287,12 @@ def test_点云在来_MOLA_不出位姿_要重启_重启后用最后可信的位
     x = t.walk(10)
     for _ in range(int(STALL_S * 10) + 2):
         t.step(x, 0.0, est=False)
-    assert t.states()[-1] == ("lost", "定位程序卡住了,在重启")
+    assert t.states()[-1] == ("lost", "定位程序卡住,在重启")
     assert t.core.take_restart() is True
     assert t.core.take_restart() is False, "拿走一次就清:适配层只重启一回(W09b 内审阻断 1)"
     for _ in range(20):                                    # 重启还没完:不再要
         t.step(x, 0.0, est=False)
-    assert t.core.take_restart() is False and t.states()[-1][1] == "定位程序卡住了,在重启"
+    assert t.core.take_restart() is False and t.states()[-1][1] == "定位程序卡住,在重启"
     t.core.backend_started()                               # 适配层重启了 MOLA
     assert t.core.take_restart() is False
     w = t.core.want_reloc()
@@ -368,7 +368,7 @@ def test_重定位之后第一帧离给的位置太远_当它没照办_不发_�
     for _ in range(n):
         t.step(0.0, 0.0)                                  # MOLA 在原点:没照办
     assert t.poses() == []
-    assert t.states()[-1] == ("initializing", "定位程序没照给的位置定位,再请一次")
+    assert t.states()[-1] == ("initializing", "定位程序未照给的位置定位,再请一次")
     w = t.core.want_reloc()
     assert (w.x, w.y, w.yaw, w.sigma, w.req, w.human) == (5.0, 4.0, 1.7, 0.5, 7, True)
     for _ in range(RELOC_MAX_TRIES - 1):
@@ -376,7 +376,7 @@ def test_重定位之后第一帧离给的位置太远_当它没照办_不发_�
         for _ in range(n):
             t.step(0.0, 0.0)
     state, reason = t.states()[-1]
-    assert state == "lost" and "没按给的位置重定位" in reason and t.core.want_reloc() is None
+    assert state == "lost" and "未按给的位置重定位" in reason and t.core.want_reloc() is None
     assert t.poses() == []
     t.core.relocalized(req=8, x=0.0, y=0.0, yaw=0.0, sigma=0.5, human=True)   # 人重新给
     t.step(0.05, 0.0)
@@ -579,7 +579,7 @@ def test_人给的位置放太久没用上_说清楚():
     t.core.reloc_expired()
     t.core.tick()
     assert [m.reason for m in t.core.drain() if isinstance(m, State)][-1] == \
-        "人给的位置放太久没用上,请重新设位置"
+        "人给的位置放太久未启用,请重新设位置"
 
 
 def test_人给了位置之后_最后可信的位置换成给的_不用重定位之前的旧看法():
@@ -610,7 +610,7 @@ def test_点云停的那一刻_最后一帧点云比_MOLA_的输出晚到一点_
     for _ in range(3):
         t.c.t += 0.1
         t.core.tick()
-    assert [m for m in t.core.drain() if isinstance(m, State)][-1].reason == "雷达没数据"
+    assert [m for m in t.core.drain() if isinstance(m, State)][-1].reason == "雷达未数据"
 
 
 def test_MOLA_的重定位是异步生效的_头几帧还是旧位置_给它一会儿():
@@ -621,7 +621,7 @@ def test_MOLA_的重定位是异步生效的_头几帧还是旧位置_给它一�
     t.core.relocalized(req=4, x=5.0, y=0.0, yaw=0.0, sigma=0.5, human=True)
     t.step(0.0, 0.0)                                       # 还是旧的
     t.step(0.0, 0.0)
-    assert t.poses() == [] and t.core.want_reloc() is None, "给它时间生效:不算没照办"
+    assert t.poses() == [] and t.core.want_reloc() is None, "给它时间生效:不算未照办"
     t.step(5.1, 0.0)                                       # 生效了
     assert t.poses()[-1].reloc_id == 4
     t2 = 台(init=False)

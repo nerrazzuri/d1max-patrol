@@ -82,9 +82,9 @@ def test_门够宽_走得到_设得上(台):
 def test_门太窄_狗过不去_设不上_说清楚(台):
     t = 台
     r = t.reach.check("backyard", "house", "narrow", 6.0, 2.0)
-    assert "从待命点走不到 backyard" in r.problem and "dock-narrow" in r.problem
+    assert "从待命点无法到达 backyard" in r.problem and "dock-narrow" in r.problem
     assert r.note == ""
-    with pytest.raises(IncidentError, match="设不了.*走不到"):
+    with pytest.raises(IncidentError, match="无法设置.*无法到达"):
         t.desk.set_intercept("backyard", map_id="house", map_version="narrow", x=6.0, y=2.0,
                              yaw=0.0)
     assert t.desk.intercept("backyard") is None
@@ -116,9 +116,9 @@ def test_查不了的不挡_写明没查(台, tmp_path):
     assert r.problem == "" and "没有规划栅格" in r.note
     t.db.query("DELETE FROM standby_points")
     r = t.reach.check("x", "house", "wide", 6.0, 2.0)
-    assert r.problem == "" and "没有待命点" in r.note
+    assert r.problem == "" and "尚无待命点" in r.note
     t.desk.set_intercept("x", map_id="house", map_version="wide", x=6.0, y=2.0, yaw=0.0)
-    assert "没有待命点" in t.desk.intercept("x")["reach_note"]
+    assert "尚无待命点" in t.desk.intercept("x")["reach_note"]
 
 
 def test_原点也算起点(台):
@@ -134,23 +134,23 @@ def test_对账_门口画了禁行区_变成走不到_来了入侵不派_删了�
     t = 台
     t.desk.set_intercept("backyard", map_id="house", map_version="wide", x=6.0, y=2.0, yaw=0.0)
     t.desk.map_zone("back", "backyard")
-    assert t.desk.recheck_intercepts() == 0, "指纹没变:不重查"
+    assert t.desk.recheck_intercepts() == 0, "指纹未变:不重查"
     t.zones.put("house", "wide", [{"id": "door", "kind": "nogo", "label": "门",
                                    "polygon": [[3.6, 1.0], [4.4, 1.0], [4.4, 3.0], [3.6, 3.0]]}],
                 base_revision=0, by="alice")
     assert t.desk.recheck_intercepts() == 1
-    assert "走不到" in t.desk.intercept("backyard")["reach"]
+    assert "无法到达" in t.desk.intercept("backyard")["reach"]
     told = []
     t.desk.on_outcome = told.append
     row = t.desk._claim("nvr", {"event_id": "e1", "type": "intrusion", "zone": "back",
                                 "occurred_at": None, "detail": None})
-    assert row["outcome"] == "unreachable" and "拦截点走不到" in row["note"]
+    assert row["outcome"] == "unreachable" and "拦截点无法到达" in row["note"]
     t.desk._publish(row)
-    assert [r["outcome"] for r in told] == ["unreachable"], "照样报「没机器人去」"
+    assert [r["outcome"] for r in told] == ["unreachable"], "照样报「无机器人去」"
     t.zones.put("house", "wide", [], base_revision=1, by="alice")
     # 外审 R1(2026-10-15 下午):删禁行区是放宽,确认之前狗照样不过门 —— 拦截点照样走不到
     t.desk.recheck_intercepts()
-    assert "走不到" in t.desk.intercept("backyard")["reach"]
+    assert "无法到达" in t.desk.intercept("backyard")["reach"]
     t.zones.confirm("house", "wide", revision=2, by="alice")
     assert t.desk.recheck_intercepts() == 1
     assert t.desk.intercept("backyard")["reach"] == ""
@@ -167,7 +167,7 @@ def test_图有新版本_拦截点标出来要重设(台, tmp_path):
     t = 台
     t.desk.set_intercept("backyard", map_id="house", map_version="wide", x=6.0, y=2.0, yaw=0.0)
     assert t.desk.intercepts()["intercepts"][0]["newer_version"] == "narrow", \
-        "站点上这张图最新的是后导入的那一版"
+        "站点上此地图最新的是后导入的那一版"
     src = _files(tmp_path / "v3")
     _屋子(src, 1.6)
     t.cat.import_dir(src, map_id="house", version="v3")
@@ -192,8 +192,8 @@ def test_外审1_查的时候禁行区被改了_存的指纹是查之前的_对�
     t.desk.set_intercept("backyard", map_id="house", map_version="wide", x=6.0, y=2.0, yaw=0.0)
     assert t.desk.intercept("backyard")["reach"] == "", "查的时候还走得到"
     t.reach.check = real
-    assert t.desk.recheck_intercepts() == 1, "指纹对不上:重查"
-    assert "走不到" in t.desk.intercept("backyard")["reach"]
+    assert t.desk.recheck_intercepts() == 1, "指纹不匹配:重查"
+    assert "无法到达" in t.desk.intercept("backyard")["reach"]
 
 
 async def test_外审2_首单没派成_补派前拦截点已经走不到_并进来的全部记走不到_照样报警(台):
@@ -205,14 +205,14 @@ async def test_外审2_首单没派成_补派前拦截点已经走不到_并进�
         t.db.query("INSERT INTO incidents(source, event_id, type, zone, received_at, outcome, "
                    "intercept, merged_into, note, detail, told_ms) VALUES ('nvr',?,'intrusion',"
                    "'back',1000,?,'backyard',?,'','{}',NULL)", (eid, outcome, merged))
-    t.db.query("UPDATE intercepts SET reach='从待命点走不到 backyard(门封了)'")
+    t.db.query("UPDATE intercepts SET reach='从待命点无法到达 backyard(门封了)'")
     told = []
     t.desk.on_outcome = told.append
     t.desk._promote_follower(1)
     rows = {r["event_id"]: r for r in t.desk.list()}
     assert rows["e2"]["outcome"] == "unreachable" and rows["e3"]["outcome"] == "unreachable"
     assert "门封了" in rows["e2"]["note"] and rows["e2"]["robot_id"] is None
-    assert sorted(r["event_id"] for r in told) == ["e2", "e3"], "照样报「没机器人去」"
+    assert sorted(r["event_id"] for r in told) == ["e2", "e3"], "照样报「无机器人去」"
 
 
 def test_外审3_命令行设拦截点也查_墙里不收_走得到的收(tmp_path):

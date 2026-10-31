@@ -49,7 +49,7 @@ def test_体检_都好_各项说人话(台):
     t = 台
     c = t.h.checks()
     assert all(c[k]["ok"] for k in ("db", "loop", "disk", "certs", "lanes")), c
-    assert c["backup"]["ok"] is False and "没配备份" in c["backup"]["detail"]
+    assert c["backup"]["ok"] is False and "未配置备份" in c["backup"]["detail"]
     assert "400 天" in c["certs"]["detail"]
     assert t.h.healthz() == (True, {"ok": True, "version": t.h.healthz()[1]["version"]})
 
@@ -209,7 +209,7 @@ def test_工单9_续签了还没换到狗上_按狗报的在用证书算到期_�
     c = t.h.checks()
     assert not c["certs"]["ok"]
     assert "机器人 A 在用的证书还有 10 天到期" in c["certs"]["detail"]
-    assert "新证书签好了" in c["certs"]["detail"], "站点这边已经续过:告诉人拷过去"
+    assert "新证书已签发" in c["certs"]["detail"], "站点这边已续过:告诉人拷过去"
     caps.tasks["tls"]["expires_ms"] = NOW + 400 * DAY                # 换上了
     assert t.h.checks()["certs"]["ok"]
     caps.tasks.pop("tls")                                             # 老代理不报:看站点的包

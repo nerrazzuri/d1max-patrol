@@ -90,7 +90,7 @@ async def test_换先验_找得到就起_MOLA_起来了等人给初值(tmp_path)
     assert sup.started == [d / PRIOR_FILE]
     core.tick()
     assert [m.reason for m in core.drain() if isinstance(m, State)][-1] == "等人给初始位置"
-    assert await be.load_prior(M, str(d)) == "", "同一张图、在跑:当没事"
+    assert await be.load_prior(M, str(d)) == "", "同一张图、正在运行:当未事"
     await _settle()
     assert len(sup.started) == 1
 
@@ -135,7 +135,7 @@ async def test_重定位_平面位姿换成_MOLA_的三维初值(tmp_path):
     assert [m.reason for m in core.drain() if isinstance(m, State)][-1] != "等人给初始位置", \
         "收下了就告诉核心"
     svc.accept = False
-    assert "没收下" in await be.relocalize(1.0, 2.0, 0.0, 0.5)
+    assert "未接收下" in await be.relocalize(1.0, 2.0, 0.0, 0.5)
 
 
 async def test_MOLA_刚起来还没出过位姿_人给的位置先记着_出了第一帧再下发(tmp_path):
@@ -146,7 +146,7 @@ async def test_MOLA_刚起来还没出过位姿_人给的位置先记着_出了�
     assert await be.relocalize(1.0, 2.0, 0.0, 0.5, req=4) == "", "先记着,回收下"
     assert svc.calls == []
     await be.check()
-    assert svc.calls == [], "MOLA 还没出过位姿"
+    assert svc.calls == [], "MOLA 尚未出过位姿"
     be.mola_output()
     await be.check()
     assert len(svc.calls) == 1
@@ -174,8 +174,8 @@ async def test_卡住了就重启_重启之后按最后可信的位置自己重�
         core.tick()
         await be.check()
         await _settle()
-    assert sup.restarts == ["定位程序卡住了,在重启"], "只重启一回"
-    assert len(svc.calls) == 1, "重启之后 MOLA 还没出过位姿:先不请"
+    assert sup.restarts == ["定位程序卡住,在重启"], "只重启一回"
+    assert len(svc.calls) == 1, "重启之后 MOLA 尚未出过位姿:先不请"
     be.mola_output()
     await be.check()
     await be.check()
@@ -251,7 +251,7 @@ async def test_换了图_旧_MOLA_出过位姿不算_新图上人给的位置先
     be.mola_output()
     await be.load_prior(("estate-1", "8"), str(_先验(tmp_path, name="m8")))
     assert await be.relocalize(1.0, 2.0, 0.0, 0.5, req=4) == ""
-    assert svc.calls == [], "新图的 MOLA 还没出过位姿:记着"
+    assert svc.calls == [], "新图的 MOLA 尚未出过位姿:记着"
     await _settle()
     be.mola_output()
     await be.check()
@@ -286,7 +286,7 @@ async def test_记着的重定位放太久就扔掉(tmp_path):
     assert svc.calls == []
     core.tick()
     assert [m.reason for m in core.drain() if isinstance(m, State)][-1] == \
-        "人给的位置放太久没用上,请重新设位置"
+        "人给的位置放太久未启用,请重新设位置"
 
 
 async def test_起_MOLA_出错_不悄悄吞掉(tmp_path):
@@ -294,7 +294,7 @@ async def test_起_MOLA_出错_不悄悄吞掉(tmp_path):
     c, core, sup, svc, be = _台(tmp_path)
 
     async def 炸(prior):
-        raise RuntimeError("看管器坏了")
+        raise RuntimeError("看管器已损坏")
     sup.start = 炸
     await be.load_prior(M, str(_先验(tmp_path)))
     await _settle()

@@ -146,9 +146,9 @@ def test_老库的任务包表也补上schema列(tmp_path):
 
 def test_A7_升级包的代理兼容级别_太老太新站点都不登记(cat, tmp_path):
     from d1max_contract.compat import SITE_MAX_AGENT_LEVEL, SITE_MIN_AGENT_LEVEL
-    with pytest.raises(ReleaseCatalogError, match="太老"):
+    with pytest.raises(ReleaseCatalogError, match="过旧"):
         cat.add(做包(tmp_path, "2026-10-10-aaaaa1", compat=None))
-    with pytest.raises(ReleaseCatalogError, match="太老"):
+    with pytest.raises(ReleaseCatalogError, match="过旧"):
         cat.add(做包(tmp_path, "2026-10-10-aaaaa2", compat=SITE_MIN_AGENT_LEVEL - 1))
     with pytest.raises(ReleaseCatalogError, match="先升站点"):
         cat.add(做包(tmp_path, "2026-10-10-aaaaa3", compat=SITE_MAX_AGENT_LEVEL + 1))

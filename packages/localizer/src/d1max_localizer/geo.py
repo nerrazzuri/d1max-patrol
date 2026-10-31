@@ -103,7 +103,7 @@ def georeference(traj: Sequence[Any], frames: Frames, rows: Sequence[dict[str, A
         return None, f"走过的范围只有 {extent:.1f} m(要 {MIN_EXTENT_M:g} m):朝向定不准"
     th, tx, ty, rms = fit_rigid2d(src, dst)
     if rms > MAX_RMS_M:
-        return None, f"残差 {rms:.2f} m(上限 {MAX_RMS_M:g} m):RTK 跟建图轨迹对不上"
+        return None, f"残差 {rms:.2f} m(上限 {MAX_RMS_M:g} m):RTK 与建图轨迹不匹配"
     base = None
     if bases:                                         # 建图时的基站坐标(内审应修 3):取中间那个
         b = sorted(bases)[len(bases) // 2]

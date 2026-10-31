@@ -123,7 +123,7 @@ class IncidentDesk:
         sealed = seal_value(self.db, secret)              # 加密落库(W30,决策 43)
         with self.db.tx() as c:
             if c.execute("SELECT 1 FROM incident_sources WHERE name=?", (name,)).fetchone():
-                raise IncidentError(f"事件源 {name} 已经登记过了")
+                raise IncidentError(f"事件源 {name} 已登记")
             c.execute("INSERT INTO incident_sources VALUES (?,?,?)", (name, sealed, self._now()))
         return secret
 
@@ -194,7 +194,7 @@ class IncidentDesk:
             key = self.reach.key(map_id, map_version, xs[0], xs[1])
             r = self.reach.check(name, map_id, map_version, xs[0], xs[1])
             if r.problem:
-                raise IncidentError(f"拦截点 {name} 设不了:{r.problem}")
+                raise IncidentError(f"拦截点 {name} 无法设置:{r.problem}")
             note = r.note
         with self.db.tx() as c:
             c.execute("INSERT INTO intercepts(name, map_id, map_version, x, y, yaw, reach, "
@@ -289,13 +289,13 @@ class IncidentDesk:
         sig = signature if isinstance(signature, str) else ""
         got = bytes.fromhex(sig) if _HEX64.fullmatch(sig) else b""
         if not rows:
-            raise IncidentAuthError("事件源没登记")
+            raise IncidentAuthError("事件源未登记")
         if not _DIGITS.fullmatch(stamp):
             raise IncidentAuthError("时间戳不是十进制纯数字毫秒")
         if abs(self._now() - int(stamp)) > MAX_SKEW_MS:
             raise IncidentAuthError("时间戳离站点的钟太远(超过 5 分钟)")
         if not hmac.compare_digest(want, got):
-            raise IncidentAuthError("签名对不上")
+            raise IncidentAuthError("签名不匹配")
 
     # ------------------------------------------------------------ 处理
 
@@ -417,19 +417,19 @@ class IncidentDesk:
                 if not on:
                     from d1max_site.modes import LABEL
                     return self._set(c, iid, outcome="disarmed",
-                                     note=f"{LABEL[mode]}模式:这个防区撤防,只记录")
+                                     note=f"{LABEL[mode]}模式:此防区撤防,只记录")
                 who = self.arming.authorized(ev["zone"])          # B1c:名单
                 if who is not None:
                     return self._set(c, iid, outcome="authorized",
-                                     note=f"授权在场:{who}(这个防区、这个时段),只记录")
+                                     note=f"授权在场:{who}(此防区、此时段),只记录")
             z = c.execute("SELECT intercept FROM zones WHERE zone=?", (ev["zone"],)).fetchone()
             if z is None:
-                return self._set(c, iid, outcome="unmapped", note="防区没映射到拦截点")
+                return self._set(c, iid, outcome="unmapped", note="防区未映射到拦截点")
             point = self.intercept(z["intercept"])
             if point.get("reach"):
                 # W23:查好的结果说走不到(地图、禁行区改过之后):不派,照样报「没狗去」
                 return self._set(c, iid, outcome="unreachable", intercept=point["name"],
-                                 note=f"拦截点走不到:{point['reach']}")
+                                 note=f"拦截点无法到达:{point['reach']}")
             leader = self._merge_target(c, ev["zone"], exclude=iid)
             if leader is not None:
                 return self._set(c, iid, outcome="merged", intercept=point["name"],
@@ -509,12 +509,12 @@ class IncidentDesk:
             who = self.arming.authorized(nxt["zone"]) if self.arming is not None else None
             if not on:
                 from d1max_site.modes import LABEL
-                stop = ("disarmed", f"首条没派成时已是{LABEL[mode]}模式:这个防区撤防,不再派")
+                stop = ("disarmed", f"首条未派成时已是{LABEL[mode]}模式:此防区撤防,不再派")
             elif who is not None:
                 # B 阶段外审 I2:补派跟首次派走同一套出动资格 —— 授权在场就不派、不占狗
-                stop = ("authorized", f"首条没派成时这个防区有授权在场:{who},只记录")
+                stop = ("authorized", f"首条未派成时此防区有授权在场:{who},只记录")
             elif point is not None and point.get("reach"):
-                stop = ("unreachable", f"拦截点走不到:{point['reach']}")
+                stop = ("unreachable", f"拦截点无法到达:{point['reach']}")
             if stop is not None:
                 disarmed = [r["id"] for r in c.execute(
                     "SELECT id FROM incidents WHERE merged_into=? AND outcome='merged' ORDER BY id",
@@ -523,7 +523,7 @@ class IncidentDesk:
                           "AND outcome='merged'", (*stop, failed))
             else:
                 got = self._reserve(c, nxt["id"], point) if point else self._set(
-                    c, nxt["id"], outcome="unmapped", note="拦截点没了")
+                    c, nxt["id"], outcome="unmapped", note="拦截点已删除")
                 c.execute("UPDATE incidents SET merged_into=? WHERE merged_into=? AND "
                           "outcome='merged' AND id<>?", (nxt["id"], failed, nxt["id"]))
                 c.execute("UPDATE incidents SET merged_into=NULL WHERE id=?", (nxt["id"],))

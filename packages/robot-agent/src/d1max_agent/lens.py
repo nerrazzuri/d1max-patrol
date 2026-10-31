@@ -70,7 +70,7 @@ def ffmpeg_gray(input_args: Sequence[str], ffmpeg: str = "ffmpeg"
             raise
         if proc.returncode != 0 or len(out) != W * H:
             from d1max_contract.video import scrub_tail  # 热像地址里有口令
-            raise OSError(f"取不到热像画面:{scrub_tail(err, 200)}")
+            raise OSError(f"无法获取热像画面:{scrub_tail(err, 200)}")
         return out
     return grab
 
@@ -143,11 +143,11 @@ class LensWatch:
         did = f"lens:{self.camera}"
         if self.state == "blocked" and self._boot_blocked:
             return device(did, "degraded", "开机以来画面一直糊成一片:镜头可能被挡住了,"
-                                           "也可能一直对着没有细节的东西(这种时候检查不了镜头)")
+                                           "也可能一直对着没有细节的东西(这种时候无法检查镜头)")
         if self.state == "blocked":
             return device(did, "degraded", "镜头可能被挡住了(雨水、脏东西),画面糊成一片")
         if self.error:
-            return device(did, "online", f"这一次没取到画面:{self.error}")
+            return device(did, "online", f"这一次未取到画面:{self.error}")
         if len(self._good) < MIN_BASELINE:
             return device(did, "online", f"还在攒基线({len(self._good)}/{MIN_BASELINE})")
         return device(did, "online", "看得清")

@@ -50,7 +50,7 @@ class FfmpegCamera(MediaSource):
                 *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
                 start_new_session=True)
         except OSError as exc:
-            raise MediaError(f"起不了 ffmpeg:{exc}") from exc
+            raise MediaError(f"无法启动 ffmpeg:{exc}") from exc
         if self._closes != closes:
             await _reap(proc)
             raise MediaError("取图源关了")
@@ -59,7 +59,7 @@ class FfmpegCamera(MediaSource):
             out, err = await asyncio.wait_for(proc.communicate(), self._timeout)
         except asyncio.TimeoutError:
             await _reap(proc)
-            raise MediaError(f"{self._timeout:g} 秒内没抽到画面(超时)") from None
+            raise MediaError(f"{self._timeout:g} 秒内未抽到画面(超时)") from None
         except BaseException:
             await _reap(proc)                        # 外审 R6:被取消也收掉,不留一个一直在拉流的
             raise

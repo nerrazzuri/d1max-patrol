@@ -62,7 +62,7 @@ class Registry:
         with self.db.tx() as c:
             row = c.execute("SELECT revoked FROM robots WHERE robot_id=?", (robot_id,)).fetchone()
             if row is None or row["revoked"]:
-                raise RegistryError(f"{robot_id} 没登记或已吊销:要 enroll,不是续签")
+                raise RegistryError(f"{robot_id} 未登记或已吊销:要 enroll,不是续签")
             c.execute("UPDATE robots SET fingerprint=?, issued_at=?, expires_at=? WHERE robot_id=?",
                       (fingerprint, issued_at, expires_at, robot_id))
 

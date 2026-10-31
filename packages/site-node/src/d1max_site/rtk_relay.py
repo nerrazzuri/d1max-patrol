@@ -70,7 +70,7 @@ def load_ntrip(path: str | Path) -> NtripAccount:
         raise SourceError(f"NTRIP 要账号:在 {p} 写 ntrip.json(user、password,"
                           "可选 lat、lon、alt),chmod 600") from exc
     except (OSError, ValueError) as exc:
-        raise SourceError(f"{p} 读不了: {exc}") from exc
+        raise SourceError(f"{p} 无法读取: {exc}") from exc
     if mode & 0o077:
         raise SourceError(f"{p} 里有密码,权限要 0600(chmod 600)")
     if not isinstance(d, dict) or not all(isinstance(d.get(k), str) and d.get(k)
@@ -131,12 +131,12 @@ class _Chunks:
             line, sep, rest = self._buf.partition(b"\r\n")
             if not sep:
                 if len(self._buf) > 64:
-                    raise ConnectionError("分块的长度行不对")
+                    raise ConnectionError("分块的长度行错误")
                 break
             try:
                 size = int(line.split(b";")[0].strip() or b"0", 16)
             except ValueError as exc:
-                raise ConnectionError("分块的长度行不对") from exc
+                raise ConnectionError("分块的长度行错误") from exc
             self._buf = rest
             if size == 0:
                 raise ConnectionError("caster 结束了数据流")
@@ -166,7 +166,7 @@ def parse_source(text: str) -> tuple[str, str, int]:
     if kind == "serial" and n not in _BAUDS:
         raise SourceError(f"波特率 {n} 不认,只认 {sorted(_BAUDS)}")
     if kind == "tcp" and not 0 < n < 65536:
-        raise SourceError(f"端口 {n} 不对")
+        raise SourceError(f"端口 {n} 错误")
     return kind, where, n
 
 
@@ -272,7 +272,7 @@ class RtcmRelay:
         while b"\r\n\r\n" not in head and not head.startswith(b"ICY 200 OK\r\n"):
             d = s.recv(1024)
             if not d:
-                raise ConnectionError("caster 没回就断了")
+                raise ConnectionError("caster 未返回就已断开")
             head += d
             if len(head) > 16384:
                 raise ConnectionError("caster 回的头太长")
@@ -284,10 +284,10 @@ class RtcmRelay:
         else:
             hdr, _, rest = head.partition(b"\r\n\r\n")
             if status.startswith("SOURCETABLE"):
-                raise ConnectionError(f"挂载点不对(caster 回了挂载点列表):/{mount}")
+                raise ConnectionError(f"挂载点错误(caster 回了挂载点列表):/{mount}")
             code = status.split(" ")[1] if status.startswith("HTTP/") and " " in status else ""
             if code == "401":
-                raise ConnectionError("NTRIP 账号密码不对(401)")
+                raise ConnectionError("NTRIP 账号密码错误(401)")
             if code != "200":
                 raise ConnectionError(f"caster 拒了:{status[:80]}")
             chunked = _Chunks() if b"transfer-encoding: chunked" in hdr.lower() else None
@@ -310,7 +310,7 @@ class RtcmRelay:
                     if self._stop.is_set():
                         return b""
                     if self._mono() - state["heard"] > NTRIP_IDLE_S:
-                        raise ConnectionError(f"caster {NTRIP_IDLE_S:.0f} s 没发数据") from None
+                        raise ConnectionError(f"caster {NTRIP_IDLE_S:.0f} s 未发数据") from None
                     continue
                 if not d:
                     return b""

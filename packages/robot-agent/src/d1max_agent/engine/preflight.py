@@ -74,7 +74,7 @@ async def _check_nav_ready(nav: NavBackend) -> CheckResult:
     status = await nav.nav_status()
     if status is None:
         # 端口约定:认不出的枚举值回 None(固件可能新增)。认不出就不放行。
-        return CheckResult("nav_ready", False, "导航状态认不出来,不敢放行")
+        return CheckResult("nav_ready", False, "导航状态无法识别,不予放行")
     ok = status is NavStatus.STANDBY
     return CheckResult("nav_ready", ok,
                        "导航就绪" if ok else f"导航当前是 {status.value},不是 StandBy")
@@ -98,7 +98,7 @@ async def _check_localized(nav: NavBackend) -> CheckResult:
     """定位必须收敛到 ContinuousLoc(§4.3)。没收敛就走,走的是错的地方。"""
     status = await nav.loc_status()
     if status is None:
-        return CheckResult("localized", False, "定位状态认不出来,不敢放行")
+        return CheckResult("localized", False, "定位状态无法识别,不予放行")
     ok = status is LocStatus.CONTINUOUS_LOC
     return CheckResult("localized", ok,
                        "定位已收敛" if ok
@@ -114,7 +114,7 @@ async def _check_home(mission: Mission, home: HomePoint | None) -> CheckResult:
     """
     if home is None:
         return CheckResult("home", False,
-                           f"地图 {mission.map_id!r} 没标过原点,先去标一个换电位")
+                           f"地图 {mission.map_id!r} 未标原点,先去标一个换电位")
     if home.map_id != mission.map_id:
         return CheckResult("home", False,
                            f"原点记的是 {home.map_id!r},任务跑的是 "
@@ -184,7 +184,7 @@ async def _check_battery(device: DeviceBackend, mission: Mission,
     if home is None or home.map_id != mission.map_id:
         # 算不出线的时候不放行 —— 这是本模块开头那条"不确定不放行"。
         return CheckResult("battery", False,
-                           f"电量 {pct:.1f}%,但算不出出发线:这张图的原点不可用"
+                           f"电量 {pct:.1f}%,但算不出出发线:此地图的原点不可用"
                            f"(见 home 项)")
     if mission.policy.charging_trip:
         # 去充电桩(W13):去充是电量唯一能回来的路,高于中止线就走(路上到中止线照样停)
@@ -192,7 +192,7 @@ async def _check_battery(device: DeviceBackend, mission: Mission,
         ok = pct > line
         return CheckResult("battery", ok,
                            f"去充电:电量 {pct:.1f}%,中止线 {line:.0f}%" if ok
-                           else f"电量 {pct:.1f}%,不到中止线 {line:.0f}%:去充电也走不动了")
+                           else f"电量 {pct:.1f}%,不到中止线 {line:.0f}%:去充电也无法行走了")
     start = await _where(nav) if nav is not None else None
     back = back_mode(nav, mission) if nav is not None else "home"
     line = departure_line_pct(mission, home, slack=slack, params=params, start=start, back=back)
@@ -221,7 +221,7 @@ async def _check_storage(runs_root: Path, min_free_mb: float, form: Form,
         probe.write_text("ok", encoding="utf-8")
         probe.unlink()
     except OSError as exc:
-        return CheckResult("storage", False, f"归档目录 {root} 写不了: {exc}")
+        return CheckResult("storage", False, f"归档目录 {root} 无法写入: {exc}")
     usage = shutil.disk_usage(root)
     verdict = storage_verdict(
         free_mb=usage.free / (1024 * 1024),
@@ -236,7 +236,7 @@ async def _check_storage(runs_root: Path, min_free_mb: float, form: Form,
         # 满,会是它满到 90% 拦停的那一天。告警通道是后面那份计划的事,
         # 这里能做的是把通过的这句话说重。
         return CheckResult("storage", True,
-                           f"{verdict.detail} —— 已经过了 "
+                           f"{verdict.detail} —— 已过了 "
                            f"{WARN_USED_RATIO * 100:.0f}% 报警线,该清盘了;"
                            f"到 {STOP_USED_RATIO * 100:.0f}% 就不许出发")
     return CheckResult("storage", verdict.ok, verdict.detail)
@@ -257,8 +257,8 @@ async def _check_removable(disks: Sequence[Removable] | None,
     """
     if disks is None:
         return CheckResult("removable", False,
-                           "没扫过外插盘,不放行 —— 认不出插着什么,"
-                           "就不能说没插")
+                           "未扫过外插盘,不放行 —— 无法识别插着什么,"
+                           "就不能说未插")
     blocking = blocks_takeoff(disks, robot_sn=robot_sn)
     if not blocking:
         return CheckResult("removable", True,
@@ -273,7 +273,7 @@ async def _check_removable(disks: Sequence[Removable] | None,
         which = ", ".join(f"{d.mount.as_posix()}(SN {d.sn})" for d in strangers)
         return CheckResult("removable", False,
                            f"还插着盘: {names} —— 其中 {which} 是别的机器人的"
-                           f"镜像盘,这台机器人是 {robot_sn};接着跑会把两台机器人的"
+                           f"镜像盘,此机器人是 {robot_sn};接着跑会把两台机器人的"
                            f"数据写到一块盘上")
     return CheckResult("removable", False,
                        f"还插着盘: {names} —— 拔下来再出发。"

@@ -253,7 +253,7 @@ def test_摄像头没了_状态变断开_说连不上(monkeypatch):
         c.close()
         c.httpd.server_close()
         _等(lambda: not w.status.connected, timeout=10)
-        assert "连不上" in w.status.error
+        assert "无法连接" in w.status.error
     finally:
         w.stop()
         w.join()
@@ -381,7 +381,7 @@ def test_实时画面_观众共用一条_都走了收掉():
     assert fa.startswith(b"\xff\xd8") and fb.startswith(b"\xff\xd8")
     assert len(procs) == 1, "两个观众共用一条 ffmpeg"
     argv = procs[0][0]
-    assert not any("cam-pass" in a for a in argv), "口令不进命令行(ps、/proc 看得到)"
+    assert not any("cam-pass" in a for a in argv), "密码不进命令行(ps、/proc 看得到)"
     a.close()
     b.close()
     _等(lambda: procs[0][1].poll() is not None, timeout=5)
@@ -503,7 +503,7 @@ def test_W19外审_两台同时断各一条_只恢复一台解决一台_删掉�
     assert al.offline() == ["cctv:c"]
     remove_camera(db, "c")
     m.sync()
-    assert al.offline() == [], "删掉断着的:它的告警不再挂着"
+    assert al.offline() == [], "删掉断着的:机器人的告警不再挂着"
     m.watches["a"].status.connected = False
     m.watches["a"].status.since_ms = now[0]
     now[0] += 301_000
@@ -534,7 +534,7 @@ def test_W19复查_重启之后_已经连上的解决旧告警_还断着的不�
     assert al2.offline() == ["cctv:b"], "a 的旧告警解决了;停机时删的 c 也解决了"
     now[0] += 301_000
     m2.sync()
-    assert al2.calls.count("raise") == 0, "b 还断着:库里已经挂着,不重报"
+    assert al2.calls.count("raise") == 0, "b 还断着:库里已挂着,不重报"
     assert [a["count"] for a in al2.desk.open() if a["robot"] == "cctv:b"] == [1]
 
 
@@ -552,14 +552,14 @@ def test_W19复查_报不出去_解决不了_下一拍重试(tmp_path):
     assert al.offline() == []
     al.fail = set()
     m.sync()
-    assert al.offline() == ["cctv:a"], "上一拍没报成:这一拍报"
+    assert al.offline() == ["cctv:a"], "上一拍未上报成:这一拍报"
     m.watches["a"].status.connected = True
     al.fail = {"resolve"}
     m.sync()
     assert al.offline() == ["cctv:a"]
     al.fail = set()
     m.sync()
-    assert al.offline() == [], "上一拍没解决成:这一拍解决"
+    assert al.offline() == [], "上一拍未解决成:这一拍解决"
     n = al.calls.count("resolve")
     m.sync()
     assert al.calls.count("resolve") == n, "确认解决了:不每拍都去问"
@@ -613,7 +613,7 @@ def test_W19外审_删除时正卡在拉消息里_回来的入侵不派_删除�
     client.release.set()                                  # 这时候一条入侵回来了
     t.join(10)
     assert not t.is_alive() and not old._thread.is_alive()
-    assert reported == [], "已经删了的摄像头:不派"
+    assert reported == [], "已删了的摄像头:不派"
 
 
 def test_W19外审_站点收尾等订阅线程退出(tmp_path):
@@ -651,7 +651,7 @@ def test_W19外审_ffmpeg自己退了_回收进程_关文件_删清单(tmp_path)
     v = CctvView(_cam(rtsp_url="rtsp://10.0.0.9/s1"), popen=popen, major=lambda f: 4)
     it = v.frames()
     assert next(it) == b"\xff\xd8A\xff\xd9"
-    assert list(it) == [], "断了:流结束"
+    assert list(it) == [], "已断开:流结束"
     argv, p, err = procs[0]
     listing = argv[argv.index("-i") + 1]
     _等(lambda: p.returncode is not None)
@@ -732,7 +732,7 @@ def test_W19外审_报错里的口令抹掉_日志和接口都不出现(站点, 
     s = 站点
     add_camera(s.db, _cam(80), now_ms=1)
     s.cctv.sync()
-    s.cctv.watches["gate-cam"].status.error = "rtsp://admin:cam-pass@x 连不上"
+    s.cctv.watches["gate-cam"].status.error = "rtsp://admin:cam-pass@x 无法连接"
     assert "cam-pass" not in str(s.cctv.view())
 
 
@@ -741,7 +741,7 @@ def test_W19外审_告警台按这一位这一种解决_别的摄像头的不动
     from d1max_site.alert_store import AlertDesk
     desk = AlertDesk(SiteDB(tmp_path / "s.db"), now_ms=lambda: 1)
     for n in ("a", "b"):
-        desk.raise_alert(kind="cctv_offline", robot=f"cctv:{n}", title=f"{n} 连不上")
+        desk.raise_alert(kind="cctv_offline", robot=f"cctv:{n}", title=f"{n} 无法连接")
     desk.raise_alert(kind="robot_offline_idle", robot="cctv:a", title="别的种类")
     assert desk.resolve_all("cctv:a", "cctv_offline", who="站点") == 1
     left = {(a["robot"], a["kind"]) for a in desk.open()}
@@ -829,7 +829,7 @@ def test_外审R6_出过画面后卡住_过了停帧时限结束流_收掉进程
     v = CctvView(_cam(rtsp_url="rtsp://10.0.0.9/s1"), popen=popen, major=lambda f: 4)
     it = v.frames()
     assert next(it) == b"\xff\xd8A\xff\xd9"
-    assert list(it) == [], "卡住了:这条流结束,浏览器那头才断得开"
+    assert list(it) == [], "卡住:此条流结束,浏览器那头才断得开"
     _等(lambda: procs[0][1].returncode is not None)
     assert v._proc is None and v.error
 
@@ -1264,7 +1264,7 @@ def test_W44复查K2_收尾时删了的摄像头_告警照样解决(tmp_path):
     resume.set()
     owner.join(5)
     closer.join(5)
-    assert ("cctv_offline", frozenset()) in al.resolved, "删掉的那台的「连不上」收尾时也解决"
+    assert ("cctv_offline", frozenset()) in al.resolved, "删掉的那台的「无法连接」收尾时也解决"
     db.close()
 
 

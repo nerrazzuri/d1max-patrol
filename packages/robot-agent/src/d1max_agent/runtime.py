@@ -524,9 +524,9 @@ class AgentRuntime:
         odom_ok = bool(getattr(nav, "odom_ok", True))
         est = nav.anchor.estimate(odom)
         if est is None:
-            return None, False, nav.anchor.why_not(odom_ok) or "还没设位置"
+            return None, False, nav.anchor.why_not(odom_ok) or "尚未设位置"
         if (est.map_id, est.map_version) != self.loaded_map:
-            return est, False, "位置不在正用着的这张图上"
+            return est, False, "位置不在正用着的此地图上"
         if not nav.anchor.ok(odom_ok):
             return est, False, nav.anchor.why_not(odom_ok) or "定位不可信"
         return est, True, ""
@@ -703,7 +703,7 @@ class AgentRuntime:
             if missing:                   # 定位器要读的先验不在清单里:没校验过(内审小 1)
                 self._map_integrity_failed(MapIntegrityError(
                     f"正在用的图 {ref.map_id}:{ref.version} 没有定位先验({', '.join(missing)}),"
-                    "配了定位器的机器人用不了"))
+                    "配了定位器的机器人不可用"))
                 return
         if self._locsrv is not None:                  # 配了定位器:换图不经 HAL(W09c 决定 6)
             self._switch_map(ref)
@@ -970,7 +970,7 @@ class AgentRuntime:
     # ------------------------------------------------------------ 充电桩(W13 外审)
 
     def _set_dock_hazard(self, why: str) -> None:
-        self._dock_hazard = why or "出没出桩说不清"
+        self._dock_hazard = why or "无法确定是否已离开充电桩"
         self._dock_clear_ms = None
         self.events.emit("dock_hazard", {"reason": self._dock_hazard})
 
@@ -1015,12 +1015,12 @@ class AgentRuntime:
         st = self.force.state
         if st == "ok" and self.force is not None and self.force.owed:
             # W26 复查 2:姿态恢复了,可停车、急停还没确认做成:照旧锁着
-            return "force: 翻倒、被抱起来后的安全处置还没做完(" + "、".join(sorted(
+            return "force: 翻倒、被抱起来后的安全处置尚未做完(" + "、".join(sorted(
                 self.force.owed)) + "):做完之前不能动"
         if st == "flipped":
-            return "flipped: 机器人翻倒了:扶起来、解除急停之后才能动"
+            return "flipped: 机器人翻倒:扶起来、解除急停之后才能动"
         if st == "lifted":
-            return "lifted: 机器人被抱起来了(腿上不承重):放回地上之后才能动"
+            return "lifted: 机器人被抱起(腿上不承重):放回地上之后才能动"
         return ""
 
     async def _watch_force(self) -> None:
@@ -1110,7 +1110,7 @@ class AgentRuntime:
         if self._dock_hazard:
             return f"on_dock: 桩上危险,运动锁住({self._dock_hazard});离了桩确认之后才放"
         if self._on_dock is None:
-            return "on_dock: 还不知道在不在充电桩上"
+            return "on_dock: 尚未确定是否在充电桩上"
         if self._on_dock:
             return "on_dock: 机器人在充电桩上:先出桩(派对桩任务出桩)"
         return ""
@@ -1204,7 +1204,7 @@ class AgentRuntime:
         if kind in ("unbind", "wifi_confirm"):
             # W42:转给本机配网服务(清机在它那儿做,会把代理自己也停掉:先回执再清)
             if self.bind is None:
-                return "unsupported: 这台没有配网服务"
+                return "unsupported: 此设备没有配网服务"
             p = cmd.payload
             if kind == "unbind":
                 why = await asyncio.to_thread(self.bind.unbind, p.get("cert"))
@@ -1375,7 +1375,7 @@ class AgentRuntime:
             if p.get("global") is not True:
                 return "payload: global 只能是 true"
             if not self._global_ok():
-                return "unsupported: 这台机器人不能自动找位置(要配避障和定位器)"
+                return "unsupported: 此机器人不能自动找位置(要配避障和定位器)"
             got = await self._global_find()
             if isinstance(got, str):
                 return got
@@ -1679,7 +1679,7 @@ class AgentRuntime:
             return "在换图"
         cur = self.processor.current
         if cur is not None and not cur.done and cur.kind in ("goto", "patrol"):
-            return f"在跑任务 {cur.task_id}"
+            return f"正在执行任务 {cur.task_id}"
         if any(t.kind in ("goto", "patrol") for t in self.processor.pending):
             return "有任务排着队"
         return ""
@@ -1693,7 +1693,7 @@ class AgentRuntime:
         if not self._tasks_idle():
             cur = self.processor.current
             what = cur.task_id if cur is not None and not cur.done else "排着队的任务"
-            return f"在跑任务 {what}"
+            return f"正在执行任务 {what}"
         if self._running(self._build_job):
             return "在重建地图"
         if self._running(self._rec_job) or (self.mapper is not None and self.mapper.recording):
@@ -1726,11 +1726,11 @@ class AgentRuntime:
                     sources.append(SourceCheck(label, bool(got.ok), str(got.detail)))
                 except asyncio.TimeoutError:
                     sources.append(SourceCheck(label, False,
-                                               f"超过 {PRECHECK_SOURCE_TIMEOUT_S:g} s 没回"))
+                                               f"超过 {PRECHECK_SOURCE_TIMEOUT_S:g} s 未返回"))
                 except Exception as exc:  # noqa: BLE001 - 来源自己炸了:这一项按不健康
                     log.warning("升级前检查的来源 %s 炸了: %s", label, exc)
                     sources.append(SourceCheck(label, False,
-                                               f"查不了: {type(exc).__name__}: {exc}"))
+                                               f"无法检查: {type(exc).__name__}: {exc}"))
         # 空闲放在最后取:上面有 await,取完空闲到调用方收下之间不再让出(不会夹进任务)。
         items = precheck(PrecheckInputs(
             name=name, current=rel.current(), installed=installed, package_error=package_error,
@@ -1779,14 +1779,14 @@ class AgentRuntime:
                 # 拒先验,狗之后一直定不了位 —— 内审应修 3)。下载之前就拒。
                 missing = [n for n in PRIOR_FILES if n not in {f.name for f in ref.files}]
                 if missing:
-                    raise MapInstallError(f"这一版没有定位先验({', '.join(missing)}),"
-                                          "配了定位器的机器人用不了:换一版机器人上建的图")
+                    raise MapInstallError(f"此版本没有定位先验({', '.join(missing)}),"
+                                          "配了定位器的机器人不可用:换一版机器人上建的图")
             dst = await asyncio.to_thread(self.maps.install, ref)
             waited = 0.0
             while not self._tasks_idle():
                 if waited >= SWITCH_WAIT_S:
                     self.maps.discard(ref)
-                    raise MapInstallError(f"等了 {SWITCH_WAIT_S:g} s 机器人一直有任务:没换")
+                    raise MapInstallError(f"等了 {SWITCH_WAIT_S:g} s 机器人一直有任务:未换")
                 await asyncio.sleep(1.0)
                 waited += 1.0
             self._switching = True
@@ -1817,7 +1817,7 @@ class AgentRuntime:
                     rolled = await self._revert_map(old, old_prev, old_home)
                 if why:
                     tail = ("(已退回原来的 " + f"{old.map_id}:{old.version})" if rolled
-                            else "(退回原来的也没成,机器人上现在的图见能力)") if old is not None \
+                            else "(退回原来的也失败,机器人上现在的图见能力)") if old is not None \
                         else "(原来没有别的图可退)"
                     raise MapInstallError(why + tail)
             finally:
@@ -1860,10 +1860,10 @@ class AgentRuntime:
             if state == "ok":
                 return ""
             if state == "rejected":
-                return f"定位器不收这张图的先验:{why}"[:200]
+                return f"定位器不收此地图的先验:{why}"[:200]
             if loop.time() >= deadline:
                 tail = f"({why})" if why else ""
-                return f"定位器 {PRIOR_ACK_WAIT_S:g} s 没确认这张图的先验{tail}"[:200]
+                return f"定位器 {PRIOR_ACK_WAIT_S:g} s 未确认此地图的先验{tail}"[:200]
             await asyncio.sleep(PRIOR_ACK_POLL_S)
 
     async def _revert_map(self, old, old_prev, old_home) -> bool:
@@ -2197,7 +2197,7 @@ class AgentRuntime:
         for bag, map_id, version, task in getattr(self.mapper, "lost", []):
             self.events.emit("map_build_failed", {"task_id": task, "bag": bag, "map_id": map_id,
                                                   "version": version,
-                                                  "reason": "代理重启了,这一趟没收完"})
+                                                  "reason": "代理重启了,本次任务未接收完"})
         if getattr(self.mapper, "pending", None) is not None:
             self._build_job = asyncio.get_running_loop().create_task(self._finish_live(""))
 
@@ -2679,7 +2679,7 @@ class AgentRuntime:
             n += len(stuck)
             why = why or next(iter(stuck.values()), "")
         if n != self._unsealed_told:
-            (log.warning if n else log.info)("封不上、扣着不传的证据:%d 个 %s", n, why)
+            (log.warning if n else log.info)("无法加密、扣着不传的证据:%d 个 %s", n, why)
             self._unsealed_told = n
         return n
 

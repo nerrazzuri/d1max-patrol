@@ -103,7 +103,7 @@ def clean(pgm: bytes, meta: dict[str, Any], specks: list[dict[str, Any]]) -> byt
     ranks = mp.grid_ranks(pgm, meta)
     free_vals = img[ranks == 1]
     if not free_vals.size:
-        raise ValueError("图里没有空闲格,不知道空地是什么灰度")
+        raise ValueError("图里没有空闲格,无法确定空地灰度")
     free = int(np.bincount(free_vals).argmax())
     for s in specks:
         for r, c in s["cells"]:

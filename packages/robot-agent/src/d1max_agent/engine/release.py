@@ -222,7 +222,7 @@ def read_manifest(where: Path | str) -> ReleaseManifest:
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
     except OSError as exc:
-        raise ReleaseError(f"读不到 {MANIFEST_NAME}: {path}") from exc
+        raise ReleaseError(f"无法读取 {MANIFEST_NAME}: {path}") from exc
     except ValueError as exc:
         raise ReleaseError(f"{MANIFEST_NAME} 不是合法 JSON: {path}") from exc
     if not isinstance(raw, dict):
@@ -257,7 +257,7 @@ def verify_package(where: Path | str) -> ReleaseManifest:
                            f"目录名却是 {where.name}")
     got = tree_sha256(where)
     if got != manifest.content_sha256:
-        raise ReleaseError(f"包的哈希对不上: 自述写 {manifest.content_sha256},"
+        raise ReleaseError(f"包的哈希不匹配: 自述写 {manifest.content_sha256},"
                            f"算出来是 {got}")
     return manifest
 
@@ -278,7 +278,7 @@ def verify_slot(layout: Layout, name: str) -> ReleaseManifest:
         raise ReleaseError(f"{MANIFEST_NAME} 里写的是 {manifest.name},槽却是 {name}")
     got = _tree_sha256(where, skip=MANIFEST_NAME, keep=_packed)
     if got != manifest.content_sha256:
-        raise ReleaseError(f"槽里的包对不上: 自述写 {manifest.content_sha256},算出来是 {got}")
+        raise ReleaseError(f"槽里的包不匹配: 自述写 {manifest.content_sha256},算出来是 {got}")
     return manifest
 
 
@@ -295,7 +295,7 @@ def _read_project_version(pyproject: Path) -> str:
     try:
         text = pyproject.read_text(encoding="utf-8")
     except OSError as exc:
-        raise ReleaseError(f"读不到 pyproject.toml: {pyproject}") from exc
+        raise ReleaseError(f"无法读取 pyproject.toml: {pyproject}") from exc
     section = ""
     body: list[str] = []
     for line in text.splitlines():
@@ -350,11 +350,11 @@ def _check_free(dest: Path, *, force: bool) -> None:
     if not dest.exists():
         return
     if not dest.is_dir():
-        raise ReleaseError(f"{dest} 已经存在而且不是个目录 —— 挪开它再打")
+        raise ReleaseError(f"{dest} 已存在而且不是个目录 —— 挪开它再打")
     if force:
         return
     if any(dest.iterdir()):
-        raise ReleaseError(f"{dest} 已经存在而且不是空的 —— 要盖掉就加 --force")
+        raise ReleaseError(f"{dest} 已存在而且不是空的 —— 要盖掉就加 --force")
 
 
 def _copy_tree_into(src: Path, staging: Path, wheels: Path | None = None) -> str:
@@ -733,10 +733,10 @@ def activate(layout: Layout, name: str, *, now_ms: int,
     name = safe_name(name)
     dest = layout.release_dir(name)
     if not (dest / MANIFEST_NAME).is_file():
-        raise ReleaseError(f"{name} 没装在盘上 —— 先落槽再切")
+        raise ReleaseError(f"{name} 未安装在盘上 —— 先落槽再切")
     src = current_name(layout)
     if src == name:
-        raise ReleaseError(f"{name} 已经是在跑的那一版了")
+        raise ReleaseError(f"{name} 已是正在运行的那一版了")
     if not can_switch(layout, src, name):
         raise ReleaseError(_unbootable(layout, name, "切"))
     pending = Pending(to=name, src=src, attempts=0, at_ms=now_ms,
@@ -800,7 +800,7 @@ def _unbootable(layout: Layout, name: str, verb: str) -> str:
         return (f"{name} 的代理启动脚本({AGENT_START})不是带执行位的普通文件,"
                 f"{verb}过去代理起不来 —— 不{verb}")
     return (f"{name} 里没有代理的启动脚本(老服务那一代),{verb}过去代理起不来,"
-            f"老服务也已经退役 —— 不{verb}")
+            f"老服务也已退役 —— 不{verb}")
 
 
 def rollback(layout: Layout, *, now_ms: int) -> str:
@@ -813,7 +813,7 @@ def rollback(layout: Layout, *, now_ms: int) -> str:
     if pending is None:
         raise ReleaseError("没有在途的升级 —— 没有该退回哪儿这回事")
     if not pending.src:
-        raise ReleaseError("装机那一次没有上一版可退 —— 这台机器要人来看")
+        raise ReleaseError("装机那一次没有上一版可退 —— 此设备要人来看")
     if not can_switch(layout, pending.to, pending.src):
         raise ReleaseError("上一版 " + _unbootable(layout, pending.src, "退"))
     _point_current(layout, pending.src)

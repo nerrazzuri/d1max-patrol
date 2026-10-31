@@ -84,7 +84,8 @@ class BindCore:
         self._lock = threading.RLock()
         dev = read_json(paths.device, None)
         if not isinstance(dev, dict) or not dev.get("serial") or not dev.get("code_hash"):
-            raise RuntimeError(f"{paths.device} 没有或不全:这台还没烧写(d1max-patrol factory burn)")
+            raise RuntimeError(f"{paths.device} 没有或不全:"
+                                f"此机器人尚未烧写(d1max-patrol factory burn)")
         self.device = dev
         self.s: dict[str, Any] = read_json(paths.state, None) or {"state": "unbound"}
         self._fails = 0
@@ -116,7 +117,7 @@ class BindCore:
             self._fails += 1
             if self._fails >= MAX_FAILS:
                 self._fails, self._locked_until = 0, now + LOCK_MS
-            raise BindRefused(403, "绑定码不对:请扫机器人身上的贴纸")
+            raise BindRefused(403, "绑定码错误:请扫机器人身上的贴纸")
         self._fails = 0
 
     def _my_cert(self) -> str:
@@ -158,11 +159,11 @@ class BindCore:
         with self._lock:
             self._check_code(code)
             if self.s["state"] == "wiping":
-                raise BindRefused(409, "正在恢复出厂,稍后再试")
+                raise BindRefused(409, "正在恢复出厂,请稍后重试")
         try:
             seen = self.router.scan()
         except Exception as exc:  # 原因给手机看
-            raise BindRefused(503, f"路由器扫不了 WiFi:{exc}") from exc
+            raise BindRefused(503, f"路由器扫无法完成 WiFi:{exc}") from exc
         best: dict[str, Any] = {}
         for w in seen:
             try:
@@ -180,7 +181,7 @@ class BindCore:
         with self._lock:
             self._check_code(code)
             if self.s["state"] in ("bound", "wiping"):
-                raise BindRefused(409, "这台已经绑在一个站点上了:要换站点,先在原来的站点上解绑")
+                raise BindRefused(409, "此机器人已绑在一个站点上了:要换站点,先在原来的站点上解绑")
             if not isinstance(body, dict):
                 raise BindRefused(400, "要 JSON")
             w, site = body.get("wifi"), body.get("site")
@@ -190,7 +191,7 @@ class BindCore:
                 raise BindRefused(400, str(exc)) from exc
             if not isinstance(site, dict) or not str(site.get("url", "")).startswith("https://") \
                     or len(str(site.get("fp", "")).removeprefix("sha256:")) != 64:
-                raise BindRefused(400, "站点地址、证书指纹不对(在手机上重新选站点)")
+                raise BindRefused(400, "站点地址、证书指纹错误(在手机上重新选站点)")
             self.router.connect_wifi(ssid, psk)
             self.s = {"state": "pending", "phase": "connecting",
                       "wifi": {"ssid": ssid, "psk": psk},
@@ -216,7 +217,7 @@ class BindCore:
         with self._lock:
             self._check_code(code)
             if self.s["state"] != "bound":
-                raise BindRefused(409, "还没绑定:绑定时就会填 WiFi")
+                raise BindRefused(409, "尚未绑定:绑定时就会填 WiFi")
             try:
                 ssid, psk = check_wifi((body or {}).get("ssid"), (body or {}).get("psk", ""))
             except (BindingError, AttributeError) as exc:
@@ -242,11 +243,11 @@ class BindCore:
         with self._lock:
             self._check_code(code)
             if self.s["state"] == "unbound":
-                raise BindRefused(409, "这台本来就没绑定")
+                raise BindRefused(409, "此机器人本来就未绑定")
             try:
                 pub = ed25519.pub_from_pem(self.paths.unbind_pub.read_bytes())
             except (OSError, ValueError) as exc:
-                raise BindRefused(409, "这台没装解绑公钥:找工程师重装") from exc
+                raise BindRefused(409, "此机器人未安装解绑公钥:找工程师重装") from exc
             try:
                 tok = verify_unbind(str(token or ""), pub, serial=self.serial, now_ms=self._now())
             except BindingError as exc:
@@ -382,7 +383,7 @@ class BindCore:
                 self._next_wipe = now + 30_000            # 没清干净:30 秒后整套再来一遍
                 failed = self._wipe()
                 if failed:
-                    self._err("清机没清干净,会接着清:" + ";".join(failed))
+                    self._err("清机未清干净,会接着清:" + ";".join(failed))
                     self._save()
                 else:
                     self.s = {"state": "unbound", "error": ""}
@@ -434,11 +435,11 @@ class BindCore:
             if exc.status in (409, 429, 400):
                 self._err(str(exc))
             else:
-                self._err(f"连不上站点:{exc}")
+                self._err(f"无法连接站点:{exc}")
             self._save()
             return
         except (KeyError, TypeError) as exc:
-            self._err(f"站点回的东西看不懂:{exc}")
+            self._err(f"站点回的东西无法解析:{exc}")
             self._save()
             return
         state = r.get("state")
@@ -446,7 +447,7 @@ class BindCore:
             try:
                 self._provision(r["code"])
             except Exception as exc:  # noqa: BLE001 - 原因给手机看,下一拍再领
-                self._err(f"领证书没成:{exc}")
+                self._err(f"领证书失败:{exc}")
                 self._save()
                 return
             self.s = {"state": "bound", "wifi": s["wifi"], "site": site,
@@ -457,8 +458,8 @@ class BindCore:
         elif state in ("rejected", "expired", "replaced", "done"):
             # 「done」是老站点的回法(领过一次就不再给):这一回没领到就只能重来
             why = {"rejected": "站点上拒绝了",
-                   "expired": "申请过期了(24 小时没人批,或批了太久没领证)",
-                   "replaced": "这台又挂了一条新申请(或者站点上已经解绑过)",
+                   "expired": "申请已过期(24 小时无人批,或批了太久未领证)",
+                   "replaced": "此机器人又挂了一条新申请(或者站点上已解绑过)",
                    "done": "开通码领过了"}[state]
             self.router.forget_wifi()
             self.s = {"state": "unbound", "error": why + ":要重新绑定就再扫一次贴纸"}

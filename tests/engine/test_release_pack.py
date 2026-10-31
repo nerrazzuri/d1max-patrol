@@ -337,7 +337,7 @@ def test_验不过的包不留在盘上(tmp_path, 无git, monkeypatch):
 
     monkeypatch.setattr(release, "_write_manifest", 写坏)
     出 = tmp_path / "出"
-    with pytest.raises(ReleaseError, match="哈希对不上"):
+    with pytest.raises(ReleaseError, match="哈希不匹配"):
         pack(_源码树(tmp_path / "树"), 出, now_ms=NOW_MS)
     assert list(出.iterdir()) == []
 

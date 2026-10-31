@@ -26,7 +26,7 @@ _ID = re.compile(r"[a-z][a-z0-9_]{0,15}(?::[A-Za-z0-9_.-]{1,32})?")
 def device(id: str, state: str, detail: str = "") -> dict[str, Any]:
     """一条设备健康(构造时就校验)。"""
     if not _ID.fullmatch(id):
-        raise ContractError(f"设备名不对:{id!r}")
+        raise ContractError(f"设备名错误:{id!r}")
     if state not in STATES:
         raise ContractError(f"设备状态只认 {'/'.join(STATES)}:{state!r}")
     return {"id": id, "state": state, "detail": str(detail)[:200]}

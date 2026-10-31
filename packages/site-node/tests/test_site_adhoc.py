@@ -179,7 +179,7 @@ def test_正在跑日程也排到后面(台):
                   "?)",
                   (毫秒(19, 50),))
     got = 跑(t.desk.submit("A", 任务定义(), label="loop", by="gina"))
-    assert got["queued"] is True and "正在跑的日程" in got["because"]
+    assert got["queued"] is True and "正在执行的日程" in got["because"]
 
 
 def test_日程没写哪台_别的台也能跑就不算撞_别的台跑不了就算(台):
@@ -189,8 +189,8 @@ def test_日程没写哪台_别的台也能跑就不算撞_别的台跑不了就
     assert t.desk.plan("A", 任务定义())["queued"] is False
     t.disp.cannot["B"] = "B 不在线"                 # 外审 #6:只有 A 能跑这条日程
     assert t.desk.plan("A", 任务定义())["queued"] is True
-    t.disp.cannot["A"] = "A 没定位"
-    assert t.desk.plan("B", 任务定义())["queued"] is False, "A 也跑不了:日程落不到谁头上"
+    t.disp.cannot["A"] = "A 未定位"
+    assert t.desk.plan("B", 任务定义())["queued"] is False, "A 也跑无法完成:日程落不到谁头上"
 
 
 def test_排队的_没到点不派_到点机器人忙不派_空了派_告诉派的人(台):
@@ -202,7 +202,7 @@ def test_排队的_没到点不派_到点机器人忙不派_空了派_告诉派�
     t.now["t"] = got["start_after_ms"]
     t.disp.running["A"] = "sched-x"
     跑(t.desk.tick())
-    assert t.disp.sent == [], "还在跑日程"
+    assert t.disp.sent == [], "还正在运行日程"
     t.disp.running.clear()
     跑(t.desk.tick())
     assert len(t.disp.sent) == 1 and t.disp.sent[0]["task_id"] == f"adhoc-{got['adhoc_id']}"
@@ -243,10 +243,10 @@ def test_排队的派不出去记失败(台):
     t.now["t"] = 毫秒(21, 59)
     got = 跑(t.desk.submit("A", 任务定义(), label="loop", by="gina"))
     t.now["t"] = got["start_after_ms"]
-    t.disp.refuse = "A 没定位"
+    t.disp.refuse = "A 未定位"
     跑(t.desk.tick())
     row = t.db.query("SELECT * FROM adhoc_queue")[0]
-    assert row["state"] == "failed" and "没定位" in row["note"]
+    assert row["state"] == "failed" and "未定位" in row["note"]
 
 
 def test_取消_派的人自己能_别的保安不能_开始跑了不能(台):

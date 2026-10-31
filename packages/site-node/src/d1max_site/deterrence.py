@@ -300,7 +300,7 @@ class DeterrenceDesk:
     def _live(self, rid: str) -> Session:
         s = self.sessions.get(rid)
         if s is None or s.ending is not None:
-            raise DeterrenceError(f"{rid} 没在驱离")
+            raise DeterrenceError(f"{rid} 未在驱离")
         return s
 
     # ------------------------------------------------------------ 人员检测(W24)
@@ -381,7 +381,7 @@ class DeterrenceDesk:
         elif present is False and s.seen_person:
             s.persons = {"count": 0, "gone": True, "at_ms": now}
             if s.auto:
-                await self._end(rid, "人走了(看到过人,之后连续 20 秒确认没人)", go_back=True)
+                await self._end(rid, "人走了(看到过人,之后连续 20 秒确认无人)", go_back=True)
 
     async def _stop_standoff(self, s: Session) -> bool:
         """收尾时撤这一场的保持距离(W25 外审 1):按固定的任务号撤,不看内存里狗报过什么。撤成了
@@ -446,7 +446,7 @@ class DeterrenceDesk:
                     tx.execute("INSERT INTO pending_alerts(kind, robot, title, detail, context, "
                                "created_ms) VALUES (?,?,?,?,?,?)",
                                ("deter_cornered", rid, "驱离中的机器人无路可退,原地站定",
-                                f"防区 {s.zone};" + (why or "四周都退不了"),
+                                f"防区 {s.zone};" + (why or "四周都无法后退"),
                                 json.dumps({"task_id": s.task_id}, ensure_ascii=False), now))
             except Exception:
                 log.exception("%s 无路可退,落库没成(下一拍再记)", rid)
@@ -471,18 +471,18 @@ class DeterrenceDesk:
         from d1max_site.dispatcher import TELEOP_TASK_PREFIX
         async with self._lock(robot_id):
             if robot_id in self.sessions:
-                raise DeterrenceError(f"{robot_id} 已经在驱离了")
+                raise DeterrenceError(f"{robot_id} 正在驱离中")
             if not self._can(robot_id):
-                raise DeterrenceError(f"{robot_id} 没有上装(声光、喇叭),开不了驱离")
+                raise DeterrenceError(f"{robot_id} 没有上装(声光、喇叭),无法开启驱离")
             c = self.dispatcher.clients.get(robot_id)
             fresh = getattr(self.dispatcher, "_fresh", None)
             pose = c.telemetry.pose if c is not None and c.telemetry is not None else None
             if c is None or (callable(fresh) and not fresh(c)) or pose is None:
-                raise DeterrenceError(f"{robot_id} 不在线、状态不新鲜或不知道在哪:开不了就地驱离")
+                raise DeterrenceError(f"{robot_id} 不在线、状态不新鲜或位置未知:无法开启就地驱离")
             task = c.status.task if c.status is not None else None
             running = task is not None and task.state.value in ("running", "pending")
             if running and task.task_id.startswith(TELEOP_TASK_PREFIX):
-                raise DeterrenceError(f"{robot_id} 有人在遥控:开不了就地驱离")
+                raise DeterrenceError(f"{robot_id} 有人在遥控:无法开启就地驱离")
             now = self._now()
             # 撤掉的那一趟记成这一场的任务号:撤的回执、终态到之前,它还「在跑」,不算被派去干别的
             tid = task.task_id if running else f"{HERE_PREFIX}{now}"
@@ -494,7 +494,7 @@ class DeterrenceDesk:
             try:
                 self._save(s)
             except Exception as exc:
-                raise DeterrenceError(f"驱离没落进库:{exc}") from exc
+                raise DeterrenceError(f"驱离未落进库:{exc}") from exc
             # 落了库马上登记(W33 外审 2):下面等撤、等开灯的回执时,到了拦截点的回调看见已经在驱离,
             # 不另开一场盖掉它
             self.sessions[robot_id] = s
@@ -557,7 +557,7 @@ class DeterrenceDesk:
             try:
                 self._save(new)
             except Exception as exc:
-                raise DeterrenceError(f"落库没成,级别没改: {exc}") from exc
+                raise DeterrenceError(f"落库失败,级别未改: {exc}") from exc
             s.level, s.level_ms, s.human_ms, s.auto, s.by = level, now, now, False, by
             s.clip_i, s.clip_ms = 0, 0                  # 换了级:话术从头(中文)、马上放
             await self._apply(s)
@@ -571,7 +571,7 @@ class DeterrenceDesk:
             await self._end(robot_id, f"{by} 解除", go_back=True, by=by)
             s = self.sessions.get(robot_id)
             if s is not None and not s.ending_saved:
-                raise DeterrenceError("声光已全关,但「解除」没落进库(站点重启可能恢复这一场):"
+                raise DeterrenceError("声光已全关,但「解除」未落进库(站点重启可能恢复这一场):"
                                       "稍后再按一次")
 
     # ------------------------------------------------------------ 每拍

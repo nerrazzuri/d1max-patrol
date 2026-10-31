@@ -177,7 +177,7 @@ class ChargeDesk:
                                "VALUES (?,?,?)", (rid, str(hz)[:200], now))
                     queue(tx, kind="dock_stuck", robot=rid,
                           title="机器人可能还在充电桩上,运动锁住了",
-                          detail=f"{str(hz)[:200]};要人去看:把机器人挪下桩,它确认离了桩自己解锁",
+                          detail=f"{str(hz)[:200]};要人去看:把机器人挪下桩,机器人确认离了桩自己解锁",
                           context={}, now_ms=now)
             elif not hz and rid in seen:
                 with self.db.tx() as tx:
@@ -275,7 +275,7 @@ class ChargeDesk:
             with self.db.tx() as tx:
                 tx.execute("UPDATE charge_cycles SET state='cooldown', until_ms=? WHERE robot_id=?",
                            (now + COOLDOWN_MS, rid))
-                queue(tx, kind="charge_failed", robot=rid, title=f"自动回充没成:{what}失败",
+                queue(tx, kind="charge_failed", robot=rid, title=f"自动回充失败:{what}失败",
                       detail=(why or "看机器人的日志") + ";10 分钟后电量还低会再试,"
                                                   "还不行请人去看桩",
                       context={"task_id": cyc["task_id"]}, now_ms=now)
@@ -324,9 +324,9 @@ class ChargeDesk:
                       (rid, "goto", tid, now, cyc["started_ms"] if cyc else now))
             if overlap:
                 queue(c, kind="charge_overlap", robot=rid,
-                      title="两台机器人同时在充:这台的区域暂时没机器人守",
+                      title="两台机器人同时在充:此机器人的区域暂时无机器人守",
                       detail=f"{rid} 电量到 {FLOOR_PCT:.0f}%,{overlap} 还在充,{rid} 也去充了;"
-                             f"有一台充完出桩之前这块区域没机器人",
+                             f"有一台充完出桩之前这块区域无机器人",
                       context={"task_id": tid, "waiting_for": overlap}, now_ms=now)
                 c.execute("INSERT OR REPLACE INTO charge_overlaps(robot_id, created_ms) "
                           "VALUES (?,?)", (rid, now))

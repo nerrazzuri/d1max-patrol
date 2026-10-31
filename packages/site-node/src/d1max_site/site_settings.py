@@ -71,7 +71,7 @@ class SiteSettings:
         if "stale_hours" in d:
             st = d["stale_hours"]
             if not _int(st) or not 1 <= st <= 48:
-                raise SettingsError("多久没巡过要是 1–48 小时的整数")
+                raise SettingsError("多久未巡过要是 1–48 小时的整数")
             cur["stale_hours"] = st
         self.put("duty", cur)
         return cur

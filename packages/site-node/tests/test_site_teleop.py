@@ -94,7 +94,7 @@ class 手机:
         while time.monotonic() < deadline:
             m = self.recv(deadline - time.monotonic())
             if m is None:
-                raise AssertionError(f"没等到 {kind},连接就关了")
+                raise AssertionError(f"未等到 {kind},连接就关了")
             if m.get("kind") == kind:
                 return m
         raise AssertionError(f"等不到 {kind}")
@@ -254,7 +254,7 @@ def test_一个租约_第二个保安409说是谁_管理员带理由接管(站�
     b = 手机(s, gus)
     assert b.status == 409 and "gina" in b.error
     assert 手机(s, gus, takeover="我来").status == 403, "只有管理员能强制接管"
-    c = 手机(s, alice, takeover="gina 那台手机没电了")
+    c = 手机(s, alice, takeover="gina 那台手机未电了")
     assert c.status == 101, c.error
     ended = a.wait_kind("ended")
     assert ended["reason"] == "taken_over"
@@ -263,7 +263,7 @@ def test_一个租约_第二个保安409说是谁_管理员带理由接管(站�
     rows = s.db.query("SELECT epoch, operator, end_reason, takeover_by, takeover_reason "
                       "FROM teleop_leases ORDER BY epoch")
     assert rows[0]["end_reason"] == "taken_over" and rows[0]["takeover_by"] == "alice"
-    assert rows[1]["takeover_reason"] == "gina 那台手机没电了"
+    assert rows[1]["takeover_reason"] == "gina 那台手机未电了"
     c.close()
 
 
@@ -431,7 +431,7 @@ def test_授予命令的有效期很短_halt回执超时回504(站点):
     ph.close()
 
     async def 超时(robot_id, **kw):
-        raise TimeoutError("机器人没回话")
+        raise TimeoutError("机器人未响应")
     s.disp.halt = 超时
     code, d = s.req("POST", "/api/robots/A/halt", {}, token=tok)
     assert code == 504 and "急停" in d["error"], (code, d)
@@ -476,7 +476,7 @@ def test_遥控中钟差变成不知道_续租被拒_这一趟收掉_狗按租�
     s.disp._skew = _钟差不知道()
     _推(ph, 0.4, seconds=0.3)
     _等(lambda: s.teleop.active("A") is None, timeout=5)
-    assert refused and all("钟差还不知道" in r for r in refused)
+    assert refused and all("钟差未知" in r for r in refused)
     # 收掉这一趟是先从内存摘下、最后才记账(``TeleopDesk.close``):等账记上再看
     assert _等(lambda: [r["end_reason"] for r in s.db.query(
         "SELECT end_reason FROM teleop_leases WHERE robot_id='A'")] == ["lease_lost"], timeout=5)

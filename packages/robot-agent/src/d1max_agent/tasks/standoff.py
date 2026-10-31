@@ -183,7 +183,7 @@ class StandoffTask(Task):
                 whys.append("拉不开距离")
                 continue
             if here is None:
-                whys.append("定位不可信,查不了拴绳和禁行区")
+                whys.append("定位不可信,无法检查拴绳和禁行区")
                 continue
             mx, my, _ = _compose(here, (ex, ey, 0.0))
             if math.hypot(mx - c0.x, my - c0.y) > self.req.leash_m:

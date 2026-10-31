@@ -122,7 +122,7 @@ def yolo_people(out: Any, *, score: float = 0.5, iou: float = 0.45, scale: float
     if a.ndim == 3:
         a = a[0]
     if a.shape[0] < 5:
-        raise ValueError(f"检测输出形状不对:{a.shape}")
+        raise ValueError(f"检测输出形状错误:{a.shape}")
     s = a[4]
     keep = s >= score
     if not keep.any():
@@ -175,7 +175,7 @@ class OnnxDetector:
             import cv2
             import onnxruntime as ort
         except ImportError as exc:
-            raise DetectorUnavailable(f"推理环境没装:{exc}") from exc
+            raise DetectorUnavailable(f"推理环境未安装:{exc}") from exc
         if not Path(model).is_file():
             raise DetectorUnavailable(f"没有模型文件 {model}")
         # OpenCV 缺省开一个跟核数一样大的线程池:C40221 上 8 个线程各吃 35–48%,把定位器(MOLA)
@@ -200,7 +200,7 @@ class OnnxDetector:
                     chosen.append(p)
             self.sess = ort.InferenceSession(str(model), sess_options=opts, providers=chosen)
         except Exception as exc:                         # 模型坏了
-            raise DetectorUnavailable(f"模型读不了:{exc}") from exc
+            raise DetectorUnavailable(f"模型无法读取:{exc}") from exc
         #: 实际用上的后端(``TensorrtExecutionProvider`` / ``CUDA…`` / ``CPU…``)。
         self.backend = (self.sess.get_providers() or ["?"])[0]
         self.input = self.sess.get_inputs()[0].name
@@ -295,11 +295,11 @@ class PersonNode:
         base = {"t": "persons", "seq": self.seq, "stamp_ns": max(0, int(stamp_ns)),
                 "camera": camera, "people": [], "snapshot": "", "reason": ""}
         if self.detector is None:
-            return base | {"check": "no_model", "reason": self.unavailable[:200] or "没检测器"}
+            return base | {"check": "no_model", "reason": self.unavailable[:200] or "未检测器"}
         try:
             boxes, w, _h = self.detector.detect(jpeg)
         except Exception as exc:                         # noqa: BLE001 - 一帧坏了不停
-            return base | {"check": "no_camera", "reason": f"这一帧处理不了:{exc}"[:200]}
+            return base | {"check": "no_camera", "reason": f"此帧处理无法完成:{exc}"[:200]}
         cloud = self._fresh_cloud(stamp_ns) if boxes else None      # 没人就不碰点云
         people = []
         for b in boxes[:16]:
@@ -398,7 +398,7 @@ class PersonLink:
         while b"\n" not in buf:
             chunk = s.recv(4096)
             if not chunk:
-                raise ConnectionError("代理握手没完就断了")
+                raise ConnectionError("代理握手未完就已断开")
             buf += chunk
             if len(buf) > limit:
                 raise ConnectionError("握手的一行太长")
@@ -421,7 +421,7 @@ class PersonLink:
                 first, rest = self._readline(s, b"", pb.MAX_LINE)
                 ch = pb.parse(first)
                 if not isinstance(ch, pb.Challenge):
-                    raise ConnectionError(f"代理没发挑战:{type(ch).__name__}")
+                    raise ConnectionError(f"代理未发挑战:{type(ch).__name__}")
                 nd = secrets.token_hex(16)
                 s.sendall(pb.encode(pb.Hello(proto=pb.PROTO, name=self.name, version=self.version,
                                              mac=pb.hello_mac(self.key, ch.nonce, self.name),
@@ -430,11 +430,11 @@ class PersonLink:
                 h = pb.parse(reply)
                 if not isinstance(h, pb.Hello):
                     why = getattr(h, "reason", type(h).__name__)
-                    raise ConnectionError(f"代理没回 hello:{why}")
+                    raise ConnectionError(f"代理未返回 hello:{why}")
                 import hmac
                 if not h.mac or not hmac.compare_digest(h.mac,
                                                         pb.agent_mac(self.key, nd, ch.nonce)):
-                    raise ConnectionError("代理回的 hello 签名不对(不是我们的代理,或者密钥不一样)")
+                    raise ConnectionError("代理回的 hello 签名错误(不是我们的代理,或者密钥不同)")
                 self._ks = pb.session_key(self.key, ch.nonce, nd)
                 self._buf = rest
             else:

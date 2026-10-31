@@ -66,7 +66,7 @@ def test_没有时区就不许解():
 
 def test_时区认不出来也不许解():
     """打错一个字母跟没写一样危险,而且更隐蔽。"""
-    with pytest.raises(ScheduleError, match="认不出来"):
+    with pytest.raises(ScheduleError, match="无法识别"):
         parse_schedule({"timezone": "Asia/Kuala_Lampur",     # 拼错了
                         "entries": [dict(好的一条)]})
 

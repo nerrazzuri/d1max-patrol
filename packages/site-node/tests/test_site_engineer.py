@@ -176,7 +176,7 @@ def test_接口_开工程师账号要再输密码(站点):
     assert _开(s, alice, confirm_password=None)[0] == 403
     for _ in range(5):
         code, d = _开(s, alice, confirm_password="wrong-wrong-wrong")
-        assert code == 403 and "密码不对" in d["error"]
+        assert code == 403 and "密码错误" in d["error"]
     assert _开(s, alice, confirm_password="wrong-wrong-wrong")[0] == 429
 
 
@@ -253,7 +253,7 @@ def test_接口_列表带最后登录和到期(站点):
 def test_接口_审计按人查_标出工程师(站点):
     s = 站点
     alice, gina = _登(s, "alice"), _登(s, "gina")
-    s.req("POST", "/api/shift-notes", {"text": "灯坏了"}, token=gina)
+    s.req("POST", "/api/shift-notes", {"text": "灯已损坏"}, token=gina)
     d = _开(s, alice)[1]
     eng = _登(s, d["name"], d["password"])
     s.req("POST", "/api/duty-settings", {"stale_hours": 3}, token=eng)

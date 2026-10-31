@@ -293,7 +293,7 @@ class _SiteAlertScenePageState extends State<SiteAlertScenePage> {
         _msg = switch (sirenState(s)) {
           SirenState.on => '',
           SirenState.notFitted => tr('Level $sirenLevel is set, but this robot has no siren.',
-              '已到第 $sirenLevel 级，但这台机器人没有警笛。'),
+              '已到第 $sirenLevel 级，但此机器人没有警笛。'),
           _ => tr('Level $sirenLevel requested. Waiting for the robot to confirm the siren.',
               '已请求第 $sirenLevel 级，机器人尚未确认警笛开启。'),
         };
@@ -338,7 +338,7 @@ class _SiteAlertScenePageState extends State<SiteAlertScenePage> {
       runs = await widget.api.runs(mission: taskId);
     } on SiteError catch (e) {
       if (mounted && gen == _gen) {
-        setState(() => _msg = tr("Can't find the record for that task: $e", '找不到该任务的记录：$e'));
+        setState(() => _msg = tr("Can't find the record for that task: $e", '未找到该任务的记录：$e'));
       }
       return;
     }
@@ -542,7 +542,7 @@ class _SiteAlertScenePageState extends State<SiteAlertScenePage> {
       second = switch (sirenState(d)) {
         SirenState.on => _big(SiteAlertScenePage.sirenKey, tr('Siren is on', '警笛已开'), null),
         SirenState.notFitted =>
-          _big(SiteAlertScenePage.sirenKey, tr('No siren on this robot', '这台机器人没有警笛'), null),
+          _big(SiteAlertScenePage.sirenKey, tr('No siren on this robot', '此机器人没有警笛'), null),
         SirenState.requested =>
           _big(SiteAlertScenePage.sirenKey, tr('Siren not confirmed. Retry', '警笛未确认，请重试'), _siren),
         _ => _big(SiteAlertScenePage.sirenKey, sound, _siren),
@@ -552,7 +552,7 @@ class _SiteAlertScenePageState extends State<SiteAlertScenePage> {
     } else if (_a.kind == 'dog_sees_person' && _isRobot && dispatch) {
       second = _big(SiteAlertScenePage.deterKey, tr('Deter here', '就地驱离'), _deterHere);
     } else {
-      second = _big(null, tr('Siren: not available', '警笛：现在用不了'), null);
+      second = _big(null, tr('Siren: not available', '警笛：暂不可用'), null);
     }
     final first = _big(SiteAlertScenePage.ackKey, tr("I'll handle it", '我来处理'),
         handle && _open && !_acked ? _ack : null,

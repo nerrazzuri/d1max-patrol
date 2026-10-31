@@ -199,7 +199,7 @@ class AdhocDesk:
         m = parse_mission(wire)
         loaded = self.dispatcher._loaded(self.dispatcher.clients.get(robot))
         if loaded is None:
-            return f"{robot} 没报已加载的地图"
+            return f"{robot} 未上报已加载的地图"
         if (m.map_id, m.map_version) != loaded:
             return (f"任务用的地图 {m.map_id}:{m.map_version},{robot} 加载的是 "
                     f"{loaded[0]}:{loaded[1]}")
@@ -267,7 +267,7 @@ class AdhocDesk:
             # 按「现在再过一分钟」算 —— 不然手动的那趟优先级高,会把日程打断
             end = max(t0 + est * 1000, self._now() + 60_000)
             if end > start_ms:
-                found.append((end, f"正在跑的日程「{entry.mission if entry else running}」"))
+                found.append((end, f"正在执行的日程「{entry.mission if entry else running}」"))
         tz = act.schedule.tz()
         a = datetime.fromtimestamp(start_ms / 1000, tz=tz)
         b = a + timedelta(seconds=dur_s)
@@ -354,7 +354,7 @@ class AdhocDesk:
             raise AdhocError("没有这一条临时巡逻")
         r = rows[0]
         if r["state"] != "queued":
-            raise AdhocError("这一趟已经不在排队了(开始跑的用「叫停」)")
+            raise AdhocError("本次任务已不在排队了(开始跑的用「叫停」)")
         if r["by"] != by and not may_others:
             raise PermissionError("只有派的人、经理、管理员能取消")
         with self.db.tx() as c:
@@ -370,7 +370,7 @@ class AdhocDesk:
         for r in rows:
             rid = r["robot"]
             if now - r["created_ms"] > QUEUE_TTL_MS:
-                self._end(r, "expired", "排了两个小时还没轮上,作废了")
+                self._end(r, "expired", "排了两个小时尚未轮上,作废了")
                 continue
             if r["not_before_ms"] > now or rid in took:
                 continue
@@ -392,7 +392,7 @@ class AdhocDesk:
                 n = tx.execute("UPDATE adhoc_queue SET state='started', task_id=?, started_ms=? "
                                "WHERE id=? AND state='queued'", (_task, now, _id)).rowcount
                 if n != 1:
-                    raise DispatchRefused("这一趟刚被取消了")
+                    raise DispatchRefused("本次任务刚被取消了")
             took.add(rid)
             try:
                 full = self.with_return(rid, json.loads(r["mission"]))
@@ -420,7 +420,7 @@ class AdhocDesk:
             rows = c.execute("SELECT * FROM adhoc_queue WHERE task_id=?", (task_id,)).fetchall()
         if n and rows and tell:
             r = dict(rows[0])
-            self._tell(r, f"临时巡逻没走成:{r['robot']}「{r['label']}」", note)
+            self._tell(r, f"临时巡逻未完成:{r['robot']}「{r['label']}」", note)
 
     def _on_ack(self, ack: Any) -> None:
         """回执(包括超时之后才到的):临时巡逻那一趟机器人明确没收,改成没走成。"""
@@ -438,7 +438,7 @@ class AdhocDesk:
             n = c.execute("UPDATE adhoc_queue SET state=?, note=?, ended_ms=? WHERE id=? "
                           "AND state='queued'", (state, note, self._now(), r["id"])).rowcount
         if n:
-            self._tell(r, f"临时巡逻没走成:{r['robot']}「{r['label']}」", note)
+            self._tell(r, f"临时巡逻未完成:{r['robot']}「{r['label']}」", note)
 
     # ------------------------------------------------------------ 通知
 

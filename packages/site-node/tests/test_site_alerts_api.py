@@ -86,10 +86,10 @@ def test_值守汇总_每台狗一行_狗上存储那几项是不知道而不是
     assert (r["clock_skew_s"] is None and r["why"]["clock_skew_s"]) or abs(r["clock_skew_s"]) < 5
     assert r["alerts"] == {"P1": 0, "P2": 0, "P3": 0}
     for k in ("disk_used_ratio", "upload_backlog"):                # W00c5d:狗还没报过盘况
-        assert r[k] is None and "不知道" in r["why"][k], k
+        assert r[k] is None and "未知" in r["why"][k], k
     assert r["bundle_lag"] is None and "任务包" in r["why"]["bundle_lag"]
     assert r["backup"] is None and "站点" in r["why"]["backup"]
-    assert d["site"]["schedule_ok"] is None and "没开排程" in d["site"]["why"]["schedule_ok"]
+    assert d["site"]["schedule_ok"] is None and "未启用排程" in d["site"]["why"]["schedule_ok"]
 
 
 def test_SSE里看得到告警的变化(站点):
@@ -110,7 +110,7 @@ def test_SSE里看得到告警的变化(站点):
                 assert d["alert"]["kind"] == "estop_pressed"
                 break
     else:
-        raise AssertionError("SSE 里没等到告警")
+        raise AssertionError("SSE 里未等到告警")
     conn.close()
 
 
@@ -129,7 +129,7 @@ def test_交接班那一张_截多少条写明白_limit不对400(站点):
 
 
 async def _raise(s, i):
-    s.desk.raise_alert(kind="run_done", robot=f"R{i}", title="跑完了")
+    s.desk.raise_alert(kind="run_done", robot=f"R{i}", title="已完成")
 
 
 def test_在事件循环里报告警_直接报不等自己(tmp_path):
@@ -191,7 +191,7 @@ def test_W17外审_值守令牌只有告警流_首帧不带狗_别的帧一律�
             line = resp.fp.readline().decode()
             if line.startswith("data:"):
                 return json.loads(line[5:])
-        raise AssertionError("没等到下一帧")
+        raise AssertionError("未等到下一帧")
     first = 下一帧()
     assert first["kind"] == "snapshot" and "robots" not in first
     assert [a["robot"] for a in first["alerts"]] == ["R0"]

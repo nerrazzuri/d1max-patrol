@@ -17,7 +17,7 @@ def test_路程_走得通回米数_走不通回None(台):  # noqa: F811
     assert m is not None and 5.0 <= m <= 6.0
     assert 台.reach.path_m("house", "narrow", (1.5, 2.0), (6.5, 2.0)) is None
     assert 台.reach.path_m("house", "wide", (1.5, 2.0), (50.0, 2.0)) is None, "出了图"
-    assert 台.reach.path_m("house", "nope", (1.5, 2.0), (2.5, 2.0)) is None, "站点没有这一版"
+    assert 台.reach.path_m("house", "nope", (1.5, 2.0), (2.5, 2.0)) is None, "站点没有此版本"
 
 
 def test_最近的_按路程不按直线(台):  # noqa: F811
@@ -63,7 +63,7 @@ def test_最近的接口_没有能派的404(站点):
     s = 站点
     gina = _登(s, "gina")
     code, d = s.req("GET", "/api/robots/nearest?map_id=nope&map_version=1&x=1&y=2", token=gina)
-    assert code == 404 and d["error"] == "这张图上没有能派的机器人"
+    assert code == 404 and d["error"] == "此地图上没有能派的机器人"
 
 
 def test_最近的接口_参数和权限(站点):

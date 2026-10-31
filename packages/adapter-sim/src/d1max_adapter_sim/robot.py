@@ -258,7 +258,7 @@ class SimRobot:
 
     async def acquire_control(self) -> None:
         if not self._connected:
-            raise RuntimeError("还没 connect()")
+            raise RuntimeError("尚未 connect()")
         self._control = True
 
     async def release_control(self) -> None:
@@ -358,7 +358,7 @@ class SimRobot:
 
     async def imu(self) -> Any:
         if not self._imu_on:
-            raise HalUnsupported("sim 没开 imu(SimRobot(imu=True))")
+            raise HalUnsupported("sim 未开启 imu(SimRobot(imu=True))")
         shock, self._shock = self._shock, 0.0             # 峰值:读走就清
         return ImuSample(stamp_ms=self._now(), roll=self._roll, pitch=self._pitch, shock_g=shock,
                          load=self._load, valid=True)
@@ -391,7 +391,7 @@ class SimRobot:
 
     def _deter(self, output: str, on: bool, max_s: float) -> None:
         if not self.payload:
-            raise HalUnsupported("sim 没装上装")
+            raise HalUnsupported("sim 未安装上装")
         self.deter_until[output] = self._now() + int(max_s * 1000) if on and max_s > 0 else 0
 
     def deter_on(self, output: str) -> bool:
@@ -471,7 +471,7 @@ class SimRobot:
 
     async def recharge_start(self) -> None:
         if self.charger is None:
-            raise HalUnsupported("sim 没配充电桩")
+            raise HalUnsupported("sim 未配置充电桩")
         cx, cy, cyaw = self.charger
         aligned = (math.hypot(self.x - cx, self.y - cy) <= 0.4
                    and abs(math.remainder(self.yaw - cyaw, 2 * math.pi)) <= math.radians(20))
@@ -480,19 +480,19 @@ class SimRobot:
 
     async def recharge_stop(self) -> None:
         if self.charger is None:
-            raise HalUnsupported("sim 没配充电桩")
+            raise HalUnsupported("sim 未配置充电桩")
         self._dock_at = None
 
     async def undock(self) -> None:
         if self.charger is None:
-            raise HalUnsupported("sim 没配充电桩")
+            raise HalUnsupported("sim 未配置充电桩")
         self.undock_calls += 1
         if self.docked:
             self._undock_at = self._now() + int(UNDOCK_S * 1000)
 
     async def recharge_status(self) -> str:
         if self.charger is None:
-            raise HalUnsupported("sim 没配充电桩")
+            raise HalUnsupported("sim 未配置充电桩")
         self._dock_tick()
         return "docked" if self.docked else ("docking" if self._dock_at else "idle")
 

@@ -140,9 +140,9 @@ class PersonBridgeServer(ObsBridgeServer):
         assert self.key is not None
         want = persbridge.hello_mac(self.key, nonce, hello.name) if nonce else ""
         if not hello.mac or not want or not hmac.compare_digest(hello.mac, want):
-            return "握手签名不对(两块板上的人员桥密钥不一样?)"
+            return "握手签名错误(两块板上的人员桥密钥不同?)"
         if not hello.nonce:
-            return "人员检测节点没给代理出题(老版本?两块板要一起升级)"
+            return "人员检测节点未提供代理出题(老版本?两块板要一起升级)"
         assert nonce is not None
         self._pending_ks[id(writer)] = (persbridge.session_key(self.key, nonce, hello.nonce),
                                         persbridge.agent_mac(self.key, hello.nonce, nonce))
@@ -177,7 +177,7 @@ class PersonBridgeServer(ObsBridgeServer):
         if self.listen is None:
             return super()._decode(line)
         if self._ks is None:
-            raise persbridge.ContractError("人员桥:还没握手")
+            raise persbridge.ContractError("人员桥:尚未握手")
         self._rx, msg = persbridge.unseal(self._ks, persbridge.TO_AGENT, line, self._rx)
         return msg
 

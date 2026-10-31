@@ -183,7 +183,7 @@ class RouteStore:
         """逐点校验:每个点的问题都列出来(``index``:第几个,从 0 数;整条的问题 ``index`` 是 None)。"""
         if not version:
             return [{"index": None, "name": "", "problem":
-                     "没绑地图版本:核过这些点是在哪一版图上量的再选版本(R1)"}]
+                     "未绑地图版本:核过这些点是在哪一版图上量的再选版本(R1)"}]
         if self.maps is None:
             return []
         from d1max_site.maps import MapError
@@ -234,7 +234,7 @@ class RouteStore:
             raise RouteError(f"不认识的字段:{', '.join(unknown)}")
         version = body.get("map_version")
         if not isinstance(version, str) or not version:
-            raise RouteError("map_version 必填(字符串):这些点是在这张图的哪一版上量的")
+            raise RouteError("map_version 必填(字符串):这些点是在此地图的哪一版上量的")
         raw: dict[str, Any] = {"mission": route_id, "map_id": body.get("map_id"),
                                "map_version": version,
                                "waypoints": _wire_waypoints(body.get("waypoints"))}
@@ -245,7 +245,7 @@ class RouteStore:
         except (MissionError, ValueError) as exc:
             raise RouteError(str(exc)) from exc
         if len(m.waypoints) > MAX_WAYPOINTS:
-            raise RouteError(f"一条路线最多 {MAX_WAYPOINTS} 个点,这条 {len(m.waypoints)} 个")
+            raise RouteError(f"一条路线最多 {MAX_WAYPOINTS} 个点,此条 {len(m.waypoints)} 个")
         if len(_json(m.to_wire()).encode()) > MAX_BYTES:
             raise RouteError(f"路线定义超过 {MAX_BYTES} 字节")
         errs = self.problems(m.map_id, m.map_version, m.waypoints)
@@ -281,8 +281,8 @@ class RouteStore:
             cur = row["revision"] if row is not None else 0
             if base != cur:
                 raise RouteConflict(
-                    f"路线 {route_id} 已经被改过(现在是第 {cur} 版,你看到的是第 {base} 版)"
-                    if cur else f"路线 {route_id} 已经被删了:重新拉一下再改")
+                    f"路线 {route_id} 已被修改(现在是第 {cur} 版,你看到的是第 {base} 版)"
+                    if cur else f"路线 {route_id} 已被删除:请刷新后再改")
             if row is None:
                 tx.execute("INSERT INTO routes(route_id, map_id, map_version, definition, "
                            "revision, updated_ms, updated_by, source) VALUES (?,?,?,?,1,?,?,?)",
@@ -304,8 +304,8 @@ class RouteStore:
             if row is None:
                 raise RouteNotFound(f"没有路线 {route_id!r}")
             if row["revision"] != base:
-                raise RouteConflict(f"路线 {route_id} 已经被改过(现在是第 {row['revision']} 版,"
-                                    f"你看到的是第 {base} 版):重新拉一下再删")
+                raise RouteConflict(f"路线 {route_id} 已被修改(现在是第 {row['revision']} 版,"
+                                    f"你看到的是第 {base} 版):请刷新后再删")
             users = [r["entry_id"] for r in tx.execute(
                 "SELECT entry_id, definition FROM route_schedules").fetchall()
                 if json.loads(r["definition"]).get("mission") == route_id]
@@ -323,7 +323,7 @@ class RouteStore:
         try:
             ZoneInfo(tz)
         except (ZoneInfoNotFoundError, ValueError) as exc:
-            raise RouteError(f"timezone 认不出来:{tz!r}") from exc
+            raise RouteError(f"timezone 无法识别:{tz!r}") from exc
         now = self._now()
         with self.db.tx() as tx:
             self._touch(tx, by, now)
@@ -358,9 +358,9 @@ class RouteStore:
                              (entry_id,)).fetchone()
             cur = row["revision"] if row is not None else 0
             if base != cur:
-                raise RouteConflict(f"排程 {entry_id} 已经被改过(现在是第 {cur} 版,"
+                raise RouteConflict(f"排程 {entry_id} 已被修改(现在是第 {cur} 版,"
                                     f"你看到的是第 {base} 版)" if cur else
-                                    f"排程 {entry_id} 已经被删了:重新拉一下再改")
+                                    f"排程 {entry_id} 已被删除:请刷新后再改")
             if row is None:
                 tx.execute("INSERT INTO route_schedules(entry_id, definition, revision, "
                            "active_from_ms, updated_ms, updated_by, source) "
@@ -383,8 +383,8 @@ class RouteStore:
             if row is None:
                 raise RouteNotFound(f"没有排程 {entry_id!r}")
             if row["revision"] != base:
-                raise RouteConflict(f"排程 {entry_id} 已经被改过(现在是第 {row['revision']} 版,"
-                                    f"你看到的是第 {base} 版):重新拉一下再删")
+                raise RouteConflict(f"排程 {entry_id} 已被修改(现在是第 {row['revision']} 版,"
+                                    f"你看到的是第 {base} 版):请刷新后再删")
             tx.execute("DELETE FROM route_schedules WHERE entry_id=?", (entry_id,))
             self._touch(tx, by, now)
 
@@ -397,10 +397,10 @@ class RouteStore:
         v = self.view()
         unbound = [r["id"] for r in v["routes"] if not r["bound"]]
         if unbound:
-            raise RouteError(f"路线 {', '.join(unbound)} 没绑地图版本,打不成包:先在路线页里选版本、"
+            raise RouteError(f"路线 {', '.join(unbound)} 未绑地图版本,无法打包:先在路线页里选版本、"
                              "核过点再存")
         if not v["routes"] and not v["schedules"]:
-            raise RouteError("库里没有路线,没什么可导出的")
+            raise RouteError("库里没有路线,没有什么可导出的")
         if version is None:
             got = self.db.query("SELECT max(version) AS v FROM bundles WHERE bundle_id=?",
                                 (bundle_id,))
@@ -425,7 +425,7 @@ class RouteStore:
                 out = build_bundle(tmp, dest_root, bundle_id=bundle_id, version=version,
                                    built_at=built_at, built_by=by)
             except (BundleError, ScheduleError) as exc:
-                raise RouteError(f"打不成包:{exc}") from exc
+                raise RouteError(f"无法打包:{exc}") from exc
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
         return {"path": str(out), "bundle_id": bundle_id, "version": version,

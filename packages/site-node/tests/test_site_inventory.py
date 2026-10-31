@@ -30,7 +30,7 @@ def test_清点_数得对_只读_不升库结构(站):
     con.close()
     before = (home / "site.db").stat().st_mtime_ns
     got = _take(home)
-    assert got["kind"] == inventory.KIND and got["schema"] == 41, "只读:没把库升上去"
+    assert got["kind"] == inventory.KIND and got["schema"] == 41, "只读:未把库升上去"
     assert (home / "site.db").stat().st_mtime_ns == before
     assert got["counts"]["robots"] == 1 and got["counts"]["runs"] == 1
     assert got["counts"]["run_photos"] == 1 and got["counts"]["accounts"] == 0
@@ -65,7 +65,7 @@ def test_备份之后才加的_恢复后少了_要人看_不替人下结论(站,
     assert site_main.main(["--home", str(new), "inventory", "--compare", str(rec)]) == 0
     shown = capsys.readouterr().out
     assert "[要人看] 账号: 1 → 0(少了 1)" in shown
-    assert "对一下是不是都在最后一次备份之后" in shown
+    assert "核对是不是都在最后一次备份之后" in shown
 
 
 def test_站点身份变了_库比原来老_不过_退出码1(站, tmp_path, capsys):
@@ -116,7 +116,7 @@ def test_记录读不了_不是清点记录_没有库_说得出(站, tmp_path, c
     home, *_ = 站
     assert site_main.main(["--home", str(home), "inventory", "--compare",
                            str(tmp_path / "无")]) != 0
-    assert "读不了清点记录" in capsys.readouterr().err
+    assert "无法读取清点记录" in capsys.readouterr().err
     bad = tmp_path / "x.json"
     for text in ('{"kind": "else", "counts": {}}', '{"kind": "d1max-site-inventory"}', "[]"):
         bad.write_text(text, "utf-8")

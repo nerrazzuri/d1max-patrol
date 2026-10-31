@@ -45,10 +45,10 @@ def 箱(tmp_path):
 
 
 def test_小的值_加密解开_改一个字节_换钥匙_都解不开(箱, tmp_path):
-    v = 箱.seal("摄像头口令 p@ss:1")
+    v = 箱.seal("摄像头密码 p@ss:1")
     assert v.startswith("enc1:") and "p@ss" not in v
-    assert 箱.open(v) == "摄像头口令 p@ss:1"
-    assert 箱.seal("x") != 箱.seal("x"), "每次随机盐:同一个值加密两次不一样"
+    assert 箱.open(v) == "摄像头密码 p@ss:1"
+    assert 箱.seal("x") != 箱.seal("x"), "每次随机盐:同一个值加密两次不同"
     bad = v[:-4] + ("AAAA" if not v.endswith("AAAA") else "BBBB")
     with pytest.raises(SealError):
         箱.open(bad)
@@ -116,12 +116,12 @@ def test_老库里的明文_起来就地加密_没配密钥读加密值就报错
     db.query("INSERT INTO cameras(name, onvif_url, username, password, zone, added_ms) "
              "VALUES ('g','http://x','u','old-pass','z',1)")
     db.query("INSERT INTO incident_sources VALUES ('nvr', ?, 1)", ("ab" * 32,))
-    assert migrate_plaintext(db) == 0, "没配密钥:不动"
+    assert migrate_plaintext(db) == 0, "未配置密钥:不动"
     db.sealbox = 箱
     assert migrate_plaintext(db) == 2 and migrate_plaintext(db) == 0
     pw = db.query("SELECT password FROM cameras")[0]["password"]
     assert pw.startswith("enc1:") and open_value(db, pw) == "old-pass"
-    assert seal_value(db, "") == "", "空口令照样空"
+    assert seal_value(db, "") == "", "空密码照样空"
     db2 = SiteDB(tmp_path / "site.db")
     with pytest.raises(SealError):
         open_value(db2, db2.query("SELECT secret FROM incident_sources")[0]["secret"]
@@ -171,7 +171,7 @@ def test_备份加密_库和证据都是密文_增量_以前的明文删掉_解�
     real = b.box.seal_file
     b.box.seal_file = lambda s, d: (calls.append(s), real(s, d))
     assert b.run_once()
-    assert not [s for s in calls if "evidence" in str(s)], "证据没变:不重加密"
+    assert not [s for s in calls if "evidence" in str(s)], "证据未变:不重加密"
     out = tmp_path / "restored"
     n = cmd_backup_open(dest, out, bkey)
     assert n == len([p for p in dest.rglob("*") if p.is_file()])
@@ -244,7 +244,7 @@ def test_按时间段删_运行记录和录像_留着的列出来不删(tmp_path
     rec.set_keep(seg["id"], True)
     seg2 = _录像(rec, "20260925T010100Z")
     got = desk.purge(since_ms=c.ms - 1000, until_ms=c.ms + 1000)
-    assert got["runs"] == 1 and got["recordings"] == 0, "录像按片段开始时刻算:不在这个窗口里"
+    assert got["runs"] == 1 and got["recordings"] == 0, "录像按片段开始时刻算:不在此窗口里"
     assert got["held_runs"] == [held["id"]] and store.run(held["id"]) is not None
     assert store.run(r1["id"]) is None and rec.get(seg2["id"]) is not None
     start = seg["start_ms"]
@@ -293,7 +293,7 @@ def test_站点配了发行公钥_没签名_签错的不登记_签对的登记(t
     m = json.loads((pkg / "release.json").read_text())
     m["signature"] = relsign.sign(dict(m, version="9.9"), k)    # 签的不是这一版
     (pkg / "release.json").write_text(json.dumps(m))
-    with pytest.raises(ReleaseCatalogError, match="签名对不上"):
+    with pytest.raises(ReleaseCatalogError, match="签名不匹配"):
         cat.add(pkg)
     m["signature"] = relsign.sign(m, k)
     (pkg / "release.json").write_text(json.dumps(m))
@@ -427,11 +427,11 @@ def test_复查1_导出删不掉_记着_下次删除或定时清理接着删(tmp
     monkeypatch.setattr(Path, "unlink", 删不掉)
     got = desk.purge(since_ms=c.ms - 1000, until_ms=c.ms + 1000)
     assert got["runs"] == 1 and got["exports"] == 0
-    assert runs.export_path(meta["name"]).is_file(), "这一次没删成"
+    assert runs.export_path(meta["name"]).is_file(), "这一次未删成"
     assert db.query("SELECT run_id FROM export_purges"), "记着要删"
     monkeypatch.setattr(Path, "unlink", real)
     assert desk.purge(since_ms=c.ms - 1000, until_ms=c.ms + 1000)["exports"] == 1, \
-        "再跑一次:运行记录已经没了,照样按记着的删"
+        "再跑一次:运行记录已没了,照样按记着的删"
     with pytest.raises(RunError):
         runs.export_path(meta["name"])
     assert not db.query("SELECT 1 FROM export_purges"), "删成了才清"

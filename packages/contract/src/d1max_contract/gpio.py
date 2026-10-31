@@ -56,7 +56,7 @@ def pack_request(offsets: Iterable[int], *, flags: int, consumer: str = "d1max",
     ``values`` 给了就带一条「输出初值」属性(第 i 位 = 第 i 根线)。"""
     offs = list(offsets)
     if not 0 < len(offs) <= MAX_LINES or any(not 0 <= o < 2 ** 32 for o in offs):
-        raise GpioError(f"线号不对:{offs}")
+        raise GpioError(f"线号错误:{offs}")
     buf = bytearray(REQUEST_SIZE)
     struct.pack_into(f"<{len(offs)}I", buf, 0, *offs)
     name = consumer.encode()[:31]
@@ -97,7 +97,7 @@ def _request(chip: str, buf: bytearray, *, ioctl: Callable[..., Any],
     try:
         ioctl(cfd, GET_LINE_IOCTL, buf)
     except OSError as exc:
-        raise GpioError(f"{path} 不让要这几根线(被别的程序占了、线号不对?): {exc}") from exc
+        raise GpioError(f"{path} 不让要这几根线(被别的程序占了、线号错误?): {exc}") from exc
     finally:
         os.close(cfd)
     return request_fd(buf)
@@ -118,11 +118,11 @@ class OutputLine:
 
     def set(self, value: bool) -> None:
         if self.fd < 0:
-            raise GpioError("GPIO 已经关了")
+            raise GpioError("GPIO 已关闭")
         try:
             self._ioctl(self.fd, SET_VALUES_IOCTL, bytearray(struct.pack("<QQ", int(value), 1)))
         except OSError as exc:
-            raise GpioError(f"GPIO {self.chip}:{self.line} 写不进去: {exc}") from exc
+            raise GpioError(f"GPIO {self.chip}:{self.line} 无法写入: {exc}") from exc
         self.value = bool(value)
 
     def close(self) -> None:
@@ -162,7 +162,7 @@ class EdgeCounter:
                 data = os.read(self.fd, EVENT_SIZE * 64)
             except (OSError, ValueError) as exc:
                 if not self._stop.is_set():
-                    self.error = f"读不了 {self.chip} 的边沿: {exc}"
+                    self.error = f"无法读取 {self.chip} 的边沿: {exc}"
                 return
             if not data:
                 return

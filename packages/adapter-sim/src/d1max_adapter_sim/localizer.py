@@ -104,7 +104,7 @@ class SimLocalizer:
                                                                         limit=MAX_LINE + 2)
         await self._say(Hello(proto=PROTO, name=self.name, version="sim"))
         line = await self._reader.readline()
-        got = parse(line) if line else Error(reason="连上就断了")
+        got = parse(line) if line else Error(reason="连上就已断开")
         if not isinstance(got, Hello):
             self.error = got.reason if isinstance(got, Error) else f"握手回的是 {got!r}"
             await self.close()
@@ -237,7 +237,7 @@ class SimLocalizer:
                 if math.hypot(msg.x - t[0], msg.y - t[1]) > self.reloc_basin_m:
                     self._seq += 1                     # 初值离得太远:在那附近对不上
                     await self._say(State(seq=self._seq, state="lost",
-                                          reason="人给的初值附近对不上"))
+                                          reason="人给的初值附近不匹配"))
                     continue
                 self.offset = [0.0, 0.0, 0.0]          # 仿真:在初值附近按真实位置对上了
                 self.frozen = None

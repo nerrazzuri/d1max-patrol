@@ -98,13 +98,13 @@ def selfcheck(home: Path, cfg: dict[str, Any], *, api_port: int = 8443, user: st
         add("FAIL", "站点身份", "site.json 里没有 site_id")
     crt = home / "ca" / "server" / "server.crt"
     if not crt.is_file():
-        add("FAIL", "站点证书", f"没有 {crt}(没 init,也没恢复?)")
+        add("FAIL", "站点证书", f"没有 {crt}(未 init,也未恢复?)")
     else:
         expired, _ = run(["openssl", "x509", "-in", str(crt), "-noout", "-checkend", "0"])
         soon, _ = run(["openssl", "x509", "-in", str(crt), "-noout", "-checkend",
                        str(CERT_WARN_DAYS * 86400)])
         if expired != 0:
-            add("FAIL", "站点证书", "已经过期(或者读不了):机器人和手机都连不上")
+            add("FAIL", "站点证书", "已过期(或者无法读取):机器人和手机都无法连接")
         elif soon != 0:
             add("WARN", "站点证书", f"不到 {CERT_WARN_DAYS} 天就到期")
         else:
@@ -117,7 +117,7 @@ def selfcheck(home: Path, cfg: dict[str, Any], *, api_port: int = 8443, user: st
         elif row["present"]:
             add("PASS", f"密钥 {row['name']}", f"{row['mode']} 指纹 {row['fingerprint']}")
     add("PASS", "发行公钥", "登记软件版本时会验签") if release_pub.is_file() else add(
-        "WARN", "发行公钥", f"没有 {release_pub}:登记不了要下发给机器人的软件版本")
+        "WARN", "发行公钥", f"没有 {release_pub}:无法登记要下发给机器人的软件版本")
 
     # ---- 账号、备份、推送
     try:
@@ -133,18 +133,18 @@ def selfcheck(home: Path, cfg: dict[str, Any], *, api_port: int = 8443, user: st
         add("FAIL", "站点库", f"打不开 {home / 'site.db'}:{exc}")
     dest = cfg.get("backup_dir")
     if not dest:
-        add("WARN", "备份", "site.json 没配 backup_dir:主机坏了数据就没了")
+        add("WARN", "备份", "site.json 未配置 backup_dir:主机损坏将导致数据丢失")
     elif not Path(dest).is_dir():
-        add("FAIL", "备份", f"备份目录 {dest} 不在(备份盘没挂上?)")
+        add("FAIL", "备份", f"备份目录 {dest} 不在(备份盘未挂上?)")
     else:
         add("PASS", "备份", str(dest))
     add("PASS", "推送", "配了") if cfg.get("push") else add(
-        "WARN", "推送", "没配:App 不在前台时手机收不到 P1(docs/告警推送配置.md)")
+        "WARN", "推送", "未配置:App 不在前台时手机无法接收 P1(docs/告警推送配置.md)")
 
     # ---- 这台主机
     rc, groups = run(["id", "-nG", user])
     if rc != 0:
-        add("FAIL", "站点用户", f"没有 {user} 这个用户")
+        add("FAIL", "站点用户", f"没有 {user} 此用户")
     elif "systemd-journal" not in groups.split():
         add("WARN", "读日志", f"{user} 不在 systemd-journal 组:诊断包里没有站点日志(重跑装机脚本)")
     else:
@@ -155,12 +155,12 @@ def selfcheck(home: Path, cfg: dict[str, Any], *, api_port: int = 8443, user: st
         if active != "active":
             add("FAIL", f"服务 {unit}", f"{active or '没起'}:systemctl start {unit}")
         elif enabled != "enabled":
-            add("WARN", f"服务 {unit}", "在跑,但没设开机自启")
+            add("WARN", f"服务 {unit}", "正在运行,但未设置开机自启")
         else:
-            add("PASS", f"服务 {unit}", "在跑,开机自启")
+            add("PASS", f"服务 {unit}", "正在运行,开机自启")
     port = int(cfg.get("broker_port") or 8883)
     why = tcp("127.0.0.1", port)
-    add("FAIL", "机器人连的端口", f"{port} 连不上:{why}") if why else add(
+    add("FAIL", "机器人连的端口", f"{port} 无法连接:{why}") if why else add(
         "PASS", "机器人连的端口", f"{port} 开着")
     code, body = healthz(api_port, home / "ca" / "ca.crt")
     if code == 200 and isinstance(body, dict) and body.get("ok"):
@@ -168,15 +168,15 @@ def selfcheck(home: Path, cfg: dict[str, Any], *, api_port: int = 8443, user: st
     elif code == 0:
         add("FAIL", "探活", f"https://127.0.0.1:{api_port}/healthz 不通:{body}")
     else:
-        add("FAIL", "探活", f"站点回 {code}:要紧的体检项没过(值班台 System 页看是哪一项)")
+        add("FAIL", "探活", f"站点回 {code}:要紧的体检项未通过(值班台 System 页看是哪一项)")
     _, chrony = run(["systemctl", "is-active", "chrony"])
-    add("PASS", "对时服务", "chrony 在跑(机器人跟这台主机对时)") if chrony == "active" else add(
-        "WARN", "对时服务", f"chrony {chrony or '没起'}:机器人对不上时,命令会被当成过期的")
+    add("PASS", "对时服务", "chrony 正在运行(机器人跟此主机对时)") if chrony == "active" else add(
+        "WARN", "对时服务", f"chrony {chrony or '没起'}:机器人时钟未同步时,命令会被当成过期的")
     try:
         free = disk_free(home)
         add("PASS" if free >= 0.15 else "WARN", "盘", f"还剩 {free:.0%}")
     except OSError as exc:
-        add("WARN", "盘", f"量不了:{exc}")
+        add("WARN", "盘", f"无法测量:{exc}")
     return out
 
 

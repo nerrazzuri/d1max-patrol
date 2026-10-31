@@ -165,10 +165,10 @@ class MappingService:
             raise MappingError(f"上一趟边走边建的 {self.pending[1]}:{self.pending[2]} 还在打包")
         full = f"{name}-{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())}"
         if (self.bags_root / full).exists():
-            raise MappingError(f"{full} 这个包已经在了,过一秒再来")
+            raise MappingError(f"{full} 此包已存在,过一秒再来")
         if target is not None:
             if (self.maps_out / target[0] / target[1]).exists():
-                raise MappingError(f"{target[0]}:{target[1]} 机器人上已经有一份在传了,换个版本号")
+                raise MappingError(f"{target[0]}:{target[1]} 机器人上已有一份在传了,换个版本号")
             bag = Path(await self.orch.start_record(full, live_map_id=target[0]))
             try:
                 (bag / LIVE).write_text(json.dumps({"map_id": target[0], "version": target[1],
@@ -190,7 +190,7 @@ class MappingService:
     async def stop(self) -> None:
         """停录。边走边建的:记下待打包(:meth:`finish`,调用方丢到后台),包先占住(打包要读它)。"""
         if not self.recording:
-            raise MappingError("现在没在录包")
+            raise MappingError("现在未在录包")
         # 编排停录**先回闲着再报**其中一个停止的错(录包、在线建图都停过了):这边不管报不报错都按
         # 「停了」收 —— 不然上层「在录」、下层「闲着」,之后停不了也开不了(外审复查阻断)。边走边建的
         # 照样记待打包,错再往外报。
@@ -270,7 +270,7 @@ class MappingService:
         out = self.maps_out / map_id / version
         try:
             if out.exists():
-                raise MappingError(f"{map_id}:{version} 机器人上已经有一份在传了,换个版本号")
+                raise MappingError(f"{map_id}:{version} 机器人上已有一份在传了,换个版本号")
             try:
                 made, mode = Path(await self.orch.package(src, map_id)), "live"
                 self.last_fallback = ""
@@ -293,7 +293,7 @@ class MappingService:
         """建出来的文件挪进发件箱、放进本地库(出错只记一笔,激活时从站点下)、最后写清单。"""
         missing = [n for n in GEOMETRY_FILES if not (made / n).is_file()]
         if missing:
-            raise MappingError(f"重建跑完了,缺 {', '.join(missing)}")
+            raise MappingError(f"重建已完成,缺 {', '.join(missing)}")
         # 先在点开头的目录里攒齐(上传器不看点开头的路径),再整个挪过去。
         tmp = self.maps_out / ".building" / f"{map_id}@{version}"
         shutil.rmtree(tmp, ignore_errors=True)
@@ -329,12 +329,12 @@ class MappingService:
         src = self.bags_root / bag
         with self.lock:                                   # 先占住,再查在不在:发件箱删包也拿这把锁
             if not (src / DONE).is_file():
-                raise MappingError(f"包 {bag} 不在机器人上了(传完、放够天数就删了)或还没录完")
+                raise MappingError(f"包 {bag} 不在机器人上了(传完、放够天数就删了)或尚未录完")
             self.held.add(bag)
         out = self.maps_out / map_id / version
         try:
             if out.exists():
-                raise MappingError(f"{map_id}:{version} 机器人上已经有一份在传了,换个版本号")
+                raise MappingError(f"{map_id}:{version} 机器人上已有一份在传了,换个版本号")
             made = Path(await self.orch.rebuild(src, map_id))   # 编排起建图前清掉上一次的产物
             # 挪文件、算几百 MB 的哈希放线程里:不卡住代理(心跳、命令)。
             ref = await asyncio.to_thread(self._settle, made, map_id, version, out)

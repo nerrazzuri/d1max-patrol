@@ -177,8 +177,8 @@ def test_不是yaml的文件报得出是格式问题(tmp_path):
 
 
 def test_读不存在的文件报得出是哪个文件(tmp_path):
-    with pytest.raises(MissionError, match="读不了"):
-        load_mission(tmp_path / "没有这个文件.yaml")
+    with pytest.raises(MissionError, match="无法读取"):
+        load_mission(tmp_path / "没有此文件.yaml")
 
 
 def test_导出的是人能读也能改的_yaml(tmp_path):

@@ -88,7 +88,7 @@ class LocBridgeServer:
     async def start(self) -> None:
         if self.path.exists() or self.path.is_symlink():
             if not stat.S_ISSOCK(os.lstat(self.path).st_mode):
-                raise FileExistsError(f"{self.path} 已经有了,而且不是套接字:不动它")
+                raise FileExistsError(f"{self.path} 已存在,而且不是套接字:不动它")
             self.path.unlink()                        # 上次没收拾的套接字
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._server = await asyncio.start_unix_server(self._on_conn, str(self.path),
@@ -114,7 +114,7 @@ class LocBridgeServer:
             return
         now = self._now()
         if now - conn.heard > HB_DEAD_S:
-            self._drop(conn, f"定位器 {now - conn.heard:.1f} 秒没声,当它断了")
+            self._drop(conn, f"定位器 {now - conn.heard:.1f} 秒无响应,视为已断开")
             return
         if now - self._hb_at >= HB_EVERY_S:
             self._hb_at = now
@@ -125,7 +125,7 @@ class LocBridgeServer:
         """发一条请求(``make(req)`` 造),等它的回复;``timeout_s`` 管从发到回的全程。"""
         conn = self._conn
         if conn is None:
-            raise LocalizerUnavailable("定位器没连上")
+            raise LocalizerUnavailable("定位器未连接")
         self._req += 1
         req = self._req
         fut: asyncio.Future = asyncio.get_running_loop().create_future()
@@ -166,22 +166,22 @@ class LocBridgeServer:
             writer.close()
             return
         if self._busy():
-            self._refuse(writer, "已经有一个定位器连着")
+            self._refuse(writer, "已有一个定位器连着")
             return
         try:
             first = await asyncio.wait_for(reader.readline(), HELLO_TIMEOUT_S)
             hello = parse(first) if first else None
         except (asyncio.TimeoutError, ValueError, ContractError, ConnectionError, OSError) as exc:
-            self._refuse(writer, f"握手不对:{exc}"[:200])
+            self._refuse(writer, f"握手失败:{exc}"[:200])
             return
         if not isinstance(hello, Hello) or hello.proto != PROTO:
             self._refuse(writer, f"第一行要是 hello(协议版本 {PROTO})")
             return
         if self._busy():                              # 等它握手的时候别的定位器连上了
-            self._refuse(writer, "已经有一个定位器连着")
+            self._refuse(writer, "已有一个定位器连着")
             return
         if self._conn is not None:
-            self._drop(self._conn, "新的定位器连上来了,旧的没声了")
+            self._drop(self._conn, "新的定位器连上来了,旧的无响应")
         conn = _Conn(reader=reader, writer=writer, heard=self._now())
         self._conn = conn
         log.info("定位器连上了:%s %s", hello.name, hello.version)
@@ -193,7 +193,7 @@ class LocBridgeServer:
             await self._read(conn)
         finally:
             if self._conn is conn:
-                self._drop(conn, "定位器断开了")
+                self._drop(conn, "定位器已断开")
 
     async def _read(self, conn: _Conn) -> None:
         while not conn.closed:

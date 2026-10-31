@@ -171,5 +171,5 @@ class _RefuseApi extends FakeApi {
   @override
   Future<Map<String, dynamic>> markHome(String robotId,
           {String name = '', bool replace = false}) async =>
-      throw const SiteError(409, '机器人没标:loc_poor: 位置偏差可能到 0.9 m');
+      throw const SiteError(409, '机器人标记失败:loc_poor: 位置偏差可能到 0.9 m');
 }

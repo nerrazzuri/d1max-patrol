@@ -188,7 +188,7 @@ def test_测速线拿不到_那几只风扇算故障_温度照记(tmp_path):
     m.sample()
     fan = {d["id"]: d for d in m.health()}["fan:stir"]
     assert fan["state"] == "error" and "busy" in fan["detail"]
-    assert m.level == "ok", "测速线拿不到不等于风扇停了,别降负载"
+    assert m.level == "ok", "测速线无法获取不等于风扇停了,别降负载"
     m.close()
 
 
@@ -279,7 +279,7 @@ def test_外审R2_过热时温度读不到_不当降温_保持上一级_读到�
         _转(counters, 3000, 10)
         m.sample()
         assert m.level == "critical", "没有降温的证据:保护不解除"
-    assert "读不到" in m.reason
+    assert "无法读取" in m.reason
     b = {d["id"]: d for d in m.health()}["board"]
     assert b["state"] == "offline" and "保持" in b["detail"]
     temps["soc"], temps["nvme"] = 60, 50

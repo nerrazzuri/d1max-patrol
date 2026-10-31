@@ -73,7 +73,7 @@ def test_截短了_先说大小不对_不用算哈希(k, monkeypatch):
     hashed = []
     real = M._sha256
     monkeypatch.setattr(M, "_sha256", lambda q: (hashed.append(q.name), real(q))[1])
-    with pytest.raises(MapIntegrityError, match="frames.json 大小不对"):
+    with pytest.raises(MapIntegrityError, match="frames.json 大小错误"):
         keeper.verify_active()
     assert "frames.json" not in hashed
 
@@ -191,7 +191,7 @@ def test_active_json_乱码或嵌套太深_也是坏了_不往外抛别的(k, tm
     keeper, _, _, _ = k
     (tmp_path / "maps" / "active.json").write_bytes(raw)
     assert keeper.active() is None
-    with pytest.raises(MapIntegrityError, match="active.json 坏了"):
+    with pytest.raises(MapIntegrityError, match="active.json 已损坏"):
         keeper.verify_active()
 
 
@@ -209,7 +209,7 @@ def test_读不了_算校验不过_重新下能修(k, monkeypatch):
     monkeypatch.setattr(M, "_sha256", eio)
     site.calls.clear()
     assert keeper.install(ref) == d
-    assert {c[0] for c in site.calls} == set(FILES), "读不了:重新下了"
+    assert {c[0] for c in site.calls} == set(FILES), "无法读取:重新下了"
     assert keeper.verify_active() == ref
 
 
@@ -219,7 +219,7 @@ def test_读不了_校验说读不了(k, monkeypatch):
     def eio(p):
         raise PermissionError(13, "Permission denied")
     monkeypatch.setattr(M, "_sha256", eio)
-    with pytest.raises(MapIntegrityError, match="读不了.*Permission"):
+    with pytest.raises(MapIntegrityError, match="无法读取.*Permission"):
         keeper.verify_active()
     assert keeper.local(keeper.active()) is None
 

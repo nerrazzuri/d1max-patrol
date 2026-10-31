@@ -178,7 +178,7 @@ async def test_规划栅格坏了_记原因(台):
     await _换图(rt, broker, site, c, ears, files={"floor.pgm": b"P2 1 1 1\n0",
                                                  "floor.yaml": b"resolution: 0.05\n"})
     z = _caps(ears).tasks["zones_set"]
-    assert z["plan_ok"] is False and "载不了" in z["problem"]
+    assert z["plan_ok"] is False and "无法加载" in z["problem"]
     assert "goto" not in rt.processor.supported
 
 
@@ -408,7 +408,7 @@ async def test_运营可视化_走的时候遥测带规划路径_收尾后不带
     broker, c, r, ears, rt, site, mk = 台
     await _换图(rt, broker, site, c, ears)
     r.teleport(1.0, 1.0, 0.0)
-    assert all("nav" not in d for d in ears.by.get("telemetry", [])), "没在导航:不带 nav"
+    assert all("nav" not in d for d in ears.by.get("telemetry", [])), "未在导航:不带 nav"
     goto = Command(command_id="g1", task_id="t1", kind="goto", issued_at=c.ms,
                    expires_at=c.ms + 60_000, control_epoch=1,
                    payload={"target": {"schema": "1.0", "map_id": "m", "map_version": "2",

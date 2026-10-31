@@ -118,7 +118,7 @@ def check(msg: dict[str, Any]) -> dict[str, Any]:
     need, opt = FIELDS[t]
     keys = set(msg) - {"type"}
     if need - keys or keys - need - opt:
-        raise ContractError(f"Nav2 转接:{t} 的字段不对:缺 {sorted(need - keys)}、"
+        raise ContractError(f"Nav2 转接:{t} 的字段错误:缺 {sorted(need - keys)}、"
                             f"多 {sorted(keys - need - opt)}")
     if t == "hello":
         _int(msg["proto"], "proto", lo=1)

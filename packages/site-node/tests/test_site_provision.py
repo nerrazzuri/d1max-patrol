@@ -48,7 +48,7 @@ def test_开通码_一次性_对不上一律同一句_过期作废_重出旧的�
     home = 站
     c = site.decode(_码(home))
     assert c["id"] == "A" and c["mqtt"] == "mqtts://localhost:8883" and len(c["fp"]) == 64
-    with pytest.raises(site.ProvisionError, match="不对、过期了或者已经用过了"):
+    with pytest.raises(site.ProvisionError, match="错误、已过期或者已用过了"):
         _领(home, "A", "猜的")
     files = _领(home, "A", c["t"])
     assert set(files) == {"ca.crt", "robot.crt", "robot.key", "registration.json"}
@@ -131,7 +131,7 @@ def test_端到端_狗钉住指纹领证书包_放好文件_私钥0600_env只改
         env = (etc / "env").read_text()
         assert "D1MAX_SITE_MQTT=mqtts://localhost:8883" in env
         assert "# 注释" in env and "D1MAX_MAP=m:1" in env and "D1MAX_HAL=sim" in env
-        with pytest.raises(dog.ProvisionError, match="不对、过期了或者已经用过了"):
+        with pytest.raises(dog.ProvisionError, match="错误、已过期或者已用过了"):
             dog.provision(srv.code(site.encode(dict(dog.decode(_码(home)), t="错的"))),
                           etc=etc, user=None)
     finally:
@@ -144,9 +144,9 @@ def test_站点证书指纹对不上_令牌一个字节都不发(站, tmp_path):
     site_main.main(["--home", str(other), "init", "--site-id", "x", "--hostname", "localhost"])
     srv = _站点(home, cert=other / "ca/server/server.crt", key=other / "ca/server/server.key")
     try:
-        with pytest.raises(dog.ProvisionError, match="指纹对不上"):
+        with pytest.raises(dog.ProvisionError, match="指纹不匹配"):
             dog.provision(srv.code(_码(home)), etc=tmp_path / "etc", user=None)
-        assert srv.hits == [], "冒充的站点拿不到令牌"
+        assert srv.hits == [], "冒充的站点无法获取令牌"
     finally:
         srv.close()
 
@@ -157,7 +157,7 @@ def test_已经开通成别的编号_不换_force才换(tmp_path):
     (etc / "registration.json").write_text(json.dumps({"robot_id": "A"}))
     code = site.encode({"api": "https://h:1", "fp": "ab", "mqtt": "mqtts://h:8883", "id": "B",
                         "t": "x"})
-    with pytest.raises(dog.ProvisionError, match="已经开通成 A"):
+    with pytest.raises(dog.ProvisionError, match="已开通成 A"):
         dog.provision(code, etc=etc, user=None, claimer=lambda c: {})
     files = {n: b"x" for n in dog.REQUIRED}
     assert dog.provision(code, etc=etc, user=None, force=True, claimer=lambda c: files) == "B"

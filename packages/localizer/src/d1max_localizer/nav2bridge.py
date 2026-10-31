@@ -386,7 +386,7 @@ class Nav2Bridge:
         except Exception as exc:                        # noqa: BLE001 - 说清楚、不就绪
             log.error("地图读不了:%s", exc)
             self.map_sent = False
-            self._set_ready(False, f"地图读不了:{exc}"[:200])
+            self._set_ready(False, f"地图无法读取:{exc}"[:200])
             return
         g = self._m["OccupancyGrid"]()
         g.header.stamp, g.header.frame_id = self._stamp(self.t_ms), "map"
@@ -510,7 +510,7 @@ class Nav2Bridge:
                 self.known_ids = set().union(*self.goal_ids.values())
         if expired:
             self.send({"type": "goal_state", "goal_id": m["goal_id"], "state": "rejected",
-                       "reason": f"上一个目标 Nav2 {QUEUE_MAX_S:g} 秒还没结束"})
+                       "reason": f"上一个目标 Nav2 {QUEUE_MAX_S:g} 秒尚未结束"})
             return
         self._send_goal(m)
 
@@ -532,7 +532,7 @@ class Nav2Bridge:
                 return
             self.queued = None
         self.send({"type": "goal_state", "goal_id": m["goal_id"], "state": "rejected",
-                   "reason": f"上一个目标 Nav2 {QUEUE_MAX_S:g} 秒还没结束"})
+                   "reason": f"上一个目标 Nav2 {QUEUE_MAX_S:g} 秒尚未结束"})
 
     def _pose(self, x: float, y: float, yaw: float) -> Any:
         from geometry_msgs.msg import PoseStamped
@@ -573,9 +573,9 @@ class Nav2Bridge:
     def _accepted(self, gid: int, fut: Any) -> None:
         try:
             h = fut.result()
-            why = "" if h.accepted else "Nav2 不收这个目标"
+            why = "" if h.accepted else "Nav2 不收此目标"
         except Exception as exc:                        # noqa: BLE001
-            h, why = None, str(exc)[:200] or "Nav2 不收这个目标"
+            h, why = None, str(exc)[:200] or "Nav2 不收此目标"
         # 复查 N4:核取消、从 pending 挪到 goals 在同一段锁里做完(原来两段锁之间能插进取消)
         with self._goal_lock:
             canceled = self.pending.pop(gid, False)
@@ -618,7 +618,7 @@ class Nav2Bridge:
             return
         state = {GoalStatus.STATUS_SUCCEEDED: "succeeded",
                  GoalStatus.STATUS_CANCELED: "canceled"}.get(status, "aborted")
-        why = "" if state != "aborted" else "Nav2 放弃了(规划不出、脱困都试过还走不动、超时)"
+        why = "" if state != "aborted" else "Nav2 放弃了(规划不出、脱困都试过还无法行走、超时)"
         self.send_threadsafe({"type": "goal_state", "goal_id": gid, "state": state,
                               "reason": why})
         self._dispatch_soon()
@@ -668,13 +668,13 @@ class Nav2Bridge:
         elif self.cleanup_pending:
             self._set_ready(False, "等 Nav2 取消上一次留下的导航目标")
         elif not self.map_sent:
-            self._set_ready(False, "还没收到地图")
+            self._set_ready(False, "尚未收到地图")
         elif time.monotonic() - self._clock_wall > CLOCK_STALE_S:
-            self._set_ready(False, "代理没在送时钟")
+            self._set_ready(False, "代理未在送时钟")
         elif not self.nav.server_is_ready() or not self.thru.server_is_ready():
-            self._set_ready(False, "Nav2 的导航动作服务还没起来")
+            self._set_ready(False, "Nav2 的导航动作服务尚未起来")
         elif not self.nav2_active:
-            self._set_ready(False, "Nav2 还在启动(生命周期没全部激活)")
+            self._set_ready(False, "Nav2 还在启动(生命周期未全部激活)")
         else:
             self._set_ready(True, "")
 

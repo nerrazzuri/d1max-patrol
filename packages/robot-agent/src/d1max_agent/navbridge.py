@@ -50,7 +50,7 @@ class NavBridgeServer:
         self._map: dict[str, Any] | None = None
         #: 转接节点说 Nav2 就绪了没有、为什么没有。
         self.ready = False
-        self.reason = "Nav2 转接节点没连上"
+        self.reason = "Nav2 转接节点未连接"
         #: 最近一条速度:``(收到的单调钟, t_ms, vx, vy, wz, goal_id, src, 到达号)``。
         self.cmd: tuple[Any, ...] | None = None
         #: 收到的报文按到达顺序编号(复查第三轮 P1:速度要比本目标的路线晚到才认)。
@@ -104,7 +104,7 @@ class NavBridgeServer:
             writer.close()
             return
         if self.connected:
-            self._raw(writer, {"type": "error", "reason": "已经有一个转接节点连着"})
+            self._raw(writer, {"type": "error", "reason": "已有一个转接节点连着"})
             writer.close()
             return
         try:
@@ -120,7 +120,7 @@ class NavBridgeServer:
         if old is not None:
             old.close()
         self._heard = self._now()
-        self.ready, self.reason = False, "Nav2 还没就绪"
+        self.ready, self.reason = False, "Nav2 尚未就绪"
         log.info("Nav2 转接节点连上了:%s %s", hello.get("name", ""), hello.get("version", ""))
         self.send({"type": "hello", "proto": PROTO})
         if self._map is not None:
@@ -141,7 +141,7 @@ class NavBridgeServer:
         finally:
             if self._writer is writer:
                 self._writer = None
-                self.ready, self.reason = False, "Nav2 转接节点断了"
+                self.ready, self.reason = False, "Nav2 转接节点已断开"
                 self.cmd = None
                 log.warning("Nav2 转接节点断了")
             writer.close()
@@ -151,7 +151,7 @@ class NavBridgeServer:
         self._rx += 1
         t = m["type"]
         if t == "ready":
-            self.ready, self.reason = m["ok"], m.get("reason", "") or ("" if m["ok"] else "没就绪")
+            self.ready, self.reason = m["ok"], m.get("reason", "") or ("" if m["ok"] else "未就绪")
         elif t == "cmd":
             # 转接节点标了是哪个目标的(外审 R7);老的不标:None
             self.cmd = (self._now(), m["t_ms"], m["vx"], m["vy"], m["wz"], m.get("goal_id"),

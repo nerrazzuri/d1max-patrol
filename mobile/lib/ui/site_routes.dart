@@ -229,7 +229,7 @@ class _SiteRoutesPageState extends State<SiteRoutesPage> {
             : NwListView(children: [
                 if (_error != null) NwNotice(tone: NwTone.error, text: tr('Routes unavailable: $_error', '无法加载路线：$_error')),
                 if (_maps.isEmpty && _error == null)
-                  NwEmpty(icon: Icons.map_outlined, text: tr('No maps on the site yet', '站点上还没有地图'))
+                  NwEmpty(icon: Icons.map_outlined, text: tr('No maps on the site yet', '站点暂无地图'))
                 else if (_sel != null) ...[
                   Row(children: [
                     Text(tr('Map version', '地图版本'), style: sub),
@@ -263,7 +263,7 @@ class _SiteRoutesPageState extends State<SiteRoutesPage> {
                     NwEmpty(
                         key: SiteRoutesPage.emptyKey,
                         icon: Icons.route_rounded,
-                        text: tr('No routes on this map version yet', '此版本地图上还没有路线'))
+                        text: tr('No routes on this map version yet', '此版本地图上暂无路线'))
                   else
                     for (final r in _routes)
                       Padding(
@@ -757,7 +757,7 @@ class _SiteRouteEditorPageState extends State<SiteRouteEditorPage> {
                         : tr('Select a point, then tap its new place on the map.', '先选中一个点，再点击新位置。'),
                     style: sub)),
           nwGap8,
-          if (_pts.isEmpty) Text(tr('No points yet. Tap the map.', '还没有点，请点击地图添加。'), style: sub),
+          if (_pts.isEmpty) Text(tr('No points yet. Tap the map.', '暂无点，请点击地图添加。'), style: sub),
           for (var i = 0; i < _pts.length; i++)
             Container(
                 key: SiteRouteEditorPage.rowKey(i),

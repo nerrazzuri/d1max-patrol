@@ -307,7 +307,7 @@ class _SiteRobotPageState extends State<SiteRobotPage> {
             '${e.message}：机器人上的原点位于 $at 的 ($x, $y)');
       } else if (e.status == 409) {
         // 站点回的是「狗没标:<狗的原因>」：原因照拒收那一套说人话。
-        final why = ackReasonText(e.message.replaceFirst(RegExp(r'^机器人没标[:：]'), ''));
+        final why = ackReasonText(e.message.replaceFirst(RegExp(r'^机器人标记失败[:：]'), ''));
         msg = tr('Not marked: $why', '未标记：$why');
       } else {
         msg = e.toString(); // 504「狗可能已经标了」等：照站点说的
@@ -364,7 +364,7 @@ class _SiteRobotPageState extends State<SiteRobotPage> {
           Text(
               trial
                   ? tr("The robot lost the site and is trying WiFi “${ch['ssid']}”. Approve within 30 minutes to keep it, otherwise it reverts.",
-                      '机器人连不上站点，正在尝试 WiFi「${ch['ssid']}」。30 分钟内确认则保留，否则恢复原网络。')
+                      '机器人无法连接站点，正在尝试 WiFi「${ch['ssid']}」。30 分钟内确认则保留，否则恢复原网络。')
                   : tr("Someone at the robot asked to switch its WiFi to “${ch['ssid']}”. Nothing changes until it is approved.",
                       '请确认机器人端申请将 WiFi 切换为「${ch['ssid']}」'),
               style: NwText.bodyMedium.copyWith(color: c.text)),

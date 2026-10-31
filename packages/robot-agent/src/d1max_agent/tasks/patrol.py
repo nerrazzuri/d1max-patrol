@@ -37,4 +37,4 @@ class PatrolTask(EngineMissionTask):
     def _failed_reason(self, bad) -> str:
         names = ", ".join(r.name for r in bad)
         first = bad[0].note or "waypoint failed"
-        return f"{len(bad)} 个航点没到({names}):{first}"
+        return f"{len(bad)} 个航点未到达({names}):{first}"

@@ -183,7 +183,7 @@ def calibrate(frames: Sequence[tuple[Any, ...]], T0: Any, *, levels=LEVELS,
             ok = d <= gate
             inlier = float(ok.mean())
             if ok.sum() < 50:
-                return Result(T, False, f"对不上(体素 {voxel} m 时只有 {int(ok.sum())} 个点挨得着)",
+                return Result(T, False, f"不匹配(体素 {voxel} m 时只有 {int(ok.sum())} 个点挨得着)",
                               inlier, math.inf, *delta(T0, T), len(fr))
             Rt = np.transpose(Rw[ok], (0, 2, 1))                  # 退回那一刻的前雷达系
             mf = np.einsum("nij,nj->ni", Rt, m[ok] - tw[ok])

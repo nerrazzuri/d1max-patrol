@@ -101,7 +101,7 @@ def _hkdf(ikm: bytes, salt: bytes, info: bytes, n: int) -> bytes:
 
 def _keys(shared: bytes, eph_pub: bytes, site_pub: bytes) -> tuple[str, bytes]:
     if shared == bytes(32):
-        raise SealError("公钥不对(共享密钥是零)")
+        raise SealError("公钥错误(共享密钥是零)")
     okm = _hkdf(shared, eph_pub + site_pub, b"d1max-evidence-v1", 64)
     return okm[:32].hex(), okm[32:]
 
@@ -114,7 +114,7 @@ def load_public(path: Path | str) -> bytes:
     try:
         raw = bytes.fromhex(Path(path).read_text("ascii").strip())
     except (OSError, ValueError) as exc:
-        raise SealError(f"证据公钥 {path} 读不了: {exc}") from exc
+        raise SealError(f"证据公钥 {path} 无法读取: {exc}") from exc
     if len(raw) != KEY_BYTES:
         raise SealError(f"证据公钥 {path} 不是 {KEY_BYTES} 字节")
     return raw
@@ -131,7 +131,7 @@ def write_keypair(priv_path: Path | str, pub_path: Path | str) -> bytes:
     """生成一对,私钥 0600(已经有就不动、报错:换了旧证据就解不开)。回公钥。"""
     priv_path, pub_path = Path(priv_path), Path(pub_path)
     if priv_path.exists():
-        raise SealError(f"{priv_path} 已经有了:不换(换了以前封的证据就解不开)")
+        raise SealError(f"{priv_path} 已存在:不换(换了以前封的证据就解不开)")
     priv, pub = keypair()
     priv_path.parent.mkdir(parents=True, exist_ok=True)
     fd = os.open(priv_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
@@ -248,7 +248,7 @@ def open_file(src: Path, dst: Path, site_priv: bytes, *, openssl: str | None = N
                 left -= len(chunk)
             tag = f.read(_TAG)
         if not hmac.compare_digest(tag, mac.digest()):
-            raise SealError(f"{src.name} 对不上(不是这把私钥,或者被改过)")
+            raise SealError(f"{src.name} 不匹配(不是这把私钥,或者被改过)")
         tmp = dst.with_name(dst.name + ".tmp")
         _openssl(["-d"], secret=secret, src=body, dst=tmp, openssl=openssl)
         os.replace(tmp, dst)

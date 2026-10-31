@@ -254,7 +254,7 @@ class TeleopZoneGuard:
             cap = max(UNTRUSTED_VX, self._deadband)
             return Verdict(max(-cap, min(cap, vx)), max(-UNTRUSTED_WZ, min(UNTRUSTED_WZ, wz)),
                            "untrusted", None,
-                           f"位置不可信({why or '没有位置'}):硬禁区守不了,限速 {cap:.1f} m/s,"
+                           f"位置不可信({why or '没有位置'}):硬禁区无法保证,限速 {cap:.1f} m/s,"
                            "看着画面开")
         pose = (est.x, est.y, est.yaw)
         sigma = sigma_of(est)

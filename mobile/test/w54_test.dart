@@ -193,7 +193,7 @@ void main() {
       await _tick(t);
       await _tap(t, MapWizardPage.markHomeKey);
       expect(api.calls, containsAllInOrder(['markHome A', 'wizard finish']));
-      expect(find.text('可以开始巡逻了'), findsOneWidget);
+      expect(find.text('可以开始巡逻'), findsOneWidget);
       expect(find.textContaining('一楼'), findsWidgets);
       await _tap(t, MapWizardPage.homeKey);
       expect(find.byType(MapWizardPage), findsNothing);

@@ -40,7 +40,7 @@ def main() -> None:
         w.setsampwidth(2)
         w.setframerate(16000)
         w.writeframes(siren(a.seconds, gain=a.gain))
-    print(f"写好了 {a.out}")
+    print(f"写完成 {a.out}")
 
 
 if __name__ == "__main__":

@@ -74,25 +74,25 @@ def status(cfg: dict[str, Any], *, root: Path | None = None) -> list[dict[str, A
                                "fingerprint": "", "mode": "", "problem": ""}
         if not p.is_file():
             row["problem"] = "" if _optional(name, cfg) else (
-                "没有这把密钥" + (":配了推送,缺它推送恢复不了" if name == "jpush" else ""))
+                "没有这把密钥" + (":配了推送,缺它推送无法恢复" if name == "jpush" else ""))
             out.append(row)
             continue
         try:
             raw = p.read_bytes()
             st = p.stat()
         except OSError as exc:
-            row["problem"] = f"读不了:{exc}"
+            row["problem"] = f"无法读取:{exc}"
             out.append(row)
             continue
         row["fingerprint"] = _fp(raw)
         row["mode"] = oct(stat.S_IMODE(st.st_mode))
         want = KEYS[name][2]
         if want is not None and len(raw) != want:
-            row["problem"] = f"长度不对({len(raw)} 字节,要 {want})"
+            row["problem"] = f"长度错误({len(raw)} 字节,要 {want})"
         elif want is None and not raw.strip():
             row["problem"] = "是空的"
         elif st.st_mode & 0o007:
-            row["problem"] = f"权限太宽({row['mode']}):别的用户也读得到"
+            row["problem"] = f"权限过宽({row['mode']}):别的用户也读得到"
         out.append(row)
     return out
 
@@ -106,7 +106,7 @@ def export(cfg: dict[str, Any], out: Path, passphrase: str, *,
            root: Path | None = None) -> list[str]:
     """把站点密钥打成一个口令加密的托管包 ``out``(0600)。回打进去的密钥名。缺了必需的就不打。"""
     if len(passphrase) < MIN_PASSPHRASE:
-        raise KeyError_(f"口令至少 {MIN_PASSPHRASE} 个字符")
+        raise KeyError_(f"密码至少 {MIN_PASSPHRASE} 个字符")
     keys: dict[str, str] = {}
     for row in status(cfg, root=root):
         if row["problem"]:
@@ -148,7 +148,7 @@ def read_bundle(src: Path, passphrase: str) -> dict[str, bytes]:
             try:
                 box.open_file(sealed, plain)
             except SealError as exc:
-                raise KeyError_("口令不对,或者托管包被改过") from exc
+                raise KeyError_("密码错误,或者托管包被改过") from exc
             d = json.loads(plain.read_text(encoding="utf-8"))
     finally:
         os.umask(old)
@@ -165,7 +165,7 @@ def import_(cfg: dict[str, Any], src: Path, passphrase: str, *, root: Path | Non
     clash = [n for n, raw in keys.items()
              if where[n].is_file() and where[n].read_bytes() != raw]
     if clash and not force:
-        raise KeyError_("这几把已经有了、而且跟托管包里的不一样,不盖(盖错了旧备份就解不开):"
+        raise KeyError_("这几把已存在、而且与托管包里的不同,不盖(盖错了旧备份就解不开):"
                         + "、".join(clash) + ";确定要盖加 --force")
     done = []
     for name, raw in keys.items():

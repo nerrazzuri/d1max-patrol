@@ -24,11 +24,11 @@ from d1max_contract.compat import (
 
 log = logging.getLogger(__name__)
 
-_TITLES = {"agent_too_old": "机器人上的代理太老:要给这台机器人升级",
+_TITLES = {"agent_too_old": "机器人上的代理版本过旧:要给此机器人升级",
            "site_too_old": "站点比机器人上的代理老:先升站点"}
-_DETAILS = {"agent_too_old": "站点要的代理兼容级别 ≥{min};这台机器人报的是 {lv}。配不上的地方:"
-                             "站点删过的证据再传上来会被老代理一直重传。在站点上给这台机器人下发新版本",
-            "site_too_old": "这台机器人的代理兼容级别是 {lv},站点只认到 {max}。先升站点"
+_DETAILS = {"agent_too_old": "站点要的代理兼容级别 ≥{min};此机器人报的是 {lv}。配不上的地方:"
+                             "站点删过的证据再传上来会被老代理一直重传。在站点上给此机器人下发新版本",
+            "site_too_old": "此机器人的代理兼容级别是 {lv},站点只认到 {max}。先升站点"
                             "(docs/版本兼容与升级顺序.md),机器人不用动"}
 
 

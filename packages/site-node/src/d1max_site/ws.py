@@ -174,10 +174,10 @@ class WsConn:
                 self._maybe_ping()
                 continue
             except (OSError, ssl.SSLError) as exc:
-                self._mark_closed(f"读不到了: {exc}")
+                self._mark_closed(f"无法读取: {exc}")
                 raise WsClosed(self.close_reason) from exc
             if not chunk:
-                self._mark_closed("对面断开了")
+                self._mark_closed("连接已断开")
                 raise WsClosed(self.close_reason)
             self._buf += chunk
             self._last_rx = time.monotonic()
@@ -206,7 +206,7 @@ class WsConn:
             b0, b1 = self._buf[0], self._buf[1]
             fin, opcode, masked, n = b0 & 0x80, b0 & 0x0F, b1 & 0x80, b1 & 0x7F
             if b0 & 0x70:
-                self._fail(1002, "没协商过扩展,RSV 位不许置")
+                self._fail(1002, "未协商过扩展,RSV 位不许置")
             if opcode >= 8 and (n > 125 or not fin):
                 self._fail(1002, "控制帧不许超过 125 字节、不许分片")
             head = 2

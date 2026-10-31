@@ -341,7 +341,7 @@ class BridgeLocalizer:
             return
         bad = self._mismatch(new)
         if bad:
-            self._jumped(new, f"定位器跟里程对不上({bad}),等它稳下来")
+            self._jumped(new, f"定位器与里程不匹配({bad}),等它稳下来")
             return
         self._win.append(new)
         if self._settle > 0:
@@ -377,13 +377,13 @@ class BridgeLocalizer:
         原因)`` 明说不收;``("pending", 原因)`` 还没回(没连上、在载、超时重发中;原因是最近一次的
         说明)。当前的图不是 ``ref`` 一律 pending(又换了图)。"""
         if self._map != ref:
-            return "pending", "当前的图已经不是这一张"
+            return "pending", "当前的图已不是这一张"
         if self._prior_ok == ref:
             return "ok", ""
         if self._prior_rejected:
             return "rejected", self._prior_err
         if not self._connected:
-            return "pending", "定位器没连上"
+            return "pending", "定位器未连接"
         return "pending", self._prior_err
 
     @property
@@ -483,11 +483,11 @@ class BridgeLocalizer:
 
     def why_not(self, odom_ok: bool) -> str:
         if not self._connected:
-            return "定位器没连上"
+            return "定位器未连接"
         if self._map is None:
             return "没有加载地图"
         if self._prior_ok != self._map:
-            return f"定位器换不了这张图的先验:{self._prior_err}" if self._prior_err \
+            return f"定位器无法切换此地图的先验:{self._prior_err}" if self._prior_err \
                 else "定位器在换图"
         if self._state in ("initializing", "lost"):
             what = "还在初始化" if self._state == "initializing" else "说定位丢了"
@@ -502,7 +502,7 @@ class BridgeLocalizer:
             return self.scan_disagree
         f = self._fix
         if f is None:
-            return "定位器还没给出位置"
+            return "定位器还未提供出位置"
         if self._off_why:
             return self._off_why
         if self._settle > 0:
@@ -511,7 +511,7 @@ class BridgeLocalizer:
         age = now - f.born
         if age > FRESH_S and not (odom_ok and age <= DR_MAX_S and self._pushable()):
             if now - f.at > FRESH_S:
-                return f"定位器 {now - f.at:.1f} 秒没来位姿"
+                return f"定位器 {now - f.at:.1f} 秒未发送位姿"
             return f"定位器给的位置是 {age:.1f} 秒前的(晚到或它自己在推算)"
         if self.sigma_xy > SIGMA_LOST_M:
             return f"定位偏差可能到 {self.sigma_xy:.1f} m"
@@ -615,7 +615,7 @@ class BridgeLocalizer:
             return f"localizer_unavailable: {exc}"
         except asyncio.TimeoutError:
             undo()
-            return f"localizer_unavailable: 定位器 {RELOC_TIMEOUT_S:g} 秒没回"
+            return f"localizer_unavailable: 定位器 {RELOC_TIMEOUT_S:g} 秒未返回"
         if self._map != map_ref:
             undo()
             return "busy: 等定位器回复的时候换了图"
@@ -737,13 +737,13 @@ class BridgeLocalizer:
             if a is None:
                 why = "代理手里没有可信过的位置"
             elif a.odom is None:
-                why = f"{self._anchor_what}那会儿没配上里程"
+                why = f"{self._anchor_what}那会儿未匹配里程"
             else:
                 why = f"里程断过(换了段),推不到{self._anchor_what}"
             did = "跳过(或重定位过)" if self._unverified else "刚连上"
-            return f"定位器{did},{why},核不了它稳住的地方:请重新设位置"
+            return f"定位器{did},{why},无法核对它稳住的地方:请重新设位置"
         if new.odom is None:
-            return f"定位器稳住了,这一帧没配上里程:等配上了再跟{self._anchor_what}核对"
+            return f"定位器稳住了,此帧未匹配里程:等配上了再跟{self._anchor_what}核对"
         want = compose(a.T, new.odom)
         if a.source == GIVEN:
             # 给的朝向可能偏几十度:拿它推「往哪走了」会越走越偏(2026-10-13 回放:给偏 45°、边走边
@@ -759,7 +759,7 @@ class BridgeLocalizer:
             bad = f"朝向 {math.degrees(turn):.0f}°"
         else:
             return ""
-        return (f"定位器稳住的地方跟{self._anchor_what}差 {bad},里程说机器人没这么动过:"
+        return (f"定位器稳住的地方跟{self._anchor_what}差 {bad},里程说机器人未这么动过:"
                 "请重新设位置")
 
     def conflict_poses(self) -> tuple[tuple[float, float, float],
@@ -880,14 +880,14 @@ class BridgeLocalizer:
                 return                               # 连上时再发
             except asyncio.TimeoutError:
                 if self._map == ref:
-                    self._prior_err = f"{PRIOR_TIMEOUT_S:g} 秒没回,再发一次"
+                    self._prior_err = f"{PRIOR_TIMEOUT_S:g} 秒未返回,再发一次"
                 continue
             if self._map != ref:
                 return                               # 等回复的时候又换了图
             if r.ok:
                 self._prior_ok, self._prior_err = ref, ""
             else:
-                self._prior_err = r.reason or "没说为什么"
+                self._prior_err = r.reason or "未说为什么"
                 self._prior_rejected = True
             return
 

@@ -49,7 +49,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         import rclpy
         from robots_dog_msgs.msg import UniRtkPvh
     except ImportError as exc:
-        print(f"厂家 RTK 辅助进程起不来:{exc}(要在狗上、source 过厂家的 ROS 环境)", file=sys.stderr,
+        print((f"厂家 RTK 辅助进程起不来:"
+               f"{exc}(要在机器人上、source 过厂家的 ROS 环境)"), file=sys.stderr,
               flush=True)
         return 2
     from rclpy.executors import SingleThreadedExecutor

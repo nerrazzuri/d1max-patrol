@@ -49,7 +49,7 @@ def _映射防区(db, zone="front-gate", polygon=True):
     ({"name": ""}, "name"), ({"name": "a b"}, "名字"), ({"name": "../x"}, "名字"),
     ({"name": "x" * 65}, "name"), ({"zone": ""}, "zone"), ({"zone": "a\nb"}, "控制字符"),
     ({"zone": "z" * 129}, "zone"), ({"onvif_url": ""}, "onvif_url"),
-    ({"onvif_url": "ftp://x"}, "http"), ({"onvif_url": "http://u:p@1.2.3.4"}, "账号口令"),
+    ({"onvif_url": "ftp://x"}, "http"), ({"onvif_url": "http://u:p@1.2.3.4"}, "账号密码"),
     ({"onvif_url": "1.2.3.4 x"}, "空格"), ({"onvif_url": "http://"}, "主机"),
     ({"onvif_url": "http://:80"}, "主机"), ({"rtsp_url": "http://x/y"}, "rtsp"),
     ({"rtsp_url": "rtsp://a b"}, "空格"), ({"motion": "yes"}, "motion"),

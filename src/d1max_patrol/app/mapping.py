@@ -213,7 +213,7 @@ class MappingOrchestrator:
             _check_name(live_map_id, "图名")
         bag = self._cfg.bags_dir / name
         if bag.exists():
-            raise MappingArgError(f"{name} 这个包已经在了,换个名字 —— 覆盖等于丢一段路")
+            raise MappingArgError(f"{name} 此包已存在,换个名字 —— 覆盖等于丢一段路")
         self._cfg.bags_dir.mkdir(parents=True, exist_ok=True)
         if live_map_id is not None:
             out, work = self._out(live_map_id)
@@ -253,7 +253,7 @@ class MappingOrchestrator:
     async def stop_record(self) -> Path:
         """停录。返回刚录完的那个包。在线建图一起停(给足存盘的时间)。"""
         if self._phase != "recording":
-            raise MappingError(f"现在没在录包(当前 {self._phase})")
+            raise MappingError(f"现在未在录包(当前 {self._phase})")
         bag = self._bag
         assert bag is not None
         stops = [self._procs.stop(self.RECORD, term_grace_s=_RECORD_GRACE_S)]

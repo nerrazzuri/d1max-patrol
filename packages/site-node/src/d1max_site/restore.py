@@ -88,11 +88,11 @@ def _complete(dest: Path) -> tuple[Path | None, Path | None]:
 def _manifest_problem(dest: Path, box: SealBox | None, man: Path | None, tmp: Path) -> str:
     """选定的那次备份按清单完整吗:回空串 = 完整;否则回原因。校验、恢复、演练共用(A2 复查)。"""
     if man is None:
-        return "没有做完的备份(没有清单):要么做到一半断了,要么是老版本做的 —— 等下一次备份"
+        return "没有做完的备份(没有清单):要么做到一半已断开,要么是老版本做的 —— 等下一次备份"
     try:
         listed = json.loads(_read(box, man, tmp / "m.json").read_bytes())["files"]
     except (SealError, OSError, ValueError, KeyError, TypeError) as exc:
-        return f"清单 {man.name} 读不了:{exc}"
+        return f"清单 {man.name} 无法读取:{exc}"
     lost = [f for f in listed if not (dest / f).is_file()]
     if lost:
         return f"清单上的 {len(lost)} 个文件不见了(比如 {lost[0]})"
@@ -103,7 +103,7 @@ def _read(box: SealBox | None, src: Path, tmp: Path) -> Path:
     """加密的解到 ``tmp``,明文的原样。"""
     if src.name.endswith(SEALED):
         if box is None:
-            raise SealError(f"{src.name} 是加密的,没给备份密钥")
+            raise SealError(f"{src.name} 是加密的,未提供备份密钥")
         box.open_file(src, tmp)
         return tmp
     return src
@@ -177,7 +177,7 @@ def verify(dest: Path, key: Path | None, *, sample: int | None = None,
             try:
                 rep.counts, runs, photos, check = _facts(_read(box, snap, Path(tmp) / "site.db"))
                 if check != "ok":
-                    rep.bad(f"库快照 {snap.name} 完整性检查没过:{check[:200]}")
+                    rep.bad(f"库快照 {snap.name} 完整性检查未通过:{check[:200]}")
             except (SealError, OSError, sqlite3.Error) as exc:
                 rep.bad(f"库快照 {snap.name} 打不开:{exc}")
         why = _manifest_problem(dest, box, man, Path(tmp))
@@ -192,7 +192,7 @@ def verify(dest: Path, key: Path | None, *, sample: int | None = None,
         try:
             if p.name.endswith(SEALED):
                 if box is None:
-                    raise SealError("是加密的,没给备份密钥")
+                    raise SealError("是加密的,未提供备份密钥")
                 box.verify_file(p)
             else:
                 with open(p, "rb") as f:
@@ -231,7 +231,7 @@ def restore(dest: Path, key: Path | None, home: Path) -> Report:
             dst.parent.mkdir(parents=True, exist_ok=True)
             if src.name.endswith(SEALED):
                 if box is None:
-                    raise SealError(f"{src.name} 是加密的,没给备份密钥")
+                    raise SealError(f"{src.name} 是加密的,未提供备份密钥")
                 box.open_file(src, dst.with_name(dst.name[:-len(SEALED)]))
             else:
                 shutil.copyfile(src, dst)                 # 不抄源文件的权限:按 umask 077 建
@@ -261,13 +261,13 @@ def verify_home(home: Path) -> Report:
     try:
         rep.counts, runs, photos, check = _facts(home / "site.db")
         if check != "ok":
-            rep.bad(f"site.db 完整性检查没过:{check[:200]}")
+            rep.bad(f"site.db 完整性检查未通过:{check[:200]}")
     except (OSError, sqlite3.Error) as exc:
         rep.bad(f"site.db 打不开:{exc}")
     try:
         json.loads((home / "site.json").read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
-        rep.bad(f"site.json 读不了:{exc}")
+        rep.bad(f"site.json 无法读取:{exc}")
     _check_tree(rep, home, "", runs, photos, "站点目录里")
     return rep
 

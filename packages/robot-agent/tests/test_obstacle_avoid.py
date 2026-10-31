@@ -62,7 +62,7 @@ def test_记忆_按里程挪_从新到旧_都没看见是未知():
     v.on_grid(_grid(cells_known=front_only, seq=2))
     hit, unk = v.lookup([(-0.65, 0.05), (0.55, 0.05), (-2.5, 0.0)], (1.2, 0.0, 0.0))
     assert hit == [0], "身后的格子靠记忆:旧的那帧看见过它是挡"
-    assert unk == [2], "哪一帧都没看见过:未知"
+    assert unk == [2], "哪一帧都未看见过:未知"
     # 新的一帧把那格看成空的:新的说了算
     t[0] = 0.3
     v.note_odom(0.0, 0.0, 0.0)
@@ -335,7 +335,7 @@ async def test_感知短暂断_原地等_接上接着走_断太久发13331(tmp_p
     assert abs(t.r.speed[0]) < 1e-9 and NavStatus.FAILED not in t.status
     t.perceive = True
     await t.跑(3.0)
-    assert abs(t.r.speed[0]) > 0.1, "接上了接着走"
+    assert abs(t.r.speed[0]) > 0.1, "接上了继续执行"
     t.perceive = False
     await t.跑(5.0)
     assert ALG_LIDAR_DISCONNECTED in t.algs and NavStatus.FAILED in t.status
@@ -345,12 +345,12 @@ async def test_外参自检没过_不受理goto(tmp_path):
     t = 台子(tmp_path)
     t.per.check = "extrinsic_bad"
     await t.start(1.5, 4.0)
-    with pytest.raises(NavRequestError, match="外参自检没过"):
+    with pytest.raises(NavRequestError, match="外参自检未通过"):
         await t.nav.goto(Pose.from_xy_yaw(10.0, 4.0))
     t2 = 台子(tmp_path)
     t2.perceive = False
     await t2.start(1.5, 4.0)
-    with pytest.raises(NavRequestError, match="断了"):
+    with pytest.raises(NavRequestError, match="已断开"):
         await t2.nav.goto(Pose.from_xy_yaw(10.0, 4.0))
 
 
@@ -385,7 +385,7 @@ async def test_要掉头_身后看不见就不转_没后雷达先往前挪_有�
     await blind.start(5.0, 4.0, yaw=0.0)
     await blind.nav.goto(Pose.from_xy_yaw(2.0, 4.0))            # 目标在身后
     await blind.跑(3.0)
-    assert abs(blind.r.yaw) < 0.05, "身后没看过:不原地转"
+    assert abs(blind.r.yaw) < 0.05, "身后未看过:不原地转"
     bx = []
     for _ in range(600):
         await blind.一拍()
@@ -575,7 +575,7 @@ def test_记忆_狗自己3秒内站过的地方算空_再久不算():
     t[0] = 1.0
     v.note_odom(1.0, 0.0, 0.0)
     _, unk = v.lookup([(-0.8, 0.0), (-0.8, 0.6)], (1.0, 0.0, 0.0))
-    assert unk == [1], "身后 0.8 m 是 1 s 前机身占着的地方:算空;旁边那点没站过:未知"
+    assert unk == [1], "身后 0.8 m 是 1 s 前机身占着的地方:算空;旁边那点未站过:未知"
     t[0] = 5.0
     v.note_odom(1.0, 0.0, 0.0)
     _, unk = v.lookup([(-0.8, 0.0)], (1.0, 0.0, 0.0))
@@ -588,7 +588,7 @@ async def test_临时障碍过期了不进代价图(tmp_path):
     cell = (40, 80)                                  # (y = 4.0, x = 8.0) 那一格
     t.nav._temp = {cell: t.c.s() - 1.0}
     t.nav._invalidate()
-    assert not t.nav._costmap(0.0).hard[cell], "过期了:不算挡"
+    assert not t.nav._costmap(0.0).hard[cell], "已过期:不算挡"
     t.nav._temp = {cell: t.c.s() + 5.0}
     t.nav._invalidate()
     assert t.nav._costmap(0.0).hard[cell]
@@ -643,7 +643,7 @@ async def test_狗尾为前_后雷达没标定或没配避障_不许自己走(tm
     assert NavStatus.FAILED in t.status and abs(t.r.x - 1.5) < 0.05
     bare = 台子(tmp_path, head="tail")
     bare.nav.obstacles = None
-    assert bare.nav.travel() == 0, "没配避障:身后没人看"
+    assert bare.nav.travel() == 0, "未配置避障:身后无人看"
 
 
 async def test_狗尾为前_第二层单独也停得住_狗尾那头的许可(tmp_path):
@@ -666,7 +666,7 @@ async def test_半路调了头_导航桥自己停(tmp_path):
     assert t.r.x > 2.0
     t.r.inject_head("tail")                                   # 后雷达标过,狗尾为前本来也能走
     await t.一拍()
-    assert t.status[-1] is NavStatus.FAILED, "行进方向变了:这一趟不接着走"
+    assert t.status[-1] is NavStatus.FAILED, "行进方向变了:本次任务不继续执行"
 
 
 # ------------------------------------------------------------ 近障降速(W12)
@@ -738,7 +738,7 @@ async def test_W35_现场视野_人挡了十几秒走开_马上接着走_不等�
     del t.world.dyn["person"]
     await t.跑(6.0)
     assert NavStatus.FAILED not in t.status, t.nav.fail_reason
-    assert t.r.x > x0 + 0.5 or NavStatus.SUCCEED in t.status, "人走了 6 s 内接着走"
+    assert t.r.x > x0 + 0.5 or NavStatus.SUCCEED in t.status, "人走了 6 s 内继续执行"
     await t.跑(60.0)
     assert NavStatus.SUCCEED in t.status and not t.crashed
 
@@ -794,7 +794,7 @@ async def test_外审I2_前面是限速低到守不住的限速区_当禁行_不
     assert not t.nav._creep_clear(here), "前面 0.8 m 起是当禁行的限速区"
     assert t.nav._creep_clear(SimpleNamespace(x=3.0, y=4.0, yaw=math.pi)), "往另一头没有"
     await t.跑(30.0)
-    assert t.r.x < 3.0 + 0.05 and not t.nav._crept, "整趟也没往里挪"
+    assert t.r.x < 3.0 + 0.05 and not t.nav._crept, "整趟也未往里挪"
 
 
 async def test_S7_往前挪_按机身轮廓加σ查禁行区(tmp_path):
@@ -811,7 +811,7 @@ async def test_S7_往前挪_按机身轮廓加σ查禁行区(tmp_path):
     here = SimpleNamespace(x=3.0, y=4.0, yaw=0.0, sigma_xy_m=0.0)
     assert t.nav._creep_clear(here), "σ 0:侧面还差 6 cm,挪得过去"
     here.sigma_xy_m = 0.1
-    assert not t.nav._creep_clear(here), "σ 0.1:侧面可能已经蹭上了,不挪"
+    assert not t.nav._creep_clear(here), "σ 0.1:侧面可能已蹭上了,不挪"
     here.y = 3.0
     assert t.nav._creep_clear(here), "离远了照挪"
 
@@ -830,7 +830,7 @@ async def test_外审I2_前面是过得去的限速区_挪的时候不超它的�
             fast = max(fast, abs(t.r.speed[0]))
         if t.status and t.status[-1] is NavStatus.STANDBY:
             break
-    assert t.nav._crept or fast > 0, "这一趟确实挪了"
+    assert t.nav._crept or fast > 0, "本次任务确实挪了"
     assert 0 < fast <= 0.1 + 1e-6, f"挪的时候 {fast} m/s,限速 0.1"
 
 
@@ -866,7 +866,7 @@ async def test_W41_现场视野_箱子拿走了_几秒内接着走_不等满20�
     del t.world.dyn["box"]
     await t.跑(6.0)
     assert NavStatus.FAILED not in t.status, t.nav.fail_reason
-    assert t.nav._blocked_since is None, "6 s 内接着走了"
+    assert t.nav._blocked_since is None, "6 s 内继续执行了"
     await t.跑(60.0)
     assert NavStatus.SUCCEED in t.status and not t.crashed
 
@@ -1046,7 +1046,7 @@ async def test_工单21_终点就在身后06米_朝向一样_直接倒着退过�
             break
     assert not t.crashed
     assert NavStatus.SUCCEED in t.status, (t.status, t.nav.fail_reason)
-    assert max(yaws) < math.radians(30), "没掉头"
+    assert max(yaws) < math.radians(30), "未掉头"
 
 
 async def test_工单21_一段放弃了_临时障碍留着_下一段不从箱子上穿(tmp_path):
@@ -1059,7 +1059,7 @@ async def test_工单21_一段放弃了_临时障碍留着_下一段不从箱子
         await t.一拍()
     assert t.nav._temp
     await t.nav._enter_terminal(NavStatus.FAILED)
-    assert t.nav._temp, "放弃这一段:留着到自己过期"
+    assert t.nav._temp, "放弃此段:留着到自己过期"
 
 
 async def test_工单23_往前挪满13米会够到箱子_身后是墙_挪短一点(tmp_path):
@@ -1140,7 +1140,7 @@ async def test_工单28_发了速度命令狗不动_按被挡计时上报_到时
     t.r.tick = lambda dt: None                                # 下游吞了命令:狗不动
     await t.跑(40.0)
     assert NavStatus.FAILED in t.status, (t.status, t.nav.fail_reason)
-    assert "没动" in t.nav.fail_reason, t.nav.fail_reason
+    assert "未动" in t.nav.fail_reason, t.nav.fail_reason
     assert [k for k, _ in t.events if k == "nav_blocked"], t.events
 
 

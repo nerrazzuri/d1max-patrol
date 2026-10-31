@@ -41,8 +41,8 @@ def test_自检_少了_长度不对_权限太宽(tmp_path):
     Path(cfg["backup_key"]).write_bytes(b"short")
     Path(cfg["evidence_key"]).chmod(0o444)
     rows = {r["name"]: r["problem"] for r in keyvault.status(cfg)}
-    assert "没有" in rows["secrets"] and "长度不对" in rows["backup"] \
-        and "权限太宽" in rows["evidence"] and rows["jpush"] == ""
+    assert "没有" in rows["secrets"] and "长度错误" in rows["backup"] \
+        and "权限过宽" in rows["evidence"] and rows["jpush"] == ""
 
 
 def test_托管包_来回一样_文件0600_里面看不到密钥_口令不对解不开(tmp_path):
@@ -55,7 +55,7 @@ def test_托管包_来回一样_文件0600_里面看不到密钥_口令不对解
         raw = Path(cfg[f"{k}_key"]).read_bytes()
         assert raw not in blob and raw.hex().encode() not in blob
     assert b"ms-secret" not in blob
-    with pytest.raises(keyvault.KeyError_, match="口令不对"):
+    with pytest.raises(keyvault.KeyError_, match="密码错误"):
         keyvault.read_bundle(out, "wrong passphrase!")
     got = keyvault.read_bundle(out, PASS)
     assert got["backup"] == Path(cfg["backup_key"]).read_bytes()
@@ -130,7 +130,7 @@ def test_发行钥匙_换钥匙_新钥匙放进点d目录就认_删掉就是吊�
     relsign.keygen(tmp_path / "new.key", tmp_path / "new.pem")
     m = {"name": "r1", "version": "1", "content_sha256": "ab", "requires_mission_schema": 1}
     m["signature"] = relsign.sign(m, tmp_path / "new.key")
-    with pytest.raises(relsign.SignError, match="对不上"):
+    with pytest.raises(relsign.SignError, match="不匹配"):
         relsign.verify(m, etc / "release-pub.pem")
     (etc / "release-pub.d").mkdir()
     (etc / "release-pub.d" / "2026.pem").write_bytes((tmp_path / "new.pem").read_bytes())
@@ -157,7 +157,7 @@ def test_外审M1_配了推送却缺极光密钥_自检报毛病_托管包不打
     cfg = _钥(tmp_path / "etc")                                  # 配了推送
     Path(cfg["push"]["secret_file"]).unlink()
     rows = {r["name"]: r["problem"] for r in keyvault.status(cfg)}
-    assert "推送恢复不了" in rows["jpush"]
+    assert "推送无法恢复" in rows["jpush"]
     with pytest.raises(keyvault.KeyError_, match="jpush"):
         keyvault.export(cfg, tmp_path / "x", PASS)
     cfg2 = _钥(tmp_path / "etc2", jpush=False)                   # 没配推送:缺了不算

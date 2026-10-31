@@ -483,7 +483,7 @@ void main() {
     testWidgets('I1 这台机器人没装警笛：按钮说没有、按不了；老站点到了第 3 级也只说没确认', (t) async {
       final api = FakeApi('guard')..deterRows = [_session(outputs: ['speaker', 'strobe'])];
       await _alarm(t, api, _p1());
-      expect(_btn(t, siren), '这台机器人没有警笛');
+      expect(_btn(t, siren), '此机器人没有警笛');
       expect(_enabled(t, siren), isFalse);
       await t.pumpWidget(Container());
       final old = FakeApi('guard')..deterRows = [_session(level: 3, auto: false, active: null)];

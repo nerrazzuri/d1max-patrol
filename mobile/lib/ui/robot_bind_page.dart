@@ -708,10 +708,10 @@ class _RobotWifiPageState extends State<RobotWifiPage> with _StickerScan<RobotWi
             tone: _confirmed ? NwTone.success : NwTone.info,
             text: _confirmed
                 ? tr('Approved. The robot switches over and reverts if it can\'t reach the site within 5 minutes.',
-                    '已确认。机器人切换网络，5 分钟内连不上站点将自动恢复原网络。')
+                    '已确认。机器人切换网络，5 分钟内无法连接站点将自动恢复原网络。')
                 : ch['mode'] == 'trial'
                     ? tr("The robot can't reach the site and is trying “${ch['ssid']}”. Approve it on the robot page within 30 minutes of it coming back online, or it reverts.",
-                        '机器人当前连不上站点，正在尝试「${ch['ssid']}」。重新上线后请在 30 分钟内于机器人页确认，否则恢复原网络。')
+                        '机器人当前无法连接站点，正在尝试「${ch['ssid']}」。重新上线后请在 30 分钟内于机器人页确认，否则恢复原网络。')
                     : tr('Sent. It switches only after approval on the site.',
                         '已发送，站点确认后才切换。')),
         if (_result != null) ...[
@@ -723,7 +723,7 @@ class _RobotWifiPageState extends State<RobotWifiPage> with _StickerScan<RobotWi
                 'applied' => tr('Done: the robot is now on “${ch['ssid']}”.', '已切换：机器人当前连接「${ch['ssid']}」。'),
                 'rejected' => tr('Not approved on the site. The robot keeps its WiFi.', '站点未批准，机器人保持原 WiFi。'),
                 'unreachable' => tr("The robot couldn't reach the site on the new WiFi and reverted. Check the name and password.",
-                    '机器人用新 WiFi 连不上站点，已恢复原网络。请核对 WiFi 名称和密码。'),
+                    '机器人使用新 WiFi 无法连接站点，已恢复原网络。请核对 WiFi 名称和密码。'),
                 _ => tr('Not approved in time. The robot keeps its WiFi.', '未在时限内确认，机器人保持原 WiFi。'),
               }),
           if (_result != 'applied') ...[

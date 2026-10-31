@@ -68,8 +68,8 @@ def test_校验_改过一个字节_没给密钥_缺了CA_缺了一趟_都查得�
     raw[20] ^= 1
     p.write_bytes(bytes(raw))
     r = verify(dest, key)
-    assert not r.ok and any("对不上" in x for x in r.problems)
-    assert not verify(dest, None).ok, "加密的没给密钥:不算过"
+    assert not r.ok and any("不匹配" in x for x in r.problems)
+    assert not verify(dest, None).ok, "加密的未提供密钥:不算过"
     other = tmp_path / "other.key"
     other.write_bytes(os.urandom(32))
     assert not verify(dest, other).ok, "不是这把密钥"
@@ -233,7 +233,7 @@ def test_R2_装机脚本有恢复模式_不生成密钥_不init_不起服务():
     s = (Path(__file__).resolve().parents[3] / "deploy" / "site" / "install-site.sh").read_text()
     rec = s[s.index('if [[ $RECOVER -eq 1 ]]; then'):]
     head = rec[:rec.index("fi")]
-    assert "放回来(不会生成新的)" in head and "exit 2" in head, "密钥没放回就停,不生成"
+    assert "放回来(不会生成新的)" in head and "exit 2" in head, "密钥未放回就停,不生成"
     gen = s.index('head -c 32 /dev/urandom')
     assert s.index("恢复要先把离线另存的") < gen, "先查密钥、后才会走到生成那一步"
     assert '恢复模式:不 init' in s

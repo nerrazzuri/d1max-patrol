@@ -736,7 +736,7 @@ class _SchedulePageState extends State<SchedulePage> {
           TodayPatrolList(api: widget.api, items: _today, onChanged: _load, offsetMin: _offsetMin)
         else ...[
           if (rows.isEmpty)
-            Text(tr('No schedule yet.', '还没有日程。'), style: NwText.bodyMedium.copyWith(color: c.textSecondary)),
+            Text(tr('No schedule yet.', '暂无日程。'), style: NwText.bodyMedium.copyWith(color: c.textSecondary)),
           for (final e in rows)
             Padding(
               padding: const EdgeInsets.only(bottom: Nw.s8),

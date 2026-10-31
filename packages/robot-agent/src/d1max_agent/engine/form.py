@@ -45,7 +45,7 @@ class Form:
     async def describe_upload(self) -> str:
         if self.upload is None:
             raise UploadTargetError(
-                f"形态 {self.name!r} 没有上传目标 —— 这不是故障,是这一档的定义")
+                f"形态 {self.name!r} 没有上传目标 —— 这不是故障,是此项的定义")
         return await self.upload.describe()
 
 

@@ -184,7 +184,7 @@ void main() {
       // 握手：指纹对不上
       final tls = await fails(SiteClient(site.url, 'cd' * 32));
       expect(tls, isA<SiteError>());
-      expect('$tls', contains('指纹对不上'));
+      expect('$tls', contains('指纹不匹配'));
       // 超时：站点一直不回
       site.hang.add('/api/support-bundle');
       final slow = await fails(SiteClient(site.url, testCertFingerprint(), timeout: const Duration(milliseconds: 300)));
@@ -208,7 +208,7 @@ void main() {
     // 连不上：站点关了
     final gone = await fails(SiteClient(url, testCertFingerprint()));
     expect(gone, isA<SiteError>());
-    expect('$gone', contains('连不上站点'));
+    expect('$gone', contains('无法连接站点'));
   });
 
   test('真 HTTPS：告警键整个编码成一段，列全部带 all=1', () async {

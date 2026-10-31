@@ -71,7 +71,7 @@ def test_掩码_P4_大小要跟栅格一样_坏的不认():
                 b"P4\n60\n", b""):
         with pytest.raises(mp.PreviewError):
             mp.parse_seen(bad, 60, 40)
-    with pytest.raises(mp.PreviewError, match="不一样大"):
+    with pytest.raises(mp.PreviewError, match="不同大"):
         mp.parse_seen(_pbm(seen), 61, 40)
     assert mp.seen_limit(60, 40) == len(b"P4\n60 40\n") + 8 * 40 + 16
 
@@ -97,7 +97,7 @@ def test_预览_看到过的是浅灰_抹掉的是没建图_范围按有内容�
     erase[:, 25:] = True                                 # 屋子右边一截(含右墙)+ 外面那一片全抹掉
     png, info = mp.render(_pgm(g), META, seen=seen, erase=erase)
     px = _gray_rows(png)
-    assert px[10, 27] == 205 and px[10, 29] == 205 and px[10, 40] == 205, "抹掉的:没建图,墙也不画"
+    assert px[10, 27] == 205 and px[10, 29] == 205 and px[10, 40] == 205, "抹掉的:未建图,墙也不画"
     assert px[10, 10] == 254 and px[5, 10] == 0
     assert "seen" not in info, "看到过的全被抹掉了:不报"
     assert info["content_bbox"] == [5.0, 5.0, 25.0, 25.0]
@@ -126,7 +126,7 @@ def test_平面图_看到过的是淡淡的地面_抹掉的透明_墙也不画()
     gray, alpha = px[_at(s, 12, 40)]
     assert gray == 255 and abs(int(alpha) - round(mp.PLAN_SEEN_ALPHA * 255)) <= 2, (gray, alpha)
     assert tuple(px[_at(s, 15, 15)]) == (255, 255), "地面照旧不透明的白"
-    assert px[_at(s, 32, 40)][1] == 0, "没建图的照旧透明"
+    assert px[_at(s, 32, 40)][1] == 0, "未建图的照旧透明"
     gray, alpha = px[_at(s, 5, 15)]
     assert alpha == 255 and gray <= 40, "墙照旧黑"
     erase = np.zeros(g.shape, bool)
@@ -205,7 +205,7 @@ def test_接口_预览带看到过和范围_抹掉区抹掉预览和平面图_�
     base = f"/api/maps/{MAP[0]}/40"
     code, d = s.req("GET", base + "/preview", token=gina)
     assert code == 200 and d["seen"] is True and d["content_bbox"] == [5.0, 5.0, 50.0, 25.0], d
-    assert d["plan"]["url"] == base + "/plan.png", "没有抹掉区:地址跟原来一样"
+    assert d["plan"]["url"] == base + "/plan.png", "没有抹掉区:地址与原来一样"
     code, body = _raw(s, d["plan"]["url"], gina)
     px, sc = _png_ga(body), d["plan"]["scale"]
     assert code == 200 and 0 < px[_at(sc, 12, 40)][1] < 255, "看到过的:淡淡的"

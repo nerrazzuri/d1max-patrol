@@ -133,7 +133,7 @@ def write_payload(*, has: bool, by: str, now_ms: int,
                   path: Path | str | None = None, confirm: str) -> Payload:
     """记下上装属性。**确认语对不上就一个字节都不写。**"""
     if confirm != CONFIRM_PHRASE:
-        raise ValueError(f"要改这个属性得原样打一遍确认语: {CONFIRM_PHRASE}")
+        raise ValueError(f"要改此属性得原样打一遍确认语: {CONFIRM_PHRASE}")
     target = payload_path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
     payload = Payload(has=bool(has), recorded=True, at_ms=int(now_ms),
@@ -169,7 +169,7 @@ class Identity:
     @property
     def provisional(self) -> bool:
         """这个 SN 是兜底来的吗?是的话别拿它当长期主键。"""
-        return self.source in ("mac", "没查到")
+        return self.source in ("mac", "未检查到")
 
     @property
     def hand_written(self) -> bool:
@@ -285,7 +285,7 @@ def resolve(sn: str | None = None, nickname: str | None = None, *,
         if macs:
             value, source = "mac:" + macs[0].replace(":", ""), "mac"
         else:
-            value, source = UNKNOWN_SN, "没查到"
+            value, source = UNKNOWN_SN, "未检查到"
 
     return Identity(sn=value, source=source, macs=macs,
                     nickname=(nickname or "").strip(),

@@ -45,7 +45,7 @@ class 假桥:
     async def request(self, make, timeout_s):
         from d1max_agent.bridge_localizer import LocalizerUnavailable
         if self.down:
-            raise LocalizerUnavailable("定位器没连上")
+            raise LocalizerUnavailable("定位器未连接")
         req = len(self.sent) + 1
         msg = make(req)
         self.sent.append(msg)
@@ -102,14 +102,14 @@ async def test_没连上_在换图_还没位置_都不可信_换好先验给了�
     _钟[0] = c
     loc = BridgeLocalizer(monotonic=c)
     loc.link = link
-    assert "没连上" in loc.why_not(True)
+    assert "未连接" in loc.why_not(True)
     loc.on_map(M, "/maps/estate-1/7")
     loc.on_connect()
     assert "换图" in loc.why_not(True), "换先验回 ok 之前"
     await loc.prior_task
     assert link.sent == [SetPrior(req=1, map_id="estate-1", map_version="7",
                                   dir="/maps/estate-1/7")]
-    assert "还没给出位置" in loc.why_not(True)
+    assert "还未提供出位置" in loc.why_not(True)
     loc.update((0.0, 0.0, 0.0), True)
     loc.on_pose(_位姿(3.0, 4.0, 0.5))
     # 第一帧不直接信(内审应修 6):初始化错了还报 tracking 的,不然抓不住。
@@ -126,13 +126,13 @@ async def test_没连上_在换图_还没位置_都不可信_换好先验给了�
 
 async def test_换不了先验_说清楚():
     c, link = 钟(), 假桥()
-    link.answer["set_prior"] = (False, "没有这张图的点云")
+    link.answer["set_prior"] = (False, "没有此地图的点云")
     loc = BridgeLocalizer(monotonic=c)
     loc.link = link
     loc.on_map(M, "")
     loc.on_connect()
     await loc.prior_task
-    assert "没有这张图的点云" in loc.why_not(True)
+    assert "没有此地图的点云" in loc.why_not(True)
 
 
 async def test_换先验没回_再发_回了就好():
@@ -160,21 +160,21 @@ async def test_两次定位之间用里程推算_有上限():
     assert loc.ok(True) and loc.estimate((0.8, 0.0, 0.0)).source == "dead_reckoning"
     assert loc.sigma_xy > 0.1, "推算的时候 σ 往上涨"
     loc.update((0.8 + DR_MAX_M, 0.0, 0.0), True)         # 推算超过 1 m
-    assert "没来位姿" in loc.why_not(True)
+    assert "未发送位姿" in loc.why_not(True)
 
 
 async def test_推算有时间上限_里程不新鲜不推算():
     c, link, loc = await _就绪()
     _稳(loc, 1.0, 1.0)
     c.t += 2.1
-    assert "没来位姿" in loc.why_not(True), "2 s 没来:不再推"
+    assert "未发送位姿" in loc.why_not(True), "2 s 未来:不再推"
     loc.on_pose(_位姿(1.0, 1.0))
     loc.update((0.0, 0.0, 0.0), False)                   # 里程断了
     c.t += FRESH_S - 0.1
     assert loc.ok(False), "0.5 s 内那一帧照用"
     assert loc.estimate((5.0, 5.0, 0.0)).x == 1.0, "里程不新鲜:不拿它推"
     c.t += 0.2
-    assert "没来位姿" in loc.why_not(False)
+    assert "未发送位姿" in loc.why_not(False)
 
 
 async def test_调用方说里程不新鲜_也不推算():
@@ -184,7 +184,7 @@ async def test_调用方说里程不新鲜_也不推算():
     c.t += 0.8
     loc.update((0.1, 0.0, 0.0), True)
     assert loc.ok(True)
-    assert "没来位姿" in loc.why_not(False)
+    assert "未发送位姿" in loc.why_not(False)
 
 
 async def test_里程一拍只转了个大角度_也换段_不再推算():
@@ -192,7 +192,7 @@ async def test_里程一拍只转了个大角度_也换段_不再推算():
     _稳(loc, 1.0, 1.0)
     c.t += 0.7
     loc.update((0.1, 0.0, 1.5), True)                    # 挪得不多、一拍转了 1.5 rad:里程跳了
-    assert "没来位姿" in loc.why_not(True)
+    assert "未发送位姿" in loc.why_not(True)
 
 
 async def test_里程一拍跳了_不再推算():
@@ -200,7 +200,7 @@ async def test_里程一拍跳了_不再推算():
     _稳(loc, 1.0, 1.0)
     c.t += 0.7
     loc.update((3.0, 0.0, 0.0), True)                    # 一拍 3 m:里程跳了
-    assert "没来位姿" in loc.why_not(True)
+    assert "未发送位姿" in loc.why_not(True)
 
 
 async def test_σ过线_别的图_都不可信():
@@ -283,7 +283,7 @@ async def test_跟里程对不上也当跳_里程不新鲜时修正量给不出(
     _稳(loc, 0.0, 0.0)
     loc.on_corrected = lambda d, human: got.append(d)
     loc.on_pose(_位姿(1.0, 0.0))                          # 定位器挪了 1 m,里程没动
-    assert "对不上" in loc.why_not(True)
+    assert "不匹配" in loc.why_not(True)
     loc.update((0.0, 0.0, 0.0), False)                   # 这期间里程断了
     loc.update((0.0, 0.0, 0.0), True)
     for _ in range(SETTLE_FIXES):
@@ -329,14 +329,14 @@ async def test_原地转身_定位器滑了一米_照样当跳():
     c, link, loc = await _就绪()
     _稳(loc, 0.0, 0.0, 0.0)
     _原地转(c, loc, 10, 1.0, lambda i: (0.0, 0.0) if i < 10 else (0.9, 0.0))
-    assert "对不上" in loc.why_not(True)
+    assert "不匹配" in loc.why_not(True)
 
 
 async def test_原地转很多圈_放宽有上限():
     c, link, loc = await _就绪()
     _稳(loc, 0.0, 0.0, 0.0)
     _原地转(c, loc, 40, 3 * math.pi, lambda i: (0.0, 0.0) if i < 40 else (0.9, 0.0))
-    assert "对不上" in loc.why_not(True)
+    assert "不匹配" in loc.why_not(True)
 
 
 async def test_小的出入不算跳():
@@ -360,7 +360,7 @@ async def test_走的一样远_方向不对_也当跳():
         c.t += 0.1
         loc.update((0.1 * i, 0.0, 0.0), True)
         loc.on_pose(_位姿(0.0, 0.1 * i))
-    assert "对不上" in loc.why_not(True)
+    assert "不匹配" in loc.why_not(True)
 
 
 async def test_里程朝向正常地慢慢漂_走得再远也不当跳():
@@ -392,7 +392,7 @@ async def test_定位器冻住_一直报同一个位置_狗在走_抓得住也�
             bad = bad or i
         if i >= 8:
             assert not loc.ok(True), (i, loc.why_not(True))
-    assert bad <= 4 and "对不上" in loc.why_not(True)
+    assert bad <= 4 and "不匹配" in loc.why_not(True)
 
 
 @pytest.mark.parametrize("per_frame", [0.25, 0.1])
@@ -503,11 +503,11 @@ async def test_定位器说丢了_断了_都不可信_连回来重新换先验�
     loc.on_state(State(seq=100, state="tracking"))
     assert loc.ok(True)
     loc.on_disconnect()
-    assert "没连上" in loc.why_not(True)
+    assert "未连接" in loc.why_not(True)
     loc.on_connect()
     await loc.prior_task
     assert len([m for m in link.sent if isinstance(m, SetPrior)]) == 2
-    assert "还没给出位置" in loc.why_not(True), "断过:以前那一帧不算"
+    assert "还未提供出位置" in loc.why_not(True), "断过:以前那一帧不算"
 
 
 async def test_断了连回来_第一帧要稳下来_修正量按断之前那一帧算():
@@ -538,7 +538,7 @@ async def test_换图_旧图的位置作废_新图换好先验给了位置稳下
     assert "换图" in loc.why_not(True)
     await loc.prior_task
     assert link.sent[-1].map_version == "8"
-    assert "还没给出位置" in loc.why_not(True), "换好先验、新图上还没来帧:旧图的位置不能当新图的"
+    assert "还未提供出位置" in loc.why_not(True), "换好先验、新图上尚未来帧:旧图的位置不能当新图的"
     assert loc.estimate((0.0, 0.0, 0.0)) is None
     loc.on_pose(_位姿(1.0, 1.0))                          # 还是旧图的
     assert "别的图" in loc.why_not(True)
@@ -559,7 +559,7 @@ async def test_重定位_不在线_没回_拒了(how, want):
     else:
         link.answer["relocalize"] = (False, "初值离地图太远")
     assert (await loc.relocalize(M, (1.0, 2.0, 0.3))).startswith(want)
-    assert loc.ok(True), "没成:不留着「在重定位」"
+    assert loc.ok(True), "失败:不留着「在重定位」"
 
 
 async def test_重定位_发初值_收下之后下一帧按跳变稳下来():
@@ -568,7 +568,7 @@ async def test_重定位_发初值_收下之后下一帧按跳变稳下来():
     _稳(loc, 0.0, 0.0)
     loc.on_corrected = lambda d, human: got.append((d, human))
     assert await loc.relocalize(M, (1.0, 2.0, 0.3)) == ""
-    assert "重定位" in loc.why_not(True), "收下了、还没回出那一帧:不拿旧位置走"
+    assert "重定位" in loc.why_not(True), "收下了、尚未回出那一帧:不拿旧位置走"
     loc.on_pose(_位姿(0.0, 0.0))                          # 定位器还在报旧的
     assert not loc.ok(True)
     r = link.sent[-1]
@@ -677,7 +677,7 @@ async def test_人给了位置_定位器乱跳一阵稳在8米外_里程没动_�
         loc.on_pose(_位姿(8.0, 0.0, -2.8))
     assert not loc.ok(True)
     assert "请重新设位置" in loc.why_not(True) and "人给的位置" in loc.why_not(True)
-    assert got == [], "没稳下来:不给引擎修正量"
+    assert got == [], "未稳下来:不给引擎修正量"
     assert not loc.busy, "卡在这儿不算「在等稳定」:RTK 核对还能来救"
 
 
@@ -881,13 +881,13 @@ async def test_外审I1_等回执的时候来的是普通帧_不许把刚给的�
     assert not loc.ok(True) and "人给的位置" in loc.why_not(True)
 
 
-@pytest.mark.parametrize("坏法", ["拒了", "没回", "没连上"])
+@pytest.mark.parametrize("坏法", ["拒了", "未返回", "未连接"])
 async def test_外审I1_重定位没成_锚退回原来那个(坏法):
     c, link, loc = await _就绪()
     _稳(loc, 0.0, 0.0)
     if 坏法 == "拒了":
         link.answer["relocalize"] = (False, "初值离地图太远")
-    elif 坏法 == "没回":
+    elif 坏法 == "未返回":
         link.hang = 1
     else:
         link.down = True
@@ -1107,7 +1107,7 @@ async def test_S1_稳下来那一帧没配上里程_等配上了再核_不直接
     c.t += 1.0                                           # 这一秒里程没来新样本:帧配不上里程
     for _ in range(SETTLE_FIXES + 1):
         loc.on_pose(_位姿(8.0, 0.0))
-    assert not loc.ok(True) and "没配上里程" in loc.why_not(True)
+    assert not loc.ok(True) and "未匹配里程" in loc.why_not(True)
     assert "请重新设位置" not in loc.why_not(True), "一会儿就好:不叫人"
     loc.update((0.0, 0.0, 0.0), True)
     loc.on_pose(_位姿(8.0, 0.0))
@@ -1251,7 +1251,7 @@ async def test_S1_换图把记下的锚删掉_写不进盘不出错(tmp_path):
     assert keep.is_file()
     loc.on_map(("estate-1", "8"), "/maps/estate-1/8")
     assert not keep.exists(), "别的图:记下的那份作废"
-    loc2, _ = _代理(c, tmp_path / "没有这个目录" / "loc_anchor.json")
+    loc2, _ = _代理(c, tmp_path / "没有此目录" / "loc_anchor.json")
     await _接上(loc2, (0.0, 0.0, 0.0))
     _稳(loc2, 1.0, 1.0)                                   # 写不进去只记日志
 
@@ -1355,4 +1355,4 @@ async def test_工单11_上报的定位带原始ICP质量():
     loc.on_pose(Pose(**{**p.__dict__, "icp_quality": 0.937}))
     assert loc.to_wire(True)["icp_quality"] == 0.94
     loc.on_pose(_位姿(3.0, 4.0))
-    assert "icp_quality" not in loc.to_wire(True), "这一帧没报(老定位器):不带"
+    assert "icp_quality" not in loc.to_wire(True), "此帧未上报(老定位器):不带"

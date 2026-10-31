@@ -63,7 +63,7 @@ def import_bundle(db: SiteDB, bundle_dir: Path, *, imported_by: str,
     try:
         m = verify_bundle(bundle_dir)
     except (BundleError, OSError) as exc:          # OSError:读不了(权限等),也是 409 不是 500
-        raise CatalogError(f"任务包校验没过: {exc}") from exc
+        raise CatalogError(f"任务包校验未通过: {exc}") from exc
     missions: dict[str, Mission] = {}
     mdir = bundle_dir / MISSIONS_DIR
     for p in sorted(mdir.glob("*.json")) if mdir.is_dir() else ():
@@ -88,7 +88,7 @@ def import_bundle(db: SiteDB, bundle_dir: Path, *, imported_by: str,
         row = c.execute("SELECT max(version) AS v FROM bundles WHERE bundle_id=?",
                         (m.bundle_id,)).fetchone()
         if row["v"] is not None and row["v"] >= m.version:
-            raise CatalogError(f"{m.bundle_id} 已经有 v{row['v']},版本号只许往上走"
+            raise CatalogError(f"{m.bundle_id} 已有 v{row['v']},版本号只许往上走"
                                f"(这份是 v{m.version})")
         rep = import_into_store(c, missions, schedule, by=imported_by, now=now_ms,
                                 source=f"bundle {m.bundle_id} v{m.version}",
@@ -116,7 +116,7 @@ def import_summary(got: dict[str, Any]) -> str:
     """导入结果给人看的一段话(命令行、接口都用)。"""
     def part(label: str, d: dict[str, list[str]]) -> str:
         bits = [f"{k} {', '.join(v)}" for k, v in
-                (("新加", d["added"]), ("替换", d["replaced"]), ("没变", d["unchanged"])) if v]
+                (("新加", d["added"]), ("替换", d["replaced"]), ("未变", d["unchanged"])) if v]
         return f"{label} " + (";".join(bits) if bits else "无")
     out = [f"导入了 {got['bundle_id']} v{got['version']}", part("路线", got["routes"]),
            part("排程", got["schedules"])]

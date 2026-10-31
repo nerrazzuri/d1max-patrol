@@ -102,7 +102,7 @@ def test_接口_看改确认_权限_404(站点):
     code, d = s.req("POST", ZP, {"zones": [POND], "base_revision": 0}, token=alice)
     assert code == 200 and d["revision"] == 1 and d["tighten"] is True, d
     code, d = s.req("POST", ZP, {"zones": [], "base_revision": 0}, token=alice)
-    assert code == 409 and "改过" in d["error"]
+    assert code == 409 and "已被修改" in d["error"]
     assert s.req("POST", ZP, {"zones": [{"id": "x"}], "base_revision": 1}, token=alice)[0] == 400
     assert s.req("POST", ZP + "/confirm", {"revision": 1}, token=alice)[0] == 400
     assert s.req("POST", ZP + "/confirm", {"revision": 0, "confirm": True}, token=alice)[0] == 409
@@ -180,10 +180,10 @@ def test_派单门槛_修订对不上拒_补发之后放行(站点):
     # 站点这头改了、没发出去(直接写库):狗上还是第 0 版
     s.disp.zones.put(MAP[0], MAP[1], [SLOW], base_revision=0, by="alice")
     code, d = s.req("POST", "/api/robots/A/goto", {"target": target(1.0)}, token=alice)
-    assert code == 409 and "安全确认" in d["error"], "改过之后没重新确认也不派"
+    assert code == 409 and "安全确认" in d["error"], "改过之后未重新确认也不派"
     s.disp.zones.confirm(MAP[0], MAP[1], revision=1, by="alice")
     code, d = s.req("POST", "/api/robots/A/goto", {"target": target(1.0)}, token=alice)
-    assert code == 409 and "还没同步" in d["error"], (code, d)
+    assert code == 409 and "尚未同步" in d["error"], (code, d)
     sent = s.loop.call(lambda: s.disp.sync_zones())
     assert sent == ["A"]
     assert s.loop.call(lambda: s.disp.sync_zones()) == [], "同一版 30 s 内不重发"
@@ -271,12 +271,12 @@ def test_避障用不了_不派会自己走的_遥控照常(站点):
     s.disp.zones.confirm(MAP[0], MAP[1], revision=0, by="alice")
     assert s.disp.dispatchable("A", "goto") == ""
     tasks = s.disp.clients["A"].capabilities.tasks
-    for st, words in (("lost", "感知断了"), ("extrinsic_bad", "外参自检没过"),
+    for st, words in (("lost", "感知已断开"), ("extrinsic_bad", "外参自检未通过"),
                       ("initializing", "还在自检")):
         tasks["obstacles"] = {"state": st, "rear": False, "reason": "雷达离地 2.9 m"}
         why = s.disp.dispatchable("A", "goto")
-        assert "避障用不了" in why and words in why and "2.9" in why, why
-        assert "避障用不了" in s.disp.dispatchable("A", "patrol")
+        assert "避障不可用" in why and words in why and "2.9" in why, why
+        assert "避障不可用" in s.disp.dispatchable("A", "patrol")
         assert s.disp.dispatchable("A", "teleop") == ""
     tasks["obstacles"] = {"state": "stale", "rear": True}
     assert s.disp.dispatchable("A", "goto") == "", "不新鲜是一两秒的事:机器人那头原地等"
@@ -291,7 +291,7 @@ def test_头尾调过来了_不派会自己走的_遥控照常(站点):
     s.disp.zones.confirm(MAP[0], MAP[1], revision=0, by="alice")
     assert s.disp.dispatchable("A", "goto") == ""
     tasks = s.disp.clients["A"].capabilities.tasks
-    for d, words in (("tail", "机器人尾为前"), ("unknown", "不知道")):
+    for d, words in (("tail", "机器人尾为前"), ("unknown", "未知")):
         for h in ({"direction": d}, {"direction": d, "autonomy": False}):   # 老狗、新狗
             tasks["head"] = h
             why = s.disp.dispatchable("A", "goto")
@@ -333,7 +333,7 @@ def test_抹掉区_加了免确认_删了要确认(tmp_path):
 def test_收紧免确认_放宽要确认_又紧又松算放宽(tmp_path):
     z, t = _z(tmp_path)
     z.put("m", "1", [POND], base_revision=0, by="alice")
-    assert not z.confirmed_current("m", "1"), "从没确认过的:收紧也不算确认(那一句还没人说过)"
+    assert not z.confirmed_current("m", "1"), "从未确认过的:收紧也不算确认(那一句还无人说过)"
     z.confirm("m", "1", revision=1, by="alice")
     t[0] = 2000
     # 收紧:加硬禁区标记、加一个限速区、调低限速、放大 —— 改的人就算确认了
@@ -364,7 +364,7 @@ def test_临时区_到期站点删_带确认_不带确认的照样不带(tmp_pat
     z.confirm("m", "1", revision=0, by="alice")
     z.put("m", "1", [POND, SLOW | {"until_ms": 70_000}], base_revision=0, by="alice")
     assert z.confirmed_current("m", "1"), "加一个临时限速区:收紧"
-    assert z.expire() == [], "还没到期"
+    assert z.expire() == [], "尚未到期"
     t[0] = 70_000
     got = z.expire()
     assert [(s.map_id, s.revision, [x.id for x in s.zones]) for s in got] == [("m", 2, ["pond"])]
@@ -387,7 +387,7 @@ def test_临时区_到期站点删_带确认_不带确认的照样不带(tmp_pat
 
 def test_临时区_到期时间要在以后_按站点的钟_给时长也行(tmp_path):
     z, t = _z(tmp_path, t0=10_000)
-    with pytest.raises(ZonesError, match="已经过了"):
+    with pytest.raises(ZonesError, match="已过了"):
         z.put("m", "1", [POND | {"until_ms": 10_000}], base_revision=0, by="a")
     with pytest.raises(ZonesError, match="太远"):
         z.put("m", "1", [POND | {"until_ms": 10_000 + 400 * 86_400_000}], base_revision=0, by="a")
@@ -428,7 +428,7 @@ def test_从56升上来_当前确认过的记下确认过的那一份_没确认�
     z.put("m", "1", [POND, SLOW], base_revision=1, by="b")
     assert z.confirmed_current("m", "1"), "确认过的那一份就是升上来时的当前一版:收紧照样免确认"
     z.put("m", "2", [POND, SLOW], base_revision=2, by="b")
-    assert not z.confirmed_current("m", "2"), "那一份不知道:往保守那边,要人确认"
+    assert not z.confirmed_current("m", "2"), "那一份未知:往保守那边,要人确认"
 
 
 # ---------------------------------- R2:新版本把上一版的区域、待命点、拦截点带过来给人核

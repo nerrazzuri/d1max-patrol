@@ -62,7 +62,7 @@ class ReleaseCatalog:
             raise ReleaseCatalogError(f"包里没有代理的启动脚本 {AGENT_START}(老服务那一代的包)")
         got = tree_sha256(pkg, skip=MANIFEST)
         if got != raw.get("content_sha256"):
-            raise ReleaseCatalogError(f"包的指纹对不上:自述 {raw.get('content_sha256')},算出 {got}")
+            raise ReleaseCatalogError(f"包的指纹不匹配:自述 {raw.get('content_sha256')},算出 {got}")
         from d1max_contract import relsign
         # A 阶段外审 I3:配了公钥位置(``pubkey`` 不是 None)就**必须**验;一把可信钥匙都没有(没生成、
         # 删光了)= 谁签的都不认,不是「不验」。不验签只有显式的开发开关(``site.json`` 的
@@ -83,13 +83,13 @@ class ReleaseCatalog:
         if not isinstance(lv, int) or isinstance(lv, bool):
             raise ReleaseCatalogError(f"{MANIFEST} 的 compat_level 要是整数")
         if lv < SITE_MIN_AGENT_LEVEL:
-            raise ReleaseCatalogError(f"{name} 的代理太老(兼容级别 {lv},站点要 "
-                                      f"≥{SITE_MIN_AGENT_LEVEL}):发下去配不上这个站点,不登记")
+            raise ReleaseCatalogError(f"{name} 的代理版本过旧(兼容级别 {lv},站点要 "
+                                      f"≥{SITE_MIN_AGENT_LEVEL}):发下去配不上此站点,不登记")
         if lv > SITE_MAX_AGENT_LEVEL:
             raise ReleaseCatalogError(f"{name} 的代理比站点新(兼容级别 {lv},站点只认到 "
                                       f"{SITE_MAX_AGENT_LEVEL}):先升站点,再登记它")
         if self.db.query("SELECT 1 FROM releases WHERE name=?", (name,)):
-            raise ReleaseCatalogError(f"{name} 已经登记过了")
+            raise ReleaseCatalogError(f"{name} 已登记")
         out = self.root / f"{name}.tar.gz"
         tmp = out.with_name(out.name + ".tmp")
         with tarfile.open(tmp, "w:gz") as tf:
@@ -114,14 +114,14 @@ class ReleaseCatalog:
     def get(self, name: str) -> ReleaseRef:
         rows = self.db.query("SELECT name, sha256, size FROM releases WHERE name=?", (name,))
         if not rows:
-            raise ReleaseCatalogError(f"没有这一版:{name}")
+            raise ReleaseCatalogError(f"版本不存在:{name}")
         return ReleaseRef(name=rows[0]["name"], sha256=rows[0]["sha256"], size=rows[0]["size"])
 
     def requires_mission_schema(self, name: str) -> int:
         """这一版要的任务包 schema(W00c6d 升级前检查)。"""
         rows = self.db.query("SELECT requires_mission_schema FROM releases WHERE name=?", (name,))
         if not rows:
-            raise ReleaseCatalogError(f"没有这一版:{name}")
+            raise ReleaseCatalogError(f"版本不存在:{name}")
         return int(rows[0]["requires_mission_schema"])
 
     def file_path(self, name: str) -> Path:

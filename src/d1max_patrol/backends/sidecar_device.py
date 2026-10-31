@@ -102,7 +102,7 @@ def read_token(path: str | os.PathLike[str]) -> str:
         raw = p.read_bytes()[: _MAX_TOKEN_BYTES + 1]
     except OSError as exc:
         raise DeviceBackendError(
-            f"读不了旁路进程的令牌 {p}: {exc} —— 旁路进程起来时写它(patrol_agent --token-file,"
+            f"无法读取旁路进程的令牌 {p}: {exc} —— 旁路进程起来时写它(patrol_agent --token-file,"
             f"缺省 {DEFAULT_TOKEN_FILE});要用起旁路进程的那个账号读,或者把路径指过去") from exc
     token = raw.decode("ascii", "replace").strip()
     if not token or len(raw) > _MAX_TOKEN_BYTES:
@@ -251,7 +251,7 @@ class SidecarDeviceBackend(DeviceBackend):
                 self._host, self._port)
         except OSError as exc:
             raise DeviceBackendError(
-                f"连不上运控旁路进程 {self._host}:{self._port}: {exc}。"
+                f"无法连接运控旁路进程 {self._host}:{self._port}: {exc}。"
                 f"它起来了吗? 见 docs/真机联调手册.md 的 S1"
             ) from exc
 
@@ -262,7 +262,7 @@ class SidecarDeviceBackend(DeviceBackend):
             raise DeviceBackendError("旁路进程连上了但不吐 hello 帧") from exc
         except (AgentProtocolError, OSError) as exc:
             await self._teardown()
-            raise DeviceBackendError(f"旁路进程的 hello 帧读不了: {exc}") from exc
+            raise DeviceBackendError(f"旁路进程的 hello 帧无法读取: {exc}") from exc
 
         if not isinstance(hello, Hello):
             await self._teardown()
@@ -270,7 +270,7 @@ class SidecarDeviceBackend(DeviceBackend):
         if not MIN_PROTO_VERSION <= hello.proto <= PROTO_VERSION:
             await self._teardown()
             raise DeviceBackendError(
-                f"协议版本对不上: 旁路进程 {hello.proto},"
+                f"协议版本不匹配: 旁路进程 {hello.proto},"
                 f"本端认 {MIN_PROTO_VERSION}–{PROTO_VERSION}。"
                 f"重编 motion/patrol_agent 再来"
             )
@@ -299,7 +299,7 @@ class SidecarDeviceBackend(DeviceBackend):
             await self._command("auth", timeout_s=URGENT_ACK_TIMEOUT_S, token=token)
         except DeviceBackendError as exc:
             await self.close()
-            raise DeviceBackendError(f"旁路进程认证没过: {exc}") from exc
+            raise DeviceBackendError(f"旁路进程认证未通过: {exc}") from exc
         self._authorized = True
 
     async def close(self) -> None:
@@ -349,7 +349,7 @@ class SidecarDeviceBackend(DeviceBackend):
         except asyncio.CancelledError:
             raise
         except (OSError, ConnectionError) as exc:
-            self._fail_pending(DeviceBackendError(f"与旁路进程的连接断了: {exc}"))
+            self._fail_pending(DeviceBackendError(f"与旁路进程的连接已断开: {exc}"))
             self._held = False
             self.emit(ControlLostEvent(reason=f"旁路进程连接断开: {exc}"))
 
@@ -408,7 +408,7 @@ class SidecarDeviceBackend(DeviceBackend):
     async def _command(self, cmd: str, *, timeout_s: float | None = None,
                        **fields: Any) -> Ack:
         if not self.connected:
-            raise DeviceBackendError(f"没连上旁路进程,发不了 {cmd}")
+            raise DeviceBackendError(f"未连接旁路进程,发无法完成 {cmd}")
         assert self._writer is not None
         self._next_id += 1
         cmd_id = self._next_id
@@ -419,7 +419,7 @@ class SidecarDeviceBackend(DeviceBackend):
             await self._writer.drain()
         except (OSError, ConnectionError) as exc:
             self._pending.pop(cmd_id, None)
-            raise DeviceBackendError(f"{cmd} 没发出去: {exc}") from exc
+            raise DeviceBackendError(f"{cmd} 未发出去: {exc}") from exc
 
         limit = self._ack_timeout_s if timeout_s is None else min(
             timeout_s, self._ack_timeout_s)
@@ -435,7 +435,7 @@ class SidecarDeviceBackend(DeviceBackend):
     async def _require_control(self, action: str) -> None:
         if not self._held:
             raise DeviceBackendError(
-                f"旁路进程没握着控制权,不能 {action}。"
+                f"旁路进程未握着控制权,不能 {action}。"
                 f"多半是被上装占了(清单 #47),要重启 RK3588 重抢开机窗口"
             )
 
@@ -449,7 +449,7 @@ class SidecarDeviceBackend(DeviceBackend):
         就直接抛,让上层知道今天走不了运控这条路。
         """
         if not self.connected:
-            raise DeviceBackendError("还没连上旁路进程")
+            raise DeviceBackendError("还未连接旁路进程")
         ack = await self._command("hold")
         self._held = True
         del ack
@@ -595,7 +595,7 @@ class SidecarDeviceBackend(DeviceBackend):
         71% 掉到 17%,四足断电会当场瘫倒 —— 所以巡检要盯这个值。
         """
         if self._state is None:
-            raise DeviceBackendError("还没收到过状态帧,读不到电量")
+            raise DeviceBackendError("尚未收到过状态帧,无法读取电量")
         return self._state.battery
 
     async def emergency(self) -> bool:
@@ -605,13 +605,13 @@ class SidecarDeviceBackend(DeviceBackend):
         赌运气。
         """
         if self._state is None:
-            raise DeviceBackendError("还没收到过状态帧,读不到急停状态")
+            raise DeviceBackendError("尚未收到过状态帧,无法读取急停状态")
         return self._state.emergency
 
     async def motion_status(self) -> MotionStatus:
         """当前运动状态。没收到过状态帧时抛错,不猜。"""
         if self._state is None:
-            raise DeviceBackendError("还没收到过状态帧,读不到运动状态")
+            raise DeviceBackendError("尚未收到过状态帧,无法读取运动状态")
         return self._state.motion
 
     async def wait_motion(self, target: MotionStatus, timeout_s: float) -> None:

@@ -73,7 +73,7 @@ def test_上传登记(站点, tmp_path):
     assert got["release"]["name"] == NAME
     assert [r["name"] for r in s.req("GET", "/api/releases", token=tok)[1]["releases"]] == [NAME]
     code, got = _传(s, tok, _打包(d))
-    assert code == 409 and "已经有了" in got["error"]
+    assert code == 409 and "已存在" in got["error"]
 
 
 def test_签名不对拒(站点, tmp_path):
@@ -82,7 +82,7 @@ def test_签名不对拒(站点, tmp_path):
     relsign.keygen(tmp_path / "other.key", tmp_path / "other.pub")
     _签(d, tmp_path / "other.key")
     code, got = _传(s, _登(s), _打包(d))
-    assert code == 400 and "签名对不上" in got["error"]
+    assert code == 400 and "签名不匹配" in got["error"]
 
 
 def test_包坏了说人话(站点, tmp_path):
@@ -90,7 +90,7 @@ def test_包坏了说人话(站点, tmp_path):
     d = 做包(tmp_path, sha="0" * 64)
     _签(d, s.key)
     code, got = _传(s, _登(s), _打包(d))
-    assert code == 400 and "坏了" in got["error"]
+    assert code == 400 and "已损坏" in got["error"]
     code, got = _传(s, _登(s), b"not a tarball")
     assert code == 400
 

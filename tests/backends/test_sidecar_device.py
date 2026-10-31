@@ -77,7 +77,7 @@ async def test_连上后能读到旁路进程的自我介绍():
 
 async def test_没人监听时报错说得清是旁路进程没起():
     backend = SidecarDeviceBackend("127.0.0.1", 1, ack_timeout_s=0.5)
-    with pytest.raises(DeviceBackendError, match="连不上运控旁路进程"):
+    with pytest.raises(DeviceBackendError, match="无法连接运控旁路进程"):
         await backend.connect()
     assert not backend.connected
 
@@ -90,7 +90,7 @@ async def test_协议版本对不上就拒绝连接(monkeypatch):
     await sim.start()
     backend = SidecarDeviceBackend("127.0.0.1", sim.port, ack_timeout_s=2.0)
     try:
-        with pytest.raises(DeviceBackendError, match="协议版本对不上"):
+        with pytest.raises(DeviceBackendError, match="协议版本不匹配"):
             await backend.connect()
         assert not backend.connected
     finally:
@@ -127,7 +127,7 @@ async def test_上装占着时申请控制权被拒且错误原文照抄真机()
 
 async def test_没握着控制权时动作指令连发都不发():
     async with _pair(deny_control=True) as (sim, backend):
-        with pytest.raises(DeviceBackendError, match="没握着控制权"):
+        with pytest.raises(DeviceBackendError, match="未握着控制权"):
             await backend.stand()
         # 关键:命令根本没发出去,而不是发出去被拒。少往那条会话上扔垃圾。
         assert sim.commands == []
@@ -242,7 +242,7 @@ async def test_控制权丢了之后动作指令立刻被挡住():
         with backend.subscription() as queue:
             sim.drop_control()
             await _drain(queue, ControlLostEvent)
-        with pytest.raises(DeviceBackendError, match="没握着控制权"):
+        with pytest.raises(DeviceBackendError, match="未握着控制权"):
             await backend.walk(seconds=1.0, forward=0.4)
 
 
@@ -382,9 +382,9 @@ async def test_电量来自遥测且取低的那块():
 async def test_还没收到状态帧时读电量抛错而不是猜一个():
     # 不猜、不返回 0 —— "读不到"和"没电了"是两件事,巡检决策靠它区分。
     backend = SidecarDeviceBackend()
-    with pytest.raises(DeviceBackendError, match="读不到电量"):
+    with pytest.raises(DeviceBackendError, match="无法读取电量"):
         await backend.battery()
-    with pytest.raises(DeviceBackendError, match="读不到运动状态"):
+    with pytest.raises(DeviceBackendError, match="无法读取运动状态"):
         await backend.motion_status()
 
 
@@ -455,7 +455,7 @@ async def test_旁路进程死掉时在等的命令立刻失败而不是干等�
             task = asyncio.ensure_future(backend.stand())
             await asyncio.sleep(0.05)
             await sim.stop()
-            with pytest.raises(DeviceBackendError, match="连接断了"):
+            with pytest.raises(DeviceBackendError, match="连接已断开"):
                 await asyncio.wait_for(task, 5.0)
             event = await _drain(queue, ControlLostEvent)
         assert "连接断开" in event.reason
@@ -466,7 +466,7 @@ async def test_旁路进程死掉时在等的命令立刻失败而不是干等�
 async def test_断开之后再发命令报的是没连上():
     async with _pair() as (_sim, backend):
         await backend.close()
-        with pytest.raises(DeviceBackendError, match="没连上旁路进程"):
+        with pytest.raises(DeviceBackendError, match="未连接旁路进程"):
             await backend.emergency_stop(True)
 
 
@@ -529,7 +529,7 @@ async def test_旁路进程还是3号_代理照样能连_2号不行(monkeypatch)
                 await backend.connect()
                 assert backend.connected
             else:
-                with pytest.raises(DeviceBackendError, match="协议版本对不上"):
+                with pytest.raises(DeviceBackendError, match="协议版本不匹配"):
                     await backend.connect()
         finally:
             await backend.close()

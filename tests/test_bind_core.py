@@ -28,7 +28,7 @@ class 假站点:
 
     def _up(self):
         if not self.up:
-            raise LinkError("连不上")
+            raise LinkError("无法连接")
 
     def request(self, site, body):
         self._up()
@@ -64,7 +64,7 @@ class 台:
         self.provisioned.append(code)
         if self.prov_fail:
             self.prov_fail -= 1
-            raise RuntimeError("连接断了")
+            raise RuntimeError("连接已断开")
         self.paths.robot_cert.parent.mkdir(parents=True, exist_ok=True)
         self.paths.robot_cert.write_bytes(PEM)
         return "D1M-1"
@@ -129,7 +129,7 @@ def test_绑定_站点连不上记原因_拒了回没绑定(机):
     机.site.up = False
     机.core.bind(CODE, {"wifi": {"ssid": "Estate", "psk": ""}, "site": SITE})
     机.tick()
-    assert "连不上站点" in 机.core.status(CODE)["error"]
+    assert "无法连接站点" in 机.core.status(CODE)["error"]
     机.site.up = True
     机.tick(c.POLL_MS)
     机.site.answer = {"state": "rejected"}
@@ -165,7 +165,7 @@ def test_换WiFi_连得上站点_挂着等确认_确认后换_连上站点才算
     st = 机.core.wifi(CODE, {"ssid": "New", "psk": "abcdefgh"})
     ch = st["change"]
     assert ch["mode"] == "online" and ch["phase"] == "waiting"
-    assert 机.router.ssid == "Estate", "没确认不换"
+    assert 机.router.ssid == "Estate", "未确认不换"
     v = 机.core.net_view()["wifi"]
     assert v["change"]["id"] == ch["id"] and v["change"]["ssid"] == "New"
     assert 机.core.wifi_confirm("bogus", True) == "no_such_change"
@@ -246,7 +246,7 @@ def test_站点叫解绑_证书对得上才清机_清完回没绑定(机):
     机.tick()
     assert 机.core.s["state"] == "wiping" and 机.wiped == 1
     机.tick(1000)
-    assert 机.wiped == 1, "没清干净:隔 30 秒再来"
+    assert 机.wiped == 1, "未清干净:隔 30 秒再来"
     机.wipe_fails = []
     机.tick(30_000)
     assert 机.core.s["state"] == "unbound" and 机.wiped == 2
@@ -256,7 +256,7 @@ def test_不在线时被解绑_问站点知道了自己清(机):
     机.bound()
     机.site.cert = "unknown"
     机.tick(c.PROBE_MS)
-    assert 机.core.s["state"] == "bound", "站点不认识这台(站点重装了):不动"
+    assert 机.core.s["state"] == "bound", "站点不认识此机器人(站点重装了):不动"
     机.site.cert = "revoked"
     机.tick(c.PROBE_MS)
     assert 机.core.s["state"] == "wiping"
@@ -265,11 +265,11 @@ def test_不在线时被解绑_问站点知道了自己清(机):
 def test_解绑令_一次性_签名序列号要对(机):
     seed = ed25519.new_seed()
     机.paths.unbind_pub.write_bytes(ed25519.public_pem(ed25519.public_key(seed)))
-    with pytest.raises(c.BindRefused, match="本来就没绑定"):
+    with pytest.raises(c.BindRefused, match="本来就未绑定"):
         机.core.unbind_token(CODE, "x")
     机.bound()
     other = b.sign_unbind(seed, "D1M-2", now_ms=机.t, hours=24)
-    with pytest.raises(c.BindRefused, match="不是给这台"):
+    with pytest.raises(c.BindRefused, match="不是给此机器人"):
         机.core.unbind_token(CODE, other)
     tok = b.sign_unbind(seed, "D1M-1", now_ms=机.t, hours=24)
     机.core.unbind_token(CODE, tok)
@@ -292,7 +292,7 @@ def test_外审I7_领证没成_下一次轮询再领(机):
     机.prov_fail = 1
     机.site.answer = {"state": "approved", "code": "D1MAX1.a"}
     机.tick(c.POLL_MS)
-    assert 机.core.s["state"] == "pending" and "领证书没成" in 机.core.s["error"]
+    assert 机.core.s["state"] == "pending" and "领证书失败" in 机.core.s["error"]
     机.site.answer = {"state": "approved", "code": "D1MAX1.b"}
     机.tick(c.POLL_MS)
     assert 机.core.s["state"] == "bound" and 机.provisioned == ["D1MAX1.a", "D1MAX1.b"]

@@ -142,7 +142,7 @@ class TeleopDesk:
         t0 = time.monotonic()
         with self._lock:
             if robot_id in self._opening:
-                raise TeleopRefused(409, f"{robot_id} 正在开遥控,稍后再试")
+                raise TeleopRefused(409, f"{robot_id} 正在开遥控,请稍后重试")
             cur = self.active(robot_id)
             if cur is not None:
                 if not takeover_reason:
@@ -162,7 +162,7 @@ class TeleopDesk:
 
     def _grant(self, robot_id: str, name: str, takeover_reason: str, t0: float) -> Session:
         if not self._video_ok(robot_id):
-            raise TeleopRefused(409, f"{robot_id} 没有画面:没画面不许动", "no_video")
+            raise TeleopRefused(409, f"{robot_id} 没有画面:无画面不许动", "no_video")
         caps = self._caps(robot_id)
         epoch, row_id = self._new_lease_row(robot_id, name, takeover_reason)
         try:
@@ -176,11 +176,12 @@ class TeleopDesk:
             # 狗可能收到了、可能没有:授予命令的有效期很短,再追一条放租,晚到的授予也起不来。
             self._end_row(row_id, "refused")
             self._release_async(robot_id, epoch)
-            raise TeleopRefused(502, f"机器人没回话: {type(exc).__name__}") from exc
+            raise TeleopRefused(502, f"机器人未响应: {type(exc).__name__}") from exc
         ack = r.get("ack", {})
         if ack.get("result") != AckResult.ACCEPTED.value:
             self._end_row(row_id, "refused")
-            raise TeleopRefused(409, f"机器人没接遥控: {ack.get('result')} {ack.get('reason', '')}")
+            raise TeleopRefused(409, (f"机器人未接受遥控: {ack.get('result')} "
+                                      f"{ack.get('reason', '')}"))
         # 开的时候查过画面是有的:之后只在变了的时候告诉手机。
         s = Session(robot_id=robot_id, epoch=epoch, operator=name, max_vx=caps[0],
                     max_wz=caps[1], max_vy=caps[2], started_ms=self._now(), row_id=row_id,
@@ -224,7 +225,7 @@ class TeleopDesk:
             log.debug("查硬禁区支持没查成", exc_info=True)
             return None
         return {"state": "unsupported",
-                "reason": f"{robot_id} 的代理太老,遥控时不守硬禁区(水体、落差):看着画面开,"
+                "reason": f"{robot_id} 的代理版本过旧,遥控时不守硬禁区(水体、落差):看着画面开,"
                           "升级代理"}
 
     def _zone_note(self, s: Session, data: Any) -> None:
@@ -246,7 +247,7 @@ class TeleopDesk:
         t = (c.capabilities.tasks.get("teleop") if c is not None and c.capabilities else None) or {}
         vx, wz, vy = t.get("max_vx"), t.get("max_wz"), t.get("max_vy")
         if not all(isinstance(v, (int, float)) and math.isfinite(v) and v > 0 for v in (vx, wz)):
-            raise TeleopRefused(409, f"{robot_id} 没报遥控能力")
+            raise TeleopRefused(409, f"{robot_id} 未上报遥控能力")
         ok_vy = (isinstance(vy, (int, float)) and not isinstance(vy, bool) and math.isfinite(vy)
                  and vy > 0)
         return float(vx), float(wz), float(vy) if ok_vy else 0.0
@@ -279,7 +280,7 @@ class TeleopDesk:
             if task is None or not task.task_id.startswith(TELEOP_TASK_PREFIX):
                 return
             if time.monotonic() >= deadline:
-                raise TeleopRefused(409, f"{robot_id} 上一趟遥控还没停稳,稍后再试")
+                raise TeleopRefused(409, f"{robot_id} 上一趟遥控尚未停稳,请稍后重试")
             time.sleep(0.1)
 
     # ------------------------------------------------------------ 帧

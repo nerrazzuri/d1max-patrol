@@ -36,7 +36,7 @@ def test_封了拆得开_明文不落盘_两次封的密文不一样(tmp_path):
     assert a.read_bytes() != b.read_bytes(), "每个文件一对临时密钥"
     assert data[:64] not in a.read_bytes()
     assert sorted(p.name for p in tmp_path.iterdir()) == ["a.jpg.d1e", "b.jpg.d1e"], \
-        "没留 .part、.tmp(封到一半的是点开头的,发件箱扫盘不排它)"
+        "未留 .part、.tmp(封到一半的是点开头的,发件箱扫盘不排它)"
     E.open_file(a, tmp_path / "a.jpg", priv)
     assert (tmp_path / "a.jpg").read_bytes() == data
 
@@ -55,12 +55,12 @@ def test_别的私钥_改一个字节_截断_都拆不开_一个字节都不写(
     other, _ = E.keypair()
     p = tmp_path / "x.jpg.d1e"
     E.Sealer(pub).seal_bytes(b"secret face" * 1000, p)
-    with pytest.raises(E.SealError, match="对不上"):
+    with pytest.raises(E.SealError, match="不匹配"):
         E.open_file(p, tmp_path / "x.jpg", other)
     raw = bytearray(p.read_bytes())
     raw[len(E.MAGIC) + 40] ^= 1
     (tmp_path / "bad.d1e").write_bytes(bytes(raw))
-    with pytest.raises(E.SealError, match="对不上"):
+    with pytest.raises(E.SealError, match="不匹配"):
         E.open_file(tmp_path / "bad.d1e", tmp_path / "x.jpg", priv)
     (tmp_path / "short.d1e").write_bytes(p.read_bytes()[:20])
     with pytest.raises(E.SealError, match="太短"):

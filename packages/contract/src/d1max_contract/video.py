@@ -77,7 +77,7 @@ def parse_video_payload(p: Any) -> VideoRequest:
     if m is None or not 0 < int(m.group(2)) < 65536:
         raise ContractError("video: 地址要是不带参数的 srt://主机:端口")
     if not isinstance(pw, str) or _PASS.fullmatch(pw) is None:
-        raise ContractError("video: 口令要是 10–79 位字母数字")
+        raise ContractError("video: 密码要是 10–79 位字母数字")
     if isinstance(ttl, bool) or not isinstance(ttl, int) \
             or not VIDEO_TTL_MIN_MS <= ttl <= VIDEO_TTL_MAX_MS:
         raise ContractError(f"video: ttl_ms 要在 [{VIDEO_TTL_MIN_MS}, {VIDEO_TTL_MAX_MS}]")
