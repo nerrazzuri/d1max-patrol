@@ -560,6 +560,13 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--c-primary); }
 .slot-name { font-size: 20px; font-weight: 700; }
 .slot-mid { display: flex; gap: 16px; margin: 0 auto; padding: 3px 14px; border-radius: 999px; background: rgba(0, 0, 0, 0.45); font-size: 15px; }
 .slot-mid:empty { display: none; }
+.slot-foot { position: absolute; left: 0; right: 0; bottom: 0; display: flex; flex-wrap: wrap; gap: 4px 14px; padding: 8px 14px;
+  background: var(--c-scrim); color: var(--c-onScrim); font-size: 14px; font-weight: 500; pointer-events: none; }
+.slot-pip ~ .slot-foot { right: calc(28% + 24px); border-top-right-radius: var(--r-r8); }
+.slot-foot > span + span::before { content: "·"; margin-right: 14px; opacity: 0.6; }
+.slot-foot .mono { font-family: var(--font-mono); }
+.slot-foot.scene { background: transparent; }
+.slot-cam { padding: 2px 10px; border-radius: var(--r-r8); background: rgba(0, 0, 0, 0.55); border: 1px solid rgba(255, 255, 255, 0.35); font-weight: 600; }
 .slot-btn { height: 30px; padding: 0 12px; border: 1px solid rgba(255, 255, 255, 0.35); border-radius: var(--r-r8); background: rgba(255, 255, 255, 0.14);
   color: #fff; font-size: 14px; cursor: pointer; }
 .slot-btn:first-of-type { margin-left: auto; }

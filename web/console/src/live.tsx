@@ -30,6 +30,15 @@ export function stateShape(s: RobotState): ShapeKind | null {
   return a === "p1" ? "P1" : a === "p2" ? "P2" : null;
 }
 
+/** 定位怎么样(W60 卡片第二层):没报 = 「—」;变差、不可信 = 变差;没锚定 = 未定位。 */
+export function locText(u: UnitInfo | undefined): Key | null {
+  const l = u?.robot.loc;
+  if (!u || u.stale || !l) return null;
+  if (l.degraded || l.reason) return "locPoor";
+  if (l.anchored === false || !l.pose) return "locNone";
+  return "locGood";
+}
+
 export function StateText({ s, stale }: { s: RobotState; stale?: boolean }) {
   if (stale) return <span class="state unknown">{t("stUnknown")}</span>;
   const a = abnormal(s);
