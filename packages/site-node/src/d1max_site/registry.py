@@ -166,7 +166,8 @@ class Registry:
             c.execute("DELETE FROM enroll_claims WHERE robot_id=?", (robot_id,))
             c.execute("DELETE FROM cert_pending WHERE robot_id=?", (robot_id,))   # W55-2 I2
             # W63:解绑了,记下的设备公钥也清掉(换主板以后同一序列号能重新加入,不判仿冒)
-            c.execute("DELETE FROM device_ids WHERE serial=?", (robot_id,))
+            from d1max_site.attest import forget_device
+            forget_device(c, robot_id)
 
     @staticmethod
     def _rec(r) -> RobotRecord:
