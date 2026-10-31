@@ -10,6 +10,7 @@
 - ``GET  /api/admin/maps/<图>/<版本>/diff?with=<另一版>``      对比的统计(JSON,带必读的 ``caveat``)
 - ``GET  /api/admin/maps/<图>/<版本>/diff.png?with=<另一版>``  对比图
 - ``GET  /api/admin/maps/<图>/<版本>/noise``       零星噪点的候选(W41;编号、位置、几格,带栅格摘要)
+- ``GET  /api/admin/maps/<图>/<版本>/quality``     建图结论(W54:能用 / 有问题 + 原因 / 说不清)
 - ``POST /api/admin/maps/<图>/<版本>/denoise``     ``{digest, skip: [编号]}`` 清掉、另存成新的一版
 """
 
@@ -25,7 +26,7 @@ from d1max_site.maps_admin import AdminError, MapAdmin
 from d1max_site.permissions import MANAGE
 
 _ROUTE = re.compile(r"^/api/admin/maps(?:/(rollback)|/([^/]{1,64})/([^/]{1,64})/"
-                    r"(note|publish|delete|diff|diff\.png|noise|denoise|edit|display|basemap))?$")
+                    r"(note|publish|delete|diff|diff\.png|noise|denoise|edit|display|basemap|quality))?$")
 MAX_ROBOTS = 32
 
 
@@ -56,6 +57,12 @@ def handle(h: Any, method: str, path: str, user: Any) -> None:
             if method != "GET":
                 raise HttpError(404, f"没有 {method} {path}")
             return _diff(h, adm, map_id, version, what)
+        if what == "quality":                     # W54:建图结论(能用 / 有问题 / 说不清)
+            if method != "GET":
+                raise HttpError(404, f"没有 {method} {path}")
+            from d1max_site.map_wizard import read_quality
+            adm.ref(map_id, version)
+            return h._send_json(200, read_quality(adm.cat, map_id, version))
         if what == "noise":
             if method != "GET":
                 raise HttpError(404, f"没有 {method} {path}")

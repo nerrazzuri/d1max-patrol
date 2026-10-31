@@ -586,6 +586,8 @@ class _Handler(TlsHandlerMixin):
                 disp = self.site.dispatcher
                 return self._send_json(200, self.site.loop.call(lambda: _sync(
                     setup_view, disp.db, disp, skip=skip)))
+            if path == "/api/map-wizard":
+                return self._map_wizard(method, user)       # W54 建图向导
             if method == "GET" and path == "/api/pairing":
                 self._need(user, VIEW)
                 return self._pairing()
@@ -2722,6 +2724,37 @@ class _Handler(TlsHandlerMixin):
         self._audit_detail |= {k: v for k, v in payload.items() if k != "files"}
         return self._send_json(200, self.site.dispatch(lambda: self.site.dispatcher.map_command(
             robot_id, kind, payload, issued_by=str(user))))
+
+    def _map_wizard(self, method: str, user) -> None:
+        """W54 建图向导(:mod:`d1max_site.map_wizard`):``GET`` 谁都能看(保安看得到「有人在建图」、
+        站点有没有图);``POST`` ``{action, …}`` 要 ``manage``(管理员、工程师)。"""
+        from d1max_site.map_wizard import MapWizard, WizardError
+        cat, settings = self.site.maps, self.site.settings
+        if cat is None or settings is None:
+            raise HttpError(404, "这个站点没开地图目录")
+        reg = self.site.dispatcher.registry
+
+        def known(rid: str) -> bool:
+            rec = reg.get(rid) if SAFE_ID.match(rid) else None
+            return rec is not None and not getattr(rec, "revoked", False)
+        w = MapWizard(settings, cat, self.site.dispatcher.db, now_ms=self.site._now, known=known)
+        if method == "GET":
+            self._need(user, VIEW)
+            return self._send_json(200, {"wizard": w.view(), "maps": len(cat.list())})
+        if method != "POST":
+            raise HttpError(404, f"没有 {method} /api/map-wizard")
+        self._need(user, MANAGE)
+        d = self._body()
+        try:
+            out = w.apply(d, by=str(user))
+        except WizardError as exc:
+            raise HttpError(exc.status, str(exc),
+                            extra={"reason": exc.reason} if exc.reason else None) from exc
+        self._audit_target = "map_wizard"
+        self._audit_detail = {k: d.get(k) for k in ("action", "step", "robot_id", "site_type",
+                                                     "drive") if k in d} | (
+            {"version": out["version"]} if out.get("version") else {})
+        return self._send_json(200, {"wizard": out or None})
 
     def _maps_admin(self, method: str, path: str, user) -> None:
         """地图管理页(管理员):见 ``maps_admin_api``。"""
