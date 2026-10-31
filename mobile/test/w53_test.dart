@@ -41,12 +41,13 @@ void main() {
   setUp(() => appLang.value = AppLang.zh);
 
   group('值守页', () {
-    testWidgets('默认跟第一台加入的；点名字切；画面点了才播、✕ 关；切台就关', (t) async {
+    testWidgets('默认跟第一台加入的；点「名字 ▾」从底部列表切；画面点了才播、✕ 关；切台就关', (t) async {
       final api = FakeApi('guard')
         ..robotsOverride = [_robot('B', 2000), _robot('A', 1000, name: '北门')];
       await _duty(t, api);
-      final first = t.widget<ChoiceChip>(find.byKey(SiteDutyPage.chipKey('A')));
-      expect(first.selected, isTrue, reason: 'A 先加入（enrolled_at 小）');
+      // W60：「名字 ▾」显示当前这台；点开底部列表选
+      expect(find.descendant(of: find.byKey(SiteDutyPage.selectorKey), matching: find.text('北门')), findsOneWidget,
+          reason: 'A 先加入（enrolled_at 小）');
       expect(find.byType(SiteVideo), findsNothing, reason: '默认不播');
       await t.tap(find.byKey(SiteDutyPage.playKey));
       await t.pump();
@@ -56,9 +57,12 @@ void main() {
       expect(find.byType(SiteVideo), findsNothing);
       await t.tap(find.byKey(SiteDutyPage.playKey));
       await t.pump();
+      await t.tap(find.byKey(SiteDutyPage.selectorKey));
+      await t.pumpAndSettle();
+      expect(t.widget<ListTile>(find.byKey(SiteDutyPage.chipKey('A'))).selected, isTrue);
       await t.tap(find.byKey(SiteDutyPage.chipKey('B')));
       await t.pumpAndSettle();
-      expect(t.widget<ChoiceChip>(find.byKey(SiteDutyPage.chipKey('B'))).selected, isTrue);
+      expect(find.descendant(of: find.byKey(SiteDutyPage.selectorKey), matching: find.text('B')), findsOneWidget);
       expect(find.byType(SiteVideo), findsNothing, reason: '切台：原来那路关掉');
     });
 

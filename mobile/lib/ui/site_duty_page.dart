@@ -10,6 +10,10 @@
 /// 7. 这台最近的事件；全站今天的巡逻；其余没处理的报警收成一行（点开是原来的告警总览）。
 ///
 /// 不放：钟差、硬盘、证据积压、P1/P2/P3 计数、排程正常、备份、诊断（W53 §9）。
+///
+/// W60（用户 2026-10-31 定的视觉改版，交互不变）：布防 + 天气是一行字，不是卡片；机器人用「名字 ▾」切
+/// （点开底部弹出列表，要关注的排前面），不再一排名字标签；P1 写清什么事、在哪、多久、哪台在赶去；
+/// 状态、最近事件、其余报警不套卡片，用分隔线 —— 卡片只留给 P1 和建图提示。
 library;
 
 import 'dart:async';
@@ -24,6 +28,7 @@ import 'nw/nw_button.dart';
 import 'nw/nw_p2_duty.dart';
 import 'nw/nw_p3_robots.dart';
 import 'nw/nw_p4_admin.dart' show nwGap8;
+import '../design/nw_tokens.g.dart' show NwFont;
 import 'nw/nw_theme.dart';
 import 'nw/nw_widgets.dart';
 import 'patrol_dispatch.dart';
@@ -72,6 +77,8 @@ class SiteDutyPage extends StatefulWidget {
   static const Key modeChangeKey = Key('duty-mode-change');
   static Key p1Key(String key) => Key('duty-p1-$key');
   static Key chipKey(String id) => Key('duty-chip-$id');
+  /// W60：「名字 ▾」，点开选机器人。
+  static const Key selectorKey = Key('duty-selector');
   static const Key videoKey = Key('duty-video');
   static const Key playKey = Key('duty-play');
   static const Key closeKey = Key('duty-video-close');
@@ -286,40 +293,50 @@ class _SiteDutyPageState extends State<SiteDutyPage> {
     if (m == null && w == null) return const SizedBox.shrink();
     final armed = m?['mode'] == 'armed' || m?['state'] == 'armed';
     final canChange = (s?.canArm ?? false) && !(s?.isViewer ?? true);
+    // W60：一行字。布防状态在前（绿点 = 布防中），天气跟在后面、灰色；点天气看详情
     return Padding(
       key: _t.mode,
-      padding: const EdgeInsets.only(bottom: Nw.s8),
-      child: NwCard(
-        key: SiteDutyPage.modeKey,
-        child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, mainAxisSize: MainAxisSize.min, children: [
-          if (m != null)
-            Row(children: [
-              Flexible(child: NwStatusPill(label: modeText(m), tone: armed ? NwTone.success : NwTone.warning)),
-              const Spacer(),
-              if (canChange)
-                NwButton(
-                    buttonKey: SiteDutyPage.modeChangeKey,
-                    size: NwButtonSize.small,
-                    variant: NwButtonVariant.outline,
-                    label: tr('Change', '切换'),
-                    onPressed: () => _go(SiteModePage(api: widget.api))),
-            ]),
-          if (m != null && w != null) const SizedBox(height: Nw.s8),
-          if (w != null)
-            InkWell(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Row(key: SiteDutyPage.modeKey, children: [
+        if (m != null) ...[
+          Container(
+              width: 8,
+              height: 8,
+              decoration: BoxDecoration(shape: BoxShape.circle, color: armed ? c.success : c.warning)),
+          const SizedBox(width: 6),
+          Flexible(
+              child: Text(modeText(m),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: NwText.titleSmall.copyWith(color: c.text))),
+        ],
+        if (w != null) ...[
+          const SizedBox(width: 12),
+          Flexible(
+            flex: 2,
+            child: InkWell(
               onTap: () => _go(SiteWeatherPage(api: widget.api)),
-              child: Row(children: [
-                Icon(weatherIcon('${w['condition']}'), size: 18, color: c.textSecondary),
+              child: Row(mainAxisSize: MainAxisSize.min, children: [
+                Icon(weatherIcon('${w['condition']}'), size: 16, color: c.textSecondary),
                 const SizedBox(width: 4),
-                Expanded(
+                Flexible(
                     child: Text(weatherText(w),
-                        maxLines: 2,
+                        maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: NwText.bodySmall.copyWith(color: c.textSecondary))),
               ]),
             ),
-        ]),
-      ),
+          ),
+        ],
+        const Spacer(),
+        if (m != null && canChange)
+          NwButton(
+              buttonKey: SiteDutyPage.modeChangeKey,
+              size: NwButtonSize.small,
+              variant: NwButtonVariant.ghost,
+              label: tr('Change', '切换'),
+              onPressed: () => _go(SiteModePage(api: widget.api))),
+      ]),
     );
   }
 
@@ -335,10 +352,21 @@ class _SiteDutyPageState extends State<SiteDutyPage> {
                 NwLevelBox(level: a.level),
                 const SizedBox(width: Nw.s8),
                 Expanded(
-                    child: Text('${a.robot} · ${alertTitle(a.kind, a.title)}',
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        style: NwText.titleSmall.copyWith(color: c.text, fontWeight: FontWeight.w700))),
+                    child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+                  Text(alertTitle(a.kind, a.title),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: NwText.titleSmall.copyWith(color: c.text, fontWeight: FontWeight.w700)),
+                  Text(
+                      [
+                        if ('${a.context['zone'] ?? ''}'.isNotEmpty) '${a.context['zone']}',
+                        if (a.robot != 'site') robotLabelOf(a.robot),
+                        _since(a.firstMs),
+                      ].join(' · '),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: NwText.bodySmall.copyWith(color: c.textSecondary)),
+                ])),
                 const SizedBox(width: Nw.s8),
                 NwButton(
                     size: NwButtonSize.small,
@@ -350,22 +378,80 @@ class _SiteDutyPageState extends State<SiteDutyPage> {
           ),
       ];
 
-  Widget _chips(NwColors c) => SingleChildScrollView(
-        key: _t.chips,
-        scrollDirection: Axis.horizontal,
-        child: Row(children: [
-          for (final r in _robots)
-            Padding(
-              padding: const EdgeInsets.only(right: Nw.s8),
-              child: ChoiceChip(
-                key: SiteDutyPage.chipKey('${r['robot_id']}'),
-                selected: r['robot_id'] == _sel,
-                onSelected: (_) => _select('${r['robot_id']}'),
-                label: Text('${robotLabel(r)} · ${robotPhaseLabel(robotPhase(r))}'),
-              ),
+  /// 多久以前（P1 那一行用）。
+  String _since(int ms) {
+    final sec = ((DateTime.now().millisecondsSinceEpoch - ms) / 1000).round();
+    if (sec < 60) return tr('${sec < 0 ? 0 : sec} s ago', '${sec < 0 ? 0 : sec} 秒前');
+    if (sec < 3600) return tr('${sec ~/ 60} min ago', '${sec ~/ 60} 分钟前');
+    return tr('${sec ~/ 3600} h ago', '${sec ~/ 3600} 小时前');
+  }
+
+  /// 编号 → 起的名字（P1 那一行写名字）。
+  String robotLabelOf(String id) {
+    for (final r in _robots) {
+      if ('${r['robot_id']}' == id) return robotLabel(r);
+    }
+    return id;
+  }
+
+  /// W60：「名字 ▾」+ 在线状态；点开底部列表选机器人（只有一台也能点开看）。
+  Widget _chips(NwColors c) {
+    final r = _selRobot!;
+    final phase = robotPhase(r);
+    return Row(key: _t.chips, children: [
+      Flexible(
+        child: InkWell(
+          key: SiteDutyPage.selectorKey,
+          borderRadius: BorderRadius.circular(Nw.r8),
+          onTap: () => _pickRobot(c),
+          child: Row(mainAxisSize: MainAxisSize.min, children: [
+            Flexible(
+                child: Text(robotLabel(r),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: NwText.headlineSmall.copyWith(color: c.text))),
+            if (_robots.length > 1) Icon(Icons.expand_more_rounded, color: c.textSecondary),
+          ]),
+        ),
+      ),
+      const SizedBox(width: Nw.s8),
+      NwStatusPill(label: robotPhaseLabel(phase), tone: robotPhaseTone(phase)),
+    ]);
+  }
+
+  /// 底部弹出的机器人列表：要关注的（离线、出事）排前面，当前这台打勾。
+  Future<void> _pickRobot(NwColors c) async {
+    int rank(Map<String, dynamic> r) => switch (robotPhaseTone(robotPhase(r))) {
+          NwTone.error => 0,
+          NwTone.warning => 1,
+          _ => 2,
+        };
+    final list = [..._robots]..sort((a, b) => rank(a).compareTo(rank(b)));
+    final id = await showModalBottomSheet<String>(
+      context: context,
+      showDragHandle: true,
+      builder: (ctx) => SafeArea(
+        child: ListView(shrinkWrap: true, children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(Nw.s16, 0, Nw.s16, Nw.s8),
+            child: Text(tr('Choose a robot', '选择机器人'), style: NwText.titleMedium.copyWith(color: c.text)),
+          ),
+          for (final r in list)
+            ListTile(
+              key: SiteDutyPage.chipKey('${r['robot_id']}'),
+              selected: r['robot_id'] == _sel,
+              title: Text(robotLabel(r)),
+              subtitle: Text(robotPhaseLabel(robotPhase(r))),
+              trailing: robotBattery(r) == null
+                  ? null
+                  : Text('${robotBattery(r)!.round()}%', style: NwText.labelLarge.copyWith(color: c.text)),
+              onTap: () => Navigator.pop(ctx, '${r['robot_id']}'),
             ),
         ]),
-      );
+      ),
+    );
+    if (id != null) _select(id);
+  }
 
   Widget _video(NwColors c) {
     final id = _sel!;
@@ -418,7 +504,6 @@ class _SiteDutyPageState extends State<SiteDutyPage> {
   Widget _status(NwColors c) {
     final s = widget.api.session;
     final r = _view ?? _selRobot!;
-    final phase = robotPhase(r);
     final st = r['status'];
     final task = st is Map ? st['task'] : null;
     final tid = task is Map ? '${task['task_id'] ?? ''}' : null;
@@ -431,18 +516,19 @@ class _SiteDutyPageState extends State<SiteDutyPage> {
     return Padding(
       key: _t.status,
       padding: const EdgeInsets.only(top: Nw.s8),
-      child: NwCard(
+      // W60：不套卡片。一行「在做什么」+ 电量（大一号的数字）
+      child: Column(
         key: SiteDutyPage.statusKey,
-        child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
           Row(children: [
-            NwStatusPill(label: robotPhaseLabel(phase), tone: robotPhaseTone(phase)),
-            const SizedBox(width: Nw.s8),
             Expanded(
                 child: Text(doing,
-                    maxLines: 2, overflow: TextOverflow.ellipsis, style: NwText.bodyMedium.copyWith(color: c.text))),
+                    maxLines: 2, overflow: TextOverflow.ellipsis, style: NwText.bodyLarge.copyWith(color: c.text))),
             if (battery != null) ...[
               const SizedBox(width: Nw.s8),
-              Text('${battery.round()}%', style: NwText.labelLarge.copyWith(color: c.text)),
+              Text('${battery.round()}%',
+                  style: NwText.titleMedium.copyWith(color: c.text, fontFamily: NwFont.mono, fontWeight: FontWeight.w600)),
             ],
           ]),
           if (r['held'] is Map) ...[
@@ -461,7 +547,7 @@ class _SiteDutyPageState extends State<SiteDutyPage> {
                     onPressed: _resume),
             ]),
           ],
-        ]),
+        ],
       ),
     );
   }
@@ -523,17 +609,17 @@ class _SiteDutyPageState extends State<SiteDutyPage> {
       const SizedBox(height: Nw.s16),
       NwSectionLabel(tr('${robotLabel(_selRobot!)} recent events', '${robotLabel(_selRobot!)} 最近事件')),
       nwGap8,
-      NwCard(
-        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           for (final e in ev)
-            Padding(
-              padding: const EdgeInsets.symmetric(vertical: 2),
+            Container(
+              padding: const EdgeInsets.symmetric(vertical: Nw.s8),
+              decoration: BoxDecoration(border: Border(bottom: BorderSide(color: c.outline))),
               child: Row(children: [
                 SizedBox(
                     width: 100,
                     child: Text(_short(robotEventTime(e['stamp'])),
                         maxLines: 1, overflow: TextOverflow.fade, softWrap: false,
-                        style: NwText.labelSmall.copyWith(color: c.textSecondary))),
+                        style: NwText.labelSmall.copyWith(color: c.textSecondary, fontFamily: NwFont.mono))),
                 Expanded(
                     child: Text(
                         robotEventTitle('${e['kind']}', e['data'] is Map ? (e['data'] as Map).cast<String, dynamic>() : null),
@@ -541,7 +627,6 @@ class _SiteDutyPageState extends State<SiteDutyPage> {
               ]),
             ),
         ]),
-      ),
     ];
   }
 
@@ -634,15 +719,19 @@ class _SiteDutyPageState extends State<SiteDutyPage> {
                       child: TodayPatrolList(api: widget.api, items: _today, onChanged: _reload, offsetMin: _offsetMin))),
               if (others > 0) ...[
                 nwGap8,
-                NwCard(
+                InkWell(
                   key: SiteDutyPage.othersKey,
                   onTap: () => _go(SiteWatchPage(api: widget.api, title: tr('Alarms', '报警'))),
-                  child: Row(children: [
-                    Expanded(
-                        child: Text(tr('$others other open alarm(s)', '其他未处理 $others 条'),
-                            style: NwText.bodyMedium.copyWith(color: c.text))),
-                    Icon(Icons.chevron_right_rounded, color: c.textSecondary),
-                  ]),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    decoration: BoxDecoration(border: Border(top: BorderSide(color: c.outline))),
+                    child: Row(children: [
+                      Expanded(
+                          child: Text(tr('$others other open alarm(s)', '其他未处理 $others 条'),
+                              style: NwText.bodyMedium.copyWith(color: c.text))),
+                      Icon(Icons.chevron_right_rounded, color: c.textSecondary),
+                    ]),
+                  ),
                 ),
               ],
             ]),
