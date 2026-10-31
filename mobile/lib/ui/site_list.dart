@@ -10,13 +10,13 @@ import '../net/background_watch.dart';
 import '../net/push.dart';
 import '../net/site_client.dart';
 import '../store/site_store.dart';
+import 'app_settings.dart';
 import 'nw/nw_button.dart';
 import 'nw/nw_cards.dart';
 import 'nw/nw_p1_entry.dart';
 import 'nw/nw_shell.dart';
 import 'nw/nw_theme.dart';
 import 'nw/nw_widgets.dart';
-import 'robot_bind_page.dart';
 import 'site_add.dart';
 
 /// 造一个站点客户端。测试换成假的。
@@ -44,6 +44,9 @@ class SiteListPage extends StatefulWidget {
       this.langStore,
       this.scanner});
 
+  /// 右上角齿轮：设置（W55，语言、工程师工具、App 版本）。
+  static const Key settingsKey = Key('open-settings');
+
   @override
   State<SiteListPage> createState() => _SiteListPageState();
 }
@@ -65,16 +68,6 @@ class _SiteListPageState extends State<SiteListPage> {
     }, onError: (Object e) {
       if (mounted) setState(() => _loadError = '$e');
     });
-  }
-
-  Future<void> _setLang(AppLang lang) async {
-    if (lang == appLang.value) return;
-    appLang.value = lang;
-    try {
-      await widget.langStore?.save(lang);
-    } catch (_) {
-      // 存不上只是下次打开还是原来的语言，不挡这一次。
-    }
   }
 
   Future<void> _remove(SiteEntry s) async {
@@ -164,24 +157,13 @@ class _SiteListPageState extends State<SiteListPage> {
       appBar: nwHeaderBar(
           context,
           NwHeader(overline: 'Nexus Warden', title: tr('Select site', '选择站点'), trailing: [
-            // 语言（App V2）：英文为主，中文可选。只在这一页能换 —— 换了整个 app 重建。
-            PopupMenuButton<AppLang>(
-                key: const Key('lang-switch'),
-                tooltip: tr('Language', '语言'),
-                icon: Icon(Icons.language_rounded, color: c.text),
-                initialValue: appLang.value,
-                onSelected: _setLang,
-                itemBuilder: (_) => const [
-                      PopupMenuItem(value: AppLang.en, child: Text('English')),
-                      PopupMenuItem(value: AppLang.zh, child: Text('中文')),
-                    ]),
-            // W42：工程师工具 —— 站点坏了没备份，拿公司签的解绑令解绑机器人（不用登录站点）
+            // W55：语言、工程师工具（解绑令）、App 版本都在「设置」里
             IconButton(
-                key: const Key('engineer-unbind'),
-                tooltip: tr('Engineer: unbind a robot with a token', '工程师：用解绑令解绑机器人'),
-                icon: Icon(Icons.build_circle_outlined, color: c.text),
-                onPressed: () => Navigator.push(
-                    context, MaterialPageRoute<void>(builder: (_) => const EngineerUnbindPage()))),
+                key: SiteListPage.settingsKey,
+                tooltip: tr('Settings', '设置'),
+                icon: Icon(Icons.settings_rounded, color: c.text),
+                onPressed: () => Navigator.push(context,
+                    MaterialPageRoute<void>(builder: (_) => AppSettingsPage(langStore: widget.langStore)))),
             if (!broken)
               IconButton(
                   key: const Key('site-add-top'),

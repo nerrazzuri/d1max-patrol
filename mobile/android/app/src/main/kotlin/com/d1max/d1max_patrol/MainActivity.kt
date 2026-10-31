@@ -51,6 +51,23 @@ class MainActivity : FlutterActivity() {
                 else -> result.notImplemented()
             }
         }
+        // W55:从站点下载的新版 App 交给系统安装
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "d1max/install").setMethodCallHandler { call, result ->
+            when (call.method) {
+                "apk" -> {
+                    val path = call.argument<String>("path") ?: ""
+                    Thread {                                  // 几十 MB 写进系统:别卡住界面
+                        try {
+                            val r = ApkInstaller.install(this, path)
+                            runOnUiThread { result.success(r) }
+                        } catch (e: Exception) {
+                            runOnUiThread { result.error("install_failed", e.message, null) }
+                        }
+                    }.start()
+                }
+                else -> result.notImplemented()
+            }
+        }
         // RC 加固 H9:FCM 的推送号。Firebase 的参数由 Dart 那边带过来(打包时 --dart-define 给的)。
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "d1max/push").setMethodCallHandler { call, result ->
             when (call.method) {

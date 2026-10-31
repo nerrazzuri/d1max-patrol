@@ -46,6 +46,7 @@ void main() {
   test('版本号跟 pubspec 一致；登录时报的那一份：类别、版本、接口级别、系统', () {
     final line = File('pubspec.yaml').readAsLinesSync().firstWhere((l) => l.startsWith('version:'));
     expect(line.split(':')[1].trim().split('+').first, appVersion);
+    expect(int.parse(line.split(':')[1].trim().split('+').last), appBuild, reason: 'W55：站点分发 App 比构建号');
     expect(clientInfo(platform: 'android'),
         {'kind': 'app', 'version': appVersion, 'api_level': appApiLevel, 'platform': 'android'});
     expect(clientInfo()['platform'], Platform.operatingSystem);

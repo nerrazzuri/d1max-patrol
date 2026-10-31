@@ -11,7 +11,9 @@ import 'package:flutter_test/flutter_test.dart';
 const _allowed = <String, List<String>>{
   // 语言自己的名字：不管界面是什么语言都这么写
   // W52：登录失败时站点说的申请状态（原话是中文）按关键词认，再按语言说
-  'lib/ui/site_list.dart': ["Text('中文')", "site.contains('等管理员批准')", "site.contains('拒')",
+  // W55：语言选项挪到设置页；「中文」是给中文读者看的语言名，两种界面都这么写
+  'lib/ui/app_settings.dart': ["Text('中文')"],
+  'lib/ui/site_list.dart': ["site.contains('等管理员批准')", "site.contains('拒')",
     "site.contains('过期')"],
   'lib/ui/site_deter.dart': ["Text('中文')"],
   // 跟站点回的报错原文对：剥掉开头那几个字

@@ -71,3 +71,18 @@ def test_RC0_产品名和包名_决策55():
     assert 'applicationId = "com.nexusdynamic.warden"' in gradle
     assert '"JPUSH_PKGNAME" to "com.nexusdynamic.warden"' in gradle, "极光按包名认 App,要跟上面一样"
     assert 'namespace = "com.d1max.d1max_patrol"' in gradle, "代码里的包路径是内部的,不跟着改"
+
+
+def test_W55_从站点更新App_装包权限与回执():
+    """W55:新版 App 从站点下载后交给系统装(PackageInstaller,人要确认)。要 REQUEST_INSTALL_PACKAGES;
+    装包回执只收系统的(exported=false);不用 FileProvider(不把文件暴露给别的 App)。"""
+    assert "android.permission.REQUEST_INSTALL_PACKAGES" in _permissions(MAIN_MANIFEST)
+    root = ET.parse(MAIN_MANIFEST).getroot()
+    rcv = [r for r in root.findall("application/receiver")
+           if r.get(f"{ANDROID}name") == ".InstallResultReceiver"]
+    assert rcv and rcv[0].get(f"{ANDROID}exported") == "false"
+    assert not root.findall("application/provider"), "不用 FileProvider"
+    kt = (MAIN_MANIFEST.parent / "kotlin/com/d1max/d1max_patrol/ApkInstaller.kt").read_text()
+    assert "setAppPackageName(act.packageName)" in kt, "只装我们自己的新版"
+    assert '"d1max/install"' in (MAIN_MANIFEST.parent
+                                 / "kotlin/com/d1max/d1max_patrol/MainActivity.kt").read_text()

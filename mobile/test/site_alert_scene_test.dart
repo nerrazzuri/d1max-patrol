@@ -146,15 +146,18 @@ void main() {
     await _land(t);
     final api = FakeApi('guard');
     final w = _Watch();
-    await t.pumpWidget(MaterialApp(home: SiteRobotsPage(api: api, watch: w, entry: _entry)));
+    final ctl = WatchControl();
+    await t.pumpWidget(MaterialApp(home: SiteRobotsPage(api: api, watch: w, entry: _entry, control: ctl)));
     await t.pumpAndSettle();
     expect(api.calls, contains('watch-token'));
     expect(w.calls, ['start 庄园 https://10.0.0.2:8443 ${'ab' * 32} watch-tok']);
-    await t.tap(find.byKey(SiteRobotsPage.bgWatchKey));
+    expect(ctl.on, isTrue, reason: 'W55：设置页上的开关跟着');
+    await ctl.toggle();                                   // W55：开关在设置页，点的就是它
     await t.pumpAndSettle();
     expect(w.calls.last, 'stop');
+    expect(ctl.on, isFalse);
     expect(find.textContaining('后台值守已关闭'), findsOneWidget);
-    await t.tap(find.byKey(SiteRobotsPage.bgWatchKey));
+    await ctl.toggle();
     await t.pumpAndSettle();
     expect(w.calls.last, startsWith('start'));
     await t.pumpWidget(Container());
@@ -165,19 +168,20 @@ void main() {
     await _land(t);
     final api = FakeApi('guard')..watchTokenError = const SiteError(500, '坏了');
     final w = _Watch();
-    await t.pumpWidget(MaterialApp(home: SiteRobotsPage(api: api, watch: w, entry: _entry)));
+    final ctl = WatchControl();
+    await t.pumpWidget(MaterialApp(home: SiteRobotsPage(api: api, watch: w, entry: _entry, control: ctl)));
     await t.pumpAndSettle();
     expect(w.calls, isEmpty);
     expect(find.textContaining('无法开启后台值守'), findsOneWidget);
-    final icon = t.widget<IconButton>(find.byKey(SiteRobotsPage.bgWatchKey));
-    expect((icon.icon as Icon).icon, Icons.shield_outlined);
+    expect(ctl.on, isFalse, reason: '设置页上显示关着');
   });
 
   testWidgets('不支持后台的（桌面版）：没有开关，也不领令牌', (t) async {
     final api = FakeApi('guard');
-    await t.pumpWidget(MaterialApp(home: SiteRobotsPage(api: api, entry: _entry)));
+    final ctl = WatchControl();
+    await t.pumpWidget(MaterialApp(home: SiteRobotsPage(api: api, entry: _entry, control: ctl)));
     await t.pumpAndSettle();
-    expect(find.byKey(SiteRobotsPage.bgWatchKey), findsNothing);
+    expect(ctl.available, isFalse, reason: '设置页上不显示后台值守开关');
     expect(api.calls, isNot(contains('watch-token')));
   });
 

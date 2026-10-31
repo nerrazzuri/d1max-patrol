@@ -21,6 +21,7 @@ import 'package:crypto/crypto.dart';
 
 import '../l10n.dart';
 import '../model/alert.dart';
+import 'error_log.dart';
 
 /// 跟站点说话时出的任何岔子。连不上、证书不对、超时是 0；站点回的 4xx/5xx 原样带状态码。
 class SiteError implements Exception {
@@ -36,6 +37,15 @@ class SiteError implements Exception {
 }
 
 /// 证书的 SHA-256（DER），小写十六进制、不带冒号。跟 `d1max-site fingerprint` 同一个算法。
+/// 边下边算指纹（App 安装包）：只留最后那一个结果。
+class _DigestSink implements Sink<Digest> {
+  Digest? value;
+  @override
+  void add(Digest data) => value = data;
+  @override
+  void close() {}
+}
+
 String certSha256(X509Certificate cert) => sha256.convert(cert.der).toString();
 
 /// 把人照着抄的指纹规范化：去掉冒号、空格，转小写。
@@ -74,6 +84,9 @@ const int appApiLevel = 1;
 /// 这个 App 的版本号（跟 `pubspec.yaml` 的 `version` 加号前面那一段一致，测试核着）。登录时报给站点
 /// （C-B4）：管理员在版本一览里看得到谁还在用老 App。
 const String appVersion = '1.0.0';
+
+/// 构建号（`pubspec.yaml` 的 `version` 加号后面那一段，测试核着）：站点分发 App（W55）比新旧只看它。
+const int appBuild = 1;
 
 /// 登录时报给站点的「我是谁」：哪一类程序、哪一版、接口级别、什么系统。只给人看，站点不拿它做判断。
 Map<String, dynamic> clientInfo({String? platform}) => <String, dynamic>{
@@ -665,6 +678,22 @@ abstract class SiteApi {
 
   /// 诊断包（A1，管理员）：一个 `.tar.gz`，发给厂家查问题用。里面没有口令和私钥。
   Future<Uint8List> supportBundle();
+
+  /// W55 远程运维（管理员、工程师）：`/api/robots/<id>/ops/<action>`。不带 [body] 是读（`diag`、
+  /// `journal`、`cleanup` 查看），带 [body] 是动手（`restart`、`reboot` 要 `confirm_password`、`debug`、
+  /// `timesync`、`cleanup`、`cert-renew`）。机器人那边要跑一会儿，等得比普通请求久。
+  Future<Map<String, dynamic>> robotOps(String robotId, String action,
+      {Map<String, dynamic>? body, Map<String, String>? query});
+
+  /// W55：App 自己的错误记录传给站点（攒着，定时传；不传画面、不传密码）。
+  Future<void> reportClientErrors(List<Map<String, dynamic>> items);
+
+  /// W55：站点上有没有比 [build] 新的安装包：`{available, version?, build?, size?, name?, sha256?}`。
+  Future<Map<String, dynamic>> appUpdate(String platform, int build);
+
+  /// W55：把站点上的安装包下载到 [dest]（边下边写盘），核对大小和 [expectSha256]；[progress] 报已下载字节数。
+  Future<void> downloadAppUpdate(String platform, File dest,
+      {required int size, required String expectSha256, void Function(int got)? progress});
   /// 标「留着」（过了 30 天也不删）：值班的人、管理员。
   Future<Map<String, dynamic>> setRecordingKeep(int id, bool keep);
   /// 把这台狗现在站的地方登记成充电桩对准点（W13：领到桩前约 1.5 米、正对桩）。管理员。
@@ -1062,6 +1091,9 @@ class SiteClient implements SiteApi {
       if (resp.statusCode == 401) {
         session = null; // 令牌死了：要人重新登录
       }
+      if (resp.statusCode >= 500 && path != '/api/client-errors') {
+        ErrorLog.instance.note('api', '$method ${path.split('?').first} → ${resp.statusCode}', detail: msg);
+      }
       throw SiteError(resp.statusCode, msg,
           body: decoded is Map<String, dynamic> ? decoded : const <String, dynamic>{});
     }
@@ -1406,6 +1438,67 @@ class SiteClient implements SiteApi {
   @override
   Future<Uint8List> supportBundle() =>
       _bytes('/api/support-bundle', maxBundleBytes, tr('Diagnostics bundle', '诊断包'));
+
+  /// 机器人运维要等机器人跑完（取日志、诊断、重启服务）：比普通请求多等一会儿。
+  static const Duration opsTimeout = Duration(seconds: 90);
+
+  @override
+  Future<Map<String, dynamic>> robotOps(String robotId, String action,
+      {Map<String, dynamic>? body, Map<String, String>? query}) async {
+    var path = '/api/robots/${Uri.encodeComponent(robotId)}/ops/${Uri.encodeComponent(action)}';
+    if (query != null && query.isNotEmpty) path += '?${Uri(queryParameters: query).query}';
+    return _map(await _send(body == null ? 'GET' : 'POST', path, body, opsTimeout));
+  }
+
+  @override
+  Future<void> reportClientErrors(List<Map<String, dynamic>> items) async {
+    await _send('POST', '/api/client-errors', <String, dynamic>{'client': 'app', 'items': items});
+  }
+
+  @override
+  Future<Map<String, dynamic>> appUpdate(String platform, int build) async => _map(await _send(
+      'GET', '/api/app-update?${Uri(queryParameters: <String, String>{'platform': platform, 'build': '$build'}).query}'));
+
+  @override
+  Future<void> downloadAppUpdate(String platform, File dest,
+          {required int size, required String expectSha256, void Function(int got)? progress}) =>
+      _wrapped(() async {
+        final req = await _io
+            .openUrl('GET', base.resolve('/api/app-update/file/${Uri.encodeComponent(platform)}'))
+            .timeout(timeout);
+        req.followRedirects = false;
+        final tok = session?.token;
+        if (tok != null) req.headers.set(HttpHeaders.authorizationHeader, 'Bearer $tok');
+        final resp = await req.close().timeout(timeout);
+        if (resp.statusCode != 200) {
+          await resp.drain<void>();
+          if (resp.statusCode == 401) session = null;
+          throw SiteError(resp.statusCode, tr('Installer unavailable', '无法获取安装包'));
+        }
+        final part = File('${dest.path}.part');
+        final sink = part.openWrite();
+        final digest = _DigestSink();
+        final hasher = sha256.startChunkedConversion(digest);
+        var got = 0;
+        try {
+          await for (final chunk in resp.timeout(timeout)) {
+            got += chunk.length;
+            if (got > size) throw SiteError(0, tr('Installer larger than announced', '安装包大小与站点所报不符'));
+            hasher.add(chunk);
+            sink.add(chunk);
+            progress?.call(got);
+          }
+          await sink.flush();
+        } finally {
+          await sink.close();
+        }
+        hasher.close();
+        if (got != size || digest.value.toString() != expectSha256) {
+          await part.delete().catchError((Object _) => part);
+          throw SiteError(0, tr('Installer download incomplete or corrupted', '安装包下载不完整或已损坏'));
+        }
+        await part.rename(dest.path);
+      });
 
   @override
   Future<Uint8List> recordingBytes(int id) =>

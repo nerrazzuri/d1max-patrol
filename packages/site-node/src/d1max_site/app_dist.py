@@ -56,7 +56,8 @@ class AppStore:
         if m is None or m["build"] <= build:
             return {"available": False}
         return {"available": True, "version": m["version"], "build": m["build"],
-                "size": m["size"], "name": m["name"], "uploaded_ms": m.get("uploaded_ms")}
+                "size": m["size"], "name": m["name"], "sha256": m.get("sha256"),
+                "uploaded_ms": m.get("uploaded_ms")}
 
     def file(self, platform: str) -> tuple[Path, dict[str, Any]]:
         m = self.latest(platform)
