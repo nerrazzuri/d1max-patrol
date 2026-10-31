@@ -309,7 +309,7 @@ export function MapsZonesPage({ say }: { say: Say }) {
                   class={drawKind === "erase" ? "draft-line erase" : drawKind === "wall" ? "draft-line vwall" : "draft-line"} /> : null}
                 marks={(s) => draft?.map(([x, y], i) => {
                   const [sx, sy] = s.map(x, y);
-                  return <circle key={i} cx={sx} cy={sy} r={4} class="draft-pt" />;
+                  return <circle key={i} cx={sx} cy={sy} r={5} class="draft-pt" />;
                 })} />
             )}
           </div>

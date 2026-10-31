@@ -90,7 +90,7 @@ export function NogoTab(p: TabProps) {
           {held.map((z) => <polygon key={`held-${z.id}`} points={polyPx(p.meta, z.polygon)} class="nogo-area held" />)}
           {pts.length > 0 && <polyline points={polyPx(p.meta, pts)} class={draw === "wall" ? "draft-line vwall" : "draft-line"} />}
         </>}
-        marks={(s) => pts.map(([x, y], i) => { const [sx, sy] = s.map(x, y); return <circle key={i} cx={sx} cy={sy} r={4} class="draft-pt" />; })} />
+        marks={(s) => pts.map(([x, y], i) => { const [sx, sy] = s.map(x, y); return <circle key={i} cx={sx} cy={sy} r={5} class="draft-pt" />; })} />
       <div class="ly-side">
         <div class="nogo-status">
           {!nav ? <p class="muted">…</p> : current && held.length === 0
