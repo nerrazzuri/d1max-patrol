@@ -317,6 +317,12 @@ def run(args: argparse.Namespace, *, now_ms: int) -> int:
                                                "run": gate.get("run")},
         }
         files: list[Path] = []
+        # W57:网页「软件升级」上传用的 .tar.gz(站点升级、机器人升级同一个),里面正好是包目录
+        import tarfile
+        tgz = out / f"{pkg.name}.tar.gz"
+        with tarfile.open(tgz, "w:gz") as t:
+            t.add(pkg, arcname=pkg.name)
+        files.append(tgz)
         if android:
             name = pubspec_version(repo)
             apk = build_apk(repo, name, args.build_number)
