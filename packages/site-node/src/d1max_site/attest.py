@@ -32,6 +32,11 @@ REPORT_EVERY_MS = 60_000
 _NONCE = re.compile(r"^(\d{1,15})\.([0-9a-f]{32})\.([0-9a-f]{64})$")
 
 
+def forget_device(c: Any, serial: str) -> None:
+    """解绑时(``Registry.revoke`` 的事务里)清掉这个序列号记下的设备公钥:换主板以后能重新加入。"""
+    c.execute("DELETE FROM device_ids WHERE serial=?", (serial,))
+
+
 class AttestRefused(Exception):
     """核不过(对外的话固定是 :data:`NEUTRAL`;为什么只记给公司)。"""
 
