@@ -109,7 +109,8 @@ class AttestDesk:
         pub = di._b64(cert.device_pub)
         now = self._now()
         with self.db.tx() as c:
-            row = c.execute("SELECT device_pub FROM device_ids WHERE serial=?", (serial,)).fetchone()
+            row = c.execute("SELECT device_pub FROM device_ids WHERE serial=?",
+                            (serial,)).fetchone()
             if row is not None and row["device_pub"] != pub:
                 raise AttestRefused("这个序列号登记过另一把设备钥匙(同一序列号两块板:仿冒)")
             if row is None:

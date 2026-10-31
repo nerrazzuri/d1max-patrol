@@ -73,8 +73,9 @@ def decode(code: str) -> dict[str, Any]:
     return d
 
 
-def claim(code: dict[str, Any], *, timeout_s: float = 20.0) -> dict[str, bytes]:
-    """连站点接口、**先核证书指纹**、再拿令牌领证书包。回 ``{文件名: 内容}``。"""
+def _pinned_call(code: dict[str, Any], method: str, path: str, body: bytes | None,
+                 timeout_s: float) -> tuple[int, bytes]:
+    """连站点接口、**先核证书指纹**(对不上一个字节都不发),发一个请求,回 (状态, 回复)。"""
     u = urlparse(code["api"])
     if u.scheme != "https" or not u.hostname:
         raise ProvisionError(f"站点接口地址错误:{code['api']}")
@@ -92,19 +93,36 @@ def claim(code: dict[str, Any], *, timeout_s: float = 20.0) -> dict[str, bytes]:
         if got != code["fp"].lower():
             raise ProvisionError(f"站点证书指纹不匹配(开通码里是 {code['fp'][:16]}…,"
                                  f"连上的是 {got[:16]}…):不是那个站点,未发令牌")
-        body = json.dumps({"robot_id": code["id"], "token": code["t"]}).encode()
-        conn.request("POST", "/api/enroll/claim", body=body,
-                     headers={"Content-Type": "application/json"})
+        conn.request(method, path, body=body, headers={"Content-Type": "application/json"})
         resp = conn.getresponse()
-        raw = resp.read()
+        return resp.status, resp.read()
     finally:
         conn.close()
+
+
+def claim(code: dict[str, Any], *, timeout_s: float = 20.0,
+          attest: Callable[[str, str, str], dict[str, Any] | None] | None = None,
+          call: Callable[..., tuple[int, bytes]] = _pinned_call) -> dict[str, bytes]:
+    """拿令牌领证书包。回 ``{文件名: 内容}``。W63:``attest`` 给了就先要题、用设备钥匙答,一起交
+    (站点要先核是原厂设备;老站点没有出题的口就不答)。"""
+    body: dict[str, Any] = {"robot_id": code["id"], "token": code["t"]}
+    if attest is not None:
+        st, raw = call(code, "GET", "/api/attest/challenge", None, timeout_s)
+        if st == 200:
+            try:
+                ch = json.loads(raw or b"{}")
+            except ValueError:
+                ch = {}
+            ans = attest("claim", str(ch.get("site_id") or ""), str(ch.get("nonce") or ""))
+            if ans is not None:
+                body["attest"] = ans
+    status, raw = call(code, "POST", "/api/enroll/claim", json.dumps(body).encode(), timeout_s)
     try:
         d = json.loads(raw or b"{}")
     except ValueError:
         d = {}
-    if resp.status != 200:
-        raise ProvisionError(f"站点不给:{d.get('error') or resp.status}")
+    if status != 200:
+        raise ProvisionError(f"站点不给:{d.get('error') or status}")
     files = {k: base64.b64decode(v) for k, v in (d.get("files") or {}).items() if k in PLACES}
     missing = [n for n in REQUIRED if n not in files]
     if missing:
@@ -163,9 +181,15 @@ def set_env(env: Path, key: str, value: str) -> None:
 
 
 def provision(code_text: str, *, etc: Path = ETC, user: str | None = "robot", force: bool = False,
-              claimer: Callable[[dict[str, Any]], dict[str, bytes]] = claim) -> str:
-    """开通。回狗的编号。"""
+              claimer: Callable[[dict[str, Any]], dict[str, bytes]] | None = None,
+              attest: Any = None) -> str:
+    """开通。回狗的编号。W63:领证书时用这台的设备钥匙答站点的题(``etc`` 下的设备身份)。"""
     code = decode(code_text)
+    if claimer is None:
+        from d1max_patrol.bind import devid
+        from d1max_patrol.bind.paths import BindPaths
+        att = attest or devid.attester(BindPaths(etc=etc))
+        claimer = lambda c: claim(c, attest=att)  # noqa: E731
     reg = etc / "registration.json"
     if reg.is_file() and not force:
         try:

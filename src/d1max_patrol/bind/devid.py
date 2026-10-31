@@ -164,7 +164,14 @@ def answer(p: BindPaths, *, purpose: str, site_id: str, nonce: str,
                                 serial=str(cert.get("serial")))
     except (DevIdError, di.DeviceIdError):
         return None
-    return {"cert": cert, "hw_id": hw, "sig": di.sign_attest(seed, msg)}
+    return {"cert": cert, "hw_id": hw, "nonce": nonce, "sig": di.sign_attest(seed, msg)}
+
+
+def attester(p: BindPaths, hw_sources: Iterable[Path] | None = None) -> Any:
+    """给连站点的那一头用:``attester(paths)(purpose, site_id, nonce)`` → 答题或 ``None``。"""
+    src = list(hw_sources) if hw_sources is not None else list(HW_SOURCES)
+    return lambda purpose, site_id, nonce: answer(p, purpose=purpose, site_id=site_id,
+                                                  nonce=nonce, hw_sources=src)
 
 
 def factory_pubs(p: BindPaths) -> list[bytes]:

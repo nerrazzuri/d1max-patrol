@@ -449,7 +449,8 @@ def release_pubkey(home: Path) -> Path | None:
 def factory_pubkeys(home: Path) -> tuple[list[bytes], set[str]]:
     """W63:认哪几把出厂公钥、作废了哪几把。``site.json`` 的 ``factory_pubkey``(默认
     ``/etc/d1max-site/factory-pub.pem``,装机脚本从发行包装)+ 旁边 ``factory-pub.d/*.pem``(换钥匙时随
-    发行加的);作废名单 ``factory-revoked.txt``(一行一个编号,``#`` 开头是注释)。没装 = 谁都进不来。"""
+    发行加的);作废名单 ``factory-revoked.txt``(一行一个编号,``#`` 开头是注释)。
+    没装 = 谁都进不来。"""
     from d1max_contract import ed25519
     cfg = _load(home)
     main = Path(cfg.get("factory_pubkey") or "/etc/d1max-site/factory-pub.pem")
@@ -475,7 +476,8 @@ def cmd_company_reports(home: Path, since_ms: int = 0) -> list[dict]:
     import json as _json
     db = _open_db(home, _load(home))
     try:
-        rows = db.query("SELECT id, at_ms, kind, source, serial, detail, sent_ms FROM company_reports "
+        rows = db.query("SELECT id, at_ms, kind, source, serial, detail, sent_ms "
+                        "FROM company_reports "
                         "WHERE at_ms>=? ORDER BY id", (since_ms,))
         return [dict(r) | {"detail": _json.loads(r["detail"] or "{}")} for r in rows]
     finally:
