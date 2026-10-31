@@ -142,7 +142,7 @@ def test_字号最小12_字体只有那三种():
     sizes = {k: (v["family"], v["size"], v["weight"]) for k, v in TOKENS["type"].items()}
     assert sizes["headlineMedium"] == ("display", 28, 600)
     assert sizes["bodyMedium"] == ("sans", 14, 400)
-    assert sizes["labelSmall"] == ("mono", 12, 500)
+    assert sizes["labelSmall"] == ("sans", 12, 500)   # W60:标签用常规字,等宽只给编号、数字
 
 
 def test_间距和圆角是设计稿那几档():

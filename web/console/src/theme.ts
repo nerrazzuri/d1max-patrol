@@ -9,15 +9,16 @@ export type Scheme = "light" | "dark";
 export type Palette = Record<string, string>;
 
 /** 品牌色(W60):只用在导航选中、焦点、主按钮、地图上选中的东西 —— 不表示健康(绿)、也不表示提示。 */
-const BRAND: Record<Scheme, { brand: string; brandSoft: string; onBrand: string; brandText: string }> = {
-  dark: { brand: "#4EA8F0", brandSoft: "#14263A", onBrand: "#04121F", brandText: "#E8F3FE" },
-  light: { brand: "#1F6FB8", brandSoft: "#E3EFFB", onBrand: "#FFFFFF", brandText: "#0B3A66" },
+//  品牌蓝本身就是设计系统的 tertiary(design/mobile.json,手机网页同一个值);这里只补网页要的软底和字色。
+const BRAND: Record<Scheme, { brandSoft: string; onBrand: string; brandText: string }> = {
+  dark: { brandSoft: "#14263A", onBrand: "#04121F", brandText: "#E8F3FE" },
+  light: { brandSoft: "#E3EFFB", onBrand: "#FFFFFF", brandText: "#0B3A66" },
 };
 
 /** 网页多出来的几样(手机没有对应的):视频底两套都是黑的;地图的底跟手机一样用 surfaceVariant;侧栏比底亮一点。 */
 function webExtras(p: Palette, s: Scheme): Palette {
   const b = BRAND[s];
-  return { well: "#000000", mapBg: p.surfaceVariant, focus: b.brand, ...b,
+  return { well: "#000000", mapBg: p.surfaceVariant, brand: p.tertiary, focus: p.tertiary, ...b,
     sidebar: s === "dark" ? "#0F1218" : "#ECEEF1" };
 }
 

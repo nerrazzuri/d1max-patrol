@@ -176,14 +176,14 @@ void main() {
       expect(zoneLabelText(null), '');
     });
 
-    testWidgets('主题（2026-10-14 重做）：浅色深色两套、主色和底色是设计稿的、字体是 Inter / JetBrains Mono', (t) async {
+    testWidgets('主题（2026-10-14 重做）：浅色深色两套、主色和底色是设计稿的、字体是 Inter（等宽只给编号）', (t) async {
       final th = nwTheme(Brightness.dark);
       expect(th.brightness, Brightness.dark);
       expect(th.colorScheme.primary, const Color(0xFFD1E4FF));
       expect(th.scaffoldBackgroundColor, const Color(0xFF0A0C10));
       expect(th.textTheme.bodyMedium!.fontFamily, 'Inter');
       expect(th.textTheme.bodyMedium!.fontSize, 14);
-      expect(NwText.labelSmall.fontFamily, 'JetBrains Mono');
+      expect(NwText.labelSmall.fontFamily, 'Inter'); // W60:标签用常规字
       final light = nwTheme(Brightness.light);
       expect(light.brightness, Brightness.light);
       expect(light.colorScheme.primary, const Color(0xFF1A1C1E));
