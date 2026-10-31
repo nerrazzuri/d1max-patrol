@@ -39,6 +39,8 @@ set -euo pipefail
 # @写盘 /etc/systemd/timesyncd.conf.d/d1max.conf                          对时配置:向站点主机对时(W09d)
 # @写盘 /etc/chrony/conf.d/d1max.conf                                     对时归 chrony 管的狗:向站点主机对时(决策 61)
 # @写盘 /usr/local/lib/d1max                                             特权执行器和它验签用的模块(W55;root 属主,不从版本目录跑代码)
+# @写盘 /etc/d1max/unbind-pub.d                                          随发行新增的解绑公钥(W57;换钥匙用)
+# @写盘 /etc/d1max/unbind-revoked.txt                                    作废的解绑公钥编号(W57)
 # @写盘 /etc/d1max-ops.json                                              特权执行器的配置(W55)
 # @写盘 /var/lib/d1max-ops                                               特权执行器的请求、结果目录(W55)
 # @写盘 /etc/systemd/system/d1max-ops.path                               特权执行器的路径单元(W55)
@@ -528,6 +530,17 @@ done
 # 配网服务(W42)以 root 跑:它的代码也拷进 root 独占的 /usr/local/lib/d1max/bind/,用系统 python -I 跑
 # (外审 W55-1:以前从版本目录跑,机器人账号改得了)。换版本时由特权执行器验签以后换。在跑的话重起一下。
 /usr/bin/python3 /usr/local/lib/d1max/ops-runner --install-bind "$PKG" --lib-dir /usr/local/lib/d1max
+# W57:随发行换解绑钥匙 —— 包里带的解绑公钥(换钥匙时新增的)、作废名单装进 /etc/d1max(配网服务认它们)
+if [[ -d "$PKG/deploy/unbind-pub.d" ]]; then
+  install -d -m 0755 -o root -g root /etc/d1max/unbind-pub.d
+  find /etc/d1max/unbind-pub.d -maxdepth 1 -type f -name '*.pem' -delete
+  for k in "$PKG"/deploy/unbind-pub.d/*.pem; do
+    [[ -f "$k" ]] && install -m 0644 -o root -g root "$k" /etc/d1max/unbind-pub.d/
+  done
+fi
+if [[ -f "$PKG/deploy/unbind-revoked.txt" ]]; then
+  install -m 0644 -o root -g root "$PKG/deploy/unbind-revoked.txt" /etc/d1max/unbind-revoked.txt
+fi
 systemctl daemon-reload
 systemctl try-restart d1max-bind.service || true
 install -d -m 0755 -o root -g root /var/lib/d1max-ops

@@ -324,3 +324,60 @@ def test_扫附近WiFi_同名留最强_强的在前_空名不列_要绑定码(�
     assert 机.core.scan(CODE)["networks"] == [
         {"ssid": "A", "signal": -50, "secured": False},
         {"ssid": "B", "signal": -60, "secured": True}]
+
+
+# ------------------------------------------------------------------ W57 换解绑钥匙、作废、台账
+
+def _pub(seed):
+    return ed25519.public_pem(ed25519.public_key(seed))
+
+
+def test_W57_解绑令_新钥匙随发行装进来就认_出厂那把照认(机):
+    old, new = ed25519.new_seed(), ed25519.new_seed()
+    机.paths.unbind_pub.write_bytes(_pub(old))
+    机.bound()
+    with pytest.raises(c.BindRefused, match="签名错误"):
+        机.core.unbind_token(CODE, b.sign_unbind(new, "D1M-1", now_ms=机.t, hours=24))
+    d = 机.paths.etc / "unbind-pub.d"
+    d.mkdir()
+    (d / "2026-11.pem").write_bytes(_pub(new))
+    机.core.unbind_token(CODE, b.sign_unbind(new, "D1M-1", now_ms=机.t, hours=24))
+    assert 机.core.s["state"] == "wiping"
+
+
+def test_W57_解绑令_作废名单里的钥匙不认_出厂那把也能作废(机):
+    old, new = ed25519.new_seed(), ed25519.new_seed()
+    机.paths.unbind_pub.write_bytes(_pub(old))
+    d = 机.paths.etc / "unbind-pub.d"
+    d.mkdir()
+    (d / "new.pem").write_bytes(_pub(new))
+    (机.paths.etc / "unbind-revoked.txt").write_text(
+        f"# 2026-11-02 出厂那把泄露\n{b.key_id(ed25519.public_key(old))}\n")
+    机.bound()
+    with pytest.raises(c.BindRefused, match="签名错误|作废"):
+        机.core.unbind_token(CODE, b.sign_unbind(old, "D1M-1", now_ms=机.t, hours=24))
+    机.core.unbind_token(CODE, b.sign_unbind(new, "D1M-1", now_ms=机.t, hours=24))
+    assert 机.core.s["state"] == "wiping"
+
+
+def test_W57_签解绑令_记台账(tmp_path, capsys):
+    import argparse
+    import csv
+
+    from d1max_patrol.bind.cli import add_args, run
+    ap = argparse.ArgumentParser()
+    add_args(ap.add_subparsers(dest="command", required=True))
+    k = tmp_path / "unbind.key"
+    assert run(ap.parse_args(["unbind-token", "keygen", "--private", str(k), "--public",
+                              str(tmp_path / "unbind-pub.pem")])) == 0
+    ledger = tmp_path / "解绑令台账.csv"
+    argv = ["unbind-token", "sign", "--private", str(k), "--serial", "D1M-1"]
+    assert run(ap.parse_args([*argv, "--ledger", str(ledger)])) == 1, "记台账要写申请人、核对人、用途"
+    assert run(ap.parse_args([*argv, "--ledger", str(ledger), "--requester", "客户 A 管理员",
+                              "--checker", "liang", "--purpose", "站点主机损坏无备份"])) == 0
+    tok = capsys.readouterr().out.strip().splitlines()[-1]
+    rows = list(csv.DictReader(ledger.open(encoding="utf-8")))
+    assert len(rows) == 1 and rows[0]["serial"] == "D1M-1" and rows[0]["checker"] == "liang"
+    assert rows[0]["nonce"] and rows[0]["nonce"] in b.verify_unbind(
+        tok, ed25519.pub_from_pem((tmp_path / "unbind-pub.pem").read_bytes()), serial="D1M-1",
+        now_ms=int(__import__("time").time() * 1000)).nonce

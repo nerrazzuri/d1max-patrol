@@ -55,6 +55,16 @@ class BindPaths:
         return self.etc / "unbind-pub.pem"
 
     @property
+    def unbind_pub_dir(self) -> Path:
+        """W57:随发行装进来的解绑公钥(换钥匙时加新的)。"""
+        return self.etc / "unbind-pub.d"
+
+    @property
+    def unbind_revoked(self) -> Path:
+        """W57:作废的解绑公钥编号(一行一个,``#`` 开头是注释)。"""
+        return self.etc / "unbind-revoked.txt"
+
+    @property
     def env(self) -> Path:
         return self.etc / "env"
 

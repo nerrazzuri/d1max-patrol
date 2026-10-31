@@ -147,7 +147,8 @@ def write_atomic(path: Path, data: bytes, *, mode: int, uid: int = 0, gid: int =
 
 
 def tree_ok(root: Path, manifest: dict[str, Any], pubkey: Path,
-            capture: frozenset[str] = frozenset()) -> dict[str, bytes]:
+            capture: frozenset[str] = frozenset(),
+            capture_prefixes: tuple[str, ...] = ()) -> dict[str, bytes]:
     """``root`` 这个包:签名对、内容指纹对。**一遍读完**:每个文件只读一次(``O_NOFOLLOW``),算指纹用的
     就是这份字节;``capture`` 里列的文件把这份字节交回去 —— 装的跟验的是同一份(外审 W55-1 第 5 条:先读
     单元、后算指纹的话,中间放进再删掉一个文件就能混进没签名的单元)。"""
@@ -164,7 +165,7 @@ def tree_ok(root: Path, manifest: dict[str, Any], pubkey: Path,
         if rel == "release.json" or not packed(rel):
             continue
         data = read_nofollow(p, limit=1 << 30)
-        if rel in capture:
+        if rel in capture or (capture_prefixes and rel.startswith(capture_prefixes)):
             got[rel] = data
         digest.update(rel.encode())
         digest.update(b"\0")
@@ -352,6 +353,10 @@ def render_wg(doc: dict[str, Any]) -> str:
 
 
 BIND_EXEC = "ExecStart=/usr/bin/python3 -I /usr/local/lib/d1max/bind/run.py"
+#: W57:随发行换解绑钥匙 —— 包里新增的解绑公钥、作废名单,验签后装进 /etc/d1max(配网服务认它们)。
+UNBIND_DIR = "deploy/unbind-pub.d"
+UNBIND_REVOKED = "deploy/unbind-revoked.txt"
+_PEM_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}\.pem$")
 
 
 def unit_problem(name: str, data: bytes, *, bind_ok: bool) -> str:
@@ -534,8 +539,9 @@ class Ops:
         if not pubkey.is_file():
             raise OpError("机器人上没装发行公钥:服务单元不更新")
         manifest = json.loads(read_nofollow(root / "release.json", limit=MAX_REQ))
-        want = frozenset(f"deploy/{u}.service" for u in ROBOT_UNITS) | frozenset(BIND_FILES)
-        got = tree_ok(root, manifest, pubkey, want)
+        want = frozenset(f"deploy/{u}.service" for u in ROBOT_UNITS) | frozenset(BIND_FILES) \
+            | frozenset({UNBIND_REVOKED})
+        got = tree_ok(root, manifest, pubkey, want, capture_prefixes=(UNBIND_DIR + "/",))
         units = {k: v for k, v in got.items() if k.endswith(".service")}
         bind_ok = all(k in got for k in BIND_FILES)
         skipped = []
@@ -560,9 +566,32 @@ class Ops:
         if bind or "d1max-bind.service" in changed:
             self.run(["systemctl", "--no-block", "try-restart", "d1max-bind.service"], 30)
         out: dict[str, Any] = {"changed": changed, "bind": bind}
+        keys = self._unbind_keys(got)
+        if keys is not None:
+            out["unbind_keys"] = keys
         if skipped:
             out["skipped"] = skipped
         return out
+
+    def _unbind_keys(self, got: dict[str, bytes]) -> list[str] | None:
+        """包里带了解绑公钥(``deploy/unbind-pub.d/*.pem``)就把 /etc/d1max/unbind-pub.d 换成包里那一套;
+        带了作废名单就换上。都没带(老包)→ None,什么都不动。"""
+        etc = self.etc / "d1max"
+        pems = {Path(k).name: v for k, v in got.items()
+                if k.startswith(UNBIND_DIR + "/") and _PEM_NAME.match(Path(k).name)
+                and Path(k).parent.as_posix() == UNBIND_DIR}
+        if UNBIND_REVOKED in got:
+            write_atomic(etc / "unbind-revoked.txt", got[UNBIND_REVOKED], mode=0o644)
+        if not pems:
+            return [] if UNBIND_REVOKED in got else None
+        d = etc / "unbind-pub.d"
+        d.mkdir(mode=0o755, parents=True, exist_ok=True)
+        for old in d.iterdir():
+            if old.name not in pems and (old.is_file() or old.is_symlink()):
+                old.unlink()
+        for name, data in pems.items():
+            write_atomic(d / name, data, mode=0o644)
+        return sorted(pems)
 
     # ---------------------------------------------------------------- 站点
     def _site(self) -> tuple[Path, Path, str]:

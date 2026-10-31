@@ -191,6 +191,12 @@ def sign_unbind(seed: bytes, serial: str, *, now_ms: int, hours: float) -> str:
     return UNBIND_PREFIX + _b64(body) + "." + _b64(ed25519.sign(seed, _UNBIND_DOMAIN + body))
 
 
+def key_id(pub: bytes) -> str:
+    """解绑公钥的编号(W57:作废名单里写它)= 原始公钥字节 SHA-256 的前 16 位十六进制。"""
+    import hashlib
+    return hashlib.sha256(pub).hexdigest()[:16]
+
+
 def verify_unbind(text: str, pub: bytes, *, serial: str, now_ms: int) -> UnbindToken:
     """验解绑令:签名、序列号、没过期。用过没有由机器人自己记(这里不管)。"""
     text = text.strip() if isinstance(text, str) else ""

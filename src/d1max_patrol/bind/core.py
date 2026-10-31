@@ -238,20 +238,48 @@ class BindCore:
             self._save()
             return self._status()
 
+    def _unbind_keys(self) -> list[bytes]:
+        """认哪几把解绑公钥(W57):出厂烧的那把 + 随发行装进来的,去掉作废名单里的。"""
+        from d1max_contract.binding import key_id
+        files = [self.paths.unbind_pub]
+        if self.paths.unbind_pub_dir.is_dir():
+            files += sorted(self.paths.unbind_pub_dir.glob("*.pem"))
+        try:
+            revoked = {ln.strip() for ln in self.paths.unbind_revoked.read_text(
+                encoding="utf-8").splitlines() if ln.strip() and not ln.startswith("#")}
+        except OSError:
+            revoked = set()
+        out = []
+        for f in files:
+            try:
+                pub = ed25519.pub_from_pem(f.read_bytes())
+            except (OSError, ValueError):
+                continue
+            if key_id(pub) not in revoked:
+                out.append(pub)
+        return out
+
     def unbind_token(self, code: Any, token: Any) -> dict[str, Any]:
         """工程师拿公司签的解绑令解(站点坏了、没备份,§7)。"""
         with self._lock:
             self._check_code(code)
             if self.s["state"] == "unbound":
                 raise BindRefused(409, "此机器人本来就未绑定")
-            try:
-                pub = ed25519.pub_from_pem(self.paths.unbind_pub.read_bytes())
-            except (OSError, ValueError) as exc:
-                raise BindRefused(409, "此机器人未安装解绑公钥:找工程师重装") from exc
-            try:
-                tok = verify_unbind(str(token or ""), pub, serial=self.serial, now_ms=self._now())
-            except BindingError as exc:
-                raise BindRefused(403, str(exc)) from exc
+            keys = self._unbind_keys()
+            if not keys:
+                raise BindRefused(409, "此机器人未安装解绑公钥:找工程师重装")
+            tok, err = None, "解绑令签名错误"
+            for pub in keys:
+                try:
+                    tok = verify_unbind(str(token or ""), pub, serial=self.serial,
+                                        now_ms=self._now())
+                    break
+                except BindingError as exc:
+                    err = str(exc)
+                    if "签名错误" not in err:        # 签名对、别的不对(序列号、过期):直接说
+                        break
+            if tok is None:
+                raise BindRefused(403, err)
             used = read_json(self.paths.used_tokens, []) or []
             if tok.nonce in used:
                 raise BindRefused(403, "这张解绑令用过了:请公司重新签一张")

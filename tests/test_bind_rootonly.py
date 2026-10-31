@@ -129,3 +129,34 @@ def test_执行器的配网文件单子_都在仓库里():
     missing = [rel for rel in R.BIND_FILES if not (ROOT / rel).is_file()]
     assert not missing
     assert sys.version_info >= (3, 10)
+
+
+def test_W57_换版本_验签以后装上新的解绑公钥和作废名单(tmp_path):
+    cfg = _cfg(tmp_path)
+    cfg["lib_dir"] = str(tmp_path / "lib")
+    keys = tmp_path / "keys"
+    relsign.keygen(keys / "priv.pem", keys / "pub.pem")
+    name = "2026-10-31-abcdef12"
+    root = tmp_path / "opt" / "releases" / name
+    (root / "deploy" / "unbind-pub.d").mkdir(parents=True)
+    (root / "deploy" / "unbind-pub.d" / "2026-11.pem").write_text("PUB-NEW")
+    (root / "deploy" / "unbind-revoked.txt").write_text("abcdef0123456789\n")
+    from d1max_agent.engine.release import _packed
+    man = {"name": name, "version": "1.0", "requires_mission_schema": 1,
+           "content_sha256": tree_sha256(root, skip="release.json", keep=_packed)}
+    man["signature"] = relsign.sign(man, keys / "priv.pem")
+    (root / "release.json").write_text(json.dumps(man))
+    etc = tmp_path / "etc"
+    (etc / "d1max" / "unbind-pub.d").mkdir(parents=True)
+    (etc / "d1max" / "unbind-pub.d" / "stale.pem").write_text("OLD")
+    sysd = tmp_path / "systemd"
+    sysd.mkdir()
+    got = R.Ops(cfg, run=Rec(), systemd_dir=sysd, etc=etc).do("units_apply", {"release": name})
+    assert got["unbind_keys"] == ["2026-11.pem"]
+    assert sorted(p.name for p in (etc / "d1max" / "unbind-pub.d").iterdir()) == ["2026-11.pem"]
+    assert (etc / "d1max" / "unbind-revoked.txt").read_text() == "abcdef0123456789\n"
+
+
+def test_W57_装机脚本装解绑公钥和作废名单():
+    text = (ROOT / "deploy" / "install.sh").read_text(encoding="utf-8")
+    assert "/etc/d1max/unbind-pub.d" in text and "/etc/d1max/unbind-revoked.txt" in text
