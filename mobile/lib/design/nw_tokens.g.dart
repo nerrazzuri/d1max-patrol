@@ -39,7 +39,7 @@ abstract final class NwDark {
   static const Color primary = Color(0xFFD1E4FF);
   static const Color onPrimary = Color(0xFF000000);
   static const Color secondary = Color(0xFFBEC6DC);
-  static const Color tertiary = Color(0xFF4796E6);
+  static const Color tertiary = Color(0xFF4EA8F0);
   static const Color outline = Color(0xFF30353F);
   static const Color text = Color(0xFFE2E2E6);
   static const Color textSecondary = Color(0xFFA1A1A6);
@@ -128,21 +128,21 @@ abstract final class NwType {
       fontWeight: FontWeight.w600,
       letterSpacing: 0.0);
   static const TextStyle labelLarge = TextStyle(
-      fontFamily: NwFont.mono,
+      fontFamily: NwFont.sans,
       fontFamilyFallback: NwFont.fallback,
       fontSize: 14.0,
       height: 1.2,
       fontWeight: FontWeight.w600,
       letterSpacing: 0.0);
   static const TextStyle labelMedium = TextStyle(
-      fontFamily: NwFont.mono,
+      fontFamily: NwFont.sans,
       fontFamilyFallback: NwFont.fallback,
       fontSize: 12.0,
       height: 1.2,
       fontWeight: FontWeight.w600,
       letterSpacing: 0.0);
   static const TextStyle labelSmall = TextStyle(
-      fontFamily: NwFont.mono,
+      fontFamily: NwFont.sans,
       fontFamilyFallback: NwFont.fallback,
       fontSize: 12.0,
       height: 1.2,

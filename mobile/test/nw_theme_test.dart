@@ -70,7 +70,7 @@ void main() {
       expect(NwColors.dark.primary, const Color(0xFFD1E4FF));
     });
 
-    test('正文 Inter 14；标题 Space Grotesk；标签 JetBrains Mono；中文落到系统字体', () {
+    test('正文 Inter 14；标题 Space Grotesk；标签也是 Inter（W60：等宽只给编号、数字）；中文落到系统字体', () {
       for (final b in Brightness.values) {
         final tt = nwTheme(b).textTheme;
         expect(tt.bodyMedium!.fontFamily, 'Inter');
@@ -79,7 +79,7 @@ void main() {
         expect(tt.headlineMedium!.fontFamily, 'Space Grotesk');
         expect(tt.headlineMedium!.fontSize, 28);
         expect(tt.headlineMedium!.fontWeight, FontWeight.w600);
-        expect(tt.labelMedium!.fontFamily, 'JetBrains Mono');
+        expect(tt.labelMedium!.fontFamily, 'Inter');
         expect(tt.titleMedium!.fontFamily, 'Inter');
         expect(tt.titleMedium!.fontWeight, FontWeight.w600);
       }

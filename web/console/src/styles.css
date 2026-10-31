@@ -211,7 +211,7 @@ button.navgroup-title[aria-expanded="true"]::after { content: " ▾"; }
 
 /* 跳转条(狗 > 4 只) */
 .jump { position: sticky; top: 56px; z-index: 4; min-height: 40px; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 4px 0; background: var(--c-bg); }
-.jumpbtn { display: inline-flex; align-items: center; gap: 4px; height: 32px; padding: 0 10px; border: 1px solid var(--c-outline); border-radius: var(--r-r8); background: var(--c-surface); color: var(--c-text); text-decoration: none; font-family: var(--font-mono); font-size: 13px; font-weight: 600; }
+.jumpbtn { display: inline-flex; align-items: center; gap: 4px; height: 32px; padding: 0 10px; border: 1px solid var(--c-outline); border-radius: var(--r-r8); background: var(--c-surface); color: var(--c-text); text-decoration: none; font-family: var(--font-sans); font-size: 13px; font-weight: 600; }
 .jumpbtn.p1 { background: var(--c-error); color: var(--c-onError); border-color: var(--c-errorFrame); }
 
 /* 报警队列(底部常驻) */
@@ -220,11 +220,11 @@ button.navgroup-title[aria-expanded="true"]::after { content: " ▾"; }
 .queue-head h2 { font-size: 18px; }
 .queue-peek { display: inline-flex; align-items: center; gap: 8px; }
 .tabs { display: flex; gap: 2px; padding: 3px; border: 1px solid var(--c-outline); border-radius: var(--r-r8); }
-.tabs button { height: 28px; padding: 0 10px; border: 0; border-radius: var(--r-r4); background: transparent; color: var(--c-textSecondary); font-family: var(--font-mono); font-size: 13px; font-weight: 600; cursor: pointer; }
+.tabs button { height: 28px; padding: 0 10px; border: 0; border-radius: var(--r-r4); background: transparent; color: var(--c-textSecondary); font-family: var(--font-sans); font-size: 13px; font-weight: 600; cursor: pointer; }
 .tabs button[aria-selected="true"] { background: var(--c-surfaceVariant); color: var(--c-text); }
 .queue-body { max-height: 168px; overflow: auto; }
 .queue table { width: 100%; border-collapse: collapse; font-size: 14px; line-height: 20px; }
-.queue th { text-align: left; font-family: var(--font-mono); font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--c-textSecondary); padding: 4px 8px; position: sticky; top: 0; background: var(--c-surface); }
+.queue th { text-align: left; font-family: var(--font-sans); font-size: 12px; font-weight: 600; letter-spacing: 0.04em; color: var(--c-textSecondary); padding: 4px 8px; position: sticky; top: 0; background: var(--c-surface); }
 .queue td { padding: 6px 8px; border-top: 1px solid var(--c-outline); }
 .queue th:first-child, .queue td:first-child { padding-left: 16px; }
 .queue tr.row-P1 td { background: var(--c-errorSoft); }
@@ -243,7 +243,7 @@ button.navgroup-title[aria-expanded="true"]::after { content: " ▾"; }
 .mapwrap > .map.dragging { cursor: grabbing; }
 .mapimg { filter: var(--map-raster, none); }
 .mapbar { display: flex; align-items: center; gap: 6px 16px; padding: 6px 12px; background: var(--c-surface); border-top: 1px solid var(--c-outline); }
-.maplegend { flex: 1; min-width: 0; list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 4px 14px; font-family: var(--font-mono); font-size: 12px; line-height: 18px; color: var(--c-textSecondary); }
+.maplegend { flex: 1; min-width: 0; list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 4px 14px; font-family: var(--font-sans); font-size: 12px; line-height: 18px; color: var(--c-textSecondary); }
 .mapctl { flex: none; display: flex; align-items: center; gap: 12px; }
 .maplegend li { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
 .sw { flex: none; display: block; }
@@ -290,7 +290,7 @@ button.navgroup-title[aria-expanded="true"]::after { content: " ▾"; }
 :not(.panel) > .panel-head { padding-left: 0; padding-right: 0; }
 .pad { padding: 8px 16px 16px; margin: 0; }
 .grid { width: 100%; border-collapse: collapse; font-size: 14px; line-height: 20px; }
-.grid th { text-align: left; font-family: var(--font-mono); font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--c-textSecondary); padding: 10px 8px 8px; }
+.grid th { text-align: left; font-family: var(--font-sans); font-size: 12px; font-weight: 600; letter-spacing: 0.04em; color: var(--c-textSecondary); padding: 10px 8px 8px; }
 .grid td { padding: 8px; border-top: 1px solid var(--c-outline); vertical-align: middle; }
 .grid th:first-child, .grid td:first-child { padding-left: 16px; }
 .grid tr.off td { color: var(--c-textMuted); }
@@ -402,7 +402,7 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--c-primary); }
 .pair-text .row { align-items: flex-end; }
 .pair-text .grow { flex: 1; min-width: 0; }
 .kv { display: grid; grid-template-columns: max-content 1fr; gap: 4px 16px; margin: 0; }
-.kv dt { color: var(--c-textSecondary); font-family: var(--font-mono); font-size: 13px; line-height: 20px; }
+.kv dt { color: var(--c-textSecondary); font-family: var(--font-sans); font-size: 13px; line-height: 20px; }
 .kv dd { margin: 0; min-width: 0; }
 .wrap { overflow-wrap: anywhere; }
 
@@ -446,7 +446,7 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--c-primary); }
 .report { display: flex; flex-direction: column; gap: 16px; }
 .sheet { display: flex; flex-direction: column; gap: 24px; max-width: 1200px; }
 .sheet h1 { font-size: 24px; line-height: 30px; margin: 0; }
-.sheet h2 { font-family: var(--font-mono); font-size: 13px; line-height: 20px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--c-textSecondary); margin: 0 0 8px; padding-bottom: 6px; border-bottom: 1px solid var(--c-outline); }
+.sheet h2 { font-family: var(--font-sans); font-size: 13px; line-height: 20px; font-weight: 600; letter-spacing: 0.06em; color: var(--c-textSecondary); margin: 0 0 8px; padding-bottom: 6px; border-bottom: 1px solid var(--c-outline); }
 .sheet p { margin: 4px 0; }
 .sheet section { display: flex; flex-direction: column; gap: 8px; }
 .stats { display: flex; flex-wrap: wrap; gap: 8px 32px; }
@@ -466,7 +466,7 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--c-primary); }
   .sheet > section:first-of-type { grid-column: 1; grid-row: 2 / span 4; }
 }
 .reptable caption { text-align: left; font-weight: 700; padding: 12px 0 4px; }
-.reptable th { text-align: left; font-family: var(--font-mono); font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--c-textSecondary); padding: 4px 16px 4px 0; border-bottom: 1px solid var(--c-outline); }
+.reptable th { text-align: left; font-family: var(--font-sans); font-size: 12px; font-weight: 600; letter-spacing: 0.04em; color: var(--c-textSecondary); padding: 4px 16px 4px 0; border-bottom: 1px solid var(--c-outline); }
 .reptable td { padding: 4px 16px 4px 0; border-bottom: 1px solid var(--c-outline); vertical-align: top; }
 .reptable .num { text-align: right; font-family: var(--font-mono); }
 /* 打印:白底黑字,只留报表;顶栏、报警队列、筛选条都不印 */
