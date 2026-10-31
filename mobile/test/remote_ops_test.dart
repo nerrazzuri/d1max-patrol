@@ -162,6 +162,7 @@ void main() {
       final prevFlutter = FlutterError.onError;
       installErrorHooks(log);
       PlatformDispatcher.instance.onError!(StateError('late async'), StackTrace.empty);
+      FlutterError.onError!(FlutterErrorDetails(exception: StateError('late image decode')));
       PlatformDispatcher.instance.onError = prev;
       FlutterError.onError = prevFlutter;
       log.note('flutter', 'build error');

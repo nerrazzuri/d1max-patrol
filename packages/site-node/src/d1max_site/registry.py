@@ -94,7 +94,9 @@ class Registry:
             rows = c.execute("SELECT * FROM cert_pending WHERE robot_id=? AND fingerprint=?",
                              (robot_id, fingerprint)).fetchall()
             if not rows:
-                return False
+                # 外审 W55-4 N4:已经转正过了(接收口先转的,回执后到)也算成
+                return c.execute("SELECT 1 FROM robots WHERE robot_id=? AND revoked=0 AND "
+                                 "fingerprint=?", (robot_id, fingerprint)).fetchone() is not None
             r = rows[0]
             # 外审 W55-2 I2:登记表还得是发起续签时那张(期间解绑、重新登记过就不转)
             n = c.execute("UPDATE robots SET fingerprint=?, issued_at=?, expires_at=? "

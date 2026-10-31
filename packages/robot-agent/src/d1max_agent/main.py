@@ -735,15 +735,23 @@ def after_switch(priv: Any, ops: Any) -> bool:
         got = priv.call("restart_all", timeout_s=900)
         if got.get("ok"):
             return True                          # 执行器最后会把代理也重启
-        log.error("重启全部服务失败:%s", got.get("error"))
-        from d1max_agent.engine import release as rel
+        why = f"重启全部服务失败:{got.get('error')}"
+    except privops.PrivOpsError as exc:
+        # 外审 W55-4 I4:执行器不可用、结果未知也一样 —— 服务是不是都换上了说不准,不许被提交
+        why = f"特权执行器不可用或结果未知:{exc}"
+    log.error("%s", why)
+    from d1max_agent.engine import release as rel
+    try:
         if rel.read_pending(ops.layout) is not None:
-            log.error("新版本有服务起不来:退回上一版")
+            log.error("这次升级还没提交:退回上一版")
             ops.rollback()
             return True
-        log.warning("只重启代理")
-    except privops.PrivOpsError as exc:
-        log.warning("特权执行器不可用:%s;只重启代理", exc)
+    except Exception:
+        # 外审 W55-4 N3:退回本身出错 —— 不能让这条线程悄悄结束、机器人一直卡在「重启中」:
+        # 记下来,照常退出代理(systemd 拉起来,开机守卫、升级前检查接着管)
+        log.exception("退回上一版失败:只重启代理")
+        return False
+    log.warning("只重启代理")
     return False
 
 

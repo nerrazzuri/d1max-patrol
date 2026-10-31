@@ -917,6 +917,14 @@ class SiteDB:
                     self._migrate_sighting_kind(decl, add_column=col not in cols, stored=stored)
                 elif col not in cols:
                     self._conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
+                    if (table, col) == ("cert_pending", "old_fingerprint"):
+                        # 外审 W55-4 N2:老库里已挂起的那几张,是在登记表还是现在这张时签的 ——
+                        # 补上它,机器人拿新证书连上来照样能转正
+                        self._conn.execute(
+                            "UPDATE cert_pending SET old_fingerprint=(SELECT r.fingerprint FROM "
+                            "robots r WHERE r.robot_id=cert_pending.robot_id AND r.revoked=0) "
+                            "WHERE old_fingerprint='' AND EXISTS (SELECT 1 FROM robots r WHERE "
+                            "r.robot_id=cert_pending.robot_id AND r.revoked=0)")
             if not had_homes:
                 # W13a 迁移:以前没有原点表,下发地图时拿「这张图上的待命点(默认的优先、再按名字)
                 # 」当原点。
