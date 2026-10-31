@@ -14,14 +14,34 @@ export function note(kind: string, message: string, detail = ""): void {
   if (queue.length > MAX) queue.splice(0, queue.length - MAX);
 }
 
+/** 一批最多多少字节(站点收请求最多 64 KiB,留余量;外审 W55-1 第 14 条)。 */
+export const BATCH_BYTES = 48_000;
+const enc = new TextEncoder();
+
+/** 从队头取一批:条数不超过 200、JSON 字节数不超过 ``BATCH_BYTES``(单条太大的截短)。 */
+function takeBatch(): Item[] {
+  const out: Item[] = [];
+  let bytes = 64;
+  while (queue.length && out.length < 200) {
+    const it = queue[0];
+    const n = enc.encode(JSON.stringify(it)).length + 1;
+    if (out.length && bytes + n > BATCH_BYTES) break;
+    queue.shift();
+    out.push(n > BATCH_BYTES ? { ...it, message: it.message.slice(0, 500), detail: it.detail.slice(0, 500) } : it);
+    bytes += n;
+  }
+  return out;
+}
+
 export async function flush(): Promise<void> {
   if (!queue.length) return;
-  const items = queue.splice(0, 200);
+  const items = takeBatch();
   try {
     await api("POST", "/api/client-errors", { client: "web", items });
   } catch (e) {
-    // 没登录、站点连不上:放回去下次再传(不再记这一次失败本身,免得越积越多)
-    if (!(e instanceof ApiError) || e.status !== 401) queue.unshift(...items.slice(0, MAX - queue.length));
+    // 没登录、站点收不下(413):这一批丢掉,免得永远卡在同一批;连不上:放回去下次再传
+    if (e instanceof ApiError && (e.status === 401 || e.status === 413 || e.status === 400)) return;
+    queue.unshift(...items.slice(0, MAX - queue.length));
   }
 }
 

@@ -131,6 +131,8 @@ ACK_MAX_BYTES = 240 * 1024
 BATTERY_FLOOR_PCT = 15.0
 
 #: 要人监护(W00c6i)时,只有这几种任务受监护租约约束(遥控、叫停、换图、发布照常)。
+#: W55:要空闲才做、做的时候不接新任务的远程运维命令(外审 W55-1 第 8、16 条)。
+_OPS_HOLD = frozenset({"ops_reboot", "cert_install", "ops_restart"})
 _AUTONOMOUS_KINDS = frozenset({"goto", "patrol", "standoff", "dock"})
 #: 放了、过期的监护会话留多久(秒):挡同一会话里迟到的旧心跳(站点的命令有效期 30 s,再多留一点)。
 _SESSION_MEMORY_S = 60.0
@@ -1188,7 +1190,7 @@ class AgentRuntime:
         if kind == "proc_log":
             return await asyncio.to_thread(self._proc_log, cmd.payload)
         if self.ops is not None and kind.startswith(("ops_", "cert_")):
-            return await asyncio.to_thread(self.ops.handle, kind, cmd.payload)
+            return await self._ops_command(kind, cmd.payload)
         if kind == "mapping_trail":
             n = cmd.payload.get("since", 0)
             if isinstance(n, bool) or not isinstance(n, int) or n < 0:
@@ -1694,6 +1696,29 @@ class AgentRuntime:
         if any(t.kind in ("goto", "patrol") for t in self.processor.pending):
             return "有任务排着队"
         return ""
+
+    async def _ops_command(self, kind: str, payload: dict[str, Any]) -> Any:
+        """W55 远程运维命令。重启整机、换证书(随后重启代理)、重启服务**只在空闲时**,
+        而且收下的那一刻起什么新任务都不接(``_restarting``),直到重启(外审 W55-1 第 8、16 条:
+        只在提交时看一眼空闲的话,等重启那几秒里还能派出巡逻、开遥控、开建图)。没做成就放开。"""
+        hold = kind in _OPS_HOLD
+        if hold:
+            why = self._busy_reason()
+            if why:
+                return f"busy: {why}"
+            self._restarting = True
+        try:
+            got = await asyncio.to_thread(self.ops.handle, kind, payload)
+        except BaseException:
+            if hold:
+                self._restarting = False
+            raise
+        if hold:
+            failed = got if isinstance(got, str) else got[0]
+            gone = kind in ("ops_reboot", "cert_install") or payload.get("unit") == "d1max-agent"
+            if failed or not gone:
+                self._restarting = False
+        return got
 
     def _busy_reason(self) -> str:
         """在忙什么(升级前检查的「空闲」那一项);空串 = 空闲。"""

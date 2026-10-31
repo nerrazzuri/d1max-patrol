@@ -2733,13 +2733,9 @@ class _Handler(TlsHandlerMixin):
         if self.site.priv is None:
             out["warning"] = "站点未安装特权执行器:要在站点主机上重新装一遍 VPN 配置才生效"
             return out
-        try:
-            vpn.write_server_conf()
-            r = self.site.priv.call("vpn_apply", timeout_s=60)
-            if not r.get("ok"):
-                out["warning"] = f"VPN 配置未生效:{r.get('error')}"
-        except Exception as exc:  # noqa: BLE001
-            out["warning"] = f"VPN 配置未生效:{exc}"[:300]
+        why = self.site.vpn_sync()           # 没装成的站点每一轮接着装(外审 W55-1 第 10 条)
+        if why:
+            out["warning"] = f"VPN 配置暂未生效,站点会自动重试:{why}"[:300]
         return out
 
     def _receive_update(self, user) -> str:

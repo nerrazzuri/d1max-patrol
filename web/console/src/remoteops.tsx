@@ -28,6 +28,8 @@ interface Diag {
 
 const UNITS = ["d1max-agent", "d1max-localizer", "d1max-obstacles", "d1max-persons", "d1max-lidar-merge",
   "d1max-nav2", "d1max-sidecar", "d1max-zenohd", "d1max-bind"];
+/** 能远程重启的(d1max-bind 以 root 跑,不经执行器重启)。 */
+const RESTARTABLE = UNITS.filter((u) => u !== "d1max-bind");
 
 export function RobotOps({ robotId, tasks, say }: { robotId: string; tasks: string[]; say: Say }) {
   const base = `/api/robots/${enc(robotId)}/ops`;
@@ -66,7 +68,7 @@ export function RobotOps({ robotId, tasks, say }: { robotId: string; tasks: stri
         {has("ops_restart") && (
           <span class="row">
             <select aria-label={t("opsService")} value={svc} onChange={(e) => setSvc(e.currentTarget.value)}>
-              {UNITS.map((u) => <option key={u} value={u}>{u}</option>)}
+              {RESTARTABLE.map((u) => <option key={u} value={u}>{u}</option>)}
             </select>
             <button type="button" class="btn" disabled={busy}
               onClick={() => void run(() => api("POST", `${base}/restart`, { unit: svc }), t("opsRestarted", { u: svc }))}>{t("opsRestart")}</button>

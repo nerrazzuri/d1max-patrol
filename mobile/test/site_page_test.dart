@@ -128,8 +128,12 @@ class FakeApi implements SiteApi {
     return opsReply?.call(action, body) ?? <String, dynamic>{};
   }
   final List<List<Map<String, dynamic>>> errorReports = <List<Map<String, dynamic>>>[];
+  SiteError? errorReportError;
   @override
-  Future<void> reportClientErrors(List<Map<String, dynamic>> items) async => errorReports.add(items);
+  Future<void> reportClientErrors(List<Map<String, dynamic>> items) async {
+    if (errorReportError != null) throw errorReportError!;
+    errorReports.add(items);
+  }
   Map<String, dynamic> appUpdateBody = <String, dynamic>{'available': false};
   final List<(String, int)> appUpdateAsks = <(String, int)>[];
   @override

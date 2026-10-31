@@ -1076,6 +1076,10 @@ class Server:
         self.cert_renewer = CertRenewer(dispatcher=self.dispatcher, registry=self.registry,
                                         ca=SiteCA(home / "ca"), alerts=self.alerts, now_ms=wall_ms)
         self.vpn = VpnState(home / "vpn")
+        try:
+            self.vpn.mark_pending()        # 起来按状态文件重装一遍 VPN 配置(恢复备份之后也对得上)
+        except Exception:
+            log.exception("VPN 状态无法读取")
         self.api.priv, self.api.cert_renewer = self.priv, self.cert_renewer
         self.api.client_errors, self.api.vpn = self.client_errors, self.vpn
         self.api.apps = AppStore(home / "apps", pubkey=release_pubkey(home))
@@ -1119,21 +1123,38 @@ class Server:
     _next_rec_prune = 0.0
 
     def _vpn_expire(self) -> None:
-        """W55:工程师的 VPN 到点收回,站点 VPN 配置重装
-        (没装执行器就只从清单里删,下次装配置时生效)。"""
+        """W55:工程师的 VPN 到点收回;站点 VPN 配置有「待生效」的就装(外审 W55-1 第 10 条:装不成
+        每一轮接着装,不会因为这一次没装成就让到期的工程师一直连得上)。"""
         if not self.vpn.ready:
             return
         gone = self.vpn.expire(wall_ms())
-        if not gone:
-            return
-        log.info("工程师 VPN 到点收回:%s", ", ".join(gone))
-        self.api.audit.record(actor="site:vpn", action="vpn_expire", target=",".join(gone)[:200],
-                              status=200)
-        if self.priv is not None:
-            self.vpn.write_server_conf()
+        if gone:
+            log.info("工程师 VPN 到点收回:%s", ", ".join(gone))
+            self.api.audit.record(actor="site:vpn", action="vpn_expire",
+                                  target=",".join(gone)[:200], status=200)
+        self.vpn_sync()
+
+    def vpn_sync(self) -> str:
+        """有「待生效」就让特权执行器装上;回空串 = 装好了(或没什么要装),否则是原因。
+        没装执行器:只能上主机手动装(``d1max-site vpn server-conf``)。"""
+        vpn = self.vpn
+        if vpn is None or not vpn.ready or not vpn.pending:
+            return ""
+        if self.priv is None:
+            return "站点未安装特权执行器:要在站点主机上手动装 VPN 配置"
+        try:
+            gen = vpn.write_apply()
             got = self.priv.call("vpn_apply", timeout_s=60)
-            if not got.get("ok"):
-                log.warning("VPN 配置未生效:%s", got.get("error"))
+        except Exception as exc:  # noqa: BLE001 - 下一轮再装
+            got = {"ok": False, "error": str(exc)[:200]}
+        if got.get("ok"):
+            vpn.applied(gen)
+            self._vpn_fail = 0
+            return ""
+        self._vpn_fail = getattr(self, "_vpn_fail", 0) + 1
+        if self._vpn_fail in (1, 10) or self._vpn_fail % 120 == 0:
+            log.warning("VPN 配置未生效(第 %d 次,接着重试):%s", self._vpn_fail, got.get("error"))
+        return str(got.get("error") or "VPN 配置未生效")
 
     def _prune_recordings(self) -> None:
         """录像留存(W18):每 10 分钟删一次过期的、盘紧时删最旧的。"""

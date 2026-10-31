@@ -133,3 +133,16 @@ describe("网页错误记录", () => {
     expect(posted.filter((p) => p.url === "/api/client-errors").length).toBe(1);
   });
 });
+
+describe("网页错误记录分批", () => {
+  it("按字节分批:很长的一堆错误分几次传,每次不超过站点的上限", async () => {
+    for (let i = 0; i < 60; i++) note("error", "x".repeat(1900), "y".repeat(1900));
+    const before = posted.length;
+    await flush();
+    await flush();
+    const ups = posted.slice(before).filter((p) => p.url === "/api/client-errors");
+    expect(ups.length).toBe(2);
+    for (const u of ups) expect(new TextEncoder().encode(JSON.stringify(u.body)).length).toBeLessThan(64 * 1024);
+    for (let i = 0; i < 20; i++) await flush();
+  });
+});

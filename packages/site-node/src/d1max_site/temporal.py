@@ -21,9 +21,12 @@ GATED, SAFE, READ = "gated", "safe", "read"
 #: W42:解绑(机器人只认现在这张证书,晚到的旧命令不清)、确认换 WiFi(只认挂着的那一条)也放行 ——
 #: 钟不准的时候正要靠它们解绑、修网。
 _SAFE_KINDS = frozenset({"halt", "abort", "release_rollback", "outbox_retry", "unbind",
-                         "wifi_confirm"})
+                         "wifi_confirm",
+                         # W55(外审 W55-1 第 13 条):钟不准的时候正要靠它修钟
+                         "ops_timesync"})
 #: 只读查询。
-_READ_KINDS = frozenset({"proc_log", "mapping_trail", "mapping_preview", "release_precheck"})
+_READ_KINDS = frozenset({"proc_log", "mapping_trail", "mapping_preview", "release_precheck",
+                         "ops_diag", "ops_journal"})
 
 
 def temporal_class(kind: str, payload: dict[str, Any] | None = None) -> str:

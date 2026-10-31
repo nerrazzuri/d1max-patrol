@@ -1,6 +1,7 @@
 // W55 远程运维（手机）：机器人运维页（诊断快照、日志按服务和时间段取、重启服务、重启整机再输密码、
 // 机器人没报的能力不给按钮）；App 错误记录（最多 500 条、定时传、传不出去留着）；从站点更新 App
 // （按构建号问、下载核对后交给系统装、名字不对不下载、登录后底部提示「更新」）。
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:d1max_patrol/l10n.dart';
@@ -116,22 +117,56 @@ void main() {
     test('最多留 max 条，丢最老的；传成功清掉，传不出去留着', () async {
       var now = 0;
       final log = ErrorLog(max: 3, now: () => ++now);
+      final api = FakeApi('admin');
+      await log.flush();                                     // 没接站点：不传
+      expect(api.errorReports, isEmpty);
+      log.attach(api, site: 'A');
       for (var i = 0; i < 5; i++) {
         log.note('flutter', 'e$i');
       }
       expect(log.pending.map((e) => e['message']), <String>['e2', 'e3', 'e4']);
       expect(log.pending.first['app_version'], '$appVersion+$appBuild');
-      final api = FakeApi('admin');
-      await log.flush();                                     // 没接站点：不传
-      expect(api.errorReports, isEmpty);
-      log.attach(api);
       await log.flush();
       expect(api.errorReports.single.length, 3);
+      expect(api.errorReports.single.first.containsKey('_site'), isFalse, reason: '站点标记不上传');
       expect(log.pending, isEmpty);
       log.note('api', 'x');
       api.session = null;                                    // 退出登录了：留着
       await log.flush();
       expect(log.pending.length, 1);
+      log.detach(api);
+    });
+
+    test('外审 W55-1：A 站点的记录不传给 B 站点；登录前的也不传', () async {
+      final log = ErrorLog();
+      log.note('flutter', 'before login');
+      final a = FakeApi('admin');
+      log.attach(a, site: 'A');
+      log.note('flutter', 'in A');
+      log.detach(a);                                         // 离线时离开 A：没传出去
+      final b = FakeApi('admin');
+      log.attach(b, site: 'B');
+      log.note('flutter', 'in B');
+      await log.flush();
+      expect(b.errorReports.single.map((e) => e['message']), <String>['in B']);
+      log.detach(b);
+    });
+
+    test('外审 W55-1：按字节分批，站点收不下的那一批扔掉不卡住', () async {
+      final log = ErrorLog();
+      final api = FakeApi('admin');
+      log.attach(api, site: 'A');
+      for (var i = 0; i < 60; i++) {
+        log.note('flutter', 'x' * 1900, detail: 'y' * 1900);
+      }
+      await log.flush();
+      final first = api.errorReports.single;
+      expect(utf8.encode(jsonEncode({'client': 'app', 'items': first})).length, lessThan(64 * 1024));
+      expect(log.pending.length, 60 - first.length);
+      api.errorReportError = const SiteError(413, 'too big');
+      final left = log.pending.length;
+      await log.flush();
+      expect(log.pending.length, lessThan(left), reason: '收不下的扔掉');
       log.detach(api);
     });
   });

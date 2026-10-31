@@ -108,6 +108,15 @@ class IntakeServer:
         for r in rows:
             if not r["revoked"] and r["issued_at"] <= now < r["expires_at"]:
                 return r["robot_id"]
+        # W55 自动续签(外审 W55-1 第 6 条):机器人换上了新证书、回执却丢了 —— 拿挂着的那张连上来,
+        # 就把登记表换成它
+        for r in self.db.query("SELECT robot_id, issued_at, expires_at FROM cert_pending "
+                               "WHERE fingerprint=?", (fp,)):
+            if r["issued_at"] <= now < r["expires_at"]:
+                from d1max_site.registry import Registry
+                if Registry(self.db, site_id="").promote(r["robot_id"], fp):
+                    log.info("%s 拿新证书连上来了:登记表换成新证书", r["robot_id"])
+                    return r["robot_id"]
         return None
 
 

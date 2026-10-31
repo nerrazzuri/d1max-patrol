@@ -72,7 +72,10 @@ TaskFactory = Callable[[Command], Task]
 #: (比站点快过命令的有效期)时,判过期就是站点刚发的叫停一到就「过期」、狗不停车,站点却记成叫停了。
 #: 区域(W10 内审应修 8)也不判:修订号挡住旧的重放(旧修订拒),放宽的等狗空闲才换;狗的钟快了
 #: 判过期的话,收紧的禁行区就一直送不到正在跑巡检的狗。
-NEVER_EXPIRE = frozenset({"halt", "abort", "zones_set", "route_net_set"})
+#: W55(外审 W55-1 第 13 条):对时、读诊断、读日志也不判 —— 钟不准的时候正要靠它们
+#: (读的、对时晚到无害)。
+NEVER_EXPIRE = frozenset({"halt", "abort", "zones_set", "route_net_set", "ops_timesync",
+                          "ops_diag", "ops_journal"})
 
 class CommandProcessor:
     def __init__(self, *, registration: Registration, now_ms: Callable[[], int],
