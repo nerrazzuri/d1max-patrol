@@ -64,13 +64,15 @@ describe("机器人页", () => {
     expect(b).toContain("离线");
     expect(b).toContain("2 个故障");
     expect(cardOf(c, "A").textContent).toContain("76%");
-    expect(cardOf(c, "A").textContent).toContain("今日巡逻 3 次");
+    expect(cardOf(c, "A").textContent).toContain("3 趟");
   });
 
-  it("没毛病写正常", async () => {
+  it("W60 没毛病就安静:不写正常、没有提示条;有毛病多一条提示、卡片标需要关注", async () => {
     const { container: c } = page();
     await waitFor(() => expect(cardOf(c, "A")).not.toBeNull());
-    expect(cardOf(c, "A").textContent).toContain("正常");
+    expect(cardOf(c, "A").textContent).not.toContain("正常");
+    expect(cardOf(c, "A").querySelector(".fleet-warn")).toBeNull();
+    expect(cardOf(c, "B").querySelector(".fleet-warn")).not.toBeNull();
   });
 
   it("改名字", async () => {

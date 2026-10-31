@@ -790,17 +790,26 @@ p.warn { color: var(--c-text); background: var(--c-warningSoft); padding: 8px 12
 .robots { display: flex; flex-direction: column; gap: 12px; }
 .robots .lead { margin: 0; }
 .robots-split { display: grid; grid-template-columns: minmax(0, 1fr) 380px; gap: 16px; align-items: start; }
-.robot-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
-.robot-card { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; padding: 14px; border: 1px solid var(--c-outline);
-  border-radius: 12px; background: var(--c-surface); color: var(--c-text); font: inherit; text-align: left; cursor: pointer; }
-.robot-card:hover, .robot-card.on { border-color: var(--c-primary); }
-.robot-pic { display: grid; place-items: center; width: 48px; height: 48px; border-radius: 10px; background: var(--c-surfaceVariant); color: var(--c-textSecondary); }
-.robot-pic svg { width: 30px; height: 30px; }
-.robot-name { font-size: 16px; font-weight: 700; }
-.robot-nums { display: flex; gap: 12px; color: var(--c-textSecondary); font-size: 14px; }
-.robot-health { font-weight: 600; font-size: 14px; }
-.robot-health.ok { color: var(--c-success); }
-.robot-health.warn { color: var(--c-warning); }
+/* W60 机器人卡片:第一层名字、状态、在做什么、电量;第二层定位、网络、今天几趟;出毛病才多一条琥珀色提示 */
+.robot-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px; }
+.robot-card { display: flex; flex-direction: column; align-items: stretch; gap: 10px; padding: 18px 20px; border: 1px solid var(--c-outline);
+  border-radius: var(--r-r12); background: var(--c-surface); color: var(--c-text); text-align: left; cursor: pointer; font: inherit; }
+.robot-card:hover { border-color: var(--c-textMuted); }
+.robot-card.on { border-color: var(--c-brand); box-shadow: 0 0 0 1px var(--c-brand); }
+.robot-card.warn { border-color: var(--c-warning); }
+.fleet-head { display: flex; align-items: baseline; gap: 8px; }
+.robot-name { font-family: var(--font-display); font-size: 22px; line-height: 28px; font-weight: 600; }
+.fleet-state { margin-left: auto; }
+.fleet-doing { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; font-size: 15px; font-weight: 500; }
+.fleet-batt { display: grid; grid-template-columns: auto 1fr; align-items: baseline; gap: 6px; }
+.fleet-pct { justify-self: end; font-size: 20px; font-weight: 600; }
+.fleet-bar { grid-column: 1 / -1; height: 6px; border-radius: 3px; background: var(--c-surfaceVariant); overflow: hidden; }
+.fleet-bar i { display: block; height: 6px; border-radius: 3px; background: var(--c-textSecondary); }
+.fleet-warn { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: var(--r-r8); background: var(--c-warningSoft); color: var(--c-text); font-size: 14px; }
+.fleet-warn .shape.P2 { fill: var(--c-warning); }
+.fleet-facts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; padding-top: 10px; border-top: 1px solid var(--c-outline); font-size: 14px; }
+.fleet-facts > span { display: flex; flex-direction: column; min-width: 0; }
+.fleet-facts small { font-size: 12px; color: var(--c-textMuted); }
 /* W42:等待批准加入、核对码、换 WiFi 等确认 */
 .bind-pending { margin-bottom: 16px; border-left: 4px solid var(--c-warning); }
 .bind-req { align-items: center; gap: 16px; padding: 8px 0; border-top: 1px solid var(--c-outline); }
