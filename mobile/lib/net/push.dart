@@ -191,8 +191,8 @@ class PushSession {
         if (_stopped) return;
         if (id == null) {
           if (why.isEmpty) {
-            why = tr('No push ID yet (push not configured, or still registering). Will retry',
-                '推送号还没拿到（没配推送、或者还在注册），稍后再试');
+            why = tr('Push not registered yet. Retrying later',
+                '推送尚未注册，稍后自动重试');
           }
           continue;
         }
@@ -202,7 +202,7 @@ class PushSession {
           _registered.add(id);
           pending.remove(r);
         } catch (e) {
-          why = tr('Push registration failed: $e. Will retry', '推送登记没成：$e，稍后再试');
+          why = tr('Push registration failed: $e. Retrying later', '推送注册失败：$e，稍后自动重试');
         }
         if (_stopped) return;
       }

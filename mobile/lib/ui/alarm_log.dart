@@ -84,7 +84,7 @@ class _AlarmLogPageState extends State<AlarmLogPage> {
                               '已解决${a.ackedBy.isEmpty ? '' : ' · ${a.ackedBy} 处理'}')
                           : a.ackedBy.isNotEmpty
                               ? tr('${a.ackedBy} is handling it', '${a.ackedBy} 在处理')
-                              : tr('Not handled yet', '还没处理'),
+                              : tr('Not handled yet', '未处理'),
                       style: NwText.bodySmall.copyWith(color: c.textSecondary)),
                 ])),
                 Text(_day(a.firstMs), style: NwText.labelSmall.copyWith(color: c.textSecondary)),

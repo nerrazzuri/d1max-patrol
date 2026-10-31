@@ -62,7 +62,7 @@ class _SiteMapsPageState extends State<SiteMapsPage> {
     return ack['result'] == 'accepted'
         ? ok
         : tr('The robot did not accept: ${ack['result']} ${ack['reason'] ?? ''}',
-            '机器人没接：${ack['result']} ${ack['reason'] ?? ''}');
+            '机器人未接受：${ack['result']} ${ack['reason'] ?? ''}');
   }
 
   /// 选一台**报了这种能力**的狗（没这能力的狗会回 unsupported）。一台都没有就说一声、返回 null。
@@ -71,13 +71,13 @@ class _SiteMapsPageState extends State<SiteMapsPage> {
     try {
       robots = (await widget.api.robots()).where((r) => robotCan(r, task)).toList();
     } on SiteError catch (e) {
-      _snack(tr('Robot list unavailable: $e', '拿不到机器人的列表：$e'));
+      _snack(tr('Robot list unavailable: $e', '无法加载机器人列表：$e'));
       return null;
     }
     if (!mounted) return null;
     if (robots.isEmpty) {
-      _snack(tr('No robot can $what (none is online reporting this capability, or it is not supported)',
-          '没有能$what的机器人（机器人没在线报能力，或者这台机器人不支持）'));
+      _snack(tr('No robot can $what (offline or not supported)',
+          '没有可$what的机器人（机器人离线或不支持）'));
       return null;
     }
     return showDialog<String>(
@@ -100,16 +100,13 @@ class _SiteMapsPageState extends State<SiteMapsPage> {
     final ok = await showDialog<bool>(
       context: context,
       builder: (c) => AlertDialog(
-        title: Text(tr('Switch $robot to $label?', '让 $robot 换成 $label？')),
+        title: Text(tr('Switch $robot to $label?', '将 $robot 切换到 $label？')),
         content: Text(tr(
-            'The robot downloads and verifies the map first, then switches coordinate frames once its '
-                'current task is done. It accepts no new tasks during the switch. '
-                'Task packages and standby points must be on this map.',
-            '机器人先下载、核对，等手上的任务做完再切换坐标系；切换那一小会儿不接新任务。'
-                '任务包、待命点要是这张图上的。')),
+            'The robot downloads and verifies the map, then switches after its current task. It accepts no new tasks while switching.',
+            '机器人下载并核对地图后，在当前任务结束时切换，切换期间不接新任务。')),
         actions: [
           TextButton(
-              onPressed: () => Navigator.pop(c, false), child: Text(tr('Cancel', '算了'))),
+              onPressed: () => Navigator.pop(c, false), child: Text(tr('Cancel', '取消'))),
           FilledButton(
               key: const Key('activate-go'),
               onPressed: () => Navigator.pop(c, true),
@@ -130,24 +127,20 @@ class _SiteMapsPageState extends State<SiteMapsPage> {
           builder: (c) => AlertDialog(
             title: Text(tr('$robot has no origin on $label', '$robot 在 $label 上还没有原点')),
             content: Text(tr(
-                'If you send it anyway, the robot accepts no goto or patrol after loading this map '
-                    '(without an origin there is no safe place to return to). Remote control and '
-                    'set position still work. Drive the robot to the origin (in front of the dock), '
-                    'set its position, then tap "Mark origin here".',
-                '照样下发的话，机器人载上这张图之后不接 goto、巡检（没有原点就没有安全返航的目标）；'
-                    '遥控、设位置照常。要先把机器人开到原点（充电桩前），设好位置，再点「在这儿标原点」。')),
+                'Without an origin, the robot won\'t navigate or patrol on this map; remote control and set position still work. Drive it to the dock, set its position, then tap "Mark origin here".',
+                '没有原点时，机器人在此地图上不执行导航和巡逻，遥控和设位置不受影响。请将机器人开到充电桩前，设好位置后点「在这儿标原点」。')),
             actions: [
               TextButton(
-                  onPressed: () => Navigator.pop(c, false), child: Text(tr('Cancel', '算了'))),
+                  onPressed: () => Navigator.pop(c, false), child: Text(tr('Cancel', '取消'))),
               FilledButton(
                   key: const Key('activate-without-home'),
                   onPressed: () => Navigator.pop(c, true),
-                  child: Text(tr('Send anyway', '照样下发'))),
+                  child: Text(tr('Send anyway', '仍然下发'))),
             ],
           ),
         );
         if (go != true) {
-          _snack(tr('Not sent: $robot has no origin on $label', '没下发：$robot 在 $label 上还没有原点'));
+          _snack(tr('Not sent: $robot has no origin on $label', '未下发：$robot 在 $label 上还没有原点'));
           return;
         }
         r = await widget.api.activateMap(robot, '${m['map_id']}', '${m['version']}',
@@ -156,9 +149,9 @@ class _SiteMapsPageState extends State<SiteMapsPage> {
       _snack(_ackText(
           r,
           tr('$robot is downloading and loading $label. Its reported map version changes when done',
-              '$robot 在下载、载入 $label，好了它报的地图版本会变')));
+              '$robot 正在下载并加载 $label，完成后上报的地图版本会更新')));
     } on SiteError catch (e) {
-      _snack(tr('Send failed: $e', '下发没成：$e'));
+      _snack(tr('Send failed: $e', '下发失败：$e'));
     }
   }
 
@@ -166,20 +159,20 @@ class _SiteMapsPageState extends State<SiteMapsPage> {
     final robot = '${b['robot_id']}';
     try {
       if (!robotCan(await widget.api.robot(robot), 'map_build')) {
-        _snack(tr('$robot cannot rebuild now (not online reporting this capability, or not supported)',
-            '$robot 现在不能重建（没在线报能力，或者不支持）'));
+        _snack(tr('$robot can\'t rebuild now (offline or not supported)',
+            '$robot 当前无法重建（离线或不支持）'));
         return;
       }
     } on SiteError catch (e) {
-      _snack(tr('Status of $robot unavailable: $e', '拿不到 $robot 的状态：$e'));
+      _snack(tr('Status of $robot unavailable: $e', '无法获取 $robot 的状态：$e'));
       return;
     }
     if (!mounted) return;
     final got = await showFieldsDialog(context,
-        title: tr('Rebuild from ${b['name']}', '拿 ${b['name']} 重建'),
+        title: tr('Rebuild from ${b['name']}', '用 ${b['name']} 重建'),
         fields: [
           DialogField(tr('Map ID', '地图号'), initial: 'estate-1'),
-          DialogField(tr('New version (must differ from existing ones)', '新的版本号（不能跟已有的重）'),
+          DialogField(tr('New version (must differ from existing ones)', '新版本号（不能与已有版本重复）'),
               key: SiteMapsPage.versionKey),
         ],
         confirm: tr('Rebuild', '重建'),
@@ -190,9 +183,9 @@ class _SiteMapsPageState extends State<SiteMapsPage> {
       _snack(_ackText(
           r,
           tr('$robot started rebuilding. The new map appears here when done',
-              '$robot 开始重建，好了新图会出现在这里')));
+              '$robot 已开始重建，完成后新地图将显示在此')));
     } on SiteError catch (e) {
-      _snack(tr('Rebuild failed: $e', '重建没成：$e'));
+      _snack(tr('Rebuild failed: $e', '重建失败：$e'));
     }
   }
 
@@ -216,7 +209,7 @@ class _SiteMapsPageState extends State<SiteMapsPage> {
               return NwListView(children: [
                 NwNotice(
                     tone: NwTone.error,
-                    text: tr('Map list unavailable: ${snap.error}', '地图目录拿不到：${snap.error}')),
+                    text: tr('Map list unavailable: ${snap.error}', '无法加载地图目录：${snap.error}')),
               ]);
             }
             if (!snap.hasData) return const Center(child: CircularProgressIndicator());
@@ -225,10 +218,10 @@ class _SiteMapsPageState extends State<SiteMapsPage> {
             final title = NwText.titleSmall.copyWith(color: c.text);
             final sub = NwText.bodySmall.copyWith(color: c.textSecondary);
             return NwListView(children: [
-              NwSectionLabel(tr('Maps', '图')),
+              NwSectionLabel(tr('Maps', '地图')),
               nwGap8,
               NwListCard(children: [
-                if (maps.isEmpty) NwCardText(tr('No maps on the site yet', '站点上还没有图')),
+                if (maps.isEmpty) NwCardText(tr('No maps on the site yet', '站点上还没有地图')),
                 for (final m in maps)
                   ListTile(
                     key: SiteMapsPage.mapKey('${m['map_id']}', '${m['version']}'),
@@ -644,7 +637,7 @@ class _SiteMapTabState extends State<SiteMapTab> {
       return NwListView(children: [
         NwNotice(
             tone: NwTone.error,
-            text: tr('Map list unavailable: ${snap.error}', '地图目录拿不到：${snap.error}')),
+            text: tr('Map list unavailable: ${snap.error}', '无法加载地图目录：${snap.error}')),
       ]);
     }
     if (v.mapId == null) {
@@ -653,10 +646,10 @@ class _SiteMapTabState extends State<SiteMapTab> {
       return NwEmpty(
           key: SiteMapTab.emptyKey,
           icon: Icons.map_outlined,
-          text: tr('No maps on the site yet', '站点上还没有图'),
+          text: tr('No maps on the site yet', '站点上还没有地图'),
           hint: admin
               ? tr('Walk the robot around the site once and it builds the map (20–40 minutes).',
-                  '开着机器人在场地里走一圈，图就建出来了（二三十分钟）。')
+                  '开着机器人在场地内走一圈即可建图（约 20–40 分钟）。')
               : tr('Ask an administrator to build the map first.', '请管理员先建图。'),
           action: admin
               ? NwButton(
@@ -674,7 +667,7 @@ class _SiteMapTabState extends State<SiteMapTab> {
             padding: const EdgeInsets.all(Nw.s16),
             child: NwNotice(
                 tone: NwTone.warning,
-                text: tr('Preview unavailable: ${v.previewError}', '看不了：${v.previewError}')))
+                text: tr('Preview unavailable: ${v.previewError}', '无法预览：${v.previewError}')))
         : _canvas(context, v);
     // 图下面那一条：点图选位置之后去这里 / 设位置（保安、管理员）
     final canPose = v.png != null && v.inUse && (widget.api.session?.canDispatch ?? false);
@@ -993,11 +986,11 @@ class _SiteMapTabState extends State<SiteMapTab> {
     String where(Map<String, dynamic> r) {
       final tag = robotMapTag(r);
       if (!here(r)) {
-        return tag == null ? tr('Reports no map', '没报在用哪张图') : tr('On map $tag', '在 $tag 这张图上');
+        return tag == null ? tr('Reports no map', '未上报当前地图') : tr('On map $tag', '位于地图 $tag');
       }
       final p = _pose(r);
       return p == null
-          ? tr('Position not set: not drawn on the map', '没设位置：图上不画')
+          ? tr('Position not set: not drawn on the map', '未设置位置：不在地图上显示')
           : tr('At (${p.dx.toStringAsFixed(1)}, ${p.dy.toStringAsFixed(1)}) m',
               '在 (${p.dx.toStringAsFixed(1)}, ${p.dy.toStringAsFixed(1)}) m');
     }
@@ -1013,7 +1006,7 @@ class _SiteMapTabState extends State<SiteMapTab> {
           if (v.robotsError != null)
             NwNotice(
                 tone: NwTone.warning,
-                text: tr('Robot list unavailable: ${v.robotsError}', '拿不到机器人的列表：${v.robotsError}'))
+                text: tr('Robot list unavailable: ${v.robotsError}', '无法加载机器人列表：${v.robotsError}'))
           else if (rows.isEmpty)
             Text(tr('No robots yet.', '还没有机器人。'), style: sub)
           else if (!rows.any(here))
@@ -1021,7 +1014,7 @@ class _SiteMapTabState extends State<SiteMapTab> {
                 padding: const EdgeInsets.only(bottom: Nw.s8),
                 child: Text(
                     tr('No robot is on this map. It is the newest map on the site.',
-                        '没有机器人在这张图上。这是站点上最新的一张。'),
+                        '此地图上没有机器人。这是站点上最新的地图。'),
                     style: sub)),
           for (final r in rows)
             Padding(

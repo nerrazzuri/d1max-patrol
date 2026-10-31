@@ -103,7 +103,7 @@ describe("报表页", () => {
   it("自己选超过31天写明不查", async () => {
     const { container: c } = page();
     await waitFor(() => expect(c.querySelector(".rep-stats")).not.toBeNull());
-    fireEvent.click(btn(c, "自己选"));
+    fireEvent.click(btn(c, "自定义"));
     fireEvent.input(c.querySelector('input[name="from"]')!, { target: { value: "2026-09-01" } });
     fireEvent.input(c.querySelector('input[name="to"]')!, { target: { value: "2026-10-20" } });
     await waitFor(() => expect(c.textContent).toContain("最长 31 天"));

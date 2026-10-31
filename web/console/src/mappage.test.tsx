@@ -50,7 +50,7 @@ describe("让最近的机器人过去看看", () => {
     await waitFor(() => expect(c.textContent).toContain("约 1 分钟"));
     expect(c.textContent).toContain("A");
     expect(posts).toEqual([]);
-    fireEvent.click(btn(c, "派它去")!);
+    fireEvent.click(btn(c, "派出")!);
     await waitFor(() => expect(posts.length).toBe(1));
     expect(posts[0].url).toBe("/api/robots/A/goto");
     expect(posts[0].body).toMatchObject({ target: { map_id: "m", map_version: "1", frame_id: "map", x: 3, y: 4 } });
@@ -59,8 +59,8 @@ describe("让最近的机器人过去看看", () => {
   it("没有能派的说清楚", async () => {
     nearest = { status: 404, body: { error: "这张图上没有能派的机器人" } };
     const { container: c } = render(<GoLookCard map={MAP} at={[3, 4]} units={[unitA]} onClose={() => {}} say={() => {}} />);
-    await waitFor(() => expect(c.textContent).toContain("这张图上没有能派的机器人"));
-    expect(btn(c, "派它去")).toBeUndefined();
+    await waitFor(() => expect(c.textContent).toContain("此地图上没有可派的机器人"));
+    expect(btn(c, "派出")).toBeUndefined();
   });
 });
 

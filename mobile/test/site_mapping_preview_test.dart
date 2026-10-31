@@ -120,8 +120,8 @@ void main() {
           'preview_error': '', 'preview_running': false},
       ];
     await _open(t, api);
-    expect(_status(t), contains('预览进程停了'));
-    expect(_status(t), contains('建图不受影响'));
+    expect(_status(t), contains('预览进程已停止'));
+    expect(_status(t), contains('不影响建图'));
     await t.pumpWidget(const SizedBox());
   });
 
@@ -133,7 +133,7 @@ void main() {
       ];
     await _open(t, api);
     expect(api.trailSince, isEmpty);
-    expect(_status(t), contains('起'));
+    expect(_status(t), contains('启动'));
     await t.pump(const Duration(seconds: 3));
     expect(api.previewSince, [0, 0]);
     expect(find.byKey(SiteMappingTrailPage.previewKey), findsOneWidget);
@@ -149,18 +149,18 @@ void main() {
           'preview_error': 'mapview 起不来'},
       ];
     await _open(t, api);
-    expect(_status(t), contains('等第一张'));
+    expect(_status(t), contains('等待第一张'));
     await t.pump(const Duration(seconds: 3));
     expect(_status(t), contains('mapview 起不来'));
-    expect(_status(t), contains('建图不受影响'));
+    expect(_status(t), contains('不影响建图'));
     await t.pumpWidget(const SizedBox());
   });
 
   testWidgets('预览 15 秒以上没更新：说预览停了、建图不受影响', (t) async {
     final api = FakeApi('admin')..previewReplies = [_pv(1, age: 42)];
     await _open(t, api);
-    expect(_status(t), contains('预览 42 秒没更新'));
-    expect(_status(t), contains('建图不受影响'));
+    expect(_status(t), contains('预览 42 秒未更新'));
+    expect(_status(t), contains('不影响建图'));
     await t.pumpWidget(const SizedBox());
   });
 
@@ -185,7 +185,7 @@ void main() {
     await t.pump();
     expect(api.previewSince, [0, 5, 0]);
     expect(find.byKey(SiteMappingTrailPage.previewKey), findsNothing);
-    expect(_status(t), contains('等第一张'));
+    expect(_status(t), contains('等待第一张'));
     await t.pumpWidget(const SizedBox());
   });
 
@@ -194,7 +194,7 @@ void main() {
     await _open(t, api);
     await t.pump(const Duration(seconds: 3));
     expect(find.byKey(SiteMappingTrailPage.previewKey), findsOneWidget);
-    expect(_status(t), contains('连不上'));
+    expect(_status(t), contains('无法连接'));
     expect(_status(t), contains('3 秒前'));
     await t.pumpWidget(const SizedBox());
   });
@@ -205,7 +205,7 @@ void main() {
     await _open(t, api);
     expect(_status(t), contains('打包'));
     await t.pump(const Duration(seconds: 3));
-    expect(_status(t), contains('建完了'));
+    expect(_status(t), contains('建图已完成'));
     expect(find.byKey(SiteMappingTrailPage.previewKey), findsOneWidget, reason: '留着最后一张');
     await t.pump(const Duration(seconds: 9));
     expect(api.previewSince.length, 2, reason: '建完了不再问');
@@ -216,7 +216,7 @@ void main() {
   testWidgets('图太大机器人没发：说', (t) async {
     final api = FakeApi('admin')..previewReplies = [{..._pv(1, png: false), 'too_big': true}];
     await _open(t, api);
-    expect(_status(t), contains('太大'));
+    expect(_status(t), contains('过大'));
     await t.pumpWidget(const SizedBox());
   });
 

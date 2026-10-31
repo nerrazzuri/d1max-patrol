@@ -33,14 +33,14 @@ void main() {
     await t.tap(find.byKey(SiteRunsPage.runKey(1)));
     await t.pumpAndSettle();
     expect(find.byKey(const Key('photo-P1__front__20260925T010000Z.jpg')), findsOneWidget);
-    expect(find.textContaining('（人已复核）'), findsOneWidget);
+    expect(find.textContaining('（已人工复核）'), findsOneWidget);
     expect(find.textContaining('复核：正常 风吹的'), findsOneWidget);
     expect(find.textContaining('判读：看过了'), findsOneWidget);
     expect(api.calls.where((c) => c.startsWith('photo 1 ')).length, 2);
     await t.tap(find.byKey(SiteRunPage.judgeKey));
     await t.pumpAndSettle();
     expect(api.calls, contains('judge 1'));
-    expect(find.textContaining('站点开始重判了'), findsOneWidget);
+    expect(find.textContaining('站点已开始重新判读'), findsOneWidget);
     await t.pumpWidget(Container());
   });
 
@@ -66,7 +66,7 @@ void main() {
     await t.tap(find.byKey(SiteRunPage.keepKey));
     await t.pumpAndSettle();
     expect(api.calls, contains('run-keep 1 true'));
-    expect(find.textContaining('过了留存期也不删'), findsWidgets);
+    expect(find.textContaining('超过留存期也不删除'), findsWidgets);
     await t.pumpWidget(Container());
   });
 
@@ -85,7 +85,7 @@ void main() {
   testWidgets('拿不到记录：说出来，不画成「还没有记录」', (t) async {
     final api = FakeApi('guard')..runsError = const SiteError(502, '站点忙');
     await _pumpRuns(t, api);
-    expect(find.textContaining('记录拿不到'), findsOneWidget);
+    expect(find.textContaining('无法加载记录'), findsOneWidget);
     expect(find.text('还没有记录'), findsNothing);
     await t.pumpWidget(Container());
   });

@@ -48,11 +48,11 @@ describe("地图编辑器", () => {
     await waitFor(() => expect(c.querySelector('.mapedit[data-ready]')).not.toBeNull());
     fireEvent.click(c.querySelector(".pick")!);
     fireEvent.click(c.querySelector(".pick")!);
-    fireEvent.click(btn(c, "画好了"));
+    fireEvent.click(btn(c, "完成绘制"));
     expect(c.querySelector("polyline.me-op.erase")).not.toBeNull();
     fireEvent.click(c.querySelector(".me-save")!);
     expect(document.body.textContent).toContain("平方米");
-    fireEvent.click(btn(document.querySelector(".modal")!, "另存成新的一版"));
+    fireEvent.click(btn(document.querySelector(".modal")!, "另存为新版本"));
     await waitFor(() => expect(posted.find((p) => p.url.endsWith("/edit"))).toBeTruthy());
     const b = posted.find((p) => p.url.endsWith("/edit"))!.body;
     expect(b.digest).toBe("abc");
@@ -75,7 +75,7 @@ describe("地图编辑器", () => {
     await waitFor(() => expect(c.querySelector('.mapedit[data-ready]')).not.toBeNull());
     fireEvent.click(c.querySelector('[data-tool="terrain"]')!);
     for (let i = 0; i < 3; i++) fireEvent.click(c.querySelector(".pick")!);
-    fireEvent.click(btn(c, "画好了"));
+    fireEvent.click(btn(c, "完成绘制"));
     expect((c.querySelector('[data-terrain] input') as HTMLInputElement).value).toBe("0.3");
   });
 
@@ -95,10 +95,10 @@ describe("地图编辑器", () => {
     const { container: c } = page();
     await waitFor(() => expect(c.querySelector('.mapedit[data-ready]')).not.toBeNull());
     fireEvent.click(c.querySelector(".pick")!);
-    fireEvent.click(btn(c, "画好了"));
+    fireEvent.click(btn(c, "完成绘制"));
     fireEvent.click(c.querySelector(".me-save")!);
-    fireEvent.click(btn(document.querySelector(".modal")!, "另存成新的一版"));
-    await waitFor(() => expect(c.querySelector(".ly-conflict")!.textContent).toContain("换了"));
+    fireEvent.click(btn(document.querySelector(".modal")!, "另存为新版本"));
+    await waitFor(() => expect(c.querySelector(".ly-conflict")!.textContent).toContain("已被修改"));
   });
 
   it("外审R5:换了图,旧图的草稿不带过去;三样都到了才能存", async () => {
@@ -113,7 +113,7 @@ describe("地图编辑器", () => {
     const ui = render(<MapEditPage say={() => {}} target={{ map_id: "A", version: "1" }} Canvas={Fake} />);
     await waitFor(() => expect(ui.container.querySelector(".mapedit[data-ready]")).not.toBeNull());
     fireEvent.click(ui.container.querySelector(".pick")!);
-    fireEvent.click(btn(ui.container, "画好了"));
+    fireEvent.click(btn(ui.container, "完成绘制"));
     expect((ui.container.querySelector(".me-save") as HTMLButtonElement).disabled).toBe(false);
     ui.rerender(<MapEditPage say={() => {}} target={{ map_id: "B", version: "1" }} Canvas={Fake} />);
     await new Promise((r) => setTimeout(r, 20));
@@ -156,9 +156,9 @@ describe("地图编辑器", () => {
     const ui = render(<MapEditPage say={() => {}} target={{ map_id: "A", version: "1" }} Canvas={Fake} />);
     await waitFor(() => expect(ui.container.querySelector(".mapedit[data-ready]")).not.toBeNull());
     fireEvent.click(ui.container.querySelector(".pick")!);
-    fireEvent.click(btn(ui.container, "画好了"));
+    fireEvent.click(btn(ui.container, "完成绘制"));
     fireEvent.click(ui.container.querySelector(".me-save")!);
-    fireEvent.click(btn(document.querySelector(".modal")!, "另存成新的一版"));
+    fireEvent.click(btn(document.querySelector(".modal")!, "另存为新版本"));
     await waitFor(() => expect(posted.some((p) => p.url.endsWith("/A/1/edit"))).toBe(true));
     location.hash = "#/admin/mapedit?map=B&version=1";
     ui.rerender(<MapEditPage say={() => {}} target={{ map_id: "B", version: "1" }} Canvas={Fake} />);
@@ -174,7 +174,7 @@ describe("地图编辑器", () => {
     const { container: c } = page();
     await waitFor(() => expect(c.querySelector(".mapedit[data-ready]")).not.toBeNull());
     fireEvent.click(c.querySelector(".pick")!);
-    expect(c.textContent).toContain("已点 1 个点");
+    expect(c.textContent).toContain("已选 1 个点");
     expect(c.textContent).not.toContain("各个角");
   });
 });

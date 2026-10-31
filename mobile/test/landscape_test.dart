@@ -191,13 +191,13 @@ void main() {
                 onPressed: () => showFieldsDialog(c,
                     title: '设位置',
                     fields: const [DialogField('x (m)'), DialogField('y (m)'), DialogField('朝向 (°)')],
-                    confirm: '设'),
+                    confirm: '设置'),
                 child: const Text('开')))));
     await t.tap(find.text('开'));
     await t.pumpAndSettle();
     t.view.viewInsets = const FakeViewPadding(bottom: 400);
     await t.pumpAndSettle();
-    expect(find.text('设'), findsOneWidget);
+    expect(find.text('设置'), findsOneWidget);
   });
 
   testWidgets('横屏不溢出：待命点与原点（W13a），「在这儿设」对话框键盘弹起来', (t) async {

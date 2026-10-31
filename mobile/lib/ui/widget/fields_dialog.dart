@@ -77,7 +77,7 @@ class _FieldsDialogState extends State<_FieldsDialog> {
       ]),
       actions: [
         NwButton(
-            variant: NwButtonVariant.ghost, onPressed: () => Navigator.pop(context), label: tr('Cancel', '算了')),
+            variant: NwButtonVariant.ghost, onPressed: () => Navigator.pop(context), label: tr('Cancel', '取消')),
         NwButton(
             buttonKey: widget.confirmKey,
             onPressed: () => Navigator.pop(context, [for (final c in _ctl) c.text.trim()]),

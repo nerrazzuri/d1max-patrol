@@ -67,12 +67,12 @@ class _SiteInterceptsPageState extends State<SiteInterceptsPage> {
     try {
       final d = await f();
       _take(d);
-      msg = tr('$what: done', '$what：好了');
+      msg = tr('$what: done', '$what：完成');
     } on SiteError catch (e) {
       msg = e.status == 409
           ? tr('$what failed: ${ackReasonText(e.message.replaceFirst(RegExp(r'^机器人没标[:：]'), ''))}',
-              '$what没成：${ackReasonText(e.message.replaceFirst(RegExp(r'^机器人没标[:：]'), ''))}')
-          : tr('$what failed: $e', '$what没成：$e');
+              '$what失败：${ackReasonText(e.message.replaceFirst(RegExp(r'^机器人没标[:：]'), ''))}')
+          : tr('$what failed: $e', '$what失败：$e');
     }
     if (mounted) setState(() => _msg = msg);
   }
@@ -82,14 +82,14 @@ class _SiteInterceptsPageState extends State<SiteInterceptsPage> {
     try {
       robots = (await widget.api.robots()).where(robotCanStandbyHere).toList();
     } on SiteError catch (e) {
-      if (mounted) setState(() => _msg = tr("Can't load the robot list: $e", '拿不到机器人的列表：$e'));
+      if (mounted) setState(() => _msg = tr("Can't load the robot list: $e", '无法加载机器人列表：$e'));
       return;
     }
     if (!mounted) return;
     if (robots.isEmpty) {
       setState(() => _msg = tr(
           'No robot can report its position (offline, or its software is too old)',
-          '没有能报位置的机器人（不在线，或者机器人上的版本太老）'));
+          '没有可上报位置的机器人（离线或软件版本过旧）'));
       return;
     }
     final robot = robots.length == 1
@@ -97,7 +97,7 @@ class _SiteInterceptsPageState extends State<SiteInterceptsPage> {
         : await showDialog<String>(
             context: context,
             builder: (c) => SimpleDialog(
-                title: Text(tr("Use which robot's current position?", '用哪台机器人现在的位置？')),
+                title: Text(tr("Use which robot's current position?", '使用哪台机器人的当前位置？')),
                 children: [
               for (final r in robots)
                 SimpleDialogOption(
@@ -112,7 +112,7 @@ class _SiteInterceptsPageState extends State<SiteInterceptsPage> {
         fields: [
           DialogField(tr('Intercept point name (letters, digits, . _ -)', '拦截点名字（字母、数字、. _ -）'))
         ],
-        confirm: tr('Set', '设'));
+        confirm: tr('Set', '设置'));
     final name = got?.first.trim() ?? '';
     if (name.isEmpty) return;
     await _run(() => widget.api.interceptHere(robot, name),
@@ -121,7 +121,7 @@ class _SiteInterceptsPageState extends State<SiteInterceptsPage> {
 
   Future<void> _addZone() async {
     if (_points.isEmpty) {
-      setState(() => _msg = tr('Set an intercept point first', '先设一个拦截点'));
+      setState(() => _msg = tr('Set an intercept point first', '请先设置拦截点'));
       return;
     }
     String? point = '${_points.first['name']}';
@@ -131,14 +131,14 @@ class _SiteInterceptsPageState extends State<SiteInterceptsPage> {
       builder: (c) => StatefulBuilder(
         builder: (c, set) => AlertDialog(
           scrollable: true, // 横屏弹键盘
-          title: Text(tr('Link zone to intercept point', '防区绑到拦截点')),
+          title: Text(tr('Link zone to intercept point', '关联防区与拦截点')),
           content: Column(mainAxisSize: MainAxisSize.min, children: [
             TextField(
                 key: const Key('zone-name'),
                 controller: zone,
                 decoration: InputDecoration(
                     labelText: tr('Zone name (same as the camera or NVR reports)',
-                        '防区名（跟摄像头、NVR 报的一样）'))),
+                        '防区名（与摄像头、NVR 上报的一致）'))),
             DropdownButton<String>(
               key: const Key('zone-intercept'),
               isExpanded: true,
@@ -151,11 +151,11 @@ class _SiteInterceptsPageState extends State<SiteInterceptsPage> {
             ),
           ]),
           actions: [
-            TextButton(onPressed: () => Navigator.pop(c, false), child: Text(tr('Cancel', '算了'))),
+            TextButton(onPressed: () => Navigator.pop(c, false), child: Text(tr('Cancel', '取消'))),
             FilledButton(
                 key: const Key('zone-go'),
                 onPressed: () => Navigator.pop(c, true),
-                child: Text(tr('Link', '绑'))),
+                child: Text(tr('Link', '关联'))),
           ],
         ),
       ),
@@ -163,7 +163,7 @@ class _SiteInterceptsPageState extends State<SiteInterceptsPage> {
     final z = zone.text.trim();
     if (ok != true || z.isEmpty || point == null) return;
     await _run(() => widget.api.mapZone(z, point!),
-        tr('Link zone $z to $point', '防区 $z 绑到 $point'));
+        tr('Link zone $z to $point', '将防区 $z 关联到 $point'));
   }
 
   Future<void> _confirm(String title, Future<void> Function() go, Key key) async {
@@ -172,7 +172,7 @@ class _SiteInterceptsPageState extends State<SiteInterceptsPage> {
       builder: (c) => AlertDialog(
         title: Text(title),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(c, false), child: Text(tr('Cancel', '算了'))),
+          TextButton(onPressed: () => Navigator.pop(c, false), child: Text(tr('Cancel', '取消'))),
           FilledButton(key: key, onPressed: () => Navigator.pop(c, true), child: Text(tr('Yes', '是'))),
         ],
       ),
@@ -193,7 +193,7 @@ class _SiteInterceptsPageState extends State<SiteInterceptsPage> {
               onPressed: _here,
               label: tr('Set intercept point at robot', '在机器人这儿设拦截点')),
           BarAction(
-              key: SiteInterceptsPage.zoneKey, onPressed: _addZone, label: tr('Link zone', '绑防区')),
+              key: SiteInterceptsPage.zoneKey, onPressed: _addZone, label: tr('Link zone', '关联防区')),
         ],
       ])),
       body: _loading
@@ -212,13 +212,13 @@ class _SiteInterceptsPageState extends State<SiteInterceptsPage> {
                   tr(
                       'Zone → intercept point (when a camera reports an intrusion in the zone, '
                           'a robot is sent to that point)',
-                      '防区 → 拦截点（摄像头报这个防区有入侵，派机器人去那个拦截点）'),
+                      '防区 → 拦截点（摄像头上报该防区入侵时，派机器人前往对应拦截点）'),
                   style: NwText.titleSmall.copyWith(color: nw.text)),
               nwGap8,
               NwListCard(children: [
                 if (_zones.isEmpty)
                   NwCardText(tr('No zones yet: intrusions are logged as "not mapped" and no robot is sent',
-                      '还没有防区：这时候来的入侵都记「没映射」，没机器人去')),
+                      '还没有防区：入侵将记为「未映射」，不派机器人')),
                 for (final z in _zones)
                   ListTile(
                     key: Key('zone-${z['zone']}'),
@@ -232,7 +232,7 @@ class _SiteInterceptsPageState extends State<SiteInterceptsPage> {
                             icon: Icon(Icons.link_off_rounded, color: nw.text),
                             onPressed: () => _confirm(
                                 tr('Stop sending robots to zone ${z['zone']}? (Intrusions still raise alarms)',
-                                    '防区 ${z['zone']} 不再派机器人？（之后的入侵照样报告警）'),
+                                    '防区 ${z['zone']} 不再派机器人？（入侵仍会报警）'),
                                 () => _run(() => widget.api.unmapZone('${z['zone']}'),
                                     tr('Unlink zone ${z['zone']}', '取消防区 ${z['zone']}')),
                                 Key('zone-remove-go-${z['zone']}')))
@@ -259,25 +259,25 @@ class _SiteInterceptsPageState extends State<SiteInterceptsPage> {
                       if ('${p['reach'] ?? ''}'.isNotEmpty)
                         Text(
                             tr('Unreachable, no robot is sent on an intrusion: ${p['reach']}',
-                                '走不到，入侵来了不派机器人：${p['reach']}'),
+                                '不可达，入侵时不派机器人：${p['reach']}'),
                             key: Key('intercept-reach-${p['name']}'), style: small.copyWith(color: nw.error)),
                       if ('${p['reach_note'] ?? ''}'.isNotEmpty)
                         Text('${p['reach_note']}', style: small.copyWith(color: nw.textMuted)),
                       if (p['newer_version'] is String)
                         Text(
                             tr('The map has a new version ${p['newer_version']}: set this point again on the new map',
-                                '图有新版本 ${p['newer_version']}：要在新图上重设'),
+                                '地图有新版本 ${p['newer_version']}：请在新地图上重新设置此点'),
                             key: Key('intercept-newer-${p['name']}'), style: small.copyWith(color: nw.warning)),
                     ]),
                     trailing: manage
                         ? IconButton(
                             key: Key('intercept-remove-${p['name']}'),
-                            tooltip: tr('Delete', '删掉'),
+                            tooltip: tr('Delete', '删除'),
                             icon: Icon(Icons.delete_outline_rounded, color: nw.error),
                             onPressed: () => _confirm(
-                                tr('Delete intercept point ${p['name']}?', '删掉拦截点 ${p['name']}？'),
+                                tr('Delete intercept point ${p['name']}?', '删除拦截点 ${p['name']}？'),
                                 () => _run(() => widget.api.removeIntercept('${p['name']}'),
-                                    tr('Delete intercept point ${p['name']}', '删拦截点 ${p['name']}')),
+                                    tr('Delete intercept point ${p['name']}', '删除拦截点 ${p['name']}')),
                                 Key('intercept-remove-go-${p['name']}')))
                         : null,
                   ),

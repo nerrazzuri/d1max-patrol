@@ -137,16 +137,16 @@ void main() {
       final plain = FakeApi('guard');
       await t.pumpWidget(MaterialApp(home: Scaffold(body: SiteMapTab(api: plain))));
       await t.pumpAndSettle();
-      expect(inLegend('看到过、机器人没走过'), findsNothing);
-      expect(inLegend('已抹掉（机器人不去）'), findsNothing);
+      expect(inLegend('已扫描，机器人未到达'), findsNothing);
+      expect(inLegend('已抹除（机器人不进入）'), findsNothing);
       final api = _Api('guard', extra: <String, dynamic>{'seen': true})
         ..zonesView = <String, dynamic>{...FakeApi('guard').zonesView, 'zones': <dynamic>[
           <String, dynamic>{'id': 'e1', 'kind': 'erase', 'label': '抹掉区', 'polygon': [[0, 0], [1, 0], [1, 1]]},
         ]};
       await t.pumpWidget(MaterialApp(home: Scaffold(body: SiteMapTab(key: UniqueKey(), api: api))));
       await t.pumpAndSettle();
-      expect(inLegend('看到过、机器人没走过'), findsOneWidget);
-      expect(inLegend('已抹掉（机器人不去）'), findsOneWidget);
+      expect(inLegend('已扫描，机器人未到达'), findsOneWidget);
+      expect(inLegend('已抹除（机器人不进入）'), findsOneWidget);
       expect(inLegend('限速区'), findsNothing, reason: '抹掉区不是限速区');
       expect(inLegend('禁行区'), findsNothing);
       final painter = t.widget<CustomPaint>(find.byKey(SiteMapTab.zonesKey)).painter! as ZonesPainter;
@@ -155,8 +155,8 @@ void main() {
       addTearDown(() => appLang.value = AppLang.zh);
       await t.pumpWidget(MaterialApp(home: Scaffold(body: SiteMapTab(key: UniqueKey(), api: api))));
       await t.pumpAndSettle();
-      expect(inLegend('Seen, not mapped for the robot'), findsOneWidget);
-      expect(inLegend('Erased (robots never go there)'), findsOneWidget);
+      expect(inLegend('Scanned; not covered by the robot'), findsOneWidget);
+      expect(inLegend('Erased (robots never enter)'), findsOneWidget);
       await t.pumpWidget(Container());
     });
   });
@@ -201,7 +201,7 @@ void main() {
         expect(api.calls.where((c) => c.startsWith('mapPreview ')).length, greaterThan(before),
             reason: '抹掉区变了：底图重新取');
         await openZonePanel(t);
-        expect(find.text('抹掉 · 抹掉区（z1）'), findsOneWidget);
+        expect(find.text('抹除 · 抹掉区（z1）'), findsOneWidget);
         final painter = t.widget<CustomPaint>(find.byKey(SiteMapPreviewPage.zonesKey)).painter! as ZonesPainter;
         expect(painter.shapes.single.erase, isTrue);
       });
@@ -225,7 +225,7 @@ void main() {
       await t.pumpAndSettle();
       expect(api.savedZones.last.single['hard'], isTrue);
       await openZonePanel(t);
-      expect(find.text('抹掉（硬） · 抹掉区（z1）'), findsOneWidget);
+      expect(find.text('抹除（硬） · 抹掉区（z1）'), findsOneWidget);
       final previews = api.calls.where((c) => c.startsWith('mapPreview ')).length;
       await tapZoneMenu(t, SiteMapPreviewPage.drawNogoKey);
       await t.pump();

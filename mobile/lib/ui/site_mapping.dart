@@ -180,7 +180,7 @@ class _SiteMappingTrailPageState extends State<SiteMappingTrailPage> with Widget
       if (mounted) {
         setState(() {
           _staleS += widget.previewPeriod.inSeconds;
-          _err = tr("Can't reach the site: $e", '连不上：$e');
+          _err = tr("Can't reach the site: $e", '无法连接站点：$e');
         });
       }
       return;
@@ -244,7 +244,7 @@ class _SiteMappingTrailPageState extends State<SiteMappingTrailPage> with Widget
         _err = '';
       });
     } on SiteError catch (e) {
-      if (mounted) setState(() => _err = tr('Trail unavailable: $e', '取不到轨迹：$e'));
+      if (mounted) setState(() => _err = tr('Trail unavailable: $e', '无法获取轨迹：$e'));
     }
   }
 
@@ -256,31 +256,31 @@ class _SiteMappingTrailPageState extends State<SiteMappingTrailPage> with Widget
   }
 
   String _trailStatus() {
-    if (!_asked) return _err.isNotEmpty ? _err : tr('Asking the robot…', '正在问机器人……');
+    if (!_asked) return _err.isNotEmpty ? _err : tr('Querying the robot…', '正在查询机器人…');
     final n = tr('${_pts.length} points logged', '已记 ${_pts.length} 个点');
     final span = TrailPainter.span(_pts);
     final size = span == null
         ? ''
         : tr(', area covered about ${span.width.toStringAsFixed(0)} × ${span.height.toStringAsFixed(0)} m',
-            '，走过的范围约 ${span.width.toStringAsFixed(0)} × ${span.height.toStringAsFixed(0)} m');
+            '，覆盖范围约 ${span.width.toStringAsFixed(0)} × ${span.height.toStringAsFixed(0)} m');
     final head = _recording
         ? tr('Recording: $n$size (updates every ${widget.period.inSeconds} s)',
             '录包中：$n$size（每 ${widget.period.inSeconds} 秒更新）')
         : _starting
             ? tr('Recording is starting (takes 10–20 s). Points are logged once it is up…',
-                '录包正在起（要十几秒），起来了就开始记点……')
+                '正在启动录包（约 10–20 秒），启动后开始记录轨迹…')
             : tr('Not recording (trail of the last recording below): $n$size',
-                '没在录包（下面是最后一次录的轨迹）：$n$size');
+                '未在录包（下方为上次录包轨迹）：$n$size');
     return [
       head,
       if (_full)
         tr('Point limit reached, no more points are logged: the red dot is the last logged point, '
             'not where the robot is now',
-            '点数到上限了，后面的不再记：红点是记下的最后一点，不是机器人现在的位置'),
+            '已达点数上限，不再记录：红点为最后记录点，不是机器人当前位置'),
       if (_jumps > 0)
         tr('Odometry jumped $_jumps time(s) (motion controller restart or reset); '
             'the trail was joined at the jumps',
-            '里程跳过 $_jumps 次（运控重启、归零），轨迹在跳的地方接上了'),
+            '里程跳变 $_jumps 次（运控重启或归零），轨迹已在跳变处衔接'),
       if (_err.isNotEmpty) _err,
     ].join('\n');
   }
@@ -290,8 +290,8 @@ class _SiteMappingTrailPageState extends State<SiteMappingTrailPage> with Widget
       if (_err.isNotEmpty) return _err;
       return _pvStarting
           ? tr('Recording is starting (takes 10–20 s). The image appears once it is up…',
-              '开录正在起（要十几秒），起来了就有图……')
-          : tr('Asking the robot…', '正在问机器人……');
+              '正在启动录包（约 10–20 秒），启动后显示预览…')
+          : tr('Querying the robot…', '正在查询机器人…');
     }
     final d = _pv;
     final tag = '${d['map_id']}:${d['version']}';
@@ -302,12 +302,12 @@ class _SiteMappingTrailPageState extends State<SiteMappingTrailPage> with Widget
     final pvErr = '${d['preview_error'] ?? ''}';
     final head = _pvDone
         ? tr('This run is finished (the built map is on the Maps page). Last preview below',
-            '这一趟建完了（建好的图在地图页），下面是最后一张')
+            '本次建图已完成（地图见「地图」页），下方为最后一张预览')
         : !rec
-            ? tr('Stopped, packaging $tag (last preview below)', '停了，正在打包 $tag（下面是最后一张）')
+            ? tr('Stopped, packaging $tag (last preview below)', '已停止，正在打包 $tag（下方为最后一张预览）')
             : _seq == 0
                 ? tr('Live mapping $tag: mapping is up, waiting for the first preview…',
-                    '边走边建 $tag：在线建图起来了，等第一张预览……')
+                    '边走边建 $tag：建图已启动，等待第一张预览…')
                 : tr(
                     'Live mapping $tag: ${d['frames']} frames merged, area about '
                         '${w.toStringAsFixed(0)} × ${h.toStringAsFixed(0)} m '
@@ -317,21 +317,19 @@ class _SiteMappingTrailPageState extends State<SiteMappingTrailPage> with Widget
     return [
       head,
       if (rec && !_pvDone && d['preview_running'] == false)
-        tr('Preview process stopped (log: mapview.log). Mapping is not affected; '
-            'the map is still built after you stop',
-            '预览进程停了（日志 mapview.log），建图不受影响，停下后照样出图')
+        tr('Preview process stopped (log: mapview.log). Mapping is not affected',
+            '预览进程已停止（日志 mapview.log），不影响建图')
       else if (rec && !_pvDone && _seq > 0 && age > _staleAfterS)
-        tr('Preview not updated for ${age.toStringAsFixed(0)} s (the preview process on the robot '
-            'may have stopped). Mapping is not affected',
-            '预览 ${age.toStringAsFixed(0)} 秒没更新（机器人上的预览进程可能停了），建图不受影响'),
+        tr('Preview not updated for ${age.toStringAsFixed(0)} s. Mapping is not affected',
+            '预览 ${age.toStringAsFixed(0)} 秒未更新，不影响建图'),
       if (pvErr.isNotEmpty)
         tr('Preview did not start: $pvErr (mapping is not affected; the map is still built after you stop)',
-            '预览没起来：$pvErr（建图不受影响，停下后照样出图）'),
+            '预览未启动：$pvErr（不影响建图）'),
       if (d['too_big'] == true)
-        tr('Image too large, the robot did not send it (previous one below)', '图太大，机器人没发（下面是上一张）'),
+        tr('Image too large, the robot did not send it (previous one below)', '图片过大，机器人未发送（下方为上一张）'),
       if (_err.isNotEmpty)
         _png != null
-            ? tr('$_err (the image below is about $_staleS s old)', '$_err（下面是约 $_staleS 秒前的图）')
+            ? tr('$_err (the image below is about $_staleS s old)', '$_err（下方为约 $_staleS 秒前的图）')
             : _err,
     ].join('\n');
   }
@@ -366,9 +364,8 @@ class _SiteMappingTrailPageState extends State<SiteMappingTrailPage> with Widget
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 12),
           child: Text(
-              tr('The green dot is where recording started, the red dot is where the robot is now. '
-                  'Coordinates are the robot\'s own odometry (a new place has no map yet) and drift over distance.',
-                  '绿点是录包起点，红点是机器人现在的位置；坐标是机器人自己的里程（新地方还没有图），走远了会有些漂。'),
+              tr('Green: start. Red: robot now. Coordinates drift with distance.',
+                  '绿点：起点；红点：机器人当前位置。距离越远，坐标偏差越大。'),
               style: NwText.bodySmall.copyWith(color: Nw.of(context).textSecondary)),
         ),
         Expanded(
@@ -415,7 +412,7 @@ class _SiteMappingTrailPageState extends State<SiteMappingTrailPage> with Widget
           child: DecoratedBox(
             decoration: BoxDecoration(border: Border.all(color: Nw.of(context).outline)),
             child: png == null
-                ? Center(child: Text(tr('No image yet', '还没有图')))
+                ? Center(child: Text(tr('No image yet', '暂无图像')))
                 : InteractiveViewer(
                     maxScale: 8,
                     child: Center(
@@ -437,11 +434,8 @@ class _SiteMappingTrailPageState extends State<SiteMappingTrailPage> with Widget
         Text(_previewStatus(), key: SiteMappingTrailPage.statusKey),
         const SizedBox(height: 8),
         Text(
-            tr('The blue line is the path covered, the green dot is the start, the red arrow is the '
-                'robot\'s position and heading. This is a preview during live mapping: its coordinates '
-                'do not match the built map. View the built map on the Maps page after you stop.',
-                '蓝线是走过的路，绿点是起点，红箭头是机器人现在的位置和朝向。这是边走边建时的预览：'
-                '坐标跟建好的图不通用，建好的图停下后在地图页看。'),
+            tr('Blue: path covered. Green: start. Red arrow: robot position and heading. View the built map on the Maps page.',
+                '蓝线：已走路径；绿点：起点；红箭头：机器人位置和朝向。建成的地图请在「地图」页查看。'),
             style: NwText.bodySmall.copyWith(color: Nw.of(context).textSecondary)),
       ]),
     ]);
@@ -739,7 +733,7 @@ class _SiteMapPreviewPageState extends State<SiteMapPreviewPage> {
       _msg = done(r['auto_confirmed'] == true);
       saved = true;
     } on SiteError catch (e) {
-      _msg = tr('Not saved: ${e.message}', '没存上：${e.message}');
+      _msg = tr('Not saved: ${e.message}', '保存失败：${e.message}');
     }
     await _loadZones();
     if (!mounted) return;
@@ -784,10 +778,10 @@ class _SiteMapPreviewPageState extends State<SiteMapPreviewPage> {
     await _save(
         [..._zoneList, zone],
         (auto) => auto
-            ? tr('Saved: revision $next (only tightens: stays confirmed, robots can still be sent out)',
-                '存好了：第 $next 版（只收紧：不用重新确认，照常派机器人）')
-            : tr('Saved: revision $next (changes must be confirmed again)',
-                '存好了：第 $next 版（改过要重新确认）'));
+            ? tr('Saved: revision $next (tightening only; stays confirmed)',
+                '已保存：第 $next 版（仅收紧，无需重新确认）')
+            : tr('Saved: revision $next (changed; confirm again)',
+                '已保存：第 $next 版（有改动，需重新确认）'));
   }
 
   Future<void> _confirm() async {
@@ -821,7 +815,7 @@ class _SiteMapPreviewPageState extends State<SiteMapPreviewPage> {
               actions: [
                 TextButton(
                     onPressed: () => Navigator.pop(c, false),
-                    child: Text(tr('Review again', '再看看'))),
+                    child: Text(tr('Review again', '返回检查'))),
                 FilledButton(
                     key: SiteMapPreviewPage.confirmOkKey,
                     onPressed: () => Navigator.pop(c, true),
@@ -840,19 +834,16 @@ class _SiteMapPreviewPageState extends State<SiteMapPreviewPage> {
                 scrollable: true,
                 title: Text(tr('No zones at all', '一个区域都没有')),
                 content: Text(tr(
-                    'This version has no no-go or speed-limit zone at all'
-                        '${had > 0 ? ' (version ${prev?['version']} had $had)' : ''}. Confirm only if there '
-                        'really is no water, drop, steep slope or flower bed anywhere on this map.',
-                    '这一版一个禁行区、限速区都没有${had > 0 ? '（上一版第 ${prev?['version']} 版画了 $had 个）' : ''}。'
-                        '确认之前再看一眼：水池、高楼楼梯、陡坡、落差真的一处都没有吗？')),
+                    'This version has no no-go or speed-limit zones${had > 0 ? ' (version ${prev?['version']} had $had)' : ''}. Confirm only if the map really has no water, stairs, steep slopes or drops.',
+                    '此版本没有任何禁行区和限速区${had > 0 ? '（上一版第 ${prev?['version']} 版有 $had 个）' : ''}。请确认地图上确实没有水池、高楼梯、陡坡和落差。')),
                 actions: [
                   TextButton(
                       onPressed: () => Navigator.pop(c, false),
-                      child: Text(tr('Review again', '再看看'))),
+                      child: Text(tr('Review again', '返回检查'))),
                   FilledButton(
                       key: SiteMapPreviewPage.confirmEmptyKey,
                       onPressed: () => Navigator.pop(c, true),
-                      child: Text(tr('Yes, there are none', '真的没有'))),
+                      child: Text(tr('Yes, there are none', '确认没有'))),
                 ],
               ));
       if (ok2 != true || !mounted) return;
@@ -879,7 +870,7 @@ class _SiteMapPreviewPageState extends State<SiteMapPreviewPage> {
       _msg = tr('Revision ${r['revision'] ?? _rev} confirmed', '确认了第 ${r['revision'] ?? _rev} 版') +
           (failed.isEmpty ? '' : '\n${failed.join('\n')}');
     } on SiteError catch (e) {
-      _msg = tr('Not confirmed: ${e.message}', '没确认上：${e.message}');
+      _msg = tr('Not confirmed: ${e.message}', '确认失败：${e.message}');
     }
     await _loadZones();
     if (mounted) setState(() => _busy = false);
@@ -893,9 +884,9 @@ class _SiteMapPreviewPageState extends State<SiteMapPreviewPage> {
     try {
       await widget.api.discardZoneProposal(widget.mapId, widget.version);
       _adopt.clear();
-      _msg = tr('Copied items dropped', '带过来的不要了');
+      _msg = tr('Copied items dropped', '已放弃带入的区域');
     } on SiteError catch (e) {
-      _msg = tr('Not dropped: ${e.message}', '没丢掉：${e.message}');
+      _msg = tr('Not dropped: ${e.message}', '放弃失败：${e.message}');
     }
     await _loadZones();
     if (mounted) setState(() => _busy = false);
@@ -915,7 +906,7 @@ class _SiteMapPreviewPageState extends State<SiteMapPreviewPage> {
                 child: NwNotice(
                     tone: NwTone.warning,
                     text: tr('Preview unavailable: ${e is SiteError ? e.message : e}',
-                        '看不了：${e is SiteError ? e.message : e}')));
+                        '无法预览：${e is SiteError ? e.message : e}')));
           }
           if (!snap.hasData) return const Center(child: CircularProgressIndicator());
           final (meta, png, plan) = snap.data!;
@@ -1039,8 +1030,8 @@ class _SiteMapPreviewPageState extends State<SiteMapPreviewPage> {
                 // 台账 M9：淡淡的地面是站点画进底图的，这里说一句是什么
                 if (geo.seen)
                   Text(
-                      tr('Faint floor: seen through doors or glass, not mapped for the robot (it never goes there)',
-                          '淡淡的地面：从门口、玻璃看到过，机器人没走过（机器人不去）'),
+                      tr('Faint floor: scanned through doors or glass; the robot never enters',
+                          '浅色地面：透过门、玻璃扫描到，机器人未到达（不会进入）'),
                       style: NwText.bodySmall.copyWith(color: Nw.of(context).textSecondary)),
                 const Divider(),
                 for (final p in homes)
@@ -1051,7 +1042,7 @@ class _SiteMapPreviewPageState extends State<SiteMapPreviewPage> {
                           '原点 · ${p['robot_id']} · ${p['name']}  '
                               '(${(p['x'] as num).toStringAsFixed(1)}, ${(p['y'] as num).toStringAsFixed(1)})'),
                       style: TextStyle(color: Nw.of(context).tertiary)),
-                if (pts.isEmpty) Text(tr('No standby points on this map yet', '这张图上还没有登记待命点')),
+                if (pts.isEmpty) Text(tr('No standby points on this map yet', '此地图上还没有待命点')),
                 for (final p in pts)
                   Text('${p['robot_id']} · ${p['name']}${p['default'] == true ? tr(' (default)', '（默认）') : ''}  '
                       '(${(p['x'] as num).toStringAsFixed(1)}, ${(p['y'] as num).toStringAsFixed(1)})'),
@@ -1088,11 +1079,11 @@ class _SiteMapPreviewPageState extends State<SiteMapPreviewPage> {
     final conf = _zones?['confirmed'] as Map<String, dynamic>?;
     final confirmed = conf != null && conf['current'] == true;
     final text = _zones == null
-        ? (_zonesError != null ? tr('Zones unavailable', '区域取不到') : tr('Loading zones…', '区域取的中…'))
+        ? (_zonesError != null ? tr('Zones unavailable', '无法加载区域') : tr('Loading zones…', '正在加载区域…'))
         : confirmed
             ? tr('Zones rev $_rev · confirmed', '区域第 $_rev 版 · 已确认')
             : tr('Zones rev $_rev · not confirmed: cannot be sent to robots',
-                '区域第 $_rev 版 · 没确认：下发不了');
+                '区域第 $_rev 版 · 未确认：无法下发');
     return Align(
       alignment: Alignment.topLeft,
       child: Material(
@@ -1162,7 +1153,7 @@ class _SiteMapPreviewPageState extends State<SiteMapPreviewPage> {
               canEdit ? () => _startDrawing('slow') : null),
           item(SiteMapPreviewPage.drawWallKey, Icons.fence_rounded, tr('Draw virtual wall', '画虚拟墙'),
               canEdit ? () => _startDrawing('wall') : null),
-          item(SiteMapPreviewPage.drawEraseKey, Icons.layers_clear_rounded, tr('Erase a region', '抹掉一块'),
+          item(SiteMapPreviewPage.drawEraseKey, Icons.layers_clear_rounded, tr('Erase a region', '抹除区域'),
               canEdit ? () => _startDrawing('erase') : null),
           if (_zones != null && (!confirmed || _proposal != null))
             item(SiteMapPreviewPage.confirmMenuKey, Icons.verified_rounded,
@@ -1258,16 +1249,15 @@ class _SiteMapPreviewPageState extends State<SiteMapPreviewPage> {
           key: SiteMapPreviewPage.proposalKey,
           tone: same == false ? NwTone.error : NwTone.warning,
           text: tr(
-              'Copied from version $from: check each one against the new map; coordinates may differ. '
-                  'Nothing here is in force until you tick it and confirm.',
-              '从第 $from 版带过来的：每一个都要对着新图核，坐标可能不一样。勾上、确认之后才生效。')),
+              'Copied from version $from. Coordinates may differ: check each, then tick and confirm.',
+              '从第 $from 版带入，坐标可能有变，请逐个核对后勾选确认。')),
       if (same == false)
         Text(
             tr('The coordinate frame changed (frames.json differs): copied positions are probably wrong. '
-                'Redraw instead.', '坐标系变了（frames.json 不一样）：带过来的位置很可能是错的，重画。'),
+                'Redraw instead.', '坐标系已变化（frames.json 不同）：带入的位置很可能有误，请重画。'),
             style: NwText.bodyMedium.copyWith(color: c.error, fontWeight: FontWeight.bold)),
       if (same == null)
-        Text(tr('Cannot tell whether the coordinate frame is the same.', '看不出坐标系是不是一样。'),
+        Text(tr('Cannot tell whether the coordinate frame is the same.', '无法判断坐标系是否一致。'),
             style: NwText.bodySmall.copyWith(color: c.warning)),
       for (final z in _propList('zones')) tick('zone:${z['id']}', 'zone', '${z['id']}', zoneTitle(z, withId: false)),
       for (final p in _propList('standby'))
@@ -1282,7 +1272,7 @@ class _SiteMapPreviewPageState extends State<SiteMapPreviewPage> {
             child: TextButton(
                 key: SiteMapPreviewPage.discardProposalKey,
                 onPressed: _busy ? null : _discardProposal,
-                child: Text(tr('Drop all copied items', '带过来的都不要')))),
+                child: Text(tr('Drop all copied items', '放弃全部带入项')))),
       const Divider(),
     ];
   }
@@ -1324,14 +1314,14 @@ class _SiteMapPreviewPageState extends State<SiteMapPreviewPage> {
                     OutlinedButton(
                         key: SiteMapPreviewPage.undoKey,
                         onPressed: _draft.isEmpty ? null : () => setState(_draft.removeLast),
-                        child: Text(tr('Undo point', '撤销一点'))),
+                        child: Text(tr('Undo point', '撤销上一点'))),
                     TextButton(
                         key: SiteMapPreviewPage.cancelKey,
                         onPressed: () => setState(() {
                               _drawing = null;
                               _draft.clear();
                             }),
-                        child: Text(tr('Cancel', '不画了'))),
+                        child: Text(tr('Cancel', '取消绘制'))),
                   ]),
                 ]),
             Wrap(spacing: Nw.s16, runSpacing: 0, crossAxisAlignment: WrapCrossAlignment.center, children: [
@@ -1343,7 +1333,7 @@ class _SiteMapPreviewPageState extends State<SiteMapPreviewPage> {
                     Checkbox(value: _hard, onChanged: (v) => setState(() => _hard = v ?? false)),
                     Flexible(
                       child: Text(tr('Hard no-go (water, drops): remote control also keeps out',
-                          '硬禁区（水体、落差）：遥控也开不进去'), style: small),
+                          '硬禁区（水体、落差）：遥控也无法进入'), style: small),
                     ),
                   ]),
                 ),
@@ -1390,9 +1380,9 @@ class _SiteMapPreviewPageState extends State<SiteMapPreviewPage> {
   List<Widget> _zonePanel(List<Map<String, dynamic>> zones) {
     final admin = widget.api.session?.canManageMaps ?? false;
     if (_zonesError != null) {
-      return [Text(tr('Zones unavailable: $_zonesError', '区域取不到：$_zonesError'))];
+      return [Text(tr('Zones unavailable: $_zonesError', '无法读取区域：$_zonesError'))];
     }
-    if (_zones == null) return [Text(tr('Loading zones…', '区域取的中…'))];
+    if (_zones == null) return [Text(tr('Loading zones…', '正在加载区域…'))];
     final conf = _zones!['confirmed'] as Map<String, dynamic>?;
     final confirmed = conf != null && conf['current'] == true;
     final prop = _proposal;
@@ -1403,20 +1393,19 @@ class _SiteMapPreviewPageState extends State<SiteMapPreviewPage> {
           confirmed
               ? switch (conf['how']) {
                   // 决策 66：只收紧的改动当场算确认了；临时区到期删掉也算（到期是确认时就定好的）
-                  'tighten' => tr('Confirmed (${conf['by']}, only tightened)',
-                      '已确认（${conf['by']}，只收紧）'),
-                  'expiry' => tr('Confirmed (a temporary zone expired)', '已确认（临时区到期删了）'),
+                  'tighten' => tr('Confirmed (${conf['by']}, tightening only)',
+                      '已确认（${conf['by']}，仅收紧）'),
+                  'expiry' => tr('Confirmed (a temporary zone expired)', '已确认（临时区已到期删除）'),
                   _ => tr('Confirmed (${conf['by']})', '已确认（${conf['by']}）'),
                 }
               : conf == null
-                  ? tr('Not confirmed: this map cannot be sent to robots', '还没确认：这张图下发不了')
+                  ? tr('Not confirmed: this map can\'t be sent to robots', '未确认：此地图无法下发')
                   : tr(
-                      'Changed since it was confirmed (revision ${conf['revision']} was confirmed): '
-                          'cannot be sent to robots',
-                      '改过之后没重新确认（确认的是第 ${conf['revision']} 版）：下发不了'),
+                      'Changed since confirmation (revision ${conf['revision']} was confirmed): can\'t be sent to robots',
+                      '确认后有改动（已确认第 ${conf['revision']} 版）：无法下发'),
           style: TextStyle(color: confirmed ? Nw.of(context).text : Nw.of(context).warning)),
       if (prop != null) ..._proposalPanel(prop, admin),
-      if (zones.isEmpty) Text(tr('No zones drawn', '没画区域')),
+      if (zones.isEmpty) Text(tr('No zones drawn', '未绘制区域')),
       for (final z in zones)
         Row(children: [
           Expanded(child: Text(zoneTitle(z) + _untilText(z['until_ms']))),
@@ -1424,8 +1413,8 @@ class _SiteMapPreviewPageState extends State<SiteMapPreviewPage> {
             IconButton(
                 key: SiteMapPreviewPage.deleteKey('${z['id']}'),
                 icon: const Icon(Icons.delete_outline),
-                tooltip: tr('Delete (relaxes limits: applied only when the robot is idle)',
-                    '删掉（放宽：机器人空闲时才换上）'),
+                tooltip: tr('Delete (relaxes limits; applied when the robot is idle)',
+                    '删除（放宽限制：机器人空闲时生效）'),
                 onPressed: _busy
                     ? null
                     : () {
@@ -1433,28 +1422,25 @@ class _SiteMapPreviewPageState extends State<SiteMapPreviewPage> {
                         _save(
                             [for (final o in zones) if (o['id'] != z['id']) o],
                             (auto) => auto
-                                ? tr('Deleted: revision $next (nothing was relaxed: stays confirmed)',
-                                    '删了：第 $next 版（没放宽：不用重新确认）')
-                                : tr('Deleted: revision $next (changes must be confirmed again)',
-                                    '删了：第 $next 版（改过要重新确认）'));
+                                ? tr('Deleted: revision $next (nothing relaxed; stays confirmed)',
+                                    '已删除：第 $next 版（未放宽，无需重新确认）')
+                                : tr('Deleted: revision $next (changed; confirm again)',
+                                    '已删除：第 $next 版（有改动，需重新确认）'));
                       }),
         ]),
       // 刚存、刚删的那句话在左上的状态条里（说明栏开不开都看得见）
       if (admin && _drawing == null) ...[
         Text(
-            tr('Adding or enlarging a zone, a lower limit or the hard mark takes effect at once. Deleting, '
-                'shrinking or raising a limit must be confirmed again before robots are sent out.',
-                '加禁行区、放大、调低限速、标硬禁区当场生效；删、缩、调高限速要重新确认才派机器人。'),
+            tr('Adding or enlarging zones, lowering limits or marking hard takes effect immediately. Deleting, shrinking or raising limits must be confirmed again before robots are sent.',
+                '新增、扩大禁行区，降低限速，标为硬禁区：立即生效。删除、缩小禁行区，提高限速：需重新确认后才派机器人。'),
             style: NwText.bodySmall.copyWith(color: Nw.of(context).textSecondary)),
         Text(
-            tr('Virtual wall: tap along the line (2 points or more). Robots do not cross it; it is stored as a '
-                '0.3 m wide no-go strip and follows the same rules as a no-go zone.',
-                '虚拟墙：沿着墙点（两个点以上）。机器人不会穿过；存成 0.3 米宽的禁行带，规则跟禁行区一样。'),
+            tr('Virtual wall: tap at least 2 points along the line. Robots do not cross it; no-go zone rules apply.',
+                '虚拟墙：沿墙点选至少 2 个点。机器人不会穿越，规则同禁行区。'),
             style: NwText.bodySmall.copyWith(color: Nw.of(context).textSecondary)),
         Text(
-            tr('Erase a region: robots never go there (like a no-go zone) and every map shows it as removed '
-                '(junk, glass reflections, places robots must not go).',
-                '抹掉一块：机器人永远不去（跟禁行区一样），所有地图上都显示成抹掉了（建图时的杂物、玻璃反射、机器人不该去的地方）。'),
+            tr('Erase a region: robots never enter (like a no-go zone) and all maps show it as erased (for clutter, glass reflections, forbidden areas).',
+                '抹除区域：机器人不会进入（同禁行区），所有地图上显示为已抹除（适用于建图杂物、玻璃反射、禁止进入的区域）。'),
             style: NwText.bodySmall.copyWith(color: Nw.of(context).textSecondary)),
         if (!confirmed || prop != null) ...[
           Text('${_zones!['confirm_text'] ?? ''}',
@@ -1464,7 +1450,7 @@ class _SiteMapPreviewPageState extends State<SiteMapPreviewPage> {
               onPressed: _busy ? null : _confirm,
               child: Text(prop == null
                   ? tr('Confirm revision $_rev', '确认第 $_rev 版')
-                  : tr('Confirm revision $_rev with the ticked items', '确认第 $_rev 版（带勾上的）'))),
+                  : tr('Confirm revision $_rev with the ticked items', '确认第 $_rev 版（含已勾选项）'))),
         ],
       ],
     ];
@@ -1523,8 +1509,8 @@ String zoneTitle(Map<String, dynamic> z, {bool withId = true}) {
         ? tr('Hard no-go · ${zoneLabelText(label)}$idEn', '硬禁区 · $label$idZh')
         : tr('No-go · ${zoneLabelText(label)}$idEn', '禁行 · $label$idZh'),
     'erase' => z['hard'] == true
-        ? tr('Erased, hard · ${zoneLabelText(label)}$idEn', '抹掉（硬） · $label$idZh')
-        : tr('Erased · ${zoneLabelText(label)}$idEn', '抹掉 · $label$idZh'),
+        ? tr('Erased, hard · ${zoneLabelText(label)}$idEn', '抹除（硬） · $label$idZh')
+        : tr('Erased · ${zoneLabelText(label)}$idEn', '抹除 · $label$idZh'),
     'ignore' => tr('Person-detection ignored · ${zoneLabelText(label)}$idEn', '人员忽略区 · $label$idZh'),
     _ => tr('Limit ${z['max_speed_mps']} m/s · ${zoneLabelText(label)}$idEn',
         '限速 ${z['max_speed_mps']} m/s · $label$idZh'),

@@ -47,7 +47,7 @@ describe("授权和临时撤防页", () => {
     fireEvent.click(btn(c.querySelector(".acc-now")!, "提前结束"));
     fireEvent.click(btn(document.body, "结束"));
     await waitFor(() => expect(posted.map((p) => p.url)).toContain("/api/lists/authorizations/3/end"));
-    await waitFor(() => expect(c.querySelector(".acc-now")!.textContent).toContain("现在没有"));
+    await waitFor(() => expect(c.querySelector(".acc-now")!.textContent).toContain("暂无"));
   });
 
   it("全部授权都列出来", async () => {
@@ -58,8 +58,8 @@ describe("授权和临时撤防页", () => {
 
   it("不重复的授权只占那一天", async () => {
     const { container: c } = page();
-    await waitFor(() => expect(btn(c, "加一个授权")).toBeTruthy());
-    fireEvent.click(btn(c, "加一个授权"));
+    await waitFor(() => expect(btn(c, "添加授权")).toBeTruthy());
+    fireEvent.click(btn(c, "添加授权"));
     const f = document.querySelector("form.acc-add")!;
     fireEvent.input(f.querySelector('input[name="who"]')!, { target: { value: "客人" } });
     fireEvent.click(f.querySelector('input[name="repeat"]')!);          // 关掉每周重复
@@ -74,8 +74,8 @@ describe("授权和临时撤防页", () => {
 
   it("每周重复按选的星期", async () => {
     const { container: c } = page();
-    await waitFor(() => expect(btn(c, "加一个授权")).toBeTruthy());
-    fireEvent.click(btn(c, "加一个授权"));
+    await waitFor(() => expect(btn(c, "添加授权")).toBeTruthy());
+    fireEvent.click(btn(c, "添加授权"));
     const f = document.querySelector("form.acc-add")!;
     fireEvent.input(f.querySelector('input[name="who"]')!, { target: { value: "维修工" } });
     fireEvent.click(f.querySelector('input[name="day1"]')!);            // 默认工作日;再勾上星期二以外的都不动

@@ -51,7 +51,7 @@ const btn = (root: Element, text: string) => Array.from(root.querySelectorAll("b
 
 describe("用户页", () => {
   it("最后登录说人话", () => {
-    expect(lastLoginText(null, NOW)).toBe("没登录过");
+    expect(lastLoginText(null, NOW)).toBe("从未登录");
     expect(lastLoginText(NOW - 3_600_000, NOW)).toBe("今天 11:00");
     expect(lastLoginText(NOW - 3 * 86_400_000, NOW)).toBe("3 天前");
   });
@@ -86,7 +86,7 @@ describe("用户页", () => {
     await waitFor(() => expect(document.body.textContent).toContain("s3cret-once-only"));
     expect(posted.find((p) => p.url === "/api/accounts/engineer")!.body).toEqual({ display_name: "王工", hours: 24, confirm_password: "my-own-password" });
     expect(document.body.textContent).toContain("eng-20261027-1200");
-    expect(document.body.textContent).toContain("关掉以后就看不到了");
+    expect(document.body.textContent).toContain("关闭后无法再查看");
     fireEvent.click(btn(document.body, "关闭"));
     expect(document.body.textContent).not.toContain("s3cret-once-only");
   });
@@ -101,17 +101,17 @@ describe("用户页", () => {
     await waitFor(() => expect(document.querySelector("form.confirm-pw")).not.toBeNull());
     fireEvent.input(document.querySelector('form.confirm-pw input[type="password"]')!, { target: { value: "wrong-password" } });
     fireEvent.submit(document.querySelector("form.confirm-pw")!);
-    await waitFor(() => expect(document.querySelector("form.confirm-pw")!.textContent).toContain("密码不对"));
+    await waitFor(() => expect(document.querySelector("form.confirm-pw")!.textContent).toContain("密码错误"));
   });
 
   it("工程师那一行写还剩多久、只能提前关和删", async () => {
     const { container: c } = page();
     await waitFor(() => expect(tr(c, "eng-20261027-0900")).not.toBeNull());
     const r = tr(c, "eng-20261027-0900");
-    expect(r.textContent).toContain("还剩 2 小时 10 分");
+    expect(r.textContent).toContain("剩余 2 小时 10 分");
     expect(r.querySelector("select")).toBeNull();
     expect(btn(r, "重设密码")).toBeUndefined();
-    fireEvent.click(btn(r, "提前关"));
+    fireEvent.click(btn(r, "提前关闭"));
     await waitFor(() => expect(posted.find((p) => p.url === "/api/accounts/eng-20261027-0900")?.body).toEqual({ disabled: true }));
   });
 
@@ -119,14 +119,14 @@ describe("用户页", () => {
     const { container: c } = page();
     await waitFor(() => expect(tr(c, "gina")).not.toBeNull());
     fireEvent.click(tr(c, "gina").querySelector(".user-name")!);
-    await waitFor(() => expect(c.querySelector(".user-audit")!.textContent).toContain("切布防模式"));
+    await waitFor(() => expect(c.querySelector(".user-audit")!.textContent).toContain("切换布防模式"));
   });
 
   it("删人要确认", async () => {
     const { container: c } = page();
     await waitFor(() => expect(tr(c, "gina")).not.toBeNull());
     fireEvent.click(btn(tr(c, "gina"), "删除"));
-    expect(document.body.textContent).toContain("做过的事还留在记录里");
+    expect(document.body.textContent).toContain("操作记录仍保留");
     fireEvent.click(btn(document.querySelector(".modal, [role=dialog]")!, "删除"));
     await waitFor(() => expect(posted.map((p) => p.url)).toContain("/api/accounts/gina/remove"));
     await waitFor(() => expect(c.querySelector('tr[data-name="gina"]')).toBeNull());

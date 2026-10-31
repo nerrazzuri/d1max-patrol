@@ -259,8 +259,8 @@ class _SiteAlertScenePageState extends State<SiteAlertScenePage> {
       final got = r['alert'] is Map ? Alert.fromWire(Map<String, dynamic>.from(r['alert'] as Map)) : null;
       if (got != null && got.key != key) {
         // 站点明说回的是另一条：不能当成这一条确认上了
-        setState(() => _msg = tr("Not acknowledged: the site answered about another alarm (${got.key})",
-            '没确认上：站点回的是另一条告警（${got.key}）'));
+        setState(() => _msg = tr("Not acknowledged: the site returned a different alarm (${got.key})",
+            '确认失败：站点返回的是另一条告警（${got.key}）'));
         return;
       }
       // 站点回了确认之后的这一条：谁、几点以站点记的为准。老站点不回正文：先在本地记成「我、现在」，
@@ -275,7 +275,7 @@ class _SiteAlertScenePageState extends State<SiteAlertScenePage> {
         _msg = '';
       });
     } on SiteError catch (e) {
-      if (mounted && gen == _gen) setState(() => _msg = tr('Not acknowledged: $e', '没确认上：$e'));
+      if (mounted && gen == _gen) setState(() => _msg = tr('Not acknowledged: $e', '确认失败：$e'));
     }
   }
 
@@ -294,12 +294,12 @@ class _SiteAlertScenePageState extends State<SiteAlertScenePage> {
           SirenState.on => '',
           SirenState.notFitted => tr('Level $sirenLevel is set, but this robot has no siren.',
               '已到第 $sirenLevel 级，但这台机器人没有警笛。'),
-          _ => tr('Level $sirenLevel requested. The robot has not confirmed the siren yet.',
-              '已要求第 $sirenLevel 级，机器人还没确认警笛开了。'),
+          _ => tr('Level $sirenLevel requested. Waiting for the robot to confirm the siren.',
+              '已请求第 $sirenLevel 级，机器人尚未确认警笛开启。'),
         };
       });
     } on SiteError catch (e) {
-      if (mounted && gen == _gen) setState(() => _msg = tr("Siren didn't start: $e", '警笛没开：$e'));
+      if (mounted && gen == _gen) setState(() => _msg = tr("Siren didn't start: $e", '警笛开启失败：$e'));
     }
   }
 
@@ -310,8 +310,8 @@ class _SiteAlertScenePageState extends State<SiteAlertScenePage> {
         context: context,
         builder: (c) => AlertDialog(
               content: Text(tr(
-                  'Mark this as a false alarm? It closes the alarm. Deterrence, if running, is not stopped here.',
-                  '记成误报？这条告警就关了。正在进行的驱离不会在这儿停。')),
+                  'Mark as a false alarm? The alarm is closed; any running deterrence is not stopped here.',
+                  '标为误报？此告警将关闭，正在进行的驱离不会在此停止。')),
               actions: [
                 TextButton(onPressed: () => Navigator.pop(c, false), child: Text(tr('Cancel', '取消'))),
                 FilledButton(
@@ -327,7 +327,7 @@ class _SiteAlertScenePageState extends State<SiteAlertScenePage> {
       await widget.api.resolveAlert(key);
       if (mounted && gen == _gen) Navigator.pop(context);
     } on SiteError catch (e) {
-      if (mounted && gen == _gen) setState(() => _msg = tr('Not closed: $e', '没关上：$e'));
+      if (mounted && gen == _gen) setState(() => _msg = tr('Not closed: $e', '关闭失败：$e'));
     }
   }
 
@@ -338,15 +338,15 @@ class _SiteAlertScenePageState extends State<SiteAlertScenePage> {
       runs = await widget.api.runs(mission: taskId);
     } on SiteError catch (e) {
       if (mounted && gen == _gen) {
-        setState(() => _msg = tr("Can't find the record for that task: $e", '找不到那一趟的记录：$e'));
+        setState(() => _msg = tr("Can't find the record for that task: $e", '找不到该任务的记录：$e'));
       }
       return;
     }
     if (!mounted || gen != _gen) return;
     if (runs.isEmpty) {
       setState(() => _msg = tr(
-          'The record for that task has not reached the site yet (it uploads after the robot arrives and takes photos)',
-          '那一趟的记录还没传到站点（机器人到了、拍完会传上来）'));
+          'The task record hasn\'t reached the site yet (it uploads after the robot arrives and takes photos)',
+          '该任务的记录尚未上传到站点（机器人到达并拍照后上传）'));
       return;
     }
     await Navigator.push(
@@ -364,11 +364,11 @@ class _SiteAlertScenePageState extends State<SiteAlertScenePage> {
       final lv = s['session'] is Map ? (s['session'] as Map)['level'] : null;
       setState(() {
         if (s['session'] is Map) _gotDeter(Map<String, dynamic>.from(s['session'] as Map));
-        _msg = tr('Deterrence started at $robot (L${lv ?? 1}). Escalate or end it on the deterrence page',
-            '已在 $robot 这儿开驱离（L${lv ?? 1}），驱离页可以升级、解除');
+        _msg = tr('Deterrence started on $robot (L${lv ?? 1}). Escalate or end it on the deterrence page',
+            '已在 $robot 启动驱离（L${lv ?? 1}），可在驱离页升级或解除');
       });
     } on SiteError catch (e) {
-      if (mounted && gen == _gen) setState(() => _msg = tr("Can't start deterrence: $e", '开不了：$e'));
+      if (mounted && gen == _gen) setState(() => _msg = tr("Can't start deterrence: $e", '无法启动驱离：$e'));
     }
   }
 
@@ -396,11 +396,11 @@ class _SiteAlertScenePageState extends State<SiteAlertScenePage> {
       final at = hms(_a.ackedMs ?? _ackedHere!.$2);
       final me = by.isNotEmpty && by == widget.api.session?.name;
       return me
-          ? tr('Acknowledged by you at $at', '你在 $at 确认了')
-          : tr('Acknowledged by $by at $at', '$by 在 $at 确认了');
+          ? tr('Acknowledged by you at $at', '你已于 $at 确认')
+          : tr('Acknowledged by $by at $at', '$by 已于 $at 确认');
     }
     return tr('Unacknowledged for ${span(widget.now().millisecondsSinceEpoch - _a.firstMs)}',
-        '没人确认已经 ${span(widget.now().millisecondsSinceEpoch - _a.firstMs)}');
+        '已 ${span(widget.now().millisecondsSinceEpoch - _a.firstMs)} 无人确认');
   }
 
   Map? get _persons {
@@ -423,9 +423,9 @@ class _SiteAlertScenePageState extends State<SiteAlertScenePage> {
     } else if (_isRobot && !_deterFresh) {
       final old = _deter;
       parts.add(old == null
-          ? tr('Deterrence status unknown.', '说不清有没有在驱离。')
+          ? tr('Deterrence status unknown.', '驱离状态未知。')
           : tr('Deterrence status unknown (level ${old['level']} when last checked at ${hms(_deterAtMs)}).',
-              '说不清有没有在驱离（${hms(_deterAtMs)} 最后问到时是第 ${old['level']} 级）。'));
+              '驱离状态未知（${hms(_deterAtMs)} 最后查询时为第 ${old['level']} 级）。'));
     }
     return parts.join(' ');
   }
@@ -544,7 +544,7 @@ class _SiteAlertScenePageState extends State<SiteAlertScenePage> {
         SirenState.notFitted =>
           _big(SiteAlertScenePage.sirenKey, tr('No siren on this robot', '这台机器人没有警笛'), null),
         SirenState.requested =>
-          _big(SiteAlertScenePage.sirenKey, tr('Siren not confirmed. Retry', '警笛没确认，再试'), _siren),
+          _big(SiteAlertScenePage.sirenKey, tr('Siren not confirmed. Retry', '警笛未确认，请重试'), _siren),
         _ => _big(SiteAlertScenePage.sirenKey, sound, _siren),
       };
     } else if (_deter != null && !_deterFresh && dispatch) {
@@ -558,7 +558,7 @@ class _SiteAlertScenePageState extends State<SiteAlertScenePage> {
         handle && _open && !_acked ? _ack : null,
         primary: true);
     final third = _big(SiteAlertScenePage.falseKey, tr('False alarm', '误报'), handle && _open ? _falseAlarm : null);
-    final fourth = _big(null, tr('Talk: not available', '对讲：还没有'), null);
+    final fourth = _big(null, tr('Talk: not available', '对讲：暂不支持'), null);
     const gap = SizedBox(width: Nw.s8);
     if (oneRow) {
       return Row(children: [
@@ -589,7 +589,7 @@ class _SiteAlertScenePageState extends State<SiteAlertScenePage> {
             .join(' · ')
       ),
       if (_a.count > 1 && _a.lastMs > _a.firstMs)
-        (_a.lastMs, tr('Raised again (${_a.count} times in total).', '又报了（一共 ${_a.count} 次）。')),
+        (_a.lastMs, tr('Raised again (${_a.count} times in total).', '再次报警（共 ${_a.count} 次）。')),
     ];
     // 开始、升级是带时刻的旧事，旧快照里的也照摆；「接下来」是现在的计划，只有新鲜的才说
     final d = _deter;
@@ -600,23 +600,23 @@ class _SiteAlertScenePageState extends State<SiteAlertScenePage> {
       if (d['level_ms'] is num && d['level'] is num && (d['level'] as num) > 1) {
         rows.add((
           (d['level_ms'] as num).toInt(),
-          tr('Deterrence went to level ${d['level']}.', '驱离升到第 ${d['level']} 级。')
+          tr('Deterrence raised to level ${d['level']}.', '驱离升至第 ${d['level']} 级。')
         ));
       }
     }
     final at = _a.ackedMs ?? _ackedHere?.$2;
     if (at != null) {
       final by = _a.ackedBy.isNotEmpty ? _a.ackedBy : (_ackedHere?.$1 ?? '');
-      rows.add((at, tr('Acknowledged by $by.', '$by 确认了。')));
+      rows.add((at, tr('Acknowledged by $by.', '$by 已确认。')));
     }
     if (_a.resolvedMs != null) rows.add((_a.resolvedMs!, tr('Closed.', '已关闭。')));
     rows.sort((x, y) => x.$1.compareTo(y.$1));
     final staleNote = _isRobot && d != null && !_deterFresh
-        ? tr('Deterrence status not updated since ${hms(_deterAtMs)}.', '驱离的状态从 ${hms(_deterAtMs)} 起没再问到。')
+        ? tr('Deterrence status not updated since ${hms(_deterAtMs)}.', '驱离状态自 ${hms(_deterAtMs)} 起未更新。')
         : null;
     final next = _deterFresh && d != null && d['auto'] == true && d['next_in_s'] is num
         ? tr('Next: level ${(d['level'] as num? ?? 0) + 1} in ${d['next_in_s']} s if no one responds.',
-            '接下来：没人处理的话 ${d['next_in_s']} 秒后升到第 ${(d['level'] as num? ?? 0) + 1} 级。')
+            '下一步：若无人处理，${d['next_in_s']} 秒后升至第 ${(d['level'] as num? ?? 0) + 1} 级。')
         : null;
     return [
       Text(tr('What happened', '事件经过'), style: NwText.titleSmall.copyWith(color: c.text)),
@@ -663,15 +663,13 @@ class _SiteAlertScenePageState extends State<SiteAlertScenePage> {
                 'Robot last at: (${(pose['x'] as num).toStringAsFixed(1)}, '
                     '${(pose['y'] as num).toStringAsFixed(1)})  map ${pose['map_id']}:${pose['map_version']}'
                     '${pose['at_ms'] is num ? '  · reported ${_ago((pose['at_ms'] as num).toInt())}' : ''}',
-                '机器人最后在：(${(pose['x'] as num).toStringAsFixed(1)}, '
-                    '${(pose['y'] as num).toStringAsFixed(1)})  图 ${pose['map_id']}:${pose['map_version']}'
-                    '${pose['at_ms'] is num ? '  · ${_ago((pose['at_ms'] as num).toInt())}报的' : ''}'),
+                '机器人最后位置：(${(pose['x'] as num).toStringAsFixed(1)}, ${(pose['y'] as num).toStringAsFixed(1)})  地图 ${pose['map_id']}:${pose['map_version']}${pose['at_ms'] is num ? '  · ${_ago((pose['at_ms'] as num).toInt())}上报' : ''}'),
             style: small),
       if (taskId != null) Text(tr('Task: $taskId', '那一趟：$taskId'), style: small),
       if (ctx.isEmpty)
         Text(
             tr('This alarm has no scene data (older site, or a site-level alarm)',
-                '这条告警没带现场（老站点，或站点那一行的告警）'),
+                '此告警没有现场数据（旧版站点或站点级告警）'),
             style: small),
       if (_isRobot || taskId != null) ...[
         const SizedBox(height: Nw.s8),

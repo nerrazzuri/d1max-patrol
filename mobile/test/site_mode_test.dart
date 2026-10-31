@@ -44,7 +44,7 @@ void main() {
       'source': 'schedule', 'state': 'partial', 'set_by': 'olga'};
     await _open(t, api);
     expect(find.text('现在：按时间表：部分布防'), findsOneWidget);
-    expect(find.textContaining('按时间表切的'), findsOneWidget);
+    expect(find.textContaining('按时间表切换'), findsOneWidget);
   });
 
   testWidgets('保安：只有「布防」，没有留守、临时撤防，也改不了防区', (t) async {
@@ -52,7 +52,7 @@ void main() {
     await _open(t, api);
     expect(find.byKey(SiteModePage.homeKey), findsNothing);
     expect(find.byKey(SiteModePage.visitorKey), findsNothing);
-    expect(find.text('撤防（留守、临时撤防）要管理员或经理切'), findsOneWidget);
+    expect(find.text('撤防（留守、临时撤防）需管理员或经理操作'), findsOneWidget);
     expect(find.byKey(const Key('mode-zone-home-yard')), findsNothing);
     await t.tap(find.byKey(SiteModePage.armKey));
     await t.pumpAndSettle();
@@ -110,9 +110,9 @@ void main() {
     api.modeError = const SiteError(403, 'owner 没有 set_mode 权限');
     await t.tap(find.byKey(SiteModePage.homeKey));
     await t.pumpAndSettle();
-    expect(find.textContaining('切到留守没成'), findsOneWidget);
+    expect(find.textContaining('切换为留守失败'), findsOneWidget);
     await _open(t, FakeApi('owner')..modeError = const SiteError(404, '没开'));
-    expect(find.text('这个站点没开布防模式'), findsOneWidget);
+    expect(find.text('此站点未启用布防模式'), findsOneWidget);
   });
 
   testWidgets('模式页：别的手机撤防了，站点推一帧，当场换、布防按钮能按了（W20 外审）', (t) async {

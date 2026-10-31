@@ -80,7 +80,7 @@ void main() {
     await t.pumpAndSettle();
     expect(find.textContaining('防区：front-yard'), findsOneWidget);
     expect(find.textContaining('拦截点：gate'), findsOneWidget);
-    expect(find.textContaining('机器人最后在：(3.0, -1.0)'), findsOneWidget);
+    expect(find.textContaining('机器人最后位置：(3.0, -1.0)'), findsOneWidget);
     expect(find.textContaining('incident-abc'), findsOneWidget);
     await t.ensureVisible(find.byKey(SiteAlertScenePage.mapKey));
     await t.tap(find.byKey(SiteAlertScenePage.mapKey));
@@ -99,7 +99,7 @@ void main() {
     await t.tap(find.byKey(SiteAlertScenePage.photoKey));
     await t.pumpAndSettle();
     expect(api.calls, contains('runs mission=incident-abc'));
-    expect(find.textContaining('还没传到站点'), findsOneWidget);
+    expect(find.textContaining('尚未上传到站点'), findsOneWidget);
     final run = (siteFixture('site_runs')['runs'] as List).first as Map<String, dynamic>;
     final ctx = <String, dynamic>{..._intrusion().context, 'task_id': run['mission']};
     await t.pumpWidget(Container());
@@ -153,7 +153,7 @@ void main() {
     await t.tap(find.byKey(SiteRobotsPage.bgWatchKey));
     await t.pumpAndSettle();
     expect(w.calls.last, 'stop');
-    expect(find.textContaining('后台值守关了'), findsOneWidget);
+    expect(find.textContaining('后台值守已关闭'), findsOneWidget);
     await t.tap(find.byKey(SiteRobotsPage.bgWatchKey));
     await t.pumpAndSettle();
     expect(w.calls.last, startsWith('start'));
@@ -168,7 +168,7 @@ void main() {
     await t.pumpWidget(MaterialApp(home: SiteRobotsPage(api: api, watch: w, entry: _entry)));
     await t.pumpAndSettle();
     expect(w.calls, isEmpty);
-    expect(find.textContaining('后台值守开不了'), findsOneWidget);
+    expect(find.textContaining('无法开启后台值守'), findsOneWidget);
     final icon = t.widget<IconButton>(find.byKey(SiteRobotsPage.bgWatchKey));
     expect((icon.icon as Icon).icon, Icons.shield_outlined);
   });
@@ -200,7 +200,7 @@ void main() {
     await t.tap(find.byKey(SiteAlertScenePage.deterKey));
     await t.pumpAndSettle();
     expect(api.calls, contains('deter-start A'));
-    expect(find.textContaining('开驱离（L1）'), findsOneWidget);
+    expect(find.textContaining('启动驱离（L1）'), findsOneWidget);
     await t.pumpWidget(MaterialApp(home: SiteAlertScenePage(api: api, alert: _intrusion())));
     await t.pumpAndSettle();
     expect(find.byKey(SiteAlertScenePage.deterKey), findsNothing);

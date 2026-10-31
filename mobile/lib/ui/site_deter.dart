@@ -56,12 +56,12 @@ typedef _Row = ({String key, String output, String? side, String name});
 /// 狗回的拒绝理由说人话。
 String deterReasonText(String r) => switch (r) {
       'busy' => tr('The speaker is playing something more urgent (incident, deterrence). Wait for it to finish',
-          '喇叭正在放更要紧的（事件、驱离），等它放完'),
-      'unsupported' => tr('This output is not fitted on the robot', '机器人上没接这一路'),
+          '喇叭正在播放更紧急的内容（事件、驱离），请等待播放结束'),
+      'unsupported' => tr('This device is not fitted on the robot', '机器人未安装此设备'),
       _ when r.startsWith('unsupported:') => tr('Not supported by the robot: ${r.substring(12).trim()}',
-          '机器人上不支持：${r.substring(12).trim()}'),
+          '机器人不支持：${r.substring(12).trim()}'),
       _ when r.startsWith('device:') =>
-        tr('Device failed: ${r.substring(7).trim()}', '设备没做成：${r.substring(7).trim()}'),
+        tr('Device failed: ${r.substring(7).trim()}', '设备执行失败：${r.substring(7).trim()}'),
       _ => ackReasonText(r),
     };
 
@@ -107,7 +107,7 @@ class _SiteDeterPageState extends State<SiteDeterPage> {
     final secs = deterOutputs[output]?.$2 ?? 10;
     final color = output == 'strobe' && on ? _color : null;
     final what = on
-        ? tr('$name on for ${secs.toStringAsFixed(0)} s', '开$name ${secs.toStringAsFixed(0)} 秒')
+        ? tr('$name on for ${secs.toStringAsFixed(0)} s', '开启$name ${secs.toStringAsFixed(0)} 秒')
         : tr('$name off', '关$name');
     String msg;
     try {
@@ -116,13 +116,13 @@ class _SiteDeterPageState extends State<SiteDeterPage> {
       final ack = r['ack'];
       final res = ack is Map ? '${ack['result']}' : 'accepted';
       if (res == 'accepted') {
-        msg = tr('$what: done', '$what：好了');
+        msg = tr('$what: done', '$what：完成');
       } else {
         final why = deterReasonText(ack is Map ? '${ack['reason'] ?? res}' : res);
-        msg = tr('$what failed: $why', '$what没成：$why');
+        msg = tr('$what failed: $why', '$what失败：$why');
       }
     } on SiteError catch (e) {
-      msg = tr('$what failed: $e', '$what没成：$e');
+      msg = tr('$what failed: $e', '$what失败：$e');
     }
     if (mounted) setState(() => _msg = msg);
   }
@@ -144,7 +144,7 @@ class _SiteDeterPageState extends State<SiteDeterPage> {
               decoration: BoxDecoration(color: c.infoSoft, borderRadius: BorderRadius.circular(Nw.r8)),
               child: Text(_msg, key: SiteDeterPage.msgKey, style: NwText.bodyMedium.copyWith(color: c.text))),
         if (outs.isEmpty)
-          Text(tr('No payload fitted on this robot', '这台机器人没接上装'),
+          Text(tr('No payload fitted on this robot', '此机器人未安装上装'),
               style: NwText.bodyLarge.copyWith(color: c.text)),
         for (final r in _rows)
           Padding(
@@ -181,10 +181,10 @@ class _SiteDeterPageState extends State<SiteDeterPage> {
                       dense: true,
                       title: Text(
                           r.side == null && o == 'spotlight' && _sides.isNotEmpty
-                              ? tr('Both spotlights (on for $secs s, then switch off by themselves)',
-                                  '两边聚光灯（开 $secs 秒，到点自己关）')
-                              : tr('${r.name} (on for $secs s, then switches off by itself)',
-                                  '${r.name}（开 $secs 秒，到点自己关）'),
+                              ? tr('Both spotlights (on for $secs s, then off automatically)',
+                                  '双侧聚光灯（开启 $secs 秒后自动关闭）')
+                              : tr('${r.name} (on for $secs s, then off automatically)',
+                                  '${r.name}（开启 $secs 秒后自动关闭）'),
                           style: NwText.bodyMedium.copyWith(color: c.text)),
                       subtitle: narrow ? Align(alignment: Alignment.centerRight, child: buttons) : null,
                       trailing: narrow ? null : buttons,
@@ -200,7 +200,7 @@ class _SiteDeterPageState extends State<SiteDeterPage> {
               final narrow = box.maxWidth < 520;
               final name = Text(tr('Speaker: ', '喇叭：'), style: NwText.titleSmall.copyWith(color: c.text));
               final clip = _clips.isEmpty
-                  ? Text(tr('No recorded clips on the robot', '机器人上没有录好的话术'),
+                  ? Text(tr('No recorded clips on the robot', '机器人上没有预录话术'),
                       style: NwText.bodyMedium.copyWith(color: c.textSecondary))
                   : DropdownButton<String>(
                       key: const Key('deter-clip'),
@@ -215,7 +215,7 @@ class _SiteDeterPageState extends State<SiteDeterPage> {
               final play = NwButton(
                   buttonKey: const Key('deter-play'),
                   onPressed: _clip == null ? null : () => _go('speaker', true, clip: _clip),
-                  label: tr('Play', '放'));
+                  label: tr('Play', '播放'));
               final stop = NwButton(
                   buttonKey: const Key('deter-off-speaker'),
                   variant: NwButtonVariant.outline,
@@ -251,8 +251,8 @@ class _SiteDeterPageState extends State<SiteDeterPage> {
                         controller: _tts,
                         maxLength: 300,
                         decoration: InputDecoration(
-                            labelText: tr('Type a message (synthesized on the robot, then played)',
-                                '现打一段（机器人上合成后放）')))),
+                            labelText: tr('Type a message (synthesized and played on the robot)',
+                                '输入文字（机器人合成后播放）')))),
                 const SizedBox(width: Nw.s8),
                 NwButton(
                     buttonKey: const Key('deter-say'),
@@ -261,7 +261,7 @@ class _SiteDeterPageState extends State<SiteDeterPage> {
                       if (t.isEmpty) return;
                       _go('speaker', true, clip: 'tts:$_lang:$t');
                     },
-                    label: tr('Say', '说')),
+                    label: tr('Say', '播报')),
               ]),
             ],
           ])),

@@ -231,7 +231,7 @@ void main() {
     await t.sendKeyEvent(LogicalKeyboardKey.escape);
     await t.pump();
     expect(api.calls, contains('halt A'));
-    expect(find.text('你按了停车'), findsOneWidget);
+    expect(find.text('你已按下停车'), findsOneWidget);
     await t.pumpWidget(Container());
   });
 
@@ -251,7 +251,7 @@ void main() {
   testWidgets('按住前推每 100 ms 一帧、速度按站点给的限速；松手发零速', (t) async {
     final api = FakeApi('guard');
     await _open(t, api);
-    expect(find.textContaining('你在遥控'), findsOneWidget);
+    expect(find.textContaining('遥控中'), findsOneWidget);
     expect(_stickEnabled(t, 0), isTrue);
     final g = await t.startGesture(t.getCenter(find.byType(Joystick).at(0)));
     await g.moveBy(const Offset(0, -200));                  // 推满
@@ -332,7 +332,7 @@ void main() {
     await t.pump();
     await t.pump();
     expect(_stickEnabled(t, 0), isFalse);
-    expect(find.textContaining('没有画面'), findsOneWidget);
+    expect(find.textContaining('无画面：禁止操作'), findsOneWidget);
     api.link!.ctl.add(<String, dynamic>{'kind': 'video', 'ok': true});
     await t.pump();
     await t.pump();
@@ -340,7 +340,7 @@ void main() {
     api.link!.ctl.add(<String, dynamic>{'kind': 'ended', 'reason': 'taken_over'});
     await t.pump();
     await t.pump();
-    expect(find.text('管理员接管了遥控'), findsOneWidget);
+    expect(find.text('管理员已接管遥控'), findsOneWidget);
     expect(_stickEnabled(t, 0), isFalse);
     await t.pumpWidget(Container());
   });
@@ -397,7 +397,7 @@ void main() {
     await t.pumpWidget(MaterialApp(home: SiteTeleopPage(api: api, robotId: 'A')));
     await t.pump();
     await t.pump();
-    expect(find.textContaining('等画面'), findsOneWidget);
+    expect(find.textContaining('等待画面'), findsOneWidget);
     expect(find.text('已结束'), findsNothing, reason: '没结束，还在等');
     await t.pump(const Duration(seconds: 2));
     await t.pump(const Duration(seconds: 2));
@@ -407,7 +407,7 @@ void main() {
     api.link!.ctl.add(<String, dynamic>{'kind': 'granted', 'lease_epoch': 1, 'max_vx': 0.5, 'max_wz': 0.75});
     await t.pump();
     await t.pump();
-    expect(find.textContaining('你在遥控'), findsOneWidget);
+    expect(find.textContaining('遥控中'), findsOneWidget);
     await t.pumpWidget(Container());
   });
 
@@ -418,7 +418,7 @@ void main() {
     for (var i = 0; i < 10; i++) {
       await t.pump(const Duration(seconds: 2));
     }
-    expect(find.textContaining('遥控开不了'), findsOneWidget);
+    expect(find.textContaining('无法开始遥控'), findsOneWidget);
     expect(api.teleopCalls, lessThanOrEqualTo(7));
     await t.pumpWidget(Container());
   });
@@ -488,7 +488,7 @@ void main() {
     await t.pump();
     expect(api.link!.released, isTrue);
     expect(api.link!.isClosed, isTrue);
-    expect(find.text('你按了停车'), findsOneWidget);
+    expect(find.text('你已按下停车'), findsOneWidget);
     await t.pumpWidget(Container());
   });
 
@@ -503,8 +503,8 @@ void main() {
       'max_wz': 0.75});
     await t.pump();
     await t.pump();
-    expect(find.text('你按了停车'), findsOneWidget);
-    expect(find.textContaining('你在遥控'), findsNothing);
+    expect(find.text('你已按下停车'), findsOneWidget);
+    expect(find.textContaining('遥控中'), findsNothing);
     final n = api.link!.sent.length;
     await t.pump(const Duration(milliseconds: 500));
     expect(api.link!.sent.length, n, reason: '定时器不许起来');
@@ -522,11 +522,11 @@ void main() {
       await t.pump();
     }
     await say({'state': 'blocked', 'zone': 'pool', 'label': '池子'});
-    expect(find.textContaining('再往前会进硬禁区「池子」'), findsOneWidget);
+    expect(find.textContaining('前方为硬禁区「池子」'), findsOneWidget);
     await say({'state': 'limited', 'zone': 'pool', 'label': '池子'});
-    expect(find.textContaining('离硬禁区「池子」近了'), findsOneWidget);
+    expect(find.textContaining('接近硬禁区「池子」'), findsOneWidget);
     await say({'state': 'inside', 'zone': 'pool', 'label': '池子'});
-    expect(find.textContaining('只许往外开'), findsOneWidget);
+    expect(find.textContaining('只能向外移动'), findsOneWidget);
     await say({'state': 'untrusted', 'max_vx': 0.2});
     expect(find.textContaining('位置不可信'), findsOneWidget);
     expect(find.textContaining('0.2 m/s'), findsOneWidget);
@@ -544,7 +544,7 @@ void main() {
       'max_wz': 0.75, 'zone_guard': {'state': 'unsupported', 'reason': 'x'}});
     await t.pump();
     await t.pump();
-    expect(find.textContaining('不守硬禁区'), findsOneWidget);
+    expect(find.textContaining('不避开硬禁区'), findsOneWidget);
     await t.pumpWidget(Container());
   });
 

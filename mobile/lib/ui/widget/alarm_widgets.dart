@@ -88,7 +88,7 @@ class StopAllButton extends StatelessWidget {
           .where((r) => r['fresh'] == true && r['status'] is Map && (r['status'] as Map)['online'] == true)
           .toList();
     } on SiteError catch (e) {
-      onResult(tr("Can't reach the site: $e. Use the E-stop on each robot.", '连不上站点：$e。去按每台机器人身上的急停。'));
+      onResult(tr("Can't reach the site: $e. Use the E-stop on each robot.", '无法连接站点：$e。请按各机器人机身急停。'));
       return;
     }
     if (!context.mounted) return;
@@ -102,7 +102,7 @@ class StopAllButton extends StatelessWidget {
         builder: (c) => AlertDialog(
               content: Text(tr(
                   'Stop all $n robots now? Each one halts where it is until you resume it.',
-                  '现在让 $n 台机器人全部急停？每台就地停住，直到你恢复它。')),
+                  '让全部 $n 台机器人立即急停？每台原地停止，直到你恢复。')),
               actions: [
                 TextButton(onPressed: () => Navigator.pop(c, false), child: Text(tr('Cancel', '取消'))),
                 FilledButton(
@@ -119,10 +119,10 @@ class StopAllButton extends StatelessWidget {
       try {
         await api.halt(id);
       } on SiteError catch (e) {
-        bad.add(tr("$id didn't stop: $e. Use the E-stop on the robot.", '$id 没停住：$e。去按它身上的急停。'));
+        bad.add(tr("$id didn't stop: $e. Use the E-stop on the robot.", '$id 未能停止：$e。请按机身急停。'));
       }
     }));
-    onResult(bad.isEmpty ? tr('Stopped $n robots.', '$n 台机器人都停了。') : bad.join(' '));
+    onResult(bad.isEmpty ? tr('Stopped $n robots.', '已停止 $n 台机器人。') : bad.join(' '));
   }
 
   static ButtonStyle _stopStyle(BuildContext context) {

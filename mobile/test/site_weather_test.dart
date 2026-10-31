@@ -20,10 +20,10 @@ void main() {
     expect(weatherText(w), '天气：下雨（手动，alice） · 限速 0.3 m/s');
     expect(weatherText(<String, dynamic>{'condition': 'storm', 'label': '雷暴', 'source': 'auto',
       'patrols_paused': true, 'speed_cap_mps': 0.3}), '天气：雷暴 · 排程巡检暂停 · 限速 0.3 m/s');
-    expect(weatherText(<String, dynamic>{'condition': 'unknown', 'label': '不知道', 'source': 'none',
-      'auto': <String, dynamic>{'enabled': true}}), '天气：不知道 · 天气查不到，按正常管');
-    expect(weatherText(<String, dynamic>{'condition': 'unknown', 'label': '不知道', 'source': 'none',
-      'auto': <String, dynamic>{'enabled': false}}), '天气：不知道 · 没配站点坐标，只能手动切');
+    expect(weatherText(<String, dynamic>{'condition': 'unknown', 'label': '未知', 'source': 'none',
+      'auto': <String, dynamic>{'enabled': true}}), '天气：未知 · 无法获取天气，按正常天气处理');
+    expect(weatherText(<String, dynamic>{'condition': 'unknown', 'label': '未知', 'source': 'none',
+      'auto': <String, dynamic>{'enabled': false}}), '天气：未知 · 未设置站点坐标，仅可手动切换');
   });
 
   testWidgets('首页有天气一行，点进去切雷暴 6 小时、再回到自动', (t) async {

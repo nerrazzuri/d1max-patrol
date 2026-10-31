@@ -94,8 +94,8 @@ describe("布置外框", () => {
     await waitFor(() => expect(c.querySelector(".fake")).not.toBeNull());
     fireEvent.click(btn(c, "改"));
     fireEvent.click(tabBtn(c, "禁行区"));
-    expect(document.body.textContent).toContain("还没保存");
-    fireEvent.click(btn(document.querySelector(".modal")!, "丢掉"));
+    expect(document.body.textContent).toContain("有未保存的修改");
+    fireEvent.click(btn(document.querySelector(".modal")!, "放弃"));
     await waitFor(() => expect(tabBtn(c, "禁行区").getAttribute("aria-selected")).toBe("true"));
   });
 
@@ -105,8 +105,8 @@ describe("布置外框", () => {
     await waitFor(() => expect(c.querySelector(".fake")).not.toBeNull());
     fireEvent.click(btn(c, "改"));
     fireEvent.click(c.querySelector(".ly-save")!);
-    await waitFor(() => expect(c.querySelector(".ly-conflict")!.textContent).toContain("刚才有人改过"));
-    fireEvent.click(btn(c.querySelector(".ly-conflict")!, "看最新的"));
+    await waitFor(() => expect(c.querySelector(".ly-conflict")!.textContent).toContain("内容刚被他人修改"));
+    fireEvent.click(btn(c.querySelector(".ly-conflict")!, "查看最新版本"));
     expect(c.querySelector(".ly-conflict")).toBeNull();
   });
 
@@ -115,8 +115,8 @@ describe("布置外框", () => {
     await waitFor(() => expect(c.querySelector(".fake")).not.toBeNull());
     fireEvent.click(btn(c, "历史版本"));
     await waitFor(() => expect(c.querySelector(".ly-history")!.textContent).toContain("olga"));
-    fireEvent.click(btn(c.querySelector(".ly-history")!, "退回到这一版"));
-    fireEvent.click(btn(document.querySelector(".modal")!, "退回到这一版"));
+    fireEvent.click(btn(c.querySelector(".ly-history")!, "回退到此版本"));
+    fireEvent.click(btn(document.querySelector(".modal")!, "回退到此版本"));
     await waitFor(() => expect(posted.map((p) => p.url)).toContain("/api/layout/history/7/restore"));
   });
 
@@ -125,8 +125,8 @@ describe("布置外框", () => {
     await waitFor(() => expect(c.querySelector(".fake")).not.toBeNull());
     fireEvent.click(btn(c, "历史版本"));
     await waitFor(() => expect(c.querySelector(".ly-history")!.textContent).toContain("olga"));
-    fireEvent.click(btn(c.querySelector(".ly-history")!, "退回到这一版"));
-    fireEvent.click(btn(document.querySelector(".modal")!, "退回到这一版"));
+    fireEvent.click(btn(c.querySelector(".ly-history")!, "回退到此版本"));
+    fireEvent.click(btn(document.querySelector(".modal")!, "回退到此版本"));
     await waitFor(() => expect(posted.find((p) => p.url.endsWith("/7/restore"))).toBeTruthy());
     expect(posted.find((p) => p.url.endsWith("/7/restore"))!.body).toEqual({ expect: { kind: "zones", map_id: "home", version: "3" } });
   });
@@ -156,14 +156,14 @@ describe("布置外框", () => {
     await waitFor(() => expect(c.querySelector(".fake")).not.toBeNull());
     fireEvent.click(btn(c, "历史版本"));
     await waitFor(() => expect(c.querySelector(".ly-history")!.textContent).toContain("A-old"));
-    fireEvent.click(btn(c.querySelector(".ly-history")!, "退回到这一版"));
+    fireEvent.click(btn(c.querySelector(".ly-history")!, "回退到此版本"));
     expect(document.querySelector(".modal")).not.toBeNull();
     const sel = c.querySelector("select") as HTMLSelectElement;
     fireEvent.change(sel, { target: { value: "B\u00001" } });
     await waitFor(() => expect(pendingB.length).toBe(1));
     expect(document.querySelector(".modal")).toBeNull();
     expect(c.querySelector(".ly-history")!.textContent).not.toContain("A-old");
-    expect(btn(c.querySelector(".ly-history")!, "退回到这一版")).toBeUndefined();
+    expect(btn(c.querySelector(".ly-history")!, "回退到此版本")).toBeUndefined();
     // A → B → A:第二次 A 的回包晚到之前,B 的回包也晚到 —— 不能把 B 的那份当成 A 的
     fireEvent.change(sel, { target: { value: "A\u00001" } });
     await waitFor(() => expect(lateA.length).toBe(1));

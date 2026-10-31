@@ -191,7 +191,7 @@ class _Shot {
 /// 组件各摆一个（数据是编的，只为看样子）。
 Widget _gallery() => Scaffold(
     body: ListView(padding: const EdgeInsets.all(Nw.s16), children: [
-      const NwHeader(title: 'Site Selection', overline: 'Nexus Warden'),
+      const NwHeader(title: 'Select site', overline: 'Nexus Warden'),
       const SizedBox(height: Nw.s16),
       NwSiteCard(name: 'Blackwood Estate', address: 'https://192.168.100.200:8443', status: 'CONNECTED', p1Count: 2, onEnter: () {}),
       const SizedBox(height: Nw.s16),

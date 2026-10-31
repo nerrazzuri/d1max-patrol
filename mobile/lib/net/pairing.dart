@@ -46,7 +46,7 @@ PairingInfo decodePairing(String raw) {
   if (!code.startsWith(pairingPrefix)) {
     throw PairingException(tr("That's not a Nexus Warden site code.", '这不是 Nexus Warden 站点的配对码。'));
   }
-  final bad = PairingException(tr('The site code is damaged. Scan or copy it again.', '配对码坏了。重新扫一次或者重新复制。'));
+  final bad = PairingException(tr('Invalid site code. Scan or copy it again.', '配对码无效，请重新扫描或复制。'));
   final Object? d;
   try {
     final body = code.substring(pairingPrefix.length);

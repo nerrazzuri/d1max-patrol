@@ -158,8 +158,8 @@ List<Alert> alertsFromWire(Map<String, dynamic> m) {
   final Object? raw = m['alerts'];
   if (raw is! List) {
     throw FormatException(m.containsKey('alerts')
-        ? tr('Alarm list is not a list: ${raw.runtimeType}', '告警名单不是个名单：${raw.runtimeType}')
-        : tr('Reply has no "alerts" section, cannot read alarms', '回的这份东西里没有 alerts 那一段，读不出告警'));
+        ? tr('Invalid alarm data (${raw.runtimeType})', '告警数据格式错误（${raw.runtimeType}）')
+        : tr('Site response is missing the alarm list', '站点返回的数据缺少告警列表'));
   }
   return <Alert>[
     for (final Object? a in raw)
@@ -167,7 +167,7 @@ List<Alert> alertsFromWire(Map<String, dynamic> m) {
         Alert.fromWire(a)
       else
         throw FormatException(tr(
-            'An entry in the alarm list is not an object: ${a.runtimeType}',
-            '告警名单里有一条不是对象：${a.runtimeType}')),
+            'Invalid entry in alarm data (${a.runtimeType})',
+            '告警数据中有无效条目（${a.runtimeType}）')),
   ];
 }

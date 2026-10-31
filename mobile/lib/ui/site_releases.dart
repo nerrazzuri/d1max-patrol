@@ -51,9 +51,9 @@ class _SiteReleasesPageState extends State<SiteReleasesPage> {
       name = got;
     }
     final what = {
-      'install': tr('install', '装'),
-      'activate': tr('activate', '切到'),
-      'rollback': tr('roll back to the previous release', '退回上一版'),
+      'install': tr('install', '安装'),
+      'activate': tr('activate', '启用'),
+      'rollback': tr('Roll back to the previous release', '退回上一版'),
     }[action];
     if (!mounted) return;
     if (action == 'precheck') {
@@ -62,7 +62,7 @@ class _SiteReleasesPageState extends State<SiteReleasesPage> {
         if (!mounted) return;
         await _showChecks(tr('Before activating $name on $robot', '$robot 切到 $name 之前'), r);
       } on SiteError catch (e) {
-        _snack(tr('Check failed: $e', '查不了：$e'));
+        _snack(tr('Check failed: $e', '检查失败：$e'));
       }
       return;
     }
@@ -73,10 +73,10 @@ class _SiteReleasesPageState extends State<SiteReleasesPage> {
           title: Text(tr('$robot: $what $name', '$robot $what $name')),
           content: Text(tr(
               'The robot restarts its agent (tens of seconds) and refuses while a task is running. Continue?',
-              '机器人要重启代理（几十秒）：跑着任务的时候机器人会拒绝。确定？')),
+              '机器人需重启代理（约数十秒），执行任务时会拒绝。确定继续？')),
           actions: [
             TextButton(
-                onPressed: () => Navigator.pop(c, false), child: Text(tr('Cancel', '算了'))),
+                onPressed: () => Navigator.pop(c, false), child: Text(tr('Cancel', '取消'))),
             FilledButton(
                 key: const Key('rel-confirm'),
                 onPressed: () => Navigator.pop(c, true),
@@ -91,16 +91,16 @@ class _SiteReleasesPageState extends State<SiteReleasesPage> {
       final ack = (r['ack'] as Map?) ?? const {};
       _snack(ack['result'] == 'accepted'
           ? tr('$robot accepted: $what $name (it reports when done; the site raises an alarm on failure)',
-              '$robot 收到了：$what $name（做完它会报，失败站点出告警）')
+              '$robot 已接受：$what $name（完成后上报，失败时站点告警）')
           : tr('$robot did not accept: ${ack['reason'] ?? ack['result']}',
-              '$robot 没接：${ack['reason'] ?? ack['result']}'));
+              '$robot 未接受：${ack['reason'] ?? ack['result']}'));
       final data = ack['data'];
       if (mounted && ack['result'] != 'accepted' && data is Map<String, dynamic>) {
         // 狗拒切时回执里带着清单
-        await _showChecks(tr('$robot did not activate: reasons', '$robot 没切：为什么'), data);
+        await _showChecks(tr('$robot did not activate: reasons', '$robot 未切换：原因'), data);
       }
     } on SiteError catch (e) {
-      _snack(tr('Not sent: $e', '没发出去：$e'));
+      _snack(tr('Not sent: $e', '发送失败：$e'));
     }
   }
 
@@ -121,8 +121,8 @@ class _SiteReleasesPageState extends State<SiteReleasesPage> {
               // 能切是绿的；不能切是红的（拦着的那几项也是红的，只是提示的是橙的）
               Text(
                   r['ok'] == true
-                      ? tr('Can activate: all blocking checks passed', '能切：拦的都过了')
-                      : tr('Cannot activate: $blocking blocking check(s) failed', '不能切：$blocking 项拦着'),
+                      ? tr('Can activate: all blocking checks passed', '可以切换：所有阻断检查均已通过')
+                      : tr('Cannot activate: $blocking blocking check(s) failed', '不能切换：$blocking 项阻断检查未通过'),
                   key: const Key('precheck-verdict'),
                   style: NwText.titleSmall.copyWith(color: r['ok'] == true ? nw.success : nw.error)),
               nwGap8,
@@ -138,13 +138,13 @@ class _SiteReleasesPageState extends State<SiteReleasesPage> {
                       color: ch['ok'] == true ? nw.success : (ch['blocking'] == true ? nw.error : nw.warning)),
                   title: Text(
                       '${_label('${ch['name']}')}'
-                      '${ch['ok'] != true && ch['blocking'] != true ? tr(' (advisory, not blocking)', '（提示，不拦）') : ''}',
+                      '${ch['ok'] != true && ch['blocking'] != true ? tr(' (advisory, not blocking)', '（仅提示，不阻断）') : ''}',
                       style: NwText.bodyMedium.copyWith(color: nw.text)),
                   subtitle: Text('${ch['detail'] ?? ''}', style: NwText.bodySmall.copyWith(color: nw.textSecondary)),
                 ),
             ]),
           ),
-          actions: [TextButton(onPressed: () => Navigator.pop(c), child: Text(tr('OK', '知道了')))],
+          actions: [TextButton(onPressed: () => Navigator.pop(c), child: Text(tr('OK', '确定')))],
         );
       },
     );
@@ -155,12 +155,12 @@ class _SiteReleasesPageState extends State<SiteReleasesPage> {
       {
         'busy': tr('Idle', '空闲'),
         'battery': tr('Battery', '电量'),
-        'disk': tr('Disk', '盘'),
+        'disk': tr('Disk', '磁盘'),
         'version': tr('Version', '版本'),
-        'installed': tr('Installed', '装好了'),
-        'package': tr('Package intact', '包没坏'),
+        'installed': tr('Installed', '已安装'),
+        'package': tr('Package intact', '安装包完整'),
         'schema': tr('Task package format', '任务包格式'),
-        'agent_start': tr('Agent starts after activation', '切过去起得来'),
+        'agent_start': tr('Agent starts after activation', '启用后可正常启动'),
         'localizer': tr('Localizer', '定位器'),
         'perception': tr('Perception', '感知'),
         'extrinsic': tr('Extrinsics', '外参'),
@@ -185,7 +185,7 @@ class _SiteReleasesPageState extends State<SiteReleasesPage> {
           if (snap.hasError) {
             return NwListView(children: [
               NwNotice(
-                  tone: NwTone.error, text: tr('Releases unavailable: ${snap.error}', '拿不到：${snap.error}')),
+                  tone: NwTone.error, text: tr('Releases unavailable: ${snap.error}', '无法加载：${snap.error}')),
             ]);
           }
           if (!snap.hasData) return const Center(child: CircularProgressIndicator());
@@ -214,17 +214,17 @@ class _SiteReleasesPageState extends State<SiteReleasesPage> {
                               Text(e.key, style: NwText.titleMedium.copyWith(color: nw.text, fontWeight: FontWeight.w700)),
                               nwGap4,
                               Text(
-                                  '${e.value ?? tr('Unknown (not reported: the robot is offline, or does not support releases from the site)', '不知道（机器人没报：不在线，或者不支持站点下发版本）')}',
+                                  '${e.value ?? tr('Unknown (not reported: the robot is offline, or does not support releases from the site)', '未知（机器人未上报：离线或不支持站点下发版本）')}',
                                   style: NwText.bodyMedium.copyWith(color: nw.textSecondary)),
                               // 狗没报在跑哪一版 = 没报发布能力（或者不在线）：按了也是 unsupported，不给按钮。
                               if (admin && e.value != null) ...[
                                 nwGap8,
                                 Wrap(spacing: Nw.s8, runSpacing: Nw.s8, children: [
                                   for (final (a, label) in [
-                                    ('install', tr('Install', '装')),
-                                    ('precheck', tr('Check', '查')),
-                                    ('activate', tr('Activate', '切')),
-                                    ('rollback', tr('Roll back', '退')),
+                                    ('install', tr('Install', '安装')),
+                                    ('precheck', tr('Check', '检查')),
+                                    ('activate', tr('Activate', '启用')),
+                                    ('rollback', tr('Roll back', '回退')),
                                   ])
                                     NwButton(
                                         buttonKey: SiteReleasesPage.actionKey(e.key, a),

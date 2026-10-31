@@ -212,7 +212,7 @@ void main() {
     testWidgets('三种大小：圆角 4 / 8 / 12，越大越高；都不小于手指点得准的宽', (t) async {
       final heights = <double>[];
       for (final (s, radius) in [(NwButtonSize.small, 4.0), (NwButtonSize.medium, 8.0), (NwButtonSize.large, 12.0)]) {
-        await _pump(t, NwButton(buttonKey: const Key('b'), label: 'OK', size: s, onPressed: () {}),
+        await _pump(t, NwButton(buttonKey: const Key('b'), label: 'Arrived', size: s, onPressed: () {}),
             theme: nwTheme(Brightness.light));
         final style = t.widget<FilledButton>(find.byKey(const Key('b'))).style!;
         expect((style.shape!.resolve({})! as RoundedRectangleBorder).borderRadius, BorderRadius.circular(radius));

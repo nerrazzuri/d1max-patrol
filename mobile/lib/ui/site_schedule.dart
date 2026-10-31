@@ -54,7 +54,7 @@ class SiteSchedulePage extends StatelessWidget {
           NwSectionLabel(tr('Scheduled rounds', '排好的巡检')),
           nwGap8,
           NwListCard(children: [
-            if (entries.isEmpty) NwCardText(tr('Nothing scheduled', '没有排程')),
+            if (entries.isEmpty) NwCardText(tr('Nothing scheduled', '无排程')),
             for (final e in entries)
               ListTile(
                 leading: Icon(Icons.schedule_rounded, color: c.textSecondary),

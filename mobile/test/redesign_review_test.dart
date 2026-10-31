@@ -44,7 +44,7 @@ void main() {
       await _robotPage(t, api);
       await t.tap(find.byKey(const Key('btn-abort')));
       await t.pumpAndSettle();
-      expect(find.textContaining('它现在没在跑任务'), findsOneWidget);
+      expect(find.textContaining('机器人当前无任务'), findsOneWidget);
       expect(api.calls.where((c) => c.startsWith('abort ')), isEmpty);
       await t.pumpWidget(const SizedBox());
     });

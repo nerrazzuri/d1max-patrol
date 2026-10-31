@@ -47,7 +47,7 @@ void main() {
     expect(t.widget<CustomPaint>(find.byKey(SiteMappingTrailPage.canvasKey)).painter,
         isA<TrailPainter>().having((p) => p.points.length, 'points', 3));
     await t.pump(const Duration(seconds: 2));
-    expect(find.textContaining('没在录包'), findsOneWidget);
+    expect(find.textContaining('未在录包'), findsOneWidget);
     await t.pump(const Duration(seconds: 10));
     expect(api.trailSince, [0, 2, 3], reason: '停了不再取');
     await t.tap(find.byKey(SiteMappingTrailPage.refreshKey));
@@ -82,7 +82,7 @@ void main() {
       ];
     await t.pumpWidget(MaterialApp(home: SiteMappingTrailPage(api: api, robotId: 'A')));
     await t.pump();
-    expect(find.textContaining('正在起'), findsOneWidget);
+    expect(find.textContaining('正在启动'), findsOneWidget);
     await t.pump(const Duration(seconds: 2));
     await t.pump();
     expect(api.trailSince, [0, 1, 0], reason: '换了一趟：不把新的一趟接在旧的后面');
@@ -112,8 +112,8 @@ void main() {
       ..trailReplies = [{..._trail([[0, 0], [1, 0]], 0, 2), 'full': true, 'jumps': 2}];
     await t.pumpWidget(MaterialApp(home: SiteMappingTrailPage(api: api, robotId: 'A')));
     await t.pump();
-    expect(find.textContaining('红点是记下的最后一点'), findsOneWidget);
-    expect(find.textContaining('跳过 2 次'), findsOneWidget);
+    expect(find.textContaining('红点为最后记录点'), findsOneWidget);
+    expect(find.textContaining('跳变 2 次'), findsOneWidget);
     await t.pumpWidget(const SizedBox());
   });
 
@@ -232,7 +232,7 @@ void main() {
         version: '8')));
     await t.pumpAndSettle();
     await openZonePanel(t);
-    expect(find.textContaining('还没确认'), findsOneWidget);
+    expect(find.textContaining('未确认：此地图无法下发'), findsOneWidget);
     await tapZoneMenu(t, SiteMapPreviewPage.drawNogoKey);
     await t.pump();
     final rect = t.getRect(find.byKey(SiteMapPreviewPage.canvasKey));
@@ -259,14 +259,14 @@ void main() {
     // 像素 (20, 10) → 地图 (-10 + 2, 5 - 1) = (-8, 4)
     expect((poly[0][0] as num).toDouble(), closeTo(-8.0, 0.02));
     expect((poly[0][1] as num).toDouble(), closeTo(4.0, 0.02));
-    expect(find.textContaining('存好了'), findsOneWidget);
+    expect(find.textContaining('已保存'), findsOneWidget);
     await openZonePanel(t);
     await t.ensureVisible(find.byKey(SiteMapPreviewPage.confirmKey)); // 右栏多了「抹掉」那段说明,确认钮往下挪了
     await openZonePanel(t);
     await t.tap(find.byKey(SiteMapPreviewPage.confirmKey));
     await t.pumpAndSettle();
     expect(find.textContaining('确认之后这张图才能下发'), findsOneWidget, reason: '弹框念一遍那句话');
-    await t.tap(find.text('再看看'));
+    await t.tap(find.text('返回检查'));
     await t.pumpAndSettle();
     expect(api.calls.where((c) => c.startsWith('confirmZones')), isEmpty);
     await openZonePanel(t);
@@ -371,7 +371,7 @@ void main() {
     await openZonePanel(t);
     await t.tap(find.byKey(SiteMapPreviewPage.deleteKey('z2')));
     await t.pumpAndSettle();
-    expect(find.textContaining('没存上'), findsWidgets);
+    expect(find.textContaining('保存失败'), findsWidgets);
     expect(find.textContaining('重新拉一下'), findsWidgets);
     await tapZoneMenu(t, SiteMapPreviewPage.drawNogoKey);
     await t.pump();
@@ -423,7 +423,7 @@ void main() {
     expect(z['kind'], 'nogo');
     expect(z['hard'], isTrue);
     expect(z['for_s'], 3600);
-    expect(find.textContaining('不用重新确认'), findsOneWidget, reason: '只收紧：站点当场算确认了');
+    expect(find.textContaining('无需重新确认'), findsOneWidget, reason: '只收紧：站点当场算确认了');
     // 站点那一份里带了 until_ms、hard:列表、图上都看得出来
     api.zonesView = <String, dynamic>{...api.zonesView, 'zones': <dynamic>[
       {'id': 'z1', 'kind': 'nogo', 'label': '禁行区', 'hard': true,
@@ -456,7 +456,7 @@ void main() {
         version: '8')));
     await t.pumpAndSettle();
     await tapVis(t, find.byKey(SiteMapPreviewPage.deleteKey('pond')));
-    expect(find.textContaining('改过要重新确认'), findsOneWidget);
+    expect(find.textContaining('有改动，需重新确认'), findsOneWidget);
   });
 
   Map<String, dynamic> proposalView({bool? same = true}) => <String, dynamic>{
@@ -485,8 +485,8 @@ void main() {
     await t.pumpAndSettle();
     await openZonePanel(t);
     expect(find.byKey(SiteMapPreviewPage.proposalKey), findsOneWidget);
-    expect(find.textContaining('从第 7 版带过来的'), findsOneWidget);
-    expect(find.textContaining('坐标可能不一样'), findsOneWidget);
+    expect(find.textContaining('从第 7 版带入'), findsOneWidget);
+    expect(find.textContaining('坐标可能有变'), findsOneWidget);
     final p = t.widget<CustomPaint>(find.byKey(SiteMapPreviewPage.zonesKey)).painter!
         as ZonesPainter;
     expect(p.shapes.where((s) => s.proposed).length, 2, reason: '带过来的画成虚的、跟生效的分开');
@@ -508,7 +508,7 @@ void main() {
         version: '8')));
     await t.pumpAndSettle();
     await openZonePanel(t);
-    expect(find.textContaining('坐标系变了'), findsOneWidget);
+    expect(find.textContaining('坐标系已变化'), findsOneWidget);
     await tapVis(t, find.byKey(SiteMapPreviewPage.discardProposalKey));
     expect(api.calls, contains('discardZoneProposal estate-1:8'));
     await openZonePanel(t);
@@ -540,9 +540,9 @@ void main() {
     await tapVis(t, find.byKey(SiteMapPreviewPage.confirmKey));
     await t.tap(find.byKey(SiteMapPreviewPage.confirmOkKey));
     await t.pumpAndSettle();
-    expect(find.textContaining('一个禁行区、限速区都没有'), findsOneWidget);
-    expect(find.textContaining('第 7 版画了 2 个'), findsOneWidget);
-    await t.tap(find.text('再看看'));
+    expect(find.textContaining('没有任何禁行区和限速区'), findsOneWidget);
+    expect(find.textContaining('第 7 版有 2 个'), findsOneWidget);
+    await t.tap(find.text('返回检查'));
     await t.pumpAndSettle();
     expect(api.calls.where((c) => c.startsWith('confirmZones')), isEmpty, reason: '没明说就不确认');
     await tapVis(t, find.byKey(SiteMapPreviewPage.confirmKey));

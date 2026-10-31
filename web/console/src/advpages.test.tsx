@@ -43,7 +43,7 @@ describe("诊断", () => {
     const { container: c } = render(<DiagPage />);
     await waitFor(() => expect(c.querySelector('[data-check="db"]')!.textContent).toContain("数据库能读能写"));
     expect(c.querySelector('[data-check="backup"]')!.className).toContain("bad");
-    await waitFor(() => expect(c.querySelector('[data-robot="A"]')!.textContent).toContain("前摄像头有画面"));
+    await waitFor(() => expect(c.querySelector('[data-robot="A"]')!.textContent).toContain("前摄像头画面正常"));
     expect(c.querySelector('[data-robot="A"]')!.textContent).toContain("浮点解");
     expect(deviceText("link:router")).toContain("router");
     expect(deviceText("relay")).toBe("relay");
@@ -64,7 +64,7 @@ describe("系统", () => {
     const { container: c } = render(<SystemPage2 me={{ name: "a", role: "admin", display_name: "", site_name: "翠湖庄园" }} now={0} />);
     await waitFor(() => expect(c.querySelector(".sys-backup .sys-row")!.className).toContain("bad"));
     expect(c.querySelector(".sys-backup")!.textContent).toContain("9 天");
-    expect(c.querySelector(".sys-vpn")!.textContent).toContain("还没装");
+    expect(c.querySelector(".sys-vpn")!.textContent).toContain("未安装");
     expect(c.textContent).toContain("翠湖庄园");
   });
 });
@@ -81,10 +81,10 @@ describe("软件升级", () => {
     await waitFor(() => expect(uploads.length).toBe(1));
     expect(uploads[0].headers["X-D1Max-Confirm"]).toBe("my-own-password");
   });
-  it("等充完电空闲时换", async () => {
+  it("充电且空闲时切换", async () => {
     const { container: c } = render(<UpgradePage say={() => {}} />);
     await waitFor(() => expect(c.querySelector('[data-release="v1.4.0"]')).not.toBeNull());
-    fireEvent.click(btn(c.querySelector('[data-release="v1.4.0"]')!, "等充完电空闲时换"));
+    fireEvent.click(btn(c.querySelector('[data-release="v1.4.0"]')!, "充电且空闲时切换"));
     await waitFor(() => expect(posted[0]).toEqual({ url: "/api/robots/A/release", body: { action: "activate", name: "v1.4.0", when: "charging" } }));
   });
 });

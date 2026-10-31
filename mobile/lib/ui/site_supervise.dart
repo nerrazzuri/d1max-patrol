@@ -53,7 +53,7 @@ class _SupervisionSwitchState extends State<SupervisionSwitch> with WidgetsBindi
         state == AppLifecycleState.detached) {
       _stop(tr(
           'App moved to the background, supervision released (the robot will stop)',
-          '切到后台了，监护已放（机器人会停下）'));
+          'App 已切到后台，监护已解除（机器人将停止）'));
     }
   }
 
@@ -71,10 +71,10 @@ class _SupervisionSwitchState extends State<SupervisionSwitch> with WidgetsBindi
       if (ack is Map && ack['result'] != 'accepted') {
         why = tr(
             'Robot did not accept supervision: ${ackReasonText('${ack['reason'] ?? ack['result']}')}',
-            '机器人没接监护：${ackReasonText('${ack['reason'] ?? ack['result']}')}');
+            '机器人未接受监护：${ackReasonText('${ack['reason'] ?? ack['result']}')}');
       }
     } catch (e) {
-      why = tr('Supervision renewal failed: $e', '监护续不上：$e');
+      why = tr('Supervision renewal failed: $e', '监护续期失败：$e');
     } finally {
       _inFlight = false;
     }
@@ -87,7 +87,7 @@ class _SupervisionSwitchState extends State<SupervisionSwitch> with WidgetsBindi
     if (_failures >= 2) {
       _stop(tr('$why (the robot will stop)', '$why（机器人会停下）'));
     } else if (mounted) {
-      setState(() => _msg = tr('$why, retrying', '$why，再试一次'));
+      setState(() => _msg = tr('$why, retrying', '$why，正在重试'));
     }
   }
 
@@ -151,14 +151,11 @@ class _SupervisionSwitchState extends State<SupervisionSwitch> with WidgetsBindi
               style: NwText.titleSmall.copyWith(color: c.text)),
           subtitle: Text(
               tr(
-                  'This robot runs dispatched tasks only under on-site supervision (obstacle avoidance is '
-                  'not accepted yet). While this is on, the robot runs the tasks sent to it. Turning it '
-                  'off, leaving this page or moving the app to the background stops it.',
-                  '这台机器人要人现场监护才执行派单（避障还没验收）。开着的时候机器人会执行下发的任务；'
-                  '关掉、离开这一页、切到后台就停。'),
+                  'This robot runs dispatched tasks only under on-site supervision (obstacle avoidance not yet accepted). Turning this off, leaving the page or backgrounding the app stops it.',
+                  '此机器人需现场监护才执行派单（避障尚未验收）。关闭、离开此页或切到后台即停止。'),
               style: NwText.bodySmall.copyWith(color: c.textSecondary)),
           value: _on,
-          onChanged: (v) => v ? _start() : _stop(tr('Supervision released', '监护已放')),
+          onChanged: (v) => v ? _start() : _stop(tr('Supervision released', '监护已解除')),
         ),
         if (_msg.isNotEmpty)
           Padding(

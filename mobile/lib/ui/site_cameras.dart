@@ -60,8 +60,8 @@ class _SiteCamerasPageState extends State<SiteCamerasPage> {
         setState(() {
           _loading = false;
           _msg = e.status == 404
-              ? tr('Cameras are not enabled on this site', '这个站点没开摄像头')
-              : tr("Can't read cameras: $e", '摄像头读不到：$e');
+              ? tr('Cameras are not enabled on this site', '此站点未启用摄像头')
+              : tr("Can't read cameras: $e", '无法读取摄像头：$e');
         });
       }
     }
@@ -72,11 +72,11 @@ class _SiteCamerasPageState extends State<SiteCamerasPage> {
     final when = since == null || since == 0 ? '' : tr(
         ' (since ${clipTime(since)})',
         '（${clipTime(since)} 起）');
-    if (c['connected'] == true) return tr('Connected$when', '连着$when');
+    if (c['connected'] == true) return tr('Connected$when', '已连接$when');
     final err = '${c['error'] ?? ''}';
     return tr(
         'Not connected$when${err.isEmpty ? '' : ': $err'} — intrusions from this camera are not received',
-        '连不上$when${err.isEmpty ? '' : '：$err'}——这一路的入侵收不到');
+        '未连接$when${err.isEmpty ? '' : '：$err'}——收不到此摄像头的入侵告警');
   }
 
   @override
@@ -100,9 +100,8 @@ class _SiteCamerasPageState extends State<SiteCamerasPage> {
                 NwCard(
                     child: Text(
                         tr(
-                            'No cameras yet. Register one on the site host with d1max-site camera-add (the '
-                                'camera reports its own intrusion detection to the site, which sends a robot)',
-                            '还没有摄像头：在站点主机上 d1max-site camera-add 登记（摄像头自带的入侵检测报到站点，派机器人去）'),
+                            'No cameras yet. Register one on the site host with d1max-site camera-add.',
+                            '暂无摄像头。请在站点主机上用 d1max-site camera-add 登记。'),
                         style: NwText.bodyMedium.copyWith(color: nw.textSecondary))),
               if (_rows.isNotEmpty)
                 NwListCard(children: [
@@ -124,7 +123,7 @@ class _SiteCamerasPageState extends State<SiteCamerasPage> {
                                   'Last intrusion reported: ${clipTime((c['last_event_ms'] as num).toInt())}',
                                   '最近一次报入侵：${clipTime((c['last_event_ms'] as num).toInt())}'),
                             if (c['motion'] == true)
-                              tr('Video motion also counts as an intrusion', '画面动了也算入侵'),
+                              tr('Video motion also counts as an intrusion', '画面移动也视为入侵'),
                           ].join('\n'),
                           style: NwText.bodySmall.copyWith(color: nw.textSecondary)),
                       isThreeLine: c['last_event_ms'] != null || c['motion'] == true,

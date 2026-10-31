@@ -70,7 +70,7 @@ void main() {
     await t.tap(find.byKey(SiteRecordingsPage.keepKey(10)));
     await t.pumpAndSettle();
     expect(api.calls, contains('keep 10 true'));
-    expect(find.textContaining('标了留着'), findsOneWidget);
+    expect(find.textContaining('已标记保留'), findsOneWidget);
     await t.tap(find.byKey(SiteRecordingsPage.keepKey(10)));
     await t.pumpAndSettle();
     expect(api.calls, contains('keep 10 false'));
@@ -84,15 +84,15 @@ void main() {
     expect(int.parse(q[3]), t0 - 30000 - 15 * 60000);
     final tile = t.widget<ListTile>(find.byKey(SiteRecordingsPage.clipKey(11)));
     expect(tile.selected, isTrue);
-    expect(find.textContaining('告警那一刻'), findsOneWidget);
+    expect(find.textContaining('告警时刻'), findsOneWidget);
   });
 
   testWidgets('没开录像的站点、读不到：说清楚', (t) async {
     await _open(t, _api('guard')..recordingsError = const SiteError(404, 'x'));
-    expect(find.text('这个站点没开录像'), findsOneWidget);
+    expect(find.text('此站点未启用录像'), findsOneWidget);
     await t.pumpWidget(Container());
     await _open(t, _api('guard')..recordingRows = <Map<String, dynamic>>[]);
-    expect(find.textContaining('这段时间没有录像'), findsOneWidget);
+    expect(find.textContaining('此时段没有录像'), findsOneWidget);
   });
 
   testWidgets('告警现场页：机器人的告警有「现场录像」，站点那一行的没有', (t) async {

@@ -12,37 +12,37 @@ String? _title(String kind) => switch (kind) {
       'task_done' => tr('Task done', '任务完成'),
       'task_failed' => tr('Task failed', '任务失败'),
       'task_aborted' => tr('Task stopped', '任务中止'),
-      'task_preempted' => tr('Task replaced', '任务被新任务顶掉'),
+      'task_preempted' => tr('Task replaced', '任务被新任务替换'),
       'task_progress' => tr('On the way', '在路上'),
       'patrol_waypoint' => tr('Patrol point', '巡检点'),
       'relocalized' => tr('Position re-set', '重新定位'),
-      'loc_wrong_solution' => tr('Position looked wrong', '定位结果不对'),
+      'loc_wrong_solution' => tr('Position looked wrong', '定位结果异常'),
       'loc_conflict_resolved' => tr('Position conflict resolved', '定位冲突已解决'),
       'map_activated' => tr('Map switched', '换了地图'),
       'map_built' => tr('Map built', '建图完成'),
       'map_build_failed' => tr('Map build failed', '建图失败'),
       'map_activate_failed' => tr('Map switch failed', '换地图失败'),
-      'map_load_failed' => tr('Map load failed', '地图没加载上'),
+      'map_load_failed' => tr('Map load failed', '地图加载失败'),
       'mapping' => tr('Mapping', '建图'),
       'mapping_failed' => tr('Mapping failed', '建图失败'),
       'recording_ok' => tr('Recording saved', '录像存好了'),
-      'video_failed' => tr('Video failed', '画面出错'),
+      'video_failed' => tr('Video failed', '视频故障'),
       'robot_fault' => tr('Robot fault', '机器人故障'),
       'dock_hazard' => tr('Dock blocked', '充电桩前有障碍'),
       'dock_hazard_cleared' => tr('Dock clear', '充电桩前障碍已清'),
-      'head_changed' => tr('Front and back swapped', '前后方向换了'),
-      'home_marked' => tr('Home point set', '标了原点'),
+      'head_changed' => tr('Front and back swapped', '前后方向已切换'),
+      'home_marked' => tr('Home point set', '已标原点'),
       'board_thermal' => tr('Board temperature', '主板温度'),
       'thermal_lens_blocked' => tr('Thermal lens blocked', '热像镜头被挡'),
       'thermal_lens_clear' => tr('Thermal lens clear', '热像镜头恢复'),
       'release_installed' => tr('Update installed', '更新已装好'),
       'release_activating' => tr('Update starting', '正在启用更新'),
       'release_committed' => tr('Update done', '更新完成'),
-      'release_install_failed' => tr('Update install failed', '更新没装上'),
+      'release_install_failed' => tr('Update install failed', '更新安装失败'),
       'release_rolling_back' => tr('Rolling back update', '更新回退中'),
       'release_rolled_back' => tr('Update rolled back', '更新已回退'),
       'outbox_retry' => tr('Resending', '重发'),
-      'archive_write_failed' => tr('Archive write failed', '存档写失败'),
+      'archive_write_failed' => tr('Archive write failed', '存档写入失败'),
       'map_integrity_failed' => tr('Map files damaged', '地图文件损坏'),
       'unbind' => tr('Unbound (factory reset)', '解绑（恢复出厂）'),
       'wifi_confirm' => tr('WiFi change answered', '换 WiFi 已答复'),
@@ -76,10 +76,10 @@ String robotEventDetail(String kind, Map<String, dynamic> data) {
   final name = data['name'];
   if (name is String && name.isNotEmpty) parts.add(name);
   if (kind == 'patrol_waypoint' && data['ok'] is bool) {
-    parts.add(data['ok'] == true ? tr('OK', '到了') : tr('missed', '没到'));
+    parts.add(data['ok'] == true ? tr('Arrived', '已到达') : tr('missed', '未到达'));
   }
   final dist = data['distance_m'];
-  if (dist is num) parts.add(tr('${dist.toStringAsFixed(1)} m to go', '还有 ${dist.toStringAsFixed(1)} 米'));
+  if (dist is num) parts.add(tr('${dist.toStringAsFixed(1)} m remaining', '剩余 ${dist.toStringAsFixed(1)} 米'));
   for (final k in const <String>['reason', 'why', 'note', 'message', 'error', 'detail']) {
     final v = data[k];
     // `preempted`、`halt` 这种是程序里的代号，人看不懂，跳过

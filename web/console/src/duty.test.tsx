@@ -76,7 +76,7 @@ describe("值班页的报警横幅", () => {
   it("机器人需要帮忙的,第二个按钮是处理好了", async () => {
     const { container: c } = page([alert({ kind: "stuck", audience: "help", title: "A 被挡住了" })]);
     expect(btn(c.querySelector(".banner")!, "确认有人")).toBeUndefined();
-    fireEvent.click(btn(c.querySelector(".banner")!, "处理好了")!);
+    fireEvent.click(btn(c.querySelector(".banner")!, "已处理")!);
     await waitFor(() => expect(posts).toContainEqual({ url: "/api/alerts/k1/resolve", body: { verdict: "handled" } }));
   });
 
@@ -84,7 +84,7 @@ describe("值班页的报警横幅", () => {
     resolveStatus = 404;
     const r = page([alert({})]);
     fireEvent.click(btn(r.container.querySelector(".banner")!, "确认有人")!);
-    await waitFor(() => expect(r.say).toHaveBeenCalledWith("已经有人处理了"));
+    await waitFor(() => expect(r.say).toHaveBeenCalledWith("已有人处理"));
     expect(r.say).toHaveBeenCalledTimes(1);
     expect(r.refresh).toHaveBeenCalled();
     r.rerender(<DutyPage units={[unit("A", "patrolling")]} alerts={[]} now={2000} role="guard" say={r.say} refresh={r.refresh} onZoom={() => {}} />);
@@ -98,13 +98,13 @@ describe("值班页的报警横幅", () => {
 
   it("两件报警写还有几件", () => {
     const { container: c } = page([alert({}), alert({ key: "k2", robot: "B", kind: "stuck", audience: "help", last_ms: 0 })]);
-    expect(c.querySelector(".banner")!.textContent).toContain("还有 1 件");
+    expect(c.querySelector(".banner")!.textContent).toContain("另有 1 件");
   });
 
   it("迷路了有帮它找位置,点了地图上提示怎么做", async () => {
     const { container: c } = page([alert({ kind: "loc_lost_paused", audience: "help", robot: "B", title: "B 迷路了" })]);
-    fireEvent.click(btn(c.querySelector(".banner")!, "帮它找位置")!);
-    await waitFor(() => expect(c.querySelector(".duty-map")!.textContent).toContain("在地图上点 B 实际站的地方"));
+    fireEvent.click(btn(c.querySelector(".banner")!, "协助定位")!);
+    await waitFor(() => expect(c.querySelector(".duty-map")!.textContent).toContain("在地图上点击 B 的实际位置"));
   });
 
   it("有人闯入的现场放那个防区的摄像头", async () => {
@@ -138,7 +138,7 @@ describe("值班页的地图", () => {
   it("点了帮它找位置才进点图选位置", async () => {
     const { container: c } = page([alert({ kind: "loc_lost_paused", audience: "help", robot: "A", title: "A 迷路了" })], [onMap()]);
     await waitFor(() => expect(c.querySelector(".duty-map svg.map")).not.toBeNull());
-    fireEvent.click(btn(c.querySelector(".banner")!, "帮它找位置")!);
+    fireEvent.click(btn(c.querySelector(".banner")!, "协助定位")!);
     await waitFor(() => expect(c.querySelector(".duty-map svg.map")!.classList.contains("drawing")).toBe(true));
   });
 });

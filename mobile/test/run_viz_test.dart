@@ -116,8 +116,8 @@ void main() {
     test('navText：被挡写多久和原因；重规划写次数和原因；没有是空串', () {
       expect(navText(null), '');
       expect(navText(<String, dynamic>{}), '');
-      expect(navText(<String, dynamic>{'blocked': {'for_s': 12, 'reason': '前方 0.4 m 有挡'}}), '被挡 12 秒：前方 0.4 m 有挡');
-      expect(navText(<String, dynamic>{'blocked': {'for_s': 5, 'reason': ''}}), '被挡 5 秒：没说原因');
+      expect(navText(<String, dynamic>{'blocked': {'for_s': 12, 'reason': '前方 0.4 m 有挡'}}), '受阻 12 秒：前方 0.4 m 有挡');
+      expect(navText(<String, dynamic>{'blocked': {'for_s': 5, 'reason': ''}}), '受阻 5 秒：未说明原因');
       expect(navText(<String, dynamic>{'replan': {'n': 2, 'why': 'detour'}}), '重规划 2 次（绕障）');
       expect(navText(<String, dynamic>{'replan': {'n': 1, 'why': 'preview'}}), '重规划 1 次（前方有障碍，提前绕）');
       expect(navText(<String, dynamic>{'replan': {'n': 1, 'why': '???'}}), '重规划 1 次（偏离路径）');
@@ -126,7 +126,7 @@ void main() {
             'blocked': {'for_s': 1, 'reason': 'x'},
             'replan': {'n': 3, 'why': 'zones'}
           }),
-          '被挡 1 秒：x\n重规划 3 次（区域换了）');
+          '受阻 1 秒：x\n重规划 3 次（区域已变更）');
     });
 
     test('locText：可信但变差了，带机器人说的原因', () {
@@ -192,7 +192,7 @@ void main() {
         await t.tap(find.byKey(SiteMapTab.legendToggleKey));
         await t.pumpAndSettle();
       }
-      for (final label in ['规划路径', '最近走过', '被挡的地方', '定位出过问题']) {
+      for (final label in ['规划路径', '最近走过', '被挡的地方', '定位异常']) {
         expect(find.descendant(of: find.byKey(SiteMapTab.legendKey), matching: find.text(label)), findsOneWidget, reason: label);
       }
       await t.pumpWidget(Container());
@@ -239,7 +239,7 @@ void main() {
       await t.pumpWidget(MaterialApp(home: SiteRobotPage(api: FakeApi('guard', robotView: view), robotId: 'A')));
       await t.pumpAndSettle();
       expect(find.byKey(const Key('robot-nav')), findsOneWidget);
-      expect(find.textContaining('被挡 12 秒：前方 0.4 m 有挡'), findsOneWidget);
+      expect(find.textContaining('受阻 12 秒：前方 0.4 m 有挡'), findsOneWidget);
       expect(find.textContaining('重规划 1 次（绕障）'), findsOneWidget);
       await t.pumpWidget(Container());
       await t.pumpWidget(MaterialApp(home: SiteRobotPage(api: FakeApi('guard'), robotId: 'A')));

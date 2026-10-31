@@ -101,14 +101,14 @@ class _MapManagePageState extends State<MapManagePage> {
           builder: (c) => AlertDialog(
             title: Text(tr('$robot has no origin on this version', '$robot 在这一版上还没有原点')),
             content: Text(tr(
-                'After loading it the robot takes no patrols until you drive it in front of the dock and tap "Mark origin here" on its page.',
-                '换上以后机器人不接巡逻，要把它开到充电桩前，在机器人页点「在这儿标原点」。')),
+                'The robot takes no patrols until its origin is marked. Drive it in front of the dock and tap "Mark origin here" on its page.',
+                '标原点之前机器人不执行巡逻。请将机器人开到充电桩前，在机器人页点「在这儿标原点」。')),
             actions: [
-              TextButton(onPressed: () => Navigator.pop(c, false), child: Text(tr('Cancel', '算了'))),
+              TextButton(onPressed: () => Navigator.pop(c, false), child: Text(tr('Cancel', '取消'))),
               FilledButton(
                   key: const Key('send-without-home'),
                   onPressed: () => Navigator.pop(c, true),
-                  child: Text(tr('Send anyway', '照样下发'))),
+                  child: Text(tr('Send anyway', '仍然下发'))),
             ],
           ),
         );
@@ -117,8 +117,8 @@ class _MapManagePageState extends State<MapManagePage> {
       }
       final ack = (r['ack'] as Map?) ?? const {};
       _snack(ack['result'] == 'accepted'
-          ? tr('$robot is downloading and loading the map', '$robot 在下载、换图')
-          : tr('The robot did not accept: ${ack['reason'] ?? ack['result']}', '机器人没接：${ack['reason'] ?? ack['result']}'));
+          ? tr('$robot is downloading and loading the map', '$robot 正在下载并加载地图')
+          : tr('The robot rejected it: ${ack['reason'] ?? ack['result']}', '机器人未接受：${ack['reason'] ?? ack['result']}'));
     } on SiteError catch (e) {
       _snack(refusalText(e));
     }
@@ -130,10 +130,10 @@ class _MapManagePageState extends State<MapManagePage> {
       context: context,
       builder: (c) => AlertDialog(
         title: Text(tr('Delete this version?', '删掉这一版？')),
-        content: Text(tr("It can't be undone. Robots aren't using it.", '删了就没了。没有机器人在用它。')),
+        content: Text(tr("This can't be undone. No robot is using this version.", '删除后无法恢复。当前没有机器人使用此版本。')),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(c, false), child: Text(tr('Cancel', '算了'))),
-          FilledButton(key: const Key('delete-ok'), onPressed: () => Navigator.pop(c, true), child: Text(tr('Delete', '删'))),
+          TextButton(onPressed: () => Navigator.pop(c, false), child: Text(tr('Cancel', '取消'))),
+          FilledButton(key: const Key('delete-ok'), onPressed: () => Navigator.pop(c, true), child: Text(tr('Delete', '删除'))),
         ],
       ),
     );
@@ -152,15 +152,15 @@ class _MapManagePageState extends State<MapManagePage> {
       builder: (c) => AlertDialog(
         title: Text(tr('Switch $robot back to ${rb['map_id']}:${rb['version']}?', '把 $robot 退回 ${rb['map_id']}:${rb['version']}？')),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(c, false), child: Text(tr('Cancel', '算了'))),
-          FilledButton(key: const Key('rollback-ok'), onPressed: () => Navigator.pop(c, true), child: Text(tr('Switch back', '退回'))),
+          TextButton(onPressed: () => Navigator.pop(c, false), child: Text(tr('Cancel', '取消'))),
+          FilledButton(key: const Key('rollback-ok'), onPressed: () => Navigator.pop(c, true), child: Text(tr('Roll back', '回退'))),
         ],
       ),
     );
     if (ok != true) return;
     try {
       await api.rollbackMap(robot);
-      _snack(tr('$robot is switching back', '$robot 在换回上一版'));
+      _snack(tr('$robot is rolling back', '$robot 正在回退到上一版'));
     } on SiteError catch (e) {
       _snack(refusalText(e));
     }
@@ -218,7 +218,7 @@ class _MapManagePageState extends State<MapManagePage> {
             if (canDelete)
               NwButton(
                   buttonKey: MapManagePage.deleteKey(mapId, version),
-                  label: tr('Delete', '删掉'),
+                  label: tr('Delete', '删除'),
                   size: NwButtonSize.small,
                   variant: NwButtonVariant.ghost,
                   onPressed: () => _delete(mapId, version)),
@@ -242,7 +242,7 @@ class _MapManagePageState extends State<MapManagePage> {
           NwButton(
               buttonKey: MapManagePage.newKey,
               label: _wizardActive
-                  ? tr('Continue mapping', '接着建图')
+                  ? tr('Continue mapping', '继续建图')
                   : (maps.isEmpty ? tr('Build the first map', '建第一张图') : tr('Build a new version', '重新建一版')),
               icon: Icons.add_location_alt_rounded,
               fullWidth: true,
@@ -291,7 +291,7 @@ class _MapManagePageState extends State<MapManagePage> {
           ListTile(
             key: MapManagePage.bagsKey,
             leading: Icon(Icons.fiber_smart_record_rounded, color: c.textSecondary),
-            title: Text(tr('Recordings and rebuild (engineer)', '录包、拿录包重建（工程师）'), style: NwText.bodyMedium.copyWith(color: c.text)),
+            title: Text(tr('Recordings and rebuild (engineer)', '录包与重建（工程师）'), style: NwText.bodyMedium.copyWith(color: c.text)),
             trailing: Icon(Icons.chevron_right_rounded, color: c.textSecondary),
             onTap: () => Navigator.push(context, MaterialPageRoute<void>(builder: (_) => SiteMapsPage(api: api))),
           ),

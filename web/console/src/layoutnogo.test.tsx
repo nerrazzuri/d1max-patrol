@@ -44,7 +44,7 @@ const btn = (root: Element, text: string) => Array.from(root.querySelectorAll("b
 function draw(c: Element, kind: string, n: number) {
   fireEvent.click(btn(c, kind));
   for (let i = 0; i < n; i++) fireEvent.click(c.querySelector(".pick")!);
-  fireEvent.click(btn(c, "画好了"));
+  fireEvent.click(btn(c, "完成绘制"));
 }
 
 describe("布置 → 禁行区", () => {
@@ -64,7 +64,7 @@ describe("布置 → 禁行区", () => {
   it("删了写等你确认,确认要那一句和密码", async () => {
     const n = nav({ zones: [], held: [POOL], confirmed: { revision: 2, by: "olga", at_ms: 1, current: false, how: "confirm" }, revision: 3 });
     const { container: c } = render(<NogoTab {...props(n)} />);
-    expect(c.querySelector(".nogo-status")!.textContent).toContain("等你确认");
+    expect(c.querySelector(".nogo-status")!.textContent).toContain("待你确认");
     expect(c.querySelector(".nogo-status")!.textContent).toContain("泳池");
     fireEvent.click(btn(c, "确认这一版"));
     const yes = btn(document.querySelector(".modal")!, "确认");
@@ -102,7 +102,7 @@ describe("布置 → 禁行区", () => {
   it("机器人还没收到写等机器人确认中", async () => {
     robots = [{ robot_id: "A", running: { map_id: "home", map_version: "3", zones: { match: false, dog_rev: 1, site_rev: 2 } } }];
     const { container: c } = render(<NogoTab {...props(nav())} />);
-    await waitFor(() => expect(c.querySelector(".nogo-status")!.textContent).toContain("等机器人确认中"));
+    await waitFor(() => expect(c.querySelector(".nogo-status")!.textContent).toContain("等待机器人确认"));
   });
 
   it("人员忽略区:没有硬禁区那一项,种类 ignore", async () => {
@@ -118,7 +118,7 @@ describe("布置 → 禁行区", () => {
 
   it("从没确认过的写清楚,不说删了什么", () => {
     const { container: c } = render(<NogoTab {...props(nav({ confirmed: null, held: [], zones: [] }))} />);
-    expect(c.querySelector(".nogo-status")!.textContent).toContain("还没人确认过");
+    expect(c.querySelector(".nogo-status")!.textContent).toContain("此版本尚未确认");
     expect(c.querySelector(".nogo-status")!.textContent).not.toContain("删掉");
   });
 });

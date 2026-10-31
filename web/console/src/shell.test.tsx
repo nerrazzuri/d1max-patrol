@@ -180,7 +180,7 @@ describe("新外壳", () => {
     const a = render(<Console me={me("admin")} onOut={() => {}} />);
     await waitFor(() => expect(a.container.querySelector(".home-todo")!.textContent).toContain("证书"));
     expect(a.container.querySelector(".home-todo")!.textContent).not.toContain("卡住了");
-    fireEvent.click(Array.from(a.container.querySelectorAll(".home-todo button")).find((b) => b.textContent === "处理好了")!);
+    fireEvent.click(Array.from(a.container.querySelectorAll(".home-todo button")).find((b) => b.textContent === "已处理")!);
     await waitFor(() => expect(posted).toContainEqual({ url: "/api/alerts/a/resolve", body: { verdict: "handled" } }));
     cleanup();
     const g = render(<Console me={me("guard")} onOut={() => {}} />);

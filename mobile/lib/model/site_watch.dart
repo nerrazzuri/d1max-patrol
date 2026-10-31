@@ -61,8 +61,8 @@ class SiteWatchRobot {
 
   /// 这一项为什么是「不知道」。没说理由的 null 也要印一句，不许留白。
   String whyFor(String field) => why[field] ?? tr(
-      'The site did not report this item, so it shows as "unknown"',
-      '站点没给这一项，这一档是「不知道」');
+      'Not reported by the site; shown as Unknown',
+      '站点未提供此项，显示为「未知」');
 }
 
 class SiteWatchSummary {
@@ -93,8 +93,8 @@ class SiteWatchSummary {
     final raw = m['robots'];
     if (raw is! List) {
       throw FormatException(tr(
-          'Watch summary has no "robots" section, cannot read it',
-          '值守汇总里没有 robots 那一段，读不出'));
+          'Watch summary is missing the robot list',
+          '值守汇总缺少机器人列表'));
     }
     final site = (m['site'] as Map?)?.cast<String, dynamic>() ?? const <String, dynamic>{};
     return SiteWatchSummary(
@@ -105,8 +105,8 @@ class SiteWatchSummary {
             SiteWatchRobot.fromWire(r.cast<String, dynamic>())
           else
             throw FormatException(tr(
-                'A row in the watch summary is not an object: ${r.runtimeType}',
-                '值守汇总里有一行不是对象：${r.runtimeType}')),
+                'Invalid entry in the watch summary (${r.runtimeType})',
+                '值守汇总中有无效条目（${r.runtimeType}）')),
       ],
       scheduleOk: site['schedule_ok'] as bool?,
       scheduleError: '${site['schedule_error'] ?? ''}',

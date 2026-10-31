@@ -25,17 +25,17 @@ const Key refusalDialogKey = Key('refusal-dialog');
 /// 按代号给一句「你可以做什么」（没有就空串）。
 String refusalHint(String code, SiteSession? s) => switch (code) {
       'held' => (s?.canDispatch ?? false)
-          ? tr('Tap Resume if it is safe to send it out again.', '确认安全了就点「恢复」。')
+          ? tr('Tap Resume once it is safe.', '确认安全后点「恢复」。')
           : tr('Ask a guard or manager to resume it.', '请保安或经理点「恢复」。'),
       'zones_unconfirmed' => (s?.canManageMaps ?? false)
-          ? tr('Check the no-go zones on the map and confirm this version.', '在地图上核对禁行区、确认这一版。')
-          : tr('An administrator needs to confirm the no-go zones first. Remote control still works.',
-              '要管理员先确认禁行区。遥控照常能用。'),
-      'supervision' => tr('Open the robot page and turn on "I\'m supervising".', '到机器人页打开「我在现场监护」。'),
-      'not_localized' => tr('Open the robot page and set its position.', '到机器人页「设位置」。'),
-      'offline' => tr('Check that the robot is powered on and connected.', '看一下机器人开着没有、网通不通。'),
-      'teleop' => tr('Wait until remote control ends.', '等遥控结束再派。'),
-      'map_mismatch' => tr('Ask an administrator to load the right map on this robot.', '请管理员给这台机器人下发对的地图。'),
+          ? tr('Review the no-go zones on the map and confirm this version.', '请在地图上核对禁行区并确认此版本。')
+          : tr('An administrator must confirm the no-go zones first. Remote control is unaffected.',
+              '需要管理员先确认禁行区。遥控不受影响。'),
+      'supervision' => tr('Turn on "I\'m supervising" on the robot page.', '请在机器人页开启「我在现场监护」。'),
+      'not_localized' => tr('Set the position on the robot page.', '请在机器人页「设位置」。'),
+      'offline' => tr('Check the robot is powered on and connected.', '请检查机器人是否开机、网络是否连通。'),
+      'teleop' => tr('Dispatch after remote control ends.', '请在遥控结束后再派。'),
+      'map_mismatch' => tr('Ask an administrator to send the correct map to this robot.', '请管理员为此机器人下发正确的地图。'),
       _ => '',
     };
 
@@ -74,10 +74,10 @@ Future<void> showRefusal(BuildContext context, SiteApi api, SiteError e,
     context: context,
     builder: (c) => AlertDialog(
       key: refusalDialogKey,
-      title: Text(title ?? tr("Couldn't send it", '没派出去')),
+      title: Text(title ?? tr("Dispatch failed", '派出失败')),
       content: Text([refusalText(e), if (hint.isNotEmpty) hint].join('\n\n')),
       actions: [
-        TextButton(onPressed: () => Navigator.pop(c), child: Text(tr('OK', '知道了'))),
+        TextButton(onPressed: () => Navigator.pop(c), child: Text(tr('OK', '确定'))),
         if (label != null && act != null)
           FilledButton(
               key: refusalActionKey,

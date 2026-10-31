@@ -58,17 +58,17 @@ Future<void> maybeOfferMapping(BuildContext context, SiteApi api) async {
     builder: (c) => AlertDialog(
       key: mapOfferKey,
       title: Text(wiz != null
-          ? tr('Mapping stopped at step $step. Carry on?', '上次建图到第 $step 步，接着做？')
+          ? tr('Mapping stopped at step $step. Continue?', '上次建图停在第 $step 步，是否继续？')
           : tr('This site has no map yet', '这个站点还没有地图')),
       content: Text(tr(
-          'Robots need to learn the place before they can patrol. Start mapping now? (about 20–40 minutes)',
-          '机器人要先认识这块地方才能巡逻。现在开始建图？（大约 20–40 分钟）')),
+          'A map is needed before patrolling. Start mapping now? (about 20–40 minutes)',
+          '巡逻前需先建图。现在开始建图？（约 20–40 分钟）')),
       actions: [
         TextButton(key: mapOfferLaterKey, onPressed: () => Navigator.pop(c, false), child: Text(tr('Later', '稍后'))),
         FilledButton(
             key: mapOfferStartKey,
             onPressed: () => Navigator.pop(c, true),
-            child: Text(wiz != null ? tr('Carry on', '接着做') : tr('Start mapping', '开始建图'))),
+            child: Text(wiz != null ? tr('Continue', '继续') : tr('Start mapping', '开始建图'))),
       ],
     ),
   );
@@ -90,11 +90,11 @@ const Key mapOfferStartKey = Key('map-offer-start');
 
 /// 建图结论的原因代号（站点给的）说人话。
 String qualityReasonText(String code) => switch (code) {
-      'no_loop' => tr("Didn't close the loop back at the start: the map may be a bit skewed",
-          '没回到起点闭合：图可能有点歪'),
-      'big_shift' => tr('Large correction when closing the loop: walls may show double lines',
-          '闭合时修正很大：墙边可能有双影'),
-      'short_path' => tr('Walked too little: parts of the site may be missing', '走得太少：可能少了地方'),
+      'no_loop' => tr("Loop not closed at the start: the map may be skewed",
+          '未回到起点闭合：地图可能有偏差'),
+      'big_shift' => tr('Large loop-closure correction: walls may show double lines',
+          '闭合修正较大：墙边可能有重影'),
+      'short_path' => tr('Path too short: some areas may be missing', '行走距离过短：可能有区域缺失'),
       _ => code,
     };
 
@@ -102,7 +102,7 @@ String qualityReasonText(String code) => switch (code) {
 String verdictText(String v) => switch (v) {
       'usable' => tr('Usable', '能用'),
       'problem' => tr('Has problems', '有问题'),
-      _ => tr('Unknown', '说不清'),
+      _ => tr('Unknown', '无法评估'),
     };
 
 NwTone verdictTone(String v) => switch (v) {
@@ -113,11 +113,11 @@ NwTone verdictTone(String v) => switch (v) {
 
 /// 站点拒向导某一步的原因（`reason`）说人话；别的照站点原话。
 String wizardErrorText(SiteError e) => switch ('${e.body['reason'] ?? ''}') {
-      'coming_soon' => tr('Settings for this kind of site are not tuned yet. Please contact your delivery engineer.',
-          '这种场地的建图参数还没调好，现在请联系交付工程师。'),
-      'wizard_active' => tr('Someone else is mapping this site right now.', '有人正在给这个站点建图。'),
-      'not_built' => tr('This map version is not built yet.', '这一版还没建好。'),
-      'no_wizard' => tr('The mapping wizard was closed (maybe from another phone).', '建图向导已经关了（可能是在别的手机上）。'),
+      'coming_soon' => tr('Mapping settings for this site type are not tuned yet. Contact your delivery engineer.',
+          '此类场地的建图参数尚未调校，请联系交付工程师。'),
+      'wizard_active' => tr('This site is already being mapped.', '此站点正在建图。'),
+      'not_built' => tr('This version is not built yet.', '此版本尚未建成。'),
+      'no_wizard' => tr('The mapping wizard was closed (possibly on another phone).', '建图向导已关闭（可能在其他手机上关闭）。'),
       _ => refusalText(e),
     };
 
@@ -126,13 +126,13 @@ String mappingAckText(Map<String, dynamic> r) {
   final ack = (r['ack'] as Map?) ?? const {};
   final reason = '${ack['reason'] ?? ack['result'] ?? ''}';
   return switch (reason) {
-    'busy' => tr('The robot is busy (still recording or building the previous map). Try again in a minute.',
-        '机器人在忙（上一趟还在录或在建），过一会儿再试。'),
-    'overheat' => tr('The robot is too hot to map now. Let it cool down first.', '机器人太热，先让它凉一凉再建图。'),
-    'storage_full' => tr("The robot's storage is full. Wait until earlier files finish uploading.",
-        '机器人上存储满了，等前面的文件传完再建。'),
-    'not_recording' => tr('The robot is not recording.', '机器人没在录。'),
-    _ => tr('The robot did not accept: $reason', '机器人没接：$reason'),
+    'busy' => tr('The robot is busy (the previous recording or build is not finished). Try again later.',
+        '机器人忙（上一次录制或建图尚未完成），请稍后重试。'),
+    'overheat' => tr('The robot is too hot. Let it cool down before mapping.', '机器人温度过高，请降温后再建图。'),
+    'storage_full' => tr("The robot's storage is full. Wait for pending uploads to finish.",
+        '机器人存储已满，请等待已有文件上传完成后再建图。'),
+    'not_recording' => tr('The robot is not recording.', '机器人未在录制。'),
+    _ => tr('The robot rejected it: $reason', '机器人未接受：$reason'),
   };
 }
 
@@ -143,20 +143,20 @@ String walkTip(
     required Duration elapsed,
     double? speed,
     double? turn}) {
-  if (speed != null && speed > 0.6) return tr('Slow down: going too fast blurs the map', '慢一点：太快图会糊');
-  if (turn != null && turn > 0.8) return tr('Turn more slowly', '转慢一点');
+  if (speed != null && speed > 0.6) return tr('Slow down: high speed blurs the map', '请减速：速度过快会导致地图模糊');
+  if (turn != null && turn > 0.8) return tr('Turn more slowly', '请放慢转向');
   if (elapsed.inMinutes >= 40) {
-    return tr("You've been going a long time. You can stop and build a version to check.", '已经很久了，可以先建一版看看。');
+    return tr("Recording for a long time. You can build a version now to check.", '已录制较长时间，可先建一版查看效果。');
   }
   if (pathM > 15 && fromStartM < 1.0) {
-    return tr("Back at the start. Tap \"Done walking\" when you've covered everything.", '回到起点了，都走到了就点「走完了」。');
+    return tr("Back at the start. Tap \"Finish walking\" once every area is covered.", '已回到起点。全部区域走完后点「结束行走」。');
   }
   if (pathM > 20 && fromStartM > 5) {
-    return tr('Finish back at the start (the green circle) so the map closes without skew.',
-        '最后要回到起点（绿圈），图才能闭合不歪。');
+    return tr('Finish at the start (green dot) so the map closes.',
+        '请最后回到起点（绿点），以便地图闭合。');
   }
-  return tr('Walk slowly, like giving someone a tour: go into every room and corridor, pause at doorways.',
-      '慢慢走，像带着人参观：每个房间、走廊都进去，门口停一下。');
+  return tr('Walk slowly, enter every room and corridor, and pause at doorways.',
+      '请缓慢行走，进入每个房间和走廊，在门口稍作停留。');
 }
 
 double _num(Object? v) => v is num ? v.toDouble() : 0;
@@ -279,7 +279,7 @@ class _MappingPreviewViewState extends State<MappingPreviewView> {
             ? Center(
                 child: Padding(
                 padding: const EdgeInsets.all(Nw.s8),
-                child: Text(tr('The map appears here as the robot walks', '机器人走起来，图就在这里长出来'),
+                child: Text(tr('The map appears here once the robot starts moving', '机器人开始行走后，地图在此显示'),
                     textAlign: TextAlign.center, style: NwText.bodySmall.copyWith(color: c.textSecondary)),
               ))
             : InteractiveViewer(
@@ -525,19 +525,19 @@ class _MapWizardPageState extends State<MapWizardPage> {
     final choice = await showDialog<String>(
       context: context,
       builder: (c) => AlertDialog(
-        title: Text(tr('Pause mapping?', '先停下吗？')),
-        content: Text(tr('Your progress is saved on the site. Next time you can carry on from this step.',
-            '做到哪一步站点记着，下次接着做。')),
+        title: Text(tr('Pause mapping?', '暂停建图？')),
+        content: Text(tr('Progress is saved on the site; you can continue from this step later.',
+            '进度已保存在站点，下次可从此步继续。')),
         actions: [
           TextButton(
               key: MapWizardPage.exitAbandonKey,
               onPressed: () => Navigator.pop(c, 'abandon'),
-              child: Text(tr('Give up this mapping', '不建了'))),
-          TextButton(onPressed: () => Navigator.pop(c), child: Text(tr('Keep going', '接着做'))),
+              child: Text(tr('Abandon mapping', '放弃建图'))),
+          TextButton(onPressed: () => Navigator.pop(c), child: Text(tr('Continue', '继续'))),
           FilledButton(
               key: MapWizardPage.exitPauseKey,
               onPressed: () => Navigator.pop(c, 'pause'),
-              child: Text(tr('Pause', '先停下'))),
+              child: Text(tr('Pause', '暂停'))),
         ],
       ),
     );
@@ -549,11 +549,11 @@ class _MapWizardPageState extends State<MapWizardPage> {
           final r = await api.mapping(_robotId, 'stop');
           final ack = (r['ack'] as Map?) ?? const {};
           if (ack['result'] != 'accepted' && '${ack['reason'] ?? ''}' != 'not_recording') {
-            if (mounted) setState(() => _err = tr("Couldn't stop recording, so mapping was not given up: ", '停不了录，没放弃：') + mappingAckText(r));
+            if (mounted) setState(() => _err = tr("Couldn't stop recording; mapping not abandoned: ", '无法停止录制，未放弃建图：') + mappingAckText(r));
             return;
           }
         } on SiteError catch (e) {
-          if (mounted) setState(() => _err = tr("Couldn't stop recording, so mapping was not given up: ", '停不了录，没放弃：') + refusalText(e));
+          if (mounted) setState(() => _err = tr("Couldn't stop recording; mapping not abandoned: ", '无法停止录制，未放弃建图：') + refusalText(e));
           return;
         }
       }
@@ -578,14 +578,14 @@ class _MapWizardPageState extends State<MapWizardPage> {
     final tasks = caps is Map ? caps['tasks'] : null;
     final canMap = tasks is Map && tasks['mapping'] is Map && (tasks['mapping'] as Map)['live'] == true;
     return [
-      (online, tr('Online', '在线'), tr('Power on the robot and check its network.', '把机器人开机、连上网。')),
-      (b == null || b >= 50, b == null ? tr('Battery unknown', '电量不知道') : tr('Battery ${b.round()}% (needs 50%+)', '电量 ${b.round()}%（要 50% 以上）'),
-          tr('Charge it first: mapping takes 20–40 minutes.', '先充电：建图要二三十分钟。')),
-      (!online || !robotActive(r), tr('Not running a task', '没在跑任务'), tr('Wait until the current task ends.', '等手上的任务做完。')),
-      (!(ready is Map && ready['estop_clear'] == false), tr('Emergency stop released', '急停没按着'),
+      (online, tr('Online', '在线'), tr('Power on the robot and connect it to the network.', '请开机并连接网络。')),
+      (b == null || b >= 50, b == null ? tr('Battery unknown', '电量未知') : tr('Battery ${b.round()}% (50% or more required)', '电量 ${b.round()}%（需 50% 以上）'),
+          tr('Charge first: mapping takes about 20–40 minutes.', '请先充电：建图约需 20–40 分钟。')),
+      (!online || !robotActive(r), tr('Idle (no task)', '空闲（无任务）'), tr('Wait for the current task to finish.', '请等待当前任务完成。')),
+      (!(ready is Map && ready['estop_clear'] == false), tr('Emergency stop released', '急停已松开'),
           tr('Release the emergency stop.', '松开急停。')),
       (!online || canMap, tr('Can map', '能建图'),
-          tr('This robot cannot map while walking (update its software).', '这台机器人不能边走边建（先升级）。')),
+          tr('This robot doesn\'t support live mapping (update its software).', '此机器人不支持边走边建图（请先升级）。')),
     ];
   }
 
@@ -650,13 +650,13 @@ class _MapWizardPageState extends State<MapWizardPage> {
         const SizedBox(height: Nw.s16),
       ],
       if (_robots.isEmpty)
-        NwNotice(tone: NwTone.warning, text: tr('No robot on this site yet. Add one first (Robots → Add).', '站点上还没有机器人，先去「机器人 → 添加」。')),
-      _label2(tr('What kind of site', '场地是什么样的')),
+        NwNotice(tone: NwTone.warning, text: tr('No robots on this site yet. Add one under Robots → Add.', '站点上还没有机器人，请先在「机器人 → 添加」中添加。')),
+      _label2(tr('Site type', '场地类型')),
       siteCard('indoor', tr('Indoor', '室内'), tr('Offices, warehouses, corridors, lobbies', '办公室、仓库、走廊、大堂')),
-      siteCard('outdoor', tr('Outdoor', '室外'), tr('Coming soon. For now, contact your delivery engineer.', '即将支持；现在请联系交付工程师'),
+      siteCard('outdoor', tr('Outdoor', '室外'), tr('Coming soon. Contact your delivery engineer for now.', '即将支持，目前请联系交付工程师'),
           enabled: false),
-      siteCard('glass', tr('Lots of glass', '玻璃多的大厅'),
-          tr('Coming soon. For now, contact your delivery engineer.', '即将支持；现在请联系交付工程师'),
+      siteCard('glass', tr('Glass-heavy site', '玻璃较多的场地'),
+          tr('Coming soon. Contact your delivery engineer for now.', '即将支持，目前请联系交付工程师'),
           enabled: false),
       const SizedBox(height: Nw.s8),
       TextField(
@@ -664,7 +664,7 @@ class _MapWizardPageState extends State<MapWizardPage> {
           controller: _label,
           maxLength: 40,
           decoration: InputDecoration(
-              labelText: tr('Name this map (optional)', '给这张图起个名（可以不填）'), hintText: tr('e.g. Ground floor', '比如：一楼'))),
+              labelText: tr('Map name (optional)', '地图名称（选填）'), hintText: tr('e.g. Ground floor', '比如：一楼'))),
       if (r != null) ...[
         _label2(tr('Checking ${r['robot_id']}', '机器人 ${r['robot_id']} 检查')),
         NwCard(
@@ -687,8 +687,8 @@ class _MapWizardPageState extends State<MapWizardPage> {
       const SizedBox(height: Nw.s16),
       NwNotice(
           tone: NwTone.info,
-          text: tr('Put the robot where it will charge later (in front of the dock). Start there and finish there.',
-              '把机器人放在以后要当充电位置的地方（充电桩前），从那里出发、最后回到那里。')),
+          text: tr('Place the robot where it will charge (in front of the dock). Start and finish there.',
+              '请将机器人放在今后的充电位置（充电桩前），从此处出发并最终回到此处。')),
     ], [
       NwButton(
           buttonKey: MapWizardPage.nextKey,
@@ -725,15 +725,15 @@ class _MapWizardPageState extends State<MapWizardPage> {
           ),
         );
     return _scroll([
-      _h1(tr('How will you drive it?', '用什么开着它走？')),
-      Text(tr('The map comes out the same either way. Pick whichever is easier.', '建出来的图一样，选顺手的。'),
+      _h1(tr('Choose how to drive', '选择操控方式')),
+      Text(tr('Both methods produce the same map.', '两种方式建出的地图相同。'),
           style: NwText.bodyMedium.copyWith(color: c.textSecondary)),
       const SizedBox(height: Nw.s16),
       card('remote', Icons.sports_esports_rounded, tr("The robot's remote", '机器人的遥控器'),
-          tr('Feels better. The phone just shows the map growing.', '手感好。手机只用来看图走到哪了。'),
-          warn: tr('Set the remote to LOW speed.', '遥控器的档位放在「低速」。'), rec: true),
+          tr('Easier to control; the phone only shows mapping progress.', '操控更顺手，手机仅显示建图进度。'),
+          warn: tr('Set the remote to LOW speed.', '请将遥控器档位调至「低速」。'), rec: true),
       card('phone', Icons.smartphone_rounded, tr('Phone remote control', '手机遥控'),
-          tr('Turn the phone sideways: joysticks, with the camera view and the map.', '手机横过来，摇杆加画面，角上看建图。')),
+          tr('Landscape: joysticks, live video and mapping preview.', '横屏使用：摇杆、实时画面和建图预览。')),
     ], [
       Row(children: [
         Expanded(
@@ -748,7 +748,7 @@ class _MapWizardPageState extends State<MapWizardPage> {
             flex: 2,
             child: NwButton(
                 buttonKey: MapWizardPage.nextKey,
-                label: tr('Start recording', '开始录'),
+                label: tr('Start recording', '开始录制'),
                 size: NwButtonSize.large,
                 onPressed: _busy
                     ? null
@@ -822,15 +822,14 @@ class _MapWizardPageState extends State<MapWizardPage> {
     final ok = await showDialog<bool>(
       context: context,
       builder: (c) => AlertDialog(
-        title: Text(tr('Done walking?', '走完了？')),
+        title: Text(tr('Finish walking?', '结束行走？')),
         content: Text([
-          tr('The robot stops recording and builds the map (a few minutes).', '机器人停止录、开始建图（几分钟）。'),
+          tr('The robot stops recording and builds the map (a few minutes).', '机器人将停止录制并开始建图（约几分钟）。'),
           if (warn)
-            tr('It has walked ${path.round()} m and is ${from.round()} m from the start. Finishing back at the start '
-                'gives a better map.', '已经走了 ${path.round()} 米，离起点 ${from.round()} 米。回到起点再停，图会更好。'),
+            tr('Walked ${path.round()} m, ${from.round()} m from the start. Return to the start before finishing.', '已行走 ${path.round()} 米，距起点 ${from.round()} 米。请回到起点后结束。'),
         ].join('\n\n')),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(c, false), child: Text(tr('Keep walking', '再走走'))),
+          TextButton(onPressed: () => Navigator.pop(c, false), child: Text(tr('Keep walking', '继续行走'))),
           FilledButton(
               key: MapWizardPage.doneWalkOkKey,
               onPressed: () => Navigator.pop(c, true),
@@ -875,7 +874,7 @@ class _MapWizardPageState extends State<MapWizardPage> {
                   FilledButton(
                       key: const Key('teleop-done-walk'),
                       onPressed: () => Navigator.pop(ctx, true),
-                      child: Text(tr('Done walking', '走完了'))),
+                      child: Text(tr('Finish walking', '结束行走'))),
                 ]),
               ),
             )));
@@ -906,8 +905,8 @@ class _MapWizardPageState extends State<MapWizardPage> {
           Expanded(
               child: Text(
                   recording
-                      ? tr('Recording', '正在录')
-                      : (starting ? tr('Starting…', '正在开录……') : tr('Not recording', '没在录')),
+                      ? tr('Recording', '录制中')
+                      : (starting ? tr('Starting…', '正在启动…') : tr('Not recording', '未录制')),
                   style: NwText.bodyMedium.copyWith(color: c.text, fontWeight: FontWeight.w600))),
           Text(tr('$mins min · ${path.round()} m', '$mins 分钟 · ${path.round()} 米'),
               style: NwText.bodyMedium.copyWith(color: c.textSecondary)),
@@ -917,7 +916,7 @@ class _MapWizardPageState extends State<MapWizardPage> {
         const SizedBox(height: Nw.s8),
         NwStatusPill(
             key: MapWizardPage.controlKey,
-            label: control ? tr('Remote not in use', '遥控器没在开') : tr('The remote is driving', '遥控器在开'),
+            label: control ? tr('Remote not in control', '遥控器未接管') : tr('Remote in control', '遥控器控制中'),
             tone: control ? NwTone.neutral : NwTone.success,
             dot: !control),
       ],
@@ -926,14 +925,14 @@ class _MapWizardPageState extends State<MapWizardPage> {
           height: 360,
           child: MappingPreviewView(api: api, robotId: _robotId, period: widget.poll, onData: _onPreview)),
       const SizedBox(height: Nw.s8),
-      Text(tr('Blue: where it has been · Grey: not seen yet · Green circle: the start',
-              '蓝线：走过的　灰：还没看到　绿点：起点'),
+      Text(tr('Blue: path walked · Grey: not scanned · Green dot: start',
+              '蓝线：已走路径　灰色：未扫描　绿点：起点'),
           style: NwText.bodySmall.copyWith(color: c.textSecondary)),
       const SizedBox(height: Nw.s8),
       NwNotice(key: MapWizardPage.tipKey, tone: NwTone.info, text: tip),
       if (remote) ...[
         const SizedBox(height: Nw.s8),
-        Text(tr('Keep the remote on LOW speed.', '遥控器档位放在低速。'),
+        Text(tr('Keep the remote on LOW speed.', '请将遥控器档位调至低速。'),
             style: NwText.bodySmall.copyWith(color: c.fg(NwTone.warning))),
       ],
       if (!live && !starting && built != 'pending') ...[
@@ -941,10 +940,10 @@ class _MapWizardPageState extends State<MapWizardPage> {
         NwNotice(
             tone: NwTone.info,
             text: built == 'failed'
-                ? tr('This run has already ended and the map could not be built (the robot may have restarted).',
-                    '这一趟已经收尾了，没建成（机器人可能重启过）。')
-                : tr('This run has already ended and the map is built (the robot may have restarted).',
-                    '这一趟已经收尾、图建好了（机器人可能重启过）。')),
+                ? tr('This run has ended and the map could not be built (the robot may have restarted).',
+                    '本次录制已结束，建图失败（机器人可能重启过）。')
+                : tr('This run has ended and the map is built (the robot may have restarted).',
+                    '本次录制已结束，地图已建好（机器人可能重启过）。')),
         const SizedBox(height: Nw.s8),
         NwButton(
             buttonKey: MapWizardPage.walkBuiltKey,
@@ -955,7 +954,7 @@ class _MapWizardPageState extends State<MapWizardPage> {
         const SizedBox(height: Nw.s16),
         NwButton(
             buttonKey: MapWizardPage.startRecKey,
-            label: tr('Start recording', '开始录'),
+            label: tr('Start recording', '开始录制'),
             icon: Icons.fiber_manual_record_rounded,
             fullWidth: true,
             onPressed: _startRec),
@@ -974,7 +973,7 @@ class _MapWizardPageState extends State<MapWizardPage> {
       ],
       NwButton(
           buttonKey: MapWizardPage.doneWalkKey,
-          label: tr('Done walking', '走完了'),
+          label: tr('Finish walking', '结束行走'),
           fullWidth: true,
           size: NwButtonSize.large,
           onPressed: _busy || !live ? null : _doneWalking),
@@ -1001,7 +1000,7 @@ class _MapWizardPageState extends State<MapWizardPage> {
             ? InteractiveViewer(maxScale: 8, child: Image.memory(snap.data!, filterQuality: FilterQuality.none))
             : Center(
                 child: snap.hasError
-                    ? Text(tr('No preview', '没有预览'), style: NwText.bodySmall.copyWith(color: c.textSecondary))
+                    ? Text(tr('No preview', '无预览'), style: NwText.bodySmall.copyWith(color: c.textSecondary))
                     : const CircularProgressIndicator()),
       ),
     );
@@ -1017,8 +1016,8 @@ class _MapWizardPageState extends State<MapWizardPage> {
         const Center(child: CircularProgressIndicator()),
         const SizedBox(height: Nw.s16),
         Text(
-            tr('Usually a few minutes. The robot builds it, then sends it to the site.',
-                '一般要几分钟：机器人建好，再传到站点。'),
+            tr('Usually a few minutes: the robot builds the map, then uploads it.',
+                '通常需要几分钟：机器人建图完成后上传到站点。'),
             key: MapWizardPage.buildStatusKey,
             textAlign: TextAlign.center,
             style: NwText.bodyMedium.copyWith(color: c.textSecondary)),
@@ -1026,16 +1025,16 @@ class _MapWizardPageState extends State<MapWizardPage> {
     }
     if (state == 'failed') {
       return _scroll([
-        _h1(tr("The map couldn't be built", '没建成')),
+        _h1(tr("Mapping failed", '建图失败')),
         NwNotice(key: MapWizardPage.buildStatusKey, tone: NwTone.error, text: '${b['reason'] ?? ''}'),
         const SizedBox(height: Nw.s8),
-        Text(tr('Walk it again. If it fails again, contact your delivery engineer with this message.',
-                '重走一遍。再不成，把这句话发给交付工程师。'),
+        Text(tr('Walk again. If it fails again, send this message to your delivery engineer.',
+                '请重新行走一次。若仍失败，请将此信息发给交付工程师。'),
             style: NwText.bodyMedium.copyWith(color: c.textSecondary)),
       ], [
         NwButton(
             buttonKey: MapWizardPage.rewalkKey,
-            label: tr('Walk again', '重走一遍'),
+            label: tr('Map again', '重新建图'),
             fullWidth: true,
             size: NwButtonSize.large,
             onPressed: _busy ? null : _rewalk),
@@ -1064,9 +1063,9 @@ class _MapWizardPageState extends State<MapWizardPage> {
         Expanded(
             child: Text(
                 switch (verdict) {
-                  'usable' => tr('Map built, usable', '图建好了，能用'),
-                  'problem' => tr('Map built, but with problems', '图建好了，但有问题'),
-                  _ => tr("Map built, quality unknown", '图建好了，好坏说不清'),
+                  'usable' => tr('Map built: usable', '地图已建成：可用'),
+                  'problem' => tr('Map built: has problems', '地图已建成：有问题'),
+                  _ => tr("Map built: quality unknown", '地图已建成：无法评估'),
                 },
                 style: NwText.titleLarge.copyWith(color: c.text, fontWeight: FontWeight.w700))),
       ]),
@@ -1076,33 +1075,33 @@ class _MapWizardPageState extends State<MapWizardPage> {
       NwCard(
         tone: good ? NwTone.neutral : NwTone.warning,
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          if (good && verdict == 'usable') Text(tr('✓ Closed the loop back at the start', '✓ 回到起点、闭合了')),
+          if (good && verdict == 'usable') Text(tr('✓ Loop closed at the start', '✓ 已回到起点闭合')),
           if (path is num) Text(tr('Walked ${path.round()} m', '走了 ${path.round()} 米')),
           if (verdict == 'unknown')
-            Text(tr("There's no build record for this version, so we can't judge it. Look at the map before using it.",
-                '这一版没有建图记录，说不清好坏：看一眼图再决定用不用。')),
-          if (shift is num && verdict == 'usable') Text(tr('Stable (largest correction ${(shift * 100).round()} cm)', '拼接很稳（最大修正 ${(shift * 100).round()} 厘米）')),
+            Text(tr("No build record for this version, so its quality can't be assessed. Check the map before using it.",
+                '此版本没有建图记录，无法评估质量，请查看地图后决定是否使用。')),
+          if (shift is num && verdict == 'usable') Text(tr('Stable (max correction ${(shift * 100).round()} cm)', '拼接稳定（最大修正 ${(shift * 100).round()} 厘米）')),
           for (final r in reasons) Text('• ${qualityReasonText(r)}'),
           if (!good)
             Padding(
               padding: const EdgeInsets.only(top: Nw.s4),
               child: Text(
-                  tr('Walking it again (slowly, finishing at the start) is recommended. You can also use this one for now and rebuild later.',
-                      '建议重走一遍：慢一点，最后回到起点。这一版也能先用，以后再重建。'),
+                  tr('Walk again more slowly and finish at the start. You can also use this version for now.',
+                      '建议放慢速度重新行走，并在起点结束。也可先使用此版本。'),
                   style: NwText.bodySmall.copyWith(color: c.textSecondary)),
             ),
         ]),
       ),
       const SizedBox(height: Nw.s8),
-      Text(tr("Have a look: are walls straight lines, is any room missing? If not, walk again; this version is kept.",
-              '看一眼：墙是不是一条线、有没有少了哪个房间。不对就重走一遍，这一版会留着。'),
+      Text(tr("Check that walls are straight and no room is missing. If not, walk again.",
+              '请检查墙体是否平直、房间是否完整，如有问题请重新行走。'),
           style: NwText.bodySmall.copyWith(color: c.textSecondary)),
     ], [
       Row(children: [
         Expanded(
             child: NwButton(
                 buttonKey: good ? MapWizardPage.rewalkKey : MapWizardPage.useKey,
-                label: good ? tr('Walk again', '重走一遍') : tr('Use it for now', '先用这张'),
+                label: good ? tr('Map again', '重新建图') : tr('Use this version for now', '暂用此版本'),
                 variant: NwButtonVariant.outline,
                 size: NwButtonSize.large,
                 onPressed: _busy ? null : (good ? _rewalk : () => _go('zones')))),
@@ -1111,7 +1110,7 @@ class _MapWizardPageState extends State<MapWizardPage> {
             flex: 2,
             child: NwButton(
                 buttonKey: good ? MapWizardPage.useKey : MapWizardPage.rewalkKey,
-                label: good ? tr('Use this map', '用这张') : tr('Walk again', '重走一遍'),
+                label: good ? tr('Use this version', '使用此版本') : tr('Map again', '重新建图'),
                 size: NwButtonSize.large,
                 onPressed: _busy ? null : (good ? () => _go('zones') : _rewalk))),
       ]),
@@ -1164,10 +1163,10 @@ class _MapWizardPageState extends State<MapWizardPage> {
     final proposal = z?['proposal'];
     final hasProposal = proposal is Map && proposal.isNotEmpty;
     return _scroll([
-      _h1(tr("Where the robot mustn't go", '机器人不能去的地方')),
+      _h1(tr("Areas the robot must not enter", '机器人禁行区域')),
       Text(
-          tr('Pools, stairwells, steep slopes, drops: draw them on the map as no-go zones. Then confirm.',
-              '水池、楼梯口、陡坡、有落差的地方，在图上圈成禁行区，再确认。'),
+          tr('Mark pools, stairwells, steep slopes and drops as no-go zones, then confirm.',
+              '将水池、楼梯口、陡坡、落差处在图上圈为禁行区，然后确认。'),
           style: NwText.bodyMedium.copyWith(color: c.textSecondary)),
       const SizedBox(height: Nw.s16),
       NwCard(
@@ -1178,17 +1177,17 @@ class _MapWizardPageState extends State<MapWizardPage> {
           Expanded(
               child: Text(
                   z == null
-                      ? tr('Loading…', '正在读……')
+                      ? tr('Loading…', '加载中…')
                       : (confirmed
                           ? tr('${list.length} zone(s), confirmed', '${list.length} 块，已确认')
-                          : tr('${list.length} zone(s), not confirmed yet', '${list.length} 块，还没确认')),
+                          : tr('${list.length} zone(s), not confirmed', '${list.length} 块，未确认')),
                   style: NwText.bodyMedium.copyWith(color: c.text))),
         ]),
       ),
       const SizedBox(height: Nw.s16),
       NwButton(
           buttonKey: MapWizardPage.zonesOpenKey,
-          label: tr('Draw on the map', '去图上圈'),
+          label: tr('Draw on the map', '在地图上绘制'),
           icon: Icons.edit_location_alt_rounded,
           variant: NwButtonVariant.outline,
           fullWidth: true,
@@ -1209,7 +1208,7 @@ class _MapWizardPageState extends State<MapWizardPage> {
         else
           NwButton(
               buttonKey: MapWizardPage.zonesConfirmKey,
-              label: tr('All drawn, confirm', '都圈好了，确认'),
+              label: tr('Confirm zones', '确认禁行区'),
               variant: NwButtonVariant.outline,
               fullWidth: true,
               onPressed: _busy ? null : () => _confirmZones(empty: false)),
@@ -1218,8 +1217,8 @@ class _MapWizardPageState extends State<MapWizardPage> {
         const SizedBox(height: Nw.s8),
         NwNotice(
             tone: NwTone.warning,
-            text: tr('Zones from the previous version need checking: open the map to adopt or discard them.',
-                '上一版带过来的禁行区要核一下：去图上采纳或者不要。')),
+            text: tr('Zones from the previous version need review: adopt or discard them on the map.',
+                '上一版本的禁行区需要核对：请在地图上采纳或放弃。')),
       ],
     ], [
       NwButton(
@@ -1246,7 +1245,7 @@ class _MapWizardPageState extends State<MapWizardPage> {
       if (ack['result'] == 'accepted') {
         _sent = true;
       } else if (mounted) {
-        setState(() => _err = tr('The robot did not accept: ${ack['reason'] ?? ack['result']}', '机器人没接：${ack['reason'] ?? ack['result']}'));
+        setState(() => _err = tr('The robot rejected it: ${ack['reason'] ?? ack['result']}', '机器人未接受：${ack['reason'] ?? ack['result']}'));
       }
     } on SiteError catch (e) {
       if (mounted) setState(() => _err = refusalText(e));
@@ -1268,8 +1267,8 @@ class _MapWizardPageState extends State<MapWizardPage> {
           setState(() {
             _sent = false;
             _err = a['state'] == 'timeout'
-                ? tr('$_robotId did not finish switching maps in time. Send it again.', '$_robotId 换图超时了，再下发一次。')
-                : tr('$_robotId could not switch to the new map: ${a['reason']}', '$_robotId 没换成新图：${a['reason']}');
+                ? tr('$_robotId timed out switching maps. Send it again.', '$_robotId 换图超时，请重新下发。')
+                : tr('$_robotId failed to switch maps: ${a['reason']}', '$_robotId 换图失败：${a['reason']}');
           });
         }
       }
@@ -1290,8 +1289,8 @@ class _MapWizardPageState extends State<MapWizardPage> {
         final got = await api.relocalize(_robotId, global: true);
         final ack = (got['ack'] as Map?) ?? const {};
         if (ack['result'] != 'accepted' && mounted) {
-          setState(() => _err = tr("It couldn't find itself: ${ack['reason'] ?? ack['result']}. Set the position on the robot page.",
-              '没找到自己在哪：${ack['reason'] ?? ack['result']}。到机器人页手动设位置。'));
+          setState(() => _err = tr("Auto-localization failed: ${ack['reason'] ?? ack['result']}. Set the position on the robot page.",
+              '自动定位失败：${ack['reason'] ?? ack['result']}。请到机器人页手动设位置。'));
         }
       } on SiteError catch (e) {
         if (mounted) setState(() => _err = refusalText(e));
@@ -1313,7 +1312,7 @@ class _MapWizardPageState extends State<MapWizardPage> {
       final r = await api.markHome(_robotId, replace: replace);
       final ack = (r['ack'] as Map?) ?? const {};
       if (ack['result'] != null && ack['result'] != 'accepted') {
-        if (mounted) setState(() => _err = tr('Not marked: ${ack['reason'] ?? ack['result']}', '没标上：${ack['reason'] ?? ack['result']}'));
+        if (mounted) setState(() => _err = tr('Failed to mark: ${ack['reason'] ?? ack['result']}', '标定失败：${ack['reason'] ?? ack['result']}'));
         return;
       }
     } on SiteError catch (e) {
@@ -1322,14 +1321,14 @@ class _MapWizardPageState extends State<MapWizardPage> {
         final ok = await showDialog<bool>(
           context: context,
           builder: (c) => AlertDialog(
-            content: Text(tr('The origin is already registered on an older map version. Replace it with this one?',
-                '原点在旧版本的图上登记过。换成这一版的？')),
+            content: Text(tr('The origin is registered on an older map version. Replace it with this version?',
+                '原点已登记在旧版本地图上，是否替换为此版本？')),
             actions: [
-              TextButton(onPressed: () => Navigator.pop(c, false), child: Text(tr('Cancel', '算了'))),
+              TextButton(onPressed: () => Navigator.pop(c, false), child: Text(tr('Cancel', '取消'))),
               FilledButton(
                   key: MapWizardPage.replaceHomeKey,
                   onPressed: () => Navigator.pop(c, true),
-                  child: Text(tr('Replace', '换'))),
+                  child: Text(tr('Replace', '替换'))),
             ],
           ),
         );
@@ -1365,10 +1364,10 @@ class _MapWizardPageState extends State<MapWizardPage> {
           Expanded(
               child: Text(
                   loaded
-                      ? tr('The new map is on $_robotId', '新图已经下发给 $_robotId，换好了')
+                      ? tr('The new map is loaded on $_robotId', '新地图已下发并加载到 $_robotId')
                       : (_sent
-                          ? tr('$_robotId is downloading and loading the new map…', '$_robotId 在下载、换新图……')
-                          : tr('Send the new map to $_robotId first', '先把新图下发给 $_robotId')),
+                          ? tr('$_robotId is downloading and loading the new map…', '$_robotId 正在下载并加载新地图…')
+                          : tr('Send the new map to $_robotId first', '请先将新地图下发给 $_robotId')),
                   style: NwText.bodyMedium.copyWith(color: c.text))),
         ]),
       ),
@@ -1384,26 +1383,25 @@ class _MapWizardPageState extends State<MapWizardPage> {
         const SizedBox(height: Nw.s8),
         NwNotice(
             tone: NwTone.warning,
-            text: tr("$_robotId doesn't know where it is on the new map yet. Set its position first.",
-                '$_robotId 还不知道自己在新图上哪儿：先设位置。')),
+            text: tr("$_robotId is not localized on the new map. Set its position first.",
+                '$_robotId 尚未在新地图上定位，请先设位置。')),
         const SizedBox(height: Nw.s8),
         NwButton(
             buttonKey: MapWizardPage.relocKey,
-            label: robotCanFindPose(r) ? tr('Let it find itself', '让它自己找位置') : tr('Set position', '设位置'),
+            label: robotCanFindPose(r) ? tr('Auto-localize', '自动定位') : tr('Set position', '设位置'),
             icon: Icons.my_location_rounded,
             fullWidth: true,
             onPressed: _busy ? null : _reloc),
       ],
       const SizedBox(height: Nw.s16),
       Text(
-          tr('Drive $_robotId to about 1.5 m in front of the dock, facing the dock, and let it stand still. Then tap the button.',
-              '把 $_robotId 开到充电桩前约 1.5 米，正对充电桩，站好不动，再点下面的按钮。'),
+          tr('Drive $_robotId to about 1.5 m in front of the dock, facing it, and keep it still. Then tap the button below.',
+              '将 $_robotId 开到充电桩前约 1.5 米处，正对充电桩，保持静止，然后点下方按钮。'),
           style: NwText.bodyLarge.copyWith(color: c.text)),
       const SizedBox(height: Nw.s8),
       Text(
-          tr('The robot checks where it is first, and refuses (with the reason) if it is unsure. The origin is where it goes '
-                  'to charge or when it is lost; it is also the default standby point.',
-              '机器人会先核对自己在哪：偏差大就不标，会说原因。原点是以后回去充电、找不到位置时回去的地方，同时也是默认的待命点。'),
+          tr('The robot verifies its position first and refuses if it is off. The origin is used for charging and return, and is the default standby point.',
+              '机器人会先核验定位，偏差过大时拒绝。原点用于回充和返航，也是默认待命点。'),
           style: NwText.bodySmall.copyWith(color: c.textSecondary)),
     ], [
       NwButton(
@@ -1442,25 +1440,25 @@ class _MapWizardPageState extends State<MapWizardPage> {
       const SizedBox(height: Nw.s8),
       Text(tr('Ready to patrol', '可以开始巡逻了'),
           textAlign: TextAlign.center, style: NwText.headlineSmall.copyWith(color: c.text, fontWeight: FontWeight.w700)),
-      Text(tr('"$name" is in use on ${f['robot_id']}', '「$name」已经在 ${f['robot_id']} 上用着'),
+      Text(tr('"$name" is active on ${f['robot_id']}', '「$name」已在 ${f['robot_id']} 上启用'),
           textAlign: TextAlign.center, style: NwText.bodyMedium.copyWith(color: c.textSecondary)),
       const SizedBox(height: Nw.s16),
       NwCard(
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Text(tr('✓ Map', '✓ 地图')),
         Text(tr('✓ Origin and standby point', '✓ 原点、待命点')),
-        Text(tr('✓ No-go zones confirmed', '✓ 禁行区确认了')),
+        Text(tr('✓ No-go zones confirmed', '✓ 禁行区已确认')),
       ])),
       const SizedBox(height: Nw.s16),
       _label2(tr('Next', '接下来')),
-      next(MapWizardPage.routesKey, tr('Draw patrol routes', '画巡逻路线'), tr('Tap the points the robot should walk', '在图上点出机器人要走的点'),
+      next(MapWizardPage.routesKey, tr('Draw patrol routes', '画巡逻路线'), tr('Tap patrol points on the map', '在地图上点选巡逻点'),
           SiteRoutesPage(api: api)),
-      next(MapWizardPage.scheduleKey, tr('Schedule patrols', '排日程'), tr('Which route runs when', '几点走哪条路线'),
+      next(MapWizardPage.scheduleKey, tr('Schedule patrols', '排日程'), tr('Which route runs when', '各路线的执行时间'),
           SchedulePage(api: api)),
     ], [
       NwButton(
           buttonKey: MapWizardPage.homeKey,
-          label: tr('Back to home', '回主页'),
+          label: tr('Back to home', '返回首页'),
           fullWidth: true,
           size: NwButtonSize.large,
           onPressed: () => Navigator.pop(context)),
@@ -1499,7 +1497,7 @@ class _MapWizardPageState extends State<MapWizardPage> {
   }
 
   String _title() => switch (_step) {
-        'walk' => tr('Walk it once', '走一圈'),
+        'walk' => tr('Walk the site', '行走建图'),
         'zones' => tr('No-go zones', '禁行区'),
         'origin' => tr('Origin', '原点'),
         _ => tr('Mapping', '建图'),

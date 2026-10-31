@@ -89,7 +89,7 @@ describe("布防时间页", () => {
     const { container: c } = page();
     await waitFor(() => expect(row(c, 0).querySelector(".armblock")).not.toBeNull());
     fireEvent.click(row(c, 0).querySelector(".armblock")!);
-    fireEvent.click(btn(c, "删掉这一段"));
+    fireEvent.click(btn(c, "删除此时段"));
     expect(row(c, 0).querySelectorAll(".armblock").length).toBe(0);
   });
 
@@ -109,7 +109,7 @@ describe("布防时间页", () => {
     await waitFor(() => expect(row(c, 0).querySelector(".armblock")).not.toBeNull());
     fireEvent.click(btn(c, "每个防区单独设"));
     fireEvent.click(btn(c, "北区"));
-    expect(c.textContent).toContain("跟全部防区一样");
+    expect(c.textContent).toContain("与全部防区一致");
     fireEvent.click(btn(c, "单独设这个防区"));
     drag(row(c, 2).querySelector(".armtrack")!, 480, 600);
     fireEvent.click(c.querySelector(".arm-save")!);
@@ -126,7 +126,7 @@ describe("布防时间页", () => {
     fireEvent.input(c.querySelector('.arm-ex input[name="first"]')!, { target: { value: "2026-10-30" } });
     fireEvent.input(c.querySelector('.arm-ex input[name="last"]')!, { target: { value: "2026-11-02" } });
     fireEvent.input(c.querySelector('.arm-ex input[name="note"]')!, { target: { value: "出远门" } });
-    fireEvent.click(btn(c, "加一个例外"));
+    fireEvent.click(btn(c, "添加例外"));
     await waitFor(() => expect(posted.find((p) => p.url === "/api/arming/exceptions")?.body).toEqual(
       { first_day: "2026-10-30", last_day: "2026-11-02", state: "armed", note: "出远门" }));
     await waitFor(() => expect(c.querySelector(".arm-ex")!.textContent).toContain("出远门"));
@@ -158,6 +158,6 @@ describe("布防时间页", () => {
     const { container: c } = page();
     await waitFor(() => expect(c.querySelector(".arm-who")!.textContent).toContain("22:00"));
     expect(c.querySelector(".arm-who")!.textContent).toContain("留守");
-    expect(c.querySelector(".arm-who")!.textContent).toContain("回时间表");
+    expect(c.querySelector(".arm-who")!.textContent).toContain("恢复按时间表");
   });
 });

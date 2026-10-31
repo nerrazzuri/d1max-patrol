@@ -58,7 +58,7 @@ void main() {
     ];
     for (final c in bad) {
       expect(() => decodePairing(c),
-          throwsA(isA<PairingException>().having((e) => e.message, 'message', contains('坏了'))),
+          throwsA(isA<PairingException>().having((e) => e.message, 'message', contains('无效'))),
           reason: c);
     }
   });

@@ -91,7 +91,7 @@ class _SiteModePageState extends State<SiteModePage> {
     } on SiteError catch (e) {
       if (mounted) {
         setState(() => _msg = e.status == 404
-            ? tr('Arming modes are not enabled on this site', '这个站点没开布防模式')
+            ? tr('Arming modes are not enabled on this site', '此站点未启用布防模式')
             : '$e');
       }
     }
@@ -102,9 +102,9 @@ class _SiteModePageState extends State<SiteModePage> {
     try {
       final m = await f();
       if (mounted) setState(() => _mode = m);
-      msg = tr('$what: done', '$what：好了');
+      msg = tr('$what: done', '$what：完成');
     } on SiteError catch (e) {
-      msg = tr('$what failed: $e', '$what没成：$e');
+      msg = tr('$what failed: $e', '$what失败：$e');
     }
     if (mounted) setState(() => _msg = msg);
   }
@@ -122,9 +122,9 @@ class _SiteModePageState extends State<SiteModePage> {
         builder: (c, set) => AlertDialog(
           scrollable: true, // 横屏
           title: Text(tr('Temp disarm: which zones to disarm in addition to Stay?',
-              '临时撤防：在「留守」的基础上，再撤哪几个防区？')),
+              '临时撤防：在「留守」基础上，还要撤防哪些防区？')),
           content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-            if (zones.isEmpty) Text(tr('No zones yet (disarms as in Stay only)', '还没有防区（只按「留守」撤防）')),
+            if (zones.isEmpty) Text(tr('No zones yet (disarms as in Stay only)', '还没有防区（仅按「留守」撤防）')),
             Wrap(spacing: 6, children: [
               for (final z in zones)
                 FilterChip(
@@ -135,18 +135,18 @@ class _SiteModePageState extends State<SiteModePage> {
                 ),
             ]),
             Row(children: [
-              Text(tr('For ', '多久：')),
+              Text(tr('Duration: ', '时长：')),
               DropdownButton<int>(
                 key: const Key('visitor-hours'),
                 value: hours,
                 items: [for (final h in visitorHours) DropdownMenuItem(value: h, child: Text(tr('$h h', '$h 小时')))],
                 onChanged: (v) => set(() => hours = v ?? hours),
               ),
-              Text(tr(', then reverts automatically', '，到点自动回去')),
+              Text(tr(', then reverts automatically', '，到期自动恢复')),
             ]),
           ]),
           actions: [
-            TextButton(onPressed: () => Navigator.pop(c, false), child: Text(tr('Cancel', '算了'))),
+            TextButton(onPressed: () => Navigator.pop(c, false), child: Text(tr('Cancel', '取消'))),
             FilledButton(key: const Key('visitor-go'), onPressed: () => Navigator.pop(c, true), child: Text(tr('Start temp disarm', '开始临时撤防'))),
           ],
         ),
@@ -191,10 +191,8 @@ class _SiteModePageState extends State<SiteModePage> {
                       style: NwText.titleMedium.copyWith(color: c.text)),
                   subtitle: Text(
                       tr(
-                          '${m['source'] == 'schedule' ? 'Switched by the schedule' : m['set_by'] == 'site:visitor_expired' ? 'Reverted automatically when visitor mode ended' : 'Set by ${m['set_by']}'}'
-                              '${(m['visitor_zones'] as List? ?? const []).isNotEmpty ? ' · visitor mode disarmed ${(m['visitor_zones'] as List).join(', ')}' : ''}',
-                          '${m['source'] == 'schedule' ? '按时间表切的' : m['set_by'] == 'site:visitor_expired' ? '临时撤防到点自动回来的' : '${m['set_by']} 切的'}'
-                              '${(m['visitor_zones'] as List? ?? const []).isNotEmpty ? ' · 临时撤防撤了 ${(m['visitor_zones'] as List).join('、')}' : ''}'),
+                          '${m['source'] == 'schedule' ? 'Switched by the schedule' : m['set_by'] == 'site:visitor_expired' ? 'Restored automatically when temporary disarm ended' : 'Set by ${m['set_by']}'}${(m['visitor_zones'] as List? ?? const []).isNotEmpty ? ' · temporarily disarmed: ${(m['visitor_zones'] as List).join(', ')}' : ''}',
+                          '${m['source'] == 'schedule' ? '按时间表切换' : m['set_by'] == 'site:visitor_expired' ? '临时撤防到期自动恢复' : '由 ${m['set_by']} 切换'}${(m['visitor_zones'] as List? ?? const []).isNotEmpty ? ' · 临时撤防：${(m['visitor_zones'] as List).join('、')}' : ''}'),
                       style: NwText.bodyMedium.copyWith(color: c.textSecondary)),
                 )),
             const SizedBox(height: Nw.s8),
@@ -202,14 +200,14 @@ class _SiteModePageState extends State<SiteModePage> {
               if (canArm)
                 NwButton(
                     buttonKey: SiteModePage.armKey,
-                    onPressed: m['mode'] == 'armed' ? null : () => _run(() => widget.api.setMode('armed'), tr('Switch to Armed', '切到布防')),
+                    onPressed: m['mode'] == 'armed' ? null : () => _run(() => widget.api.setMode('armed'), tr('Switch to Armed', '切换为布防')),
                     icon: Icons.shield_rounded,
                     label: tr('Armed', '布防')),
               if (canSet) ...[
                 NwButton(
                     buttonKey: SiteModePage.homeKey,
                     variant: NwButtonVariant.outline,
-                    onPressed: m['mode'] == 'home' ? null : () => _run(() => widget.api.setMode('home'), tr('Switch to Stay', '切到留守')),
+                    onPressed: m['mode'] == 'home' ? null : () => _run(() => widget.api.setMode('home'), tr('Switch to Stay', '切换为留守')),
                     icon: Icons.home_rounded,
                     label: tr('Stay', '留守')),
                 NwButton(
@@ -220,11 +218,11 @@ class _SiteModePageState extends State<SiteModePage> {
                     label: tr('Temp disarm…', '临时撤防…')),
               ],
               if (!canSet)
-                Text(tr('Disarming (Stay, Temp disarm) needs an administrator or manager', '撤防（留守、临时撤防）要管理员或经理切'),
+                Text(tr('Disarming (Stay, Temp disarm) needs an administrator or manager', '撤防（留守、临时撤防）需管理员或经理操作'),
                     style: NwText.bodySmall.copyWith(color: c.textSecondary)),
             ]),
             const SizedBox(height: Nw.s16),
-            Text(tr('Zones (zones that are not configured are always armed)', '防区（没配过的防区一律布防）'),
+            Text(tr('Zones (zones that are not configured are always armed)', '防区（未配置的防区一律布防）'),
                 style: NwText.labelMedium.copyWith(color: c.textSecondary)),
             const SizedBox(height: Nw.s8),
             if (_zones.isEmpty)
@@ -398,7 +396,7 @@ class _SiteModeBarState extends State<SiteModeBar> {
       final m = await f();
       if (mounted && seq > _applied) setState(() => _got(m, seq));
     } on SiteError catch (e) {
-      msg = tr('$what failed: $e', '$what没成：$e');
+      msg = tr('$what failed: $e', '$what失败：$e');
     }
     if (mounted) {
       setState(() {
@@ -413,18 +411,18 @@ class _SiteModeBarState extends State<SiteModeBar> {
         context: context,
         builder: (c) => AlertDialog(
               content: Text(tr(
-                  'Switch to Home? Zones marked "disarmed in Home mode" stop dispatching robots and ringing.',
-                  '切到留守？标了「留守时撤防」的防区来了入侵就不派机器人、不响铃了。')),
+                  'Switch to Stay? Zones marked "Disarmed in Stay mode" stop dispatching robots and ringing.',
+                  '切换到留守？标为「留守时撤防」的防区发生入侵时，不派机器人、不响铃。')),
               actions: [
-                TextButton(onPressed: () => Navigator.pop(c, false), child: Text(tr('Cancel', '算了'))),
+                TextButton(onPressed: () => Navigator.pop(c, false), child: Text(tr('Cancel', '取消'))),
                 FilledButton(
                     key: SiteModeBar.homeGoKey,
                     onPressed: () => Navigator.pop(c, true),
-                    child: Text(tr('Switch to Stay', '切到留守'))),
+                    child: Text(tr('Switch to Stay', '切换为留守'))),
               ],
             ));
     if (ok != true || !mounted) return;
-    await _run(() => widget.api.setMode('home'), tr('Switch to Stay', '切到留守'));
+    await _run(() => widget.api.setMode('home'), tr('Switch to Stay', '切换为留守'));
   }
 
   Future<void> _visitor() async {
@@ -451,7 +449,7 @@ class _SiteModeBarState extends State<SiteModeBar> {
             selected: now == 'armed',
             onTap: !canArm || _busy || now == 'armed'
                 ? null
-                : () => _run(() => widget.api.setMode('armed'), tr('Switch to Armed', '切到布防'))),
+                : () => _run(() => widget.api.setMode('armed'), tr('Switch to Armed', '切换为布防'))),
         NwChoice(
             key: SiteModeBar.homeKey,
             icon: Icons.home_rounded,
@@ -470,11 +468,11 @@ class _SiteModeBarState extends State<SiteModeBar> {
         Text(tr('Now: ${modeText(m)}', '现在：${modeText(m)}'),
             key: SiteModeBar.nowKey, style: NwText.bodySmall.copyWith(color: c.text))
       else if (_loadError.isNotEmpty)
-        Text(tr("Can't load the arming mode: $_loadError", '布防模式读不到：$_loadError'),
+        Text(tr("Can't load the arming mode: $_loadError", '无法读取布防模式：$_loadError'),
             key: SiteModeBar.nowKey, style: small)
       else
-        Text(tr('Arming mode not loaded yet', '布防模式还没读到'), key: SiteModeBar.nowKey, style: small),
-      if (!canSet) Text(tr('Disarming (Stay, Temp disarm) needs an administrator or manager', '撤防（留守、临时撤防）要管理员或经理切'), style: small),
+        Text(tr('Arming mode not loaded yet', '布防模式未加载'), key: SiteModeBar.nowKey, style: small),
+      if (!canSet) Text(tr('Disarming (Stay, Temp disarm) needs an administrator or manager', '撤防（留守、临时撤防）需管理员或经理操作'), style: small),
       if (_msg.isNotEmpty)
         Padding(
             padding: const EdgeInsets.only(top: Nw.s4),

@@ -45,8 +45,8 @@ String weatherText(Map<String, dynamic> w) {
   if (w['condition'] == 'unknown') {
     final a = w['auto'];
     parts.add(a is Map && a['enabled'] == true
-        ? tr('Weather unavailable, treated as normal', '天气查不到，按正常管')
-        : tr('No site coordinates set, manual only', '没配站点坐标，只能手动切'));
+        ? tr('Weather unavailable, treated as normal', '无法获取天气，按正常天气处理')
+        : tr('No site coordinates set, manual only', '未设置站点坐标，仅可手动切换'));
   }
   return parts.join(' · ');
 }
@@ -113,7 +113,7 @@ class _SiteWeatherPageState extends State<SiteWeatherPage> {
     } on SiteError catch (e) {
       if (mounted) {
         setState(() => _msg = e.status == 404
-            ? tr('Weather is not enabled on this site', '这个站点没开天气')
+            ? tr('Weather is not enabled on this site', '此站点未启用天气')
             : '$e');
       }
     }
@@ -125,11 +125,11 @@ class _SiteWeatherPageState extends State<SiteWeatherPage> {
       final w = await widget.api.setWeather(c, hours: c == 'auto' ? null : _hours);
       if (mounted) setState(() => _w = w);
       msg = c == 'auto'
-          ? tr('Back to automatic (online weather)', '回到自动（按联网查的）')
+          ? tr('Back to automatic (online weather)', '恢复自动（联网获取）')
           : tr('Set to ${_names[c]}, back to automatic in $_hours h',
-              '切成${_names[c]}，$_hours 小时后回到自动');
+              '已切换为${_names[c]}，$_hours 小时后恢复自动');
     } on SiteError catch (e) {
-      msg = tr('Not changed: $e', '没切成：$e');
+      msg = tr('Not changed: $e', '切换失败：$e');
     }
     if (mounted) setState(() => _msg = msg);
   }
@@ -162,15 +162,14 @@ class _SiteWeatherPageState extends State<SiteWeatherPage> {
                           ? tr(
                               'Online: ${a['condition'] == null ? 'no result yet' : (_names[a['condition']] ?? a['condition'])}'
                                   '${'${a['error'] ?? ''}'.isEmpty ? '' : ' (last lookup failed: ${a['error']})'}',
-                              '联网查的：${a['condition'] == null ? '还没查到' : (_names[a['condition']] ?? a['condition'])}'
-                                  '${'${a['error'] ?? ''}'.isEmpty ? '' : '（上次查不到：${a['error']}）'}')
-                          : tr('No site coordinates set, no online lookup', '没配站点坐标，不联网查'),
+                              '联网获取：${a['condition'] == null ? '尚无结果' : (_names[a['condition']] ?? a['condition'])}${'${a['error'] ?? ''}'.isEmpty ? '' : '（上次获取失败：${a['error']}）'}')
+                          : tr('No site coordinates set, no online lookup', '未设置站点坐标，不联网获取'),
                       style: NwText.bodySmall.copyWith(color: nw.textSecondary)),
                 ])),
               ])),
           nwGap24,
         ],
-        NwSectionLabel(tr('Set manually', '手动切')),
+        NwSectionLabel(tr('Set manually', '手动切换')),
         nwGap8,
         NwCard(
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
@@ -178,11 +177,11 @@ class _SiteWeatherPageState extends State<SiteWeatherPage> {
               tr(
                   'Thunderstorm: scheduled patrols pause and robots return to standby; an intrusion '
                       'still sends a robot. Rain and thunderstorm: all robots limited to 0.3 m/s.',
-                  '雷暴：排程巡检暂停、机器人回待命点，有入侵照样派机器人。下雨、雷暴：全机器人限速 0.3 m/s。'),
+                  '雷暴：暂停日程巡逻，机器人返回待命点，入侵时仍会派机器人。雨天、雷暴：所有机器人限速 0.3 m/s。'),
               style: NwText.bodySmall.copyWith(color: nw.textSecondary)),
           nwGap16,
           Wrap(spacing: Nw.s8, runSpacing: Nw.s4, crossAxisAlignment: WrapCrossAlignment.center, children: [
-            Text(tr('Manual for:', '手动切多久：'), style: NwText.bodyMedium.copyWith(color: nw.text)),
+            Text(tr('Manual for:', '手动切换时长：'), style: NwText.bodyMedium.copyWith(color: nw.text)),
             for (final h in weatherHours)
               ChoiceChip(
                   key: SiteWeatherPage.hoursKey(h),

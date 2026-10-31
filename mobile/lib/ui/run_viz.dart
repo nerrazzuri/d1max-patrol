@@ -160,7 +160,7 @@ List<NwLegendItem> runVizLegend(BuildContext context,
               width: 10,
               height: 10,
               decoration: BoxDecoration(shape: BoxShape.circle, color: c.warning)),
-          label: tr('Localization problem', '定位出过问题')),
+          label: tr('Localization problem', '定位异常')),
   ];
 }
 

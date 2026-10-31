@@ -63,7 +63,7 @@ class _SiteProcLogsPageState extends State<SiteProcLogsPage> {
             return NwListView(children: [
               NwNotice(
                   tone: NwTone.error,
-                  text: tr("Can't load the log list: ${snap.error}", '取不到日志列表：${snap.error}')),
+                  text: tr("Can't load the log list: ${snap.error}", '无法加载日志列表：${snap.error}')),
             ]);
           }
           if (!snap.hasData) return const Center(child: CircularProgressIndicator());
@@ -72,7 +72,7 @@ class _SiteProcLogsPageState extends State<SiteProcLogsPage> {
             return NwEmpty(
                 icon: Icons.article_outlined,
                 text: tr('No logs yet: this robot has not recorded a bag or rebuilt a map',
-                    '还没有日志：这台机器人还没录过包、没重建过图'));
+                    '暂无日志：此机器人尚未录包或重建地图'));
           }
           return NwListView(children: [
             NwListCard(children: [
@@ -149,7 +149,7 @@ class _SiteProcLogPageState extends State<SiteProcLogPage> {
           final nw = Nw.of(context);
           if (snap.hasError) {
             return NwListView(children: [
-              NwNotice(tone: NwTone.error, text: tr("Can't load: ${snap.error}", '取不到：${snap.error}')),
+              NwNotice(tone: NwTone.error, text: tr("Can't load: ${snap.error}", '无法加载：${snap.error}')),
             ]);
           }
           if (!snap.hasData) return const Center(child: CircularProgressIndicator());
@@ -165,7 +165,7 @@ class _SiteProcLogPageState extends State<SiteProcLogPage> {
                   d['truncated'] == true
                       ? tr(
                           '${logSizeText(size)} in total, showing only the last ${logSizeText(got)} (newest at the bottom)',
-                          '共 ${logSizeText(size)}，只显示最后 ${logSizeText(got)}（最新的在最底下）')
+                          '共 ${logSizeText(size)}，仅显示最后 ${logSizeText(got)}（最新在底部）')
                       : tr('${logSizeText(size)} in total', '共 ${logSizeText(size)}'),
                   style: NwText.bodySmall.copyWith(color: nw.textSecondary)),
               nwGap8,

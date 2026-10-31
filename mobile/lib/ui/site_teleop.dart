@@ -36,30 +36,30 @@ String? teleopZoneText(Map<String, dynamic>? zg) {
   final name = '${zg['label'] ?? ''}'.isNotEmpty ? '${zg['label']}' : '${zg['zone'] ?? ''}';
   final v = (zg['max_vx'] as num?)?.toStringAsFixed(1) ?? '0.2';
   return switch ('${zg['state']}') {
-    'limited' => tr('Close to hard no-go zone "$name": slowing down', '离硬禁区「$name」近了：减速'),
-    'blocked' => tr('Next to hard no-go zone "$name": the robot will not drive further in. Drive or turn away',
-        '再往前会进硬禁区「$name」：不许往那边开，往外开、转开都行'),
+    'limited' => tr('Close to hard no-go zone "$name": slowing down', '接近硬禁区「$name」：减速'),
+    'blocked' => tr('Hard no-go zone "$name" ahead: forward movement blocked. Back up or turn away',
+        '前方为硬禁区「$name」：禁止继续前进，可后退或转向'),
     'inside' => tr('At or inside hard no-go zone "$name": only moves that lead out are allowed',
-        '机器人在硬禁区「$name」边上或里面：只许往外开'),
+        '机器人位于硬禁区「$name」边缘或内部：只能向外移动'),
     'untrusted' => tr(
         'Position not trusted: hard no-go zones (water, drops) cannot be checked. Speed limited to $v m/s, watch the video',
-        '位置不可信：硬禁区（水体、落差）守不了，限速 $v m/s，看着画面开'),
+        '位置不可信：无法保证避开硬禁区（水体、落差），限速 $v m/s，请看着画面操作'),
     'unsupported' => tr(
         'This robot\'s software does not keep remote control out of hard no-go zones: watch the video and update the robot',
-        '这台机器人的代理太老，遥控时不守硬禁区：看着画面开，升级代理'),
+        '此机器人软件版本过旧，遥控时不避开硬禁区：请看着画面操作并升级'),
     _ => null,
   };
 }
 
 /// 结束原因给人看的话。
 String teleopEndText(String reason) => switch (reason) {
-      'released' => tr('You released control', '你放开了遥控'),
-      'disconnected' => tr('Remote control connection lost. The robot has stopped', '遥控连接断了，机器人已经停下'),
-      'taken_over' => tr('An admin took control', '管理员接管了遥控'),
-      'halt' => tr('Someone pressed stop', '有人按了停车'),
-      'robot_offline' => tr('The robot went offline', '机器人掉线了'),
-      'lease_lost' => tr('The control lease could not be renewed. Remote control ended', '续不上租约，遥控结束'),
-      'logged_out' => tr('Your session has expired', '登录过期了'),
+      'released' => tr('You released control', '你已退出遥控'),
+      'disconnected' => tr('Remote control connection lost. The robot has stopped', '遥控连接已断开，机器人已停止'),
+      'taken_over' => tr('An admin took control', '管理员已接管遥控'),
+      'halt' => tr('Someone pressed stop', '有人按下了停车'),
+      'robot_offline' => tr('The robot went offline', '机器人已离线'),
+      'lease_lost' => tr('The control lease could not be renewed. Remote control ended', '租约续期失败，遥控已结束'),
+      'logged_out' => tr('Your session has expired', '登录已过期'),
       _ => tr('Remote control ended ($reason)', '遥控结束（$reason）'),
     };
 
@@ -90,7 +90,7 @@ class _SiteTeleopPageState extends State<SiteTeleopPage> with WidgetsBindingObse
   TeleopLink? _link;
   StreamSubscription<Map<String, dynamic>>? _sub;
   Timer? _tick;
-  String _status = tr('Requesting control…', '正在拿遥控……');
+  String _status = tr('Requesting control…', '正在请求控制权…');
   bool _granted = false;
   bool _video = true;
   bool _ended = false;
@@ -128,8 +128,8 @@ class _SiteTeleopPageState extends State<SiteTeleopPage> with WidgetsBindingObse
       case AppLifecycleState.detached:
         _clearKeys();
         _endLocally(tr(
-            'The app went to the background. Remote control ended (robot stopped). Reopen this page to continue',
-            '切到后台了，遥控已结束（机器人已停）。要接着开，重新进这一页'));
+            'App went to the background. Remote control ended and the robot stopped',
+            'App 已切到后台，遥控结束，机器人已停止'));
     }
   }
 
@@ -174,14 +174,14 @@ class _SiteTeleopPageState extends State<SiteTeleopPage> with WidgetsBindingObse
     } on SiteError catch (e) {
       if (e.status == 409 && e.body['reason'] == 'no_video' && _noVideo < _videoRetries && mounted && !_ended) {
         _noVideo++;
-        setState(() => _status = tr('Waiting for the video to start…', '等画面起来……'));
+        setState(() => _status = tr('Waiting for the video to start…', '正在等待画面…'));
         await Future<void>.delayed(const Duration(seconds: 2));
         if (mounted && !_ended) await _open();
         return;
       }
       if (mounted) {
         setState(() {
-          _status = tr("Can't start remote control: ${e.message}", '遥控开不了：${e.message}');
+          _status = tr("Can't start remote control: ${e.message}", '无法开始遥控：${e.message}');
           _ended = true;
         });
       }
@@ -201,7 +201,7 @@ class _SiteTeleopPageState extends State<SiteTeleopPage> with WidgetsBindingObse
           _maxWz = (m['max_wz'] as num?)?.toDouble() ?? 0;
           _maxVy = (m['max_vy'] as num?)?.toDouble() ?? 0;
           _status = tr('You are in control (speed limit ${_maxVx.toStringAsFixed(2)} m/s)',
-              '你在遥控（限速 ${_maxVx.toStringAsFixed(2)} m/s）');
+              '遥控中（限速 ${_maxVx.toStringAsFixed(2)} m/s）');
           _zoneNote = teleopZoneText(m['zone_guard'] as Map<String, dynamic>?);
         });
         _tick ??= Timer.periodic(const Duration(milliseconds: 100), (_) => _sendNow());
@@ -310,7 +310,7 @@ class _SiteTeleopPageState extends State<SiteTeleopPage> with WidgetsBindingObse
       setState(() {
         _ended = true;
         _granted = false;
-        _status = tr('You pressed stop', '你按了停车');
+        _status = tr('You pressed stop', '你已按下停车');
       });
     }
     try {
@@ -320,7 +320,7 @@ class _SiteTeleopPageState extends State<SiteTeleopPage> with WidgetsBindingObse
         ScaffoldMessenger.of(context)
             .showSnackBar(SnackBar(
                 content: Text(tr('Stop not confirmed: $e. Press the E-stop on the robot',
-                    '停车没确认：$e —— 按机身急停！'))));
+                    '停车未确认：$e —— 请按机身急停！'))));
       }
     }
   }
@@ -418,7 +418,7 @@ class _SiteTeleopPageState extends State<SiteTeleopPage> with WidgetsBindingObse
                             child: Text(
                               !_video && !_ended
                                   ? tr('No video: do not drive (the joysticks are disabled until video returns)',
-                                      '没有画面：不许动（画面回来之前摇杆不起作用）')
+                                      '无画面：禁止操作（画面恢复前摇杆不可用）')
                                   : _status,
                               key: SiteTeleopPage.statusKey,
                               maxLines: 2,
@@ -448,9 +448,9 @@ class _SiteTeleopPageState extends State<SiteTeleopPage> with WidgetsBindingObse
                               child: Text(
                                   lateral
                                       ? tr('Keyboard: W/S forward/back, Q/E sideways, A/D turn, release to stop; Esc to stop',
-                                          '键盘：W/S 前后，Q/E 横移，A/D 转向，松开就停；Esc 停车')
+                                          '键盘：W/S 前后，Q/E 横移，A/D 转向，松开即停；Esc 停车')
                                       : tr('Keyboard: W/S forward/back, A/D turn, release to stop; Esc to stop',
-                                          '键盘：W/S 前后，A/D 转向，松开就停；Esc 停车'),
+                                          '键盘：W/S 前后，A/D 转向，松开即停；Esc 停车'),
                                   style: NwText.bodySmall.copyWith(
                                       color: Colors.white,
                                       shadows: const [Shadow(blurRadius: 3)])),

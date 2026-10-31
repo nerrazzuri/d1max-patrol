@@ -30,8 +30,8 @@ void main() {
     await _open(t, _api());
     expect(find.textContaining('gate-cam · 防区 front-yard'), findsOneWidget);
     expect(find.textContaining('最近一次报入侵'), findsOneWidget);
-    expect(find.textContaining('这一路的入侵收不到'), findsOneWidget);
-    expect(find.textContaining('画面动了也算入侵'), findsOneWidget);
+    expect(find.textContaining('收不到此摄像头的入侵告警'), findsOneWidget);
+    expect(find.textContaining('画面移动也视为入侵'), findsOneWidget);
     await t.pumpWidget(Container());
   });
 
@@ -51,7 +51,7 @@ void main() {
 
   testWidgets('没开摄像头、还没有摄像头：说清楚', (t) async {
     await _open(t, FakeApi('owner')..camerasError = const SiteError(404, 'x'));
-    expect(find.text('这个站点没开摄像头'), findsOneWidget);
+    expect(find.text('此站点未启用摄像头'), findsOneWidget);
     await t.pumpWidget(Container());
     await _open(t, FakeApi('owner'));
     expect(find.textContaining('camera-add'), findsOneWidget);
