@@ -93,7 +93,9 @@ _CHUNK_JOIN = b"\0"
 #: (W00c5d:启动参数随版本走,单元只指着这一版的启动脚本),装机脚本也从包里取单元。
 #: ``packages`` 是 W00b 加的:robot-agent 三个包要在槽 venv 里装。各包的 ``tests/`` 不进
 #: (``_PACK_SKIP_DIRS``)。
-_PACK_INCLUDE = ("pyproject.toml", "src", "config", "deploy", "packages")
+_PACK_INCLUDE = ("pyproject.toml", "src", "config", "deploy", "packages", "motion")
+#: 没有也行的(W55:旁路进程源码;源码树里没有就不带)。
+_PACK_OPTIONAL = frozenset({"motion"})
 
 #: 白名单收下的目录里头还要再筛一遍的噪声。**它们是构建/缓存产物,不是源码**,
 #: 而且同一份源码带不带它们会算出两个不同的 ``content_sha256``。
@@ -115,8 +117,10 @@ _BUILD_OUTPUTS = frozenset({"build", "dist"})
 def _build_output(rel: str) -> bool:
     """包里的相对路径是不是某个项目根(顶层、``packages/<包>/``)下的 ``build/``、``dist/``。"""
     parts = rel.split("/")
-    return parts[0] in _BUILD_OUTPUTS or (
-        len(parts) > 2 and parts[0] == "packages" and parts[2] in _BUILD_OUTPUTS)
+    # W55:旁路进程在机器人上编,编出来的东西在 motion/build/ 下(装好之后才长出来,不进指纹)
+    return (parts[0] in _BUILD_OUTPUTS
+            or (len(parts) > 2 and parts[0] == "packages" and parts[2] in _BUILD_OUTPUTS)
+            or (len(parts) > 1 and parts[0] == "motion" and parts[1] in _BUILD_OUTPUTS))
 
 #: 从 ``pyproject.toml`` 的 ``[project]`` 段里抠 ``version``。
 _PROJECT_VERSION_RE = re.compile(r"^\s*version\s*=\s*[\"']([^\"']+)[\"']",
@@ -335,9 +339,12 @@ def _git_short(src: Path) -> str:
 def _pack_ignore(where: str, names: list[str]) -> set[str]:
     """``shutil.copytree`` 的筛子。筛掉的理由见 ``_PACK_SKIP_DIRS``、``_BUILD_OUTPUTS``。"""
     project_root = (Path(where) / "pyproject.toml").is_file()
+    # W55:旁路进程只带源码(开发机上编出来的程序、build/ 不带;在机器人上编)
+    motion = Path(where).name == "motion" and (Path(where).parent / "pyproject.toml").is_file()
     return {n for n in names
             if n in _PACK_SKIP_DIRS or n.endswith(_PACK_SKIP_SUFFIXES)
-            or (project_root and n in _BUILD_OUTPUTS)}
+            or (project_root and n in _BUILD_OUTPUTS)
+            or (motion and not (n == "Makefile" or n.endswith((".cpp", ".hpp"))))}
 
 
 def _check_free(dest: Path, *, force: bool) -> None:
@@ -374,6 +381,8 @@ def _copy_tree_into(src: Path, staging: Path, wheels: Path | None = None) -> str
             shutil.copytree(source, staging / entry, ignore=_pack_ignore)
         elif source.is_file():
             shutil.copy2(source, staging / entry)
+        elif entry in _PACK_OPTIONAL:
+            continue
         else:
             raise ReleaseError(f"源目录里少了 {entry},这棵树打出来的包"
                                f"在机器人上起不来: {source}")

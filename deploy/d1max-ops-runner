@@ -1,0 +1,483 @@
+#!/usr/bin/env python3
+"""d1max-ops-runner —— 特权执行器(W55 远程运维)。
+
+代理(``robot`` 用户)、站点(``d1max-site`` 用户,单元带 NoNewPrivileges)要 root 才能做的几件事交给它:
+重启我们的服务、重启机器人、对时、换证书、更新服务单元、清日志;站点:重启站点、恢复备份、升级站点、
+装 VPN 配置、读 VPN 状态。
+
+由 systemd 路径单元 ``d1max-ops.path`` 看见 ``<spool>/req/*.json`` 就拉起 ``d1max-ops.service``(root),
+逐个处理、结果写进 ``<spool>/done/<id>.json``。
+
+**安全要点**(这个文件以 root 跑,每一条都别删):
+
+- 装机脚本把它拷到 ``/usr/local/lib/d1max/``(root 属主)。**不从机器人可写的版本目录里跑任何代码**;
+  验签用的三个小模块(``d1max_contract/{ed25519,digest,relsign}.py``)也一起拷过去。
+- 只认白名单动作,参数逐个校验;服务名只在白名单里挑;路径全是固定的,不从请求里拼。
+- 请求文件按 ``O_NOFOLLOW`` 打开、属主必须是请求方、必须是普通文件、不超过 64 KB。
+- 从机器人可写目录里拿来要装进系统的东西(证书、服务单元、站点包)先读进内存 / 拷进 root 目录,再核,再装
+  (核完再读一遍会被中途换掉)。服务单元、站点包要过发行签名。
+
+配置 ``/etc/d1max-ops.json``(装机脚本写):``{"profile": "robot"|"site", "requester": <用户>,
+"spool": <目录>, ...}``。
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import io
+import json
+import os
+import pwd
+import re
+import shutil
+import stat
+import subprocess
+import sys
+import tarfile
+import tempfile
+import time
+from pathlib import Path
+from typing import Any, Callable
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+#: 我们自己的服务(机器人上)。重启、读日志、装单元只在这里挑。
+ROBOT_UNITS = ("d1max-localizer", "d1max-obstacles", "d1max-persons", "d1max-lidar-merge",
+               "d1max-nav2", "d1max-sidecar", "d1max-zenohd", "d1max-bind", "d1max-agent")
+SITE_UNITS = ("d1max-site", "d1max-mosquitto")
+ID_RE = re.compile(r"^[0-9a-f]{8,32}$")
+NAME_RE = re.compile(r"^\d{4}-\d{2}-\d{2}-[0-9a-f]{6,12}$")      # 版本目录名(同 engine/release)
+PKG_RE = re.compile(r"^[A-Za-z0-9._-]{1,80}\.tar\.gz$")
+MAX_REQ = 64 * 1024
+MAX_PEM = 64 * 1024
+
+# 打包时收哪些(同 d1max_agent.engine.release._packed;测试核两边一致)。
+SKIP_DIRS = frozenset({"__pycache__", ".git", ".venv", "venv", ".pytest_cache", ".ruff_cache",
+                       ".mypy_cache", "tests"})
+SKIP_SUFFIXES = (".pyc", ".pyo", ".tmp", ".egg-info")
+BUILD_OUTPUTS = frozenset({"build", "dist"})
+
+
+def packed(rel: str) -> bool:
+    parts = rel.split("/")
+    built = (parts[0] in BUILD_OUTPUTS
+             or (len(parts) > 2 and parts[0] == "packages" and parts[2] in BUILD_OUTPUTS)
+             or (len(parts) > 1 and parts[0] == "motion" and parts[1] in BUILD_OUTPUTS))
+    return not built and not any(p in SKIP_DIRS or p.endswith(SKIP_SUFFIXES) for p in parts)
+
+
+class OpError(Exception):
+    pass
+
+
+Runner = Callable[[list[str], float], tuple[int, str]]
+
+
+def run_cmd(argv: list[str], timeout: float = 120.0) -> tuple[int, str]:
+    try:
+        got = subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return 127, str(exc)
+    return got.returncode, (got.stdout + got.stderr)[-4000:]
+
+
+def read_nofollow(path: Path, *, limit: int, owner: int | None = None) -> bytes:
+    """按 O_NOFOLLOW 打开普通文件读进内存;属主不对、太大、不是普通文件都拒。"""
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    except OSError as exc:
+        raise OpError(f"打不开 {path.name}:{exc}") from exc
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode):
+            raise OpError(f"{path.name} 不是普通文件")
+        if owner is not None and st.st_uid != owner:
+            raise OpError(f"{path.name} 的属主不对")
+        if st.st_size > limit:
+            raise OpError(f"{path.name} 过大")
+        with os.fdopen(fd, "rb", closefd=False) as f:
+            return f.read(limit + 1)
+    finally:
+        os.close(fd)
+
+
+def write_atomic(path: Path, data: bytes, *, mode: int, uid: int = 0, gid: int = 0) -> None:
+    tmp = path.with_name(f".{path.name}.d1max-new")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, mode)
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
+            f.flush()
+            os.fsync(f.fileno())
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
+    if os.geteuid() == 0:                       # 测试里不是 root:不改属主
+        os.chown(tmp, uid, gid)
+    os.chmod(tmp, mode)
+    os.replace(tmp, path)
+
+
+def tree_ok(root: Path, manifest: dict[str, Any], pubkey: Path,
+            override: dict[str, bytes] | None = None) -> None:
+    """``root`` 这个包:签名对、内容指纹对。``override`` 里的文件按给的内容算(已经读进内存、要装的那几个)。"""
+    from d1max_contract import relsign
+    try:
+        relsign.verify(manifest, pubkey)
+    except relsign.SignError as exc:
+        raise OpError(f"发行签名不通过:{exc}") from exc
+    override = override or {}
+    digest = hashlib.sha256()
+    files = sorted((p.relative_to(root).as_posix(), p) for p in root.rglob("*")
+                   if p.is_file() and not p.is_symlink())
+    for rel, p in files:
+        if rel == "release.json" or not packed(rel):
+            continue
+        data = override[rel] if rel in override else p.read_bytes()
+        digest.update(rel.encode())
+        digest.update(b"\0")
+        digest.update(hashlib.sha256(data).hexdigest().encode())
+        digest.update(b"\0")
+    if digest.hexdigest() != manifest.get("content_sha256"):
+        raise OpError("包的内容与签名的清单不匹配")
+
+
+class Ops:
+    def __init__(self, cfg: dict[str, Any], *, run: Runner = run_cmd,
+                 etc: Path = Path("/etc"), systemd_dir: Path = Path("/etc/systemd/system")) -> None:
+        self.cfg = cfg
+        self.run = run
+        self.etc = etc
+        self.systemd_dir = systemd_dir
+        self.profile = cfg["profile"]
+
+    # ---------------------------------------------------------------- 公用
+    def _sys(self, *argv: str, timeout: float = 120.0) -> str:
+        rc, out = self.run(list(argv), timeout)
+        if rc != 0:
+            raise OpError(f"{' '.join(argv[:3])} 失败({rc}):{out.strip()[-300:]}")
+        return out
+
+    def _units(self) -> tuple[str, ...]:
+        return ROBOT_UNITS if self.profile == "robot" else SITE_UNITS
+
+    def _unit_arg(self, args: dict[str, Any]) -> str:
+        u = args.get("unit")
+        if u not in self._units():
+            raise OpError(f"不在白名单里的服务:{u!r}")
+        return str(u)
+
+    def do(self, action: str, args: dict[str, Any]) -> dict[str, Any]:
+        fn = ROBOT_ACTIONS.get(action) if self.profile == "robot" else SITE_ACTIONS.get(action)
+        if fn is None:
+            raise OpError(f"不认识的动作:{action!r}")
+        return fn(self, args) or {}
+
+    # ---------------------------------------------------------------- 机器人
+    def restart(self, args: dict[str, Any]) -> dict[str, Any]:
+        unit = self._unit_arg(args)
+        if unit in ("d1max-agent", "d1max-site"):
+            # 请求方自己:不等它起来(它一退,结果就没人读了)
+            self._sys("systemctl", "--no-block", "restart", f"{unit}.service")
+        else:
+            self._sys("systemctl", "restart", f"{unit}.service", timeout=180)
+        return {"unit": unit}
+
+    def restart_all(self, args: dict[str, Any]) -> dict[str, Any]:
+        """换版本以后:我们的服务里已启用或正在跑的,全重启;代理最后、不等。"""
+        done = []
+        for u in ROBOT_UNITS:
+            rc_a, _ = self.run(["systemctl", "is-active", "--quiet", f"{u}.service"], 30)
+            rc_e, _ = self.run(["systemctl", "is-enabled", "--quiet", f"{u}.service"], 30)
+            if rc_a != 0 and rc_e != 0:
+                continue
+            if u == "d1max-agent":
+                self._sys("systemctl", "--no-block", "restart", f"{u}.service")
+            else:
+                self.run(["systemctl", "restart", f"{u}.service"], 180)
+            done.append(u)
+        return {"restarted": done}
+
+    def reboot(self, args: dict[str, Any]) -> dict[str, Any]:
+        delay = args.get("delay_s", 5)
+        if not isinstance(delay, int) or isinstance(delay, bool) or not 1 <= delay <= 60:
+            raise OpError("delay_s 要 1–60")
+        self._sys("systemd-run", f"--on-active={delay}", "--unit=d1max-reboot",
+                  "/bin/systemctl", "reboot")
+        return {"delay_s": delay}
+
+    def timesync(self, args: dict[str, Any]) -> dict[str, Any]:
+        if shutil.which("chronyc"):
+            out = self._sys("chronyc", "-a", "makestep")
+            return {"how": "chrony", "out": out.strip()[-200:]}
+        self._sys("systemctl", "restart", "systemd-timesyncd.service")
+        return {"how": "timesyncd"}
+
+    def journal_vacuum(self, args: dict[str, Any]) -> dict[str, Any]:
+        mb = args.get("max_mb", 200)
+        if not isinstance(mb, int) or isinstance(mb, bool) or not 50 <= mb <= 2000:
+            raise OpError("max_mb 要 50–2000")
+        out = self._sys("journalctl", f"--vacuum-size={mb}M")
+        return {"max_mb": mb, "out": out.strip()[-300:]}
+
+    def cert_install(self, args: dict[str, Any]) -> dict[str, Any]:
+        """代理放在 ``<data>/cert-new/`` 的新证书、新私钥、新登记文件换上(代理已核过公钥对得上私钥、
+        链到站点 CA)。这里只再核格式,原来的留 ``.prev``,再重启代理。"""
+        user = pwd.getpwnam(self.cfg["requester"])
+        src = Path(self.cfg.get("data_root", "/var/lib/d1max")) / "cert-new"
+        crt = read_nofollow(src / "robot.crt", limit=MAX_PEM, owner=user.pw_uid)
+        key = read_nofollow(src / "robot.key", limit=MAX_PEM, owner=user.pw_uid)
+        reg = read_nofollow(src / "registration.json", limit=MAX_PEM, owner=user.pw_uid)
+        if b"-----BEGIN CERTIFICATE-----" not in crt or b"PRIVATE KEY-----" not in key:
+            raise OpError("证书或私钥格式错误")
+        try:
+            json.loads(reg)
+        except ValueError as exc:
+            raise OpError("登记文件不是 JSON") from exc
+        tls = self.etc / "d1max" / "tls"
+        for name, data, mode, dest in (("robot.crt", crt, 0o644, tls / "robot.crt"),
+                                       ("robot.key", key, 0o600, tls / "robot.key"),
+                                       ("registration.json", reg, 0o644,
+                                        self.etc / "d1max" / "registration.json")):
+            if dest.is_file():
+                st = dest.stat()
+                shutil.copy2(dest, dest.with_name(dest.name + ".prev"))
+                uid, gid = st.st_uid, st.st_gid
+            else:
+                uid, gid = user.pw_uid, user.pw_gid
+            write_atomic(dest, data, mode=mode, uid=uid, gid=gid)
+        self._sys("systemctl", "--no-block", "restart", "d1max-agent.service")
+        return {"installed": ["robot.crt", "robot.key", "registration.json"]}
+
+    def units_apply(self, args: dict[str, Any]) -> dict[str, Any]:
+        """这一版包里带的服务单元(白名单里的)跟系统里的不一样就换上。包要过发行签名、内容指纹。"""
+        name = args.get("release")
+        if not isinstance(name, str) or not NAME_RE.fullmatch(name):
+            raise OpError("版本名错误")
+        root = Path(self.cfg.get("release_root", "/opt/d1max")) / "releases" / name
+        pubkey = Path(self.cfg.get("pubkey", "/etc/d1max/release-pub.pem"))
+        if not pubkey.is_file():
+            raise OpError("机器人上没装发行公钥:服务单元不更新")
+        units = {}
+        for u in ROBOT_UNITS:
+            p = root / "deploy" / f"{u}.service"
+            if p.is_file() and not p.is_symlink():
+                units[f"deploy/{u}.service"] = read_nofollow(p, limit=MAX_REQ)
+        manifest = json.loads(read_nofollow(root / "release.json", limit=MAX_REQ))
+        tree_ok(root, manifest, pubkey, units)
+        changed = []
+        for rel, data in units.items():
+            dest = self.systemd_dir / Path(rel).name
+            if dest.is_file() and dest.read_bytes() == data:
+                continue
+            write_atomic(dest, data, mode=0o644)
+            changed.append(Path(rel).name)
+        if changed:
+            self._sys("systemctl", "daemon-reload")
+        return {"changed": changed}
+
+    # ---------------------------------------------------------------- 站点
+    def _site(self) -> tuple[Path, Path, str]:
+        return (Path(self.cfg.get("site_home", "/var/lib/d1max-site")),
+                Path(self.cfg.get("site_venv", "/opt/d1max-site/venv")),
+                self.cfg["requester"])
+
+    def restart_site(self, args: dict[str, Any]) -> dict[str, Any]:
+        self._sys("systemctl", "--no-block", "restart", "d1max-site.service")
+        return {}
+
+    def _healthy(self, wait_s: float) -> bool:
+        """站点起来以后 ``wait_s`` 秒还在跑、没被 systemd 重起过。"""
+        _, before = self.run(["systemctl", "show", "-p", "NRestarts", "--value", "d1max-site.service"], 30)
+        time.sleep(wait_s)
+        rc, _ = self.run(["systemctl", "is-active", "--quiet", "d1max-site.service"], 30)
+        _, after = self.run(["systemctl", "show", "-p", "NRestarts", "--value", "d1max-site.service"], 30)
+        return rc == 0 and before.strip() == after.strip()
+
+    def restore(self, args: dict[str, Any]) -> dict[str, Any]:
+        """从站点配置的备份目录恢复(恢复要空目录):停站点 → 现在的站点目录挪开 → 恢复 → 起。
+        恢复不成就挪回去再起。"""
+        home, venv, user = self._site()
+        cfg = json.loads(read_nofollow(home / "site.json", limit=MAX_REQ))
+        dest = cfg.get("backup_dir") if isinstance(cfg, dict) else None
+        if not isinstance(dest, str) or not Path(dest).is_dir():
+            raise OpError("站点未配置备份目录")
+        aside = home.with_name(f"{home.name}.before-restore-{int(time.time())}")
+        self._sys("systemctl", "stop", "d1max-site.service", timeout=180)
+        os.rename(home, aside)
+        try:
+            home.mkdir(mode=0o700)
+            pw = pwd.getpwnam(user)
+            os.chown(home, pw.pw_uid, pw.pw_gid)
+            self._sys("runuser", "-u", user, "--", str(venv / "bin" / "d1max-site"), "--home",
+                      str(home), "restore", dest, timeout=3600)
+        except Exception:
+            shutil.rmtree(home, ignore_errors=True)
+            os.rename(aside, home)
+            self.run(["systemctl", "start", "d1max-site.service"], 120)
+            raise
+        self._sys("systemctl", "start", "d1max-site.service", timeout=120)
+        return {"aside": str(aside)}
+
+    def update(self, args: dict[str, Any]) -> dict[str, Any]:
+        """升级站点:站点放在 ``<site_home>/updates/<包>.tar.gz`` 的包 → 拷进 root 目录 → 解开 → 验签 →
+        停站点、留一份程序和库 → 装 → 起 → 看 30 秒;不行就把程序和库换回去再起。"""
+        home, venv, user = self._site()
+        pkg_name = args.get("package")
+        if not isinstance(pkg_name, str) or not PKG_RE.fullmatch(pkg_name):
+            raise OpError("升级包名错误")
+        pw = pwd.getpwnam(user)
+        raw = read_nofollow(home / "updates" / pkg_name, limit=512 * 1024 * 1024, owner=pw.pw_uid)
+        pubkey = Path(self.cfg.get("site_pubkey", "/etc/d1max-site/release-pub.pem"))
+        if not pubkey.is_file():
+            raise OpError("站点上没装发行公钥:不升级")
+        work = Path(tempfile.mkdtemp(prefix="d1max-site-update-", dir="/var/lib/d1max-ops"))
+        os.chmod(work, 0o700)
+        try:
+            with tarfile.open(fileobj=io.BytesIO(raw), mode="r:gz") as tar:
+                safe_extract(tar, work)
+            tops = [p for p in work.iterdir() if p.is_dir()]
+            if len(tops) != 1:
+                raise OpError("升级包里要正好一个目录")
+            pkg = tops[0]
+            manifest = json.loads((pkg / "release.json").read_text(encoding="utf-8"))
+            tree_ok(pkg, manifest, pubkey)
+            if not (pkg / "deploy" / "site" / "install-site.sh").is_file():
+                raise OpError("这不是站点升级包(没有 deploy/site/install-site.sh)")
+            keep = work / "prev"
+            self._sys("systemctl", "stop", "d1max-site.service", timeout=180)
+            shutil.copytree(venv, keep / "venv", symlinks=True)
+            if (home / "site.db").is_file():
+                shutil.copy2(home / "site.db", keep / "site.db")
+            ok = False
+            try:
+                self._sys("bash", str(pkg / "deploy" / "site" / "install-site.sh"), "--upgrade",
+                          timeout=1800)
+                ok = self._healthy(30)
+            except OpError:
+                ok = False
+            if ok:
+                return {"version": manifest.get("version"), "rolled_back": False}
+            self.run(["systemctl", "stop", "d1max-site.service"], 180)
+            shutil.rmtree(venv, ignore_errors=True)
+            shutil.copytree(keep / "venv", venv, symlinks=True)
+            if (keep / "site.db").is_file():
+                shutil.copy2(keep / "site.db", home / "site.db")
+                os.chown(home / "site.db", pw.pw_uid, pw.pw_gid)
+                for side in ("site.db-wal", "site.db-shm"):
+                    (home / side).unlink(missing_ok=True)
+            self.run(["systemctl", "start", "d1max-site.service"], 120)
+            raise OpError("新版本未能正常运行,已退回原版本")
+        finally:
+            shutil.rmtree(work, ignore_errors=True)
+
+    def vpn_apply(self, args: dict[str, Any]) -> dict[str, Any]:
+        """站点生成好的 VPN 配置(``<site_home>/vpn/server.conf``)装进 ``/etc/wireguard/d1max.conf``、生效。"""
+        home, _, user = self._site()
+        pw = pwd.getpwnam(user)
+        conf = read_nofollow(home / "vpn" / "server.conf", limit=MAX_REQ, owner=pw.pw_uid)
+        if not conf.startswith(b"[Interface]"):
+            raise OpError("VPN 配置格式错误")
+        wg = self.etc / "wireguard"
+        wg.mkdir(mode=0o700, exist_ok=True)
+        write_atomic(wg / "d1max.conf", conf, mode=0o600)
+        rc, _ = self.run(["systemctl", "is-active", "--quiet", "wg-quick@d1max.service"], 30)
+        if rc == 0:
+            self._sys("systemctl", "restart", "wg-quick@d1max.service")
+        else:
+            self._sys("systemctl", "enable", "--now", "wg-quick@d1max.service")
+        return {}
+
+    def wg_status(self, args: dict[str, Any]) -> dict[str, Any]:
+        rc, out = self.run(["wg", "show", "d1max", "dump"], 30)
+        if rc != 0:
+            return {"up": False, "peers": []}
+        peers = []
+        for line in out.splitlines()[1:]:
+            f = line.split("\t")
+            if len(f) >= 8:
+                peers.append({"public_key": f[0], "allowed_ips": f[3],
+                              "latest_handshake": int(f[4]) if f[4].isdigit() else 0,
+                              "rx": int(f[5]) if f[5].isdigit() else 0,
+                              "tx": int(f[6]) if f[6].isdigit() else 0})
+        return {"up": True, "peers": peers}
+
+
+ROBOT_ACTIONS: dict[str, Callable[[Ops, dict[str, Any]], dict[str, Any]]] = {
+    "restart": Ops.restart, "restart_all": Ops.restart_all, "reboot": Ops.reboot,
+    "timesync": Ops.timesync, "journal_vacuum": Ops.journal_vacuum,
+    "cert_install": Ops.cert_install, "units_apply": Ops.units_apply,
+}
+SITE_ACTIONS: dict[str, Callable[[Ops, dict[str, Any]], dict[str, Any]]] = {
+    "restart": Ops.restart, "restart_site": Ops.restart_site, "restore": Ops.restore,
+    "update": Ops.update, "vpn_apply": Ops.vpn_apply, "wg_status": Ops.wg_status,
+    "timesync": Ops.timesync,
+}
+
+
+def safe_extract(tar: tarfile.TarFile, dest: Path) -> None:
+    """只解普通文件和目录,路径不许跑出 ``dest``。"""
+    base = dest.resolve()
+    for m in tar.getmembers():
+        target = (dest / m.name).resolve()
+        if base not in target.parents and target != base:
+            raise OpError(f"包里的路径越界:{m.name}")
+        if not (m.isfile() or m.isdir()):
+            raise OpError(f"包里有不允许的条目:{m.name}")
+    tar.extractall(dest)  # noqa: S202 —— 上面逐条核过
+
+
+def process(cfg: dict[str, Any], ops: Ops, *, uid: int, gid: int) -> int:
+    spool = Path(cfg["spool"])
+    req, done = spool / "req", spool / "done"
+    n = 0
+    now = time.time()
+    for old in done.glob("*.json"):            # 结果留一小时
+        try:
+            if now - old.stat().st_mtime > 3600:
+                old.unlink()
+        except OSError:
+            pass
+    for path in sorted(req.glob("*.json")):
+        rid = path.stem
+        try:
+            raw = read_nofollow(path, limit=MAX_REQ, owner=uid)
+        except OpError:
+            path.unlink(missing_ok=True)
+            continue
+        path.unlink(missing_ok=True)
+        if not ID_RE.fullmatch(rid):
+            continue
+        out: dict[str, Any] = {"id": rid, "ok": False, "error": ""}
+        try:
+            body = json.loads(raw)
+            if not isinstance(body, dict) or body.get("id") != rid:
+                raise OpError("请求格式错误")
+            action = body.get("action")
+            args = body.get("args") if isinstance(body.get("args"), dict) else {}
+            out["action"] = action
+            out.update(ops.do(str(action), args))
+            out["ok"] = True
+        except OpError as exc:
+            out["error"] = str(exc)
+        except Exception as exc:  # noqa: BLE001 —— 一条坏请求不能把后面的都挡住
+            out["error"] = f"{type(exc).__name__}: {exc}"[:300]
+        write_atomic(done / f"{rid}.json", json.dumps(out, ensure_ascii=False).encode(),
+                     mode=0o640, uid=0, gid=gid)
+        n += 1
+    return n
+
+
+def main(argv: list[str] | None = None) -> int:
+    ap = argparse.ArgumentParser(description="D1 Max 特权执行器(W55)")
+    ap.add_argument("--config", default="/etc/d1max-ops.json")
+    a = ap.parse_args(argv)
+    cfg = json.loads(Path(a.config).read_text(encoding="utf-8"))
+    pw = pwd.getpwnam(cfg["requester"])
+    process(cfg, Ops(cfg), uid=pw.pw_uid, gid=pw.pw_gid)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
