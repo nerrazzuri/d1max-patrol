@@ -298,7 +298,7 @@ def test_CI_的安卓包是调试签名_发行脚本才要求正式钥匙():
 
 
 def test_W55_安卓包旁边出站点分发用的签名清单_站点认(world, monkeypatch, tmp_path):
-    """W55:App 从站点分发。发行脚本编完安卓包,用同一把发行钥匙签一份清单;网页上连包一起传,站点验签收下。"""
+    """W55:App 从站点分发。发行脚本编完安卓包,用发行钥匙签一份清单;站点验签收下。"""
     from d1max_site.app_dist import AppStore
     repo, key, out = world
     apk = tmp_path / "app-release.apk"
