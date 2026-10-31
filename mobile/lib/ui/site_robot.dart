@@ -453,7 +453,7 @@ class _SiteRobotPageState extends State<SiteRobotPage> {
         NwOpTile(
             tileKey: const Key('btn-standby-list'),
             icon: Icons.flag_rounded,
-            label: tr('Standby points…', '待命点…'),
+            label: tr('Standby', '待命点'),
             onTap: () => go(() => SiteStandbyPage(
                 api: widget.api, robotId: widget.robotId, canMarkHere: robotCanStandbyHere(v)))),
     ];

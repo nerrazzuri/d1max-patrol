@@ -816,25 +816,33 @@ class _SiteRouteEditorPageState extends State<SiteRouteEditorPage> {
                 label: tr('Send ${widget.tempFor} on this route', '派 ${widget.tempFor} 走这条'),
                 onPressed: _busy || _pts.isEmpty ? null : _sendTemp)
           else
-          Wrap(spacing: Nw.s8, runSpacing: Nw.s8, children: [
-            if (edit)
-              NwButton(
-                  buttonKey: SiteRouteEditorPage.saveKey,
-                  label: tr('Save route', '保存路线'),
-                  onPressed: _busy || _pts.isEmpty || !(_isNew || _dirty) ? null : _save),
-            if (_canSend && !_isNew)
-              NwButton(
-                  buttonKey: SiteRouteEditorPage.sendKey,
-                  label: tr('Send to a robot', '派给机器人'),
-                  icon: Icons.near_me_rounded,
-                  variant: NwButtonVariant.outline,
-                  onPressed: _dirty ? null : _send),
-            if (edit && !_isNew)
+          // 保存、派出等宽一行；删除单独一行，铺满。
+          Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+            Row(children: [
+              if (edit)
+                Expanded(
+                    child: NwButton(
+                        buttonKey: SiteRouteEditorPage.saveKey,
+                        label: tr('Save route', '保存路线'),
+                        onPressed: _busy || _pts.isEmpty || !(_isNew || _dirty) ? null : _save)),
+              if (edit && _canSend && !_isNew) const SizedBox(width: Nw.s8),
+              if (_canSend && !_isNew)
+                Expanded(
+                    child: NwButton(
+                        buttonKey: SiteRouteEditorPage.sendKey,
+                        label: tr('Send to robot', '派给机器人'),
+                        icon: Icons.near_me_rounded,
+                        variant: NwButtonVariant.outline,
+                        onPressed: _dirty ? null : _send)),
+            ]),
+            if (edit && !_isNew) ...[
+              const SizedBox(height: Nw.s8),
               NwButton(
                   buttonKey: SiteRouteEditorPage.deleteKey,
                   label: tr('Delete route', '删除路线'),
                   variant: NwButtonVariant.destructive,
                   onPressed: _delete),
+            ],
           ]),
           if (_temp)
             Padding(

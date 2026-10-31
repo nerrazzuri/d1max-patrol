@@ -229,8 +229,8 @@ class _SiteListPageState extends State<SiteListPage> {
               : _sites.isEmpty
                   ? NwEmpty(
                       icon: Icons.domain_add_rounded,
-                      text: tr('No sites yet. Add one with the button at the bottom right.',
-                          '还没有站点，点右下角添加。'),
+                      text: tr('No sites yet. Tap "Add site" below.',
+                          '暂无站点，请点击下方「添加站点」。'),
                       hint: tr('Scan the site code shown on the duty console, or enter the address by hand.',
                           '扫描值班台上的配对码，或手动输入站点地址。'))
                   // 宽屏（桌面版）上卡片不拉满一整行

@@ -1132,7 +1132,7 @@ void main() {
   testWidgets('打开就是站点列表：没有直连入口（W00c5e）', (t) async {
     await t.pumpWidget(PatrolApp(siteStore: MemorySiteStore()));
     await t.pumpAndSettle();
-    expect(find.text('还没有站点，点右下角添加。'), findsOneWidget);
+    expect(find.text('暂无站点，请点击下方「添加站点」。'), findsOneWidget);
     expect(find.byKey(const Key('mode-direct')), findsNothing);
     expect(find.textContaining('直连'), findsNothing);
   });
@@ -1270,7 +1270,7 @@ void main() {
     await t.enterText(find.byKey(const Key('site-password')), 'pw');
     await t.tap(find.text('登录'));
     await t.pumpAndSettle();
-    expect(find.text('还没有站点，点右下角添加。'), findsNothing);
+    expect(find.text('暂无站点，请点击下方「添加站点」。'), findsNothing);
     expect(find.textContaining('重新登录'), findsOneWidget);
   });
 

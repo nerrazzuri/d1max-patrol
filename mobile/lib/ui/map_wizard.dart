@@ -1101,13 +1101,12 @@ class _MapWizardPageState extends State<MapWizardPage> {
         Expanded(
             child: NwButton(
                 buttonKey: good ? MapWizardPage.rewalkKey : MapWizardPage.useKey,
-                label: good ? tr('Map again', '重新建图') : tr('Use this version for now', '暂用此版本'),
+                label: good ? tr('Map again', '重新建图') : tr('Use for now', '暂用此版本'),
                 variant: NwButtonVariant.outline,
                 size: NwButtonSize.large,
                 onPressed: _busy ? null : (good ? _rewalk : () => _go('zones')))),
         const SizedBox(width: Nw.s8),
         Expanded(
-            flex: 2,
             child: NwButton(
                 buttonKey: good ? MapWizardPage.useKey : MapWizardPage.rewalkKey,
                 label: good ? tr('Use this version', '使用此版本') : tr('Map again', '重新建图'),
