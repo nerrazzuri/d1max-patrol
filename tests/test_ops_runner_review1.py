@@ -110,13 +110,14 @@ def test_VPN_数据被换成链接_不跟(tmp_path):
 
 # ------------------------------------------------------------------ 2 d1max-bind
 
-def test_root跑的配网服务不在重启白名单里(tmp_path):
+def test_配网服务的代码在root目录里_重启它不是提权(tmp_path):
+    """第 2 条先是把它移出白名单;后来把它的代码挪进 root 独占目录(test_bind_rootonly.py),
+    又放回来。"""
+    unit = (Path(__file__).resolve().parents[1] / "deploy" / "d1max-bind.service").read_text()
+    assert "/opt/d1max" not in unit.split("[Service]", 1)[1]
     rec = Rec()
-    ops = R.Ops(_cfg(tmp_path), run=rec)
-    with pytest.raises(R.OpError, match="白名单"):
-        ops.do("restart", {"unit": "d1max-bind"})
-    ops.do("restart_all", {})
-    assert not any("d1max-bind.service" in " ".join(c) for c in rec.calls)
+    R.Ops(_cfg(tmp_path), run=rec).do("restart", {"unit": "d1max-bind"})
+    assert rec.calls == [["systemctl", "restart", "d1max-bind.service"]]
 
 
 # ------------------------------------------------------------------ 5 服务单元

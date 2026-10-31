@@ -81,6 +81,14 @@ def _now() -> int:
     return int(time.time() * 1000)
 
 
+def serve_main(argv: list[str] | None = None) -> int:
+    """配网服务的入口(``deploy/d1max-bind-run``:root 独占目录里那份代码、系统 python ``-I`` 跑;
+    参数同 ``d1max-patrol bind-serve``)。"""
+    ap = argparse.ArgumentParser(prog="d1max-bind")
+    add_args(ap.add_subparsers(dest="command", required=True))
+    return run(ap.parse_args(["bind-serve", *(sys.argv[1:] if argv is None else argv)]))
+
+
 def run(args: argparse.Namespace) -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
     if args.command == "bind-serve":

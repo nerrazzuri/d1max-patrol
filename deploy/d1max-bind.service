@@ -15,7 +15,9 @@ Environment=D1MAX_OUTBOX=/var/lib/d1max/outbox
 Environment=PYTHONUNBUFFERED=1
 # D1MAX_BIND_HOST(3588 在路由器 LAN1 上的地址)、D1MAX_ROUTER、D1MAX_OUTBOX 从 env 文件来。
 EnvironmentFile=-/etc/d1max/env
-ExecStart=/opt/d1max/current/deploy/d1max-bind-start
+# 代码在 root 独占的 /usr/local/lib/d1max/bind/(装机脚本、特权执行器从签过名的包里拷来):root 跑的东西
+# 不许放在机器人账号能改的版本目录、venv 里(外审 W55-1)。参数从上面的 env 文件来(D1MAX_BIND_HOST 等)。
+ExecStart=/usr/bin/python3 -I /usr/local/lib/d1max/bind/run.py
 Restart=always
 RestartSec=5
 

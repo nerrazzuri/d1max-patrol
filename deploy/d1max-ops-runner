@@ -24,7 +24,8 @@
     和防火墙规则由这里自己生成,请求方给不了命令钩子。
   - **站点目录里的文件**(库、VPN 状态)是站点账号能换成符号链接的:一律相对目录描述符、
     ``O_NOFOLLOW`` 打开,写回用临时文件 + 原子替换,不沿着链接写、不沿着链接改属主。
-  - root 跑、代码在机器人可写目录里的服务(``d1max-bind``)不在重启白名单里。
+  - 配网服务(``d1max-bind``)以 root 跑:它的代码由这里从签过名的包里拷进 root 独占的
+    ``/usr/local/lib/d1max/bind/``(``install_bind``),不再从机器人可写的版本目录跑。
 
 配置 ``/etc/d1max-ops.json``(装机脚本写):``{"profile": "robot"|"site", "requester": <用户>,
 "spool": <目录>, ...}``。
@@ -51,10 +52,23 @@ from typing import Any, Callable
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-#: 我们自己的服务(机器人上)。重启、读日志、装单元只在这里挑。
-#: 外审 W55-1:``d1max-bind`` 以 root 跑、代码在机器人可写的版本目录里 —— 不让代理借执行器重启它。
+#: 我们自己的服务(机器人上)。重启、读日志、装单元只在这里挑。``d1max-bind`` 以 root 跑,代码在 root
+#: 独占目录里(``install_bind``),重启它不是提权。
 ROBOT_UNITS = ("d1max-localizer", "d1max-obstacles", "d1max-persons", "d1max-lidar-merge",
-               "d1max-nav2", "d1max-sidecar", "d1max-zenohd", "d1max-agent")
+               "d1max-nav2", "d1max-sidecar", "d1max-zenohd", "d1max-bind", "d1max-agent")
+
+#: 配网服务(以 root 跑)要的文件:包里的路径 → ``<lib>/bind/`` 底下的路径。只有标准库加这几个模块
+#: (``tests/test_bind_rootonly.py`` 用 ``python3 -I`` 核过导入不漏到别处)。
+BIND_FILES = {
+    "deploy/d1max-bind-run": "run.py",
+    "src/d1max_patrol/__init__.py": "lib/d1max_patrol/__init__.py",
+    "src/d1max_patrol/provision.py": "lib/d1max_patrol/provision.py",
+    **{f"src/d1max_patrol/bind/{m}.py": f"lib/d1max_patrol/bind/{m}.py"
+       for m in ("__init__", "cli", "core", "factory", "paths", "router", "server", "sitelink",
+                 "wipe")},
+    **{f"packages/contract/src/d1max_contract/{m}.py": f"lib/d1max_contract/{m}.py"
+       for m in ("__init__", "binding", "ed25519")},
+}
 SITE_UNITS = ("d1max-site", "d1max-mosquitto")
 ID_RE = re.compile(r"^[0-9a-f]{8,32}$")
 NAME_RE = re.compile(r"^\d{4}-\d{2}-\d{2}-[0-9a-f]{6,12}$")      # 版本目录名(同 engine/release)
@@ -321,6 +335,31 @@ def render_wg(doc: dict[str, Any]) -> str:
     return "\n".join(out)
 
 
+def install_bind(files: dict[str, bytes], lib_dir: Path) -> bool:
+    """配网服务的代码装进 ``<lib_dir>/bind/``(root 属主、只读):先在旁边建好整棵,再换名。``files`` 是
+    包里路径 → 内容(已经验过签的那一份)。跟现在装着的一样就不动;回装没装。"""
+    dst = lib_dir / "bind"
+    if dst.is_dir() and all((dst / rel).is_file() and (dst / rel).read_bytes() == files[src]
+                            for src, rel in BIND_FILES.items()):
+        return False
+    new, old = lib_dir / "bind.new", lib_dir / "bind.old"
+    for d in (new, old):
+        shutil.rmtree(d, ignore_errors=True)
+    for src, rel in BIND_FILES.items():
+        target = new / rel
+        target.parent.mkdir(parents=True, exist_ok=True, mode=0o755)
+        write_atomic(target, files[src], mode=0o755 if rel == "run.py" else 0o644)
+    for d in [new, *(p for p in new.rglob("*") if p.is_dir())]:
+        os.chmod(d, 0o755)
+        if os.geteuid() == 0:
+            os.chown(d, 0, 0)
+    if dst.exists():
+        os.rename(dst, old)
+    os.rename(new, dst)
+    shutil.rmtree(old, ignore_errors=True)
+    return True
+
+
 class Ops:
     def __init__(self, cfg: dict[str, Any], *, run: Runner = run_cmd,
                  etc: Path = Path("/etc"), systemd_dir: Path = Path("/etc/systemd/system")) -> None:
@@ -438,8 +477,9 @@ class Ops:
         if not pubkey.is_file():
             raise OpError("机器人上没装发行公钥:服务单元不更新")
         manifest = json.loads(read_nofollow(root / "release.json", limit=MAX_REQ))
-        want = frozenset(f"deploy/{u}.service" for u in ROBOT_UNITS)
-        units = tree_ok(root, manifest, pubkey, want)
+        want = frozenset(f"deploy/{u}.service" for u in ROBOT_UNITS) | frozenset(BIND_FILES)
+        got = tree_ok(root, manifest, pubkey, want)
+        units = {k: v for k, v in got.items() if k.endswith(".service")}
         changed = []
         for rel, data in units.items():
             dest = self.systemd_dir / Path(rel).name
@@ -447,9 +487,15 @@ class Ops:
                 continue
             write_atomic(dest, data, mode=0o644)
             changed.append(Path(rel).name)
+        # 配网服务的代码(验过签的那一份)换进 root 独占目录;老包没带全就不动
+        bind = False
+        if all(k in got for k in BIND_FILES):
+            bind = install_bind(got, Path(self.cfg.get("lib_dir", "/usr/local/lib/d1max")))
         if changed:
             self._sys("systemctl", "daemon-reload")
-        return {"changed": changed}
+        if bind or "d1max-bind.service" in changed:
+            self.run(["systemctl", "--no-block", "try-restart", "d1max-bind.service"], 30)
+        return {"changed": changed, "bind": bind}
 
     # ---------------------------------------------------------------- 站点
     def _site(self) -> tuple[Path, Path, str]:
@@ -834,7 +880,20 @@ def process(cfg: dict[str, Any], ops: Ops, *, uid: int, gid: int) -> int:
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="D1 Max 特权执行器(W55)")
     ap.add_argument("--config", default="/etc/d1max-ops.json")
+    ap.add_argument("--install-bind", metavar="包目录",
+                    help="装机脚本用:把包里配网服务的代码装进 root 独占目录(装机是人在现场、包是人拿来的)")
+    ap.add_argument("--lib-dir", default="/usr/local/lib/d1max")
     a = ap.parse_args(argv)
+    if a.install_bind:
+        pkg = Path(a.install_bind)
+        missing = [rel for rel in BIND_FILES if not (pkg / rel).is_file()]
+        if missing:
+            print(f"包里没带配网服务的代码({missing[0]} 等):不装", file=sys.stderr)
+            return 0
+        done = install_bind({rel: (pkg / rel).read_bytes() for rel in BIND_FILES},
+                            Path(a.lib_dir))
+        print("  配网服务的代码" + ("装好了" if done else "没变") + f":{a.lib_dir}/bind/")
+        return 0
     cfg = json.loads(Path(a.config).read_text(encoding="utf-8"))
     pw = pwd.getpwnam(cfg["requester"])
     process(cfg, Ops(cfg), uid=pw.pw_uid, gid=pw.pw_gid)

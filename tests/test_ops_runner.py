@@ -174,11 +174,11 @@ def test_装服务单元_验签过了才装_有变化才daemon_reload(tmp_path):
     rec = Rec()
     ops = R.Ops(cfg, run=rec, systemd_dir=sysd)
     got = ops.do("units_apply", {"release": root.name})
-    assert got == {"changed": ["d1max-localizer.service"]}
+    assert got == {"changed": ["d1max-localizer.service"], "bind": False}
     assert (sysd / "d1max-localizer.service").read_text() == "[Unit]\nDescription=new\n"
     assert rec.calls == [["systemctl", "daemon-reload"]]
     rec.calls.clear()
-    assert ops.do("units_apply", {"release": root.name}) == {"changed": []}
+    assert ops.do("units_apply", {"release": root.name}) == {"changed": [], "bind": False}
     assert rec.calls == []
 
 

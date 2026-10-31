@@ -28,8 +28,8 @@ interface Diag {
 
 const UNITS = ["d1max-agent", "d1max-localizer", "d1max-obstacles", "d1max-persons", "d1max-lidar-merge",
   "d1max-nav2", "d1max-sidecar", "d1max-zenohd", "d1max-bind"];
-/** 能远程重启的(d1max-bind 以 root 跑,不经执行器重启)。 */
-const RESTARTABLE = UNITS.filter((u) => u !== "d1max-bind");
+/** 能远程重启的:全部(配网服务的代码在 root 独占目录里)。 */
+const RESTARTABLE = UNITS;
 
 export function RobotOps({ robotId, tasks, say }: { robotId: string; tasks: string[]; say: Say }) {
   const base = `/api/robots/${enc(robotId)}/ops`;

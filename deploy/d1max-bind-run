@@ -1,0 +1,23 @@
+#!/usr/bin/python3 -I
+"""配网服务(W42)的入口,以 root 跑。装在 root 独占的 /usr/local/lib/d1max/bind/(装机脚本、特权执行器从
+签过名的包里拷来);旁边 lib/ 里只有它要的那几个模块。用系统 python 的 -I:不读 PYTHON* 环境变量、
+不读用户目录、不把脚本目录放进搜索路径 —— 只认下面这一个目录。
+
+参数从环境来(/etc/d1max/env,systemd 读):
+  D1MAX_BIND_HOST=<3588 在路由器 LAN1 上的地址>   只绑这个地址:热点那一侧的手机只碰得到它
+  D1MAX_ROUTER=<路由器>                            缺省 fake
+  D1MAX_OUTBOX=<发件箱在别的盘上时>                清机一起清
+"""
+import os
+import sys
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib"))
+
+host = os.environ.get("D1MAX_BIND_HOST", "")
+if not host:
+    sys.exit("/etc/d1max/env 里没有 D1MAX_BIND_HOST(3588 在路由器 LAN1 上的地址)")
+
+from d1max_patrol.bind.cli import serve_main  # noqa: E402 - 先定搜索路径
+
+raise SystemExit(serve_main(["--host", host, "--router", os.environ.get("D1MAX_ROUTER") or "fake",
+                             "--outbox", os.environ.get("D1MAX_OUTBOX", "")]))

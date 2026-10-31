@@ -36,9 +36,8 @@ from d1max_contract.privops import PrivOps, PrivOpsError
 #: 我们自己的服务(同 deploy/d1max-ops-runner 的 ROBOT_UNITS;测试核一致)。
 OUR_UNITS = ("d1max-agent", "d1max-localizer", "d1max-obstacles", "d1max-persons",
              "d1max-lidar-merge", "d1max-nav2", "d1max-sidecar", "d1max-zenohd", "d1max-bind")
-#: 能远程重启的(外审 W55-1 第 2 条:``d1max-bind`` 以 root 跑、代码在机器人可写的目录里,
-#: 不经执行器重启)。
-RESTART_UNITS = tuple(u for u in OUR_UNITS if u != "d1max-bind")
+#: 能远程重启的:我们的全部(``d1max-bind`` 以 root 跑,代码在 root 独占目录里,重启它不是提权)。
+RESTART_UNITS = OUR_UNITS
 #: 能看日志的:我们的 + 远程运维相关的系统服务(谁 SSH 进来过、VPN、对时)。
 JOURNAL_UNITS = OUR_UNITS + ("ssh", "wg-quick@d1max", "chrony", "systemd-timesyncd")
 KINDS = ("ops_journal", "ops_diag", "ops_restart", "ops_reboot", "ops_debug", "ops_cleanup",

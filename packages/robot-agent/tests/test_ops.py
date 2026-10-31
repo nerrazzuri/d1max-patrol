@@ -34,9 +34,7 @@ def test_我们的服务名单_跟特权执行器一致():
     spec = importlib.util.spec_from_loader("r", loader)
     r = importlib.util.module_from_spec(spec)
     loader.exec_module(r)
-    assert set(O.RESTART_UNITS) == set(r.ROBOT_UNITS)
-    assert "d1max-bind" in O.OUR_UNITS and "d1max-bind" not in O.RESTART_UNITS, \
-        "root 跑的配网服务能看日志、不能远程重启(外审 W55-1 第 2 条)"
+    assert set(O.RESTART_UNITS) == set(r.ROBOT_UNITS) == set(O.OUR_UNITS)
 
 
 def test_没装执行器_要root的不报_发了也说不支持(tmp_path):
