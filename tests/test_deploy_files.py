@@ -254,6 +254,10 @@ def 交付文件() -> tuple[Path, ...]:
         ROOT / "docs" / "任务包格式.md",
         ROOT / "docs" / "鉴权与控制权.md",
         ROOT / "docs" / "值守与告警.md",
+        # W58:给客户的文档(W57)
+        ROOT / "docs" / "客户" / "使用手册.md",
+        ROOT / "docs" / "客户" / "现场验收报告模板.md",
+        ROOT / "docs" / "客户" / "软硬件版本对照表.md",
     )
 
 
