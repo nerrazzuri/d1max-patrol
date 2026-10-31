@@ -323,7 +323,7 @@ def run(args: argparse.Namespace, *, now_ms: int) -> int:
             dest = out / f"{manifest['name']}-android-{name}+{args.build_number}.apk"
             shutil.copy2(apk, dest)
             files.append(dest)
-            # W55:站点分发 App 要的签名清单(同一把发行钥匙;网页「软件升级 → App 安装包」连安装包一起传)
+            # W55:站点分发 App 用的签名清单(同一把发行钥匙;网页上连安装包一起传)
             app_man = {"name": dest.name, "version": f"{name}+{args.build_number}",
                        "requires_mission_schema": 1, "content_sha256": sha256(dest)}
             app_man["signature"] = relsign.sign(app_man, key)
