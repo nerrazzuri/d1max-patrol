@@ -286,6 +286,33 @@ async def test_外审W55_1_重启服务_忙就拒_做完放开(tmp_path):
     assert not rt._restarting, "重启的不是代理自己:做完放开"
 
 
+async def test_W61_演示站点的仿真机器人_换证书重启以后不卡在维护状态(tmp_path):
+    """演示站点(2026-11-01):站点一起来自动续证书,仿真机器人的模拟执行器回「成功」却没人重启代理,
+    代理一直「重启中」、什么任务都不接。模拟执行器标明不会重启(restarts=False):做完就放开。"""
+    broker, c = MemoryBroker(), 钟()
+    rt = AgentRuntime(transport=MemoryTransport(broker, "dog"), registration=REG,
+                      hal=SimRobot(now_ms=c), store_dir=tmp_path / "agent", now_ms=c,
+                      loaded_map=("m", "1"), boot_id="b", home=Pose.from_xy_yaw(0, 0, 0),
+                      monotonic=lambda: c.mono)
+    s = SimOps(restarts=False)
+    rt.attach_ops(O.OpsDesk(robot_id=REG.robot_id, priv=s, data_root=tmp_path / "data",
+                            busy=lambda: ""))
+    await rt.start()
+    for i, (kind, payload) in enumerate([("ops_reboot", {}),
+                                         ("ops_restart", {"unit": "d1max-agent"})]):
+        await rt._on_cmd(_cmd(kind, payload, f"w{i}", c))
+        await broker.drain()
+        assert [a for a, _ in s.calls][-1] in ("reboot", "restart")
+        assert not rt._restarting, kind
+        assert not (tmp_path / "data" / "ops-hold.json").exists(), kind
+
+
+def test_W61_模拟执行器默认跟真的一样_会重启():
+    assert "no_restart" not in SimOps().call("reboot")
+    assert SimOps(restarts=False).call("cert_install")["no_restart"] is True
+    assert "no_restart" not in SimOps(restarts=False).call("timesync")
+
+
 @pytest.fixture(autouse=True)
 def _quiet():
     yield

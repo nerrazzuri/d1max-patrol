@@ -331,11 +331,12 @@ def main(argv: list[str] | None = None) -> int:
     procs: list[subprocess.Popen] = []
     agents: dict[str, subprocess.Popen] = {}       # W42:绑定好了的出厂机器人的代理
 
-    def start(name: str, argv: list[str], ready: str) -> None:
+    def start(name: str, argv: list[str], ready: str, env: dict[str, str] | None = None) -> None:
         log = logs / f"{name}.log"
         if log.exists():                   # 上一次的挪开:等「起来了」那一行要等这一次的
             log.replace(log.with_suffix(".prev.log"))
-        p = subprocess.Popen(argv, stdout=open(log, "wb"), stderr=subprocess.STDOUT, env=ENV)
+        p = subprocess.Popen(argv, stdout=open(log, "wb"), stderr=subprocess.STDOUT,
+                             env={**ENV, **(env or {})})
         procs.append(p)
         _wait(log, ready, p)
 
@@ -407,7 +408,10 @@ def _run(a, home: Path, logs: Path, names: list[str], bport: int, fp: str, procs
                                     if a.nav == "planned" or a.w54 else []),
                                   *(["--mapping-sim", str(a.map_dir.resolve())] if a.w54
                                     else [])],
-                  "d1max-agent 起来了")
+                  "d1max-agent 起来了",
+                  # W61:每台自己的数据目录(远程运维的维护标记 ops-hold.json 在那里;
+                  # 原来几台共用,串了)
+                  env={"D1MAX_DATA_ROOT": str(a.dir / f"data{sub}")})
         fresh = _unbound(a, logs, start) if a.unbound else []
         base = f"https://{a.host}:{a.api_port}"
         seeded = _seed_w53(base, a.password, names) if a.w53 and not reuse else []

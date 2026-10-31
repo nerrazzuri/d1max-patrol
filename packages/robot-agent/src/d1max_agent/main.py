@@ -915,7 +915,7 @@ def _ops(args: argparse.Namespace, registration: Registration, runtime: Any) -> 
     from d1max_contract.debuglog import DebugWatch
     priv: Any = privops.from_config()
     if priv is None and args.hal == "sim":
-        priv = privops.SimOps()
+        priv = privops.SimOps(restarts=False)        # W61:没人会重启仿真代理,做完就放开
     data_root = Path(os.environ.get("D1MAX_DATA_ROOT") or Path(args.store_dir).parent)
     desk = OpsDesk(robot_id=registration.robot_id, priv=priv, data_root=data_root,
                    busy=lambda: "", releases=runtime.releases,
