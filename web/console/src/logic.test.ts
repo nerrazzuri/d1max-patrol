@@ -38,7 +38,7 @@ describe("i18n", () => {
   });
   it("告警标题按种类;不认识的用站点原文", () => {
     expect(alertTitle("en", "estop_pressed", "急停被按下")).toBe("E-stop pressed");
-    expect(alertTitle("zh", "estop_pressed", "x")).toBe("急停被按下");
+    expect(alertTitle("zh", "estop_pressed", "x")).toBe("急停已按下");
     expect(alertTitle("en", "brand_new_kind", "站点原文")).toBe("站点原文");
     expect(alertTitle("en", "$doc", "原文")).toBe("原文");
     expect(knownKinds().length).toBeGreaterThan(60);
