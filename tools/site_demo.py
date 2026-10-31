@@ -292,6 +292,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--w53", action="store_true",
                     help="W53:加保安 gina、经理 olga、只看 vic、一条账号申请、"
                          "一条路线和 15 分钟后的日程")
+    ap.add_argument("--intake-port", type=int, default=8444,
+                    help="机器人专用接收口的端口(同时开两套演示站点时换一个)")
     ap.add_argument("--w54", action="store_true",
                     help="W54 建图向导:站点上先没有图(管理员登录弹「开始建图」),仿真机器人用假建图"
                          "(录包、打包、上传是真的流程,建出的图照搬 --map-dir,回环按走过的路算)")
@@ -315,6 +317,12 @@ def main(argv: list[str] | None = None) -> int:
         logs.mkdir(parents=True)
         bport = _free_port()
         _site(home, "init", "--site-id", "demo", "--hostname", a.host, "--broker-port", str(bport))
+        if a.intake_port != 8444:
+            import json
+            cfg_path = home / "site.json"
+            cfg = json.loads(cfg_path.read_text())
+            cfg["intake"] = {**cfg.get("intake", {}), "port": a.intake_port}
+            cfg_path.write_text(json.dumps(cfg, indent=1))
         for n in names:
             _site(home, "enroll", n, "--days", "30")
     if not reuse:
@@ -395,7 +403,7 @@ def _run(a, home: Path, logs: Path, names: list[str], bport: int, fp: str, procs
                                   # 规划要图:站点下发地图走发件箱 + 接收口(真机器人也是这么配的);
                                   # W54 假建图也要(录包、建出的图从发件箱传站点)
                                   *(["--outbox", str(a.dir / f"outbox{sub}"),
-                                     "--intake", f"https://{a.host}:8444"]
+                                     "--intake", f"https://{a.host}:{a.intake_port}"]
                                     if a.nav == "planned" or a.w54 else []),
                                   *(["--mapping-sim", str(a.map_dir.resolve())] if a.w54
                                     else [])],
