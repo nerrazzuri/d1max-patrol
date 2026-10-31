@@ -93,16 +93,27 @@ describe("保安的临时路线", () => {
 });
 
 describe("地图页的图层开关", () => {
-  it("禁行区默认关,别的默认开;不显示定位质量那些", () => {
+  it("W60 基本图层默认开(含禁行区),待命点默认关;保安看不到工程图层、不显示定位那些", () => {
     try { localStorage.removeItem("d1max.maplayers"); } catch { /* */ }
     const { container: c } = render(<MapPage units={[]} p1={[]} now={0} selected={null} onSelect={() => {}} onVideo={() => {}} role="guard"
       mode={null} onArm={() => {}} />);
     const box = (name: string) => Array.from(c.querySelectorAll(".layers label")).find((l) => l.textContent?.includes(name))?.querySelector("input") as HTMLInputElement;
-    expect(box("禁行区").checked).toBe(false);
+    expect(box("禁行区").checked).toBe(true);
     expect(box("防区和布防").checked).toBe(true);
     expect(box("巡逻路线").checked).toBe(true);
-    expect(c.textContent).not.toContain("定位");
     expect(box("摄像头").checked).toBe(true);
+    expect(c.textContent).not.toContain("定位");
+    expect(c.querySelector(".eng-layers")).toBeNull();
+  });
+
+  it("W60 工程师多一组工程图层(默认关):覆盖、定位历史", () => {
+    try { localStorage.removeItem("d1max.maplayers"); } catch { /* */ }
+    const { container: c } = render(<MapPage units={[]} p1={[]} now={0} selected={null} onSelect={() => {}} onVideo={() => {}} role="engineer"
+      mode={null} onArm={() => {}} />);
+    const eng = c.querySelector(".eng-layers")!;
+    expect(eng.querySelector("summary")!.textContent).toBe("工程图层");
+    expect(Array.from(eng.querySelectorAll("label")).map((l) => l.textContent)).toEqual(["未巡逻时长", "定位历史"]);
+    expect(Array.from(eng.querySelectorAll("input")).every((i) => !(i as HTMLInputElement).checked)).toBe(true);
   });
 });
 

@@ -10,7 +10,7 @@ import { siteHm } from "./todaypatrols";
 import { Modal } from "./dialogs";
 import { alertTitle, lang, refusalText, t, type Key } from "./i18n";
 import type { UnitInfo } from "./live";
-import { etaNext, LAYERS, loadLayers, saveLayers, shiftStart, staleAfter, staleCells, tonightEvents, zoneDecor,
+import { ENGINEERING_LAYERS, etaNext, LAYERS, layersFor, loadLayers, saveLayers, shiftStart, staleAfter, staleCells, tonightEvents, zoneDecor,
   type AuthzRow, type Cell, type Layer, type ModeView } from "./maplayers";
 import { fanPath } from "./layoutpage";
 import { MapCanvas, type CanvasArea, type LegendKey, type Screen } from "./mapcanvas";
@@ -243,7 +243,8 @@ export function MapPage(props: {
   useEffect(() => {
     api<{ cameras: PlacedCam[] }>("GET", "/api/cameras").then((d) => setCams(d.cameras ?? [])).catch(() => setCams([]));
   }, []);
-  const on = (l: Layer) => layers.has(l);
+  const active = layersFor(layers, props.role ?? "");
+  const on = (l: Layer) => active.has(l);
   const flip = (l: Layer) => {
     const n = new Set(layers);
     if (n.has(l)) n.delete(l);
@@ -296,12 +297,12 @@ export function MapPage(props: {
   const robotsHere = props.units.filter((u) => u.state !== "offline" && onThisMap(u)).map((u) => u.robot.robot_id);
   const toRec = (a: Alert) => { location.hash = `#/recordings?robot=${enc(a.robot)}&t=${a.first_ms}`; };
   const names: Record<Layer, Key> = { zones: "layerZones", cameras: "layerCameras", route: "layerRoute", standby: "layerStandby",
-    events: "layerEvents", stale: "layerStale", nogo: "layerNoGo" };
+    events: "layerEvents", stale: "layerStale", nogo: "layerNoGo", loc: "layerLoc" };
 
   return (
     <div class="mappage">
       <SiteMap units={props.units} p1={props.p1} now={props.now} selected={props.selected} onSelect={props.onSelect} role={props.role}
-        episodes={false} navZones={on("nogo")} route={on("route")} eta={on("route")}
+        episodes={on("loc")} navZones={on("nogo")} route={on("route")} eta={on("route")}
         areaDecor={on("zones") ? (n) => zoneDecor(n, props.mode, authz) : (n) => ({ label: n, tone: "armed" })}
         onMapShown={(map, meta) => setShown({ map, meta })}
         onPickMap={canDispatch(props.role ?? "") ? (x, y, map) => {
@@ -358,6 +359,16 @@ export function MapPage(props: {
             <label key={l}><input type="checkbox" checked={on(l)} onChange={() => flip(l)} />{t(names[l])}</label>
           ))}
         </div>
+        {props.role === "engineer" && (
+          <details class="eng-layers">
+            <summary>{t("layerEngineering")}</summary>
+            <div class="layers">
+              {ENGINEERING_LAYERS.map((l) => (
+                <label key={l}><input type="checkbox" checked={on(l)} onChange={() => flip(l)} />{t(names[l])}</label>
+              ))}
+            </div>
+          </details>
+        )}
         {props.mode && props.mode.mode !== "armed" && canArm(props.role ?? "") && (
           <button type="button" class="btn primary arm-all" onClick={props.onArm}>{t("armAll")}</button>
         )}

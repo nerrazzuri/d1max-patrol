@@ -4,16 +4,24 @@ import { t } from "./i18n";
 import type { Pt } from "./mapview";
 import { forGuard, type Alert } from "./model";
 
-export type Layer = "zones" | "cameras" | "route" | "standby" | "events" | "stale" | "nogo";
-export const LAYERS: Layer[] = ["zones", "cameras", "route", "standby", "events", "stale", "nogo"];
-/** 禁行区默认关(保安平时不用看),别的默认开。 */
-export const DEFAULT_LAYERS: ReadonlySet<Layer> = new Set(LAYERS.filter((l) => l !== "nogo"));
+export type Layer = "zones" | "cameras" | "route" | "standby" | "events" | "stale" | "nogo" | "loc";
+/** 基本图层(W60):谁都看得到。 */
+export const LAYERS: Layer[] = ["zones", "cameras", "route", "events", "nogo", "standby"];
+/** 工程图层(W60):覆盖(多久没巡到)、定位历史(近 7 天定位出过问题的地方)—— 只给工程师,默认收着、默认关。 */
+export const ENGINEERING_LAYERS: Layer[] = ["stale", "loc"];
+/** 默认开基本图层(区域、摄像头、路线、事件、禁行区);待命点、工程图层默认关(W60:值班默认极简)。 */
+export const DEFAULT_LAYERS: ReadonlySet<Layer> = new Set<Layer>(["zones", "cameras", "route", "events", "nogo"]);
+
+/** 这个角色实际开着哪些(存过的设置里,工程图层只有工程师算数)。 */
+export function layersFor(saved: ReadonlySet<Layer>, role: string): Set<Layer> {
+  return new Set([...saved].filter((l) => role === "engineer" || !ENGINEERING_LAYERS.includes(l)));
+}
 const LAYERS_KEY = "d1max.maplayers";
 
 export function loadLayers(): Set<Layer> {
   try {
     const raw = JSON.parse(localStorage.getItem(LAYERS_KEY) ?? "null");
-    if (Array.isArray(raw)) return new Set(raw.filter((x): x is Layer => (LAYERS as string[]).includes(x)));
+    if (Array.isArray(raw)) return new Set(raw.filter((x): x is Layer => ([...LAYERS, ...ENGINEERING_LAYERS] as string[]).includes(x)));
   } catch {
     /* 读不到就用默认 */
   }
