@@ -1064,6 +1064,21 @@ class Server:
         self.api.runviz, self.api.loc_history = self.runviz, self.loc_history   # 运营可视化
         self.api.pose_track = self.pose_track                                    # W44
         self.cctv.on_changed = self.api.drop_cctv_view   # 删了、改了:正在看的旧画面当场关
+        # W55 远程运维:特权执行器(装机脚本装;演示站点 D1MAX_OPS_SIM=1 用模拟的)、证书自动续签、
+        # App 与网页的错误记录、App 安装包分发、站点 VPN(工程师到点收回)。
+        from d1max_contract import privops
+        from d1max_site.app_dist import AppStore
+        from d1max_site.remote_ops import CertRenewer, ClientErrors
+        from d1max_site.vpn import VpnState
+        self.priv: Any = privops.from_config() or (
+            privops.SimOps() if os.environ.get("D1MAX_OPS_SIM") == "1" else None)
+        self.client_errors = ClientErrors(self.db, now_ms=wall_ms)
+        self.cert_renewer = CertRenewer(dispatcher=self.dispatcher, registry=self.registry,
+                                        ca=SiteCA(home / "ca"), alerts=self.alerts, now_ms=wall_ms)
+        self.vpn = VpnState(home / "vpn")
+        self.api.priv, self.api.cert_renewer = self.priv, self.cert_renewer
+        self.api.client_errors, self.api.vpn = self.client_errors, self.vpn
+        self.api.apps = AppStore(home / "apps", pubkey=release_pubkey(home))
         self._stop = threading.Event()
         self._chores = threading.Thread(target=self._chore_loop, daemon=True,
                                         name="site-chores")
@@ -1093,13 +1108,32 @@ class Server:
                              ("录像留存", self._prune_recordings),
                              ("体检", self.health.tick),                  # A1:证书、盘、卡住的道
                              ("摄像头", self.cctv.sync),
-                             ("拦截点对账", self.incidents.recheck_intercepts)):
+                             ("拦截点对账", self.incidents.recheck_intercepts),
+                             ("VPN 到点收回", self._vpn_expire),             # W55
+                             ("错误记录清理", self.client_errors.prune)):     # W55
                 try:
                     fn()
                 except Exception:
                     log.exception("%s这一拍没办成", what)
 
     _next_rec_prune = 0.0
+
+    def _vpn_expire(self) -> None:
+        """W55:工程师的 VPN 到点收回,站点 VPN 配置重装
+        (没装执行器就只从清单里删,下次装配置时生效)。"""
+        if not self.vpn.ready:
+            return
+        gone = self.vpn.expire(wall_ms())
+        if not gone:
+            return
+        log.info("工程师 VPN 到点收回:%s", ", ".join(gone))
+        self.api.audit.record(actor="site:vpn", action="vpn_expire", target=",".join(gone)[:200],
+                              status=200)
+        if self.priv is not None:
+            self.vpn.write_server_conf()
+            got = self.priv.call("vpn_apply", timeout_s=60)
+            if not got.get("ok"):
+                log.warning("VPN 配置未生效:%s", got.get("error"))
 
     def _prune_recordings(self) -> None:
         """录像留存(W18):每 10 分钟删一次过期的、盘紧时删最旧的。"""
@@ -1181,6 +1215,7 @@ class Server:
                                      ("受力", "force", "reconcile"),             # W26
                                      ("证据没封", "evidence_watch", "tick"),     # W30b
                                      ("版本", "compat", "tick"),                 # A7
+                                     ("证书续签", "cert_renewer", "tick"),        # W55
                                      ("临时撤防到点退回", "arming", "tick")):        # W20
                 try:
                     getattr(getattr(self, part), meth)()

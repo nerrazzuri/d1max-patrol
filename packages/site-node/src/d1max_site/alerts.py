@@ -107,6 +107,7 @@ LEVEL_OF: dict[str, Level] = {
     "backup_verify_failed": Level.P2,
     "push_failed": Level.P2,
     "cert_expiring": Level.P2,
+    "cert_renew_failed": Level.P2,          # W55:证书自动续签失败(明天再试)
     "site_disk_low": Level.P2,
     "lane_stuck": Level.P2,
     "agent_too_old": Level.P2,

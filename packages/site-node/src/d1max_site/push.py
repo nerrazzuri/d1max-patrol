@@ -489,6 +489,22 @@ class PushDesk:
                 out.setdefault(r["provider"], []).append(r["reg_id"])
         return out
 
+    def send_test(self, account: str) -> dict[str, Any]:
+        """W55:给某个账号登记着的手机发一条测试推送(配好推送后确认手机收得到)。回发了几台、哪里出错。"""
+        devices = self._devices(account=account)
+        if not devices:
+            return {"sent": 0, "errors": [f"{account} 没有登记推送的手机(要在手机上登录过)"]}
+        sent, errors = 0, []
+        for provider, ids in devices.items():
+            try:
+                self.senders[provider].send(ids, f"{self.site_name or '站点'}:测试推送",
+                                            "这是一条测试推送,收到说明推送已配置好。",
+                                            {"kind": "push_test"}, ttl_s=300)
+                sent += len(ids)
+            except Exception as exc:  # noqa: BLE001 —— 一个通道不通,另一个照样试
+                errors.append(f"{provider}:{exc}"[:300])
+        return {"sent": sent, "errors": errors}
+
     def tick(self) -> None:
         """要推的都推出去(要等网络:站点主程序放在自己那条道上跑)。
 

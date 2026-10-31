@@ -28,9 +28,11 @@ ARM = "arm"                        # 切到布防(W20):谁值班谁都能
 SET_MODE = "set_mode"              # 切到留守、临时撤防(W20):撤防是经理、管理员的决定
 SCHEDULE = "schedule"              # 改巡逻日程、布防时间(W53):经理能排日程;路线本身还是 manage
 PATROL = "patrol"                  # 派巡逻(临时巡逻,W53):有 dispatch 的都有,经理也有
+#: 远程运维(W55):机器人日志、诊断、重启、对时、续证书;站点重启、恢复、升级。只给管理员、工程师。
+MAINTAIN = "maintain"
 
 ALL = frozenset({VIEW, DISPATCH, ABORT, MANAGE, MANAGE_ACCOUNTS, VIEW_AUDIT, HANDLE_ALERTS,
-                 TELEOP, REVIEW, EXPORT, ARM, SET_MODE, SCHEDULE, PATROL})
+                 TELEOP, REVIEW, EXPORT, ARM, SET_MODE, SCHEDULE, PATROL, MAINTAIN})
 ROLES: dict[str, frozenset[str]] = {
     "admin": ALL,
     # W44 第二期:工程师临时账号(管理员开,4 / 24 小时到点失效)= 管理员减去管账号(不能给自己续命)

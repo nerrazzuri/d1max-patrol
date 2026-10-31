@@ -338,10 +338,18 @@ def _journal(unit: str, hours: int) -> str:
     return got.stdout
 
 
+#: 诊断包里带日志的站点主机服务(W55:加 VPN、对时)。
+BUNDLE_UNITS = ("d1max-site", "d1max-mosquitto", "wg-quick@d1max", "chrony", "d1max-ops")
+
+
 def support_bundle(out: Path, *, home: Path, db: Any, health: HealthDesk | None,
                    hours: int = 24, now_ms: int,
-                   journal: Callable[[str, int], str] = _journal) -> Path:
-    """写诊断包 ``out``(tar.gz)。回 ``out``。"""
+                   journal: Callable[[str, int], str] = _journal,
+                   extra: dict[str, bytes] | None = None) -> Path:
+    """写诊断包 ``out``(tar.gz)。回 ``out``。
+
+    W55:``hours`` 是时间段(日志、事件、命令、操作记录都按它取);``extra`` 是 API 那边另外取来的
+    (每台在线机器人的诊断快照与日志、App 与网页的错误记录),原样放进包里。"""
     files: dict[str, bytes] = {}
 
     def put(name: str, obj: Any) -> None:
@@ -395,8 +403,28 @@ def support_bundle(out: Path, *, home: Path, db: Any, health: HealthDesk | None,
         for r in db.query("SELECT ts, key, value FROM metrics ORDER BY ts, key"):
             w.writerow([r["ts"], r["key"], r["value"]])
         files["metrics.csv"] = buf.getvalue().encode()
-    for unit in ("d1max-site", "d1max-mosquitto"):
+    for unit in BUNDLE_UNITS:
         files[f"logs/{unit}.log"] = redact_text(journal(unit, hours)).encode()
+    win = now_ms - hours * 3_600_000
+    for name, sql in (
+            ("events.json", "SELECT robot_id, kind, data, stamp, received_at FROM events "
+                            "WHERE received_at >= ? ORDER BY received_at DESC LIMIT 20000"),
+            # 命令只带种类和回执,不带内容(换 WiFi 的命令里有密码)
+            ("commands.json", "SELECT command_id, task_id, robot_id, kind, issued_by, issued_at, "
+                              "ack_result, ack_reason FROM commands WHERE issued_at >= ? "
+                              "ORDER BY issued_at DESC LIMIT 20000"),
+            ("audit.json", "SELECT at, actor, action, target, status, detail, remote FROM audit "
+                           "WHERE at >= ? ORDER BY at DESC LIMIT 20000")):
+        table = name.removesuffix(".json")
+        if table in tables:
+            try:
+                rows = [dict(r) for r in db.query(sql, (win,))]
+            except Exception as exc:  # noqa: BLE001 —— 一张表取不到,别的照样打进包
+                rows = [{"error": str(exc)[:300]}]
+            files[name] = redact_text(json.dumps(rows, ensure_ascii=False, indent=1,
+                                                 default=str)).encode()
+    for name, data in (extra or {}).items():
+        files[name] = data
     out = Path(out)
     out.parent.mkdir(parents=True, exist_ok=True)
     tmp = out.with_name(out.name + ".part")

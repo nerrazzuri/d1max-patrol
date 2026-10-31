@@ -67,6 +67,7 @@ from d1max_site.permissions import (
     DISPATCH,
     EXPORT,
     HANDLE_ALERTS,
+    MAINTAIN,
     MANAGE,
     MANAGE_ACCOUNTS,
     PATROL,
@@ -160,6 +161,7 @@ _ZONES = re.compile(r"^/api/maps/([^/]{1,64})/([^/]{1,32})/zones(/confirm|/propo
 _ROUTENET = re.compile(r"^/api/maps/([^/]{1,64})/([^/]{1,32})/route_net$")
 #: W00c6g:狗上建图进程日志的列表、某一个的尾巴(``?bytes=``)。
 _LOGS = re.compile(r"^/api/robots/([^/]{1,64})/logs(?:/([^/]{1,64}))?$")
+_OPS = re.compile(r"^/api/robots/([^/]{1,64})/ops/([a-z_-]{1,32})$")      # W55 远程运维
 _LOG_NAME = re.compile(r"[a-z0-9_.-]{1,48}")
 #: W00c6h:录包时的轨迹(``?since=`` 上次拿到的点数)。
 #: 录包轨迹(W00c6h)、建图预览(W09f):都是管理员经只读命令现取现给
@@ -294,6 +296,13 @@ class SiteApi:
         self.pose_track: Any = None
         #: W44:按时刻从录像抓一帧(报警记录的抓拍);第一次用时按录像库现建。
         self.frames: Any = None
+        #: W55 远程运维(站点主程序接上):特权执行器(``privops``;没装是 None)、证书自动续签、
+        #: App 与网页的错误记录、App 安装包分发、站点 VPN。
+        self.priv: Any = None
+        self.cert_renewer: Any = None
+        self.client_errors: Any = None
+        self.apps: Any = None
+        self.vpn: Any = None
         self._cctv_views: dict[str, Any] = {}
         self._cctv_lock = threading.Lock()
         #: 造 ``CctvView`` 的(测试换成假 ffmpeg 的)。
@@ -754,6 +763,18 @@ class _Handler(TlsHandlerMixin):
                 if not SAFE_ID.match(robot_id):
                     raise HttpError(404, "机器人不存在")
                 return self._mapping_read(robot_id, m.group(2), user)
+            m = _OPS.match(path)
+            if m is not None:
+                robot_id = unquote(m.group(1))
+                if not SAFE_ID.match(robot_id):
+                    raise HttpError(404, "机器人不存在")
+                return self._robot_ops(method, robot_id, m.group(2), user)
+            if path == "/api/client-errors":
+                return self._client_errors(method, user)
+            if path.startswith("/api/system/"):
+                return self._system(method, path, user)
+            if path == "/api/app-update" or path.startswith("/api/app-update/"):
+                return self._app_update(method, path, user)
             m = _LOGS.match(path)
             if m is not None and method == "GET":
                 robot_id = unquote(m.group(1))
@@ -1388,8 +1409,12 @@ class _Handler(TlsHandlerMixin):
             except AuthError as exc:
                 raise HttpError(400, str(exc)) from exc
             self._audit_target = name
-            return self._send_json(200, {"name": name, "password": pw, "expires_ms": until,
-                                         "accounts": acc.list()})
+            out = {"name": name, "password": pw, "expires_ms": until, "accounts": acc.list()}
+            if d.get("vpn") is True:
+                # W55:同时给一份 VPN 配置(同样到点失效),能 SSH 到机器人、站点主机
+                out["vpn"] = self._engineer_vpn(name, until)
+                self._audit_detail["vpn"] = bool(out["vpn"].get("conf"))
+            return self._send_json(200, out)
         m = _ACCOUNT_RM.match(path)
         if m is not None:
             if method != "POST":
@@ -1967,9 +1992,13 @@ class _Handler(TlsHandlerMixin):
         import tempfile
 
         from d1max_site.health import support_bundle
+        q = parse_qs(self.path.split("?", 1)[1] if "?" in self.path else "")
+        h = q.get("hours", ["24"])[0]
+        hours = min(max(int(h), 1), 168) if h.isdigit() else 24      # W55:时间段,最长 7 天
+        extra = self._bundle_extra(hours)
         with tempfile.TemporaryDirectory(prefix="d1max-bundle-") as tmp:
             out = support_bundle(Path(tmp) / "support.tar.gz", home=desk.home, db=desk.db,
-                                 health=desk, now_ms=self.site._now())
+                                 health=desk, now_ms=self.site._now(), hours=hours, extra=extra)
             return self._send_bytes(out.read_bytes(), "application/gzip")
 
     def _push_devices(self, method: str, path: str, user) -> None:
@@ -2485,6 +2514,324 @@ class _Handler(TlsHandlerMixin):
         if not isinstance(data, dict):
             raise HttpError(502, "机器人的回执里没有日志")
         return self._send_json(200, data)
+
+    # ------------------------------------------------------------ W55 远程运维
+
+    #: 机器人运维动作 → (方法, 机器人命令)。读的走 GET,动手的走 POST。
+    _OPS_ACTIONS = {"journal": ("GET", "ops_journal"), "diag": ("GET", "ops_diag"),
+                    "cleanup": (None, "ops_cleanup"), "restart": ("POST", "ops_restart"),
+                    "reboot": ("POST", "ops_reboot"), "debug": ("POST", "ops_debug"),
+                    "timesync": ("POST", "ops_timesync")}
+
+    def _robot_ops(self, method: str, robot_id: str, action: str, user) -> None:
+        """W55:``/api/robots/<id>/ops/<动作>`` —— 日志、诊断、清理、重启服务、重启整机(再输密码)、
+        详细日志、对时、立即续签证书。只给管理员、工程师(``maintain``)。"""
+        self._need(user, MAINTAIN)
+        self._audit_target = robot_id
+        if action == "cert-renew":
+            if method != "POST":
+                raise HttpError(405, "只支持 POST")
+            if self.site.cert_renewer is None:
+                raise HttpError(404, "此站点未启用证书自动续签")
+            try:
+                got = self.site.loop.call(lambda: self.site.cert_renewer.renew(
+                    robot_id, by=str(user)), timeout_s=120)
+            except HttpError:
+                raise
+            except Exception as exc:  # 哪一步不行都说清楚(RenewError、CA、超时)
+                raise HttpError(409, f"续签失败:{exc}") from exc
+            return self._send_json(200, got)
+        spec = self._OPS_ACTIONS.get(action)
+        if spec is None:
+            raise HttpError(404, f"没有这个运维动作:{action}")
+        want, kind = spec
+        if want is not None and method != want:
+            raise HttpError(405, f"只支持 {want}")
+        if method == "GET":
+            q = parse_qs(self.path.split("?", 1)[1] if "?" in self.path else "")
+            payload: dict[str, Any] = {}
+            if action == "journal" and "unit" in q:
+                payload["unit"] = q["unit"][0]
+                h = q.get("hours", ["6"])[0]
+                payload["hours"] = int(h) if h.isdigit() else -1
+        else:
+            payload = self._body()
+            if action == "reboot":
+                self._confirm(user, payload)
+                payload = {}
+            payload.pop("confirm_password", None)
+            self._audit_detail = {k: v for k, v in payload.items()
+                                  if isinstance(v, (str, int, list))}
+        r = self.site.dispatch(lambda: self.site.dispatcher.map_command(
+            robot_id, kind, payload, issued_by=str(user)))
+        ack = r["ack"]
+        if ack.get("result") != "accepted":
+            reason = str(ack.get("reason") or ack.get("result"))
+            raise HttpError(409, f"机器人未执行:{reason}", extra={"reason": reason})
+        return self._send_json(200, ack.get("data") if isinstance(ack.get("data"), dict) else {})
+
+    def _bundle_extra(self, hours: int) -> dict[str, bytes]:
+        """诊断包里另外带的(W55):每台在线机器人的诊断快照、主要服务的日志;App、网页的错误记录。
+        机器人那边一项取不到写进它的 errors.txt,别的照样打包。"""
+        from d1max_site.remote_ops import dumps
+        out: dict[str, bytes] = {}
+        since = self.site._now() - hours * 3_600_000
+        if self.site.client_errors is not None:
+            out["client_errors.json"] = dumps(self.site.client_errors.recent(since))
+        disp = self.site.dispatcher
+        units = ("d1max-agent", "d1max-localizer", "d1max-obstacles", "d1max-persons",
+                 "d1max-lidar-merge", "d1max-sidecar")
+
+        async def one(rid: str, kind: str, payload: dict[str, Any]) -> tuple[str, Any]:
+            try:
+                r = await disp.map_command(rid, kind, payload, issued_by="site:support-bundle")
+                ack = r["ack"]
+                if ack.get("result") != "accepted":
+                    return "err", f"{kind} {payload.get('unit', '')}:{ack.get('reason')}"
+                return "ok", ack.get("data")
+            except Exception as exc:  # noqa: BLE001
+                return "err", f"{kind} {payload.get('unit', '')}:{type(exc).__name__}: {exc}"
+
+        async def gather() -> dict[str, list[tuple[str, dict[str, Any], tuple[str, Any]]]]:
+            import asyncio
+            jobs: list[tuple[str, str, dict[str, Any]]] = []
+            for rid, c in list(getattr(disp, "clients", {}).items()):
+                tasks = getattr(getattr(c, "capabilities", None), "tasks", {}) or {}
+                if not (c.status and c.status.online):
+                    continue
+                if "ops_diag" in tasks:
+                    jobs.append((rid, "ops_diag", {}))
+                for u in units:
+                    if u in (tasks.get("ops_journal") or {}).get("units", []):
+                        jobs.append((rid, "ops_journal", {"unit": u, "hours": min(hours, 168)}))
+            got = await asyncio.gather(*(one(r, k, p) for r, k, p in jobs))
+            res: dict[str, list[Any]] = {}
+            for (rid, kind, p), g in zip(jobs, got, strict=True):
+                res.setdefault(rid, []).append((kind, p, g))
+            return res
+
+        try:
+            per = self.site.loop.call(gather, timeout_s=90)
+        except Exception as exc:  # noqa: BLE001
+            out["robots/errors.txt"] = f"取机器人数据失败:{exc}\n".encode()
+            return out
+        for rid, items in per.items():
+            errs = []
+            for kind, p, (st, data) in items:
+                if st != "ok":
+                    errs.append(str(data))
+                elif kind == "ops_diag":
+                    out[f"robots/{rid}/diag.json"] = dumps(data)
+                else:
+                    out[f"robots/{rid}/{p['unit']}.log"] = str(
+                        (data or {}).get("text", "")).encode()
+            if errs:
+                out[f"robots/{rid}/errors.txt"] = ("\n".join(errs) + "\n").encode()
+        return out
+
+    def _client_errors(self, method: str, user) -> None:
+        """W55:App、网页报自己的错误(登录着的谁都能报);站点留 14 天,进诊断包。"""
+        if method != "POST":
+            raise HttpError(405, "只支持 POST")
+        if self.site.client_errors is None:
+            raise HttpError(404, "此站点未启用错误记录")
+        d = self._body()
+        client = str(d.get("client") or "")
+        if client not in ("app", "web"):
+            raise HttpError(400, "client 要是 app 或 web")
+        self._skip_audit = True                 # 每 10 分钟一批,不进操作记录
+        try:
+            n = self.site.client_errors.add(str(user), client, d.get("items"))
+        except ValueError as exc:
+            raise HttpError(400, str(exc)) from exc
+        return self._send_json(200, {"stored": n})
+
+    def _system(self, method: str, path: str, user) -> None:
+        """W55 站点级运维:重启站点、测试推送、备份状态与恢复、升级站点、VPN 状态。"""
+        self._need(user, MAINTAIN)
+        what = path.removeprefix("/api/system/")
+        priv = self.site.priv
+        if what == "push-test":
+            if method != "POST":
+                raise HttpError(405, "只支持 POST")
+            if self.site.push is None or not self.site.push.senders:
+                raise HttpError(409, "此站点未配置推送")
+            acc = str(self._body().get("account") or user)
+            return self._send_json(200, self.site.push.send_test(acc))
+        if what == "backups":
+            if method != "GET":
+                raise HttpError(405, "只支持 GET")
+            if self.site.backup is None:
+                raise HttpError(404, "此站点未启用备份")
+            return self._send_json(200, self.site.backup.status())
+        if what == "vpn":
+            if method != "GET":
+                raise HttpError(405, "只支持 GET")
+            vpn = self.site.vpn
+            out: dict[str, Any] = {"ready": bool(vpn is not None and vpn.ready),
+                                   "peers": vpn.list() if vpn is not None and vpn.ready else []}
+            if priv is not None:
+                try:
+                    got = priv.call("wg_status", timeout_s=20)
+                    out["status"] = got if got.get("ok") else {"error": got.get("error")}
+                except Exception as exc:  # noqa: BLE001
+                    out["status"] = {"error": str(exc)[:200]}
+            return self._send_json(200, out)
+        if what in ("restart", "restore", "update"):
+            return self._system_priv(method, what, user, priv)
+        raise HttpError(404, f"没有 /api/system/{what}")
+
+    def _system_priv(self, method: str, what: str, user, priv: Any) -> None:
+        """重启站点、恢复备份、升级站点:都会让站点自己停掉,所以只交请求、马上回 202;结果之后
+        ``GET /api/system/<同一个>`` 查(执行器写在结果目录里,站点重启后照样读得到)。"""
+        import json as _json
+        home = self.site.home
+        if home is None:
+            raise HttpError(404, "此站点未启用站点目录")
+        last = home / "ops-last.json"
+        if method == "GET":
+            try:
+                rec = _json.loads(last.read_text(encoding="utf-8")).get(what)
+            except (OSError, ValueError):
+                rec = None
+            if rec and priv is not None:
+                rec = {**rec, "result": priv.result(rec["id"])}
+            return self._send_json(200, {"last": rec})
+        if method != "POST":
+            raise HttpError(405, "只支持 GET、POST")
+        if priv is None:
+            raise HttpError(409, "此站点未安装特权执行器(装机脚本会装):只能上主机操作")
+        args: dict[str, Any] = {}
+        if what == "update":
+            name = self._receive_update(user)
+            args = {"package": name}
+        else:
+            self._confirm(user, self._body())
+        action = {"restart": "restart_site", "restore": "restore", "update": "update"}[what]
+        rid = priv.submit(action, args)
+        try:
+            rec = _json.loads(last.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            rec = {}
+        rec[what] = {"id": rid, "by": str(user), "at_ms": self.site._now(), **args}
+        last.write_text(_json.dumps(rec, ensure_ascii=False), encoding="utf-8")
+        self._audit_detail = {"request": rid, **args}
+        return self._send_json(202, {"id": rid})
+
+    def _engineer_vpn(self, account: str, until: int) -> dict[str, Any]:
+        """W55:工程师的 VPN 配置(同账号一起到点)。VPN 没装、执行器没装都明说,账号照开。"""
+        from d1max_site.vpn import VpnError
+        vpn = self.site.vpn
+        if vpn is None or not vpn.ready:
+            return {"error": "此站点未安装 VPN(d1max-site vpn init),工程师只能在现场局域网里连"}
+        try:
+            got = vpn.add("engineer", f"eng-{account}", expires_ms=until)
+            conf = vpn.peer_conf(got["name"])
+        except VpnError as exc:
+            return {"error": str(exc)}
+        out: dict[str, Any] = {"conf": conf, "address": got["address"], "expires_ms": until}
+        if self.site.priv is None:
+            out["warning"] = "站点未安装特权执行器:要在站点主机上重新装一遍 VPN 配置才生效"
+            return out
+        try:
+            vpn.write_server_conf()
+            r = self.site.priv.call("vpn_apply", timeout_s=60)
+            if not r.get("ok"):
+                out["warning"] = f"VPN 配置未生效:{r.get('error')}"
+        except Exception as exc:  # noqa: BLE001
+            out["warning"] = f"VPN 配置未生效:{exc}"[:300]
+        return out
+
+    def _receive_update(self, user) -> str:
+        """站点升级包(公司签名的 ``.tar.gz``)收进 ``<站点目录>/updates/``;验签由执行器做(root、
+        root 属主的公钥),这里先核得出是个包。再输一次密码在 ``X-D1Max-Confirm`` 头里。"""
+        home = self.site.home
+        try:
+            n = int(self.headers.get("Content-Length") or 0)
+        except ValueError as exc:
+            raise HttpError(400, "Content-Length 不是数") from exc
+        if n <= 0:
+            raise HttpError(400, "未收到文件")
+        if n > self.MAX_UPLOAD:
+            raise HttpError(413, "升级包过大(最多 500 MB)")
+        d = home / "updates"
+        d.mkdir(exist_ok=True)
+        for old in d.glob("site-*.tar.gz"):          # 只留这一个
+            old.unlink(missing_ok=True)
+        name = f"site-{self.site._now()}.tar.gz"
+        dest = d / name
+        left = n
+        with open(dest, "wb") as fh:
+            while left > 0:
+                chunk = self.rfile.read(min(left, 1 << 20))
+                if not chunk:
+                    dest.unlink(missing_ok=True)
+                    raise HttpError(400, "文件未传完")
+                fh.write(chunk)
+                left -= len(chunk)
+        try:
+            self._confirm(user, {"confirm_password": self.headers.get("X-D1Max-Confirm") or ""})
+        except HttpError:
+            dest.unlink(missing_ok=True)
+            raise
+        import tarfile
+        try:
+            with tarfile.open(dest, "r:gz") as tf:
+                if not any(m.name.endswith("/release.json") for m in tf.getmembers()):
+                    raise HttpError(400, "这不是站点升级包(里面没有 release.json)")
+        except (tarfile.TarError, OSError, EOFError) as exc:
+            dest.unlink(missing_ok=True)
+            raise HttpError(400, "这不是升级包(打不开)") from exc
+        return name
+
+    def _app_update(self, method: str, path: str, user) -> None:
+        """W55 App 安装包:``GET /api/app-update?platform=&build=`` 有没有新的(登录着的都能问);
+        ``GET /api/app-update/file/<平台>`` 下载;``POST /api/app-update/upload?platform=``
+        上传(管理员、工程师;签名清单放在 ``X-App-Manifest`` 头里,base64 的 JSON)。"""
+        from d1max_site.app_dist import AppDistError
+        apps = self.site.apps
+        if apps is None:
+            raise HttpError(404, "此站点未启用 App 分发")
+        q = parse_qs(self.path.split("?", 1)[1] if "?" in self.path else "")
+        try:
+            if path == "/api/app-update" and method == "GET":
+                b = q.get("build", ["0"])[0]
+                return self._send_json(200, apps.check(q.get("platform", [""])[0],
+                                                       int(b) if b.isdigit() else 0))
+            if path.startswith("/api/app-update/file/") and method == "GET":
+                f, m = apps.file(path.removeprefix("/api/app-update/file/"))
+                self._audit_target = m["name"]
+                apk = m["name"].endswith(".apk")
+                return self._send_file(f, "application/vnd.android.package-archive" if apk
+                                       else "application/octet-stream")
+            if path == "/api/app-update/upload" and method == "POST":
+                self._need(user, MAINTAIN)
+                import base64
+                import json as _json
+                try:
+                    manifest = _json.loads(base64.b64decode(
+                        self.headers.get("X-App-Manifest") or "", validate=True))
+                except ValueError as exc:
+                    raise HttpError(400, "X-App-Manifest 要是 base64 的 JSON") from exc
+                try:
+                    n = int(self.headers.get("Content-Length") or 0)
+                except ValueError as exc:
+                    raise HttpError(400, "Content-Length 不是数") from exc
+                if n <= 0 or n > self.MAX_UPLOAD:
+                    raise HttpError(413 if n > 0 else 400, "安装包为空或过大")
+                buf = bytearray()
+                while len(buf) < n:
+                    chunk = self.rfile.read(min(n - len(buf), 1 << 20))
+                    if not chunk:
+                        raise HttpError(400, "文件未传完")
+                    buf += chunk
+                meta = apps.add(q.get("platform", [""])[0], bytes(buf), manifest,
+                                now_ms=self.site._now())
+                self._audit_target = meta["name"]
+                return self._send_json(200, meta)
+        except AppDistError as exc:
+            raise HttpError(400 if "没有" not in str(exc) else 404, str(exc)) from exc
+        raise HttpError(404, f"没有 {method} {path}")
 
     def _supervise(self, robot_id: str, user) -> None:
         """监护心跳(W00c6i):``{"action": "renew"|"release"}``。``dispatch`` 权限 —— 保安、

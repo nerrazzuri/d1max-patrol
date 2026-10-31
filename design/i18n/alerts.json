@@ -315,5 +315,9 @@
   "authorized_person": {
     "en": "Authorized person present",
     "zh": "授权人员在场"
+  },
+  "cert_renew_failed": {
+    "en": "Automatic certificate renewal failed",
+    "zh": "证书自动续签失败"
   }
 }
