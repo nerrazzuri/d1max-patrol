@@ -292,7 +292,12 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--w53", action="store_true",
                     help="W53:加保安 gina、经理 olga、只看 vic、一条账号申请、"
                          "一条路线和 15 分钟后的日程")
+    ap.add_argument("--w54", action="store_true",
+                    help="W54 建图向导:站点上先没有图(管理员登录弹「开始建图」),仿真机器人用假建图"
+                         "(录包、打包、上传是真的流程,建出的图照搬 --map-dir,回环按走过的路算)")
     a = ap.parse_args(argv)
+    if a.w54 and a.map_dir is None:
+        ap.error("--w54 要给 --map-dir(假建图照搬这张图)")
     mosq = shutil.which("mosquitto") or "/usr/sbin/mosquitto"
     if not Path(mosq).exists():
         raise SystemExit("没有 mosquitto:sudo apt-get install mosquitto")
@@ -357,7 +362,8 @@ def _setup_rest(a, home: Path, names: list[str]) -> str:
         src = a.dir / "map-src"
         src.mkdir()
         (src / "m.pgm").write_bytes(b"x")
-    _site(home, "map-import", str(src), "--map-id", "estate-1", "--version", "7")
+    if not a.w54:                                  # W54:先没有图,走建图向导
+        _site(home, "map-import", str(src), "--map-id", "estate-1", "--version", "7")
     fp = _site(home, "fingerprint").strip()
     if a.recordings > 0:
         _seed_recordings(home, a.dir, a.recordings)
@@ -382,19 +388,22 @@ def _run(a, home: Path, logs: Path, names: list[str], bport: int, fp: str, procs
                                   "--tls-key", str(crt / "robot.key"), "--hal", "sim",
                                   "--registration", str(crt / "registration.json"),
                                   "--store-dir", str(a.dir / f"agent{sub}"),
-                                  *([] if a.nav == "planned"
+                                  *([] if a.nav == "planned" or a.w54
                                     else ["--runs-root", str(a.dir / f"runs{sub}")]),
                                   "--map", "estate-1:7", "--home", f"{i * 1.0},0,0",
                                   "--nav", a.nav,
-                                  # 规划要图:站点下发地图走发件箱 + 接收口(真机器人也是这么配的)
+                                  # 规划要图:站点下发地图走发件箱 + 接收口(真机器人也是这么配的);
+                                  # W54 假建图也要(录包、建出的图从发件箱传站点)
                                   *(["--outbox", str(a.dir / f"outbox{sub}"),
                                      "--intake", f"https://{a.host}:8444"]
-                                    if a.nav == "planned" else [])],
+                                    if a.nav == "planned" or a.w54 else []),
+                                  *(["--mapping-sim", str(a.map_dir.resolve())] if a.w54
+                                    else [])],
                   "d1max-agent 起来了")
         fresh = _unbound(a, logs, start) if a.unbound else []
         base = f"https://{a.host}:{a.api_port}"
         seeded = _seed_w53(base, a.password, names) if a.w53 and not reuse else []
-        if a.nav == "planned":
+        if a.nav == "planned" and not a.w54:      # W54:站点上还没有图,建好了再下发
             seeded += _send_maps(base, a.password, names)
         print(f"演示站点起来了(日志在 {logs}):\n"
               f"  地址  https://{a.host}:{a.api_port}\n"

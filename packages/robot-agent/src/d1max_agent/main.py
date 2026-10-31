@@ -272,6 +272,9 @@ def build_parser() -> argparse.ArgumentParser:
                    help="双槽发布根目录(站点下发版本,W00c5d 第三部分);缺省读 D1MAX_RELEASE_ROOT")
     o.add_argument("--mapping", action="store_true",
                    help="开建图(W00c5d 第二部分:站点下 mapping/map_build);要本机有 ROS 2")
+    o.add_argument("--mapping-sim", type=Path, default=None, metavar="图目录",
+                   help="演示站点用(W54):假建图 —— 录包、打包流程是真的,建出的图照搬这张图,"
+                        "回环按仿真机器人走过的路算;只配 --hal sim")
     o.add_argument("--intake", default=None,
                    help="站点的机器人专用接收口 https://host:port;"
                         "mqtts 时默认 https://<broker 主机>:8444")
@@ -365,6 +368,9 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         p.error("--tls-* 只用于 mqtts://")
     if (args.outbox is None) == (args.runs_root is None):
         p.error("--outbox 与 --runs-root 给且只给一个(运行记录落在哪)")
+    if args.mapping_sim is not None and (args.hal != "sim" or args.outbox is None
+                                         or args.mapping):
+        p.error("--mapping-sim 只配 --hal sim、要 --outbox、不跟 --mapping 一起")
     if args.mapping and args.outbox is None:
         p.error("--mapping 要配 --outbox(录包和生成的图都写进发件箱传给站点)")
     if args.obstacles == "bridge" and args.nav not in ("planned", "nav2"):
@@ -576,6 +582,9 @@ def build(args: argparse.Namespace) -> Assembled:
                                     ffmpeg=args.ffmpeg, sealer=sealer)
         elif cams:
             log.warning("给了 --record 但没有 --outbox:不录(片段要从录像发件箱传站点)")
+        if mapper is not None and args.mapping_sim is not None:
+            # 假建图跟着仿真机器人的位置长预览、算走过的路
+            mapper.orch.pose = lambda: (hal.x, hal.y, hal.yaw)
         runtime = AgentRuntime(transport=transport, registration=registration, hal=hal,
                                store_dir=args.store_dir, now_ms=wall_ms, loaded_map=args.map,
                                parts=parts, video=video, recorder=recorder,
@@ -754,7 +763,14 @@ def _outbox(args: argparse.Namespace, registration: Registration, parts: EngineP
                  HttpSink(args.intake + "/video", ssl_context=ctx)]
         keeper = MapKeeper(Path(args.store_dir) / "maps", fetch=https_fetch(args.intake, ctx))
     mapper = None
-    if args.mapping:
+    if args.mapping_sim is not None:
+        from d1max_agent.sim_mapping import SimMappingOrchestrator
+        orch = SimMappingOrchestrator(args.mapping_sim, bags_dir=args.outbox / "bags",
+                                      work=Path(args.store_dir) / "mapwork")
+        mapper = MappingService(orch, bags_root=args.outbox / "bags",
+                                maps_out=args.outbox / "maps")
+        mapper.keeper = keeper
+    elif args.mapping:
         from d1max_patrol.app.mapping import MappingConfig, MappingOrchestrator
         from d1max_patrol.app.procs import ProcManager
         store = Path(args.store_dir)
