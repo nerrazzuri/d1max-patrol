@@ -68,6 +68,12 @@ def test_条件齐了_出签好的包和发行记录(world, capsys):
     assert rec["release_key_id"] == relsign.key_id(repo / "deploy/release-pub.pem")
     shown = capsys.readouterr().out
     assert manifest["content_sha256"] in shown and "没编(--skip-android)" in shown
+    # W57:网页上传升级包(站点、机器人)用的 .tar.gz 一起出,里面正好是这个包目录
+    import tarfile
+    tgz = out / f"{pkgs[0].name}.tar.gz"
+    with tarfile.open(tgz) as t:
+        assert {n.split("/")[0] for n in t.getnames()} == {pkgs[0].name}
+    assert tgz.name in (out / f"{pkgs[0].name}.SHA256SUMS.txt").read_text()
 
 
 def _parse(argv):
