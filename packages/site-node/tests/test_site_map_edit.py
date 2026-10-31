@@ -42,6 +42,48 @@ def test_橡皮擦改成空地(tmp_path):
     assert _值(new, 4.0, 0.5) == 254 and st["erased_m2"] > 0 and st["obstacle_m2"] == 0
 
 
+def _块(pgm):
+    """屋里 (1.5–2.0, 1.5–2.0) 画一块障碍(当作要擦掉的杂物)。"""
+    ops = me.check_ops([{"op": "obstacle", "shape": "rect", "points": [[1.5, 1.5], [2.0, 2.0]]}])
+    return me.apply_ops(pgm, META, ops)[0]
+
+
+LOOP = [[1.0, 1.0], [2.6, 1.0], [2.6, 2.6], [1.0, 2.6], [1.1, 1.05]]
+
+
+def test_W61_画笔圈一圈_圈里面整块擦掉(tmp_path):
+    """用户 2026-11-01:用画笔把杂物圈起来,擦的只是笔划那一圈,圈里面的没动。
+    首尾接上就是圈:里面一起擦。"""
+    pgm = _块(_图(tmp_path))
+    assert _值(pgm, 1.75, 1.75) == 0
+    ops = me.check_ops([{"op": "erase", "shape": "stroke", "points": LOOP, "width_m": 0.1}])
+    new, st = me.apply_ops(pgm, META, ops)
+    assert _值(new, 1.75, 1.75) == 254
+    assert 0.2 <= st["erased_m2"] <= 0.4                 # 实际改了的那块(0.5 × 0.5),不是整圈面积
+
+
+def test_W61_没首尾接上的画笔_照旧只擦笔划(tmp_path):
+    pgm = _块(_图(tmp_path))
+    ops = me.check_ops([{"op": "erase", "shape": "stroke", "points": LOOP[:-1], "width_m": 0.1}])
+    new, _ = me.apply_ops(pgm, META, ops)
+    assert _值(new, 1.75, 1.75) == 0
+
+
+def test_W61_只擦本来就是空地的_统计是0_不虚报(tmp_path):
+    pgm = _图(tmp_path)
+    ops = me.check_ops([{"op": "erase", "shape": "stroke", "points": [[1.0, 1.0], [2.0, 1.0]],
+                         "width_m": 0.4}])
+    _, st = me.apply_ops(pgm, META, ops)
+    assert st["erased_m2"] == 0
+
+
+def test_W61_圈出来画障碍_里面整块变占用(tmp_path):
+    pgm = _图(tmp_path)
+    ops = me.check_ops([{"op": "obstacle", "shape": "stroke", "points": LOOP, "width_m": 0.1}])
+    new, st = me.apply_ops(pgm, META, ops)
+    assert _值(new, 1.75, 1.75) == 0 and st["obstacle_m2"] > 2.0
+
+
 def test_画障碍改成占用_直线和方框(tmp_path):
     pgm = _图(tmp_path)
     ops = me.check_ops([{"op": "obstacle", "shape": "line", "points": [[1.0, 1.0], [2.0, 1.0]],

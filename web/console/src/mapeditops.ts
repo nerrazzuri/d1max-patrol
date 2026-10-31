@@ -32,8 +32,29 @@ export function redo(h: History): History {
   return { past: [...h.past, h.now], now: h.future[0], future: h.future.slice(1) };
 }
 
+/** 画笔终点离起点不超过这么远(米;跟 3 倍粗细取大的)就算圈(W61;站点 map_edit.CLOSE_M 同一个数)。 */
+export const CLOSE_M = 0.5;
+
+/** 画笔首尾接上了(至少 3 个点,终点回到起点附近):圈里面整块一起擦 / 一起画(W61,用户 2026-11-01)。 */
+export function closedLoop(o: GridOp): boolean {
+  if (o.shape !== "stroke" || o.points.length < 3) return false;
+  const [ax, ay] = o.points[0];
+  const [bx, by] = o.points[o.points.length - 1];
+  return Math.hypot(bx - ax, by - ay) <= Math.max(CLOSE_M, 3 * o.width_m);
+}
+
 /** 一个操作大概盖了多少平方米(给人确认用,不是精确值;站点回的才准)。 */
 export function areaOf(o: GridOp): number {
+  if (closedLoop(o)) {
+    let a = 0;
+    const p = o.points;
+    for (let i = 0; i < p.length; i++) {
+      const [x1, y1] = p[i];
+      const [x2, y2] = p[(i + 1) % p.length];
+      a += x1 * y2 - x2 * y1;
+    }
+    return Math.abs(a) / 2;
+  }
   if (o.shape === "rect") {
     const [[x0, y0], [x1, y1]] = o.points;
     return Math.abs(x1 - x0) * Math.abs(y1 - y0);

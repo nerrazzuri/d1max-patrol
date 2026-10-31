@@ -972,6 +972,9 @@ img.cam-live { width: 100%; max-height: 60vh; object-fit: contain; background: #
 .me-op.obstacle { stroke: var(--c-text); }
 polygon.me-op.erase { fill: var(--c-success); stroke: none; }
 polygon.me-op.obstacle { fill: var(--c-text); stroke: none; }
+/* W61:画笔首尾接上 = 圈,里面填满、笔划照画 */
+polygon.me-op.loop.erase { stroke: var(--c-success); }
+polygon.me-op.loop.obstacle { stroke: var(--c-text); }
 .me-terrain { fill: var(--c-warning); fill-opacity: .25; stroke: var(--c-warning); stroke-dasharray: 4 3; vector-effect: non-scaling-stroke; }
 .me-terrain.grass, .me-terrain.gravel { fill: var(--c-success); stroke: var(--c-success); }
 

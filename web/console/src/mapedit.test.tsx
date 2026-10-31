@@ -60,6 +60,18 @@ describe("地图编辑器", () => {
     await waitFor(() => expect(posted.some((p) => p.url === "/api/admin/maps/home/4/display")).toBe(true));
   });
 
+  it("W61 画笔首尾接上:预览里圈内填满(跟站点一样整块擦)", async () => {
+    const seq: [number, number][] = [[10, 10], [60, 10], [60, 60], [10, 60], [11, 11]];
+    let i = 0;
+    const Seq = (o: OwnLayer) => <div class="fakemap"><button type="button" class="pick" onClick={() => { const [x, y] = seq[i++ % seq.length]; o.onPick?.(x, y); }}>pick</button><svg>{o.world}</svg></div>;
+    const { container: c } = render(<MapEditPage say={() => {}} target={{ map_id: "home", version: "3" }} Canvas={Seq} />);
+    await waitFor(() => expect(c.querySelector('.mapedit[data-ready]')).not.toBeNull());
+    for (let k = 0; k < seq.length; k++) fireEvent.click(c.querySelector(".pick")!);
+    fireEvent.click(btn(c, "完成绘制"));
+    expect(c.querySelector("polygon.me-op.loop.erase")).not.toBeNull();
+    expect(c.querySelector("polyline.me-op.erase")).toBeNull();
+  });
+
   it("方框两个对角就画完", async () => {
     const { container: c } = page();
     await waitFor(() => expect(c.querySelector('.mapedit[data-ready]')).not.toBeNull());
