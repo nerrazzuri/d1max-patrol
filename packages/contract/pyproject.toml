@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "d1max-contract"
-version = "0.1.0"
+version = "1.0.0-rc.1"
 description = "狗 ↔ 站点的唯一契约:报文数据类、主题与 ACL、RobotHAL、Transport、派遣客户端"
 requires-python = ">=3.10"
 # W00c2a:任务与排程的解析(任务包里是 YAML)。狗上与站点上本来就有它。

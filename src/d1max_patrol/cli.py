@@ -742,7 +742,8 @@ def _cmd_release_sign(args: argparse.Namespace) -> int:
         if args.release_command == "sign-app":
             import hashlib
             import re
-            if not re.fullmatch(r"\d{1,4}\.\d{1,4}\.\d{1,4}\+\d{1,9}", args.version):
+            if not re.fullmatch(r"\d{1,4}\.\d{1,4}\.\d{1,4}(?:-[0-9A-Za-z.]{1,20})?\+\d{1,9}",
+                                args.version):
                 raise ValueError("版本要写成 主.次.修+构建号(例如 1.2.0+12)")
             f = Path(args.file)
             manifest = {"name": f.name, "version": args.version, "requires_mission_schema": 1,

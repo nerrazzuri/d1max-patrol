@@ -83,7 +83,7 @@ const int appApiLevel = 1;
 
 /// 这个 App 的版本号（跟 `pubspec.yaml` 的 `version` 加号前面那一段一致，测试核着）。登录时报给站点
 /// （C-B4）：管理员在版本一览里看得到谁还在用老 App。
-const String appVersion = '1.0.0';
+const String appVersion = '1.0.0-rc.1';
 
 /// 构建号（`pubspec.yaml` 的 `version` 加号后面那一段，测试核着）：站点分发 App（W55）比新旧只看它。
 const int appBuild = 1;

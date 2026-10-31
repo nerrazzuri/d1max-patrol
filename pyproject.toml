@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "d1max-patrol"
-version = "0.1.0"
-description = "智元 D1 Max 四足机器人巡检与例检系统"
+version = "1.0.0-rc.1"
+description = "Nexus Warden:四足机器人安防巡逻系统(站点、机器人代理、手机与网页)"
 requires-python = ">=3.10"
 dependencies = [
     # MIN-10: 下界 `>=13` 是设计文档的全局约束(新版 asyncio 接口
