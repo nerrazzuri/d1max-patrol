@@ -31,6 +31,10 @@ class PrivOps(Protocol):
     def call(self, action: str, args: dict[str, Any] | None = None, *,
              timeout_s: float = 60.0) -> dict[str, Any]: ...
 
+    def submit(self, action: str, args: dict[str, Any] | None = None) -> str: ...
+
+    def result(self, rid: str) -> dict[str, Any] | None: ...
+
 
 class SpoolOps:
     """真的那一份:写请求、轮询结果。"""
@@ -41,20 +45,21 @@ class SpoolOps:
         self._sleep = sleep
         self._mono = monotonic
 
+    def submit(self, action: str, args: dict[str, Any] | None = None) -> str:
+        """只写请求、不等(会让请求方自己停掉的动作:站点升级、恢复、重启)。回请求号,之后
+        :meth:`result` 查。"""
+        return self._write(action, args)
+
+    def result(self, rid: str) -> dict[str, Any] | None:
+        try:
+            got = json.loads((self.spool / "done" / f"{rid}.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+        return got if isinstance(got, dict) else None
+
     def call(self, action: str, args: dict[str, Any] | None = None, *,
              timeout_s: float = 60.0) -> dict[str, Any]:
-        rid = secrets.token_hex(12)
-        req = self.spool / "req"
-        body = json.dumps({"id": rid, "action": action, "args": args or {}},
-                          ensure_ascii=False).encode()
-        tmp = req / f".{rid}.tmp"
-        try:
-            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-            with os.fdopen(fd, "wb") as f:
-                f.write(body)
-            os.replace(tmp, req / f"{rid}.json")      # 路径单元只看 *.json:写完才出现
-        except OSError as exc:
-            raise PrivOpsError(f"特权执行器的请求写不进去({req}):{exc}") from exc
+        rid = self._write(action, args)
         done = self.spool / "done" / f"{rid}.json"
         end = self._mono() + timeout_s
         while self._mono() < end:
@@ -68,6 +73,21 @@ class SpoolOps:
             return got if isinstance(got, dict) else {"ok": False, "error": "结果格式错误"}
         raise PrivOpsError(f"特权执行器 {timeout_s:g} 秒内无响应(d1max-ops.path 未启用?)")
 
+    def _write(self, action: str, args: dict[str, Any] | None) -> str:
+        rid = secrets.token_hex(12)
+        req = self.spool / "req"
+        body = json.dumps({"id": rid, "action": action, "args": args or {}},
+                          ensure_ascii=False).encode()
+        tmp = req / f".{rid}.tmp"
+        try:
+            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with os.fdopen(fd, "wb") as f:
+                f.write(body)
+            os.replace(tmp, req / f"{rid}.json")      # 路径单元只看 *.json:写完才出现
+        except OSError as exc:
+            raise PrivOpsError(f"特权执行器的请求写不进去({req}):{exc}") from exc
+        return rid
+
 
 class SimOps:
     """测试、演示用:记下每次调用,回 ``ok``(``fail`` 里的动作回失败)。"""
@@ -77,6 +97,15 @@ class SimOps:
         self.calls: list[tuple[str, dict[str, Any]]] = []
         self.fail = dict(fail or {})
         self.results = dict(results or {})
+        self._done: dict[str, dict[str, Any]] = {}
+
+    def submit(self, action: str, args: dict[str, Any] | None = None) -> str:
+        rid = f"sim{len(self.calls):06d}"
+        self._done[rid] = self.call(action, args)
+        return rid
+
+    def result(self, rid: str) -> dict[str, Any] | None:
+        return self._done.get(rid)
 
     def call(self, action: str, args: dict[str, Any] | None = None, *,
              timeout_s: float = 60.0) -> dict[str, Any]:

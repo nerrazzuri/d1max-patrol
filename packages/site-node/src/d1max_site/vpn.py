@@ -35,7 +35,11 @@ from typing import Any
 SUBNET = ipaddress.ip_network("172.29.70.0/24")
 SITE_HOST = 1
 #: 各类从哪个号开始分、到哪为止。
-RANGES = {"robot": (10, 99), "phone": (100, 250)}
+RANGES = {"robot": (10, 99), "phone": (100, 199), "engineer": (200, 250)}
+#: W55:工程师的地址到期就收回、可以再分(别的种类删了不马上再分,免得旧配置还在谁手里时撞上)。
+REUSABLE = frozenset({"engineer"})
+#: 隧道里的转发规则单独一条链,增删工程师、重装配置时整条清掉重建,不留旧规则。
+CHAIN = "D1MAX-VPN"
 DEFAULT_PORT = 51820
 KEEPALIVE_S = 25
 _NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}")
@@ -171,11 +175,11 @@ class VpnState:
         self._save(d)
         return {"public": pub, "address": str(SUBNET[SITE_HOST])}
 
-    def add(self, kind: str, name: str) -> dict[str, Any]:
+    def add(self, kind: str, name: str, *, expires_ms: int | None = None) -> dict[str, Any]:
         with self._locked():
-            return self._add(kind, name)
+            return self._add(kind, name, expires_ms)
 
-    def _add(self, kind: str, name: str) -> dict[str, Any]:
+    def _add(self, kind: str, name: str, expires_ms: int | None = None) -> dict[str, Any]:
         if kind not in RANGES:
             raise VpnError(f"种类要是 {'/'.join(RANGES)}")
         if not isinstance(name, str) or not _NAME.fullmatch(name):
@@ -183,20 +187,44 @@ class VpnState:
         d = self._need()
         if any(p["name"] == name for p in d["peers"]):
             raise VpnError(f"{name} 已存在")
+        if (kind == "engineer") != (expires_ms is not None):
+            raise VpnError("工程师要有到期时间,别的种类不要")
         lo, hi = RANGES[kind]
-        used = set(d.get("used", [])) | {p["host"] for p in d["peers"]}
-        host = next((h for h in range(lo, hi + 1) if h not in used), None)
+        now_used = {p["host"] for p in d["peers"]}
+        used = set(d.get("used", [])) | now_used
+        host = next((h for h in range(lo, hi + 1)
+                     if h not in (now_used if kind in REUSABLE else used)), None)
         if host is None:
             raise VpnError(f"{kind} 的地址分完了({lo}–{hi})")
         priv, pub = keypair()
         peer = {"name": name, "kind": kind, "host": host, "private": priv, "public": pub,
                 "psk": _b64(secrets.token_bytes(32))}
+        if expires_ms is not None:
+            peer["expires_ms"] = int(expires_ms)
         d["peers"].append(peer)
         d["used"] = sorted(used | {host})
         self._save(d)
         self._write_peer(d, peer)
         return {"name": name, "kind": kind, "address": str(SUBNET[host]),
-                "conf": str(self.root / "peers" / f"{name}.conf")}
+                "conf": str(self.root / "peers" / f"{name}.conf"), "expires_ms": expires_ms}
+
+    def expire(self, now_ms: int) -> list[str]:
+        """W55:到点的工程师收回(配置文件一起删)。回收回了谁;站点随后重装 VPN 配置。"""
+        with self._locked():
+            d = self._load()
+            gone = [p["name"] for p in d.get("peers", [])
+                    if isinstance(p.get("expires_ms"), int) and p["expires_ms"] <= now_ms]
+            if not gone:
+                return []
+            d["peers"] = [p for p in d["peers"] if p["name"] not in gone]
+            self._save(d)
+            for n in gone:
+                (self.root / "peers" / f"{n}.conf").unlink(missing_ok=True)
+            return gone
+
+    @property
+    def ready(self) -> bool:
+        return bool(self._load().get("server"))
 
     def remove(self, name: str) -> None:
         with self._locked():
@@ -213,18 +241,46 @@ class VpnState:
     def list(self) -> list[dict[str, Any]]:
         d = self._load()
         return [{"name": p["name"], "kind": p["kind"], "address": str(SUBNET[p["host"]]),
-                 "public": p["public"]} for p in d.get("peers", [])]
+                 "public": p["public"], "expires_ms": p.get("expires_ms")}
+                for p in d.get("peers", [])]
 
     def server_conf(self) -> str:
         d = self._need()
         s = d["server"]
         out = ["# d1max 站点 VPN(W45):/etc/wireguard/d1max.conf,wg-quick@d1max",
                "[Interface]", f"Address = {SUBNET[SITE_HOST]}/{SUBNET.prefixlen}",
-               f"ListenPort = {s['port']}", f"PrivateKey = {s['private']}", ""]
+               f"ListenPort = {s['port']}", f"PrivateKey = {s['private']}",
+               *self._forward_rules(d), ""]
         for p in d["peers"]:
             out += [f"# {p['kind']} {p['name']}", "[Peer]", f"PublicKey = {p['public']}",
                     f"PresharedKey = {p['psk']}", f"AllowedIPs = {SUBNET[p['host']]}/32", ""]
         return "\n".join(out)
+
+    @staticmethod
+    def _forward_rules(d: dict[str, Any]) -> list[str]:
+        """W55:隧道里谁能连谁。只放行**工程师 → 隧道里的机器人、站点的 TCP 22**(SSH),别的
+        隧道内转发一律丢(手机连不到机器人)。规则单独一条链,起停都整条清掉重建。只开这一个接口的转发。"""
+        eng = [p for p in d.get("peers", []) if p.get("kind") == "engineer"]
+        up = ["sysctl -q -w net.ipv4.conf.%i.forwarding=1",
+              f"iptables -N {CHAIN} 2>/dev/null || true", f"iptables -F {CHAIN}",
+              f"iptables -C FORWARD -i %i -j {CHAIN} 2>/dev/null || "
+              f"iptables -I FORWARD -i %i -j {CHAIN}",
+              f"iptables -A {CHAIN} -o %i -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT"]
+        up += [f"iptables -A {CHAIN} -o %i -s {SUBNET[p['host']]}/32 -p tcp --dport 22 -j ACCEPT"
+               for p in eng]
+        up += [f"iptables -A {CHAIN} -j DROP"]
+        down = [f"iptables -D FORWARD -i %i -j {CHAIN} 2>/dev/null || true",
+                f"iptables -F {CHAIN} 2>/dev/null || true",
+                f"iptables -X {CHAIN} 2>/dev/null || true"]
+        return [f"PostUp = {r}" for r in up] + [f"PostDown = {r}" for r in down]
+
+    def write_server_conf(self) -> Path:
+        """把站点这边的配置写到 ``<vpn>/server.conf``(0600),特权执行器从这儿装进 /etc/wireguard。"""
+        f = self.root / "server.conf"
+        fd = os.open(f, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(self.server_conf())
+        return f
 
     def peer_conf(self, name: str) -> str:
         d = self._need()
@@ -238,6 +294,8 @@ class VpnState:
         s = d["server"]
         where = "/etc/wireguard/d1max.conf(wg-quick@d1max)" if p["kind"] == "robot" \
             else "WireGuard 应用里导入"
+        if p["kind"] == "engineer":
+            where += f";到期自动失效(站点时间 {p.get('expires_ms')} ms);可 SSH 到机器人、站点主机"
         return "\n".join([
             f"# d1max 站点 VPN(W45):{p['kind']} {p['name']} —— {where}", "[Interface]",
             f"Address = {SUBNET[p['host']]}/32", f"PrivateKey = {p['private']}", "",

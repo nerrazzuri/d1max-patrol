@@ -17,7 +17,7 @@ from typing import Any
 #: 58 路线库(站点存的路线、排程是唯一真理源);59 运营可视化:定位历史 loc_episodes(只加表);
 #: 60 区域「在生效的那一份」nav_zones.effective_body(外审 R1,2026-10-15);
 #: 61 W44:告警结论 alerts.verdict、交班留言 shift_notes、位置轨迹 pose_track(只加列、加表)。
-SCHEMA_VERSION = 68
+SCHEMA_VERSION = 69
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -744,6 +744,21 @@ CREATE TABLE IF NOT EXISTS account_requests (
     decided_by  TEXT NOT NULL DEFAULT '',
     decided_ms  INTEGER
 );
+-- W55(库 69):App、网页报上来的错误(远程运维看得见)。留 14 天。remote_ops.py。
+CREATE TABLE IF NOT EXISTS client_errors (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    at_ms       INTEGER NOT NULL,
+    account     TEXT NOT NULL,
+    client      TEXT NOT NULL,
+    kind        TEXT NOT NULL DEFAULT '',
+    page        TEXT NOT NULL DEFAULT '',
+    message     TEXT NOT NULL DEFAULT '',
+    detail      TEXT NOT NULL DEFAULT '',
+    app_version TEXT NOT NULL DEFAULT '',
+    platform    TEXT NOT NULL DEFAULT '',
+    received_ms INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS client_errors_at ON client_errors(at_ms);
 """
 
 

@@ -225,6 +225,39 @@ class SiteCA:
             raise CAError(f"{robot_id} 没有有效证书可续;要 enroll")
         return self._issue(robot_id, days=days, now_ms=now_ms)
 
+    def sign_robot_csr(self, robot_id: str, csr_pem: str, *, days: int,
+                       now_ms: int) -> tuple[str, Registration, str]:
+        """W55 证书自动续签:机器人自己生成新私钥和证书申请(私钥不出机器人),站点核过申请的签名、
+        CN 是这台机器人,再签。**旧证书不吊销**(同 :meth:`renew_robot`)。
+        回 ``(证书 PEM, 登记, 指纹)``。"""
+        check_robot_id(self.site_id, robot_id)
+        if robot_id not in self._valid_subjects():
+            raise CAError(f"{robot_id} 没有有效证书可续;要 enroll")
+        if (not isinstance(csr_pem, str) or len(csr_pem) > 16_384
+                or "BEGIN CERTIFICATE REQUEST" not in csr_pem):
+            raise CAError("证书申请格式错误")
+        d = self.robot_dir(robot_id)
+        d.mkdir(parents=True, exist_ok=True)
+        csr = d / "renew.csr"
+        csr.write_text(csr_pem, encoding="ascii")
+        try:
+            self._run("req", "-in", str(csr), "-noout", "-verify")
+            subj = self._run("req", "-in", str(csr), "-noout", "-subject", "-nameopt", "RFC2253")
+            if subj.strip().removeprefix("subject=").strip() != f"CN={robot_id}":
+                raise CAError(f"证书申请的主体不是 {robot_id}:{subj.strip()[:120]}")
+            crt = d / "robot.crt"
+            self._run("ca", "-batch", "-notext", "-config", str(self._cnf), "-days", str(days),
+                      "-extensions", "robot_ext", "-in", str(csr), "-out", str(crt))
+            os.chmod(crt, 0o644)
+        finally:
+            csr.unlink(missing_ok=True)
+        (d / "robot.key").unlink(missing_ok=True)       # 站点手里那把旧私钥不再对应在用的证书
+        fp = self.fingerprint(crt)
+        reg = Registration(site_id=self.site_id, robot_id=robot_id, credential_fingerprint=fp,
+                           issued_at=now_ms, expires_at=now_ms + days * DAY_MS)
+        reg.save(d / "registration.json")
+        return crt.read_text(encoding="ascii"), reg, fp
+
     def _issue(self, robot_id: str, *, days: int, now_ms: int) -> RobotBundle:
         site_id = self.site_id
         d = self.robot_dir(robot_id)
