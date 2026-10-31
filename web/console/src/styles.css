@@ -1033,3 +1033,5 @@ details.ops > summary { cursor: pointer; font-weight: 600; padding: 6px 0; }
 .kpi-d.bad { color: var(--c-warning); }
 @media (max-width: 720px) { .kpi-row { grid-template-columns: minmax(0, 1fr); } }
 @media print { .kpi { break-inside: avoid; } }
+.eng-layers { margin-top: 8px; }
+.eng-layers summary { cursor: pointer; font-size: 13px; font-weight: 600; color: var(--c-textSecondary); }

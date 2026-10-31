@@ -1,7 +1,7 @@
 // W44 地图页的图层规则(设计 §4.3):多久没巡过、今晚的事、本班从几点算、下一个巡检点几分钟到、防区标签。
 import { beforeEach, describe, expect, it } from "vitest";
 import { lang } from "./i18n";
-import { DEFAULT_LAYERS, etaNext, shiftStart, staleAfter, staleCells, STALE_AFTER_MS, tonightEvents, zoneDecor } from "./maplayers";
+import { DEFAULT_LAYERS, ENGINEERING_LAYERS, etaNext, layersFor, type Layer, shiftStart, staleAfter, staleCells, STALE_AFTER_MS, tonightEvents, zoneDecor } from "./maplayers";
 import type { Alert } from "./model";
 
 beforeEach(() => {
@@ -14,9 +14,17 @@ const alert = (o: Partial<Alert>): Alert => ({
 });
 
 describe("图层", () => {
-  it("禁行区默认关,别的默认开", () => {
-    expect(DEFAULT_LAYERS.has("nogo")).toBe(false);
-    for (const l of ["zones", "route", "standby", "events", "stale"] as const) expect(DEFAULT_LAYERS.has(l)).toBe(true);
+  it("W60 默认开基本图层(区域、摄像头、路线、事件、禁行区);待命点、工程图层默认关", () => {
+    for (const l of ["zones", "cameras", "route", "events", "nogo"] as const) expect(DEFAULT_LAYERS.has(l)).toBe(true);
+    for (const l of ["standby", "stale", "loc"] as const) expect(DEFAULT_LAYERS.has(l)).toBe(false);
+    expect(ENGINEERING_LAYERS).toEqual(["stale", "loc"]);
+  });
+
+  it("W60 工程图层只给工程师:别的角色存过也不算", () => {
+    const saved = new Set<Layer>(["route", "stale", "loc"]);
+    expect([...layersFor(saved, "engineer")].sort()).toEqual(["loc", "route", "stale"]);
+    expect([...layersFor(saved, "admin")]).toEqual(["route"]);
+    expect([...layersFor(saved, "guard")]).toEqual(["route"]);
   });
 });
 
