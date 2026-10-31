@@ -521,6 +521,11 @@ install -m 0644 -o root -g root /dev/null /usr/local/lib/d1max/d1max_contract/__
 for m in ed25519 relsign; do
   install -m 0644 -o root -g root "$PKG/packages/contract/src/d1max_contract/$m.py" /usr/local/lib/d1max/d1max_contract/
 done
+# 配网服务(W42)以 root 跑:它的代码也拷进 root 独占的 /usr/local/lib/d1max/bind/,用系统 python -I 跑
+# (外审 W55-1:以前从版本目录跑,机器人账号改得了)。换版本时由特权执行器验签以后换。在跑的话重起一下。
+/usr/bin/python3 /usr/local/lib/d1max/ops-runner --install-bind "$PKG" --lib-dir /usr/local/lib/d1max
+systemctl daemon-reload
+systemctl try-restart d1max-bind.service || true
 install -d -m 0755 -o root -g root /var/lib/d1max-ops
 install -d -m 0700 -o "$RUN_USER" -g "$RUN_USER" /var/lib/d1max-ops/req
 install -d -m 0750 -o root -g "$RUN_USER" /var/lib/d1max-ops/done
