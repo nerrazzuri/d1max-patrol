@@ -336,3 +336,17 @@ def test_诊断包_带时间段_事件命令操作记录_另取的原样放进�
             "audit.json", "logs/chrony.log"} <= names
     assert audit[0]["actor"] == "alice" and log == b"wg-quick@d1max 2h\n"
     db.close()
+
+
+def test_命令行签App包_站点认(tmp_path):
+    from d1max_patrol.cli import main
+    assert main(["release", "keygen", str(tmp_path / "p.pem"), str(tmp_path / "pub.pem")]) == 0
+    f = tmp_path / "nw-1.0.0.apk"
+    f.write_bytes(b"APK!")
+    assert main(["release", "sign-app", str(f), "--version", "1.0.0", "--key",
+                 str(tmp_path / "p.pem")]) == 2, "版本没写构建号"
+    assert main(["release", "sign-app", str(f), "--version", "1.0.0+7", "--key",
+                 str(tmp_path / "p.pem")]) == 0
+    man = json.loads((tmp_path / "nw-1.0.0.apk.manifest.json").read_text())
+    st = AppStore(tmp_path / "apps", pubkey=tmp_path / "pub.pem")
+    assert st.add("android", b"APK!", man, now_ms=1)["build"] == 7
