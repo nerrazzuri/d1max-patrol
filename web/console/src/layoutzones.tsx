@@ -45,7 +45,7 @@ export function ZonesTab(p: TabProps) {
         drawing={!!draft}
         onPick={draft ? (px, py) => setDraft((d) => (d ? [...d, toMap(p.meta, px, py)] : d)) : undefined}
         world={draft && draft.length > 0 ? <polyline points={polyPx(p.meta, draft)} class="draft-line" /> : null}
-        marks={(s) => draft?.map(([x, y], i) => { const [sx, sy] = s.map(x, y); return <circle key={i} cx={sx} cy={sy} r={4} class="draft-pt" />; })} />
+        marks={(s) => draft?.map(([x, y], i) => { const [sx, sy] = s.map(x, y); return <circle key={i} cx={sx} cy={sy} r={5} class="draft-pt" />; })} />
       <div class="ly-side">
         {draft ? (
           <div class="row wrap">
