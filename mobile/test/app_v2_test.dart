@@ -10,6 +10,7 @@ import 'package:d1max_patrol/net/site_client.dart';
 import 'package:d1max_patrol/store/site_store.dart';
 import 'package:d1max_patrol/ui/site_add.dart';
 import 'package:d1max_patrol/ui/site_alert_scene.dart';
+import 'package:d1max_patrol/ui/site_runs.dart' show SiteRunPage;
 import 'package:d1max_patrol/ui/site_mapping.dart' show zoneLabelText;
 import 'package:d1max_patrol/ui/site_page.dart';
 import 'package:d1max_patrol/ui/site_standby.dart';
@@ -272,6 +273,23 @@ void main() {
   });
 
   group('告警页（视觉规范 2.5）', () {
+    testWidgets('W60 现场为先：有那一趟的照片就放在报警头下面，点开看全部；没有那一趟不占地方', (t) async {
+      final api = FakeApi('guard');
+      final a = Alert.fromWire(<String, dynamic>{
+        'key': 'A/dog_sees_person#2', 'level': 'P1', 'kind': 'dog_sees_person', 'robot': 'A', 'title': '发现人员',
+        'detail': '', 'count': 1, 'first_ms': _t0, 'last_ms': _t0, 'acked_by': '',
+        'context': <String, dynamic>{'zone': 'East wall', 'task_id': '巡检一'}});
+      await _alarm(t, api, a);
+      expect(find.byKey(ScenePhoto.photoKey), findsOneWidget);
+      expect(api.calls, containsAll(<String>['runs mission=巡检一', 'run 1']));
+      await t.tap(find.byKey(ScenePhoto.photoKey));
+      await t.pumpAndSettle();
+      expect(find.byType(SiteRunPage), findsOneWidget);
+      await t.pumpWidget(Container());
+      await _alarm(t, FakeApi('guard'), _p1());
+      expect(find.byKey(ScenePhoto.photoKey), findsNothing);
+    });
+
     testWidgets('没确认的 P1：头条说没确认多久、框在闪；「我来处理」之后头条换成谁确认的、不闪了、按钮灰掉', (t) async {
       final api = FakeApi('guard')..deterRows = [_session()];
       await _alarm(t, api, _p1());
