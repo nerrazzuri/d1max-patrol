@@ -1,11 +1,12 @@
 // 高级 → 诊断(W44 第四期,设计 §5.3「诊断」):什么时候用 —— 有东西不正常,或者工程师让你发日志。
 // 站点主机一张检查单(/api/health 各项,大白话,通过 / 不通过 + 站点写的说明);每台机器人一张(在线、设备健康:摄像头有画面、
 // 网络、卫星定位、存储盘……认不得的原样);「打包日志」下载站点的诊断包(不含密钥、令牌、数据库)。
-import { useEffect } from "preact/hooks";
+import { useEffect, useState } from "preact/hooks";
 import { useLoad } from "./admin";
 import { nameOf } from "./data";
 import { t, type Key } from "./i18n";
 import type { Robot } from "./model";
+import { RobotOps } from "./remoteops";
 
 interface Health { ok: boolean; version: string; checks: Record<string, { ok: boolean; detail?: string }> }
 type DevRobot = Robot & { devices?: { items: { id: string; state: string; detail?: string }[]; stale?: boolean } | null };
@@ -30,7 +31,8 @@ export function deviceText(id: string): string {
   return id;
 }
 
-export function DiagPage() {
+export function DiagPage({ say }: { say: (s: string) => void }) {
+  const [hours, setHours] = useState(24);
   const [health, reload] = useLoad<Health>("/api/health");
   const [robots, reloadRobots] = useLoad<{ robots: DevRobot[] }>("/api/robots");
   useEffect(() => {
@@ -41,7 +43,12 @@ export function DiagPage() {
     <section class="advdiag">
       <div class="panel-head">
         <h1>{t("tabDiag")}</h1>
-        <a class="btn push" href="/api/support-bundle" download="d1max-support.tar.gz">{t("supportBundle")}</a>
+        <span class="push row">
+          <select aria-label={t("bundleHours")} value={String(hours)} onChange={(e) => setHours(Number(e.currentTarget.value))}>
+            {[6, 24, 72, 168].map((h) => <option key={h} value={String(h)}>{t("opsHours", { n: h })}</option>)}
+          </select>
+          <a class="btn" href={`/api/support-bundle?hours=${hours}`} download="d1max-support.tar.gz">{t("supportBundle")}</a>
+        </span>
       </div>
       <p class="muted lead">{t("diagWhen")}</p>
       <section class="panel checklist">
@@ -73,6 +80,10 @@ export function DiagPage() {
             {!r.devices && <li class="muted small">{t("diagNoDevices")}</li>}
             {r.devices?.stale && <li class="muted small">{t("devStale")}</li>}
           </ul>
+          <details class="ops">
+            <summary>{t("opsTitle")}</summary>
+            <RobotOps robotId={r.robot_id} tasks={Object.keys(r.capabilities?.tasks ?? {})} say={say} />
+          </details>
         </section>
       ))}
     </section>

@@ -31,7 +31,8 @@ beforeEach(() => {
       posted.push({ url, body });
       if (url === "/api/accounts/engineer") {
         if (!pwOk) return Promise.resolve(json({ error: "密码不对" }, 403));
-        return Promise.resolve(json({ name: "eng-20261027-1200", password: "s3cret-once-only", expires_ms: NOW + 4 * 3_600_000, accounts }));
+        return Promise.resolve(json({ name: "eng-20261027-1200", password: "s3cret-once-only", expires_ms: NOW + 4 * 3_600_000, accounts,
+          ...(body.vpn ? { vpn: { conf: "[Interface]\nAddress = 10.77.0.200/32\n", address: "10.77.0.200" } } : {}) }));
       }
       if (url.endsWith("/remove")) accounts = accounts.filter((a) => !url.includes(`/${a.name}/`));
       return Promise.resolve(json({ accounts }));
@@ -84,7 +85,9 @@ describe("用户页", () => {
     fireEvent.input(document.querySelector('form.confirm-pw input[type="password"]')!, { target: { value: "my-own-password" } });
     fireEvent.submit(document.querySelector("form.confirm-pw")!);
     await waitFor(() => expect(document.body.textContent).toContain("s3cret-once-only"));
-    expect(posted.find((p) => p.url === "/api/accounts/engineer")!.body).toEqual({ display_name: "王工", hours: 24, confirm_password: "my-own-password" });
+    expect(posted.find((p) => p.url === "/api/accounts/engineer")!.body).toEqual({ display_name: "王工", hours: 24, vpn: true, confirm_password: "my-own-password" });
+    expect(document.body.textContent).toContain("10.77.0.200");                    // W55:默认同时发 VPN 配置
+    expect(document.querySelector('a[download="d1max-eng-20261027-1200.conf"]')).not.toBeNull();
     expect(document.body.textContent).toContain("eng-20261027-1200");
     expect(document.body.textContent).toContain("关闭后无法再查看");
     fireEvent.click(btn(document.body, "关闭"));
