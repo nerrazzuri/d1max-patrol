@@ -14,6 +14,7 @@ import '../l10n.dart';
 import '../net/site_client.dart';
 import '../store/site_store.dart';
 import 'guide.dart';
+import 'map_wizard.dart' show openMapWizard;
 import 'nw/nw_button.dart';
 import 'nw/nw_p4_admin.dart' show nwGap8, NwListView;
 import 'nw/nw_theme.dart';
@@ -75,8 +76,8 @@ class _Entry extends StatelessWidget {
       'robots' => (tr('Add robots', '加机器人'), tr('Robots → Add, scan the sticker on the robot.', '机器人 → 添加，扫机器人上的贴纸。')),
       'map' => (
           tr('Map', '地图'),
-          tr('Mapping needs the engineer tools. Ask your delivery engineer, or follow the mapping manual.',
-              '建图要工程师工具：请交付工程师做，或者照《建图手册》做。')
+          tr('Walk the robot around the site once with the mapping wizard (20–40 minutes).',
+              '跟着建图向导，开着机器人走一圈（二三十分钟）。')
         ),
       'zones' => (tr('Confirm no-go zones', '确认禁行区'),
           tr("Robots don't go out on their own until the zones on this map are confirmed.", '这张图的禁行区确认之前，机器人不自己出去。')),
@@ -308,7 +309,9 @@ class _AdminHomeTabState extends State<AdminHomeTab> {
     switch (id) {
       case 'robots' || 'standby':
         widget.switchTab(1);
-      case 'map' || 'zones':
+      case 'map':
+        unawaited(openMapWizard(context, widget.api).then((_) => _load()));
+      case 'zones':
         widget.switchTab(2);
       case 'routes':
         _push(context, SiteRoutesPage(api: widget.api));

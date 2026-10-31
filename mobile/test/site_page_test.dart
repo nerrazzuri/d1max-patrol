@@ -708,6 +708,74 @@ class FakeApi implements SiteApi {
   Future<Map<String, dynamic>> me() async => <String, dynamic>{
         'name': session?.name, 'role': session?.role, 'display_name': '', 'guide': guide};
 
+  // ---- W54 建图向导：假的站点向导（照站点的规矩走步）
+
+  /// 站点上的向导（null 是没有）；[mapsCount] 站点上有几版图（0 = 弹「开始建图」）。
+  Map<String, dynamic>? wizard;
+  int mapsCount = 1;
+
+  /// 建图那一步站点说的结果（`{state: pending|ready|failed, quality?, reason?}`）。
+  Map<String, dynamic> wizardBuild = <String, dynamic>{'state': 'pending'};
+  SiteError? wizardError;
+
+  @override
+  Future<Map<String, dynamic>> mapWizard() async {
+    calls.add('mapWizard');
+    final w = wizard;
+    return <String, dynamic>{'wizard': w == null ? null : <String, dynamic>{...w, 'build': wizardBuild}, 'maps': mapsCount};
+  }
+
+  @override
+  Future<Map<String, dynamic>> mapWizardAction(Map<String, dynamic> body) async {
+    final a = body['action'];
+    calls.add('wizard $a${body['step'] != null ? ' ${body['step']}' : ''}${body['drive'] != null ? ' ${body['drive']}' : ''}');
+    final err = wizardError;
+    if (err != null) {
+      wizardError = null;
+      throw err;
+    }
+    switch (a) {
+      case 'start':
+        wizard = <String, dynamic>{
+          'step': 'prepare', 'robot_id': body['robot_id'], 'site_type': body['site_type'], 'drive': body['drive'],
+          'map_id': 'main', 'version': '20261031-1', 'tried': <dynamic>[], 'label': body['label'] ?? '',
+          'by': session?.name ?? 'alice', 'started_ms': 0,
+        };
+      case 'step':
+        wizard = <String, dynamic>{...?wizard, 'step': body['step'], if (body['drive'] != null) 'drive': body['drive']};
+      case 'rewalk':
+        wizard = <String, dynamic>{...?wizard, 'step': 'walk', 'version': '20261031-2'};
+      case 'finish':
+        final done = <String, dynamic>{...?wizard, 'step': 'done'};
+        wizard = null;
+        return <String, dynamic>{'wizard': done};
+      case 'abandon':
+        wizard = null;
+        return <String, dynamic>{'wizard': null};
+    }
+    return <String, dynamic>{'wizard': <String, dynamic>{...?wizard, 'build': wizardBuild}};
+  }
+
+  Map<String, dynamic> overview = <String, dynamic>{'maps': <dynamic>[], 'robots': <dynamic>[]};
+
+  @override
+  Future<Map<String, dynamic>> mapsOverview() async {
+    calls.add('mapsOverview');
+    return overview;
+  }
+
+  @override
+  Future<Map<String, dynamic>> deleteMapVersion(String mapId, String version) async {
+    calls.add('deleteMap $mapId:$version');
+    return <String, dynamic>{'ok': true};
+  }
+
+  @override
+  Future<Map<String, dynamic>> rollbackMap(String robotId) async {
+    calls.add('rollback $robotId');
+    return <String, dynamic>{'ok': true};
+  }
+
   @override
   Future<Map<String, dynamic>> setGuide(Map<String, dynamic> patch) async {
     calls.add('setGuide ${patch.keys.join(',')}');
