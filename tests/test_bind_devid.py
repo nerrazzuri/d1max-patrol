@@ -99,3 +99,30 @@ def test_答题_站点验得过(板):
 def test_没烧写过设备身份_答不了题_说清楚(板):
     p, hw = 板
     assert devid.answer(p, purpose="bind", site_id="s1", nonce="n" * 32, hw_sources=hw) is None
+
+
+def test_没走过烧写的老机器_只补设备身份_不当成烧写过(tmp_path):
+    p = BindPaths(etc=tmp_path / "etc")
+    p.etc.mkdir()
+    dt = tmp_path / "serial-number"
+    dt.write_bytes(b"1424C21A0C3A\x00")
+    req = devid.init_identity(p, serial="C40221", model="d1max-orin", hw_sources=[dt])
+    assert req["serial"] == "C40221" and not p.device.exists(), "不写 device.json(配网服务不起)"
+    factory = ed25519.new_seed()
+    pubs = [ed25519.public_key(factory)]
+    devid.install_cert(p, di.sign_device(factory, req, now_ms=NOW), factory_pubs=pubs,
+                       hw_sources=[dt])
+    assert devid.problems(p, factory_pubs=pubs, hw_sources=[dt]) == []
+    ans = devid.answer(p, purpose="claim", site_id="s1", nonce="n" * 32, hw_sources=[dt])
+    assert di.verify_cert(ans["cert"], pubs).serial == "C40221"
+    assert devid.init_identity(p, serial="C40221", hw_sources=[dt])["device_pub"] == \
+        req["device_pub"], "再跑一次:同一把设备钥匙"
+    with pytest.raises(devid.DevIdError, match="C40221"):
+        devid.init_identity(p, serial="C40011", hw_sources=[dt])
+
+
+def test_烧写过的机器_补身份的序列号要跟烧写的一样(板):
+    p, hw = 板
+    with pytest.raises(devid.DevIdError, match="D1M-0001"):
+        devid.init_identity(p, serial="D1M-9999", hw_sources=hw)
+    assert devid.init_identity(p, serial="D1M-0001", hw_sources=hw)["serial"] == "D1M-0001"

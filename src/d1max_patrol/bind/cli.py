@@ -63,6 +63,12 @@ def add_args(sub: argparse._SubParsersAction) -> None:
     paths_args(ic)
     ic.add_argument("cert", help="出厂证书 <序列号>.json")
     ic.add_argument("--hw-source", action="append", default=None, help=argparse.SUPPRESS)
+    di_ = fs.add_parser("device-init", help="W63:没走过烧写的老机器(开发样机)只补设备身份:"
+                                             "设备钥匙 + 出厂申请;不动绑定码、热点")
+    paths_args(di_)
+    di_.add_argument("--serial", required=True, help="这台在站点上的编号")
+    di_.add_argument("--model", default="")
+    di_.add_argument("--hw-source", action="append", default=None, help=argparse.SUPPRESS)
     r = fs.add_parser("rekey", help="贴纸坏了重做(只能在没绑定的时候)")
     paths_args(r)
     r.add_argument("--out", required=True)
@@ -197,6 +203,10 @@ def _factory(args: argparse.Namespace) -> int:
     hw = [Path(x) for x in args.hw_source] if getattr(args, "hw_source", None) else None
     hw_kw = {"hw_sources": hw} if hw is not None else {}
     try:
+        if args.factory_command == "device-init":
+            devid.init_identity(paths, serial=args.serial, model=args.model, **hw_kw)
+            print(f"出厂申请(拿到台式机上用出厂钥匙签):{devid.request_path(paths)}")
+            return 0
         if args.factory_command == "install-cert":
             devid.install_cert(paths, devid.load_cert_file(Path(args.cert)),
                                factory_pubs=devid.factory_pubs(paths), **hw_kw)

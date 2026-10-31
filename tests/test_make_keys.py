@@ -1,4 +1,4 @@
-"""W57:公司三把钥匙的生成脚本(tools/make_keys.py)。"""
+"""W57:公司钥匙的生成脚本(tools/make_keys.py);W63 加第四把出厂钥匙。"""
 
 from __future__ import annotations
 
@@ -25,16 +25,17 @@ def _fake_keytool(tmp_path: Path) -> str:
     return str(kt)
 
 
-def test_三把都生成_私钥只有自己读_说明里有编号(tmp_path):
+def test_四把都生成_私钥只有自己读_说明里有编号(tmp_path):
     out = tmp_path / "usb" / "nexus-keys"
     made = mk.make(out, org="Test Co", keytool=_fake_keytool(tmp_path))
     assert set(made) == set(mk.FILES)
     assert stat.S_IMODE(out.stat().st_mode) == 0o700
-    for f in ("release.key", "unbind.key", "android-release.jks"):
+    for f in ("release.key", "unbind.key", "factory.key", "android-release.jks"):
         assert stat.S_IMODE((out / f).stat().st_mode) == 0o600, f
     from d1max_contract import relsign
     note = (out / "钥匙说明.txt").read_text()
     assert relsign.key_id(out / "release-pub.pem") in note and "解绑令" in note
+    assert "出厂钥匙" in note
     from d1max_contract import ed25519
     from d1max_contract.binding import sign_unbind, verify_unbind
     seed = ed25519.seed_from_pem((out / "unbind.key").read_bytes())
@@ -52,3 +53,26 @@ def test_不覆盖已有的_不许放仓库里(tmp_path):
     assert (out / "release.key").read_text() == "old"
     with pytest.raises(SystemExit, match="仓库里面"):
         mk.make(ROOT / "runs" / "keys-should-not-be-here", org="x", android=False)
+
+
+def test_W63_已有三把_只补出厂钥匙_别的不动_说明里追加(tmp_path):
+    out = tmp_path / "keys"
+    mk.make(out, org="x", android=False)
+    (out / "factory.key").unlink()
+    (out / "factory-pub.pem").unlink()
+    before = {f: (out / f).read_bytes() for f in ("release.key", "unbind.key")}
+    note0 = (out / "钥匙说明.txt").read_text()
+    assert mk.make_factory(out) == ["factory.key", "factory-pub.pem"]
+    assert {f: (out / f).read_bytes() for f in before} == before
+    assert stat.S_IMODE((out / "factory.key").stat().st_mode) == 0o600
+    from d1max_contract import device_id as di
+    from d1max_contract import ed25519
+    seed = ed25519.seed_from_pem((out / "factory.key").read_bytes())
+    pub = ed25519.pub_from_pem((out / "factory-pub.pem").read_bytes())
+    req = di.make_request(serial="D1M-1", model="d1max",
+                          device_pub=ed25519.public_key(ed25519.new_seed()), hw_id="a" * 64)
+    assert di.verify_cert(di.sign_device(seed, req, now_ms=1), [pub]).serial == "D1M-1"
+    note = (out / "钥匙说明.txt").read_text()
+    assert note.startswith(note0) and di.key_id(pub) in note and "deploy/factory-pub.pem" in note
+    with pytest.raises(SystemExit, match="不覆盖"):
+        mk.make_factory(out)
