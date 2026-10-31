@@ -186,3 +186,14 @@ def test_网页登录记成web_自己报成app也不认(台):
     assert code == 200
     assert [(c["name"], c["kind"], c.get("version")) for c in 台.accounts.clients()] == [
         ("alice", "web", None)]
+
+
+def test_W58_第三方软件声明_包里带着_按utf8纯文本给():
+    got = webui.resolve("/assets/third-party-notices.txt")
+    assert got is not None, \
+        "网页构建产物里没有第三方软件声明(先 tools/third_party.py,再 npm run build)"
+    f, typ, _ = got
+    assert typ == "text/plain; charset=utf-8"
+    text = f.read_text(encoding="utf-8")
+    for name in ("PyYAML", "paho-mqtt", "preact", "AGPL-3.0"):
+        assert name in text, name

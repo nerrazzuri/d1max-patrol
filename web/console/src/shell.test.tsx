@@ -149,6 +149,16 @@ describe("新外壳", () => {
     expect(Array.from(bar.querySelectorAll("button")).some((b) => b.textContent === "EN")).toBe(true);
   });
 
+  it("W58 用户菜单里能打开第三方软件声明(新窗口)", () => {
+    const c = render(<Console me={me("guard")} onOut={() => {}} />);
+    const bar = c.container.querySelector(".topbar")!;
+    fireEvent.click(bar.querySelector(".usermenu > button")!);
+    const a = Array.from(bar.querySelectorAll("a")).find((x) => x.textContent === "第三方软件声明")!;
+    expect(a.getAttribute("href")).toBe("/assets/third-party-notices.txt");
+    expect(a.getAttribute("target")).toBe("_blank");
+    expect(a.getAttribute("rel")).toContain("noopener");
+  });
+
   it("布防状态只显示,不能点", async () => {
     const c = render(<Console me={me("admin")} onOut={() => {}} />);
     await waitFor(() => expect(c.container.querySelector(".armstate")!.textContent).toContain("布防"));

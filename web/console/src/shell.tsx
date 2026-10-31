@@ -224,6 +224,7 @@ function UserMenu(props: { me: Me; pref: ThemePref; onPref: (p: ThemePref) => vo
             </div>
           </div>
           <button type="button" class="menu-item" role="menuitem" onClick={() => { setOpen(false); setPw(true); }}>{t("changePassword")}</button>
+          <a class="menu-item" role="menuitem" href="/assets/third-party-notices.txt" target="_blank" rel="noopener noreferrer" onClick={() => setOpen(false)}>{t("thirdParty")}</a>
           <button type="button" class="menu-item" role="menuitem" onClick={props.onSignOut}><Icon name="logout" />{t("signOut")}</button>
         </div>
       )}
