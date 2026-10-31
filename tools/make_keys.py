@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""生成公司的三把钥匙(W57,`docs/钥匙生成与保管.md`):**在你自己的电脑上跑一次,输出放加密 U 盘**。
+"""生成公司的三把钥匙(W57,`docs/钥匙生成与保管.md`):**你本人跑一次**。现阶段放台式机 ~/nexus-keys,
+正式发行前挪到加密 U 盘。
 
-    .venv/bin/python tools/make_keys.py --out /media/<加密U盘>/nexus-keys --org "<公司名>"
+    .venv/bin/python tools/make_keys.py --out ~/nexus-keys --org "<公司名>"
 
 生成:
 - ``release.key`` / ``release-pub.pem``:发行签名钥匙(站点、机器人的升级包,App 的签名清单)。
@@ -43,8 +44,9 @@ def make(out: Path, *, org: str, android: bool = True,
     from d1max_contract import ed25519, relsign
     from d1max_contract.binding import key_id
     if _inside(out, ROOT):
-        raise SystemExit(f"输出目录 {out} 在仓库里面:放到加密 U 盘上")
-    out.mkdir(parents=True, exist_ok=True)
+        raise SystemExit(f"输出目录 {out} 在仓库里面:放到仓库外面(~/nexus-keys 或加密 U 盘)")
+    out.mkdir(mode=0o700, parents=True, exist_ok=True)
+    out.chmod(0o700)
     clash = [f for f in FILES if (out / f).exists()]
     if clash:
         raise SystemExit(f"{out} 里已经有 {clash}:不覆盖(钥匙丢不起;换一个空目录)")
@@ -86,7 +88,7 @@ def make(out: Path, *, org: str, android: bool = True,
    签:安卓 App。发行机上 mobile/android/key.properties 指向它(见 docs/正式发行手册.md)。
    密码不写在这里:写在纸质保管记录上,跟 U 盘分开放。
 
-保管:这个目录整份再拷一份到另一个加密 U 盘,两份分开放(比如一份随身、一份保险柜)。
+保管:现阶段放台式机,至少再拷一份离线备份;正式发行前挪到两个加密 U 盘(分开放),删掉台式机上的。
 不要放 GitHub、网盘、聊天软件、邮箱。丢了或怀疑泄露:见 docs/钥匙生成与保管.md 第四节。
 """, encoding="utf-8")
     made.append("钥匙说明.txt")
@@ -95,13 +97,13 @@ def make(out: Path, *, org: str, android: bool = True,
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="生成公司的三把钥匙(在你自己的电脑上跑)")
-    ap.add_argument("--out", required=True, help="输出目录(加密 U 盘上,空目录)")
+    ap.add_argument("--out", required=True, help="输出目录(仓库外的空目录,如 ~/nexus-keys)")
     ap.add_argument("--org", default="Nexus Dynamic", help="公司名(写进安卓签名证书)")
     ap.add_argument("--skip-android", action="store_true", help="不生成安卓签名钥匙")
     a = ap.parse_args(argv)
     made = make(Path(a.out).expanduser(), org=a.org, android=not a.skip_android)
     print(f"\n生成好了({len(made)} 个文件):{', '.join(made)}")
-    print(f"先看 {Path(a.out) / '钥匙说明.txt'} 里的下一步;再把整个目录拷一份到另一个加密 U 盘。")
+    print(f"先看 {Path(a.out) / '钥匙说明.txt'} 里的下一步;再把整个目录拷一份离线备份。")
     return 0
 
 
