@@ -2532,7 +2532,8 @@ class _Handler(TlsHandlerMixin):
         try:
             session = desk.open(robot_id, user, takeover_reason=reason)
         except TeleopRefused as exc:
-            raise HttpError(exc.status, exc.message) from exc
+            raise HttpError(exc.status, exc.message,
+                            extra={"reason": exc.reason} if exc.reason else None) from exc
         ws = upgrade(self)
         if ws is None:
             desk.close(session, "bad_upgrade")

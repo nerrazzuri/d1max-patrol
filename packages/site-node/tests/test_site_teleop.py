@@ -37,7 +37,7 @@ class 手机:
                 break
             head += chunk
         self.status = int(head.split(b" ")[1]) if head else 0
-        self.error = ""
+        self.error = self.reason = ""
         if self.status != 101:
             n = 0
             for line in head.split(b"\r\n"):
@@ -47,6 +47,7 @@ class 手机:
             while len(body) < n:
                 body += self.sock.recv(n - len(body))
             self.error = json.loads(body or b"{}").get("error", "")
+            self.reason = json.loads(body or b"{}").get("reason", "")
         self.buf = b""
         self.seq = 0
 
@@ -273,6 +274,7 @@ def test_没画面不给租约_遥控中画面没了就不转发运动(站点):
     s.video_live["site"] = False
     ph = 手机(s, tok)
     assert ph.status == 409 and "没有画面" in ph.error
+    assert ph.reason == "no_video"          # W54:手机据此等画面起来再试,不当成别的拒绝
     s.video_live["site"] = True
     ph = 手机(s, tok)
     ph.wait_kind("granted")

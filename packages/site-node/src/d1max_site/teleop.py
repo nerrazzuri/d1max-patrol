@@ -57,10 +57,12 @@ class _NoRelease(Exception):
 
 
 class TeleopRefused(RuntimeError):
-    def __init__(self, status: int, message: str) -> None:
+    def __init__(self, status: int, message: str, reason: str = "") -> None:
         super().__init__(message)
         self.status = status
         self.message = message
+        #: 原因代号(W54:``no_video`` —— 画面还没起来,手机等一会儿再试)。
+        self.reason = reason
 
 
 @dataclass
@@ -160,7 +162,7 @@ class TeleopDesk:
 
     def _grant(self, robot_id: str, name: str, takeover_reason: str, t0: float) -> Session:
         if not self._video_ok(robot_id):
-            raise TeleopRefused(409, f"{robot_id} 没有画面:没画面不许动")
+            raise TeleopRefused(409, f"{robot_id} 没有画面:没画面不许动", "no_video")
         caps = self._caps(robot_id)
         epoch, row_id = self._new_lease_row(robot_id, name, takeover_reason)
         try:
