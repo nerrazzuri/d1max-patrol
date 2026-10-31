@@ -153,6 +153,10 @@ class _SiteTeleopPageState extends State<SiteTeleopPage> with WidgetsBindingObse
     }
   }
 
+  /// 画面还没起来被拒（站点回 `no_video`）时再要几次：这一页一开就去拉画面，机器人推上来要几秒（W54）。
+  static const int _videoRetries = 6;
+  int _noVideo = 0;
+
   Future<void> _open() async {
     try {
       final link = await widget.api.teleop(widget.robotId, takeoverReason: widget.takeoverReason);
@@ -168,6 +172,13 @@ class _SiteTeleopPageState extends State<SiteTeleopPage> with WidgetsBindingObse
       _link = link;
       _sub = link.messages.listen(_onMsg);
     } on SiteError catch (e) {
+      if (e.status == 409 && e.body['reason'] == 'no_video' && _noVideo < _videoRetries && mounted && !_ended) {
+        _noVideo++;
+        setState(() => _status = tr('Waiting for the video to start…', '等画面起来……'));
+        await Future<void>.delayed(const Duration(seconds: 2));
+        if (mounted && !_ended) await _open();
+        return;
+      }
       if (mounted) {
         setState(() {
           _status = tr("Can't start remote control: ${e.message}", '遥控开不了：${e.message}');

@@ -390,6 +390,39 @@ void main() {
     await t.pumpWidget(Container());
   });
 
+  testWidgets('画面还没起来被拒（no_video）：说在等画面，隔一会儿再要，拿到了照常遥控（W54）', (t) async {
+    final api = FakeApi('guard')
+      ..teleopError = const SiteError(409, 'A 没有画面:没画面不许动', body: <String, dynamic>{'reason': 'no_video'})
+      ..teleopErrorTimes = 2;
+    await t.pumpWidget(MaterialApp(home: SiteTeleopPage(api: api, robotId: 'A')));
+    await t.pump();
+    await t.pump();
+    expect(find.textContaining('等画面'), findsOneWidget);
+    expect(find.text('已结束'), findsNothing, reason: '没结束，还在等');
+    await t.pump(const Duration(seconds: 2));
+    await t.pump(const Duration(seconds: 2));
+    await t.pump();
+    expect(api.teleopCalls, 3);
+    expect(api.link, isNotNull);
+    api.link!.ctl.add(<String, dynamic>{'kind': 'granted', 'lease_epoch': 1, 'max_vx': 0.5, 'max_wz': 0.75});
+    await t.pump();
+    await t.pump();
+    expect(find.textContaining('你在遥控'), findsOneWidget);
+    await t.pumpWidget(Container());
+  });
+
+  testWidgets('一直没画面：等够了才说开不了', (t) async {
+    final api = FakeApi('guard')
+      ..teleopError = const SiteError(409, 'A 没有画面:没画面不许动', body: <String, dynamic>{'reason': 'no_video'});
+    await t.pumpWidget(MaterialApp(home: SiteTeleopPage(api: api, robotId: 'A')));
+    for (var i = 0; i < 10; i++) {
+      await t.pump(const Duration(seconds: 2));
+    }
+    expect(find.textContaining('遥控开不了'), findsOneWidget);
+    expect(api.teleopCalls, lessThanOrEqualTo(7));
+    await t.pumpWidget(Container());
+  });
+
   testWidgets('被拒说站点给的原因；退出放租并关连接', (t) async {
     final refused = FakeApi('guard')..teleopError = const SiteError(409, 'gina 正在遥控 A');
     await t.pumpWidget(MaterialApp(home: SiteTeleopPage(api: refused, robotId: 'A')));

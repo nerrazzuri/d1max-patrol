@@ -566,6 +566,10 @@ class FakeApi implements SiteApi {
   /// 遥控（W00c5c）。
   FakeTeleopLink? link;
   SiteError? teleopError;
+
+  /// 给了就只拒前几次（之后照常给连接）；没给（null）[teleopError] 次次都拒。
+  int? teleopErrorTimes;
+  int teleopCalls = 0;
   String? lastTakeover;
   /// 给了就等它完成再回连接（模拟连接、授权还在路上）。
   Completer<void>? teleopGate;
@@ -573,7 +577,12 @@ class FakeApi implements SiteApi {
   Future<TeleopLink> teleop(String robotId, {String takeoverReason = ''}) async {
     lastTakeover = takeoverReason;
     if (teleopGate != null) await teleopGate!.future;
-    if (teleopError != null) throw teleopError!;
+    teleopCalls++;
+    final times = teleopErrorTimes;
+    if (teleopError != null && (times == null || times > 0)) {
+      if (times != null) teleopErrorTimes = times - 1;
+      throw teleopError!;
+    }
     return link = FakeTeleopLink();
   }
   /// 运行记录（W00c5d）：真站点的夹具。
