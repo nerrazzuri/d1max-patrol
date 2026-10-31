@@ -284,7 +284,30 @@ def _ca_reg(tmp: Path, expires_in_ms: int, now: int):
     db = SiteDB(tmp / "site.db")
     reg = Registry(db, site_id="estate-1")
     reg.enroll("A", fingerprint=b.fingerprint, issued_at=now, expires_at=now + expires_in_ms)
+    _核过身份(db, "A")
     return ca, reg, db
+
+
+def _核过身份(db, rid):
+    """W63:这台核过设备身份(领证书时答过题),才给续签。"""
+    with db.tx() as c:
+        c.execute("INSERT INTO device_ids(serial, device_pub, hw_id, first_ms, last_ms) "
+                  "VALUES (?, 'pub', ?, 0, 0)", (rid, "e" * 64))
+
+
+def test_W63_没核过设备身份的_不自动续签_手动续签只给中性的话_不告警(tmp_path):
+    from d1max_site.attest import NEUTRAL
+    now = 1_800_000_000_000
+    ca, reg, db = _ca_reg(tmp_path, 10 * 86_400_000, now)
+    with db.tx() as c:
+        c.execute("DELETE FROM device_ids")
+    d, al = _Disp(tmp_path), _Alerts()
+    r = CertRenewer(dispatcher=d, registry=reg, ca=ca, alerts=al, now_ms=lambda: now)
+    assert r.due() == []
+    with pytest.raises(Exception, match=NEUTRAL):
+        asyncio.run(r.renew("A", by="alice"))
+    assert d.calls == [] and al.raised == []
+    db.close()
 
 
 def test_证书自动续签_快到期的才续_签了换上_登记表换指纹(tmp_path):
