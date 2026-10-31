@@ -688,6 +688,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     ap.add_argument("--sidecar", default="", help="旁路进程 host:port(发净空许可;空 = 不发)")
     a = ap.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    # W55:工程师远程打开「详细日志」时调到 DEBUG,到点自动恢复
+    from d1max_contract.debuglog import DebugWatch
+    DebugWatch().start()
 
     import rclpy
     from rclpy.executors import SingleThreadedExecutor

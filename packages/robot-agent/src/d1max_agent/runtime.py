@@ -387,6 +387,8 @@ class AgentRuntime:
         self.mapper = mapper
         #: 发布(W00c5d 第三部分):``ReleaseOps``。
         self.releases = releases
+        #: 远程运维(W55;装机入口 :meth:`attach_ops` 接上):日志、诊断、重启、对时、换证书。
+        self.ops: Any = None
         #: 升级前检查的外部来源(W00c6d,W08 追加):W09 定位器、W11 感知与外参自检接上之后各挂一个
         #: ``(名字, async () -> SourceCheck)``;现在是空的,清单里那三项写「还没部署」。每个来源最多等
         #: ``PRECHECK_SOURCE_TIMEOUT_S``,炸了、卡住都按不健康(名字按登记的,不信来源自己报的)。
@@ -806,8 +808,15 @@ class AgentRuntime:
             pass
         return name
 
+    def attach_ops(self, desk: Any) -> None:
+        """W55:接上远程运维(:class:`d1max_agent.ops.OpsDesk`);它要问「在不在忙」就问这里。"""
+        desk.busy = self._busy_reason
+        self.ops = desk
+
     def _extra_tasks(self) -> dict[str, dict[str, Any]]:
         out: dict[str, dict[str, Any]] = {}
+        if self.ops is not None:
+            out.update(self.ops.kinds())            # W55 远程运维
         cams = getattr(self.video, "cameras", None)
         if callable(cams):
             # W40:这只狗有哪几路能看(上装 V1.2 多一路热像)。不报的老狗,站点当它有前后两路
@@ -1178,6 +1187,8 @@ class AgentRuntime:
             return await self._route_net_set(cmd)
         if kind == "proc_log":
             return await asyncio.to_thread(self._proc_log, cmd.payload)
+        if self.ops is not None and kind.startswith(("ops_", "cert_")):
+            return await asyncio.to_thread(self.ops.handle, kind, cmd.payload)
         if kind == "mapping_trail":
             n = cmd.payload.get("since", 0)
             if isinstance(n, bool) or not isinstance(n, int) or n < 0:

@@ -20,6 +20,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
+import platform
 import shutil
 import subprocess
 import sys
@@ -98,7 +99,44 @@ def build_venv(pkg: Path, slot: Path, *, pip_args: list[str],
             run(vpy, "-m", "pip", "install", "--quiet", *pip_args,
                 f"{copy / 'packages' / 'contract'}[mqtt]", str(copy / "packages" / "adapter-sim"),
                 str(copy / "packages" / "adapter-d1max"), str(agent))
+    why = build_sidecar(pkg, slot, sdk=os.environ.get("D1MAX_ROBOT_SDK"))
+    if why:
+        raise ReleaseOpError(why)
     (venv / SENTINEL).write_text(f"d1max_patrol {slot.name}\n", encoding="utf-8")
+
+
+def build_sidecar(pkg: Path, slot: Path, *, sdk: str | None, arch: str | None = None,
+                  run: Callable[[list[str]], tuple[int, str]] | None = None) -> str:
+    """W55:运动控制旁路程序跟着版本走 —— 包里带源码(``motion/``),在机器人上编,程序落在
+    ``<槽>/motion/build/patrol_agent``(``d1max-sidecar-start`` 先用它)。
+
+    厂商 SDK 不进包(私有):机器人上 ``D1MAX_ROBOT_SDK`` 指着它(``RobotSDK-<版本>`` 那一层)。没配、
+    不在,就**不编**,旁路进程沿用原来那个程序(回空串);配了却编不过 = 装失败,不切这一版。"""
+    src = pkg / "motion"
+    if not (src / "Makefile").is_file() or not sdk or not Path(sdk).is_dir():
+        return ""
+    out = slot / "motion" / "build"
+    work = out / "src"
+    shutil.rmtree(out, ignore_errors=True)
+    work.mkdir(parents=True)
+    for f in src.iterdir():
+        if f.is_file() and (f.name == "Makefile" or f.suffix in (".cpp", ".hpp")):
+            shutil.copy2(f, work / f.name)
+    argv = ["make", "-C", str(work), "patrol_agent", f"ARCH={arch or platform.machine()}",
+            f"SDK_ROOT={sdk}"]
+    if run is None:
+        try:
+            got = subprocess.run(argv, capture_output=True, text=True, timeout=900)
+            rc, txt = got.returncode, got.stdout + got.stderr
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            rc, txt = 127, str(exc)
+    else:
+        rc, txt = run(argv)
+    if rc != 0 or not (work / "patrol_agent").is_file():
+        return f"旁路程序编译失败:{txt.strip()[-300:]}"
+    os.replace(work / "patrol_agent", out / "patrol_agent")
+    shutil.rmtree(work, ignore_errors=True)
+    return ""
 
 
 class ReleaseOps:

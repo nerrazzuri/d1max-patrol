@@ -121,6 +121,9 @@ def main(argv: Sequence[str] | None = None) -> None:
     args = parse_args(argv)
     logging.basicConfig(level=args.log_level,
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    # W55:工程师远程打开「详细日志」时调到 DEBUG,到点自动恢复
+    from d1max_contract.debuglog import DebugWatch
+    DebugWatch().start()
     asyncio.run(_main(args))
 
 
