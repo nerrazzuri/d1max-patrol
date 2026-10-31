@@ -240,8 +240,9 @@ def apk_signer(apk: Path) -> tuple[str, str]:
 
 
 def pubspec_version(repo: Path) -> str:
-    m = re.search(r"^version:\s*([0-9.]+)", (repo / "mobile/pubspec.yaml").read_text("utf-8"),
-                  re.M)
+    # W57:候选版写成 1.0.0-rc.1+构建号 —— 「-rc.1」要留着(安卓包名、App 签名清单里都用它)
+    m = re.search(r"^version:\s*([0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.]+)?)",
+                  (repo / "mobile/pubspec.yaml").read_text("utf-8"), re.M)
     if not m:
         raise ReleaseFail("mobile/pubspec.yaml 里读不到 version")
     return m.group(1)
