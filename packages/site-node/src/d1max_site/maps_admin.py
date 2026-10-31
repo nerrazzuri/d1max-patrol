@@ -25,6 +25,7 @@ from typing import Any
 
 from d1max_contract.errors import ContractError
 from d1max_contract.maps import MapRef, check_name
+from d1max_site.map_wizard import read_quality
 
 log = logging.getLogger(__name__)
 
@@ -197,6 +198,7 @@ class MapAdmin:
                     "note": m.get("note") or "",
                     "size_bytes": sum(int(f.get("size", 0)) for f in m["files"]),
                     "latest": i == 0, "build": cat.build_info(map_id, m["version"]),
+                    "quality": read_quality(cat, map_id, m["version"]),
                     "counts": {"zones": len(zs.zones) if zs else 0,
                                "nogo": len(zs.nogo()) if zs else 0,
                                "slow": len(zs.slow()) if zs else 0,

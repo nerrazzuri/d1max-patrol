@@ -5,7 +5,7 @@
 某一项标成「不用了」(比如不排布防时间、一直手动切),记在自己账号的 ``guide.skip`` 里。
 
 **上手向导**:每个账号看过哪一版导览(``guide.tour`` 是 App 的、``guide.web_tour`` 是网页的)、
-开站清单收没收起来(``guide.setup_hidden``),
+开站清单收没收起来(``guide.setup_hidden``)、没图时的「开始建图」点没点过稍后(``guide.map_later``,W54),
 记在账号表 ``accounts.guide``(JSON)。换手机不用再看一遍。
 """
 
@@ -17,7 +17,8 @@ from typing import Any
 #: 清单的项,顺序就是给人看的顺序。
 ITEMS = ("robots", "map", "zones", "standby", "routes", "schedule", "arming", "accounts", "push")
 #: ``guide`` 里认的键。
-_GUIDE_KEYS = {"tour": int, "web_tour": int, "setup_hidden": bool, "skip": list}
+_GUIDE_KEYS = {"tour": int, "web_tour": int, "setup_hidden": bool, "skip": list,
+               "map_later": bool}
 
 
 class GuideError(ValueError):
@@ -75,11 +76,13 @@ def read_guide(accounts: Any, name: str) -> dict[str, Any]:
     g = _parse(accounts.guide(name))
     return {"tour": int(g.get("tour") or 0), "web_tour": int(g.get("web_tour") or 0),
             "setup_hidden": bool(g.get("setup_hidden")),
+            # W54:站点没图时管理员点过「稍后」,登录不再每次弹「开始建图」
+            "map_later": bool(g.get("map_later")),
             "skip": [s for s in g.get("skip") or [] if s in ITEMS]}
 
 
 def write_guide(accounts: Any, name: str, patch: Any) -> dict[str, Any]:
-    """合进去(只认 ``tour``、``setup_hidden``、``skip``)。"""
+    """合进去(只认 ``_GUIDE_KEYS`` 里的)。"""
     if not isinstance(patch, dict) or not patch or set(patch) - set(_GUIDE_KEYS):
         raise GuideError(f"只认 {'、'.join(_GUIDE_KEYS)}")
     for k, typ in _GUIDE_KEYS.items():

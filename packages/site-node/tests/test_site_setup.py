@@ -61,10 +61,11 @@ def test_向导记录_按账号_合并写_不认的键拒(tmp_path):
     db = SiteDB(tmp_path / "s.db")
     acc = Accounts(db, now_ms=lambda: 0)
     acc.add("g", "pass-word-123", role="guard")
-    assert read_guide(acc, "g") == {"tour": 0, "web_tour": 0, "setup_hidden": False, "skip": []}
+    assert read_guide(acc, "g") == {"tour": 0, "web_tour": 0, "setup_hidden": False, "skip": [],
+                                    "map_later": False}
     write_guide(acc, "g", {"tour": 1})
     assert write_guide(acc, "g", {"skip": ["arming"], "web_tour": 1}) == {
-        "tour": 1, "web_tour": 1, "setup_hidden": False, "skip": ["arming"]}
+        "tour": 1, "web_tour": 1, "setup_hidden": False, "skip": ["arming"], "map_later": False}
     for bad in ({}, {"x": 1}, {"tour": "1"}, {"tour": True}, {"skip": ["nope"]},
                 {"tour": -1}, {"setup_hidden": 1}):
         with pytest.raises(GuideError):
