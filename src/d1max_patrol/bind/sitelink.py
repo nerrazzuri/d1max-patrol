@@ -20,8 +20,10 @@ class LinkError(RuntimeError):
 
 
 class SiteLink:
-    def __init__(self, *, timeout_s: float = 8.0) -> None:
+    def __init__(self, *, timeout_s: float = 8.0, attest: Any = None) -> None:
         self.timeout_s = timeout_s
+        #: W63:``attest(purpose, site_id, nonce)`` → 答题(``devid.attester``);没有 = 不答
+        self.attest = attest
 
     def _call(self, site: dict[str, Any], method: str, path: str,
               body: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -60,7 +62,22 @@ class SiteLink:
             raise LinkError(str(d.get("error") or f"站点回 {resp.status}"), resp.status)
         return d if isinstance(d, dict) else {}
 
+    def challenge(self, site: dict[str, Any]) -> dict[str, Any] | None:
+        """W63:站点出的题;老站点没有出题的口(404)回 ``None``(它也不核)。"""
+        try:
+            return self._call(site, "GET", "/api/attest/challenge")
+        except LinkError as exc:
+            if exc.status == 404:
+                return None
+            raise
+
     def request(self, site: dict[str, Any], body: dict[str, Any]) -> dict[str, Any]:
+        if self.attest is not None:                    # W63:先要题、用设备钥匙答,一起交
+            ch = self.challenge(site)
+            if ch is not None:
+                ans = self.attest("bind", str(ch.get("site_id") or ""), str(ch.get("nonce") or ""))
+                if ans is not None:
+                    body = {**body, "attest": ans}
         return self._call(site, "POST", "/api/bind/request", body)
 
     def poll(self, site: dict[str, Any], rid: str, secret: str) -> dict[str, Any]:

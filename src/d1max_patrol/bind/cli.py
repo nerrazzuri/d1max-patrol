@@ -25,6 +25,7 @@ def add_args(sub: argparse._SubParsersAction) -> None:
 
     p = sub.add_parser("bind-serve", help="配网服务(W42,以 root 跑,热点那一侧 + 代理套接字)")
     paths_args(p)
+    p.add_argument("--hw-source", action="append", default=None, help=argparse.SUPPRESS)  # 演示
     p.add_argument("--host", required=True, help="只绑这个地址(路由器 LAN1 那一侧)")
     p.add_argument("--port", type=int, default=8450)
     p.add_argument("--sock", default="/run/d1max/bind.sock")
@@ -131,9 +132,11 @@ def _serve(args: argparse.Namespace) -> int:
             return 0
     else:
         sysrun = wp._run
-    core = BindCore(paths, router=router, site=SiteLink(),
+    from d1max_patrol.bind import devid
+    att = devid.attester(paths, [Path(x) for x in args.hw_source] if args.hw_source else None)
+    core = BindCore(paths, router=router, site=SiteLink(attest=att),
                     provision=lambda code: pv.provision(code, etc=paths.etc, user=user,
-                                                        force=True),
+                                                        force=True, attest=att),
                     wipe=lambda: wp.wipe(paths, router=router, run=sysrun),
                     start_services=lambda: wp.start_services(sysrun), now_ms=_now,
                     version=__version__)

@@ -89,7 +89,8 @@ def test_核不过_一律同一句中性的话_记给公司(台, what):
         desk.verify(ans, purpose="claim", serial=serial, source="10.0.0.9")
     assert str(e.value) == NEUTRAL
     rows = _记录(db)
-    assert len(rows) == 1 and rows[0]["kind"] == "device_rejected" and rows[0]["source"] == "10.0.0.9"
+    assert len(rows) == 1 and rows[0]["kind"] == "device_rejected"
+    assert rows[0]["source"] == "10.0.0.9"
     assert rows[0]["serial"] == serial and json.loads(rows[0]["detail"])["why"]
 
 

@@ -118,6 +118,17 @@ def _unbound(a: argparse.Namespace, logs: Path, start) -> list[dict]:
     keys.mkdir()
     _patrol("unbind-token", "keygen", "--private", str(keys / "unbind.key"),
             "--public", str(keys / "unbind-pub.pem"))
+    # W63:演示用的临时出厂钥匙 —— 演示站点认它,出厂机器人照真流程签、装出厂证书(不用跳过开关)
+    import json as _json
+
+    from d1max_contract import ed25519
+    fseed = ed25519.new_seed()
+    (keys / "factory.key").write_bytes(ed25519.private_pem(fseed))
+    (keys / "factory-pub.pem").write_bytes(ed25519.public_pem(ed25519.public_key(fseed)))
+    cfg_path = a.dir / "site" / "site.json"
+    cfg = _json.loads(cfg_path.read_text())
+    cfg["factory_pubkey"] = str(keys / "factory-pub.pem")
+    cfg_path.write_text(_json.dumps(cfg, indent=1))
     out = []
     for k in range(a.unbound):
         serial, base, port = f"D1M-NEW{k + 1}", a.dir / f"new{k + 1}", 18450 + k
@@ -130,6 +141,11 @@ def _unbound(a: argparse.Namespace, logs: Path, start) -> list[dict]:
                 "--router", router, "--serial", serial,
                 "--unbind-pub", str(keys / "unbind-pub.pem"), "--out", str(base / "label"),
                 "--hw-source", str(chip))
+        (etc / "factory-pub.pem").write_bytes((keys / "factory-pub.pem").read_bytes())
+        _patrol("factory", "sign-device", str(etc / "device" / "device-request.json"),
+                "--key", str(keys / "factory.key"), "--out-dir", str(base / "factory-cert"))
+        _patrol("factory", "install-cert", str(base / "factory-cert" / f"{serial}.json"),
+                "--etc", str(etc), "--data-root", str(data), "--hw-source", str(chip))
         line = next(x for x in (base / "label" / f"{serial}.txt").read_text().splitlines()
                     if x.startswith("二维码 "))
         st = decode_sticker(line.split(" ", 1)[1])
@@ -139,7 +155,8 @@ def _unbound(a: argparse.Namespace, logs: Path, start) -> list[dict]:
         start(f"bind-{serial}", [sys.executable, "-m", "d1max_patrol.cli", "bind-serve",
                                  "--etc", str(etc), "--data-root", str(data), "--host", a.host,
                                  "--port", str(port), "--sock", str(sock), "--group", "",
-                                 "--user", "", "--router", router, "--dry-system"],
+                                 "--user", "", "--router", router, "--dry-system",
+                                 "--hw-source", str(chip)],
               "配网服务起来了")
         out.append({"serial": serial, "base": base, "etc": etc, "sock": sock,
                     "sticker": sticker})
