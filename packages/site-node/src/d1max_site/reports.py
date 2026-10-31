@@ -203,6 +203,98 @@ def summary(db: SiteDB, since_ms: Any, until_ms: Any, *, tz: tzinfo) -> dict[str
     for b in days.values():
         for k in totals:
             totals[k] += b[k]
+    span = until_ms - since_ms
     return {"since_ms": since_ms, "until_ms": until_ms, "totals": totals,
             "days": [{"day": k, **v} for k, v in days.items()], "events": events,
-            "truncated": total_events > len(events)}
+            "truncated": total_events > len(events),
+            "kpis": kpis(db, since_ms, until_ms), "kpis_prev": kpis(db, since_ms - span, since_ms)}
+
+
+#: 一趟巡逻没收到结束事件时,按这么长算它在跑(人工干预率用)。
+RUN_MAX_MS = 3 * 3_600_000
+_TERMINAL = ("task_done", "task_failed", "task_aborted", "task_preempted")
+
+
+def _down_ms(db: SiteDB, names: list[str], kinds: tuple[str, ...], since_ms: int,
+             until_ms: int) -> int:
+    """这几台在 ``[since, until)`` 里掉线一共多久(掉线告警从出现到解决;没解决算到 until;
+    同一台重叠的合并)。"""
+    if not names:
+        return 0
+    marks = ",".join("?" * len(kinds))
+    per: dict[str, list[tuple[int, int]]] = {}
+    for r in db.query(f"SELECT robot, first_ms, resolved_ms FROM alerts WHERE kind IN ({marks}) "
+                      "AND first_ms<? AND (resolved_ms IS NULL OR resolved_ms>?)",
+                      (*kinds, until_ms, since_ms)):
+        if r["robot"] in names:
+            a = max(r["first_ms"], since_ms)
+            b = min(r["resolved_ms"] if r["resolved_ms"] is not None else until_ms, until_ms)
+            if b > a:
+                per.setdefault(r["robot"], []).append((a, b))
+    total = 0
+    for spans in per.values():
+        spans.sort()
+        cur_a, cur_b = spans[0]
+        for a, b in spans[1:]:
+            if a <= cur_b:
+                cur_b = max(cur_b, b)
+            else:
+                total += cur_b - cur_a
+                cur_a, cur_b = a, b
+        total += cur_b - cur_a
+    return total
+
+
+def kpis(db: SiteDB, since_ms: int, until_ms: int) -> dict[str, Any]:
+    """报表的关键指标(W60):``[since, until)`` 里
+
+    安防运营 —— ``patrol_completion`` 派出的巡逻(没被拒的)有几成走完(``task_done``);
+    ``response_s`` 给保安的告警从出现到有人确认平均几秒;``ack_rate`` 给保安的告警有几成有人确认。
+    系统可靠性 —— ``robot_availability`` / ``camera_availability`` 在册的机器人 / 摄像头
+    不在掉线状态的时间占比
+    (按掉线告警算);``intervention_rate`` 派出的巡逻里中途出过「要人帮忙」告警的占几成。
+    没有可算的(没派过、没告警、没机器人)给 ``None``,不给 0(0% 可用率吓人又不对)。
+    """
+    w = (since_ms, until_ms)
+    sent = db.query("SELECT task_id, robot_id, issued_at FROM commands WHERE kind='patrol' "
+                    f"AND issued_at>=? AND issued_at<? AND {_PATROL_OK}", w)
+    marks = ",".join("?" * len(_TERMINAL))
+    done = helped = 0
+    for r in sent:
+        ev = db.query("SELECT kind, received_at FROM events WHERE robot_id=? "
+                      f"AND kind IN ({marks}) "
+                      "AND json_extract(data, '$.task_id')=? ORDER BY received_at LIMIT 1",
+                      (r["robot_id"], *_TERMINAL, r["task_id"]))
+        end = ev[0]["received_at"] if ev else r["issued_at"] + RUN_MAX_MS
+        if ev and ev[0]["kind"] == "task_done":
+            done += 1
+        if any(audience(h["kind"]) == "help" for h in db.query(
+                "SELECT kind FROM alerts WHERE robot=? AND first_ms>=? AND first_ms<=?",
+                (r["robot_id"], r["issued_at"], end))):
+            helped += 1
+    guard = [r for r in db.query("SELECT kind, first_ms, acked_ms FROM alerts "
+                                 "WHERE first_ms>=? AND first_ms<?", w)
+             if audience(r["kind"]) in GUARD_AUDIENCES]
+    acked = [r for r in guard if r["acked_ms"] is not None and r["acked_ms"] >= r["first_ms"]]
+    span = until_ms - since_ms
+    robots = [r["robot_id"] for r in db.query(
+        "SELECT robot_id FROM robots WHERE revoked=0 AND issued_at<?", (until_ms,))]
+    cams = [r["name"] for r in db.query("SELECT name FROM cameras WHERE added_ms<?", (until_ms,))]
+    from d1max_site.cctv import alert_robot
+
+    def avail(names: list[str], kinds: tuple[str, ...]) -> float | None:
+        if not names or span <= 0:
+            return None
+        return 1 - _down_ms(db, names, kinds, since_ms, until_ms) / (len(names) * span)
+
+    n = len(sent)
+    return {
+        "patrols_sent": n, "patrols_done": done,
+        "patrol_completion": done / n if n else None,
+        "response_s": (sum((r["acked_ms"] - r["first_ms"]) / 1000 for r in acked) / len(acked)
+                       if acked else None),
+        "ack_rate": len(acked) / len(guard) if guard else None,
+        "robot_availability": avail(robots, ("robot_offline", "robot_offline_idle")),
+        "camera_availability": avail([alert_robot(c) for c in cams], ("cctv_offline",)),
+        "intervention_rate": helped / n if n else None,
+    }

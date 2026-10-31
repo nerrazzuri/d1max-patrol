@@ -121,3 +121,33 @@ describe("报表页", () => {
     vi.unstubAllGlobals();
   });
 });
+
+describe("W60 关键指标", () => {
+  const k = (o: Partial<import("./reports").Kpis> = {}) => ({ patrols_sent: 10, patrols_done: 9, patrol_completion: 0.9, response_s: 42,
+    ack_rate: 0.95, robot_availability: 0.991, camera_availability: null, intervention_rate: 0.1, ...o });
+
+  it("比上一段:比例按百分点、响应按秒;越低越好的反过来算好坏;没上一段写清楚", async () => {
+    const { kpiDelta } = await import("./reports");
+    expect(kpiDelta("patrol_completion", k(), k({ patrol_completion: 0.868 }))).toEqual({ d: 3.2, tone: "good" });
+    expect(kpiDelta("response_s", k(), k({ response_s: 50 }))).toEqual({ d: -8, tone: "good" });
+    expect(kpiDelta("intervention_rate", k(), k({ intervention_rate: 0.05 }))).toEqual({ d: 5, tone: "bad" });
+    expect(kpiDelta("robot_availability", k(), k())).toEqual({ d: 0, tone: "flat" });
+    expect(kpiDelta("camera_availability", k(), k())).toBeNull();
+    expect(kpiDelta("ack_rate", k(), undefined)).toBeNull();
+  });
+
+  it("两组六张,没有数据的写「—」;老站点不带 kpis 就不画", async () => {
+    setFetch(((url: string) => Promise.resolve(json({ ...summaryFor(url), kpis: k(), kpis_prev: k({ response_s: 50 }) }))) as typeof fetch);
+    const c = render(<ReportsPage now={NOW} />).container;
+    await waitFor(() => expect(c.querySelectorAll(".kpi").length).toBe(6));
+    expect(Array.from(c.querySelectorAll(".kpi-group-h")).map((x) => x.textContent)).toEqual(["安防运营", "系统可靠性"]);
+    expect(c.querySelector('[data-kpi="patrol_completion"] .kpi-v')!.textContent).toBe("90%");
+    expect(c.querySelector('[data-kpi="response_s"] .kpi-d')!.textContent).toContain("↓ 8 秒");
+    expect(c.querySelector('[data-kpi="camera_availability"] .kpi-v')!.textContent).toBe("—");
+    cleanup();
+    setFetch(((url: string) => Promise.resolve(json(summaryFor(url)))) as typeof fetch);
+    const old = render(<ReportsPage now={NOW} />).container;
+    await waitFor(() => expect(old.querySelector(".rep-stats")).not.toBeNull());
+    expect(old.querySelector(".kpi")).toBeNull();
+  });
+});

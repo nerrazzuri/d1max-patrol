@@ -6,7 +6,48 @@ import { useEffect, useState } from "preact/hooks";
 import { api } from "./api";
 import { hm, nameOf } from "./data";
 import { alertTitle, DICTS, lang, t, type Key } from "./i18n";
-import { eventsCsv, fileTag, matches, reportRange, type ReportKind, type Summary, type SummaryEvent } from "./reports";
+import { eventsCsv, fileTag, kpiDelta, matches, reportRange, type KpiKey, type Kpis, type ReportKind, type Summary, type SummaryEvent } from "./reports";
+
+/** W60 关键指标分两组:安防运营、系统可靠性。 */
+const KPI_GROUPS: { key: Key; items: { k: KpiKey; key: Key }[] }[] = [
+  { key: "kpiOps", items: [{ k: "patrol_completion", key: "kpiCompletion" }, { k: "response_s", key: "kpiResponse" }, { k: "ack_rate", key: "kpiAck" }] },
+  { key: "kpiSys", items: [{ k: "robot_availability", key: "kpiRobotAvail" }, { k: "camera_availability", key: "kpiCamAvail" },
+    { k: "intervention_rate", key: "kpiIntervention" }] },
+];
+
+function kpiValue(k: KpiKey, v: number | null): { n: string; unit: string } {
+  if (v == null) return { n: "—", unit: "" };
+  if (k === "response_s") return { n: String(Math.round(v)), unit: t("kpiSec") };
+  return { n: (Math.round(v * 1000) / 10).toString(), unit: "%" };
+}
+
+function KpiCards({ cur, prev }: { cur: Kpis; prev?: Kpis }) {
+  return (
+    <div class="kpi-groups">
+      {KPI_GROUPS.map((g) => (
+        <section key={g.key} class="kpi-group" aria-label={t(g.key)}>
+          <h2 class="kpi-group-h">{t(g.key)}</h2>
+          <div class="kpi-row">
+            {g.items.map((x) => {
+              const v = kpiValue(x.k, cur[x.k]);
+              const d = kpiDelta(x.k, cur, prev);
+              return (
+                <div key={x.k} class="kpi" data-kpi={x.k}>
+                  <span class="kpi-l">{t(x.key)}</span>
+                  <span class="kpi-v">{v.n}<small>{v.unit}</small></span>
+                  <span class={`kpi-d ${d ? d.tone : "flat"}`}>
+                    {d == null ? t("kpiNoPrev") : d.d === 0 ? t("kpiFlat")
+                      : t(x.k === "response_s" ? "kpiDeltaSec" : "kpiDeltaPts", { a: d.d > 0 ? "↑" : "↓", n: Math.abs(d.d) })}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        </section>
+      ))}
+    </div>
+  );
+}
 
 /** 入侵事件、排程的结果:认得的翻成人话,不认得的原样摆(站点以后可能多出新的)。 */
 export function outcomeText(v: string | null): string {
@@ -91,6 +132,7 @@ export function ReportsPage({ now }: { now: number }) {
       {p && !d && !failed && <p class="muted">…</p>}
       {p && d && (
         <>
+          {d.kpis && <KpiCards cur={d.kpis} prev={d.kpis_prev} />}
           <div class="rep-stats">
             <div class="stat"><span class="stat-n">{d.totals.patrols}</span><span class="stat-l">{t("rsPatrols")}</span></div>
             <div class="stat"><span class="stat-n">{d.totals.incidents}</span><span class="stat-l">{t("rsIncidents")}</span></div>

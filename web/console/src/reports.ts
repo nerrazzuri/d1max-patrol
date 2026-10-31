@@ -178,10 +178,32 @@ export function reportRange(kind: ReportKind, now: number, from?: string, to?: s
 
 export interface SummaryDay { day: string; patrols: number; incidents: number; false_alarms: number; robot_problems: number }
 export interface SummaryEvent { key: string; kind: string; level: string; robot: string; title: string; first_ms: number; verdict: string; resolved_by: string; audience: string; zone?: string }
+/** 关键指标(W60,站点 reports.kpis):没有可算的是 null(不是 0)。比例是 0–1。 */
+export interface Kpis {
+  patrols_sent: number; patrols_done: number;
+  patrol_completion: number | null; response_s: number | null; ack_rate: number | null;
+  robot_availability: number | null; camera_availability: number | null; intervention_rate: number | null;
+}
 export interface Summary {
   since_ms: number; until_ms: number;
   totals: { patrols: number; incidents: number; false_alarms: number; robot_problems: number };
   days: SummaryDay[]; events: SummaryEvent[]; truncated: boolean;
+  /** W60;老站点没有。 */
+  kpis?: Kpis; kpis_prev?: Kpis;
+}
+
+export type KpiKey = "patrol_completion" | "response_s" | "ack_rate" | "robot_availability" | "camera_availability" | "intervention_rate";
+/** 哪些是越低越好(响应时间、人工干预率);别的越高越好。 */
+export const LOWER_BETTER: ReadonlySet<KpiKey> = new Set(["response_s", "intervention_rate"]);
+
+/** 一个指标比上一段:变化量(比例按百分点、秒按秒)、好坏。上一段或这一段没有 → null。 */
+export function kpiDelta(k: KpiKey, cur: Kpis | undefined, prev: Kpis | undefined): { d: number; tone: "good" | "bad" | "flat" } | null {
+  const a = cur?.[k], b = prev?.[k];
+  if (a == null || b == null) return null;
+  const d = k === "response_s" ? Math.round(a - b) : Math.round((a - b) * 1000) / 10;
+  if (d === 0) return { d, tone: "flat" };
+  const better = LOWER_BETTER.has(k) ? d < 0 : d > 0;
+  return { d, tone: better ? "good" : "bad" };
 }
 
 export function eventsCsv(rows: SummaryEvent[], title: (r: SummaryEvent) => string, verdict: (v: string) => string,

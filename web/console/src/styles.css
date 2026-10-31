@@ -1019,3 +1019,17 @@ details.ops > summary { cursor: pointer; font-weight: 600; padding: 6px 0; }
 .sys-row.metric { align-items: center; }
 .spark { color: var(--c-primary); max-width: 100%; height: auto; }
 @media (max-width: 600px) { .sys-row > .muted { min-width: 0; width: 100%; } }
+
+/* W60 报表关键指标:两组(安防运营、系统可靠性),每组三张;比上一段:好绿、差琥珀、持平灰 */
+.kpi-groups { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(520px, 100%), 1fr)); gap: 16px; }
+.kpi-group-h { margin: 0 0 8px; font-family: var(--font-sans); font-size: 13px; font-weight: 600; letter-spacing: 0.04em; color: var(--c-textSecondary); }
+.kpi-row { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.kpi { display: flex; flex-direction: column; gap: 4px; padding: 16px; border: 1px solid var(--c-outline); border-radius: var(--r-r12); background: var(--c-surface); }
+.kpi-l { font-size: 13px; font-weight: 600; color: var(--c-textSecondary); }
+.kpi-v { font-family: var(--font-display); font-size: 34px; line-height: 42px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.kpi-v small { margin-left: 4px; font-size: 16px; font-weight: 500; color: var(--c-textSecondary); }
+.kpi-d { font-size: 13px; font-weight: 600; color: var(--c-textMuted); }
+.kpi-d.good { color: var(--c-success); }
+.kpi-d.bad { color: var(--c-warning); }
+@media (max-width: 720px) { .kpi-row { grid-template-columns: minmax(0, 1fr); } }
+@media print { .kpi { break-inside: avoid; } }

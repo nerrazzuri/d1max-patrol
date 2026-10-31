@@ -118,3 +118,82 @@ def test_实测_摄像头报的事带上防区(db):
     ev = {e["key"]: e for e in summary(db, *WEEK, tz=KL)["events"]}
     assert ev["s1"]["zone"] == "前门"
     assert "zone" not in ev["h1"]
+
+
+# ------------------------------------------------------------------ W60 关键指标
+
+def _done(db, i, at, kind="task_done", robot="A"):
+    import json as _j
+    with db.tx() as c:
+        c.execute("INSERT INTO events(robot_id, boot_id, seq, event_id, kind, data, stamp, "
+                  "received_at) VALUES (?,?,?,?,?,?,?,?)",
+                  (robot, "b", i, f"e{i}", kind, _j.dumps({"task_id": f"t{i}"}), at, at))
+
+
+def _al(db, key, kind, first, *, robot="A", acked=None, resolved=None, level="P1"):
+    with db.tx() as c:
+        c.execute("INSERT INTO alerts(key, level, kind, robot, title, detail, first_ms, last_ms, "
+                  "count, acked_by, acked_ms, resolved_by, resolved_ms, escalated) "
+                  "VALUES (?,?,?,?,?,?,?,?,1,?,?,?,?,0)",
+                  (key, level, kind, robot, kind, "", first, first, "g" if acked else "", acked,
+                   "g" if resolved else "", resolved))
+
+
+def test_W60_指标_巡逻完成率_干预率(db):
+    h = 3_600_000
+    _cmd(db, 1, kl(2026, 10, 26, 9))
+    _done(db, 1, kl(2026, 10, 26, 9, 20))
+    _cmd(db, 2, kl(2026, 10, 27, 9))
+    _done(db, 2, kl(2026, 10, 27, 9, 30), kind="task_failed")
+    _cmd(db, 3, kl(2026, 10, 28, 9))
+    _done(db, 3, kl(2026, 10, 28, 9, 25))
+    _cmd(db, 4, kl(2026, 10, 28, 10), ack="rejected")          # 被拒的不算派出
+    _al(db, "h1", "stuck", kl(2026, 10, 28, 9, 10))            # 第 3 趟中途要人帮忙
+    _al(db, "h2", "stuck", kl(2026, 10, 28, 20))               # 不在任何一趟里:不算
+    k = summary(db, *WEEK, tz=KL)["kpis"]
+    assert k["patrols_sent"] == 3 and k["patrols_done"] == 2
+    assert k["patrol_completion"] == pytest.approx(2 / 3)
+    assert k["intervention_rate"] == pytest.approx(1 / 3)
+    del h
+
+
+def test_W60_指标_平均响应_确认率_只算给保安的(db):
+    t0 = kl(2026, 10, 27, 1)
+    _al(db, "i1", "intrusion", t0, acked=t0 + 30_000)
+    _al(db, "i2", "intrusion", t0 + 1, acked=t0 + 1 + 50_000)
+    _al(db, "i3", "stuck", t0 + 2)                              # 没人确认
+    _al(db, "c1", "cert_expiring", t0 + 3, acked=t0 + 900_000, level="P2")   # 技术类不算
+    k = summary(db, *WEEK, tz=KL)["kpis"]
+    assert k["response_s"] == pytest.approx(40.0)
+    assert k["ack_rate"] == pytest.approx(2 / 3)
+
+
+def test_W60_指标_机器人和摄像头可用率_按掉线告警扣(db):
+    from d1max_site.registry import Registry
+    reg = Registry(db, site_id="s")
+    reg.enroll("A", fingerprint="fa", issued_at=0, expires_at=2**50)
+    reg.enroll("B", fingerprint="fb", issued_at=0, expires_at=2**50)
+    with db.tx() as c:
+        c.execute("INSERT INTO cameras(name, onvif_url, zone, added_ms) VALUES ('n1','x','z',0)")
+    span = WEEK[1] - WEEK[0]
+    _al(db, "o1", "robot_offline_idle", WEEK[0] + 1000, robot="A",
+        resolved=WEEK[0] + 1000 + span // 10, level="P2")
+    _al(db, "o2", "cctv_offline", WEEK[1] - span // 4, robot="cctv:n1", level="P2")   # 到现在还没好
+    k = summary(db, *WEEK, tz=KL)["kpis"]
+    assert k["robot_availability"] == pytest.approx(1 - 0.1 / 2, abs=1e-6)
+    assert k["camera_availability"] == pytest.approx(0.75, abs=1e-6)
+
+
+def test_W60_指标_什么都没有时是空_不是零(db):
+    k = summary(db, *WEEK, tz=KL)["kpis"]
+    assert k["patrol_completion"] is None and k["response_s"] is None and k["ack_rate"] is None
+    assert k["robot_availability"] is None and k["camera_availability"] is None
+    assert k["intervention_rate"] is None
+
+
+def test_W60_指标_带上一段同样长的_好算比上一段(db):
+    prev0 = WEEK[0] - (WEEK[1] - WEEK[0])
+    _cmd(db, 1, prev0 + 3_600_000)
+    _done(db, 1, prev0 + 4_000_000)
+    got = summary(db, *WEEK, tz=KL)
+    assert got["kpis_prev"]["patrols_sent"] == 1 and got["kpis_prev"]["patrol_completion"] == 1.0
