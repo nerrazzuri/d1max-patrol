@@ -261,3 +261,29 @@ def test_接口_审计按人查_标出工程师(站点):
     assert rows and all(r["actor"] == "gina" for r in rows)
     rows = s.req("GET", f"/api/audit?actor={d['name']}", token=alice)[1]["audit"]
     assert rows and all(r["actor_role"] == "engineer" for r in rows)
+
+
+def test_外审W55_2_I1_开工程师账号带VPN_拿得到账号和配置(站点, tmp_path):
+    """站点 API 对象上要接着 VPN 同步(以前调了个不存在的方法:账号建了、口令和配置都拿不到)。"""
+    from d1max_site.vpn import VpnState
+    s = 站点
+    v = VpnState(tmp_path / "vpn")
+    v.init(endpoint="vpn.example.com")
+    s.api.vpn = v
+    from d1max_contract.privops import SimOps
+    s.api.priv = SimOps()
+    synced = []
+    s.api.vpn_sync = lambda: synced.append(1) or ""
+    alice = _登(s, "alice")
+    code, d = _开(s, alice, vpn=True)
+    assert code == 200, d
+    assert d["password"] and "[Interface]" in d["vpn"]["conf"] and synced == [1]
+    assert "warning" not in d["vpn"]
+
+
+def test_外审W55_2_I1_站点主程序把VPN同步接到API上(站点):
+    import inspect
+
+    from d1max_site import main as site_main
+    assert callable(站点.api.vpn_sync), "没接也不许 AttributeError"
+    assert "self.api.vpn_sync = self.vpn_sync" in inspect.getsource(site_main.Server.__init__)

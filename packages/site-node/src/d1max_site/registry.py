@@ -56,16 +56,19 @@ class Registry:
                 c.execute("UPDATE robots SET fingerprint=?, issued_at=?, expires_at=?, "
                           "revoked=0, enrolled_at=? WHERE robot_id=?",
                           (fingerprint, issued_at, expires_at, now_ms or issued_at, robot_id))
+            c.execute("DELETE FROM cert_pending WHERE robot_id=?", (robot_id,))   # W55-2 I2
 
     def stage(self, robot_id: str, *, fingerprint: str, issued_at: int, expires_at: int,
-              now_ms: int) -> None:
-        """W55 自动续签:新证书签好了、机器人还没换上 —— 记下来,旧证书照常认(外审 W55-1 第 6 条)。"""
+              now_ms: int, old_fingerprint: str = "") -> None:
+        """W55 自动续签:新证书签好了、机器人还没换上 —— 记下来,旧证书照常认(外审 W55-1 第 6 条)。
+        记着发起时登记表里的那张(``old_fingerprint``):转正时登记表还得是它。"""
         with self.db.tx() as c:
-            c.execute("INSERT INTO cert_pending(robot_id, fingerprint, issued_at, expires_at, "
-                      "created_ms) VALUES (?,?,?,?,?) ON CONFLICT(robot_id) DO UPDATE SET "
-                      "fingerprint=excluded.fingerprint, issued_at=excluded.issued_at, "
+            c.execute("INSERT INTO cert_pending(robot_id, fingerprint, old_fingerprint, issued_at, "
+                      "expires_at, created_ms) VALUES (?,?,?,?,?,?) "
+                      "ON CONFLICT(robot_id) DO UPDATE SET fingerprint=excluded.fingerprint, "
+                      "old_fingerprint=excluded.old_fingerprint, issued_at=excluded.issued_at, "
                       "expires_at=excluded.expires_at, created_ms=excluded.created_ms",
-                      (robot_id, fingerprint, issued_at, expires_at, now_ms))
+                      (robot_id, fingerprint, old_fingerprint, issued_at, expires_at, now_ms))
 
     def pending(self, robot_id: str) -> dict | None:
         rows = self.db.query("SELECT * FROM cert_pending WHERE robot_id=?", (robot_id,))
@@ -87,9 +90,11 @@ class Registry:
             if not rows:
                 return False
             r = rows[0]
+            # 外审 W55-2 I2:登记表还得是发起续签时那张(期间解绑、重新登记过就不转)
             n = c.execute("UPDATE robots SET fingerprint=?, issued_at=?, expires_at=? "
-                          "WHERE robot_id=? AND revoked=0",
-                          (fingerprint, r["issued_at"], r["expires_at"], robot_id)).rowcount
+                          "WHERE robot_id=? AND revoked=0 AND fingerprint=?",
+                          (fingerprint, r["issued_at"], r["expires_at"], robot_id,
+                           r["old_fingerprint"])).rowcount
             c.execute("DELETE FROM cert_pending WHERE robot_id=?", (robot_id,))
             return n == 1
 
@@ -151,6 +156,7 @@ class Registry:
             # A 阶段外审 I1:吊销了,没领的开通码一并作废(重新登记要先吊销,所以也不会复活;
             # 就算漏删,claim 还核证书代次)
             c.execute("DELETE FROM enroll_claims WHERE robot_id=?", (robot_id,))
+            c.execute("DELETE FROM cert_pending WHERE robot_id=?", (robot_id,))   # W55-2 I2
 
     @staticmethod
     def _rec(r) -> RobotRecord:

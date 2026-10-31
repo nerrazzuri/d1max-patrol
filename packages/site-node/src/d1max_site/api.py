@@ -303,6 +303,9 @@ class SiteApi:
         self.client_errors: Any = None
         self.apps: Any = None
         self.vpn: Any = None
+        #: 有「待生效」的 VPN 配置就装上(``Server.vpn_sync``,main 接上;外审 W55-2 I1)。
+        #: 回空串 = 好了。
+        self.vpn_sync: Callable[[], str] = lambda: "站点未接上 VPN 同步"
         self._cctv_views: dict[str, Any] = {}
         self._cctv_lock = threading.Lock()
         #: 造 ``CctvView`` 的(测试换成假 ffmpeg 的)。

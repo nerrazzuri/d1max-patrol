@@ -24,7 +24,16 @@ CONFIG = Path("/etc/d1max-ops.json")
 
 
 class PrivOpsError(Exception):
-    """请求发不出去、等不到结果。"""
+    """请求发不出去、等不到结果(确定没执行)。"""
+
+
+class PrivTimeout(PrivOpsError):
+    """等不到结果,而且执行器已经把请求拿走了:**结果未知**,可能还在做、可能做完了(外审 W55-2 C3)。
+    调用方别当没执行;按 ``rid`` 接着查 :meth:`SpoolOps.result`。"""
+
+    def __init__(self, msg: str, rid: str) -> None:
+        super().__init__(msg)
+        self.rid = rid
 
 
 class PrivOps(Protocol):
@@ -34,6 +43,8 @@ class PrivOps(Protocol):
     def submit(self, action: str, args: dict[str, Any] | None = None) -> str: ...
 
     def result(self, rid: str) -> dict[str, Any] | None: ...
+
+    def cancel(self, rid: str) -> bool: ...
 
 
 class SpoolOps:
@@ -71,7 +82,20 @@ class SpoolOps:
             except (OSError, ValueError) as exc:
                 raise PrivOpsError(f"特权执行器的结果读不了:{exc}") from exc
             return got if isinstance(got, dict) else {"ok": False, "error": "结果格式错误"}
-        raise PrivOpsError(f"特权执行器 {timeout_s:g} 秒内无响应(d1max-ops.path 未启用?)")
+        if self.cancel(rid):
+            raise PrivOpsError(f"特权执行器 {timeout_s:g} 秒内未处理,请求已撤回"
+                               "(d1max-ops.path 未启用?)")
+        raise PrivTimeout(f"特权执行器 {timeout_s:g} 秒内未回结果,请求 {rid} 已在执行,"
+                          "结果未知", rid)
+
+    def cancel(self, rid: str) -> bool:
+        """撤回还没被执行器拿走的请求。回真 = 撤回了(一定不会执行);回假 = 执行器已经拿走了。
+        执行器拿请求是**改名认领**,跟这里的删除只有一个能成。"""
+        try:
+            os.unlink(self.spool / "req" / f"{rid}.json")
+        except FileNotFoundError:
+            return False
+        return True
 
     def _write(self, action: str, args: dict[str, Any] | None) -> str:
         rid = secrets.token_hex(12)
@@ -106,6 +130,9 @@ class SimOps:
 
     def result(self, rid: str) -> dict[str, Any] | None:
         return self._done.get(rid)
+
+    def cancel(self, rid: str) -> bool:
+        return False
 
     def call(self, action: str, args: dict[str, Any] | None = None, *,
              timeout_s: float = 60.0) -> dict[str, Any]:

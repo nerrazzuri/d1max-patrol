@@ -764,6 +764,8 @@ CREATE INDEX IF NOT EXISTS client_errors_at ON client_errors(at_ms);
 CREATE TABLE IF NOT EXISTS cert_pending (
     robot_id    TEXT PRIMARY KEY,
     fingerprint TEXT NOT NULL,
+    -- 发起续签时登记表里的那张(外审 W55-2 I2:解绑、重新登记以后,迟到的转正不许覆盖新身份)
+    old_fingerprint TEXT NOT NULL DEFAULT '',
     issued_at   INTEGER NOT NULL,
     expires_at  INTEGER NOT NULL,
     created_ms  INTEGER NOT NULL

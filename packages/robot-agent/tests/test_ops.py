@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import importlib.machinery
 import importlib.util
 import logging
@@ -293,3 +294,47 @@ def test_外审W55_1_钟不准时_对时和读诊断不判过期():
     from d1max_agent.commands import NEVER_EXPIRE
     assert {"ops_timesync", "ops_diag", "ops_journal"} <= NEVER_EXPIRE
     assert "ops_reboot" not in NEVER_EXPIRE
+
+
+
+async def test_外审W55_2_C3_执行器结果未知_维护状态不放_确定没做成才放(tmp_path):
+    from d1max_contract.privops import PrivTimeout
+
+    class 慢执行器:
+        def __init__(self):
+            self.res = None
+
+        def call(self, action, args=None, *, timeout_s=60.0):
+            raise PrivTimeout("执行器拿走了还没回", "rid42")
+
+        def result(self, rid):
+            return self.res
+
+        def cancel(self, rid):
+            return False
+    broker, c = MemoryBroker(), 钟()
+    ears = 耳朵()
+    st = MemoryTransport(broker, "site")
+    await st.connect()
+    await st.subscribe(f"{T.prefix}/#", ears)
+    rt = AgentRuntime(transport=MemoryTransport(broker, "dog"), registration=REG,
+                      hal=SimRobot(now_ms=c), store_dir=tmp_path / "agent", now_ms=c,
+                      loaded_map=("m", "1"), boot_id="b", home=Pose.from_xy_yaw(0, 0, 0),
+                      monotonic=lambda: c.mono)
+    rt.OPS_WATCH_EVERY_S = 0.05
+    priv = 慢执行器()
+    rt.attach_ops(O.OpsDesk(robot_id=REG.robot_id, priv=priv, data_root=tmp_path / "data",
+                            busy=lambda: ""))
+    await rt.start()
+    await rt._on_cmd(_cmd("ops_reboot", {}, "z1", c))
+    await broker.drain()
+    acks = {a["command_id"]: a for a in ears.by["cmd/ack"]}
+    assert "priv_pending" in str(acks["z1"].get("reason"))
+    await asyncio.sleep(0.2)
+    assert rt._restarting, "结果未知:可能还要重启,不接新任务"
+    priv.res = {"ok": False, "error": "reboot failed"}
+    for _ in range(40):
+        if not rt._restarting:
+            break
+        await asyncio.sleep(0.05)
+    assert not rt._restarting, "确定没做成:放开"

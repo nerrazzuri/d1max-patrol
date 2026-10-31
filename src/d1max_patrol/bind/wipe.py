@@ -15,6 +15,7 @@ from __future__ import annotations
 import logging
 import os
 import shutil
+import stat
 import subprocess
 from collections.abc import Callable, Sequence
 from pathlib import Path
@@ -79,15 +80,53 @@ def start_services(run: Run = _run) -> None:
             run(["systemctl", "start", u])
 
 
-def _clear_dir(d: Path) -> None:
-    """删目录里的东西,目录本身留着(属主、权限是装机脚本定的)。"""
-    if not d.is_dir():
+def _open_dir_nofollow(d: Path) -> int | None:
+    """从 ``/`` 起逐级打开,**每一级都不跟链接**(外审 W55-2 C7:发件箱这种目录的上级可能归机器人账号,
+    中间哪一级被换成链接,root 清机就会删到别处去)。不在 → None;哪一级是链接 → OSError。"""
+    if not d.is_absolute():
+        d = d.resolve()
+    fd = os.open("/", os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        for part in d.parts[1:]:
+            try:
+                nxt = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+            except FileNotFoundError:
+                return None
+            os.close(fd)
+            fd = nxt
+        out, fd = fd, -1
+        return out
+    finally:
+        if fd >= 0:
+            os.close(fd)
+
+
+def _rm_in(dfd: int, name: str) -> None:
+    """删目录描述符底下的一项(目录就递归),全程相对描述符、不跟链接。"""
+    st = os.stat(name, dir_fd=dfd, follow_symlinks=False)
+    if not stat.S_ISDIR(st.st_mode):
+        os.unlink(name, dir_fd=dfd)
         return
-    for p in d.iterdir():
-        if p.is_dir() and not p.is_symlink():
-            shutil.rmtree(p)
-        else:
-            p.unlink()
+    sub = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=dfd)
+    try:
+        for child in os.listdir(sub):
+            _rm_in(sub, child)
+    finally:
+        os.close(sub)
+    os.rmdir(name, dir_fd=dfd)
+
+
+def _clear_dir(d: Path) -> None:
+    """删目录里的东西,目录本身留着(属主、权限是装机脚本定的)。整条路径每一级都不跟链接打开,删的时候
+    只相对这个目录的描述符(外审 W55-2 C7)。"""
+    fd = _open_dir_nofollow(d)
+    if fd is None:
+        return
+    try:
+        for name in os.listdir(fd):
+            _rm_in(fd, name)
+    finally:
+        os.close(fd)
 
 
 def wipe(paths: BindPaths, *, router: Router, run: Run = _run, trim: Trim = _trim) -> list[str]:

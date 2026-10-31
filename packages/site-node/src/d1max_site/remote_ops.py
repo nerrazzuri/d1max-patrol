@@ -124,8 +124,10 @@ class CertRenewer:
         now = self._now()
         cert, reg, fp = await asyncio.to_thread(self.ca.sign_robot_csr, rid, csr, days=CERT_DAYS,
                                                 now_ms=now)
+        old = self.registry.get(rid)
         self.registry.stage(rid, fingerprint=fp, issued_at=reg.issued_at,
-                            expires_at=reg.expires_at, now_ms=now)
+                            expires_at=reg.expires_at, now_ms=now,
+                            old_fingerprint=old.fingerprint if old is not None else "")
         try:
             got = await self.dispatcher.map_command(
                 rid, "cert_install", {"cert": cert, "registration": reg.to_wire()}, issued_by=by)
@@ -134,8 +136,12 @@ class CertRenewer:
             raise RenewError(f"机器人未回执(可能已换上,连上来时自动生效):{exc}") from exc
         ack = got.get("ack", {})
         if ack.get("result") != "accepted":
-            self.registry.drop_pending(rid, fp)
             reason = str(ack.get("reason") or ack.get("result"))
+            if reason.startswith("priv_pending"):
+                # 机器人那边执行器结果未知(外审 W55-2 C3):可能已经换上了 —— 挂着的新证书留着,
+                # 机器人拿它连上来时自动生效
+                raise RenewError("机器人上的执行器未及时回复(可能已换上,连上来时自动生效)")
+            self.registry.drop_pending(rid, fp)
             if reason.startswith("busy"):
                 raise RenewBusy(f"机器人正忙,未换证书:{reason}")
             raise RenewError(f"机器人未换上新证书:{reason}")

@@ -25,6 +25,7 @@ import hashlib
 import http.client
 import json
 import os
+import re
 import shutil
 import socket
 import ssl
@@ -48,6 +49,11 @@ class ProvisionError(RuntimeError):
     pass
 
 
+_MQTT_URL = re.compile(r"mqtts?://[A-Za-z0-9.\-]{1,253}:\d{1,5}")
+#: env 文件里的键:大写字母、数字、下划线。
+_ENV_KEY = re.compile(r"[A-Z][A-Z0-9_]{0,63}")
+
+
 def decode(code: str) -> dict[str, Any]:
     """开通码(``D1MAX1.<base64url(JSON)>``,跟站点 ``d1max_site.provision`` 同一个格式)。"""
     code = code.strip()
@@ -61,6 +67,9 @@ def decode(code: str) -> dict[str, Any]:
     for k in ("api", "fp", "mqtt", "id", "t"):
         if not isinstance(d.get(k), str) or not d[k]:
             raise ProvisionError(f"开通码里缺 {k}")
+    # 外审 W55-2 C6:mqtt 要写进 /etc/d1max/env(root 跑的配网服务也读它)—— 只认 mqtt(s)://主机:端口
+    if not _MQTT_URL.fullmatch(d["mqtt"]):
+        raise ProvisionError("开通码里的消息服务地址无效(要是 mqtts://主机:端口)")
     return d
 
 
@@ -132,7 +141,11 @@ def _write(path: Path, data: bytes, mode: int, owner: tuple[int, int] | None) ->
 
 
 def set_env(env: Path, key: str, value: str) -> None:
-    """``env`` 里把 ``key=`` 那一行换成新值(没有就加在最后);别的行原样不动。"""
+    """``env`` 里把 ``key=`` 那一行换成新值(没有就加在最后);别的行原样不动。
+    键、值都不许带换行、控制字符(外审 W55-2 C6:值里夹一个换行就能多写一行配置,root 跑的配网服务
+    也读这个文件)。"""
+    if not _ENV_KEY.fullmatch(key) or any(ord(ch) < 0x20 or ord(ch) == 0x7f for ch in value):
+        raise ValueError(f"env 的键或值不合法:{key!r}")
     lines = env.read_text(encoding="utf-8").splitlines() if env.is_file() else []
     out, done = [], False
     for line in lines:

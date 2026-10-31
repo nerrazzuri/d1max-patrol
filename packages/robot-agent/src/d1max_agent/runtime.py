@@ -406,6 +406,8 @@ class AgentRuntime:
         #: 切版本、退版本收下了、马上要重启:什么都不再接(W00c5d 第三部分内部评审:
         #: 这几秒里收下的任务会被重启掐掉)。切不成就放开。
         self._restarting = False
+        #: W55:结果未知的特权请求的那条查结果任务。
+        self._ops_watch: asyncio.Task | None = None
         #: 录包时的轨迹(W00c6h);``_trail_on``:上一拍在不在录(录包开始那一拍清空)。
         self.trail = MappingTrail()
         self._trail_on = False
@@ -1716,9 +1718,37 @@ class AgentRuntime:
         if hold:
             failed = got if isinstance(got, str) else got[0]
             gone = kind in ("ops_reboot", "cert_install") or payload.get("unit") == "d1max-agent"
-            if failed or not gone:
+            if failed.startswith("priv_pending"):
+                # 执行器拿走了请求、结果未知(外审 W55-2 C3):还可能重启、换证书 —— 维护状态不放,
+                # 按请求号接着查,确定没做成才放
+                rid = failed.split()[1] if len(failed.split()) > 1 else ""
+                self._ops_watch = asyncio.get_running_loop().create_task(
+                    self._watch_priv(rid, release_on_ok=not gone))
+            elif failed or not gone:
                 self._restarting = False
         return got
+
+    #: 结果未知的特权请求:多久查一次结果、查多久(测试改小)。
+    OPS_WATCH_EVERY_S = 5.0
+    OPS_WATCH_GIVE_UP_S = 1800.0
+
+    async def _watch_priv(self, rid: str, *, release_on_ok: bool) -> None:
+        """结果未知的特权请求:等执行器回结果。没做成 → 放开;做成了 → 重启、换证书的等它重启
+        (不放),别的放开。半小时还没结果:执行器卡住了,维护状态照旧不放(宁可不接任务),记错误。"""
+        priv = getattr(self.ops, "priv", None)
+        loop = asyncio.get_running_loop()
+        every_s = self.OPS_WATCH_EVERY_S
+        end = loop.time() + self.OPS_WATCH_GIVE_UP_S
+        while loop.time() < end:
+            got = await asyncio.to_thread(priv.result, rid) if priv is not None and rid else None
+            if got is not None:
+                if not got.get("ok") or release_on_ok:
+                    self._restarting = False
+                log.warning("特权请求 %s 有结果了:%s", rid, "成功" if got.get("ok") else
+                            got.get("error"))
+                return
+            await asyncio.sleep(every_s)
+        log.error("特权请求 %s 半小时没有结果:维护状态不放(不接新任务);查 d1max-ops 的日志", rid)
 
     def _busy_reason(self) -> str:
         """在忙什么(升级前检查的「空闲」那一项);空串 = 空闲。"""
