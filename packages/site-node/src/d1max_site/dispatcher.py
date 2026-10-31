@@ -69,6 +69,10 @@ class DispatchRefused(RuntimeError):
     """派遣条件不满足。``reason`` 给人看,站点 API 原样回 409。"""
 
 
+class SkewUnknown(DispatchRefused):
+    """钟差还不知道(站点刚起来、机器人刚连上):过一会儿遥测到了就好。后台任务据此稍后重试(W58)。"""
+
+
 def version_mismatch_text(mission: str, map_id: str, version: str, robot_id: str,
                           loaded: str) -> str:
     """任务绑的那一版跟狗加载的不一样(R1;派遣器、排程共用)。"""
@@ -693,7 +697,7 @@ class Dispatcher:
         过期,起一趟没人握着的遥控)。"""
         skew = self.clock_skew_s(robot_id)
         if skew is None:
-            raise DispatchRefused(f"{robot_id} 的钟差未知(站点刚起来、机器人刚连上,"
+            raise SkewUnknown(f"{robot_id} 的钟差未知(站点刚起来、机器人刚连上,"
                                   "或者最近一分钟未"
                                   "收到它的遥测):先不派会让它动、依赖命令有效期的命令")
         limit = min(SKEW_DISPATCH_MAX_S, ttl_ms / 2000.0)
