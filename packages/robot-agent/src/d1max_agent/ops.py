@@ -22,6 +22,7 @@ import json
 import os
 import platform
 import re
+import secrets
 import shutil
 import subprocess
 import time
@@ -96,9 +97,58 @@ class OpsDesk:
     debug_flag: Path | None = None
     extra_diag: Callable[[], dict[str, Any]] | None = None
 
+    hold_file: Path | None = None
+
     def __post_init__(self) -> None:
         if self.debug_flag is None:
             self.debug_flag = self.data_root / "debug-until.json"
+        if self.hold_file is None:
+            self.hold_file = self.data_root / "ops-hold.json"
+
+    # ------------------------------------------------------------ 维护状态落盘(外审 W55-3 C3)
+    @staticmethod
+    def _boot() -> str:
+        try:
+            return Path("/proc/sys/kernel/random/boot_id").read_text().strip()
+        except OSError:
+            return ""
+
+    def _hold_write(self, rid: str, action: str, args: dict[str, Any]) -> None:
+        tmp = self.hold_file.with_name(self.hold_file.name + ".tmp")
+        tmp.parent.mkdir(parents=True, exist_ok=True)
+        tmp.write_text(json.dumps({"rid": rid, "action": action, "unit": args.get("unit", ""),
+                                   "boot": self._boot()}), encoding="utf-8")
+        os.replace(tmp, self.hold_file)
+
+    def clear_hold(self) -> None:
+        self.hold_file.unlink(missing_ok=True)
+
+    @staticmethod
+    def _gone(action: str, unit: str) -> bool:
+        """做成了以后代理(或整机)会被重启的动作。"""
+        return action in ("reboot", "cert_install") or unit == "d1max-agent"
+
+    def resume_hold(self) -> tuple[str, bool] | None:
+        """代理起来时:上一个进程留下的未决特权请求。要接着保持维护 → (请求号, 做成了要不要放开);
+        不用(没有、已经撤回、已经有结果并且做过了)→ None,标记删掉。"""
+        try:
+            h = json.loads(self.hold_file.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+        rid, action, unit = str(h.get("rid", "")), str(h.get("action", "")), str(h.get("unit", ""))
+        if self.priv is None or not rid:
+            self.clear_hold()
+            return None
+        got = self.priv.result(rid)
+        if got is None:
+            if self.priv.cancel(rid):                 # 执行器还没拿走:撤回,一定不会执行
+                self.clear_hold()
+                return None
+            return rid, not self._gone(action, unit)
+        if got.get("ok") and action == "reboot" and h.get("boot") and h.get("boot") == self._boot():
+            return rid, False                         # 重启做成了、还没重启:接着等它重启
+        self.clear_hold()
+        return None
 
     # ------------------------------------------------------------ 入口
     def kinds(self) -> dict[str, dict[str, Any]]:
@@ -125,12 +175,29 @@ class OpsDesk:
             return f"priv_failed: {exc}"[:300]
 
     def _priv(self, action: str, args: dict[str, Any] | None = None,
-              timeout_s: float = 60.0) -> str | dict[str, Any]:
+              timeout_s: float = 60.0, *, hold: bool = False) -> str | dict[str, Any]:
+        """``hold``:重启、换证书这类 —— 请求号先落盘(``ops-hold.json``),代理中途重启也知道还有一件
+        没了结的事(外审 W55-3 C3)。确定没做成就删;做成了、而且会重启的留着,由下一个进程核对后删。"""
         if self.priv is None:
             return "unsupported: 此机器人未安装特权执行器"
-        got = self.priv.call(action, args, timeout_s=timeout_s)
+        args = dict(args or {})
+        rid = secrets.token_hex(12)
+        if hold:
+            self._hold_write(rid, action, args)
+        try:
+            got = self.priv.call(action, args, timeout_s=timeout_s, rid=rid)
+        except PrivTimeout:
+            raise                                     # 结果未知:标记留着
+        except PrivOpsError:
+            if hold:
+                self.clear_hold()
+            raise
         if not got.get("ok"):
+            if hold:
+                self.clear_hold()
             return f"priv_failed: {got.get('error') or '未知原因'}"[:300]
+        if hold and not self._gone(action, str(args.get("unit", ""))):
+            self.clear_hold()
         return got
 
     # ------------------------------------------------------------ 日志
@@ -259,14 +326,14 @@ class OpsDesk:
         why = self.busy()                          # 重启定位、避障、旁路这些,走着的时候会出事
         if why:
             return f"busy: {why}"
-        got = self._priv("restart", {"unit": unit}, timeout_s=200)
+        got = self._priv("restart", {"unit": unit}, timeout_s=200, hold=True)
         return got if isinstance(got, str) else ("", {"unit": unit})
 
     def _ops_reboot(self, p: dict[str, Any]) -> str | tuple[str, dict[str, Any]]:
         why = self.busy()
         if why:
             return f"busy: {why}"
-        got = self._priv("reboot", {"delay_s": 5})
+        got = self._priv("reboot", {"delay_s": 5}, hold=True)
         return got if isinstance(got, str) else ("", {"delay_s": 5})
 
     def _ops_timesync(self, p: dict[str, Any]) -> str | tuple[str, dict[str, Any]]:
@@ -382,7 +449,7 @@ class OpsDesk:
         if rc != 0:
             return f"cert_untrusted: {out.strip()[-200:]}"
         (d / "registration.json").write_text(json.dumps(reg, ensure_ascii=False), encoding="utf-8")
-        got = self._priv("cert_install", {}, timeout_s=60)
+        got = self._priv("cert_install", {}, timeout_s=60, hold=True)
         return got if isinstance(got, str) else ("", {"installed": True})
 
 

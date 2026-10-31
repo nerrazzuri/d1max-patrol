@@ -90,3 +90,11 @@ def test_C8_装机脚本_root不执行机器人账号的解释器和pip():
             prev = code[i - 1].strip() if i else ""
             assert s.startswith("sudo -u") or prev.endswith("\\") and "sudo -u" in prev, ln
     assert 'sudo -u "$RUN_USER" tee "$ROOT/bin/python"' in text
+
+
+def test_W55_3_N1_装机脚本_root不写机器人目录里的哨兵():
+    text = (ROOT / "deploy" / "install.sh").read_text(encoding="utf-8")
+    code = [ln for ln in text.splitlines() if not ln.lstrip().startswith("#")]
+    assert not [ln for ln in code if re.search(r'>\s*"\$(ROOT_)?SENTINEL"', ln)]
+    assert not [ln for ln in code if re.search(r'chown\b.*"\$(ROOT_)?SENTINEL"', ln)]
+    assert sum('sudo -u "$RUN_USER" tee "$' in ln and 'SENTINEL"' in ln for ln in code) == 2

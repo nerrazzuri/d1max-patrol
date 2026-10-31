@@ -6,6 +6,7 @@ from __future__ import annotations
 import asyncio
 import importlib.machinery
 import importlib.util
+import json
 import logging
 import subprocess
 from pathlib import Path
@@ -304,7 +305,7 @@ async def test_外审W55_2_C3_执行器结果未知_维护状态不放_确定没
         def __init__(self):
             self.res = None
 
-        def call(self, action, args=None, *, timeout_s=60.0):
+        def call(self, action, args=None, *, timeout_s=60.0, rid=None):
             raise PrivTimeout("执行器拿走了还没回", "rid42")
 
         def result(self, rid):
@@ -338,3 +339,85 @@ async def test_外审W55_2_C3_执行器结果未知_维护状态不放_确定没
             break
         await asyncio.sleep(0.05)
     assert not rt._restarting, "确定没做成:放开"
+
+
+class _卡住的执行器:
+    """拿走了请求、一直没结果;撤不回。"""
+
+    def __init__(self):
+        self.res = {}
+        self.cancelled = False
+
+    def call(self, action, args=None, *, timeout_s=60.0, rid=None):
+        from d1max_contract.privops import PrivTimeout
+        raise PrivTimeout("还没回", rid)
+
+    def result(self, rid):
+        return self.res.get(rid)
+
+    def cancel(self, rid):
+        return self.cancelled
+
+
+async def test_外审W55_3_C3_代理重启以后_未决请求还在就先不接任务(tmp_path):
+    broker, c = MemoryBroker(), 钟()
+    priv = _卡住的执行器()
+
+    def 起(name):
+        rt = AgentRuntime(transport=MemoryTransport(broker, name), registration=REG,
+                          hal=SimRobot(now_ms=c), store_dir=tmp_path / name, now_ms=c,
+                          loaded_map=("m", "1"), boot_id="b", home=Pose.from_xy_yaw(0, 0, 0),
+                          monotonic=lambda: c.mono)
+        rt.OPS_WATCH_EVERY_S = 0.05
+        rt.attach_ops(O.OpsDesk(robot_id=REG.robot_id, priv=priv, data_root=tmp_path / "data",
+                                busy=lambda: ""))
+        return rt
+    rt = 起("dog1")
+    await rt.start()
+    await rt._on_cmd(_cmd("ops_reboot", {}, "h1", c))
+    hold = json.loads((tmp_path / "data" / "ops-hold.json").read_text())
+    assert hold["action"] == "reboot" and hold["rid"]
+    await rt.close()
+    rt2 = 起("dog2")                                   # 代理被重启了
+    await rt2.start()
+    assert rt2._restarting, "上次的重启请求还没结果:新代理先不接任务"
+    priv.res[hold["rid"]] = {"ok": False, "error": "x"}
+    for _ in range(40):
+        if not rt2._restarting:
+            break
+        await asyncio.sleep(0.05)
+    assert not rt2._restarting and not (tmp_path / "data" / "ops-hold.json").exists()
+    await rt2.close()
+
+
+def test_外审W55_3_C3_未决请求还没被执行器拿走_撤回_不用等(tmp_path):
+    priv = _卡住的执行器()
+    priv.cancelled = True
+    d = _desk(tmp_path, priv=priv)
+    d._hold_write("abcdef0123456789", "reboot", {})
+    assert d.resume_hold() is None and not d.hold_file.exists()
+
+
+def test_外审W55_3_I4_换版本后服务起不来_在途就退回上一版(tmp_path, monkeypatch):
+    from d1max_agent import main as M
+    from d1max_agent.engine import release as rel
+
+    class 执行器:
+        def call(self, action, args=None, *, timeout_s=60.0, rid=None):
+            return {"ok": action != "restart_all", "error": "d1max-localizer 起不来"}
+
+    class 版本:
+        layout = object()
+        rolled = False
+
+        def current(self):
+            return "2026-10-31-abcdef12"
+
+        def rollback(self):
+            self.rolled = True
+    ops = 版本()
+    monkeypatch.setattr(rel, "read_pending", lambda layout: object())
+    assert M.after_switch(执行器(), ops) is True and ops.rolled
+    monkeypatch.setattr(rel, "read_pending", lambda layout: None)
+    ops2 = 版本()
+    assert M.after_switch(执行器(), ops2) is False and not ops2.rolled

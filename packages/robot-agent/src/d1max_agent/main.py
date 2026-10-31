@@ -718,6 +718,35 @@ def _sealer(args: argparse.Namespace) -> Any:
     return sealer
 
 
+def after_switch(priv: Any, ops: Any) -> bool:
+    """换版本以后(W55):按这一版包里的服务单元更新(验签)、把我们所有的服务重启(代理最后,由执行器重启)。
+    回真 = 交给执行器了 / 退回上一版了(都会重启代理,这里不用自己退);回假 = 调用方自己退出,
+    systemd 从新的 current 起来。
+
+    外审 W55-3 I4:有服务起不来,而且这次升级还在途(没提交)→ 退回上一版,不让它被提交成「升级成功」。
+    退回会再走一遍这里(那时已不在途,不会再退)。"""
+    from d1max_contract import privops
+    if priv is None or ops is None:
+        return False
+    try:
+        got = priv.call("units_apply", {"release": ops.current()}, timeout_s=120)
+        if not got.get("ok"):
+            log.warning("这一版的服务单元未更新:%s", got.get("error"))
+        got = priv.call("restart_all", timeout_s=900)
+        if got.get("ok"):
+            return True                          # 执行器最后会把代理也重启
+        log.error("重启全部服务失败:%s", got.get("error"))
+        from d1max_agent.engine import release as rel
+        if rel.read_pending(ops.layout) is not None:
+            log.error("新版本有服务起不来:退回上一版")
+            ops.rollback()
+            return True
+        log.warning("只重启代理")
+    except privops.PrivOpsError as exc:
+        log.warning("特权执行器不可用:%s;只重启代理", exc)
+    return False
+
+
 def _board(args: argparse.Namespace) -> Any:
     """``--board``(W46):文件在才看板子温度、风扇;写错了代理不起(说清楚哪里错)。"""
     path = getattr(args, "board", None)
@@ -850,20 +879,8 @@ def _releases(args: argparse.Namespace, registration: Registration) -> Any:
         # current 起来(别的服务要等机器人重启才跑新版)。
         def go() -> None:
             from d1max_contract import privops
-            priv = privops.from_config()
-            ops = holder.get("ops")
-            if priv is not None and ops is not None:
-                try:
-                    got = priv.call("units_apply", {"release": ops.current()}, timeout_s=120)
-                    if not got.get("ok"):
-                        log.warning("这一版的服务单元未更新:%s", got.get("error"))
-                    got = priv.call("restart_all", timeout_s=900)
-                    if got.get("ok"):
-                        return                      # 执行器最后会把代理也重启
-                    log.warning("重启全部服务失败:%s;只重启代理", got.get("error"))
-                except privops.PrivOpsError as exc:
-                    log.warning("特权执行器不可用:%s;只重启代理", exc)
-            os.kill(os.getpid(), signal.SIGTERM)
+            if not after_switch(privops.from_config(), holder.get("ops")):
+                os.kill(os.getpid(), signal.SIGTERM)
         threading.Timer(3.0, go).start()
     from d1max_contract import relsign
     pub = Path(os.environ.get("D1MAX_RELEASE_PUBKEY") or relsign.DEFAULT_PUBKEY)

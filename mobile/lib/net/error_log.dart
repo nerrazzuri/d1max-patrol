@@ -109,6 +109,9 @@ class ErrorLog {
 }
 
 /// 接上 Flutter 的出错钩子（`main()` 里调一次）：记下来，原来的处理照旧。
+///
+/// 外审 W55-3 I3：画面出错（构建、布局）出在眼前这个站点的页面上，记在当前站点名下；**没接住的异步
+/// 异常**说不清是哪个站点的请求留下的（可能是刚离开的那个），不记站点 —— 留在手机上、不上传。
 void installErrorHooks([ErrorLog? log]) {
   final l = log ?? ErrorLog.instance;
   final prev = FlutterError.onError;
@@ -117,7 +120,7 @@ void installErrorHooks([ErrorLog? log]) {
     prev?.call(details);
   };
   PlatformDispatcher.instance.onError = (error, stack) {
-    l.note('uncaught', '$error', detail: '$stack');
+    l.note('uncaught', '$error', detail: '$stack', site: '');
     return false;
   };
 }

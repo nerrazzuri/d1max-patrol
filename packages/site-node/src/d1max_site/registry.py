@@ -59,16 +59,22 @@ class Registry:
             c.execute("DELETE FROM cert_pending WHERE robot_id=?", (robot_id,))   # W55-2 I2
 
     def stage(self, robot_id: str, *, fingerprint: str, issued_at: int, expires_at: int,
-              now_ms: int, old_fingerprint: str = "") -> None:
+              now_ms: int, old_fingerprint: str = "") -> bool:
         """W55 自动续签:新证书签好了、机器人还没换上 —— 记下来,旧证书照常认(外审 W55-1 第 6 条)。
         记着发起时登记表里的那张(``old_fingerprint``):转正时登记表还得是它。"""
         with self.db.tx() as c:
+            # 外审 W55-3 I2:登记表还得是发起时那张(期间解绑、重登过就不挂)
+            if old_fingerprint and c.execute(
+                    "SELECT 1 FROM robots WHERE robot_id=? AND revoked=0 AND fingerprint=?",
+                    (robot_id, old_fingerprint)).fetchone() is None:
+                return False
             c.execute("INSERT INTO cert_pending(robot_id, fingerprint, old_fingerprint, issued_at, "
                       "expires_at, created_ms) VALUES (?,?,?,?,?,?) "
                       "ON CONFLICT(robot_id) DO UPDATE SET fingerprint=excluded.fingerprint, "
                       "old_fingerprint=excluded.old_fingerprint, issued_at=excluded.issued_at, "
                       "expires_at=excluded.expires_at, created_ms=excluded.created_ms",
                       (robot_id, fingerprint, old_fingerprint, issued_at, expires_at, now_ms))
+        return True
 
     def pending(self, robot_id: str) -> dict | None:
         rows = self.db.query("SELECT * FROM cert_pending WHERE robot_id=?", (robot_id,))

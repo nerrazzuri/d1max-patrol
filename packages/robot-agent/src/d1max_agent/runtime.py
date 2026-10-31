@@ -1744,6 +1744,9 @@ class AgentRuntime:
             if got is not None:
                 if not got.get("ok") or release_on_ok:
                     self._restarting = False
+                    clear = getattr(self.ops, "clear_hold", None)
+                    if clear is not None:
+                        clear()
                 log.warning("特权请求 %s 有结果了:%s", rid, "成功" if got.get("ok") else
                             got.get("error"))
                 return
@@ -2167,7 +2170,28 @@ class AgentRuntime:
             await self.close()
             raise
 
+    async def _resume_ops_hold(self) -> None:
+        """上一个代理进程留下的未决特权请求(外审 W55-3 C3):先核对,还说不准就保持维护、接着查,
+        **在开放任务之前**。"""
+        resume = getattr(self.ops, "resume_hold", None)
+        if resume is None:
+            return
+        try:
+            got = await asyncio.to_thread(resume)
+        except Exception:
+            log.exception("核对未决的特权请求出错:先不接新任务")
+            self._restarting = True
+            return
+        if got is None:
+            return
+        rid, release_on_ok = got
+        log.warning("上次留下未决的特权请求 %s:先不接新任务,等它有结果", rid)
+        self._restarting = True
+        self._ops_watch = asyncio.get_running_loop().create_task(
+            self._watch_priv(rid, release_on_ok=release_on_ok))
+
     async def _start(self) -> None:
+        await self._resume_ops_hold()
         # 录像(W18)不靠 HAL 也不靠站点:先起,连不上站点期间照录、攒着。起不来(目录建不了)不许
         # 连累代理:报一条、照常起(每拍还会重试起 ffmpeg)
         if self.recorder is not None:
