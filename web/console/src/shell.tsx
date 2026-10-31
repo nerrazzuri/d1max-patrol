@@ -124,8 +124,8 @@ export function pinFor(p: Page, pref: ThemePref, systemDark: boolean): "dark" | 
 export function pageAllowed(p: Page, role: string): boolean {
   if (!isAdminPage(p)) return true;
   if (p === "admin/users") return role === "admin";
-  // W53:经理能排布防时间(App 里排巡逻日程,布防时间在这里)
-  if (p === "admin/arming") return isOwnerLike(role) || role === "owner";
+  // W53:经理能排布防时间(App 里排巡逻日程,布防时间在这里)。W60:经理也看机器人(只看)、报表
+  if (p === "admin/arming" || p === "admin/robots" || p === "admin/reports") return isOwnerLike(role) || role === "owner";
   return isOwnerLike(role);
 }
 

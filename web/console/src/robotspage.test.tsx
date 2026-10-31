@@ -174,4 +174,14 @@ describe("机器人页", () => {
     const { container: c } = render(<LiveWall units={[u]} alerts={[]} now={0} onZoom={() => {}} />);
     expect(c.querySelector(".lw-card .slot-name")!.textContent).toBe("南区");
   });
+
+  it("W60 经理只看:没有添加、批准、改名、解绑", async () => {
+    const c = render(<RobotsPage say={() => {}} now={0} readOnly />).container;
+    await waitFor(() => expect(cardOf(c, "A")).not.toBeNull());
+    expect(btn(c, "添加机器人")).toBeUndefined();
+    fireEvent.click(cardOf(c, "A"));
+    const d = c.querySelector(".robot-detail")!;
+    expect(d.querySelector("form")).toBeNull();
+    expect(Array.from(d.querySelectorAll("button")).map((b) => b.textContent?.trim())).toEqual(["关闭"]);
+  });
 });

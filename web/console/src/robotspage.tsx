@@ -48,7 +48,8 @@ function problemText(p: RobotCard["problems"][number]): string {
   return "kind" in p ? alertTitle(lang.value, p.kind, p.kind) : t("robotDeviceBad", { d: p.device });
 }
 
-export function RobotsPage({ say, now, units = [] }: { say: Say; now: number; units?: UnitInfo[] }) {
+/** ``readOnly``(W60):经理只看 —— 没有添加、批准加入、改名、改派单方式、开通码、解绑、确认换 WiFi。 */
+export function RobotsPage({ say, now, units = [], readOnly = false }: { say: Say; now: number; units?: UnitInfo[]; readOnly?: boolean }) {
   const [rows, setRows] = useState<RobotCard[] | null>(null);
   const [open, setOpen] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
@@ -81,10 +82,10 @@ export function RobotsPage({ say, now, units = [] }: { say: Say; now: number; un
     <div class="robots">
       <div class="panel-head">
         <h1>{t("robots")}</h1>
-        <button type="button" class="btn primary push" onClick={() => setAdding(true)}>{t("addRobot")}</button>
+        {!readOnly && <button type="button" class="btn primary push" onClick={() => setAdding(true)}>{t("addRobot")}</button>}
       </div>
       <p class="muted lead">{t("robotsLead")}</p>
-      {pending.length > 0 && (
+      {!readOnly && pending.length > 0 && (
         <section class="panel bind-pending" aria-label={t("bindPending")}>
           <h2>{t("bindPending")}</h2>
           <p class="muted small">{t("bindPendingHint")}</p>
@@ -142,7 +143,7 @@ export function RobotsPage({ say, now, units = [] }: { say: Say; now: number; un
             );
           })}
         </div>
-        {cur && <RobotDetail r={cur} say={say} onChanged={load} onCode={setCode} onClose={() => setOpen(null)} />}
+        {cur && <RobotDetail readOnly={readOnly} r={cur} say={say} onChanged={load} onCode={setCode} onClose={() => setOpen(null)} />}
       </div>
       {adding && (
         <AddRobot onClose={() => setAdding(false)} say={say}
@@ -168,7 +169,8 @@ export function RobotsPage({ say, now, units = [] }: { say: Say; now: number; un
   );
 }
 
-function RobotDetail({ r, say, onChanged, onCode, onClose }: {
+function RobotDetail({ r, say, onChanged, onCode, onClose, readOnly = false }: {
+  readOnly?: boolean;
   r: RobotCard; say: Say; onChanged: () => void; onCode: (c: { id: string; code: string; hours: number }) => void; onClose: () => void;
 }) {
   const [name, setName] = useState(r.name);
@@ -190,11 +192,11 @@ function RobotDetail({ r, say, onChanged, onCode, onClose }: {
         <h2>{label(r)}</h2>
         <button type="button" class="btn sm push" onClick={onClose}>{t("close")}</button>
       </div>
-      <form class="row" onSubmit={(e) => { e.preventDefault(); void act(() => api("POST", `/api/admin/robots/${enc(r.robot_id)}/name`, { name }), t("saved")); }}>
+      {!readOnly && <form class="row" onSubmit={(e) => { e.preventDefault(); void act(() => api("POST", `/api/admin/robots/${enc(r.robot_id)}/name`, { name }), t("saved")); }}>
         <label class="field grow">{t("robotName")}<input name="name" value={name} maxLength={32} placeholder={r.robot_id}
           onInput={(e) => setName(e.currentTarget.value)} /></label>
         <button type="submit" class="btn" disabled={name === r.name}>{t("robotNameSave")}</button>
-      </form>
+      </form>}
       <dl class="kv small">
         <dt>{t("robotId")}</dt><dd class="mono">{r.robot_id}</dd>
         <dt>{t("colVersion")}</dt><dd>{r.agent ?? "—"} · {t(compat)}</dd>
@@ -202,7 +204,7 @@ function RobotDetail({ r, say, onChanged, onCode, onClose }: {
         <dt>{t("dispatchMode")}</dt><dd>{r.manual_only ? t("manualOnly") : t("autoDispatch")}</dd>
         {r.wifi && <><dt>{t("wifiLabel")}</dt><dd>{r.wifi.ssid || "—"} · {t(`link_${r.wifi.link}` as Key)}</dd></>}
       </dl>
-      {r.wifi?.change && <WifiChange id={r.robot_id} ch={r.wifi.change} act={act} />}
+      {!readOnly && r.wifi?.change && <WifiChange id={r.robot_id} ch={r.wifi.change} act={act} />}
       <h3>{t("robotRecent")}</h3>
       {r.recent_problems.length === 0 ? <p class="muted small">{t("robotRecentNone")}</p> : (
         <ul class="plain">
@@ -215,7 +217,7 @@ function RobotDetail({ r, say, onChanged, onCode, onClose }: {
       {r.problems.some((p) => "device" in p) && (
         <p class="small">{r.problems.filter((p) => "device" in p).map(problemText).join(" · ")}</p>
       )}
-      <div class="row wrap">
+      {!readOnly && <div class="row wrap">
         <button type="button" class="btn sm" onClick={() => void act(() => api("POST", `/api/robots/${enc(r.robot_id)}/service`, { manual_only: !r.manual_only }))}>
           {r.manual_only ? t("setAuto") : t("setManual")}
         </button>
@@ -224,7 +226,7 @@ function RobotDetail({ r, say, onChanged, onCode, onClose }: {
           onCode({ id: r.robot_id, code: d.code, hours: d.hours });
         })}>{t("newCode")}</button>
         <button type="button" class="btn sm stop" onClick={() => setUnbind("ask")}>{t("robotUnbind")}</button>
-      </div>
+      </div>}
       {unbind === "ask" && (
         <Confirm text={t("robotUnbindConfirm", { id: label(r) })} yes={t("robotUnbind")} danger onNo={() => setUnbind(null)} onYes={() => setUnbind("pw")} />
       )}

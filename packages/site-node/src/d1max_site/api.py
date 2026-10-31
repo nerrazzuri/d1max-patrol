@@ -641,8 +641,9 @@ class _Handler(TlsHandlerMixin):
             if method == "GET" and path == "/api/video/ws":
                 return self._video_ws(user)               # W51:网页的多路画面走一条 WebSocket
             if method == "GET" and path == "/api/robots/overview":
-                # W44 第二期:经理看的机器人卡片(今天几趟、毛病、电量)
-                self._need(user, MANAGE)
+                # W44 第二期:机器人卡片(今天几趟、毛病、电量)。W60:经理也看(以看为主;改动的接口照旧要 manage)
+                if not allowed(getattr(user, "role", ""), SCHEDULE):
+                    self._need(user, MANAGE)
                 from d1max_site.robot_overview import overview
                 from d1max_site.sitetime import site_tz
                 disp = self.site.dispatcher

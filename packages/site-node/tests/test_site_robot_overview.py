@@ -193,3 +193,13 @@ def test_解绑要再输密码(站点, tmp_path):
     assert code == 403
     audit = s.req("GET", "/api/audit", token=alice)[1]["audit"]
     assert json.dumps(audit).count("revoke") >= 2
+
+
+def test_W60_经理看得到机器人概况_只看(站点):
+    """W60(用户 2026-10-31 定):经理能看机器人页(以看为主);保安、只看的照旧看不到;经理改名照旧不行。"""
+    s = 站点
+    s.accounts.add("mona", PW, role="owner")
+    s.accounts.add("vic", PW, role="viewer")
+    assert s.req("GET", "/api/robots/overview", token=_登(s, "mona"))[0] == 200
+    assert s.req("GET", "/api/robots/overview", token=_登(s, "vic"))[0] == 403
+    assert s.req("POST", "/api/admin/robots/A/name", {"name": "x"}, token=_登(s, "mona"))[0] == 403
