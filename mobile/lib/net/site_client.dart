@@ -1538,15 +1538,18 @@ class SiteClient implements SiteApi {
       final resp = await req.close().timeout(timeout);
       if (resp.statusCode != 101) {
         var why = tr("Can't start remote control", '遥控开不了');
+        var body = const <String, dynamic>{};
         try {
           final d = jsonDecode(await utf8.decoder.bind(resp).join());
           if (d is Map && d['error'] is String) why = d['error'] as String;
+          // 整个错误体带出去（W54：`reason: no_video` 是画面还没起来，遥控页等一会儿再要）
+          if (d is Map) body = d.cast<String, dynamic>();
         } on FormatException {
           // 没有原因就只报状态码
         }
         if (resp.statusCode == 401) session = null;
         io.close(force: true);
-        throw SiteError(resp.statusCode, why);
+        throw SiteError(resp.statusCode, why, body: body);
       }
       final want = base64.encode(
           sha1.convert(utf8.encode('${key}258EAFA5-E914-47DA-95CA-C5AB0DC85B11')).bytes);

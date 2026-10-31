@@ -213,9 +213,21 @@ void main() {
       expect(api.calls, contains('wizard rewalk'));
       expect(api.wizard!['version'], '20261031-2');
       expect(find.text('3 / 7'), findsOneWidget);
-      expect(find.byKey(MapWizardPage.startRecKey), findsOneWidget, reason: '回到走一圈，没在录：给「开始录」');
-      await _tap(t, MapWizardPage.startRecKey);
-      expect(api.calls, contains('mapping A start map-20261031-2 main:20261031-2'));
+      expect(api.calls, contains('mapping A start map-20261031-2 main:20261031-2'), reason: '重走：换了版本、接着就开录');
+    });
+
+    testWidgets('走到一半机器人重启、这一趟自己收尾建好了：不卡在走一圈，给「看建图结果」（演示站点 10-31 撞上的）', (t) async {
+      final api = _admin()
+        ..wizard = <String, dynamic>{'step': 'walk', 'robot_id': 'A', 'map_id': 'main', 'version': '20261031-1',
+          'drive': 'phone', 'by': 'u', 'label': ''}
+        ..wizardBuild = <String, dynamic>{'state': 'ready', 'quality': <String, dynamic>{
+          'verdict': 'problem', 'reasons': <dynamic>['short_path'], 'path_m': 0.0}};
+      await _wizard(t, api);
+      expect(find.byKey(MapWizardPage.walkBuiltKey), findsOneWidget);
+      expect(find.byKey(MapWizardPage.startRecKey), findsNothing, reason: '这一版已经有了，不能再录同一版');
+      await _tap(t, MapWizardPage.walkBuiltKey);
+      expect(api.calls, contains('wizard step build'));
+      expect(find.text('图建好了，但有问题'), findsOneWidget);
     });
 
     testWidgets('没建成：写原因，只能重走', (t) async {
