@@ -67,8 +67,13 @@ class SiteTeleopPage extends StatefulWidget {
   final SiteApi api;
   final String robotId;
   final String takeoverReason;
+
+  /// 浮在画面右上、「停」下面的一块（W54 建图向导：小的建图预览和「走完了」）。没有就不摆。
+  final Widget? overlay;
   const SiteTeleopPage(
-      {super.key, required this.api, required this.robotId, this.takeoverReason = ''});
+      {super.key, required this.api, required this.robotId, this.takeoverReason = '', this.overlay});
+
+  static const Key overlayKey = Key('teleop-overlay');
 
   static const Key stopKey = Key('teleop-stop');
   static const Key statusKey = Key('teleop-status');
@@ -471,6 +476,12 @@ class _SiteTeleopPageState extends State<SiteTeleopPage> with WidgetsBindingObse
                       ),
                     ]),
                   ),
+                  if (widget.overlay != null)
+                    Positioned(
+                        key: SiteTeleopPage.overlayKey,
+                        right: stick + Nw.s16,
+                        top: 64 + Nw.s16,
+                        child: widget.overlay!),
                   // 左下：前后 + 横移（能横移的狗）；右下：转向。半透明，浮在画面上
                   Positioned(
                     left: Nw.s8,

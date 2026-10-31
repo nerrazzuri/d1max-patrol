@@ -19,6 +19,7 @@ import 'package:flutter/material.dart';
 import '../l10n.dart';
 import '../model/alert.dart';
 import '../net/site_client.dart';
+import 'map_wizard.dart' show openMapWizard, wizardSteps;
 import 'nw/nw_button.dart';
 import 'nw/nw_p2_duty.dart';
 import 'nw/nw_p3_robots.dart';
@@ -83,6 +84,8 @@ class SiteDutyPage extends StatefulWidget {
   static const Key othersKey = Key('duty-others');
   static const Key noRobotsKey = Key('duty-no-robots');
   static const Key todayKey = Key('duty-today');
+  static const Key noMapKey = Key('duty-no-map');
+  static const Key mapWizardKey = Key('duty-map-wizard');
 
   @override
   State<SiteDutyPage> createState() => _SiteDutyPageState();
@@ -107,6 +110,8 @@ class _SiteDutyPageState extends State<SiteDutyPage> {
   Map<String, dynamic>? _mode;
   Map<String, dynamic>? _weather;
   Map<String, dynamic>? _view;
+  /// W54：站点有没有图、有没有人在建图（`/api/map-wizard`）；老站点没有是 null。
+  Map<String, dynamic>? _mapWiz;
   String? _sel;
   bool _playing = false;
   bool _loaded = false;
@@ -167,6 +172,7 @@ class _SiteDutyPageState extends State<SiteDutyPage> {
       _try(widget.api.patrolsToday),
       _try(widget.api.mode),
       _try(widget.api.weather),
+      _try(widget.api.mapWizard),
     ]);
     if (!mounted) return;
     final robots = got[0] is List ? dutyOrder((got[0] as List).cast<Map<String, dynamic>>()) : _robots;
@@ -181,6 +187,7 @@ class _SiteDutyPageState extends State<SiteDutyPage> {
       }
       if (got[3] is Map) _mode = (got[3] as Map).cast<String, dynamic>();
       if (got[4] is Map) _weather = (got[4] as Map).cast<String, dynamic>();
+      if (got[5] is Map) _mapWiz = (got[5] as Map).cast<String, dynamic>();
       final ids = robots.map((r) => '${r['robot_id']}').toList();
       final want = _sel ?? _picked[_site];
       _sel = want != null && ids.contains(want) ? want : (ids.isEmpty ? null : ids.first);
@@ -529,6 +536,51 @@ class _SiteDutyPageState extends State<SiteDutyPage> {
     ];
   }
 
+  /// W54：站点上一张图都没有。管理员、工程师一行带「开始建图」；别人只说请管理员建。
+  List<Widget> _noMap(NwColors c) {
+    final w = _mapWiz;
+    if (w == null || (w['maps'] as num? ?? 1) > 0) return const [];
+    final admin = widget.api.session?.canManageMaps ?? false;
+    final wiz = w['wizard'] is Map ? (w['wizard'] as Map) : null;
+    final step = wiz == null ? 0 : wizardSteps.indexOf('${wiz['step']}') + 1;
+    return [
+      NwCard(
+        key: SiteDutyPage.noMapKey,
+        tone: NwTone.warning,
+        child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          Text(tr('The site has no map yet', '站点还没有地图'),
+              style: NwText.titleSmall.copyWith(color: c.text, fontWeight: FontWeight.w700)),
+          const SizedBox(height: 2),
+          Text(
+              wiz != null
+                  ? tr('${wiz['by']} is mapping (step $step of 7).', '${wiz['by']} 正在建图（第 $step 步，共 7 步）。')
+                  : (admin
+                      ? tr('Robots need a map before they can patrol. Video and remote control work now.',
+                          '机器人要先建好地图才能巡逻。现在能看画面、能遥控，不能派巡逻。')
+                      : tr('Robots need a map before they can patrol. Ask an administrator to build it in the app.',
+                          '机器人要先建好地图才能巡逻。请管理员在 App 里建图。')),
+              style: NwText.bodyMedium.copyWith(color: c.text)),
+          if (admin) ...[
+            const SizedBox(height: Nw.s8),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: NwButton(
+                  buttonKey: SiteDutyPage.mapWizardKey,
+                  label: wiz != null ? tr('Continue mapping', '接着建图') : tr('Start mapping', '开始建图'),
+                  icon: Icons.add_location_alt_rounded,
+                  size: NwButtonSize.small,
+                  onPressed: () async {
+                    await openMapWizard(context, widget.api);
+                    await _reload();
+                  }),
+            ),
+          ],
+        ]),
+      ),
+      nwGap8,
+    ];
+  }
+
   @override
   Widget build(BuildContext context) {
     final c = Nw.of(context);
@@ -547,6 +599,7 @@ class _SiteDutyPageState extends State<SiteDutyPage> {
               if (_error != null) ...[NwNotice(text: _error!, tone: NwTone.error), nwGap8],
               _modeRow(c),
               ..._p1(c),
+              ..._noMap(c),
               if (!_loaded)
                 const Padding(padding: EdgeInsets.all(Nw.s24), child: Center(child: CircularProgressIndicator()))
               else if (!hasRobot)

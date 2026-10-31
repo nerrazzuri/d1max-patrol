@@ -585,6 +585,23 @@ abstract class SiteApi {
   /// 改我的向导记录（合进去）：`tour`、`setup_hidden`、`skip`。回整份。
   Future<Map<String, dynamic>> setGuide(Map<String, dynamic> patch);
 
+  /// 建图向导（W54）：`{wizard: {step, robot_id, site_type, drive, map_id, version, tried, label, by,
+  /// started_ms, build: {state: pending|ready|failed, quality?, reason?}} | null, maps: 站点上有几版图}`。
+  Future<Map<String, dynamic>> mapWizard();
+
+  /// 建图向导的一步（管理员、工程师）：`{action: start|step|rewalk|finish|abandon, …}` → `{wizard}`。
+  Future<Map<String, dynamic>> mapWizardAction(Map<String, dynamic> body);
+
+  /// 地图管理总览（管理员）：`{maps: [{map_id, versions: [{version, created_ms, note, quality, loaded_on,
+  /// previous_on, latest, counts, …}]}], robots: [{robot_id, online, loaded, rollback, …}]}`。
+  Future<Map<String, dynamic>> mapsOverview();
+
+  /// 删一个旧版本（有机器人在用、最新的一版站点回 409）。
+  Future<Map<String, dynamic>> deleteMapVersion(String mapId, String version);
+
+  /// 把这台机器人换回它上一张图。
+  Future<Map<String, dynamic>> rollbackMap(String robotId);
+
   /// 巡逻日程（W53：经理、管理员在 App 里排）：`{timezone, revision, schedules: [{id, mission, at, days,
   /// robot?, window_min, on_missed, revision, ...}]}`。
   Future<Map<String, dynamic>> routeSchedules();
@@ -1600,6 +1617,25 @@ class SiteClient implements SiteApi {
   @override
   Future<Map<String, dynamic>> setGuide(Map<String, dynamic> patch) async =>
       _map(await _send('POST', '/api/me/guide', patch));
+
+  @override
+  Future<Map<String, dynamic>> mapWizard() async => _map(await _send('GET', '/api/map-wizard'));
+
+  @override
+  Future<Map<String, dynamic>> mapWizardAction(Map<String, dynamic> body) async =>
+      _map(await _send('POST', '/api/map-wizard', body));
+
+  @override
+  Future<Map<String, dynamic>> mapsOverview() async => _map(await _send('GET', '/api/admin/maps'));
+
+  @override
+  Future<Map<String, dynamic>> deleteMapVersion(String mapId, String version) async => _map(await _send(
+      'POST', '/api/admin/maps/${Uri.encodeComponent(mapId)}/${Uri.encodeComponent(version)}/delete',
+      <String, dynamic>{}));
+
+  @override
+  Future<Map<String, dynamic>> rollbackMap(String robotId) async =>
+      _map(await _send('POST', '/api/admin/maps/rollback', <String, dynamic>{'robot_id': robotId}));
 
   @override
   Future<Map<String, dynamic>> routeSchedules() async => _map(await _send('GET', '/api/route-schedules'));

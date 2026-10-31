@@ -13,6 +13,8 @@ import 'package:d1max_patrol/ui/site_health.dart';
 import 'package:d1max_patrol/ui/robot_bind_page.dart';
 import 'package:d1max_patrol/ui/alarm_log.dart';
 import 'package:d1max_patrol/ui/guide.dart';
+import 'package:d1max_patrol/ui/map_manage.dart';
+import 'package:d1max_patrol/ui/map_wizard.dart';
 import 'package:d1max_patrol/ui/site_add.dart';
 import 'package:d1max_patrol/ui/site_duty_page.dart';
 import 'package:d1max_patrol/ui/site_tabs.dart';
@@ -55,6 +57,14 @@ FakeApi _w53Api(String role) => FakeApi(role)
         'robot': 'B', 'by': '', 'state': 'failed', 'reason': 'Blocked at point 3', 'end_ms': null, 'adhoc_id': ''},
     ],
   };
+
+/// W54：建图向导停在 [step]（建图那一步用 [build]）。显示名、机器人名都取长的。
+FakeApi _wizApi(String step, {Map<String, dynamic>? build}) => FakeApi('admin')
+  ..mapsCount = 0
+  ..wizard = <String, dynamic>{'step': step, 'robot_id': 'A', 'site_type': 'indoor', 'drive': 'phone',
+    'map_id': 'main', 'version': '20261031-12', 'tried': <dynamic>[], 'label': 'Ground floor east wing lobby',
+    'by': 'night.guard.long.name', 'started_ms': 0}
+  ..wizardBuild = build ?? <String, dynamic>{'state': 'pending'};
 
 const _portrait = Size(390, 844);
 const _landscape = Size(800, 360);
@@ -112,6 +122,24 @@ final _pages = <String, Widget Function()>{
   'admin tab': () => AdminHomeTab(api: _w53Api('admin'), switchTab: (_) {}),
   'schedule (W53, owner)': () => SchedulePage(api: _w53Api('owner')),
   'me (guard)': () => MeTab(api: FakeApi('guard')),
+  // W54：建图向导每一步（「正在建图」一直在转，不放进来）、地图管理、没有图时的值守页和地图栏
+  'map wizard (prepare)': () => MapWizardPage(api: FakeApi('admin')..mapsCount = 0),
+  'map wizard (drive)': () => MapWizardPage(api: _wizApi('drive')),
+  'map wizard (walk)': () => MapWizardPage(api: _wizApi('walk')),
+  'map wizard (built, problem)': () => MapWizardPage(
+      api: _wizApi('build', build: <String, dynamic>{'state': 'ready', 'quality': <String, dynamic>{
+        'verdict': 'problem', 'reasons': <dynamic>['big_shift', 'short_path'], 'path_m': 12.0, 'max_shift_m': 0.42}})),
+  'map wizard (built, usable)': () => MapWizardPage(
+      api: _wizApi('build', build: <String, dynamic>{'state': 'ready', 'quality': <String, dynamic>{
+        'verdict': 'usable', 'reasons': <dynamic>[], 'path_m': 186.0, 'max_shift_m': 0.08}})),
+  'map wizard (failed)': () => MapWizardPage(
+      api: _wizApi('build', build: <String, dynamic>{'state': 'failed',
+        'reason': 'MappingError: the recording is empty, the lidar topic had no messages for 30 s'})),
+  'map wizard (zones)': () => MapWizardPage(api: _wizApi('zones')),
+  'map wizard (origin)': () => MapWizardPage(api: _wizApi('origin')),
+  'map manage': () => MapManagePage(api: FakeApi('admin')),
+  'duty (admin, no map)': () => SiteDutyPage(api: _wizApi('walk'), title: 'East Gate Estate'),
+  'duty (guard, no map)': () => SiteDutyPage(api: FakeApi('guard')..mapsCount = 0, title: 'East Gate Estate'),
   'accounts': () => AccountsPage(
       api: FakeApi('admin')
         ..acctReqs = <Map<String, dynamic>>[

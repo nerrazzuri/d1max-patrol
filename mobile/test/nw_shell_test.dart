@@ -3,6 +3,7 @@
 import 'package:d1max_patrol/l10n.dart';
 import 'package:d1max_patrol/net/site_client.dart';
 import 'package:d1max_patrol/store/site_store.dart';
+import 'package:d1max_patrol/ui/map_manage.dart';
 import 'package:d1max_patrol/ui/nw/nw_shell.dart';
 import 'package:d1max_patrol/ui/nw/nw_theme.dart';
 import 'package:d1max_patrol/ui/alarm_log.dart';
@@ -112,7 +113,8 @@ void main() {
       expect(find.byType(SiteMapTab), findsOneWidget);
       expect(find.byKey(const Key('robot-A')), findsNothing);
       await _tab(t, SiteMapTab.listKey);
-      expect(find.byType(SiteMapsPage), findsOneWidget);
+      // W54：管理员进地图管理（版本、结论、下发、退回、新建）；原来的地图目录在它最下面
+      expect(find.byType(MapManagePage), findsOneWidget);
       expect(find.byType(NwBottomNav), findsNothing);
       await t.pageBack();
       await t.pumpAndSettle();

@@ -23,7 +23,9 @@ import 'nw/nw_p3_robots.dart' show robotOnline;
 import 'nw/nw_p4_admin.dart';
 import 'nw/nw_theme.dart';
 import 'nw/nw_widgets.dart';
+import 'map_manage.dart';
 import 'map_view.dart';
+import 'map_wizard.dart' show openMapWizard;
 import 'run_viz.dart';
 import 'site_mapping.dart';
 import 'site_pose_pick.dart';
@@ -373,6 +375,9 @@ class SiteMapTab extends StatefulWidget {
   final Duration livePeriod;
   const SiteMapTab({super.key, required this.api, this.livePeriod = const Duration(seconds: 3)});
 
+  /// 没有图时的「开始建图」（W54，管理员）。
+  static const Key wizardKey = Key('map-tab-wizard');
+
   static const Key canvasKey = Key('map-tab-canvas');
   static const Key wallLegendKey = Key('map-tab-legend-wall');
 
@@ -591,8 +596,13 @@ class _SiteMapTabState extends State<SiteMapTab> {
     _zoom.value = m;
   }
 
-  void _openList() => Navigator.push(
-      context, MaterialPageRoute<void>(builder: (_) => SiteMapsPage(api: widget.api)));
+  /// 右上角：管理员、工程师进地图管理（W54：版本、结论、下发、退回、新建）；别人看地图目录。
+  Future<void> _openList() async {
+    final admin = widget.api.session?.canManageMaps ?? false;
+    await Navigator.push(context, MaterialPageRoute<void>(
+        builder: (_) => admin ? MapManagePage(api: widget.api) : SiteMapsPage(api: widget.api)));
+    if (mounted) _reload();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -638,19 +648,26 @@ class _SiteMapTabState extends State<SiteMapTab> {
       ]);
     }
     if (v.mapId == null) {
+      // W54：管理员、工程师直接开建图向导；别人等管理员建
+      final admin = widget.api.session?.canManageMaps ?? false;
       return NwEmpty(
           key: SiteMapTab.emptyKey,
           icon: Icons.map_outlined,
           text: tr('No maps on the site yet', '站点上还没有图'),
-          hint: tr(
-              'An administrator records a mapping run from a robot\'s page, then builds a map from it '
-                  'in the map list.',
-              '管理员在单机器人页录一趟包，再到地图列表里拿它建图。'),
-          action: NwButton(
-              label: tr('Open map list', '去地图列表'),
-              icon: Icons.layers_rounded,
-              variant: NwButtonVariant.outline,
-              onPressed: _openList));
+          hint: admin
+              ? tr('Walk the robot around the site once and it builds the map (20–40 minutes).',
+                  '开着机器人在场地里走一圈，图就建出来了（二三十分钟）。')
+              : tr('Ask an administrator to build the map first.', '请管理员先建图。'),
+          action: admin
+              ? NwButton(
+                  buttonKey: SiteMapTab.wizardKey,
+                  label: tr('Start mapping', '开始建图'),
+                  icon: Icons.add_location_alt_rounded,
+                  onPressed: () async {
+                    await openMapWizard(context, widget.api);
+                    if (mounted) _reload();
+                  })
+              : null);
     }
     final canvas = v.png == null
         ? SingleChildScrollView(

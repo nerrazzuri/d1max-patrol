@@ -20,6 +20,7 @@ import '../../net/site_client.dart';
 import '../../store/site_store.dart';
 import '../alarm_log.dart';
 import '../guide.dart';
+import '../map_wizard.dart' show maybeOfferMapping;
 import '../site_duty_page.dart';
 import '../site_incidents.dart';
 import '../site_maps.dart';
@@ -183,7 +184,10 @@ class _NwShellState extends State<NwShell> {
     }
     if (_tourChecked) return;
     _tourChecked = true;
-    unawaited(maybeStartTour(ctx, widget.api, t));
+    // 导览走完再问建图（W54：管理员、站点没有图）
+    unawaited(maybeStartTour(ctx, widget.api, t).then((_) async {
+      if (ctx.mounted) await maybeOfferMapping(ctx, widget.api);
+    }));
   }
 
   /// 第 5 栏是什么：管理员、工程师「管理」；经理「日程」；保安、只看「我的」。
