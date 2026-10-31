@@ -234,7 +234,7 @@ du -sh d1max-walk-01
 R1 折腾不通的话，直接 SSH 上机器录，回来再 scp：
 
 ```bash
-ssh robot@192.168.168.100          # 密码 1
+ssh robot@192.168.168.100          # 密码见现场记录
 df -h                              # 先看盘还有多少
 source /opt/ros/humble/setup.bash
 ros2 bag record -o /tmp/d1max-walk-01 /front_lidar /front_lidar/imu /tf /tf_static

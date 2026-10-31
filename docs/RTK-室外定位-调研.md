@@ -40,7 +40,7 @@
 - 看竞品**天线没用**:天线只被动收卫星,与"用哪个改正服务"无关;换服务不换天线。
 - 验证方法(比研究竞品直接):**SSH 进 D1 Max 看它现在怎么拿改正**
   ```bash
-  ssh robot@192.168.234.1   # 密码 bot
+  ssh robot@192.168.234.1   # 密码见现场记录
   ps aux | grep -Ei "rtk|ntrip|gnss|sixents|cors"
   grep -RniE "ntrip|caster|rtcm|sixents|cors|2101|mountpoint" /ota /opt /etc /agibot 2>/dev/null | head -50
   cat /ota/sixents_config.ini
