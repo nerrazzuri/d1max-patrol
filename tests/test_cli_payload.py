@@ -55,3 +55,17 @@ def test_看继电器板状态(board, capsys):
     out = capsys.readouterr().out
     assert "CH2=开" in out and "IN2=1" in out and "IN1=0" in out
     assert "应为 50" in out
+
+
+def test_外审W56_1_线圈号不连续_按实际线圈号报(board, capsys, tmp_path):
+    from d1max_patrol.cli import main
+    b, cfg = board
+    raw = json.loads(cfg.read_text())
+    raw["relay"]["coils"] = {"spot_l": 0, "siren": 2}
+    raw["spotlight"] = {"both": "spot_l"}
+    raw["strobe"] = {}
+    cfg.write_text(json.dumps(raw))
+    b.coils[2] = True
+    assert main(["payload", "relay-status", "--config", str(cfg)]) == 0
+    out = capsys.readouterr().out
+    assert "CH3=开" in out and "CH1=关" in out and "CH2" not in out

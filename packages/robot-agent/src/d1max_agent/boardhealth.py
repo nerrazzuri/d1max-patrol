@@ -50,6 +50,8 @@ LEVELS = ("ok", "warn", "shed", "critical")
 PERIOD_S = 10.0
 #: 连着几拍太慢才算停转。
 STOP_SAMPLES = 2
+#: 继电器板有几路输入(中盛 4 入 4 出;外审 W56-1:写成不存在的那几路会一直读到 0、一直显示正常)。
+RELAY_INPUTS = 4
 _NAME = re.compile(r"[a-z][a-z0-9_]{0,15}")
 THERMAL_ROOT = Path("/sys/class/thermal")
 HWMON_ROOT = Path("/sys/class/hwmon")
@@ -135,8 +137,9 @@ class BoardConfig:
                     raise BoardConfigError(f"风扇 {name}:relay_input(报警线)和 chip/line(测速线)"
                                            "二选一")
                 ri, act = f["relay_input"], f.get("alarm_active", "high")
-                if isinstance(ri, bool) or not isinstance(ri, int) or not 0 <= ri <= 15:
-                    raise BoardConfigError(f"风扇 {name} 的 relay_input 要是 0–15(0 = IN1)")
+                if isinstance(ri, bool) or not isinstance(ri, int) or not 0 <= ri < RELAY_INPUTS:
+                    raise BoardConfigError(f"风扇 {name} 的 relay_input 要是 0–{RELAY_INPUTS - 1}"
+                                           "(0 = IN1;继电器板只有 4 路输入)")
                 if act not in ("high", "low"):
                     raise BoardConfigError(f"风扇 {name} 的 alarm_active 只认 high 或 low")
                 if any(o.via_relay and o.relay_input == ri for o in out):

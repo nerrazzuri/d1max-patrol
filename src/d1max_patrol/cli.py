@@ -783,10 +783,11 @@ def _cmd_payload(args: argparse.Namespace) -> int:
                                   reg=cfg.watchdog_reg if cfg.watchdog_reg >= 0 else 0x30)
                 print(got["note"])
                 return 0
-            coils = (relay.read_coils(min(cfg.coils.values()), len(cfg.coils))
-                     if cfg.coils else [])
-            print("输出:", " ".join(f"CH{i + 1}={'开' if on else '关'}"
-                                   for i, on in enumerate(coils)))
+            if cfg.coils:                         # 按实际线圈号报(线圈号可以不连续、不从 0 起)
+                lo, hi = min(cfg.coils.values()), max(cfg.coils.values())
+                bits = relay.read_coils(lo, hi - lo + 1)
+                print("输出:", " ".join(f"CH{n + 1}={'开' if bits[n - lo] else '关'}"
+                                       for n in sorted(cfg.coils.values())))
             if cfg.inputs_reg >= 0:
                 bits = relay.read_input_registers(cfg.inputs_reg, 1)[0]
                 print("输入:", " ".join(f"IN{i + 1}={bits >> i & 1}" for i in range(4)))

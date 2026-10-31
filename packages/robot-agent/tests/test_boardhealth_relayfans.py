@@ -112,3 +112,8 @@ def test_没接上装继电器板_风扇说清楚(tmp_path):
 def test_样例里没有GPIO了():
     raw = json.loads((ROOT / "deploy" / "board.example.json").read_text())
     assert not any("chip" in f for f in raw["fans"])
+
+
+def test_外审W56_1_输入号只认板子上有的四路():
+    with pytest.raises(BoardConfigError, match="0–3"):
+        BoardConfig.parse_fans([{"name": "a", "relay_input": 4}])
