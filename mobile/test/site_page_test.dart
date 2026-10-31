@@ -8,9 +8,11 @@ import 'package:d1max_patrol/model/alert.dart';
 import 'package:d1max_patrol/net/push.dart';
 import 'package:d1max_patrol/net/site_client.dart';
 import 'package:d1max_patrol/store/site_store.dart';
+import 'package:d1max_patrol/ui/app_settings.dart';
 import 'package:d1max_patrol/ui/patrol_dispatch.dart';
 import 'package:d1max_patrol/ui/refusal.dart';
 import 'package:d1max_patrol/ui/site_page.dart';
+import 'package:d1max_patrol/ui/site_tabs.dart' show MeTab;
 import 'package:d1max_patrol/ui/site_video.dart';
 import 'package:d1max_patrol/ui/widget/live_video.dart';
 import 'package:flutter/material.dart';
@@ -112,6 +114,35 @@ class FakeApi implements SiteApi {
     calls.add('support-bundle');
     if (bundleError != null) throw bundleError!;
     return Uint8List.fromList(List<int>.filled(3000, 7));
+  }
+  /// W55 远程运维、错误记录、App 更新。
+  final List<(String, String, Map<String, dynamic>?, Map<String, String>?)> opsCalls =
+      <(String, String, Map<String, dynamic>?, Map<String, String>?)>[];
+  Map<String, dynamic> Function(String action, Map<String, dynamic>? body)? opsReply;
+  SiteError? opsError;
+  @override
+  Future<Map<String, dynamic>> robotOps(String robotId, String action,
+      {Map<String, dynamic>? body, Map<String, String>? query}) async {
+    opsCalls.add((robotId, action, body, query));
+    if (opsError != null) throw opsError!;
+    return opsReply?.call(action, body) ?? <String, dynamic>{};
+  }
+  final List<List<Map<String, dynamic>>> errorReports = <List<Map<String, dynamic>>>[];
+  @override
+  Future<void> reportClientErrors(List<Map<String, dynamic>> items) async => errorReports.add(items);
+  Map<String, dynamic> appUpdateBody = <String, dynamic>{'available': false};
+  final List<(String, int)> appUpdateAsks = <(String, int)>[];
+  @override
+  Future<Map<String, dynamic>> appUpdate(String platform, int build) async {
+    appUpdateAsks.add((platform, build));
+    return appUpdateBody;
+  }
+  List<int> appBytes = <int>[];
+  @override
+  Future<void> downloadAppUpdate(String platform, File dest,
+      {required int size, required String expectSha256, void Function(int got)? progress}) async {
+    await dest.writeAsBytes(appBytes);
+    progress?.call(appBytes.length);
   }
   /// 商业化 A6：推送号登记、注销、注销会话的先后。
   final List<String> pushLog = <String>[];
@@ -1217,12 +1248,21 @@ void main() {
       await t.tap(find.byKey(NwShell.dogsKey));
       await t.pumpAndSettle();
       expect(find.byType(SiteRobotsPage), findsOneWidget);
-      final tip = find.byKey(SiteRobotsPage.pushKey);
+      // W55：推送状态在「设置」页（我的 → 设置）
+      await t.tap(find.byKey(NwShell.moreKey));
+      await t.pumpAndSettle();
+      await t.tap(find.byKey(MeTab.settingsKey));
+      await t.pumpAndSettle();
+      final tip = find.byKey(AppSettingsPage.pushKey);
       if (push.supported) {
-        expect(t.widget<Tooltip>(tip).message, 'P1 推送：已就绪', reason: '标题栏上看得见推送就绪了');
+        expect(find.descendant(of: tip, matching: find.text('已就绪')), findsOneWidget, reason: '设置页上看得见推送就绪了');
       } else {
         expect(tip, findsNothing);
       }
+      await t.pageBack();
+      await t.pumpAndSettle();
+      await t.tap(find.byKey(NwShell.dogsKey));
+      await t.pumpAndSettle();
       await t.pageBack();
       await t.pumpAndSettle();
       expect(api.pushLog,

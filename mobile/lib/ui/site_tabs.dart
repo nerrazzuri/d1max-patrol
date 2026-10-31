@@ -13,6 +13,7 @@ import 'package:flutter/material.dart';
 import '../l10n.dart';
 import '../net/site_client.dart';
 import '../store/site_store.dart';
+import 'app_settings.dart';
 import 'guide.dart';
 import 'map_wizard.dart' show openMapWizard;
 import 'nw/nw_button.dart';
@@ -425,6 +426,13 @@ class _AdminHomeTabState extends State<AdminHomeTab> {
                         '为机器人安装新版本，出现问题可回退。'),
                     onTap: () => _push(context, SiteReleasesPage(api: api))),
                 _Entry(
+                    entryKey: AdminHomeTab.entryKey('settings'),
+                    icon: Icons.settings_rounded,
+                    title: tr('Settings', '设置'),
+                    hint: tr('Language, background watch and push, app version and updates.',
+                        '语言、后台值守与推送、App 版本与更新。'),
+                    onTap: () => openSettings(context, api)),
+                _Entry(
                     entryKey: AdminHomeTab.entryKey('tour'),
                     icon: Icons.school_rounded,
                     title: tr('How to use', '使用教程'),
@@ -617,6 +625,7 @@ class SchedulePage extends StatefulWidget {
   const SchedulePage({super.key, required this.api, this.embedded = false});
 
   static const Key todayTabKey = Key('sched-today');
+  static const Key settingsKey = Key('sched-settings');
   static const Key weekTabKey = Key('sched-week');
   static const Key addKey = Key('sched-add');
   static Key rowKey(String id) => Key('sched-row-$id');
@@ -784,6 +793,12 @@ class _SchedulePageState extends State<SchedulePage> {
       return Scaffold(
           body: Column(children: [
         NwHeader(overline: 'Nexus Warden', title: tr('Schedule', '日程'), trailing: [
+          // 经理的第 5 栏是日程（没有「我的」栏）：设置从这里进
+          IconButton(
+              key: SchedulePage.settingsKey,
+              tooltip: tr('Settings', '设置'),
+              icon: const Icon(Icons.settings_rounded),
+              onPressed: () => openSettings(context, widget.api)),
           IconButton(
               key: leaveSiteKey,
               tooltip: tr('Leave this site', '退出站点'),
@@ -915,6 +930,7 @@ class MeTab extends StatelessWidget {
   const MeTab({super.key, required this.api, this.entry});
 
   static const Key leaveKey = Key('me-leave');
+  static const Key settingsKey = Key('me-settings');
 
   @override
   Widget build(BuildContext context) {
@@ -939,6 +955,13 @@ class MeTab extends StatelessWidget {
               ]),
             ),
             const SizedBox(height: Nw.s16),
+            _Entry(
+                entryKey: MeTab.settingsKey,
+                icon: Icons.settings_rounded,
+                title: tr('Settings', '设置'),
+                hint: tr('Language, background watch and push, app version and updates.',
+                    '语言、后台值守与推送、App 版本与更新。'),
+                onTap: () => openSettings(context, api)),
             _Entry(
                 entryKey: const Key('me-tour'),
                 icon: Icons.school_rounded,

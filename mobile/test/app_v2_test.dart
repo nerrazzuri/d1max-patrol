@@ -136,9 +136,12 @@ void main() {
       // 2026-10-14 重做：这一页的标题按设计稿叫 Site Selection（原来是 Sites / 站点）
       expect(find.text('Select site'), findsOneWidget);
       expect(find.text('No sites yet. Tap "Add site" below.'), findsOneWidget);
+      // W55：语言在「设置」里（站点列表右上角齿轮）
+      await t.tap(find.byKey(const Key('open-settings')));
+      await t.pumpAndSettle();
       await t.tap(find.byKey(const Key('lang-switch')));
       await t.pumpAndSettle();
-      await t.tap(find.text('中文'));
+      await t.tap(find.text('中文').last);
       await t.pumpAndSettle();
       expect(find.text('选择站点'), findsOneWidget);
       expect(find.text('Select site'), findsNothing);

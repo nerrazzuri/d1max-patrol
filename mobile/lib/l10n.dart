@@ -32,6 +32,20 @@ String alertTitle(String kind, String siteTitle) {
   return appLang.value == AppLang.zh ? e.$2 : e.$1;
 }
 
+/// App 用的那一份语言存储（`main()` 里设）；测试不设（不落盘）。
+LangStore? langStoreRef;
+
+/// 换语言并存下来（站点列表、设置页都走这里）。存不上只是下次打开还是原来的语言，不挡这一次。
+Future<void> setAppLang(AppLang lang, {LangStore? store}) async {
+  if (lang == appLang.value) return;
+  appLang.value = lang;
+  try {
+    await (store ?? langStoreRef)?.save(lang);
+  } catch (_) {
+    // 同上
+  }
+}
+
 /// 语言选了哪种存在哪儿。只存这一项；文件坏了、没有，都当没选过（英文）。
 class LangStore {
   final File file;

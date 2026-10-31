@@ -7,6 +7,7 @@ library;
 
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
 abstract class BackgroundWatch {
@@ -48,4 +49,35 @@ class ChannelBackgroundWatch implements BackgroundWatch {
 
   @override
   Future<bool> running() async => supported && (await _ch.invokeMethod<bool>('running') ?? false);
+}
+
+/// 后台值守开关的状态（W55：开关从机器人栏顶上挪到「设置」页）。机器人栏（`SiteRobotsPage`）一直活着，管真正的
+/// 开、停（进站点自动开，离开站点就停）；设置页看它、点它。
+class WatchControl extends ChangeNotifier {
+  bool _on = false;
+  bool _busy = false;
+  Future<void> Function()? _toggle;
+
+  bool get on => _on;
+  bool get busy => _busy;
+
+  /// 这台设备、这个站点能不能后台值守（桌面版没有）。
+  bool get available => _toggle != null;
+
+  void bind(Future<void> Function() toggle) {
+    _toggle = toggle;
+    notifyListeners();
+  }
+
+  /// 机器人栏关掉时解开（不通知：那时候整棵树在拆）。
+  void unbind() => _toggle = null;
+
+  void report({required bool on, required bool busy}) {
+    if (on == _on && busy == _busy) return;
+    _on = on;
+    _busy = busy;
+    notifyListeners();
+  }
+
+  Future<void> toggle() async => _toggle?.call();
 }

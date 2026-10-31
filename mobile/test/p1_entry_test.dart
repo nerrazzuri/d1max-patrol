@@ -66,12 +66,12 @@ final _themes = <String, ThemeData? Function()>{
 
 void main() {
   group('选站点', () {
-    testWidgets('页头：小标、标题、语言、加号；一个站点一张卡，卡上是名字、地址和账号，没有编出来的状态', (t) async {
+    testWidgets('页头：小标、标题、设置、加号；一个站点一张卡，卡上是名字、地址和账号，没有编出来的状态', (t) async {
       await t.pumpWidget(MaterialApp(home: SiteListPage(store: MemorySiteStore([_site(), _site('别院')]))));
       await t.pumpAndSettle();
       expect(find.text('NEXUS WARDEN'), findsOneWidget);
       expect(find.text('选择站点'), findsOneWidget);
-      expect(find.byKey(const Key('lang-switch')), findsOneWidget);
+      expect(find.byKey(const Key('open-settings')), findsOneWidget, reason: 'W55：语言、工程师工具在设置里');
       expect(find.byType(NwSiteCard), findsNWidgets(2));
       final card = t.widget<NwSiteCard>(find.byType(NwSiteCard).first);
       expect(card.name, '庄园');

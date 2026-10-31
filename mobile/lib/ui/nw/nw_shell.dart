@@ -14,11 +14,15 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../../l10n.dart';
+import '../../net/app_update.dart';
 import '../../net/background_watch.dart';
+import '../../net/error_log.dart';
 import '../../net/push.dart';
 import '../../net/site_client.dart';
 import '../../store/site_store.dart';
 import '../alarm_log.dart';
+import '../app_settings.dart';
+import '../app_update_ui.dart';
 import '../guide.dart';
 import '../map_wizard.dart' show maybeOfferMapping;
 import '../site_duty_page.dart';
@@ -97,6 +101,9 @@ class NwShell extends StatefulWidget {
   final PushSession? push;
   final Duration ringEvery;
 
+  /// W55：登录后问站点有没有新版 App；测试给 null 就不问（默认按本机平台问）。
+  final AppUpdater? Function(SiteApi api)? updater;
+
   const NwShell(
       {super.key,
       required this.api,
@@ -105,7 +112,13 @@ class NwShell extends StatefulWidget {
       this.watch = const ChannelBackgroundWatch(),
       this.entry,
       this.push,
-      this.ringEvery = const Duration(seconds: 4)});
+      this.ringEvery = const Duration(seconds: 4),
+      this.updater = defaultUpdater});
+
+  static AppUpdater? defaultUpdater(SiteApi api) {
+    final p = updatePlatform();
+    return p == null ? null : AppUpdater(api: api, platform: p);
+  }
 
   static const Key dutyKey = Key('open-watch');
   static const Key dogsKey = Key('open-dogs');
@@ -145,6 +158,9 @@ class _NwShellState extends State<NwShell> {
   /// 进来先看值守。
   int _tab = 0;
 
+  /// 后台值守开关（机器人栏管开停，设置页显示、点它）。
+  final WatchControl _watchCtl = WatchControl();
+
   /// 上手导览（W53 §8.2）：这一次进站点查过没有；「使用教程」要再走一遍。
   bool _tourChecked = false;
   bool _replay = false;
@@ -152,6 +168,13 @@ class _NwShellState extends State<NwShell> {
   @override
   void initState() {
     super.initState();
+    ErrorLog.instance.attach(widget.api);                 // W55：错误记录定时传给站点
+    final u = widget.updater?.call(widget.api);
+    if (u != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) unawaited(offerAppUpdate(context, u));
+      });
+    }
     replayTour = () async {
       _replay = true;
       if (_tab == 0) {
@@ -167,6 +190,9 @@ class _NwShellState extends State<NwShell> {
 
   @override
   void dispose() {
+    unawaited(ErrorLog.instance.flush());
+    ErrorLog.instance.detach(widget.api);
+    _watchCtl.dispose();
     replayTour = null;
     super.dispose();
   }
@@ -225,7 +251,11 @@ class _NwShellState extends State<NwShell> {
         _ => NwNavItem(key: NwShell.moreKey, icon: Icons.person_rounded, label: tr('Me', '我的')),
       },
     ];
-    return Scaffold(
+    return SettingsHost(
+        watch: _watchCtl,
+        push: widget.push,
+        updater: widget.updater,
+        child: Scaffold(
       body: IndexedStack(index: _tab == _dogs ? 0 : 1, sizing: StackFit.expand, children: [
         SiteRobotsPage(
             api: widget.api,
@@ -234,7 +264,8 @@ class _NwShellState extends State<NwShell> {
             watch: widget.watch,
             entry: widget.entry,
             push: widget.push,
-            ringEvery: widget.ringEvery),
+            ringEvery: widget.ringEvery,
+            control: _watchCtl),
         if (_tab == _dogs)
           const SizedBox.shrink()
         else
@@ -242,7 +273,7 @@ class _NwShellState extends State<NwShell> {
       ]),
       bottomNavigationBar:
           NwBottomNav(items: items, index: _tab, onTap: (i) => setState(() => _tab = i)),
-    );
+    ));
   }
 }
 

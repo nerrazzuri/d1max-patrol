@@ -15,6 +15,7 @@ import 'nw/nw_p3_robots.dart';
 import 'nw/nw_theme.dart';
 import 'nw/nw_widgets.dart';
 import 'robot_events.dart';
+import 'robot_ops.dart';
 import 'robot_bind_page.dart';
 import 'patrol_dispatch.dart';
 import 'refusal.dart';
@@ -490,6 +491,17 @@ class _SiteRobotPageState extends State<SiteRobotPage> {
             icon: Icons.timeline_rounded,
             label: tr('Bag recording trail', '录包轨迹'),
             onTap: _openTrail),
+      // 远程运维（W55）：诊断快照、各服务日志、重启服务 / 整机、详细日志、对时、续签证书。
+      if ((s?.canSeeHealth ?? false) && robotCan(v, 'ops_diag'))
+        NwOpTile(
+            tileKey: const Key('btn-robot-ops'),
+            icon: Icons.build_circle_rounded,
+            label: tr('Remote maintenance', '远程运维'),
+            onTap: () => go(() => RobotOpsPage(
+                api: widget.api,
+                robotId: widget.robotId,
+                tasks: ((v?['capabilities'] as Map?)?['tasks'] as Map?)?.keys.map((k) => '$k').toSet() ??
+                    const <String>{}))),
       // 建图进程日志（W00c6g）：管理员看录包、重建子进程的日志，不用再 SSH 上狗。
       if (maps && robotCan(v, 'proc_log'))
         NwOpTile(

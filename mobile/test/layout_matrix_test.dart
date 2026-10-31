@@ -6,12 +6,16 @@
 // （大多数测试是光秃秃的 MaterialApp，页面在那儿也得画得出来、不抛）。老的专业版主题那一档跟着
 // 主题本身一起删了。
 import 'package:d1max_patrol/l10n.dart';
+import 'package:d1max_patrol/net/app_update.dart';
+import 'package:d1max_patrol/net/background_watch.dart';
 import 'package:d1max_patrol/model/alert.dart';
 import 'package:d1max_patrol/store/site_store.dart';
 import 'package:d1max_patrol/ui/nw/nw_theme.dart';
 import 'package:d1max_patrol/ui/site_health.dart';
 import 'package:d1max_patrol/ui/robot_bind_page.dart';
+import 'package:d1max_patrol/ui/robot_ops.dart';
 import 'package:d1max_patrol/ui/alarm_log.dart';
+import 'package:d1max_patrol/ui/app_settings.dart';
 import 'package:d1max_patrol/ui/guide.dart';
 import 'package:d1max_patrol/ui/map_manage.dart';
 import 'package:d1max_patrol/ui/map_wizard.dart';
@@ -153,6 +157,10 @@ final _pages = <String, Widget Function()>{
   'alarm log': () => Scaffold(body: AlarmLogPage(api: FakeApi('guard'))),
   'robots': () => SiteRobotsPage(api: FakeApi('admin'), title: 'East Gate Estate'),
   'robot (admin, busy)': () => SiteRobotPage(api: FakeApi('admin', robotView: busyView()), robotId: 'A'),
+  'robot ops (W55)': () => RobotOpsPage(api: FakeApi('admin'), robotId: 'A', tasks: robotOpsAll),
+  'settings (W55, site list)': () => const AppSettingsPage(),
+  'settings (W55, in site)': () => AppSettingsPage(api: FakeApi('admin'), watch: WatchControl()..bind(() async {}),
+      updater: (a) => AppUpdater(api: a, platform: 'android')),
   'robot (guard)': () => SiteRobotPage(api: FakeApi('guard'), robotId: 'A'),
   // W40：设备健康列得最长的样子（说明很长）
   'robot (devices)': () => SiteRobotPage(

@@ -23,6 +23,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 
 import 'l10n.dart';
+import 'net/error_log.dart';
 import 'store/paths.dart';
 import 'store/site_store.dart';
 import 'ui/nw/nw_theme.dart';
@@ -40,12 +41,14 @@ const List<(List<String>, String)> fontLicenses = <(List<String>, String)>[
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  installErrorHooks(); // W55：App 的错误记下来，登录着定时传给站点
   LicenseRegistry.addLicense(() async* {
     for (final (families, path) in fontLicenses) {
       yield LicenseEntryWithLineBreaks(families, await rootBundle.loadString(path));
     }
   });
   final langStore = await openLangStore();
+  langStoreRef = langStore;
   appLang.value = await langStore.load();
   runApp(PatrolApp(siteStore: await openSiteStore(), langStore: langStore));
 }

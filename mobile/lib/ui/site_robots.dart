@@ -42,6 +42,9 @@ class SiteRobotsPage extends StatefulWidget {
   final PushSession? push;
   /// 响铃那一档、没人确认：每隔这么久再响一次，直到确认（W17）。
   final Duration ringEvery;
+
+  /// 后台值守开关的状态（W55：开关在「设置」页）；不给就自己建一个。
+  final WatchControl? control;
   const SiteRobotsPage(
       {super.key,
       required this.api,
@@ -50,10 +53,9 @@ class SiteRobotsPage extends StatefulWidget {
       this.watch = const ChannelBackgroundWatch(),
       this.entry,
       this.push,
-      this.ringEvery = const Duration(seconds: 4)});
+      this.ringEvery = const Duration(seconds: 4),
+      this.control});
 
-  static const Key bgWatchKey = Key('btn-bg-watch');
-  static const Key pushKey = Key('push-state');
   static const Key addKey = Key('robot-add');
 
   @override
@@ -78,6 +80,7 @@ class _SiteRobotsPageState extends State<SiteRobotsPage> {
   @override
   void initState() {
     super.initState();
+    if (widget.watch.supported && widget.entry != null) _ctl.bind(_bgToggle);
     _reload();
     _listen();
     // 后台值守（决策 30）：登录进来就开
@@ -230,6 +233,13 @@ class _SiteRobotsPageState extends State<SiteRobotsPage> {
 
   bool _bgOn = false;
   bool _bgBusy = false;
+  late final WatchControl _ctl = widget.control ?? WatchControl();
+
+  @override
+  void setState(VoidCallback fn) {
+    super.setState(fn);
+    _ctl.report(on: _bgOn, busy: _bgBusy);                // 设置页上的开关跟着变
+  }
 
   Future<void> _bgStart() async {
     final e = widget.entry;
@@ -277,12 +287,12 @@ class _SiteRobotsPageState extends State<SiteRobotsPage> {
     _sub?.cancel();
     _bell?.cancel();
     if (_bgOn) unawaited(widget.watch.stop()); // 离开就注销（站点列表那边）：后台值守跟着停
+    _ctl.unbind();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    final c = Nw.of(context);
     final title = widget.title ?? tr('Site', '站点');
     return Scaffold(
       body: Column(children: [
@@ -304,34 +314,7 @@ class _SiteRobotsPageState extends State<SiteRobotsPage> {
                           builder: (_) => RobotAddPage(api: widget.api, site: widget.entry!)));
                       await _reload();
                     }),
-              if (widget.push != null)
-                ValueListenableBuilder<PushState>(
-                    valueListenable: widget.push!.state,
-                    builder: (_, st, _) => st == PushState.off
-                        ? const SizedBox.shrink()
-                        : Padding(
-                            padding: const EdgeInsets.symmetric(horizontal: Nw.s8),
-                            child: Tooltip(
-                                key: SiteRobotsPage.pushKey,
-                                message: st == PushState.ready
-                                    ? tr('P1 push: ready', 'P1 推送：已就绪')
-                                    : tr('P1 push: not ready (${widget.push!.reason})',
-                                        'P1 推送：未就绪（${widget.push!.reason}）'),
-                                // 就绪是绿的；没就绪换一个图标（不只靠颜色）
-                                child: Icon(
-                                    st == PushState.ready
-                                        ? Icons.notifications_on
-                                        : Icons.notifications_paused,
-                                    color: st == PushState.ready ? c.success : c.textSecondary)))),
-              if (widget.watch.supported && widget.entry != null)
-                IconButton(
-                    key: SiteRobotsPage.bgWatchKey,
-                    tooltip: _bgOn
-                        ? tr('Background watch: on (tap to turn off)', '后台值守：已开启（点击关闭）')
-                        : tr('Background watch: off (tap to turn on)', '后台值守：已关闭（点击开启）'),
-                    icon: Icon(_bgOn ? Icons.shield : Icons.shield_outlined,
-                        color: _bgOn ? c.success : c.textSecondary),
-                    onPressed: _bgBusy ? null : _bgToggle),
+              // W55：P1 推送状态、后台值守开关挪到「设置」页（AppSettingsPage）
             ]),
         Expanded(
           child: RefreshIndicator(

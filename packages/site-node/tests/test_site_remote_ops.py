@@ -168,6 +168,7 @@ def test_App安装包_验签_只收更新的_问有没有新的(tmp_path):
     assert st.check("android", 1) == {"available": False}
     meta = st.add("android", b"apk1", man, now_ms=5)
     assert meta["build"] == 3 and st.check("android", 2)["available"]
+    assert st.check("android", 2)["sha256"] == meta["sha256"], "App 下载完要核对指纹"
     assert not st.check("android", 3)["available"]
     with pytest.raises(AppDistError, match="只收更新的"):
         st.add("android", b"apk1", man, now_ms=6)
