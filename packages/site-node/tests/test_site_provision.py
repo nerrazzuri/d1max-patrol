@@ -205,10 +205,18 @@ def test_接口_领证书包不用登录_用过一次403(tmp_path, 站):
             c.execute("UPDATE robots SET fingerprint=? WHERE robot_id='A'", (fp,))
         cfg = _j.loads((home / "site.json").read_text())
         c = site.decode(site.issue_code(s.db, cfg, home, "A", fingerprint="ab", now_ms=NOW))
+        from attest_kit import 出厂
+        fac = 出厂(home)
+        # W63:没答题(不是原厂的)领不到;开通码不作废,原厂的随后照样领得到
         code, d = s.req("POST", "/api/enroll/claim", {"robot_id": "A", "token": c["t"]})
+        assert code == 403 and "供应商" in d["error"]
+        code, d = s.req("POST", "/api/enroll/claim", {"robot_id": "A", "token": c["t"],
+                                                     "attest": fac.答(s, "A", "claim")})
         assert code == 200 and "robot.key" in d["files"]
-        assert s.req("POST", "/api/enroll/claim", {"robot_id": "A", "token": c["t"]})[0] == 403
-        assert s.req("POST", "/api/enroll/claim", {"robot_id": "A", "token": "猜的"})[0] == 403
+        assert s.req("POST", "/api/enroll/claim", {"robot_id": "A", "token": c["t"],
+                                                   "attest": fac.答(s, "A", "claim")})[0] == 403
+        assert s.req("POST", "/api/enroll/claim", {"robot_id": "A", "token": "猜的",
+                                                   "attest": fac.答(s, "A", "claim")})[0] == 403
     finally:
         s.close()
 

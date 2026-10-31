@@ -279,6 +279,8 @@ class SiteApi:
         self.home: Path | None = None
         #: W42 绑定申请台(``binding.BindDesk``;有站点目录时第一次用现建)。
         self.bind: Any = None
+        #: W63 设备身份核对台(第一次用时现建)。
+        self.attest: Any = None
         #: W53 临时巡逻台(``adhoc.AdhocDesk``);站点主程序接上,没接的第一次用时现建。
         self.adhoc: Any = None
         #: W52 账号申请台(``account_requests.AccountRequests``);第一次用时现建。
@@ -548,6 +550,8 @@ class _Handler(TlsHandlerMixin):
                 return self._login()
             if method == "POST" and path == "/api/enroll/claim":
                 return self._enroll_claim()          # 商业化 A4:狗领证书包,开通码就是凭证
+            if method == "GET" and path == "/api/attest/challenge":
+                return self._send_json(200, self._attest_desk().challenge())   # W63:出题
             if path.startswith("/api/bind/"):
                 return self._bind_robot(method, path)  # W42:机器人挂绑定申请、轮询、问证书还算不算
             if method == "POST" and path == "/api/account-requests":
@@ -1823,6 +1827,8 @@ class _Handler(TlsHandlerMixin):
         self._actor, self._audit_target = f"robot:{rid}", rid
         if self.site.home is None:
             raise HttpError(404, "此站点未启用开通码")
+        # W63:领证书前核设备身份(配网、工程师开通码两条路都过这里);核不过不动开通码
+        self._attest_or_refuse(d, purpose="claim", serial=rid)
         try:
             # 吊销、证书代次在 claim 的事务里跟登记表核(A 阶段外审 I1)
             files = claim(self.site.dispatcher.db, self.site.home, rid,
@@ -1850,6 +1856,32 @@ class _Handler(TlsHandlerMixin):
                 set_name=site.dispatcher.registry.set_name)
         return site.bind
 
+    def _attest_desk(self) -> Any:
+        """W63 设备身份核对台(站点主程序接了站点目录才有;第一次用时现建)。"""
+        site = self.site
+        if site.home is None or site.dispatcher is None:
+            raise HttpError(404, "此站点未启用设备身份核对")
+        if site.attest is None:
+            from d1max_site import main as site_main
+            from d1max_site.attest import AttestDesk
+            home = site.home
+            site.attest = AttestDesk(site.dispatcher.db, site_id=site.dispatcher.registry.site_id,
+                                     now_ms=site._now,
+                                     factory_pubs=lambda: site_main.factory_pubkeys(home)[0],
+                                     revoked=lambda: site_main.factory_pubkeys(home)[1])
+        return site.attest
+
+    def _attest_or_refuse(self, d: Any, *, purpose: str, serial: str) -> None:
+        """W63:核设备身份;核不过一律 403 同一句中性的话(不报警、不进待批准;记给公司)。"""
+        from d1max_site.attest import AttestRefused
+        ans = d.get("attest") if isinstance(d, dict) else None
+        try:
+            self._attest_desk().verify(ans, purpose=purpose, serial=serial,
+                                       source=self.client_address[0])
+        except AttestRefused as exc:
+            self._audit_detail = {"attest": "refused"}
+            raise HttpError(403, str(exc)) from exc
+
     def _bind_robot(self, method: str, path: str) -> None:
         """机器人这头(不用登录,W42 §5.1):挂申请、轮询、问证书。"""
         from d1max_site.binding import BindRefused
@@ -1860,6 +1892,7 @@ class _Handler(TlsHandlerMixin):
                 d = self._body()
                 serial = str(d.get("serial") or "")[:64] if isinstance(d, dict) else ""
                 self._actor, self._audit_target = f"robot:{serial}", serial
+                self._attest_or_refuse(d, purpose="bind", serial=serial)   # W63:先核原厂
                 host = urlparse("//" + (self.headers.get("Host") or "")).hostname or ""
                 return self._send_json(200, desk.request(d, source=self.client_address[0],
                                                          host=host))

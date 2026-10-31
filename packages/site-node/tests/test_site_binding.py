@@ -196,8 +196,11 @@ def test_接口_机器人不用登录_批准要manage和密码(tmp_path, 台):
     s = 起站(tmp_path / "api", alerts=True)
     try:
         s.api.home = home          # 测试台的库跟站点目录的库是两个:登记进站点目录那个
+        from attest_kit import 出厂
+        fac = 出厂(home)           # W63:原厂机器人才进得来
         tok = s.login()
-        code, d = s.req("POST", "/api/bind/request", {"serial": "D1M-9", "nonce": NONCE})
+        code, d = s.req("POST", "/api/bind/request", {"serial": "D1M-9", "nonce": NONCE,
+                                                      "attest": fac.答(s, "D1M-9", "bind")})
         assert code == 200, d
         rid, sec = d["request_id"], d["poll_secret"]
         assert s.req("GET", f"/api/bind/request/{rid}?secret={sec}")[1] == {"state": "pending"}
@@ -221,7 +224,45 @@ def test_接口_机器人不用登录_批准要manage和密码(tmp_path, 台):
         assert s.req("GET", "/api/bind/state?serial=A&cert=sha256:a")[1] == {"state": "active"}
         assert s.req("GET", "/api/bind/state?serial=A&cert=sha256:b")[1] == {"state": "unknown"}
         assert s.req("GET", "/api/bind/state?serial=NOPE&cert=x")[1] == {"state": "unknown"}
-        assert s.req("POST", "/api/bind/request", {"serial": "A", "nonce": NONCE})[0] == 409
+        assert s.req("POST", "/api/bind/request", {"serial": "A", "nonce": NONCE,
+                                                   "attest": fac.答(s, "A", "bind")})[0] == 409
+    finally:
+        s.close()
+
+
+def test_W63_没有出厂证书的_悄悄拒_不进待批准_不报警_记给公司(tmp_path, 台):
+    from attest_kit import 出厂
+    from test_site_api import 站 as 起站
+
+    from d1max_site.attest import NEUTRAL
+    _, home, *_ = 台
+    s = 起站(tmp_path / "api", alerts=True)
+    try:
+        s.api.home = home
+        fac = 出厂(home)
+        tok = s.login()
+        code, d = s.req("POST", "/api/bind/request", {"serial": "D1M-7", "nonce": NONCE})
+        assert code == 403 and d["error"] == NEUTRAL
+        from d1max_contract import device_id as di
+        from d1max_contract import ed25519
+        dev, alien = ed25519.new_seed(), ed25519.new_seed()   # 别家「出厂钥匙」签的
+        cert = di.sign_device(alien, di.make_request(serial="D1M-8", model="x",
+                                                     device_pub=ed25519.public_key(dev),
+                                                     hw_id="e" * 64), now_ms=1)
+        ch = s.req("GET", "/api/attest/challenge")[1]
+        fake = {"cert": cert, "hw_id": "e" * 64, "nonce": ch["nonce"], "sig": di.sign_attest(
+            dev, di.attest_message(purpose="bind", site_id=ch["site_id"], nonce=ch["nonce"],
+                                   serial="D1M-8"))}
+        code, d = s.req("POST", "/api/bind/request", {"serial": "D1M-8", "nonce": NONCE,
+                                                      "attest": fake})
+        assert code == 403 and d["error"] == NEUTRAL
+        assert s.req("GET", "/api/admin/bind", token=tok)[1]["requests"] == []
+        assert not any(a.get("kind") == "bind_request"
+                       for a in s.req("GET", "/api/alerts", token=tok)[1]["alerts"])
+        rows = s.db.query("SELECT kind, serial, detail FROM company_reports")
+        assert [r["serial"] for r in rows] == ["D1M-7"], "同一来源一分钟只记一条"
+        assert rows[0]["kind"] == "device_rejected" and "出厂证书" in rows[0]["detail"]
+        del fac
     finally:
         s.close()
 

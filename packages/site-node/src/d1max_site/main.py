@@ -446,6 +446,42 @@ def release_pubkey(home: Path) -> Path | None:
     return Path(cfg.get("release_pubkey") or "/etc/d1max-site/release-pub.pem")
 
 
+def factory_pubkeys(home: Path) -> tuple[list[bytes], set[str]]:
+    """W63:认哪几把出厂公钥、作废了哪几把。``site.json`` 的 ``factory_pubkey``(默认
+    ``/etc/d1max-site/factory-pub.pem``,装机脚本从发行包装)+ 旁边 ``factory-pub.d/*.pem``(换钥匙时随
+    发行加的);作废名单 ``factory-revoked.txt``(一行一个编号,``#`` 开头是注释)。没装 = 谁都进不来。"""
+    from d1max_contract import ed25519
+    cfg = _load(home)
+    main = Path(cfg.get("factory_pubkey") or "/etc/d1max-site/factory-pub.pem")
+    files = [main]
+    d = main.parent / "factory-pub.d"
+    if d.is_dir():
+        files += sorted(d.glob("*.pem"))
+    pubs = []
+    for f in files:
+        try:
+            pubs.append(ed25519.pub_from_pem(f.read_bytes()))
+        except (OSError, ValueError):
+            continue
+    try:
+        lines = (main.parent / "factory-revoked.txt").read_text(encoding="utf-8").splitlines()
+    except OSError:
+        lines = []
+    return pubs, {ln.strip() for ln in lines if ln.strip() and not ln.startswith("#")}
+
+
+def cmd_company_reports(home: Path, since_ms: int = 0) -> list[dict]:
+    """W63:给公司的记录(没过设备身份核对的尝试等),工程师导出交给公司;公司后台(W43)做好后自动上传。"""
+    import json as _json
+    db = _open_db(home, _load(home))
+    try:
+        rows = db.query("SELECT id, at_ms, kind, source, serial, detail, sent_ms FROM company_reports "
+                        "WHERE at_ms>=? ORDER BY id", (since_ms,))
+        return [dict(r) | {"detail": _json.loads(r["detail"] or "{}")} for r in rows]
+    finally:
+        db.close()
+
+
 def cmd_release_add(home: Path, src: Path, note: str) -> dict:
     """W00c5d 第三部分:把一个发布包目录(``release pack`` 的产物)登记进站点的发布目录。"""
     from d1max_site.releases import ReleaseCatalog, ReleaseCatalogError
@@ -1389,6 +1425,9 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("fingerprint", help="打印站点服务证书的 SHA-256(手机添加站点时核对)")
     sc = sub.add_parser("selfcheck", help="装完自检(H6):逐条 PASS / WARN / FAIL,有 FAIL 退出码 1")
     sc.add_argument("--api-port", type=int, default=8443)
+    cr = sub.add_parser("company-reports",
+                        help="W63:导出给公司的记录(没过设备身份核对的尝试),一行一条 JSON")
+    cr.add_argument("--since-ms", type=int, default=0)
     pc = sub.add_parser("pair-code",
                         help="出手机添加站点用的配对码(App V2;手机上粘贴,"
                              "或在值班台 System 页扫二维码)")
@@ -1559,6 +1598,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 1 if any(c.level == "FAIL" for c in checks) else 0
         elif args.cmd == "fingerprint":
             print(cmd_fingerprint(home))
+        elif args.cmd == "company-reports":
+            import json as _json
+            for row in cmd_company_reports(home, args.since_ms):
+                print(_json.dumps(row, ensure_ascii=False))
         elif args.cmd == "pair-code":
             print(cmd_pair_code(home, args.url, args.name))
         elif args.cmd == "enroll":
