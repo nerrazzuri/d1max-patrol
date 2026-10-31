@@ -958,3 +958,18 @@ polygon.me-op.obstacle { fill: var(--c-text); stroke: none; }
 .help-faq details { border-bottom: 1px solid var(--c-outline); padding: 6px 0; }
 .help-faq summary { cursor: pointer; font-weight: 600; }
 .requests { margin-bottom: 16px; }
+
+/* W55 远程运维 */
+.robot-ops, .sys-ops { display: flex; flex-direction: column; gap: 12px; }
+.robot-ops .row-wrap, .sys-ops .row-wrap, .up-site .row-wrap, .up-apps .row-wrap { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+details.ops { margin-top: 8px; }
+details.ops > summary { cursor: pointer; font-weight: 600; padding: 6px 0; }
+.ops-diag { display: flex; flex-direction: column; gap: 2px; }
+.ops-svc { margin: 4px 0 8px; }
+.ops-svc tr.bad td { color: var(--c-error); }
+.ops-logtext { max-height: 420px; overflow: auto; margin: 0; padding: 10px 12px; border: 1px solid var(--c-outline); border-radius: 8px;
+  font-family: var(--font-mono); font-size: 12px; line-height: 18px; white-space: pre-wrap; word-break: break-all; background: var(--c-surface); }
+.ops-clean .sys-row { align-items: center; }
+.sys-row.metric { align-items: center; }
+.spark { color: var(--c-primary); max-width: 100%; height: auto; }
+@media (max-width: 600px) { .sys-row > .muted { min-width: 0; width: 100%; } }

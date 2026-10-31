@@ -154,8 +154,8 @@ export function Console({ me, onOut }: { me: Me; onOut: () => void }) {
               {route.page === "admin/arming" && <ArmingPage say={say} now={now} role={me.role} />}
               {route.page === "admin/users" && pageAllowed(route.page, me.role) && <UsersPage me={me.name} say={say} now={now} />}
               {route.page === "admin/robots" && <RobotsPage say={say} now={now} />}
-              {route.page === "admin/system" && <SystemPage2 me={me} now={now} />}
-              {route.page === "admin/diag" && <DiagPage />}
+              {route.page === "admin/system" && <SystemPage2 me={me} now={now} say={say} />}
+              {route.page === "admin/diag" && <DiagPage say={say} />}
               {route.page === "admin/mapedit" && <MapEditPage say={say} target={editTarget(location.hash)} />}
               {route.page === "admin/upgrade" && <UpgradePage say={say} />}
               {route.page === "admin/layout" && <LayoutPage say={say} robots={units.map((u) => u.robot.robot_id)} tabs={LAYOUT_TABS} />}

@@ -19,6 +19,9 @@ export function setFetch(f: Fetch): void {
   fetcher = f;
 }
 
+/** W55:接口回 5xx 时叫它(记进网页错误记录);errlog 接上。 */
+export const onServerError: { cb: ((method: string, path: string, status: number, msg: string) => void) | null } = { cb: null };
+
 /** 401 时叫它(回登录页)。 */
 export const onUnauthorized: { cb: () => void } = { cb: () => {} };
 
@@ -54,6 +57,7 @@ export async function api<T = unknown>(method: "GET" | "POST", path: string, bod
   }
   if (!resp.ok) {
     const msg = (data as { error?: string }).error ?? `HTTP ${resp.status}`;
+    if (resp.status >= 500 && onServerError.cb) onServerError.cb(method, path, resp.status, msg);
     // 登录本身、开页时问「我是谁」的 401 不算「过期」:只有用着用着被踢才回登录页并提示
     if (resp.status === 401 && path !== "/api/login" && path !== "/api/me") onUnauthorized.cb();
     throw new ApiError(resp.status, msg, data);

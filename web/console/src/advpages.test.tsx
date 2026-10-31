@@ -40,7 +40,7 @@ const btn = (root: Element, text: string) => Array.from(root.querySelectorAll("b
 
 describe("诊断", () => {
   it("检查单说人话,机器人的设备也列", async () => {
-    const { container: c } = render(<DiagPage />);
+    const { container: c } = render(<DiagPage say={() => {}} />);
     await waitFor(() => expect(c.querySelector('[data-check="db"]')!.textContent).toContain("数据库能读能写"));
     expect(c.querySelector('[data-check="backup"]')!.className).toContain("bad");
     await waitFor(() => expect(c.querySelector('[data-robot="A"]')!.textContent).toContain("前摄像头画面正常"));
@@ -54,14 +54,14 @@ describe("诊断", () => {
     expect(deviceText("nav2")).toBe("自主导航（Nav2）");
   });
   it("打包日志是下载", () => {
-    const { container: c } = render(<DiagPage />);
-    expect(c.querySelector('a[href="/api/support-bundle"]')!.hasAttribute("download")).toBe(true);
+    const { container: c } = render(<DiagPage say={() => {}} />);
+    expect(c.querySelector('a[href="/api/support-bundle?hours=24"]')!.hasAttribute("download")).toBe(true);
   });
 });
 
 describe("系统", () => {
   it("备份没成功写红,VPN 还没装", async () => {
-    const { container: c } = render(<SystemPage2 me={{ name: "a", role: "admin", display_name: "", site_name: "翠湖庄园" }} now={0} />);
+    const { container: c } = render(<SystemPage2 me={{ name: "a", role: "admin", display_name: "", site_name: "翠湖庄园" }} now={0} say={() => {}} />);
     await waitFor(() => expect(c.querySelector(".sys-backup .sys-row")!.className).toContain("bad"));
     expect(c.querySelector(".sys-backup")!.textContent).toContain("9 天");
     expect(c.querySelector(".sys-vpn")!.textContent).toContain("未安装");

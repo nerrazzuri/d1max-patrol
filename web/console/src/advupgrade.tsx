@@ -7,6 +7,7 @@ import { api, apiUpload, ApiError, enc } from "./api";
 import { ConfirmPassword } from "./confirmpw";
 import { hm, nameOf } from "./data";
 import { t } from "./i18n";
+import { AppPackages, SiteUpdate } from "./remoteops";
 
 type Say = (s: string) => void;
 interface Release { name: string; size?: number; note?: string; added_ms?: number }
@@ -47,6 +48,8 @@ export function UpgradePage({ say }: { say: Say }) {
           </div>
         ))}
       </section>
+      <SiteUpdate say={say} />
+      <AppPackages say={say} />
       <section class="panel up-get">
         <h2>{t("upGet")}</h2>
         <div class="row wrap">

@@ -4,6 +4,7 @@ import { useLoad, PairPhone } from "./admin";
 import type { Me } from "./app";
 import { hms } from "./data";
 import { t, type Key } from "./i18n";
+import { SiteMetrics, SiteOps } from "./remoteops";
 
 interface Health { ok: boolean; version: string; checks: Record<string, { ok: boolean; detail?: string }> }
 
@@ -16,7 +17,7 @@ function Row({ k, check }: { k: Key; check?: { ok: boolean; detail?: string } })
   );
 }
 
-export function SystemPage2({ me, now }: { me: Me; now: number }) {
+export function SystemPage2({ me, now, say }: { me: Me; now: number; say: (s: string) => void }) {
   const [health] = useLoad<Health>("/api/health");
   const c = health?.checks ?? {};
   return (
@@ -37,10 +38,8 @@ export function SystemPage2({ me, now }: { me: Me; now: number }) {
         <Row k="sysBackupLast" check={c.backup} />
         <p class="muted small">{t("sysBackupHint")}</p>
       </section>
-      <section class="panel sys-vpn">
-        <h2>{t("sysNet")}</h2>
-        <p>{t("sysVpnNotYet")}</p>
-      </section>
+      <SiteOps say={say} />
+      <SiteMetrics />
       <PairPhone />
     </section>
   );

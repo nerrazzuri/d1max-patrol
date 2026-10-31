@@ -64,8 +64,9 @@ function useAccounts(say: Say): [Account[], () => void, (a: Account[]) => void] 
 export function UsersPage({ me, say, now }: { me: string; say: Say; now: number }) {
   const [rows, reload, setRows] = useAccounts(say);
   const [adding, setAdding] = useState(false);
-  const [eng, setEng] = useState<"form" | { display: string; hours: number } | null>(null);
-  const [made, setMade] = useState<{ name: string; password: string; expires_ms: number } | null>(null);
+  const [eng, setEng] = useState<"form" | { display: string; hours: number; vpn: boolean } | null>(null);
+  const [made, setMade] = useState<{ name: string; password: string; expires_ms: number;
+    vpn?: { conf?: string; address?: string; error?: string; warning?: string } } | null>(null);
   const [resetFor, setResetFor] = useState<string | null>(null);
   const [removing, setRemoving] = useState<Account | null>(null);
   const [who, setWho] = useState<string | null>(null);
@@ -139,14 +140,15 @@ export function UsersPage({ me, say, now }: { me: string; say: Say; now: number 
       </div>
 
       {adding && <AddUser onClose={() => setAdding(false)} say={say} onDone={() => { setAdding(false); say(t("saved")); reload(); }} />}
-      {eng === "form" && <EngineerForm onClose={() => setEng(null)} onNext={(display, hours) => setEng({ display, hours })} />}
+      {eng === "form" && <EngineerForm onClose={() => setEng(null)} onNext={(display, hours, vpn) => setEng({ display, hours, vpn })} />}
       {eng && eng !== "form" && (
         <ConfirmPassword title={t("engOpen")} onClose={() => setEng(null)}
           onConfirm={async (pw) => {
-            const d = await api<{ name: string; password: string; expires_ms: number; accounts: Account[] }>(
-              "POST", "/api/accounts/engineer", { display_name: eng.display, hours: eng.hours, confirm_password: pw });
+            const d = await api<{ name: string; password: string; expires_ms: number; accounts: Account[];
+              vpn?: { conf?: string; address?: string; error?: string; warning?: string } }>(
+              "POST", "/api/accounts/engineer", { display_name: eng.display, hours: eng.hours, vpn: eng.vpn, confirm_password: pw });
             setEng(null);
-            setMade({ name: d.name, password: d.password, expires_ms: d.expires_ms });
+            setMade({ name: d.name, password: d.password, expires_ms: d.expires_ms, vpn: d.vpn });
             if (d.accounts) setRows(d.accounts);
           }} />
       )}
@@ -158,6 +160,14 @@ export function UsersPage({ me, say, now }: { me: string; say: Say; now: number 
             <dt>{t("password")}</dt><dd class="mono">{made.password}</dd>
           </dl>
           <p class="warn">{t("engOnce")}</p>
+          {made.vpn?.conf && (
+            <p class="row">
+              <span class="muted small">{t("engVpnConf", { a: made.vpn.address ?? "" })}</span>
+              <a class="btn sm" download={`d1max-${made.name}.conf`}
+                href={`data:text/plain;charset=utf-8,${encodeURIComponent(made.vpn.conf)}`}>{t("download")}</a>
+            </p>
+          )}
+          {(made.vpn?.error || made.vpn?.warning) && <p class="warn">{made.vpn.error ?? made.vpn.warning}</p>}
           <div class="row end">
             <button type="button" class="btn" onClick={() => { void navigator.clipboard?.writeText(`${made.name}\n${made.password}`).then(() => say(t("copied"))); }}>{t("copy")}</button>
             <button type="button" class="btn primary" onClick={() => setMade(null)}>{t("close")}</button>
@@ -210,12 +220,13 @@ function UserAudit({ name, account, onClose }: { name: string; account?: Account
   );
 }
 
-function EngineerForm({ onClose, onNext }: { onClose: () => void; onNext: (display: string, hours: number) => void }) {
+function EngineerForm({ onClose, onNext }: { onClose: () => void; onNext: (display: string, hours: number, vpn: boolean) => void }) {
   const [display, setDisplay] = useState("");
   const [hours, setHours] = useState(4);
+  const [vpn, setVpn] = useState(true);
   return (
     <Modal label={t("engOpen")} onClose={onClose}>
-      <form class="form eng-form" onSubmit={(e) => { e.preventDefault(); if (display.trim()) onNext(display.trim(), hours); }}>
+      <form class="form eng-form" onSubmit={(e) => { e.preventDefault(); if (display.trim()) onNext(display.trim(), hours, vpn); }}>
         <p class="muted small">{t("engHint")}</p>
         <label class="field">{t("engWho")}<input name="display" value={display} maxLength={64} required onInput={(e) => setDisplay(e.currentTarget.value)} /></label>
         <fieldset class="checks row-wrap">
@@ -224,6 +235,8 @@ function EngineerForm({ onClose, onNext }: { onClose: () => void; onNext: (displ
             <label key={h}><input type="radio" name="hours" value={String(h)} checked={hours === h} onChange={() => setHours(h)} /> {t("accHours", { n: h })}</label>
           ))}
         </fieldset>
+        <label class="check"><input type="checkbox" name="vpn" checked={vpn} onChange={(e) => setVpn(e.currentTarget.checked)} /> {t("engVpn")}</label>
+        <p class="muted small">{t("engVpnHint")}</p>
         <div class="row end">
           <button type="button" class="btn" onClick={onClose}>{t("cancel")}</button>
           <button type="submit" class="btn primary" disabled={!display.trim()}>{t("engNext")}</button>
