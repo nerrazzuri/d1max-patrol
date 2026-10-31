@@ -7,7 +7,7 @@ import { rankUnits } from "./dutyrank";
 import { t } from "./i18n";
 import type { UnitInfo } from "./live";
 import { robotCams, type Alert } from "./model";
-import { SlotBar } from "./slot";
+import { SlotBar, SlotFoot } from "./slot";
 import { nameOf } from "./data";
 
 export function LiveWall(props: { units: UnitInfo[]; alerts: Alert[]; now: number; onZoom: (robot: string) => void }) {
@@ -47,6 +47,7 @@ export function LiveWall(props: { units: UnitInfo[]; alerts: Alert[]; now: numbe
                 </div>
               )}
               <SlotBar u={u} onZoom={() => props.onZoom(id)} thermal={has && !off ? { on: thermal, toggle: () => flip(id) } : null} />
+              <SlotFoot u={u} />
             </section>
           );
         })}

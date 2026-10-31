@@ -13,7 +13,7 @@ import { hm, robotNames } from "./data";
 import { Confirm, Modal } from "./dialogs";
 import { alertTitle, lang, t, type Key } from "./i18n";
 import { Shape } from "./icons";
-import { StateText, type UnitInfo } from "./live";
+import { locText, StateText, type UnitInfo } from "./live";
 
 type Say = (s: string) => void;
 export interface RobotCard {
@@ -46,15 +46,6 @@ const label = (r: RobotCard) => r.name || r.robot_id;
 
 function problemText(p: RobotCard["problems"][number]): string {
   return "kind" in p ? alertTitle(lang.value, p.kind, p.kind) : t("robotDeviceBad", { d: p.device });
-}
-
-/** 定位怎么样(W60 卡片第二层):没报 = 「—」;变差、不可信 = 变差;没锚定 = 未定位。 */
-export function locText(u: UnitInfo | undefined): Key | null {
-  const l = u?.robot.loc;
-  if (!u || u.stale || !l) return null;
-  if (l.degraded || l.reason) return "locPoor";
-  if (l.anchored === false || !l.pose) return "locNone";
-  return "locGood";
 }
 
 export function RobotsPage({ say, now, units = [] }: { say: Say; now: number; units?: UnitInfo[] }) {

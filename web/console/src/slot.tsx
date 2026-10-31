@@ -1,10 +1,11 @@
 // 画面位(W44 第一期,设计 §4.1):一台机器人一个位 —— 前摄像头大画面 + 后摄像头小窗,点小窗两路互换;
 // 装了热像的多一个「热像」按钮(大画面换热像、前摄像头进小窗,设计 §2.4);报警时大画面换成现场(固定摄像头)。
-// 顶上一条状态栏:名字 + 状态、速度、电量、钉住、放大。值班页、实况页共用状态栏。
+// 顶上一条状态栏:名字 + 状态、钉住、放大;底下一条(W60,最多三项):在做什么、电量、定位。值班页、实况页共用。
+// 报警时换成固定摄像头的现场:底下那条写「固定摄像头 · 哪里」(强调地点),跟机器人画面一眼分得开。
 import { useState } from "preact/hooks";
 import { CameraWell, type Cam } from "./camera";
 import { t } from "./i18n";
-import { StateText, type UnitInfo } from "./live";
+import { locText, StateText, type UnitInfo } from "./live";
 import { robotCams } from "./model";
 import { nameOf } from "./data";
 
@@ -29,10 +30,7 @@ export function SlotBar(props: {
     <div class="slot-bar">
       <span class="slot-name">{nameOf(u.robot.robot_id)}</span>
       <StateText s={u.state} stale={u.stale} />
-      <span class="slot-mid">
-        {u.speed != null && <span class="mono">{t("speedMps", { v: u.speed.toFixed(1) })}</span>}
-        {u.battery != null && <span>{t("battery", { n: Math.round(u.battery) })}</span>}
-      </span>
+      <span class="slot-mid" />
       {props.thermal && (
         <button type="button" class="slot-btn slot-thermal" aria-pressed={props.thermal.on} onClick={props.thermal.toggle}>{t("thermal")}</button>
       )}
@@ -42,6 +40,15 @@ export function SlotBar(props: {
       {props.onZoom && <button type="button" class="slot-btn slot-zoom" onClick={props.onZoom}>{t("enlarge")} ⤢</button>}
     </div>
   );
+}
+
+/** 画面底下那条(W60):机器人画面 = 在做什么 · 电量 · 定位;固定摄像头的现场 = 「固定摄像头 · 哪里」。 */
+export function SlotFoot({ u, scene }: { u: UnitInfo; scene?: Scene }) {
+  if (scene) return <div class="slot-foot scene"><span class="slot-cam">{t("sceneCam", { name: scene.label })}</span></div>;
+  if (u.state === "offline" || u.stale) return null;
+  const loc = locText(u);
+  const bits = [u.task, u.battery != null ? `${Math.round(u.battery)}%` : "", loc ? t("slotLoc", { q: t(loc) }) : ""].filter(Boolean);
+  return bits.length ? <div class="slot-foot">{bits.map((b) => <span key={b}>{b}</span>)}</div> : null;
 }
 
 export function VideoSlot(props: {
@@ -84,6 +91,7 @@ export function VideoSlot(props: {
       )}
       <SlotBar u={props.u} pinned={props.pinned} onPin={props.onPin} onZoom={props.onZoom}
         thermal={hasThermal && !props.scene ? { on: thermal, toggle: () => setThermal(!thermal) } : null} />
+      <SlotFoot u={props.u} scene={props.scene} />
     </section>
   );
 }
