@@ -194,3 +194,83 @@ def test_生产设置断线全关_写0x0030_读回来(板子):
     got = relay_setup(ModbusRelay(板子.open, timeout_s=0.2, retries=0), watchdog_ds=50)
     assert 板子.holding[0x30] == 50 and got["watchdog_ds"] == 50
     assert "重新上电" in got["note"]
+
+
+# ------------------------------------------------------------------ 外审 W56-1
+
+class 慢混音(假混音):
+    """amixer 很慢(卡在线程里)。"""
+
+    def __init__(self, delay: float) -> None:
+        super().__init__()
+        self.delay = delay
+
+    def set(self, value: bool) -> None:
+        import time
+        time.sleep(self.delay)
+        super().set(value)
+
+
+def _跑得了(tmp_path, dur=0.05):
+    (tmp_path / "hello.wav").write_bytes(b"RIFF")
+
+    async def 跑(*argv, **kw):
+        class P:
+            returncode = 0
+
+            async def wait(self):
+                await asyncio.sleep(dur)
+                return 0
+
+            def kill(self):
+                pass
+        return P()
+    return 跑
+
+
+async def test_外审W56_1_静音很慢_不拖心跳(板子, tmp_path):
+    mix = 慢混音(1.5)
+    p = _pl(tmp_path, 板子, mute=mix)
+    p._run = _跑得了(tmp_path)
+    p.cfg = p.cfg.__class__(**{**p.cfg.__dict__, "amp_idle_s": 0.1})
+    await p.start()                                   # 起来先静音(慢)
+    await p.sound("hello", 5)
+    await asyncio.sleep(4.0)                          # 期间空闲静音又慢一次
+    asks = [t for t, fn in 板子.reqs if fn == 0x04]
+    gaps = [b - a for a, b in zip(asks, asks[1:], strict=False)]
+    assert gaps and max(gaps) <= 1.0, gaps
+    await p.close()
+
+
+async def test_外审W56_1_正在静音时来了新播报_播报不被静音(板子, tmp_path):
+    mix = 慢混音(0.6)
+    p = _pl(tmp_path, 板子, mute=mix)
+    p._run = _跑得了(tmp_path, dur=1.5)
+    p.cfg = p.cfg.__class__(**{**p.cfg.__dict__, "amp_idle_s": 0.05})
+    await p.start()
+    await p.sound("hello", 5)
+    await asyncio.sleep(1.7)                          # 第一段放完,闲了,开始静音(要 0.6 秒)
+    await p.sound("hello", 5)                         # 静音还没做完就来了第二段
+    assert p.playing()
+    await asyncio.sleep(1.0)
+    assert p.playing() and mix.muted is False, "第二段在放:不许被静音"
+    await p.close()
+
+
+async def test_外审W56_1_只有系统静音没有继电器_放完也会再静音(tmp_path):
+    mix = 假混音()
+    raw = json.loads((ROOT / "deploy" / "payload.v2.example.json").read_text())
+    raw.pop("relay")
+    for k in ("spotlight", "strobe"):
+        raw.pop(k)
+    raw["siren"] = {"clip": "siren"}
+    raw["audio"]["clips_dir"] = str(tmp_path)
+    raw["audio"]["amp_idle_s"] = 0.1
+    (tmp_path / "payload.json").write_text(json.dumps(raw))
+    p = Payload(PayloadConfig.load(tmp_path / "payload.json"), mute=mix)
+    p._run = _跑得了(tmp_path)
+    await p.start()
+    await p.sound("hello", 5)
+    assert await _等到(lambda: not p.playing(), 2.0)
+    assert await _等到(lambda: mix.muted is True, 2.0), "放完闲了要静音"
+    await p.close()

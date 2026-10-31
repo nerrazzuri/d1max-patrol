@@ -600,6 +600,10 @@ class Payload:
         #: 警灯从几点开始闪(None = 不闪)。
         self._blink_from: float | None = None
         self._guard: asyncio.Task | None = None
+        #: 功放静音的维护(外审 W56-1:跟继电器看护分开 —— amixer 慢不拖心跳、到点关)和它的锁
+        #: (静音、打开不交叉:正在静音时来了新播报,等静音做完再打开)。
+        self._amp_task: asyncio.Task | None = None
+        self._amp_lock_: asyncio.Lock | None = None
         self._closed = False
         self._sound: asyncio.Task | None = None
         self._proc: Any = None
@@ -668,9 +672,24 @@ class Payload:
             self._until.get(c) is not None for c in self.cfg.strobe_coils)
 
     def _ensure_guard(self) -> None:
-        if not self._closed and (self.cfg.coils or self.cfg.mute_chip) \
-                and (self._guard is None or self._guard.done()):
-            self._guard = asyncio.get_running_loop().create_task(self._watch())
+        if self._closed:
+            return
+        loop = asyncio.get_running_loop()
+        if self.cfg.coils and (self._guard is None or self._guard.done()):
+            self._guard = loop.create_task(self._watch())
+        if self.cfg.has_mute and (self._amp_task is None or self._amp_task.done()):
+            self._amp_task = loop.create_task(self._amp_watch())
+
+    def _amp_lock(self) -> asyncio.Lock:
+        if self._amp_lock_ is None:
+            self._amp_lock_ = asyncio.Lock()
+        return self._amp_lock_
+
+    async def _amp_watch(self) -> None:
+        """常电功放:闲够了就静音(自己一条任务,不跟继电器看护挤)。"""
+        while not self._closed:
+            await self._amp_idle_check()
+            await asyncio.sleep(self.RETRY_S)
 
     async def start(self) -> None:
         """起来:每个线圈当「状态不明、要关」(上次进程死掉时开着的,继电器板自己不会关),先试一遍,
@@ -809,8 +828,10 @@ class Payload:
                 next_read = loop.time() + self.READBACK_S
             for c in self.cfg.coils:
                 await self._reconcile(c)
-            await self._amp_idle_check()
-            await asyncio.sleep(self.BLINK_TICK_S if self._blinking() else self.RETRY_S)
+            pause = self.BLINK_TICK_S if self._blinking() else self.RETRY_S
+            if self.cfg.heartbeat:                  # 心跳按截止时刻来,不叠加轮询间隔
+                pause = min(pause, max(0.0, next_beat - loop.time()))
+            await asyncio.sleep(pause)
 
     def _pick(self, output: str, on: bool, side: str, color: str
               ) -> tuple[tuple[str, ...], tuple[str, ...]]:
@@ -1028,6 +1049,10 @@ class Payload:
 
     async def _amp_unmute(self, until: float) -> None:
         self._ensure_guard()
+        async with self._amp_lock():
+            await self._amp_unmute_locked(until)
+
+    async def _amp_unmute_locked(self, until: float) -> None:
         self._amp_until = max(self._amp_until or 0.0, until + self.cfg.amp_idle_s)
         if self._amp_open:
             return
@@ -1058,20 +1083,22 @@ class Payload:
             self.mute.set(value)
 
     async def _amp_idle_check(self) -> None:
-        """看护循环每拍:常电功放闲够了就静音(静音写不进去下一拍再来)。"""
+        """常电功放闲够了就静音(静音写不进去下一拍再来)。跟打开共用一把锁:锁里再看一遍还闲不闲。"""
         if not self._amp_open or self.mute is None:
             return
-        until = self._amp_until
-        if until is not None and asyncio.get_running_loop().time() < until:
-            return
-        try:
-            await self._mute_set(self._muted_level)
-        except Exception as exc:                       # noqa: BLE001 - 下一拍再静音
-            self.amp_error = str(exc)
-            log.warning("功放静音不了(接着试): %s", exc)
-            return
-        self._amp_open = False
-        self._amp_until = None
+        async with self._amp_lock():
+            until = self._amp_until
+            if not self._amp_open or (until is not None
+                                      and asyncio.get_running_loop().time() < until):
+                return
+            try:
+                await self._mute_set(self._muted_level)
+            except Exception as exc:                   # noqa: BLE001 - 下一拍再静音
+                self.amp_error = str(exc)
+                log.warning("功放静音不了(接着试): %s", exc)
+                return
+            self._amp_open = False
+            self._amp_until = None
 
     def _amp_release(self) -> None:
         """一段声音停了:另一样(说话 / 警笛)也不响的话,功放闲置 ``amp_idle_s`` 秒后
@@ -1295,13 +1322,14 @@ class Payload:
     async def close(self) -> None:
         """全关:每个线圈都关、喇叭和喇叭警笛掐掉、看护循环停。断开、收尾都走这里(关不掉记日志)。"""
         self._closed = True
-        if self._guard is not None:
-            self._guard.cancel()
-            try:
-                await self._guard
-            except asyncio.CancelledError:
-                pass
-            self._guard = None
+        for t in (self._guard, self._amp_task):
+            if t is not None:
+                t.cancel()
+                try:
+                    await t
+                except asyncio.CancelledError:
+                    pass
+        self._guard = self._amp_task = None
         await self.stop_sound()
         await self._siren_stop()
         self._blink_from = None
