@@ -17,7 +17,7 @@ from typing import Any
 #: 58 路线库(站点存的路线、排程是唯一真理源);59 运营可视化:定位历史 loc_episodes(只加表);
 #: 60 区域「在生效的那一份」nav_zones.effective_body(外审 R1,2026-10-15);
 #: 61 W44:告警结论 alerts.verdict、交班留言 shift_notes、位置轨迹 pose_track(只加列、加表)。
-SCHEMA_VERSION = 69
+SCHEMA_VERSION = 70
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -769,6 +769,26 @@ CREATE TABLE IF NOT EXISTS cert_pending (
     issued_at   INTEGER NOT NULL,
     expires_at  INTEGER NOT NULL,
     created_ms  INTEGER NOT NULL
+);
+-- W63(库 70):设备身份。每个序列号第一次核过时的设备公钥(以后换了钥匙 = 仿冒,拒)。attest.py。
+CREATE TABLE IF NOT EXISTS device_ids (
+    serial      TEXT PRIMARY KEY,
+    device_pub  TEXT NOT NULL,
+    hw_id       TEXT NOT NULL,
+    model       TEXT NOT NULL DEFAULT '',
+    first_ms    INTEGER NOT NULL,
+    last_ms     INTEGER NOT NULL
+);
+-- W63:给公司的记录(没过设备身份核对的尝试等)。网页、手机不显示;公司后台(W43)做好后上传
+-- (sent_ms),在那之前 d1max-site company-reports 导出。
+CREATE TABLE IF NOT EXISTS company_reports (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    at_ms       INTEGER NOT NULL,
+    kind        TEXT NOT NULL,
+    source      TEXT NOT NULL DEFAULT '',
+    serial      TEXT NOT NULL DEFAULT '',
+    detail      TEXT NOT NULL DEFAULT '{}',
+    sent_ms     INTEGER
 );
 """
 
