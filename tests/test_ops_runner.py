@@ -173,7 +173,8 @@ def test_装服务单元_验签过了才装_有变化才daemon_reload(tmp_path):
     sysd.mkdir()
     rec = Rec()
     ops = R.Ops(cfg, run=rec, systemd_dir=sysd)
-    assert ops.do("units_apply", {"release": root.name}) == {"changed": ["d1max-localizer.service"]}
+    got = ops.do("units_apply", {"release": root.name})
+    assert got == {"changed": ["d1max-localizer.service"]}
     assert (sysd / "d1max-localizer.service").read_text() == "[Unit]\nDescription=new\n"
     assert rec.calls == [["systemctl", "daemon-reload"]]
     rec.calls.clear()
@@ -184,7 +185,8 @@ def test_装服务单元_验签过了才装_有变化才daemon_reload(tmp_path):
 def test_装服务单元_包被改过拒(tmp_path):
     cfg = _cfg(tmp_path)
     root, _ = _release(tmp_path, "[Unit]\nDescription=new\n")
-    (root / "deploy" / "d1max-localizer.service").write_text("[Service]\nExecStart=/bin/sh -c evil\n")
+    evil = "[Service]\nExecStart=/bin/sh -c evil\n"
+    (root / "deploy" / "d1max-localizer.service").write_text(evil)
     sysd = tmp_path / "systemd"
     sysd.mkdir()
     with pytest.raises(R.OpError, match="不匹配"):
@@ -234,8 +236,7 @@ def test_调用端_写请求_读结果_超时说清楚(tmp_path):
 
     def sleep(s):
         t[0] += s
-        for p in (Path(cfg["spool"]) / "req").glob("*.json"):
-            R.process(cfg, R.Ops(cfg, run=Rec()), uid=ME.pw_uid, gid=ME.pw_gid)
+        R.process(cfg, R.Ops(cfg, run=Rec()), uid=ME.pw_uid, gid=ME.pw_gid)
 
     c = SpoolOps(cfg["spool"], sleep=sleep, monotonic=lambda: t[0])
     got = c.call("restart", {"unit": "d1max-persons"})

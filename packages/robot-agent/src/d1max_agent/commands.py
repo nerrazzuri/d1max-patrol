@@ -54,12 +54,16 @@ log = logging.getLogger(__name__)
 MAP_KINDS = frozenset({"map_activate", "mapping", "map_build",
                        "release_install", "release_activate", "release_rollback",
                        "release_precheck", "outbox_retry", "relocalize", "mark_home",
-                       "zones_set", "route_net_set", "unbind", "wifi_confirm"})
+                       "zones_set", "route_net_set", "unbind", "wifi_confirm",
+                       # W55 远程运维里动手的那几样:进幂等记录(重投的一条不许再重启一次机器人)
+                       "ops_restart", "ops_reboot", "ops_debug", "ops_cleanup", "ops_timesync",
+                       "cert_csr", "cert_install"})
 
 #: 只读查询(W00c6g 建图进程日志、W00c6h 录包轨迹、W09f 建图预览):也交给 ``map_hook``,但**不进幂等
 #: 记录** —— 回执里带着上百 KB 的日志、轨迹每 2 s 查一次,记下来代理起来要全量重放;重投的再查一次
 #: 就是,无害。
-READ_KINDS = frozenset({"proc_log", "mapping_trail", "mapping_preview"})
+READ_KINDS = frozenset({"proc_log", "mapping_trail", "mapping_preview",
+                        "ops_journal", "ops_diag"})       # W55:日志、诊断快照
 
 TaskFactory = Callable[[Command], Task]
 

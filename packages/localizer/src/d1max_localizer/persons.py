@@ -557,6 +557,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     ap.add_argument("--z-max", type=float, default=Z_MAX)
     a = ap.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    # W55:工程师远程打开「详细日志」时调到 DEBUG,到点自动恢复
+    from d1max_contract.debuglog import DebugWatch
+    DebugWatch().start()
     key: bytes | None = None
     if a.connect:
         if a.key is None:

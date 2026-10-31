@@ -636,6 +636,7 @@ def build(args: argparse.Namespace) -> Assembled:
             from d1max_agent.lens import LensWatch, ffmpeg_gray
             runtime.attach_lens(LensWatch(ffmpeg_gray(source("thermal"), args.ffmpeg),
                                           emit=lambda k, d: None))
+        runtime.attach_ops(_ops(args, registration, runtime))   # W55 远程运维
         return hal, parts, runtime, pump
 
     async def _in_loop():
@@ -840,22 +841,61 @@ def _releases(args: argparse.Namespace, registration: Registration) -> Any:
     ctx = ssl.create_default_context(cafile=args.tls_ca)
     ctx.load_cert_chain(args.tls_cert, args.tls_key)
 
+    holder: dict[str, Any] = {}
+
     def restart() -> None:
-        # 代理单元是 Restart=always:自己好好退出,systemd 从新的 current 起来。等 3 秒,让回执与
-        # 「在切了」那条事件先出去。
-        threading.Timer(3.0, lambda: os.kill(os.getpid(), signal.SIGTERM)).start()
+        # 等 3 秒,让回执与「在切了」那条事件先出去。
+        # W55:装了特权执行器的机器人,先按这一版包里的服务单元更新(验签)、再把**我们所有的服务**
+        # 重启(定位、避障、人员、雷达合并……,代理最后);没装的照旧只让代理自己退出,systemd 从新的
+        # current 起来(别的服务要等机器人重启才跑新版)。
+        def go() -> None:
+            from d1max_contract import privops
+            priv = privops.from_config()
+            ops = holder.get("ops")
+            if priv is not None and ops is not None:
+                try:
+                    got = priv.call("units_apply", {"release": ops.current()}, timeout_s=120)
+                    if not got.get("ok"):
+                        log.warning("这一版的服务单元未更新:%s", got.get("error"))
+                    got = priv.call("restart_all", timeout_s=900)
+                    if got.get("ok"):
+                        return                      # 执行器最后会把代理也重启
+                    log.warning("重启全部服务失败:%s;只重启代理", got.get("error"))
+                except privops.PrivOpsError as exc:
+                    log.warning("特权执行器不可用:%s;只重启代理", exc)
+            os.kill(os.getpid(), signal.SIGTERM)
+        threading.Timer(3.0, go).start()
     from d1max_contract import relsign
     pub = Path(os.environ.get("D1MAX_RELEASE_PUBKEY") or relsign.DEFAULT_PUBKEY)
     unsigned_ok = os.environ.get("D1MAX_RELEASE_UNSIGNED_OK") == "1"
     if unsigned_ok:
         log.warning("D1MAX_RELEASE_UNSIGNED_OK=1:没装发行公钥时不验签名(只许开发、仿真用)")
-    return ReleaseOps(Layout(root=args.release_root), fetch=https_fetch(args.intake, ctx),
-                      build=functools.partial(build_venv, pip_args=pip_args_from_env(),
-                                              python=default_python()),
-                      work=Path(args.store_dir) / "release-dl", now_ms=wall_ms,
-                      restart=restart, sn=registration.robot_id,
-                      signature_check=lambda pkg: relsign.check_package(
-                          pkg, pub, allow_unsigned=unsigned_ok))
+    holder["ops"] = ReleaseOps(Layout(root=args.release_root), fetch=https_fetch(args.intake, ctx),
+                               build=functools.partial(build_venv, pip_args=pip_args_from_env(),
+                                                       python=default_python()),
+                               work=Path(args.store_dir) / "release-dl", now_ms=wall_ms,
+                               restart=restart, sn=registration.robot_id,
+                               signature_check=lambda pkg: relsign.check_package(
+                                   pkg, pub, allow_unsigned=unsigned_ok))
+    return holder["ops"]
+
+
+def _ops(args: argparse.Namespace, registration: Registration, runtime: Any) -> Any:
+    """W55 远程运维。装了特权执行器(``/etc/d1max-ops.json``)就用它;仿真机器人用模拟的
+    (动作记下来、不真做,演示站点上点得动);真机没装执行器 = 要 root 的那几项不报。"""
+    from d1max_agent.ops import OpsDesk
+    from d1max_contract import privops
+    from d1max_contract.debuglog import DebugWatch
+    priv: Any = privops.from_config()
+    if priv is None and args.hal == "sim":
+        priv = privops.SimOps()
+    data_root = Path(os.environ.get("D1MAX_DATA_ROOT") or Path(args.store_dir).parent)
+    desk = OpsDesk(robot_id=registration.robot_id, priv=priv, data_root=data_root,
+                   busy=lambda: "", releases=runtime.releases,
+                   tls_cert=Path(args.tls_cert or "/etc/d1max/tls/robot.crt"),
+                   tls_ca=Path(args.tls_ca or "/etc/d1max/tls/ca.crt"))
+    DebugWatch(desk.debug_flag).start()               # 代理自己的日志级别也跟着到点文件走
+    return desk
 
 
 #: 证书「还没生效」「已过期」(OpenSSL 的 X509_V_ERR_CERT_NOT_YET_VALID / CERT_HAS_EXPIRED)。
