@@ -1,7 +1,7 @@
 {
   "name": "d1max-console",
   "private": true,
-  "version": "0.1.0",
+  "version": "1.0.0-rc.1",
   "type": "module",
   "description": "D1 Max duty console (B1): built into packages/site-node/src/d1max_site/web and served by the site.",
   "scripts": {

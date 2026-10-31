@@ -18,7 +18,8 @@ from typing import Any
 
 PLATFORMS = ("android", "linux", "windows", "macos")
 _FILE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]{0,119}\.(apk|tar\.gz|zip|dmg|msix|exe)$")
-_VERSION = re.compile(r"^\d{1,4}\.\d{1,4}\.\d{1,4}\+(\d{1,9})$")
+#: 主.次.修,候选版可加 -rc.N 这类(W57),+ 后面是构建号(比新旧只看它)。
+_VERSION = re.compile(r"^\d{1,4}\.\d{1,4}\.\d{1,4}(?:-[0-9A-Za-z.]{1,20})?\+(\d{1,9})$")
 MAX_BYTES = 300 * 1024 * 1024
 
 

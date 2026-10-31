@@ -70,11 +70,9 @@ def _openssl_enddate(cert: Path) -> int | None:
 
 
 def site_version() -> str:
-    try:
-        from importlib.metadata import version
-        return version("d1max-site-node")
-    except Exception:  # noqa: BLE001 - 装法不一样拿不到版本:不挡体检
-        return "unknown"
+    """产品版本(W57:站点、机器人、App 同一个号,客户看到的就是它)。"""
+    from d1max_contract.product import PRODUCT_VERSION
+    return PRODUCT_VERSION
 
 
 class HealthDesk:
