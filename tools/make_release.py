@@ -34,6 +34,8 @@ from d1max_agent.engine.release import ReleaseError, pack
 from d1max_contract import relsign
 
 REPO_PUBKEY = Path("deploy/release-pub.pem")
+#: W63:出厂公钥(站点只让它签过出厂证书的机器人加入;包里没有 = 站点谁都进不来)。
+FACTORY_PUBKEY = Path("deploy/factory-pub.pem")
 KEY_PROPS = Path("mobile/android/key.properties")
 APK = Path("mobile/build/app/outputs/flutter-apk/app-release.apk")
 DEBUG_DN = "android debug"
@@ -89,6 +91,11 @@ def preflight(repo: Path, key: Path, out: Path, *, android: bool,
         have_pub = False
         bad.append(f"仓库里没有提交过的 {REPO_PUBKEY}:先 `d1max-patrol release keygen`,"
                    "把公钥提交进仓库")
+    try:
+        _git(repo, "ls-files", "--error-unmatch", str(FACTORY_PUBKEY))
+    except (ReleaseFail, OSError):
+        bad.append(f"仓库里没有提交过的 {FACTORY_PUBKEY}:装了这个包的站点会拒绝所有机器人。"
+                   "先 `tools/make_keys.py` 生成出厂钥匙,把公钥提交进仓库")
     if not key.is_file():
         bad.append(f"发行私钥不在: {key}")
     else:

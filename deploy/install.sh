@@ -41,6 +41,8 @@ set -euo pipefail
 # @写盘 /usr/local/lib/d1max                                             特权执行器和它验签用的模块(W55;root 属主,不从版本目录跑代码)
 # @写盘 /etc/d1max/unbind-pub.d                                          随发行新增的解绑公钥(W57;换钥匙用)
 # @写盘 /etc/d1max/unbind-revoked.txt                                    作废的解绑公钥编号(W57)
+# @写盘 /etc/d1max/factory-pub.pem                                       出厂公钥(W63;出厂装证书时核对用)
+# @写盘 /etc/d1max/factory-pub.d                                         换钥匙时另外认的出厂公钥(W63)
 # @写盘 /etc/d1max-ops.json                                              特权执行器的配置(W55)
 # @写盘 /var/lib/d1max-ops                                               特权执行器的请求、结果目录(W55)
 # @写盘 /etc/systemd/system/d1max-ops.path                               特权执行器的路径单元(W55)
@@ -540,6 +542,17 @@ if [[ -d "$PKG/deploy/unbind-pub.d" ]]; then
 fi
 if [[ -f "$PKG/deploy/unbind-revoked.txt" ]]; then
   install -m 0644 -o root -g root "$PKG/deploy/unbind-revoked.txt" /etc/d1max/unbind-revoked.txt
+fi
+# W63:出厂公钥(出厂装证书 factory install-cert 时核对证书是我们签的)
+if [[ -f "$PKG/deploy/factory-pub.pem" ]]; then
+  install -m 0644 -o root -g root "$PKG/deploy/factory-pub.pem" /etc/d1max/factory-pub.pem
+fi
+if [[ -d "$PKG/deploy/factory-pub.d" ]]; then
+  install -d -m 0755 -o root -g root /etc/d1max/factory-pub.d
+  find /etc/d1max/factory-pub.d -maxdepth 1 -type f -name '*.pem' -delete
+  for k in "$PKG"/deploy/factory-pub.d/*.pem; do
+    [[ -f "$k" ]] && install -m 0644 -o root -g root "$k" /etc/d1max/factory-pub.d/
+  done
 fi
 systemctl daemon-reload
 systemctl try-restart d1max-bind.service || true
