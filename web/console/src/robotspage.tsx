@@ -4,13 +4,16 @@
 // W42:「添加」= 手机扫机器人贴纸;机器人连上站点后挂在本页顶上「等待批准加入」,核对 6 位核对码、再输密码批准。
 // 机器人上有人提了换 WiFi:详情里确认 / 不换(卡片上标出来)。工程师的开通码流程收进「添加」里的一个按钮。
 // 照片位这一期放图标;电池健康机器人还不报,不显示。
+// W60 卡片分层:第一层名字、状态、在做什么、电量;第二层定位、网络、今天几趟;出了毛病才多一条琥珀色提示
+// (正常时安静,不写「正常」)。在做什么、定位从值班的实时数据来(units),概况接口没有。
 import { useCallback, useEffect, useState } from "preact/hooks";
 import { api, ApiError, enc } from "./api";
 import { ConfirmPassword } from "./confirmpw";
 import { hm, robotNames } from "./data";
 import { Confirm, Modal } from "./dialogs";
 import { alertTitle, lang, t, type Key } from "./i18n";
-import { Icon } from "./icons";
+import { Shape } from "./icons";
+import { StateText, type UnitInfo } from "./live";
 
 type Say = (s: string) => void;
 export interface RobotCard {
@@ -45,7 +48,16 @@ function problemText(p: RobotCard["problems"][number]): string {
   return "kind" in p ? alertTitle(lang.value, p.kind, p.kind) : t("robotDeviceBad", { d: p.device });
 }
 
-export function RobotsPage({ say, now }: { say: Say; now: number }) {
+/** 定位怎么样(W60 卡片第二层):没报 = 「—」;变差、不可信 = 变差;没锚定 = 未定位。 */
+export function locText(u: UnitInfo | undefined): Key | null {
+  const l = u?.robot.loc;
+  if (!u || u.stale || !l) return null;
+  if (l.degraded || l.reason) return "locPoor";
+  if (l.anchored === false || !l.pose) return "locNone";
+  return "locGood";
+}
+
+export function RobotsPage({ say, now, units = [] }: { say: Say; now: number; units?: UnitInfo[] }) {
   const [rows, setRows] = useState<RobotCard[] | null>(null);
   const [open, setOpen] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
@@ -103,22 +115,41 @@ export function RobotsPage({ say, now }: { say: Say; now: number }) {
       {rows && rows.length === 0 && <p class="empty">{t("robotsNone")}</p>}
       <div class={cur ? "robots-split" : undefined}>
         <div class="robot-cards">
-          {(rows ?? []).map((r) => (
-            <button key={r.robot_id} type="button" class={r.robot_id === open ? "robot-card on" : "robot-card"} data-robot={r.robot_id}
-              onClick={() => setOpen(r.robot_id === open ? null : r.robot_id)}>
-              <span class="robot-pic" aria-hidden="true"><Icon name="robot" /></span>
-              <span class="robot-name">{label(r)}{r.name && <small class="muted mono"> {r.robot_id}</small>}</span>
-              <span class={r.online ? "state tone-success" : "state tone-muted"}>{r.online ? t("online") : t("st_offline")}</span>
-              <span class="robot-nums">
-                <span>{r.battery_pct == null ? "—" : `${r.battery_pct}%`}</span>
-                <span>{t("robotPatrolsToday", { n: r.patrols_today })}</span>
-              </span>
-              <span class={r.problems.length ? "robot-health warn" : "robot-health ok"}>
-                {r.problems.length ? t("robotProblems", { n: r.problems.length }) : t("robotOk")}
-              </span>
-              {r.wifi?.change && <span class="robot-health warn">{t("wifiPending")}</span>}
-            </button>
-          ))}
+          {(rows ?? []).map((r) => {
+            const u = units.find((x) => x.robot.robot_id === r.robot_id);
+            const loc = locText(u);
+            const warn = r.problems.length > 0 || !!r.wifi?.change;
+            return (
+              <button key={r.robot_id} type="button" data-robot={r.robot_id}
+                class={["robot-card", r.robot_id === open ? "on" : "", warn ? "warn" : ""].filter(Boolean).join(" ")}
+                onClick={() => setOpen(r.robot_id === open ? null : r.robot_id)}>
+                <span class="fleet-head">
+                  <span class="robot-name">{label(r)}</span>
+                  {r.name && <small class="muted mono">{r.robot_id}</small>}
+                  <span class="fleet-state">
+                    {!r.online ? <span class="state tone-error">{t("st_offline")}</span>
+                      : warn ? <span class="state tone-warning"><Shape kind="P2" />{t("fleetAttention")}</span>
+                      : <span class="state tone-success">{t("online")}</span>}
+                  </span>
+                </span>
+                {u && r.online && <span class="fleet-doing"><StateText s={u.state} stale={u.stale} />{u.task && <span class="muted">{u.task}</span>}</span>}
+                <span class="fleet-batt">
+                  <span class="muted">{t("fleetBattery")}</span>
+                  <span class="mono fleet-pct">{r.battery_pct == null ? "—" : `${r.battery_pct}%`}</span>
+                  <span class="fleet-bar" aria-hidden="true"><i style={{ width: `${Math.max(0, Math.min(100, r.battery_pct ?? 0))}%` }} /></span>
+                </span>
+                {r.problems.length > 0 && (
+                  <span class="fleet-warn"><Shape kind="P2" />{problemText(r.problems[0])}{r.problems.length > 1 ? ` · ${t("robotProblems", { n: r.problems.length })}` : ""}</span>
+                )}
+                {r.wifi?.change && <span class="fleet-warn"><Shape kind="P2" />{t("wifiPending")}</span>}
+                <span class="fleet-facts">
+                  <span><small>{t("fleetLoc")}</small>{loc ? t(loc) : "—"}</span>
+                  <span><small>{t("fleetNet")}</small>{r.wifi ? t(`link_${r.wifi.link}` as Key) : "—"}</span>
+                  <span><small>{t("fleetToday")}</small>{t("fleetPatrols", { n: r.patrols_today })}</span>
+                </span>
+              </button>
+            );
+          })}
         </div>
         {cur && <RobotDetail r={cur} say={say} onChanged={load} onCode={setCode} onClose={() => setOpen(null)} />}
       </div>
