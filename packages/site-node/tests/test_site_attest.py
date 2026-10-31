@@ -150,3 +150,16 @@ def test_没装出厂公钥的站点_谁都进不来_也记(tmp_path):
         desk.verify(_答(desk, dev, cert), purpose="claim", serial="D1M-0001", source="a")
     assert len(_记录(db)) == 1
     db.close()
+
+
+def test_解绑以后_同一序列号换了板子可以重新加入(台):
+    from d1max_site.registry import Registry
+    desk, db, factory, _ = 台
+    reg = Registry(db, site_id="estate-1")
+    reg.enroll("D1M-0001", fingerprint="sha256:" + "a" * 64, issued_at=0, expires_at=1)
+    dev, cert = _机器人(factory)
+    desk.verify(_答(desk, dev, cert), purpose="claim", serial="D1M-0001", source="a")
+    reg.revoke("D1M-0001")                               # 换主板:先在站点上解绑
+    dev2, cert2 = _机器人(factory, hw="d" * 64)
+    assert desk.verify(_答(desk, dev2, cert2, hw="d" * 64), purpose="claim", serial="D1M-0001",
+                       source="b").hw_id == "d" * 64
