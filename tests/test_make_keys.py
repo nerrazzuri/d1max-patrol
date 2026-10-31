@@ -29,6 +29,7 @@ def test_三把都生成_私钥只有自己读_说明里有编号(tmp_path):
     out = tmp_path / "usb" / "nexus-keys"
     made = mk.make(out, org="Test Co", keytool=_fake_keytool(tmp_path))
     assert set(made) == set(mk.FILES)
+    assert stat.S_IMODE(out.stat().st_mode) == 0o700
     for f in ("release.key", "unbind.key", "android-release.jks"):
         assert stat.S_IMODE((out / f).stat().st_mode) == 0o600, f
     from d1max_contract import relsign
