@@ -3,7 +3,8 @@
 - **出厂申请**(上装板烧写时出):序列号、型号、设备公钥(私钥只在这块板上)、芯片编号 ``hw_id``
   (芯片唯一序号的 SHA-256,64 位十六进制)。
 - **出厂证书**:公司**出厂钥匙**(Ed25519,跟发行、解绑令钥匙分开)签上面这些 + 签发时间、出厂钥匙编号。
-- **答题**:站点出一道随机题,机器人用设备私钥签「用途 | 站点编号 | 题 | 序列号」;站点用证书里的设备公钥验。
+- **答题**:站点出一道随机题,机器人用设备私钥签「用途 | 站点编号 | 题 | 序列号」;
+  站点用证书里的设备公钥验。
 
 证书是 JSON 对象,签的是固定次序拼起来的字节(不靠 JSON 怎么排版):见 :func:`_signed_bytes`。
 """
@@ -135,7 +136,7 @@ def attest_message(*, purpose: str, site_id: str, nonce: str, serial: str) -> by
     for v in (site_id, nonce, serial):
         if not isinstance(v, str) or not v or "|" in v or len(v) > 200:
             raise DeviceIdError("答题内容不对")
-    return _ATTEST_DOMAIN + f"{purpose}|{site_id}|{nonce}|{serial}".encode("utf-8")
+    return _ATTEST_DOMAIN + f"{purpose}|{site_id}|{nonce}|{serial}".encode()
 
 
 def sign_attest(device_seed: bytes, msg: bytes) -> str:
