@@ -88,7 +88,7 @@ describe("机器人页", () => {
     const { container: c } = page();
     await waitFor(() => expect(cardOf(c, "B")).not.toBeNull());
     fireEvent.click(cardOf(c, "B"));
-    expect(c.querySelector(".robot-detail")!.textContent).toContain("点位没到");
+    expect(c.querySelector(".robot-detail")!.textContent).toContain("未到达点位");
   });
 
   it("解绑要确认再输密码", async () => {
