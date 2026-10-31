@@ -50,6 +50,14 @@ def test_结论_没有回环路程_按覆盖轨迹算():
     assert q["path_m"] == pytest.approx(5.0) and "short_path" in q["reasons"]
 
 
+def test_结论_坏数字不炸():
+    for bad in (10**400, float("inf"), float("nan"), -3, True, "1"):
+        q = quality({**BUILD, "loop_closure": {"used": True, "closures": 1, "path_m": bad,
+                                               "max_shift_m": bad}}, [[0, 0], [10**400, 0]])
+        json.dumps(q, allow_nan=False)
+        assert q["path_m"] is None and q["max_shift_m"] is None
+
+
 def test_结论_导入的老图没有建图记录_说不清():
     assert quality(None, None)["verdict"] == "unknown"
 
@@ -87,9 +95,25 @@ def _tok(s, name="alice"):
     return d["token"]
 
 
+class _W:
+    """测试用:跟着手机一样,开始以后每一步都带上这份向导的编号。"""
+
+    def __init__(self, w: MapWizard) -> None:
+        self.w = w
+
+    def view(self):
+        return self.w.view()
+
+    def apply(self, d, *, by):
+        if d.get("action") != "start":
+            cur = self.w.view()
+            d = {"wizard_id": cur["id"] if cur else "", **d}
+        return self.w.apply(d, by=by)
+
+
 def _wiz(s):
-    return MapWizard(s.api.settings, s.maps, s.db, now_ms=lambda: 1_700_000_000_000,
-                     day=lambda: "20261031", known=lambda r: r == "A")
+    return _W(MapWizard(s.api.settings, s.maps, s.db, now_ms=lambda: 1_700_000_000_000,
+                        day=lambda: "20261031", known=lambda r: r == "A", zones=s.api.zones))
 
 
 def test_向导_开始_起地图号版本_记在站点上(站点):
@@ -193,14 +217,64 @@ def test_向导_建图失败_带原因(站点):
     assert b["state"] == "failed" and "录包是空的" in b["reason"]
 
 
-def test_向导_完成_清掉(站点):
+def test_向导_完成_要禁行区确认了_原点登记了(站点):
     w = _wiz(站点)
     v = w.apply({"action": "start", "robot_id": "A", "site_type": "indoor", "drive": "remote"},
                 by="alice")
     put_version_main(站点, v["version"], build=BUILD)
     w.apply({"action": "step", "step": "zones"}, by="alice")
+    with pytest.raises(WizardError) as ei:
+        w.apply({"action": "finish"}, by="alice")
+    assert ei.value.reason == "zones_unconfirmed"
+    zs = 站点.api.zones
+    zs.confirm("main", v["version"], revision=zs.current("main", v["version"]).revision,
+               by="alice")
+    with pytest.raises(WizardError) as ei:
+        w.apply({"action": "finish"}, by="alice")
+    assert ei.value.reason == "no_home"
+    with 站点.db.tx() as c:
+        c.execute("INSERT INTO homes(robot_id, map_id, map_version, name, x, y, yaw, "
+                  "marked_at_ms) VALUES ('A', 'main', ?, 'home', 0, 0, 0, 1)", (v["version"],))
     out = w.apply({"action": "finish"}, by="alice")
     assert out["step"] == "done" and w.view() is None
+
+
+def test_向导_换掉以后旧手机改不了新的(站点):
+    raw = _wiz(站点).w
+    old = raw.apply({"action": "start", "robot_id": "A", "site_type": "indoor",
+                     "drive": "remote"}, by="alice")
+    new = raw.apply({"action": "start", "robot_id": "A", "site_type": "indoor", "drive": "phone",
+                     "replace": True}, by="eng")
+    assert new["id"] != old["id"]
+    for act in ({"action": "abandon"}, {"action": "step", "step": "drive"}, {"action": "rewalk"}):
+        with pytest.raises(WizardError) as ei:
+            raw.apply({**act, "wizard_id": old["id"]}, by="alice")
+        assert ei.value.status == 409 and ei.value.reason == "stale_wizard"
+    with pytest.raises(WizardError):
+        raw.apply({"action": "abandon"}, by="alice")      # 不带编号也不行
+    assert raw.view()["by"] == "eng"
+
+
+def test_向导_两个人同时开始_只有一个成(站点):
+    import threading
+    raw = _wiz(站点).w
+    got, errs = [], []
+    gate = threading.Barrier(8)
+
+    def go(i):
+        gate.wait()
+        try:
+            got.append(raw.apply({"action": "start", "robot_id": "A", "site_type": "indoor",
+                                  "drive": "remote"}, by=f"u{i}"))
+        except WizardError as exc:
+            errs.append(exc.reason)
+    ts = [threading.Thread(target=go, args=(i,)) for i in range(8)]
+    for x in ts:
+        x.start()
+    for x in ts:
+        x.join()
+    assert len(got) == 1 and errs == ["wizard_active"] * 7
+    assert raw.view()["by"] == got[0]["by"]
 
 
 def put_version_main(s, version: str, *, build: dict) -> None:
