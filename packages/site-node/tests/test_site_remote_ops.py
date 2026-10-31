@@ -558,3 +558,41 @@ def test_外审W55_4_N4_接收口先转正_回执后到_也算续签成功(tmp_p
     got = asyncio.run(r.renew("A", by="site:cert"))
     assert got["fingerprint"] == reg.get("A").fingerprint and al.raised == []
     db.close()
+
+
+# ------------------------------------------------------------------ W58 长跑查出来的
+
+def test_W58_续签失败_真告警簿里记得上_成功后自动关掉(tmp_path):
+    """原来假告警簿什么参数都收,站点真用的 AlertDesk 不收 now_ms:告警从来没记上。"""
+    from d1max_site.alert_store import AlertDesk
+    now = 1_800_000_000_000
+    ca, reg, db = _ca_reg(tmp_path, 10 * 86_400_000, now)
+    desk = AlertDesk(db, now_ms=lambda: now)
+    d = _Disp(tmp_path)
+    d.install = {"result": "rejected", "reason": "disk full"}
+    r = CertRenewer(dispatcher=d, registry=reg, ca=ca, alerts=desk, now_ms=lambda: now)
+    with pytest.raises(Exception, match="disk full"):
+        asyncio.run(r.renew("A", by="site:cert"))
+    assert desk.has_open("A", "cert_renew_failed")
+    d.install = {"result": "accepted"}
+    asyncio.run(r.renew("A", by="site:cert"))
+    assert not desk.has_open("A", "cert_renew_failed")
+
+
+def test_W58_钟差还不知道_当忙_过一会儿再试_不报续签失败(tmp_path):
+    """站点刚起来、机器人刚连上时钟差未知,派命令被拒:不算续签失败,按「忙」稍后重试。"""
+    from d1max_site import remote_ops
+    from d1max_site.alert_store import AlertDesk
+    from d1max_site.dispatcher import SkewUnknown
+    now = 1_800_000_000_000
+    ca, reg, db = _ca_reg(tmp_path, 10 * 86_400_000, now)
+    desk = AlertDesk(db, now_ms=lambda: now)
+    d = _Disp(tmp_path)
+
+    async def refuse(rid, kind, payload, *, issued_by):
+        raise SkewUnknown(f"{rid} 的钟差未知")
+    d.map_command = refuse
+    r = CertRenewer(dispatcher=d, registry=reg, ca=ca, alerts=desk, now_ms=lambda: now)
+    asyncio.run(r._auto("A"))
+    assert r._wait["A"] == remote_ops.BUSY_RETRY_MS
+    assert not desk.has_open("A", "cert_renew_failed")

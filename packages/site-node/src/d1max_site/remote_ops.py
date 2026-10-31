@@ -120,7 +120,11 @@ class CertRenewer:
         first = self.registry.get(rid)
         if first is None or first.revoked:
             raise RenewError(f"{rid} 未登记或已解绑")
-        got = await self.dispatcher.map_command(rid, "cert_csr", {}, issued_by=by)
+        from d1max_site.dispatcher import SkewUnknown
+        try:
+            got = await self.dispatcher.map_command(rid, "cert_csr", {}, issued_by=by)
+        except SkewUnknown as exc:          # W58:刚起来、刚连上,遥测一到就好 —— 当忙,稍后再试
+            raise RenewBusy(str(exc)) from exc
         ack = got.get("ack", {})
         if ack.get("result") != "accepted":
             raise RenewError(f"机器人未生成证书申请:{ack.get('reason') or ack.get('result')}")
@@ -160,8 +164,7 @@ class CertRenewer:
         try:
             self.alerts.raise_alert(kind="cert_renew_failed", robot=rid,
                                     title="证书自动续签失败",
-                                    detail=f"{why[:300]};明天自动重试,也可在网页机器人页点「立即续签」",
-                                    now_ms=self._now())
+                                    detail=f"{why[:300]};明天自动重试,也可在网页机器人页点「立即续签」")
         except Exception:
             log.exception("%s 续签失败的告警未能记录", rid)
 
