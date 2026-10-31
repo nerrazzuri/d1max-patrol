@@ -632,11 +632,14 @@ class FakeApi implements SiteApi {
     }
     return <String, dynamic>{'ack': <String, dynamic>{'result': 'accepted'}};
   }
+  /// 录包命令的回执（W54：模拟机器人拒停录）；不给就是收下。
+  Map<String, dynamic>? mappingAck;
+
   @override
   Future<Map<String, dynamic>> mapping(String robotId, String action,
       {String name = '', String mapId = '', String version = ''}) async {
     calls.add('mapping $robotId $action $name${mapId.isEmpty ? '' : ' $mapId:$version'}');
-    return <String, dynamic>{'ack': <String, dynamic>{'result': 'accepted'}};
+    return <String, dynamic>{'ack': mappingAck ?? <String, dynamic>{'result': 'accepted'}};
   }
   @override
   Future<Map<String, dynamic>> buildMap(
@@ -726,6 +729,7 @@ class FakeApi implements SiteApi {
   /// 建图那一步站点说的结果（`{state: pending|ready|failed, quality?, reason?}`）。
   Map<String, dynamic> wizardBuild = <String, dynamic>{'state': 'pending'};
   SiteError? wizardError;
+  final List<Map<String, dynamic>> wizardBodies = <Map<String, dynamic>>[];
 
   @override
   Future<Map<String, dynamic>> mapWizard() async {
@@ -737,6 +741,7 @@ class FakeApi implements SiteApi {
   @override
   Future<Map<String, dynamic>> mapWizardAction(Map<String, dynamic> body) async {
     final a = body['action'];
+    wizardBodies.add(body);
     calls.add('wizard $a${body['step'] != null ? ' ${body['step']}' : ''}${body['drive'] != null ? ' ${body['drive']}' : ''}');
     final err = wizardError;
     if (err != null) {
@@ -746,7 +751,7 @@ class FakeApi implements SiteApi {
     switch (a) {
       case 'start':
         wizard = <String, dynamic>{
-          'step': 'prepare', 'robot_id': body['robot_id'], 'site_type': body['site_type'], 'drive': body['drive'],
+          'id': 'w-${wizardBodies.length}', 'step': 'prepare', 'robot_id': body['robot_id'], 'site_type': body['site_type'], 'drive': body['drive'],
           'map_id': 'main', 'version': '20261031-1', 'tried': <dynamic>[], 'label': body['label'] ?? '',
           'by': session?.name ?? 'alice', 'started_ms': 0,
         };
@@ -897,10 +902,15 @@ class FakeApi implements SiteApi {
       'ack': superviseAck ?? <String, dynamic>{'result': 'accepted'}};
   }
 
+  /// 标原点不带 replace 时抛它（W54：名字在旧版本上登记过，站点回 409 带 name_taken）。
+  SiteError? markHomeError;
+
   @override
   Future<Map<String, dynamic>> markHome(String robotId,
       {String name = '', bool replace = false}) async {
     calls.add('markHome $robotId${name.isEmpty ? '' : ' $name'}${replace ? ' replace' : ''}');
+    final err = markHomeError;
+    if (err != null && !replace) throw err;
     return <String, dynamic>{
       'ack': <String, dynamic>{
         'result': 'accepted',

@@ -1,6 +1,7 @@
 // W54 建图向导（用户 2026-10-31）：站点没图时管理员登录弹「开始建图」（稍后记下来）、别的角色只看到提示；
 // 向导七步从头走到尾（遥控器、手机两种开法）、建图结论三档、退出能接着做；地图管理（版本、结论、下发、退回）。
 import 'package:d1max_patrol/l10n.dart';
+import 'package:d1max_patrol/net/site_client.dart';
 import 'package:d1max_patrol/ui/map_manage.dart';
 import 'package:d1max_patrol/ui/map_wizard.dart';
 import 'package:d1max_patrol/ui/nw/nw_shell.dart';
@@ -292,6 +293,87 @@ void main() {
       await _wizard(t, api);
       expect(find.textContaining('先充电'), findsOneWidget);
       expect(t.widget<FilledButton>(find.byKey(MapWizardPage.nextKey)).onPressed, isNull);
+    });
+  });
+
+  group('外审 W54-1', () {
+    Map<String, dynamic> at(String step) => <String, dynamic>{'id': 'w-9', 'step': step, 'robot_id': 'A',
+          'map_id': 'main', 'version': '20261031-1', 'drive': 'remote', 'by': 'u', 'label': ''};
+
+    testWidgets('每一步都带这份向导的编号（被别人换掉的旧页面改不了新的）', (t) async {
+      final api = _admin()..wizard = at('drive');
+      await _wizard(t, api);
+      await _tap(t, MapWizardPage.backKey);
+      expect(api.wizardBodies.last['wizard_id'], 'w-9');
+    });
+
+    testWidgets('换了图、机器人还不知道自己在哪：标原点按不了，给「设位置」（能自己找的让它找）', (t) async {
+      final lost = _robotA(map: 'main:20261031-1');
+      final caps = Map<String, dynamic>.from(lost['capabilities'] as Map);
+      caps['tasks'] = <String, dynamic>{...(caps['tasks'] as Map), 'relocalize': <String, dynamic>{'global': true}};
+      lost['capabilities'] = caps;
+      (lost['status'] as Map)['ready'] = <String, dynamic>{'control': true, 'motion': true, 'estop_clear': true, 'loc_ok': false};
+      final api = FakeApi('admin', robotView: lost)
+        ..robotsOverride = [lost]
+        ..mapsCount = 0
+        ..wizard = at('origin');
+      await _wizard(t, api);
+      expect(t.widget<FilledButton>(find.byKey(MapWizardPage.markHomeKey)).onPressed, isNull);
+      await _tap(t, MapWizardPage.relocKey);
+      expect(api.calls, contains('relocalize A global'));
+    });
+
+    testWidgets('原点在旧版本上登记过：问一句，换就带 replace 再标', (t) async {
+      final api = FakeApi('admin', robotView: _robotA(map: 'main:20261031-1'))
+        ..robotsOverride = [_robotA(map: 'main:20261031-1')]
+        ..mapsCount = 0
+        ..wizard = at('origin')
+        ..markHomeError = const SiteError(409, 'home 已经在 main:20261030-1 上登记了',
+            body: <String, dynamic>{'name_taken': <String, dynamic>{'map_id': 'main', 'map_version': '20261030-1'}});
+      await _wizard(t, api);
+      await _tap(t, MapWizardPage.markHomeKey);
+      await _tap(t, MapWizardPage.replaceHomeKey);
+      expect(api.calls, containsAllInOrder(['markHome A', 'markHome A replace', 'wizard finish']));
+    });
+
+    testWidgets('「不建了」：在走一圈就先停录（不管预览回没回来）；机器人不停就不放弃', (t) async {
+      final api = _admin()
+        ..wizard = at('walk')
+        ..mappingAck = <String, dynamic>{'result': 'rejected', 'reason': 'busy'};
+      await _wizard(t, api);
+      await _tap(t, MapWizardPage.exitKey);
+      await _tap(t, MapWizardPage.exitAbandonKey);
+      expect(api.calls, contains('mapping A stop '));
+      expect(api.calls.where((c) => c == 'wizard abandon'), isEmpty, reason: '没停下来不放弃');
+      expect(find.byType(MapWizardPage), findsOneWidget);
+      api.mappingAck = <String, dynamic>{'result': 'rejected', 'reason': 'not_recording'};
+      await _tap(t, MapWizardPage.exitKey);
+      await _tap(t, MapWizardPage.exitAbandonKey);
+      expect(api.calls, contains('wizard abandon'), reason: '本来就没在录：放弃');
+    });
+
+    testWidgets('说不清（没有建图记录）：不显示成绿色「能用」', (t) async {
+      final api = _admin()
+        ..wizard = at('build')
+        ..wizardBuild = <String, dynamic>{'state': 'ready', 'quality': <String, dynamic>{'verdict': 'unknown', 'reasons': <dynamic>[]}};
+      await _wizard(t, api);
+      expect(find.text('图建好了，能用'), findsNothing);
+      expect(find.textContaining('说不清'), findsWidgets);
+      expect(find.byKey(MapWizardPage.useKey), findsOneWidget);
+    });
+
+    testWidgets('换图没成：说原因，能再下发', (t) async {
+      final api = _admin()
+        ..wizard = at('origin')
+        ..overview = <String, dynamic>{'maps': <dynamic>[], 'robots': <dynamic>[
+          <String, dynamic>{'robot_id': 'A', 'activation': <String, dynamic>{'map_id': 'main', 'version': '20261031-1',
+            'state': 'failed', 'reason': '下载的 prior.mm 校验不对'}},
+        ]};
+      await _wizard(t, api);
+      await _tap(t, MapWizardPage.sendMapKey);
+      await _tick(t);
+      expect(find.textContaining('prior.mm 校验不对'), findsOneWidget);
+      expect(find.byKey(MapWizardPage.sendMapKey), findsOneWidget, reason: '能再下发');
     });
   });
 

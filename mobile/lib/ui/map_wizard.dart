@@ -23,6 +23,7 @@ import 'nw/nw_theme.dart';
 import 'nw/nw_widgets.dart';
 import 'site_mapping.dart' show PreviewPainter, SiteMapPreviewPage;
 import 'site_maps.dart' show robotMapTag;
+import 'site_robot.dart' show SiteRobotPage;
 import 'site_routes.dart';
 import 'site_tabs.dart' show SchedulePage;
 import 'site_teleop.dart';
@@ -335,6 +336,8 @@ class MapWizardPage extends StatefulWidget {
   static const Key zonesConfirmKey = Key('wizard-zones-confirm');
   static const Key sendMapKey = Key('wizard-send-map');
   static const Key markHomeKey = Key('wizard-mark-home');
+  static const Key replaceHomeKey = Key('wizard-replace-home');
+  static const Key relocKey = Key('wizard-reloc');
   static const Key routesKey = Key('wizard-routes');
   static const Key scheduleKey = Key('wizard-schedule');
   static const Key homeKey = Key('wizard-home');
@@ -437,6 +440,7 @@ class _MapWizardPageState extends State<MapWizardPage> {
         await _reloadWizard(); // 机器人重启过、这一趟自己收尾了：站点上的建图结果会变
       case 'origin':
         await _pollRobot();
+        if (_sent) await _checkActivation();
       case 'build':
         await _reloadWizard();
     }
@@ -480,6 +484,8 @@ class _MapWizardPageState extends State<MapWizardPage> {
       _busy = true;
       _err = '';
     });
+    final id = _w?['id'];
+    if (body['action'] != 'start' && id != null) body = <String, dynamic>{...body, 'wizard_id': id};
     try {
       final d = await api.mapWizardAction(body);
       if (!mounted) return;
@@ -537,11 +543,18 @@ class _MapWizardPageState extends State<MapWizardPage> {
     );
     if (!mounted || choice == null) return;
     if (choice == 'abandon') {
-      if (_step == 'walk' && _pv['recording'] == true) {
+      // 在走一圈：先停录（预览可能还没回来，不看它）。机器人说本来就没在录也算停了；别的不放弃，说原因
+      if (_step == 'walk') {
         try {
-          await api.mapping(_robotId, 'stop');
-        } on SiteError {
-          // 停不了也照样放弃：录包页还能停
+          final r = await api.mapping(_robotId, 'stop');
+          final ack = (r['ack'] as Map?) ?? const {};
+          if (ack['result'] != 'accepted' && '${ack['reason'] ?? ''}' != 'not_recording') {
+            if (mounted) setState(() => _err = tr("Couldn't stop recording, so mapping was not given up: ", '停不了录，没放弃：') + mappingAckText(r));
+            return;
+          }
+        } on SiteError catch (e) {
+          if (mounted) setState(() => _err = tr("Couldn't stop recording, so mapping was not given up: ", '停不了录，没放弃：') + refusalText(e));
+          return;
         }
       }
       try {
@@ -1035,11 +1048,26 @@ class _MapWizardPageState extends State<MapWizardPage> {
     final path = q['path_m'], shift = q['max_shift_m'];
     return _scroll([
       Row(key: MapWizardPage.verdictKey, children: [
-        Icon(good ? Icons.check_circle_rounded : Icons.warning_rounded,
-            size: 28, color: good ? c.success : c.fg(NwTone.warning)),
+        Icon(
+            switch (verdict) {
+              'usable' => Icons.check_circle_rounded,
+              'problem' => Icons.warning_rounded,
+              _ => Icons.help_outline_rounded,
+            },
+            size: 28,
+            color: switch (verdict) {
+              'usable' => c.success,
+              'problem' => c.fg(NwTone.warning),
+              _ => c.textSecondary,
+            }),
         const SizedBox(width: Nw.s8),
         Expanded(
-            child: Text(good ? tr('Map built, usable', '图建好了，能用') : tr('Map built, but with problems', '图建好了，但有问题'),
+            child: Text(
+                switch (verdict) {
+                  'usable' => tr('Map built, usable', '图建好了，能用'),
+                  'problem' => tr('Map built, but with problems', '图建好了，但有问题'),
+                  _ => tr("Map built, quality unknown", '图建好了，好坏说不清'),
+                },
                 style: NwText.titleLarge.copyWith(color: c.text, fontWeight: FontWeight.w700))),
       ]),
       const SizedBox(height: Nw.s16),
@@ -1050,7 +1078,10 @@ class _MapWizardPageState extends State<MapWizardPage> {
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           if (good && verdict == 'usable') Text(tr('✓ Closed the loop back at the start', '✓ 回到起点、闭合了')),
           if (path is num) Text(tr('Walked ${path.round()} m', '走了 ${path.round()} 米')),
-          if (shift is num && good) Text(tr('Stable (largest correction ${(shift * 100).round()} cm)', '拼接很稳（最大修正 ${(shift * 100).round()} 厘米）')),
+          if (verdict == 'unknown')
+            Text(tr("There's no build record for this version, so we can't judge it. Look at the map before using it.",
+                '这一版没有建图记录，说不清好坏：看一眼图再决定用不用。')),
+          if (shift is num && verdict == 'usable') Text(tr('Stable (largest correction ${(shift * 100).round()} cm)', '拼接很稳（最大修正 ${(shift * 100).round()} 厘米）')),
           for (final r in reasons) Text('• ${qualityReasonText(r)}'),
           if (!good)
             Padding(
@@ -1171,7 +1202,7 @@ class _MapWizardPageState extends State<MapWizardPage> {
         if (list.isEmpty)
           NwButton(
               buttonKey: MapWizardPage.zonesEmptyKey,
-              label: tr('Nothing to draw on this map', '这张图没有要圈的'),
+              label: tr('This map has no no-go zones', '这张图没有禁区'),
               variant: NwButtonVariant.outline,
               fullWidth: true,
               onPressed: _busy ? null : () => _confirmZones(empty: true))
@@ -1225,6 +1256,54 @@ class _MapWizardPageState extends State<MapWizardPage> {
     await _pollRobot();
   }
 
+  /// 下发之后盯这一次换图：机器人报换图没成（下载、核对、载入、定位先验）就说原因，能再下发。
+  Future<void> _checkActivation() async {
+    try {
+      final ov = await api.mapsOverview();
+      for (final r in (ov['robots'] as List? ?? const [])) {
+        if (r is! Map || '${r['robot_id']}' != _robotId) continue;
+        final a = r['activation'];
+        if (a is Map && '${a['map_id']}' == _mapId && '${a['version']}' == _version &&
+            (a['state'] == 'failed' || a['state'] == 'timeout') && mounted) {
+          setState(() {
+            _sent = false;
+            _err = a['state'] == 'timeout'
+                ? tr('$_robotId did not finish switching maps in time. Send it again.', '$_robotId 换图超时了，再下发一次。')
+                : tr('$_robotId could not switch to the new map: ${a['reason']}', '$_robotId 没换成新图：${a['reason']}');
+          });
+        }
+      }
+    } on SiteError {
+      // 下次再问
+    }
+  }
+
+  /// 换了图要重新知道自己在哪（换图会清掉原来的定位）：能自己找的让它拿看到的墙套地图；不能的去机器人页设。
+  Future<void> _reloc() async {
+    final r = _rv;
+    if (r != null && robotCanFindPose(r)) {
+      setState(() {
+        _busy = true;
+        _err = '';
+      });
+      try {
+        final got = await api.relocalize(_robotId, global: true);
+        final ack = (got['ack'] as Map?) ?? const {};
+        if (ack['result'] != 'accepted' && mounted) {
+          setState(() => _err = tr("It couldn't find itself: ${ack['reason'] ?? ack['result']}. Set the position on the robot page.",
+              '没找到自己在哪：${ack['reason'] ?? ack['result']}。到机器人页手动设位置。'));
+        }
+      } on SiteError catch (e) {
+        if (mounted) setState(() => _err = refusalText(e));
+      } finally {
+        if (mounted) setState(() => _busy = false);
+      }
+    } else {
+      await Navigator.push(context, MaterialPageRoute<void>(builder: (_) => SiteRobotPage(api: api, robotId: _robotId)));
+    }
+    await _pollRobot();
+  }
+
   Future<void> _markHome({bool replace = false}) async {
     setState(() {
       _busy = true;
@@ -1238,7 +1317,8 @@ class _MapWizardPageState extends State<MapWizardPage> {
         return;
       }
     } on SiteError catch (e) {
-      if (e.status == 409 && e.body['name_taken'] == true && !replace && mounted) {
+      final taken = e.body['name_taken'];
+      if (e.status == 409 && taken != null && taken != false && !replace && mounted) {
         final ok = await showDialog<bool>(
           context: context,
           builder: (c) => AlertDialog(
@@ -1246,7 +1326,10 @@ class _MapWizardPageState extends State<MapWizardPage> {
                 '原点在旧版本的图上登记过。换成这一版的？')),
             actions: [
               TextButton(onPressed: () => Navigator.pop(c, false), child: Text(tr('Cancel', '算了'))),
-              FilledButton(onPressed: () => Navigator.pop(c, true), child: Text(tr('Replace', '换'))),
+              FilledButton(
+                  key: MapWizardPage.replaceHomeKey,
+                  onPressed: () => Navigator.pop(c, true),
+                  child: Text(tr('Replace', '换'))),
             ],
           ),
         );
@@ -1269,6 +1352,9 @@ class _MapWizardPageState extends State<MapWizardPage> {
   Widget _origin(NwColors c) {
     final r = _rv;
     final loaded = r != null && robotMapTag(r) == '$_mapId:$_version';
+    final st = r?['status'];
+    final ready = st is Map ? st['ready'] : null;
+    final located = !(ready is Map && ready['loc_ok'] == false);
     return _scroll([
       _h1(tr('Mark the origin', '标原点')),
       NwCard(
@@ -1294,6 +1380,20 @@ class _MapWizardPageState extends State<MapWizardPage> {
             fullWidth: true,
             onPressed: _busy ? null : _sendMap),
       ],
+      if (loaded && !located) ...[
+        const SizedBox(height: Nw.s8),
+        NwNotice(
+            tone: NwTone.warning,
+            text: tr("$_robotId doesn't know where it is on the new map yet. Set its position first.",
+                '$_robotId 还不知道自己在新图上哪儿：先设位置。')),
+        const SizedBox(height: Nw.s8),
+        NwButton(
+            buttonKey: MapWizardPage.relocKey,
+            label: robotCanFindPose(r) ? tr('Let it find itself', '让它自己找位置') : tr('Set position', '设位置'),
+            icon: Icons.my_location_rounded,
+            fullWidth: true,
+            onPressed: _busy ? null : _reloc),
+      ],
       const SizedBox(height: Nw.s16),
       Text(
           tr('Drive $_robotId to about 1.5 m in front of the dock, facing the dock, and let it stand still. Then tap the button.',
@@ -1311,7 +1411,7 @@ class _MapWizardPageState extends State<MapWizardPage> {
           label: tr('Mark the origin here', '在这儿标原点'),
           fullWidth: true,
           size: NwButtonSize.large,
-          onPressed: loaded && !_busy ? _markHome : null),
+          onPressed: loaded && located && !_busy ? _markHome : null),
     ]);
   }
 
