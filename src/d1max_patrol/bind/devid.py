@@ -167,6 +167,21 @@ def answer(p: BindPaths, *, purpose: str, site_id: str, nonce: str,
     return {"cert": cert, "hw_id": hw, "sig": di.sign_attest(seed, msg)}
 
 
+def factory_pubs(p: BindPaths) -> list[bytes]:
+    """这台认的出厂公钥:``/etc/d1max/factory-pub.pem`` + ``factory-pub.d/*.pem``(随发行装的)。"""
+    files = [p.etc / "factory-pub.pem"]
+    d = p.etc / "factory-pub.d"
+    if d.is_dir():
+        files += sorted(d.glob("*.pem"))
+    out = []
+    for f in files:
+        try:
+            out.append(ed25519.pub_from_pem(f.read_bytes()))
+        except (OSError, ValueError):
+            continue
+    return out
+
+
 def load_cert_file(path: Path) -> Any:
     try:
         return json.loads(Path(path).read_text(encoding="utf-8"))

@@ -14,6 +14,7 @@ import base64
 import os
 import shutil
 import subprocess
+from collections.abc import Iterable
 from pathlib import Path
 
 from d1max_contract.binding import (
@@ -78,7 +79,10 @@ def _new_secrets(paths: BindPaths, serial: str, router: Router, *, ssid: str,
 
 
 def burn(paths: BindPaths, serial: str, *, router: Router, unbind_pub: Path,
-         model: str = "D1 Max", force: bool = False) -> Sticker:
+         model: str = "D1 Max", force: bool = False,
+         hw_sources: Iterable[Path] | None = None) -> Sticker:
+    """W63:先读芯片编号(读不到什么都不写),烧完顺带生成设备钥匙、出出厂申请(``devid``)。"""
+    from d1max_patrol.bind import devid
     try:
         check_serial(serial)
     except BindingError as exc:
@@ -86,6 +90,11 @@ def burn(paths: BindPaths, serial: str, *, router: Router, unbind_pub: Path,
     dev = read_json(paths.device, None)
     if dev and not force:
         raise FactoryError(f"此机器人已烧写过了(序列号 {dev.get('serial')}):重做贴纸用 rekey")
+    sources = list(hw_sources) if hw_sources is not None else list(devid.HW_SOURCES)
+    try:
+        devid.read_hw_id(sources)
+    except devid.DevIdError as exc:
+        raise FactoryError(str(exc)) from exc
     if not unbind_pub.is_file():
         raise FactoryError(f"没有公司解绑公钥 {unbind_pub}")
     paths.etc.mkdir(parents=True, exist_ok=True)
@@ -99,7 +108,12 @@ def burn(paths: BindPaths, serial: str, *, router: Router, unbind_pub: Path,
         # 3588 在路由器 LAN1 上的地址(出厂配置定死;贴纸不带地址时手机就找它)
         set_env(paths.env, "D1MAX_BIND_HOST", DEFAULT_BIND_ADDR.split(":")[0])
     write_json(paths.state, {"state": "unbound", "error": ""})
-    return _new_secrets(paths, serial, router, ssid=hotspot_ssid(serial), model=model)
+    st = _new_secrets(paths, serial, router, ssid=hotspot_ssid(serial), model=model)
+    try:
+        devid.make_request(paths, hw_sources=sources)
+    except devid.DevIdError as exc:
+        raise FactoryError(str(exc)) from exc
+    return st
 
 
 def rekey(paths: BindPaths, *, router: Router) -> Sticker:

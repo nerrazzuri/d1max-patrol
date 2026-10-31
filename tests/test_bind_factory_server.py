@@ -28,7 +28,9 @@ def 出厂(tmp_path):
     pub = tmp_path / "unbind-pub.pem"
     pub.write_bytes(ed25519.public_pem(ed25519.public_key(ed25519.new_seed())))
     router = FakeRouter()
-    st = fa.burn(paths, "D1M-000123", router=router, unbind_pub=pub)
+    sn = tmp_path / "chip-sn"
+    sn.write_bytes(b"TEST-CHIP-0001\x00")
+    st = fa.burn(paths, "D1M-000123", router=router, unbind_pub=pub, hw_sources=[sn])
     return paths, router, st, pub
 
 
