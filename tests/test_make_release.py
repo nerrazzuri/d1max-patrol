@@ -295,3 +295,23 @@ def test_CI_的安卓包是调试签名_发行脚本才要求正式钥匙():
     ci = (ROOT / ".github/workflows/ci.yml").read_text("utf-8")
     assert "requireReleaseKey" not in ci
     assert "-Pd1max.requireReleaseKey=true" in (ROOT / "tools/make_release.py").read_text("utf-8")
+
+
+def test_W55_安卓包旁边出站点分发用的签名清单_站点认(world, monkeypatch, tmp_path):
+    """W55:App 从站点分发。发行脚本编完安卓包,用同一把发行钥匙签一份清单;网页上连包一起传,站点验签收下。"""
+    from d1max_site.app_dist import AppStore
+    repo, key, out = world
+    apk = tmp_path / "app-release.apk"
+    apk.write_bytes(b"PK-apk")
+    monkeypatch.setattr(mr, "preflight", lambda *a, **k: [])
+    monkeypatch.setattr(mr, "pubspec_version", lambda repo: "1.4.0")
+    monkeypatch.setattr(mr, "build_apk", lambda repo, name, n: apk)
+    monkeypatch.setattr(mr, "apk_signer", lambda p: ("CN=Nexus", "ab" * 32))
+    argv = ["--repo", str(repo), "--key", str(key), "--out", str(out), "--no-gate",
+            "--build-number", "17"]
+    assert mr.run(_parse(argv), now_ms=NOW) == 0
+    rec = next(json.loads(p.read_text("utf-8")) for p in out.glob("*.release-record.json"))
+    man = json.loads((out / rec["android"]["site_manifest"]).read_text("utf-8"))
+    assert man["version"] == "1.4.0+17" and man["name"] == rec["android"]["file"]
+    st = AppStore(tmp_path / "apps", pubkey=repo / "deploy/release-pub.pem")
+    assert st.add("android", (out / man["name"]).read_bytes(), man, now_ms=1)["build"] == 17

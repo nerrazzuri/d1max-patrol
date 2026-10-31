@@ -24,7 +24,7 @@ String? updatePlatform() {
 }
 
 /// 安装包名只许站点那边认的样子（防路径穿越：名字要拿来拼本地路径）。
-final RegExp _safeName = RegExp(r'^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$');
+final RegExp _safeName = RegExp(r'^[A-Za-z0-9][A-Za-z0-9._+-]{0,119}$');
 
 /// 下载、安装。测试换掉 [install]。
 class AppUpdater {

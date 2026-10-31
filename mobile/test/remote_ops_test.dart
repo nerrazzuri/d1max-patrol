@@ -142,7 +142,7 @@ void main() {
       addTearDown(() => dir.delete(recursive: true));
       final api = FakeApi('guard')
         ..appUpdateBody = <String, dynamic>{'available': true, 'version': '1.1.0+5', 'build': 5, 'size': 3,
-          'name': 'nw-1.1.0.apk', 'sha256': 'a' * 64}
+          'name': 'nw-1.1.0+5.apk', 'sha256': 'a' * 64}
         ..appBytes = <int>[1, 2, 3];
       File? installed;
       final u = AppUpdater(api: api, platform: 'android', dir: () async => dir, install: (f) async {
@@ -152,7 +152,7 @@ void main() {
       final info = await u.check();
       expect(api.appUpdateAsks.single, ('android', appBuild));
       expect(await u.downloadAndInstall(info!), 'ok');
-      expect(installed!.path, '${dir.path}${Platform.pathSeparator}nw-1.1.0.apk');
+      expect(installed!.path, '${dir.path}${Platform.pathSeparator}nw-1.1.0+5.apk');
       expect(await installed!.readAsBytes(), <int>[1, 2, 3]);
       await expectLater(u.downloadAndInstall(<String, dynamic>{...info, 'name': '../evil.apk'}),
           throwsA(isA<SiteError>()));
