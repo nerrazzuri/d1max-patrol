@@ -315,3 +315,11 @@ def test_W55_安卓包旁边出站点分发用的签名清单_站点认(world, m
     assert man["version"] == "1.4.0+17" and man["name"] == rec["android"]["file"]
     st = AppStore(tmp_path / "apps", pubkey=repo / "deploy/release-pub.pem")
     assert st.add("android", (out / man["name"]).read_bytes(), man, now_ms=1)["build"] == 17
+
+
+def test_W57_pubspec版本带候选号_安卓包名和清单里都留着(tmp_path):
+    (tmp_path / "mobile").mkdir()
+    (tmp_path / "mobile" / "pubspec.yaml").write_text("name: x\nversion: 1.0.0-rc.1+7\n")
+    assert mr.pubspec_version(tmp_path) == "1.0.0-rc.1"
+    (tmp_path / "mobile" / "pubspec.yaml").write_text("name: x\nversion: 1.2.3+7\n")
+    assert mr.pubspec_version(tmp_path) == "1.2.3"
