@@ -10,9 +10,13 @@
 /// 2026-10-14 重做（设计稿的 AlarmIncidentDetail）：四个大按钮和按了之后的那句话挪到**底栏**
 /// （拇指够得着、不跟着滚）；「在哪」、细节是一张卡，事件经过是一张卡；有位置的告警多一张小地图
 /// （站点渲染的那张栅格图，点了进地图）。状态、防迟到回包的那些一个字没动。
+///
+/// W60（用户 2026-10-31 定）：以现场为先 —— 报警头下面先放现场照片（那一趟拍的第一张，点开看全部），
+/// 再是实时画面；没有照片就不占地方。
 library;
 
 import 'dart:async';
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 
@@ -473,6 +477,12 @@ class _SiteAlertScenePageState extends State<SiteAlertScenePage> {
                 border: Border.all(color: p1 ? c.errorFrame : c.outline, width: p1 ? 2 : 1)),
             child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
               _head(),
+              if (_a.context['task_id'] is String)
+                ScenePhoto(
+                    key: ValueKey<String>('scene-photo ${_a.key}'),
+                    api: widget.api,
+                    taskId: _a.context['task_id'] as String,
+                    onOpen: () => _photo(_a.context['task_id'] as String)),
               if (_isRobot && _open) ...[
                 // 哪只狗的画面。前 / 后哪一路、连没连上是画面那一格自己说的（它管切换、管在线判定）
                 Padding(
@@ -800,5 +810,78 @@ class _SiteAlertScenePageState extends State<SiteAlertScenePage> {
                 ...rest,
               ])),
     );
+  }
+}
+
+/// W60：报警页的现场照片（那一趟拍的第一张）。没有那一趟、还没上传、取不到：不占地方（不报错，
+/// 「现场照片」按钮照旧能点开看全部）。
+class ScenePhoto extends StatefulWidget {
+  final SiteApi api;
+  final String taskId;
+  final VoidCallback onOpen;
+  const ScenePhoto({super.key, required this.api, required this.taskId, required this.onOpen});
+
+  static const Key photoKey = Key('scene-photo-inline');
+
+  @override
+  State<ScenePhoto> createState() => _ScenePhotoState();
+}
+
+class _ScenePhotoState extends State<ScenePhoto> {
+  late final Future<Uint8List?> _bytes = _load();
+
+  Future<Uint8List?> _load() async {
+    try {
+      final runs = await widget.api.runs(mission: widget.taskId);
+      if (runs.isEmpty) return null;
+      final id = (runs.first['id'] as num).toInt();
+      final d = await widget.api.run(id);
+      final ps = (d['photos'] as List? ?? const []).whereType<Map>().toList();
+      if (ps.isEmpty) return null;
+      final b = await widget.api.runPhoto(id, '${ps.first['name']}');
+      return b.isEmpty ? null : b;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final c = Nw.of(context);
+    return FutureBuilder<Uint8List?>(
+        future: _bytes,
+        builder: (context, snap) {
+          final b = snap.data;
+          if (b == null) return const SizedBox.shrink();
+          return Padding(
+            padding: const EdgeInsets.fromLTRB(Nw.s8, Nw.s8, Nw.s8, 0),
+            child: Semantics(
+              button: true,
+              label: tr('Scene photo', '现场照片'),
+              child: InkWell(
+                key: ScenePhoto.photoKey,
+                onTap: widget.onOpen,
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(Nw.r8),
+                  child: AspectRatio(
+                    aspectRatio: 4 / 3,
+                    child: Stack(fit: StackFit.expand, children: [
+                      Image.memory(b, fit: BoxFit.cover, gaplessPlayback: true),
+                      Positioned(
+                        left: Nw.s8,
+                        top: Nw.s8,
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: Nw.s8, vertical: 2),
+                          decoration: BoxDecoration(color: c.scrim, borderRadius: BorderRadius.circular(Nw.r4)),
+                          child: Text(tr('Scene photo', '现场照片'), style: NwText.bodySmall.copyWith(color: c.onScrim)),
+                        ),
+                      ),
+                    ]),
+                  ),
+                ),
+              ),
+            ),
+          );
+        });
   }
 }
