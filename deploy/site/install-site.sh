@@ -123,6 +123,22 @@ if [[ -d "$PKG/deploy/release-pub.d" ]]; then
   done
 fi
 
+# W63 出厂公钥:只有它签过出厂证书的机器人能加入站点(没装 = 谁都进不来);换钥匙另外认的、作废名单
+# 跟包里的一样
+if [[ -f "$PKG/deploy/factory-pub.pem" ]]; then
+  install -m 0644 "$PKG/deploy/factory-pub.pem" /etc/d1max-site/factory-pub.pem
+fi
+if [[ -d "$PKG/deploy/factory-pub.d" ]]; then
+  install -d -m 0755 /etc/d1max-site/factory-pub.d
+  find /etc/d1max-site/factory-pub.d -maxdepth 1 -type f -name '*.pem' -delete
+  for k in "$PKG"/deploy/factory-pub.d/*.pem; do
+    [[ -f "$k" ]] && install -m 0644 "$k" /etc/d1max-site/factory-pub.d/
+  done
+fi
+if [[ -f "$PKG/deploy/factory-revoked.txt" ]]; then
+  install -m 0644 "$PKG/deploy/factory-revoked.txt" /etc/d1max-site/factory-revoked.txt
+fi
+
 # W55 特权执行器:站点服务(NoNewPrivileges)要 root 才能做的几件事(重启自己、恢复备份、升级、装 VPN 配置)
 # 交给它。执行器和验签用的两个小模块拷到 root 属主的 /usr/local/lib/d1max/,不从站点可写的地方跑代码。
 install -d -m 0755 -o root -g root /usr/local/lib/d1max /usr/local/lib/d1max/d1max_contract

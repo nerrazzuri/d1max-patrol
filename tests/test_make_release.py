@@ -42,6 +42,9 @@ def world(tmp_path):
     key = tmp_path / "usb" / "release.key"
     key.parent.mkdir()
     relsign.keygen(key, repo / "deploy/release-pub.pem")
+    from d1max_contract import ed25519
+    (repo / "deploy/factory-pub.pem").write_bytes(
+        ed25519.public_pem(ed25519.public_key(ed25519.new_seed())))
     _git(repo, "init", "-q")
     _git(repo, "add", "-A")
     _git(repo, "commit", "-q", "-m", "init")
@@ -110,6 +113,14 @@ def test_公钥没提交进仓库_不发(world, capsys):
     _git(repo, "commit", "-q", "-m", "drop")
     (repo / "deploy/release-pub.pem").unlink()
     assert "没有提交过的 deploy/release-pub.pem" in _refused(world, capsys)
+
+
+def test_W63_出厂公钥没提交进仓库_不发_不然站点谁都进不来(world, capsys):
+    repo = world[0]
+    _git(repo, "rm", "-q", "--cached", "deploy/factory-pub.pem")
+    _git(repo, "commit", "-q", "-m", "drop")
+    (repo / "deploy/factory-pub.pem").unlink()
+    assert "没有提交过的 deploy/factory-pub.pem" in _refused(world, capsys)
 
 
 def test_私钥跟仓库里的公钥不是一对_不发(world, capsys, tmp_path):
