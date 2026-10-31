@@ -116,10 +116,15 @@ class SpoolOps:
 
 
 class SimOps:
-    """测试、演示用:记下每次调用,回 ``ok``(``fail`` 里的动作回失败)。"""
+    """测试、演示用:记下每次调用,回 ``ok``(``fail`` 里的动作回失败)。
+
+    ``restarts``(W61):真执行器做完重启整机、换证书、重启代理以后,代理会被重启;模拟的默认也当会
+    (测试拿它当真的用)。演示站点的仿真机器人没人重启它:给 ``False``,这几样回 ``no_restart``,
+    代理做完就放开维护状态(不然一直「重启中」、什么任务都不接)。"""
 
     def __init__(self, *, fail: dict[str, str] | None = None,
-                 results: dict[str, dict[str, Any]] | None = None) -> None:
+                 results: dict[str, dict[str, Any]] | None = None, restarts: bool = True) -> None:
+        self.restarts = restarts
         self.calls: list[tuple[str, dict[str, Any]]] = []
         self.fail = dict(fail or {})
         self.results = dict(results or {})
@@ -141,8 +146,11 @@ class SimOps:
         self.calls.append((action, dict(args or {})))
         if action in self.fail:
             return {"action": action, "ok": False, "error": self.fail[action]}
-        return {"action": action, "ok": True, "error": "", "simulated": True,
-                **self.results.get(action, {})}
+        out = {"action": action, "ok": True, "error": "", "simulated": True,
+               **self.results.get(action, {})}
+        if not self.restarts and action in ("reboot", "cert_install", "restart"):
+            out["no_restart"] = True
+        return out
 
 
 def from_config(path: Path = CONFIG) -> SpoolOps | None:

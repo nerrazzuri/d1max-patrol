@@ -1724,8 +1724,9 @@ class AgentRuntime:
                 rid = failed.split()[1] if len(failed.split()) > 1 else ""
                 self._ops_watch = asyncio.get_running_loop().create_task(
                     self._watch_priv(rid, release_on_ok=not gone))
-            elif failed or not gone:
-                self._restarting = False
+            elif failed or not gone or (not isinstance(got, str) and isinstance(got[1], dict)
+                                         and got[1].get("no_restart")):
+                self._restarting = False              # W61:演示的模拟执行器不会真重启,做完就放开
         return got
 
     #: 结果未知的特权请求:多久查一次结果、查多久(测试改小)。

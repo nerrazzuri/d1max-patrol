@@ -196,8 +196,8 @@ class OpsDesk:
             if hold:
                 self.clear_hold()
             return f"priv_failed: {got.get('error') or '未知原因'}"[:300]
-        if hold and not self._gone(action, str(args.get("unit", ""))):
-            self.clear_hold()
+        if hold and (got.get("no_restart") or not self._gone(action, str(args.get("unit", "")))):
+            self.clear_hold()                         # W61:模拟执行器说了不会重启 —— 也不用等
         return got
 
     # ------------------------------------------------------------ 日志
@@ -327,14 +327,14 @@ class OpsDesk:
         if why:
             return f"busy: {why}"
         got = self._priv("restart", {"unit": unit}, timeout_s=200, hold=True)
-        return got if isinstance(got, str) else ("", {"unit": unit})
+        return got if isinstance(got, str) else ("", {"unit": unit, **_no_restart(got)})
 
     def _ops_reboot(self, p: dict[str, Any]) -> str | tuple[str, dict[str, Any]]:
         why = self.busy()
         if why:
             return f"busy: {why}"
         got = self._priv("reboot", {"delay_s": 5}, hold=True)
-        return got if isinstance(got, str) else ("", {"delay_s": 5})
+        return got if isinstance(got, str) else ("", {"delay_s": 5, **_no_restart(got)})
 
     def _ops_timesync(self, p: dict[str, Any]) -> str | tuple[str, dict[str, Any]]:
         got = self._priv("timesync")
@@ -450,7 +450,12 @@ class OpsDesk:
             return f"cert_untrusted: {out.strip()[-200:]}"
         (d / "registration.json").write_text(json.dumps(reg, ensure_ascii=False), encoding="utf-8")
         got = self._priv("cert_install", {}, timeout_s=60, hold=True)
-        return got if isinstance(got, str) else ("", {"installed": True})
+        return got if isinstance(got, str) else ("", {"installed": True, **_no_restart(got)})
+
+
+def _no_restart(got: dict[str, Any]) -> dict[str, Any]:
+    """执行器说了做完不会重启(只有演示用的模拟执行器这样说,W61):带到回执里,运行时据此放开。"""
+    return {"no_restart": True} if got.get("no_restart") else {}
 
 
 def _read_text(path: str) -> str:
