@@ -5,24 +5,29 @@
 - **每 ``period_s``(缺省 10 s)读一次**:
   - SoC 各温区:``/sys/class/thermal/thermal_zone*/{type,temp}``;
   - NVMe:hwmon 里名字叫 ``nvme`` 的那个(内核从盘的 SMART 读出来的综合温度);
-  - 风扇:测速线(FG)接 GPIO,数下降沿(``d1max_contract.gpio.EdgeCounter``),每转 ``pulses`` 个脉冲。
+  - 风扇:测速线(FG)接 GPIO,数下降沿(``d1max_contract.gpio.EdgeCounter``),每转 ``pulses`` 个脉冲;
+    或者(W56,V2 实际接法:主控板不接 GPIO)堵转报警线接继电器板输入 IN1–IN3,由上装每秒读一次
+    (``relay_inputs``),报警电平 ``alarm_active`` 可配(等风扇到货才知道高低)。
 - **写一行 CSV**(``<log_dir>/board-<UTC 日期>.csv``):样机热测试 C2 直接拿这份。
 - **分三级**(决策 74),升级当场升,降级要比门槛低 ``hyst_c``(缺省 3 °C)才降,免得在线上来回跳:
   - 警戒 ``warn``:SoC ≥ 80 °C、NVMe ≥ 65 °C,或者停了一只风扇 → 报警给管理员;
   - 降负载 ``shed``:SoC ≥ 85 °C、NVMe ≥ 70 °C,或者停了两只 → 停热像录像、暂停上传、不接新的建图;
   - 危急 ``critical``:SoC ≥ 95 °C、NVMe ≥ 75 °C → 结束这一趟、回原点,出 P1。
   降负载、回原点由运行时按 :attr:`BoardMonitor.level` 做,这里只管量和判。
-- 风扇**连着两拍**低于 ``min_rpm`` 才算停转(刚上电、读数抖)。
+- 风扇**连着两拍**低于 ``min_rpm``(或报警线连着两拍报警)才算停转(刚上电、读数抖)。
   测速线拿不到(引脚被占、没接)只报那只风扇故障,**不算停转、不降负载**:不知道不等于停了。
 - 级别变了报一次 ``board_thermal`` 事件,站点出告警。
   设备健康:``board`` 一条、每只风扇 ``fan:<名>`` 一条。
 
 配置 ``/etc/d1max/board.json``(代理 ``--board``;没有这个文件就不起,老狗、厂商 Orin 上都没有)::
 
-    {"fans": [{"name": "exhaust_l", "chip": "gpiochip3", "line": 5},
-              {"name": "exhaust_r", "chip": "gpiochip3", "line": 6},
-              {"name": "stir", "chip": "gpiochip4", "line": 1, "pulses": 2, "min_rpm": 300}],
+    {"fans": [{"name": "exhaust_l", "relay_input": 0, "alarm_active": "high"},
+              {"name": "exhaust_r", "relay_input": 1, "alarm_active": "high"},
+              {"name": "stir", "relay_input": 2, "alarm_active": "high"}],
      "log_dir": "/var/lib/d1max/board", "limits": {"warn_soc": 80}}
+
+测速线接 GPIO 的写法(``{"name": …, "chip": "gpiochip3", "line": 5, "pulses": 2, "min_rpm": 300}``)
+照旧认。
 """
 
 from __future__ import annotations
@@ -86,12 +91,20 @@ class Limits:
 @dataclass(frozen=True)
 class FanCfg:
     name: str
-    chip: str
-    line: int
+    chip: str = ""
+    line: int = -1
     #: 每转几个脉冲(常见 2)。
     pulses: int = 2
     #: 低于这个转速算停转。
     min_rpm: int = 300
+    #: W56:堵转报警线接在继电器板第几路输入(0 = IN1;-1 = 没接,用测速线)。
+    relay_input: int = -1
+    #: 报警时线上是高电平还是低电平。
+    alarm_active: str = "high"
+
+    @property
+    def via_relay(self) -> bool:
+        return self.relay_input >= 0
 
 
 @dataclass(frozen=True)
@@ -108,12 +121,28 @@ class BoardConfig:
             raise BoardConfigError("fans 要是列表")
         out: list[FanCfg] = []
         for f in raw:
-            if not isinstance(f, dict) or set(f) - {"name", "chip", "line", "pulses", "min_rpm"}:
+            if not isinstance(f, dict) or set(f) - {"name", "chip", "line", "pulses", "min_rpm",
+                                                    "relay_input", "alarm_active"}:
                 raise BoardConfigError(f"风扇写法错误:{f!r}")
             name, line = f.get("name"), f.get("line")
             pulses, min_rpm = f.get("pulses", 2), f.get("min_rpm", 300)
             if not isinstance(name, str) or not _NAME.fullmatch(name):
                 raise BoardConfigError(f"风扇名小写字母开头、最多 16 个字符:{name!r}")
+            if any(o.name == name for o in out):
+                raise BoardConfigError(f"风扇名重了:{name}")
+            if "relay_input" in f:                    # W56:报警线接继电器板输入
+                if "chip" in f or "line" in f:
+                    raise BoardConfigError(f"风扇 {name}:relay_input(报警线)和 chip/line(测速线)"
+                                           "二选一")
+                ri, act = f["relay_input"], f.get("alarm_active", "high")
+                if isinstance(ri, bool) or not isinstance(ri, int) or not 0 <= ri <= 15:
+                    raise BoardConfigError(f"风扇 {name} 的 relay_input 要是 0–15(0 = IN1)")
+                if act not in ("high", "low"):
+                    raise BoardConfigError(f"风扇 {name} 的 alarm_active 只认 high 或 low")
+                if any(o.via_relay and o.relay_input == ri for o in out):
+                    raise BoardConfigError(f"两只风扇接在同一路输入 IN{ri + 1}")
+                out.append(FanCfg(name, relay_input=ri, alarm_active=act))
+                continue
             try:
                 chip_path(f.get("chip", ""))
             except GpioError as exc:
@@ -122,8 +151,6 @@ class BoardConfig:
                                     ("min_rpm", min_rpm, 0, 20000)):
                 if isinstance(v, bool) or not isinstance(v, int) or not lo <= v <= hi:
                     raise BoardConfigError(f"风扇 {name} 的 {what} 要是 {lo}–{hi} 的整数")
-            if any(o.name == name for o in out):
-                raise BoardConfigError(f"风扇名重了:{name}")
             out.append(FanCfg(name, f["chip"], line, pulses, min_rpm))
         return tuple(out)
 
@@ -298,7 +325,8 @@ class BoardMonitor:
                  read_nvme: Callable[[], float | None] = read_nvme,
                  counter: Callable[[str, list[int]], Any] | None = None,
                  read_freqs: Callable[[], dict[str, int]] = read_freqs,
-                 read_cooling: Callable[[], dict[str, str]] = read_cooling) -> None:
+                 read_cooling: Callable[[], dict[str, str]] = read_cooling,
+                 relay_inputs: Callable[[], int | None] | None = None) -> None:
         self.cfg = cfg
         self.emit = emit
         self._mono, self._wall = mono, wall
@@ -313,6 +341,8 @@ class BoardMonitor:
             def counter(chip: str, lines: list[int]) -> Any:
                 return EdgeCounter(chip, lines)
         self._counter_of = counter
+        #: W56:继电器板四路输入的位图(上装每秒读一次;读不到 None)。没接上装继电器板是 None。
+        self._relay_inputs = relay_inputs
         self._fans = [_Fan(f) for f in cfg.fans]
         self._counters: dict[str, Any] = {}
         self._last = 0.0
@@ -330,7 +360,8 @@ class BoardMonitor:
     def start(self) -> None:
         by_chip: dict[str, list[int]] = {}
         for f in self.cfg.fans:
-            by_chip.setdefault(f.chip, []).append(f.line)
+            if not f.via_relay:
+                by_chip.setdefault(f.chip, []).append(f.line)
         for chip, lines in by_chip.items():
             try:
                 self._counters[chip] = self._counter_of(chip, lines)
@@ -352,6 +383,19 @@ class BoardMonitor:
     @property
     def rpm(self) -> dict[str, int | None]:
         return {f.cfg.name: f.rpm for f in self._fans}
+
+    def _relay_fan(self, fan: _Fan, bits: int | None) -> None:
+        """W56:报警线接继电器板输入。读不到只报这只风扇故障,不算停转(不知道不等于停了)。"""
+        where = f"IN{fan.cfg.relay_input + 1}"
+        if bits is None:
+            fan.error = (f"继电器板读不到(报警线接在 {where})" if self._relay_inputs is not None
+                         else f"上装继电器板未配置(报警线接在 {where})")
+            fan.slow = 0
+            return
+        fan.error = ""
+        level = bool(bits >> fan.cfg.relay_input & 1)
+        alarm = level if fan.cfg.alarm_active == "high" else not level
+        fan.slow = fan.slow + 1 if alarm else 0
 
     def stopped(self) -> list[str]:
         return [f.cfg.name for f in self._fans if not f.error and f.slow >= STOP_SAMPLES]
@@ -378,7 +422,11 @@ class BoardMonitor:
                 for fan in self._fans:
                     if fan.cfg.chip == chip:
                         fan.error = c.error
+        bits = self._relay_inputs() if self._relay_inputs is not None else None
         for fan in self._fans:
+            if fan.cfg.via_relay:
+                self._relay_fan(fan, bits)
+                continue
             if fan.error:
                 continue
             n = counts.get((fan.cfg.chip, fan.cfg.line), 0)
@@ -478,7 +526,10 @@ class BoardMonitor:
             if f.error:
                 out.append(device(fid, "error", f.error))
             elif f.cfg.name in stopped:
-                out.append(device(fid, "error", f"停转了({f.rpm} rpm)"))
+                out.append(device(fid, "error", f"堵转报警(IN{f.cfg.relay_input + 1})"
+                                  if f.cfg.via_relay else f"停转了({f.rpm} rpm)"))
+            elif f.cfg.via_relay:
+                out.append(device(fid, "online", "没有堵转报警"))
             else:
                 out.append(device(fid, "online", "尚未测" if f.rpm is None else f"{f.rpm} rpm"))
         return out

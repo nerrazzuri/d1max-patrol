@@ -8,6 +8,7 @@ import json
 import os
 import struct
 import threading
+import time
 import tty
 
 import pytest
@@ -37,6 +38,11 @@ class 假板子:
         #: 执行了、应答丢了(W21 外审):线圈照改,不回。
         self.drop_reply = False
         self.writes: list[tuple[int, bool]] = []
+        #: W56(中盛 4 入 4 出):输入寄存器 0x0032 是四路输入的位图;保持寄存器 0x0030 是断线自动全关的
+        #: 时间(×0.1 秒)。``reqs`` 记每一问的(单调钟, 功能码)。
+        self.inputs = 0
+        self.holding: dict[int, int] = {0x30: 50}
+        self.reqs: list[tuple[float, int]] = []
         self._stop = False
         self.t = threading.Thread(target=self._serve, daemon=True)
         self.t.start()
@@ -62,6 +68,7 @@ class 假板子:
                 if self.mute:
                     continue
                 fn = req[1]
+                self.reqs.append((time.monotonic(), fn))
                 if self.exception:
                     os.write(self.master, frame(bytes([self.slave, fn | 0x80, 0x02])))
                     continue
@@ -77,6 +84,15 @@ class 假板子:
                     bits = sum(1 << i for i in range(n) if self.coils[start + i])
                     nb = (n + 7) // 8
                     resp = frame(bytes([self.slave, 1, nb]) + bits.to_bytes(nb, "little"))
+                elif fn in (0x03, 0x04):
+                    _, _, start, n = struct.unpack(">BBHH", req[:6])
+                    regs = [(self.inputs if start + i == 0x32 else 0) if fn == 0x04
+                            else self.holding.get(start + i, 0) for i in range(n)]
+                    resp = frame(bytes([self.slave, fn, 2 * n]) + struct.pack(f">{n}H", *regs))
+                elif fn == 0x06:
+                    _, _, reg, val = struct.unpack(">BBHH", req[:6])
+                    self.holding[reg] = val
+                    resp = frame(req[:6])
                 else:
                     continue
                 if self.garble:

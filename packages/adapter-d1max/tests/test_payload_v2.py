@@ -194,17 +194,7 @@ async def test_V2继电器板自己掉电重启_代理发现了重新下发(板�
     await p.close()
 
 
-def test_V2配置样例_引脚没填就起不来_填了能读(tmp_path):
-    raw = json.loads((ROOT / "deploy" / "payload.v2.example.json").read_text())
-    tmp = tmp_path / "payload.json"
-    tmp.write_text(json.dumps(raw))
-    with pytest.raises(PayloadError, match="尚未填"):
-        PayloadConfig.load(tmp)
-    raw["audio"]["mute"]["line"] = 5
-    tmp.write_text(json.dumps(raw))
-    c = PayloadConfig.load(tmp)
-    assert c.coils == {"spot_l": 0, "spot_r": 1, "siren": 2, "beacon": 3}
-    assert c.siren_coil and c.siren_clip and c.mute_line == 5
+# 配置样例(W56 起不用 GPIO、直接能用)的测试在 test_payload_v2_hw.py
 
 
 async def test_外审R3_回读失败_确认值作废_报故障_通了按意图重新下发():

@@ -8,6 +8,15 @@ W46(上装 V2,硬件版本 D):压电警笛接继电器,放警报时喇叭跟着�
 用 GPIO 控 MUTE 脚(先放开、等 ``amp_lead_s`` 再出声,防爆音);看护循环每 ``READBACK_S`` 秒回读一次
 线圈,继电器板自己掉电重启(输出全关)以后重新下发。
 
+W56(硬件组 10-31 答复,`docs/上装V2-硬件对接说明.md` 第八节):主控板不接 GPIO。
+- 继电器板中盛 4 入 4 出:站号 1、38400 8N1。生产时把保持寄存器 0x0030 设成 50:断线 5 秒全关
+  (断电不丢,改完重新上电生效;``relay_setup``)。所以**至少每秒跟板子说一次话**:
+  看护循环每 ``HEARTBEAT_S`` 秒用 04 读一次输入寄存器 0x0032(``relay.inputs_reg``),
+  正好拿到四路输入(风扇堵转报警接 IN1–IN3,``input_bits``,boardhealth 判)。
+  通了以后读一次 0x0030,没设成 50 就在设备健康里说。
+- 功放没有 MUTE 线:不播报时用系统声音设置静音(``audio.mute.mixer``,``amixer sset … mute``),播报前
+  打开。静音开关失败不挡出声(只报功放故障):声音设置本来就是开着的话照样响。
+
 硬件还没选型,这一层只认通用的东西:
 - 继电器板:Modbus RTU,功能码 05 写单个线圈(``FF00`` 开、``0000`` 关)、01 读线圈。
   哪一路接什么、站号、波特率都在配置里(``PayloadConfig``)。
@@ -33,6 +42,7 @@ import select
 import shlex
 import struct
 import threading
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -45,7 +55,11 @@ RELAY_OUTPUTS = ("strobe", "siren", "spotlight")
 MAX_ON_S = 600.0                                     # 一次最长开 10 分钟,再长要再下命令
 #: GPIO 控 MUTE 的功放:放开以后等这么久再出声(硬件组建议约 200 ms,防爆音)。
 AMP_LEAD_S = 0.2
+#: 系统声音静音(W56):打开以后等一下再出声。
+MIXER_LEAD_S = 0.1
 AMP_LEAD_MAX_S = 2.0
+_MIXER_CARD = re.compile(r"[A-Za-z0-9_-]{1,32}")
+_MIXER_CONTROL = re.compile(r"[A-Za-z0-9][A-Za-z0-9 _,.-]{0,47}")
 _CLIP = re.compile(r"[A-Za-z0-9_.-]{1,64}")
 _LANG = re.compile(r"[A-Za-z]{2,3}(?:[-_][A-Za-z0-9]{2,8})?")
 MAX_TTS_CHARS = 300
@@ -159,6 +173,65 @@ class ModbusRelay:
         bits = int.from_bytes(got[3:3 + nbytes], "little")
         return [bool(bits >> i & 1) for i in range(count)]
 
+    def _read_regs(self, fn: int, start: int, count: int) -> list[int]:
+        body = struct.pack(">BBHH", self.slave, fn, start, count)
+        got = self._ask(body, 5 + 2 * count)
+        if got[2] != 2 * count:
+            raise PayloadError("继电器板读寄存器的字节数错误")
+        return list(struct.unpack(f">{count}H", got[3:3 + 2 * count]))
+
+    def read_input_registers(self, start: int, count: int = 1) -> list[int]:
+        """04 读输入寄存器(W56:中盛板 0x0032 是四路输入的位图,最低位 IN1)。"""
+        return self._read_regs(0x04, start, count)
+
+    def read_holding(self, start: int, count: int = 1) -> list[int]:
+        """03 读保持寄存器。"""
+        return self._read_regs(0x03, start, count)
+
+    def write_register(self, reg: int, value: int) -> None:
+        """06 写单个保持寄存器。"""
+        body = struct.pack(">BBHH", self.slave, 0x06, reg, value)
+        got = self._ask(body, 8)
+        if got[:6] != body:
+            raise PayloadError("继电器板的回显与请求不匹配")
+
+
+class AlsaMute:
+    """系统声音静音(W56:功放没有 MUTE 线)。跟 GPIO 的 MUTE 脚同一个样子:``set(True)`` 静音、
+    ``set(False)`` 打开。``amixer`` 失败抛 ``OSError``(带它说的原因)。"""
+
+    def __init__(self, card: str, control: str, *,
+                 run: Callable[..., Any] | None = None) -> None:
+        import subprocess
+        self.card, self.control = card, control
+        self._run = run or subprocess.run
+
+    def set(self, value: bool) -> None:
+        argv = ["amixer", "-q", "-c", self.card, "sset", self.control,
+                "mute" if value else "unmute"]
+        try:
+            r = self._run(argv, capture_output=True, text=True, timeout=3)
+        except Exception as exc:
+            raise OSError(f"amixer 无法执行:{exc}") from exc
+        if r.returncode != 0:
+            raise OSError((r.stderr or "").strip()[:200] or f"amixer 退出码 {r.returncode}")
+
+    def close(self) -> None:
+        pass
+
+
+def relay_setup(relay: ModbusRelay, *, watchdog_ds: int = 50, reg: int = 0x30) -> dict[str, Any]:
+    """生产时设一次(W56,硬件组 10-31):保持寄存器 0x0030 = 断线多久全关(×0.1 秒)。写完读回来核对。
+    这个值断电不丢,**重新上电才生效**。"""
+    if not 1 <= watchdog_ds <= 600:
+        raise PayloadError("断线全关时间要在 1–600(×0.1 秒)")
+    relay.write_register(reg, watchdog_ds)
+    got = relay.read_holding(reg, 1)[0]
+    if got != watchdog_ds:
+        raise PayloadError(f"写进去读回来不一样:写 {watchdog_ds},读到 {got}")
+    return {"watchdog_ds": got,
+            "note": f"已设置:断线 {got / 10:g} 秒后全部继电器断开。断电不丢,重新上电后生效。"}
+
 
 def termios_flush(fd: int) -> None:
     """发之前清掉上一次没读完的字节(不然下一问读到的是上一问的尾巴)。pty 也认。"""
@@ -248,12 +321,32 @@ class PayloadConfig:
     mute_chip: str = ""
     mute_line: int = -1
     mute_level: str = "high"
-    #: 放开功放以后等多久再出声(防爆音)。负数 = 缺省:GPIO 0.2 秒,继电器 0。
+    #: 放开功放以后等多久再出声(防爆音)。负数 = 缺省:GPIO 0.2 秒,系统静音 0.1 秒,继电器 0。
     amp_lead_s: float = -1.0
+    #: 功放没有 MUTE 线(W56):用系统声音设置静音 —— 哪块声卡、哪个音量控件(``amixer -c 卡 scontrols``
+    #: 查)。跟 ``mute_chip``、``amp_coil`` 三选一。
+    mixer_card: str = ""
+    mixer_control: str = ""
+    #: 继电器板的输入寄存器(04 读;-1 = 不读)。设了就每 ``HEARTBEAT_S`` 秒读一次(兼作心跳)。
+    inputs_reg: int = -1
+    #: 断线自动全关的保持寄存器和应设的值(×0.1 秒;-1 / 0 = 不查)。
+    watchdog_reg: int = -1
+    watchdog_ds: int = 0
+
+    @property
+    def has_mute(self) -> bool:
+        """功放常电、靠静音开关出声(GPIO MUTE 脚或系统声音)。"""
+        return bool(self.mute_chip or self.mixer_card)
+
+    @property
+    def heartbeat(self) -> bool:
+        """要定时跟板子说话(读输入或者有断线全关)。"""
+        return bool(self.coils) and (self.inputs_reg >= 0 or self.watchdog_reg >= 0)
 
     def __post_init__(self) -> None:
         if self.amp_lead_s < 0:
-            object.__setattr__(self, "amp_lead_s", AMP_LEAD_S if self.mute_chip else 0.0)
+            object.__setattr__(self, "amp_lead_s", AMP_LEAD_S if self.mute_chip
+                               else MIXER_LEAD_S if self.mixer_card else 0.0)
         # 老配置(W21):coils 的键就是那几路
         if not self.spotlight and "spotlight" in self.coils:
             object.__setattr__(self, "spotlight", {"both": ("spotlight",)})
@@ -299,9 +392,23 @@ class PayloadConfig:
             if self.amp_coil:
                 raise PayloadError("功放只能二选一:audio.amp(电源接继电器)"
                                    "或 audio.mute(GPIO 控 MUTE)")
+        if self.mixer_card or self.mixer_control:
+            if not _MIXER_CARD.fullmatch(self.mixer_card) \
+                    or not _MIXER_CONTROL.fullmatch(self.mixer_control):
+                raise PayloadError("audio.mute.mixer 要写 card(声卡名,字母数字 _ -)和 control"
+                                   "(音量控件名,amixer -c <卡> scontrols 查)")
+            if self.mute_chip or self.amp_coil:
+                raise PayloadError("功放只能二选一:audio.mute.mixer(系统静音)、audio.mute 的 GPIO、"
+                                   "audio.amp(电源接继电器)")
+        for what, v, lo, hi in (("relay.inputs_reg", self.inputs_reg, -1, 0xFFFF),
+                                ("relay.watchdog_reg", self.watchdog_reg, -1, 0xFFFF)):
+            if isinstance(v, bool) or not isinstance(v, int) or not lo <= v <= hi:
+                raise PayloadError(f"{what} 要是 0–65535 的寄存器地址(-1 = 不用)")
+        if self.watchdog_reg >= 0 and not 1 <= self.watchdog_ds <= 600:
+            raise PayloadError("relay.watchdog_ds 要在 1–600(×0.1 秒;硬件组定 50 = 5 秒)")
         if not 0 <= self.amp_lead_s <= AMP_LEAD_MAX_S:
             raise PayloadError(f"audio.amp_lead_s 要在 0–{AMP_LEAD_MAX_S:.0f} 秒")
-        if (self.siren_clip or self.amp_coil or self.mute_chip) and not self.audio_device:
+        if (self.siren_clip or self.amp_coil or self.has_mute) and not self.audio_device:
             raise PayloadError("喇叭警笛、功放都要先接喇叭(audio.device)")
         if not 0 <= self.amp_idle_s <= MAX_ON_S:
             raise PayloadError(f"audio.amp_idle_s 要在 0–{MAX_ON_S:.0f} 秒")
@@ -361,6 +468,13 @@ class PayloadConfig:
         if not isinstance(colors, dict):
             raise PayloadError("strobe.colors 要是对象")
         mute = audio.get("mute") or {}
+        mixer = mute.get("mixer") or {} if isinstance(mute, dict) else {}
+        if not isinstance(mixer, dict) or not all(isinstance(mixer.get(k, ""), str)
+                                                  for k in ("card", "control")):
+            raise PayloadError("audio.mute.mixer 要是 "
+                               "{\"card\": \"声卡名\", \"control\": \"控件名\"}")
+        if mixer and (mixer.get("card") == "" or mixer.get("control") == ""):
+            raise PayloadError("audio.mute.mixer 要写 card 和 control")
         if not isinstance(mute, dict):
             raise PayloadError("audio.mute 要是对象:{\"chip\": \"gpiochipN\", \"line\": N, "
                                "\"mute_level\": \"high\"}")
@@ -373,6 +487,10 @@ class PayloadConfig:
             idle = float(audio.get("amp_idle_s", cls.amp_idle_s))
             lead = float(audio.get("amp_lead_s", -1.0))
             baud, slave = int(relay.get("baud", cls.baud)), int(relay.get("slave", cls.slave))
+            regs = {k: relay.get(k, -1) for k in ("inputs_reg", "watchdog_reg")}
+            wds = relay.get("watchdog_ds", 0)
+            if any(isinstance(v, bool) or not isinstance(v, int) for v in (*regs.values(), wds)):
+                raise ValueError("relay.inputs_reg、watchdog_reg、watchdog_ds 要是整数")
         except (TypeError, ValueError) as exc:
             raise PayloadError(f"上装配置的数字错误: {exc}") from exc
         if not all(isinstance(siren.get(k, ""), str) for k in ("coil", "clip")) \
@@ -391,7 +509,10 @@ class PayloadConfig:
                    siren_coil=siren.get("coil", ""), siren_clip=siren.get("clip", ""),
                    amp_coil=audio.get("amp", ""), amp_idle_s=idle,
                    mute_chip=mute.get("chip", ""), mute_line=line,
-                   mute_level=mute.get("mute_level", "high"), amp_lead_s=lead)
+                   mute_level=mute.get("mute_level", "high"), amp_lead_s=lead,
+                   mixer_card=mixer.get("card", ""), mixer_control=mixer.get("control", ""),
+                   inputs_reg=regs["inputs_reg"], watchdog_reg=regs["watchdog_reg"],
+                   watchdog_ds=wds)
 
 
 # ------------------------------------------------------------ 上装
@@ -430,6 +551,10 @@ class Payload:
     BLINK_TICK_S = 0.1
     #: 多久回读一次线圈(W46:继电器板自己掉电重启以后输出全关,要发现、重新下发)。
     READBACK_S = 5.0
+    #: 多久跟板子说一次话(W56:板子 5 秒不通信就全关,硬件组要求至少每秒一次)。
+    HEARTBEAT_S = 0.8
+    #: 输入多久没读到就当不知道(风扇报警不能拿老数据判)。
+    INPUT_STALE_S = 3.0
     #: 警笛等说话说完时多久看一次。
     SIREN_POLL_S = 0.1
     #: 警笛放不出来时隔多久再试。
@@ -446,7 +571,9 @@ class Payload:
         #: 灯、警笛照样能用,喇叭出声时报「功放开不了」。
         self.amp_error = ""
         self.mute = mute
-        if mute is None and cfg.mute_chip:
+        if mute is None and cfg.mixer_card:
+            self.mute = AlsaMute(cfg.mixer_card, cfg.mixer_control)
+        if self.mute is None and cfg.mute_chip:
             from d1max_contract.gpio import OutputLine
             try:
                 self.mute = OutputLine(cfg.mute_chip, cfg.mute_line, value=self._muted_level,
@@ -454,6 +581,10 @@ class Payload:
             except OSError as exc:
                 self.amp_error = str(exc)
                 log.error("功放 MUTE 脚拿不到,喇叭出不了声: %s", exc)
+        #: 继电器板的输入位图、读到的时刻(单调钟);断线全关寄存器读到的值(None = 还没读到)。
+        self._inputs: int | None = None
+        self._inputs_at = 0.0
+        self.watchdog_seen: int | None = None
         #: GPIO 功放:放开着到单调钟几点(None = 要静音);现在是不是放开着。
         self._amp_until: float | None = None
         self._amp_open = False
@@ -545,8 +676,57 @@ class Payload:
         """起来:每个线圈当「状态不明、要关」(上次进程死掉时开着的,继电器板自己不会关),先试一遍,
         关不掉看护循环接着关。关不掉不挡代理起来,由 :meth:`problems` 报故障。"""
         self._ensure_guard()
+        if self.cfg.mixer_card and self.mute is not None:   # W56:起来先静音(上次可能停在打开)
+            try:
+                await self._mute_set(True)
+            except OSError as exc:
+                self.amp_error = str(exc)
+                log.error("系统声音静音不了(功放会一直有底噪): %s", exc)
         for c in self.cfg.coils:
             await self._reconcile(c)
+
+    def input_bits(self) -> int | None:
+        """继电器板四路输入的位图(最低位 IN1);``INPUT_STALE_S`` 秒内没读到就是 None(W56)。"""
+        if self._inputs is None:
+            return None
+        if time.monotonic() - self._inputs_at > self.INPUT_STALE_S:     # 板子监视在线程里问
+            return None
+        return self._inputs
+
+    def _comm_failed(self, exc: BaseException) -> None:
+        """跟板子说不上话:记故障,所有确认值作废(通了按意图重新下发);断线全关的值重新查。"""
+        if not self.relay_error:
+            log.warning("继电器板读不回来(掉电、断线?):%s;全部线圈按不明算,通了重新下发", exc)
+        self.relay_error = str(exc) or type(exc).__name__
+        for name in self.cfg.coils:
+            self._known[name] = None
+        self.watchdog_seen = None
+
+    async def _beat(self) -> None:
+        """心跳(W56):读一次输入寄存器(没配就读线圈);通了以后查一次断线全关设没设。"""
+        if self.relay is None:
+            return
+        cfg = self.cfg
+        async with self._lock():
+            try:
+                if cfg.inputs_reg >= 0:
+                    regs = await asyncio.to_thread(self.relay.read_input_registers,
+                                                   cfg.inputs_reg, 1)
+                    self._inputs = regs[0]
+                    self._inputs_at = time.monotonic()
+                else:
+                    lo = min(cfg.coils.values())
+                    await asyncio.to_thread(self.relay.read_coils, lo, 1)
+                if cfg.watchdog_reg >= 0 and self.watchdog_seen is None:
+                    self.watchdog_seen = (await asyncio.to_thread(
+                        self.relay.read_holding, cfg.watchdog_reg, 1))[0]
+                    if self.watchdog_seen != cfg.watchdog_ds:
+                        log.error("继电器板断线自动全关未设置:0x%04X = %s,应为 %s",
+                                  cfg.watchdog_reg, self.watchdog_seen, cfg.watchdog_ds)
+            except Exception as exc:                   # noqa: BLE001 - 记故障,确认值作废
+                self._comm_failed(exc)
+                return
+            self.relay_error = ""
 
     def _want(self, coil: str) -> bool:
         loop = asyncio.get_running_loop()
@@ -606,12 +786,7 @@ class Payload:
                 bits = await asyncio.to_thread(self.relay.read_coils, lo,
                                                max(nums.values()) - lo + 1)
             except Exception as exc:                   # noqa: BLE001 - 记故障,确认值作废
-                if not self.relay_error:
-                    log.warning("继电器板读不回来(掉电、断线?):%s;全部线圈按不明算,通了重新下发",
-                                exc)
-                self.relay_error = str(exc) or type(exc).__name__
-                for name in nums:
-                    self._known[name] = None
+                self._comm_failed(exc)
                 return
             self.relay_error = ""
             for name, n in nums.items():
@@ -624,13 +799,17 @@ class Payload:
     async def _watch(self) -> None:
         loop = asyncio.get_running_loop()
         next_read = loop.time() + self.READBACK_S
+        next_beat = loop.time()
         while not self._closed:
+            if self.cfg.heartbeat and loop.time() >= next_beat:
+                await self._beat()
+                next_beat = loop.time() + self.HEARTBEAT_S
             if loop.time() >= next_read:
                 await self._readback()
                 next_read = loop.time() + self.READBACK_S
             for c in self.cfg.coils:
                 await self._reconcile(c)
-            self._amp_idle_check()
+            await self._amp_idle_check()
             await asyncio.sleep(self.BLINK_TICK_S if self._blinking() else self.RETRY_S)
 
     def _pick(self, output: str, on: bool, side: str, color: str
@@ -782,6 +961,13 @@ class Payload:
             elif unknown or stuck:
                 names = "、".join(dict.fromkeys(self.cfg.role_of(c) for c in unknown + stuck))
                 out.append(device("relay", "error", f"{names}未确认或无法关闭,正在接着关"))
+            elif self.cfg.watchdog_reg >= 0 and self.watchdog_seen is not None \
+                    and self.watchdog_seen != self.cfg.watchdog_ds:
+                out.append(device(
+                    "relay", "degraded",
+                    f"断线自动全关未设置(0x{self.cfg.watchdog_reg:04X} = {self.watchdog_seen},"
+                    f"应为 {self.cfg.watchdog_ds}):代理断线时灯、警笛不会自动关。"
+                    "用 d1max payload relay-setup 设置后重新上电"))
             else:
                 out.append(device("relay", "online", f"{len(self.cfg.coils)} 个线圈都确认过"))
         if self.cfg.audio_device:
@@ -797,6 +983,11 @@ class Payload:
             where = f"{self.cfg.mute_chip}:{self.cfg.mute_line}"
             out.append(device("amp", "error", f"功放 MUTE 脚 {where} 无法写入:{self.amp_error}")
                        if self.amp_error else device("amp", "online", f"MUTE 脚 {where}"))
+        elif self.cfg.mixer_card:
+            where = f"{self.cfg.mixer_card} 的 {self.cfg.mixer_control}"
+            out.append(device("amp", "degraded",
+                              f"系统声音 {where} 无法静音或打开:{self.amp_error}")
+                       if self.amp_error else device("amp", "online", f"系统静音({where})"))
         if self.cfg.siren_clip and not self.cfg.siren_coil:
             if not self._siren_wav().is_file():
                 out.append(device("siren", "error", f"没有警笛声文件 {self._siren_wav()}"))
@@ -815,7 +1006,7 @@ class Payload:
     async def _amp_on(self, until: float) -> None:
         """出声前放开功放,至少放开到 ``until`` + 闲置时间;刚放开的等 ``amp_lead_s`` 再出声。
         放不开就报错(不出声的喇叭当没放)。"""
-        if self.cfg.mute_chip:
+        if self.cfg.has_mute:
             await self._amp_unmute(until)
             return
         a = self.cfg.amp_coil
@@ -843,25 +1034,38 @@ class Payload:
         try:
             if self.mute is None:
                 raise OSError(self.amp_error or "未拿到这根线")
-            self.mute.set(not self._muted_level)
+            await self._mute_set(not self._muted_level)
         except Exception as exc:
-            self._amp_until = None
             self.amp_error = str(exc)
+            if self.cfg.mixer_card:
+                # W56 系统静音:打不开不挡出声(声音设置本来开着就照样响),只报功放故障
+                log.warning("系统声音打不开,照样放: %s", exc)
+                self._amp_open = True
+                return
+            self._amp_until = None
             raise PayloadError(f"功放无法开启(MUTE 脚): {exc}") from exc
         self.amp_error = ""
         self._amp_open = True
         if self.cfg.amp_lead_s:
             await asyncio.sleep(self.cfg.amp_lead_s)
 
-    def _amp_idle_check(self) -> None:
-        """看护循环每拍:GPIO 功放闲够了就静音(静音写不进去下一拍再来)。"""
+    async def _mute_set(self, value: bool) -> None:
+        """写静音开关:系统静音要起 amixer,放到线程里(不卡看护循环、心跳);GPIO 当场写。"""
+        assert self.mute is not None
+        if self.cfg.mixer_card:
+            await asyncio.to_thread(self.mute.set, value)
+        else:
+            self.mute.set(value)
+
+    async def _amp_idle_check(self) -> None:
+        """看护循环每拍:常电功放闲够了就静音(静音写不进去下一拍再来)。"""
         if not self._amp_open or self.mute is None:
             return
         until = self._amp_until
         if until is not None and asyncio.get_running_loop().time() < until:
             return
         try:
-            self.mute.set(self._muted_level)
+            await self._mute_set(self._muted_level)
         except Exception as exc:                       # noqa: BLE001 - 下一拍再静音
             self.amp_error = str(exc)
             log.warning("功放静音不了(接着试): %s", exc)
@@ -875,7 +1079,7 @@ class Payload:
         me = asyncio.current_task()
         busy = any(t is not None and not t.done() and t is not me
                    for t in (self._sound, self._siren))
-        if self.cfg.mute_chip:
+        if self.cfg.has_mute:
             if not busy and self._amp_until is not None:
                 self._amp_until = min(self._amp_until,
                                       asyncio.get_running_loop().time() + self.cfg.amp_idle_s)
