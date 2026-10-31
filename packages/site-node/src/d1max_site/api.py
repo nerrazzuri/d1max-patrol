@@ -2738,7 +2738,8 @@ class _Handler(TlsHandlerMixin):
         def known(rid: str) -> bool:
             rec = reg.get(rid) if SAFE_ID.match(rid) else None
             return rec is not None and not getattr(rec, "revoked", False)
-        w = MapWizard(settings, cat, self.site.dispatcher.db, now_ms=self.site._now, known=known)
+        w = MapWizard(settings, cat, self.site.dispatcher.db, now_ms=self.site._now, known=known,
+                      zones=self.site.zones)
         if method == "GET":
             self._need(user, VIEW)
             return self._send_json(200, {"wizard": w.view(), "maps": len(cat.list())})

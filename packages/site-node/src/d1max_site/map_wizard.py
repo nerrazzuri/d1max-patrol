@@ -16,6 +16,8 @@ from __future__ import annotations
 import json
 import math
 import re
+import secrets
+import threading
 from collections.abc import Callable
 from datetime import datetime
 from typing import Any
@@ -28,6 +30,9 @@ COMING_SOON = ("outdoor", "glass")
 DRIVES = ("remote", "phone")
 DEFAULT_MAP = "main"
 MAX_LABEL = 40
+
+#: 一个站点一份向导:查、分版本、存要一起做(接口每个请求新建一个 MapWizard,锁放在模块上)。
+_LOCK = threading.Lock()
 
 #: 结论的阈值(设计 D6)。
 MAX_SHIFT_M = 0.3
@@ -45,7 +50,14 @@ class WizardError(ValueError):
 
 
 def _num(v: Any) -> float | None:
-    return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else None
+    """有限、不为负的数(米、个);别的(超大整数、inf、nan、负数、布尔、字符串)当没有。"""
+    if not isinstance(v, (int, float)) or isinstance(v, bool):
+        return None
+    try:
+        f = float(v)
+    except OverflowError:
+        return None
+    return f if math.isfinite(f) and f >= 0 else None
 
 
 def _path_len(path: Any) -> float | None:
@@ -54,13 +66,16 @@ def _path_len(path: Any) -> float | None:
     total = 0.0
     prev = None
     for p in path:
-        if not (isinstance(p, list) and len(p) >= 2 and _num(p[0]) is not None
-                and _num(p[1]) is not None):
+        if not (isinstance(p, list) and len(p) >= 2 and all(
+                isinstance(c, (int, float)) and not isinstance(c, bool) for c in p[:2])):
             return None
         if prev is not None:
-            total += math.hypot(p[0] - prev[0], p[1] - prev[1])
+            try:
+                total += math.hypot(float(p[0]) - float(prev[0]), float(p[1]) - float(prev[1]))
+            except OverflowError:
+                return None
         prev = p
-    return total
+    return total if math.isfinite(total) else None
 
 
 def quality(build: Any, coverage_path: Any) -> dict[str, Any]:
@@ -107,7 +122,10 @@ def read_quality(cat: Any, map_id: str, version: str) -> dict[str, Any]:
         except (OSError, ValueError):
             return None
     cov = load("coverage.json")
-    return quality(load("build.json"), cov.get("path") if isinstance(cov, dict) else None)
+    try:
+        return quality(load("build.json"), cov.get("path") if isinstance(cov, dict) else None)
+    except Exception:  # noqa: BLE001 —— 一版的记录坏了不能拖垮总览、向导:说不清
+        return quality(None, None)
 
 
 # ------------------------------------------------------------ 版本号
@@ -134,8 +152,10 @@ class MapWizard:
     读事件表(这一版没建成的原因)。``known(robot_id)``:站点认不认识这台机器人。"""
 
     def __init__(self, settings: Any, cat: Any, db: Any, *, now_ms: Callable[[], int],
-                 known: Callable[[str], bool], day: Callable[[], str] | None = None) -> None:
+                 known: Callable[[str], bool], day: Callable[[], str] | None = None,
+                 zones: Any = None) -> None:
         self.settings = settings
+        self.zones = zones
         self.cat = cat
         self.db = db
         self.now_ms = now_ms
@@ -193,15 +213,23 @@ class MapWizard:
         return self.view() or st
 
     def apply(self, d: Any, *, by: str) -> dict[str, Any]:
-        """``{action: start|step|rewalk|finish|abandon, …}``;回改完的状态(放弃回 ``{}``)。"""
+        """``{action: start|step|rewalk|finish|abandon, wizard_id, …}``;回改完的状态(放弃回 {})。
+        开始以后的每一步都要带这份向导的 ``wizard_id``:被别人换掉的旧页面改不了新的。"""
         if not isinstance(d, dict):
             raise WizardError(400, "要 JSON 对象")
+        with _LOCK:
+            return self._apply(d, by)
+
+    def _apply(self, d: dict[str, Any], by: str) -> dict[str, Any]:
         action = d.get("action")
         if action == "start":
             return self._start(d, by)
         st = self._raw()
         if st is None:
             raise WizardError(409, "现在没有在做的建图向导", "no_wizard")
+        if d.get("wizard_id") != st.get("id"):
+            raise WizardError(409, f"这份建图向导已经换成 {st.get('by', '?')} 开的了,"
+                                   "重新进一次", "stale_wizard")
         if action == "abandon":
             self.settings.put(KEY, None)
             return {}
@@ -213,8 +241,14 @@ class MapWizard:
             st["started_ms"] = self.now_ms()
             return self._save(st)
         if action == "finish":
-            if not self._built(st["map_id"], st["version"]):
+            m, v, r = st["map_id"], st["version"], st["robot_id"]
+            if not self._built(m, v):
                 raise WizardError(409, "这一版还没建好", "not_built")
+            if self.zones is not None and not self.zones.confirmed_current(m, v):
+                raise WizardError(409, f"{m}:{v} 的禁行区还没确认", "zones_unconfirmed")
+            if not self.db.query("SELECT 1 FROM homes WHERE robot_id=? AND map_id=? AND "
+                                 "map_version=?", (r, m, v)):
+                raise WizardError(409, f"{r} 在 {m}:{v} 上还没标原点", "no_home")
             self.settings.put(KEY, None)
             return st | {"step": "done"}
         if action != "step":
@@ -259,7 +293,8 @@ class MapWizard:
                 m["map_id"] == map_id for m in self.cat.list()):
             raise WizardError(400, "没有这张图(新图不用给地图号)")
         now = self.now_ms()
-        st = {"step": "prepare", "robot_id": robot, "site_type": site_type, "drive": drive,
+        st = {"id": secrets.token_hex(8), "step": "prepare", "robot_id": robot,
+              "site_type": site_type, "drive": drive,
               "map_id": map_id, "version": self._alloc(map_id, []), "tried": [],
               "label": label.strip(), "by": by, "started_ms": now}
         return self._save(st)
