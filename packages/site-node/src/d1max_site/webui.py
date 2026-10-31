@@ -35,7 +35,8 @@ SECURITY_HEADERS = (
 
 _TYPES = {".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8",
           ".html": "text/html; charset=utf-8", ".svg": "image/svg+xml", ".woff2": "font/woff2",
-          ".png": "image/png", ".json": "application/json; charset=utf-8"}
+          ".png": "image/png", ".json": "application/json; charset=utf-8",
+          ".txt": "text/plain; charset=utf-8"}         # W58:第三方软件声明、字体许可证
 
 
 def session_cookie(token: str) -> str:
