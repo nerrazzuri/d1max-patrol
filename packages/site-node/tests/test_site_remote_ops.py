@@ -220,8 +220,25 @@ def test_工程师VPN_要到期时间_到点收回_地址能再分_只放行到2
     assert "172.29.70.200" not in v.server_conf()
     again = v.add("engineer", "eng-y", expires_ms=2000)
     assert again["address"] == "172.29.70.200", "到点的地址再分"
-    f = v.write_server_conf()
+    gen = v.write_apply()
+    f = v.root / "apply.json"
     assert oct(f.stat().st_mode & 0o777) == "0o600"
+    assert v.pending, "改过、还没装上"
+    v.applied(gen)
+    assert not v.pending
+
+
+def test_外审W55_1_VPN装不成一直待生效_期间又改过的不清(tmp_path):
+    v = VpnState(tmp_path / "vpn")
+    v.init(endpoint="vpn.example.com")
+    gen = v.write_apply()
+    v.add("engineer", "eng-x", expires_ms=1000)          # 装的同时又改了
+    v.applied(gen)
+    assert v.pending, "装上的是老的那一份:还得再装"
+    v.applied(v.write_apply())
+    assert not v.pending
+    v.expire(1000)
+    assert v.pending, "收回了工程师:要重装"
 
 
 class _Disp:
@@ -363,3 +380,70 @@ def test_自动续签早于体检告警_剩40天就续(tmp_path):
                     now_ms=lambda: now)
     assert r.due() == ["A"]
     db.close()
+
+
+
+def test_外审W55_1_续签_机器人拒绝换_旧证书照常认_挂着的删掉_隔天再试(tmp_path):
+    now = 1_800_000_000_000
+    ca, reg, db = _ca_reg(tmp_path, 10 * 86_400_000, now)
+    old = reg.get("A")
+    d, al = _Disp(tmp_path), _Alerts()
+    d.install = {"result": "rejected", "reason": "cert_mismatch: x"}
+    r = CertRenewer(dispatcher=d, registry=reg, ca=ca, alerts=al, now_ms=lambda: now)
+    with pytest.raises(Exception, match="未换上"):
+        asyncio.run(r.renew("A", by="site:cert"))
+    assert reg.get("A").fingerprint == old.fingerprint and reg.get("A").expires_at == old.expires_at
+    assert reg.pending("A") is None
+    assert r.due() == ["A"], "登记表没动:还该续"
+    db.close()
+
+
+def test_外审W55_1_续签_回执丢了_新证书挂着_机器人拿它连上来就转正(tmp_path):
+    from d1max_site.intake import IntakeServer
+    now = 1_800_000_000_000
+    ca, reg, db = _ca_reg(tmp_path, 10 * 86_400_000, now)
+    old = reg.get("A").fingerprint
+    d, al = _Disp(tmp_path), _Alerts()
+
+    async def lost(rid, kind, payload, *, issued_by, _orig=d.map_command):
+        if kind == "cert_install":
+            d.cert = payload["cert"]
+            raise TimeoutError("no ack")
+        return await _orig(rid, kind, payload, issued_by=issued_by)
+    d.map_command = lost
+    r = CertRenewer(dispatcher=d, registry=reg, ca=ca, alerts=al, now_ms=lambda: now)
+    with pytest.raises(Exception, match="未回执"):
+        asyncio.run(r.renew("A", by="site:cert"))
+    assert reg.get("A").fingerprint == old, "没确认:登记表不动,旧证书照常认"
+    assert reg.pending("A") is not None and r.due() == [], "挂着一张:别再签一张顶掉它"
+    der = subprocess.run(["openssl", "x509", "-outform", "DER"], input=d.cert.encode(),
+                         capture_output=True, check=True).stdout
+    it = IntakeServer.__new__(IntakeServer)
+    it.db, it._now = db, lambda: now
+    assert it.robot_for(der) == "A", "拿新证书连上来:认,并转正"
+    assert reg.get("A").fingerprint != old and reg.pending("A") is None
+    db.close()
+
+
+def test_外审W55_1_续签_机器人正忙_不告警_一小时后再试(tmp_path):
+    from d1max_site import remote_ops
+    now = [1_800_000_000_000]
+    ca, reg, db = _ca_reg(tmp_path, 10 * 86_400_000, now[0])
+    d, al = _Disp(tmp_path), _Alerts()
+    d.install = {"result": "rejected", "reason": "busy: 正在执行任务 t1"}
+    r = CertRenewer(dispatcher=d, registry=reg, ca=ca, alerts=al, now_ms=lambda: now[0])
+
+    async def go():
+        r.tick()
+        await asyncio.sleep(0.5)
+    asyncio.run(go())
+    assert al.raised == [] and r._wait["A"] == remote_ops.BUSY_RETRY_MS
+    assert reg.pending("A") is None
+    db.close()
+
+
+def test_外审W55_1_钟不准的时候_对时和读诊断放行():
+    from d1max_site.temporal import READ, SAFE, temporal_class
+    assert temporal_class("ops_timesync") == SAFE
+    assert temporal_class("ops_diag") == READ and temporal_class("ops_journal") == READ
+    assert temporal_class("ops_reboot") not in (SAFE, READ)

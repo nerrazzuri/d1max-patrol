@@ -24,6 +24,8 @@ PrivateTmp=yes
 ReadWritePaths=/var/lib/d1max-site
 # W00c5d:站点备份(site.json 的 backup_dir)。外接盘挂到这里;没挂也能起(前面的 - )。
 ReadWritePaths=-/var/lib/d1max-site-backup
+# W55(外审 W55-1 第 7 条):给特权执行器递请求(只开请求目录;结果目录照旧只读)
+ReadWritePaths=-/var/lib/d1max-ops/req
 Restart=always
 RestartSec=5
 

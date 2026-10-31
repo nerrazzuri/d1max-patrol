@@ -21,6 +21,8 @@ CERT_DAYS = 365
 DAY_MS = 86_400_000
 #: 同一台失败了,隔多久再试。
 RETRY_MS = DAY_MS
+#: 机器人正忙(巡逻、遥控、建图)没换:隔多久再试(外审 W55-1 第 16 条:换证书要重启代理,只在空闲时换)。
+BUSY_RETRY_MS = 3_600_000
 #: 多久扫一次。
 SCAN_MS = 3_600_000
 
@@ -29,12 +31,20 @@ class RenewError(Exception):
     pass
 
 
+class RenewBusy(RenewError):
+    """机器人正忙,这次没换(不算失败、不告警,一小时后再试)。"""
+
+
 class CertRenewer:
     """证书自动续签:机器人生成新私钥和申请 → 站点签 → 机器人核对后换上(代理随后重启)。
 
     在线、报了 ``cert_csr``、证书 ``RENEW_WITHIN_DAYS`` 天内到期的才续;
     失败报 P2「证书自动续签失败」,
-    隔一天再试。人也可以在网页上点「立即续签」(:meth:`renew`)。"""
+    隔一天再试;机器人正忙一小时后再试。人也可以在网页上点「立即续签」(:meth:`renew`)。
+
+    **新证书先挂着,不马上换登记表**(外审 W55-1 第 6 条):签好的记进 ``cert_pending``,旧证书照常认;
+    机器人回执说换上了才换登记表;回执丢了的话,机器人拿新证书连上接收口时由 intake 换。机器人明确拒绝
+    就删掉挂着的那张。"""
 
     def __init__(self, *, dispatcher: Any, registry: Any, ca: Any, alerts: Any | None,
                  now_ms: Callable[[], int]) -> None:
@@ -45,6 +55,7 @@ class CertRenewer:
         self._now = now_ms
         self._scanned = 0
         self._tried: dict[str, int] = {}
+        self._wait: dict[str, int] = {}
         self._inflight: set[str] = set()
 
     def due(self) -> list[str]:
@@ -57,6 +68,9 @@ class CertRenewer:
             row = self.registry.get(rid)
             if row is None or row.revoked or row.expires_at - now > RENEW_WITHIN_DAYS * DAY_MS:
                 continue
+            pend = self.registry.pending(rid)
+            if pend is not None and now - pend["created_ms"] < RETRY_MS:
+                continue                # 挂着一张没回执的:等机器人拿它连上来,别再签一张顶掉它
             out.append(rid)
         return out
 
@@ -67,7 +81,8 @@ class CertRenewer:
             return
         self._scanned = now
         for rid in self.due():
-            if rid in self._inflight or now - self._tried.get(rid, -RETRY_MS) < RETRY_MS:
+            wait = self._wait.get(rid, RETRY_MS)
+            if rid in self._inflight or now - self._tried.get(rid, -wait) < wait:
                 continue
             self._tried[rid] = now
             asyncio.ensure_future(self._auto(rid))
@@ -75,7 +90,12 @@ class CertRenewer:
     async def _auto(self, rid: str) -> None:
         try:
             await self.renew(rid, by="site:cert")
+            self._wait.pop(rid, None)
+        except RenewBusy as exc:
+            self._wait[rid] = BUSY_RETRY_MS
+            log.info("%s 证书续签等空闲:%s", rid, exc)
         except Exception as exc:  # noqa: BLE001 —— 后台任务:记下、告警,不往外抛
+            self._wait[rid] = RETRY_MS
             log.warning("%s 证书自动续签失败:%s", rid, exc)
 
     async def renew(self, rid: str, *, by: str) -> dict[str, Any]:
@@ -84,6 +104,8 @@ class CertRenewer:
         self._inflight.add(rid)
         try:
             out = await self._renew(rid, by)
+        except RenewBusy:
+            raise
         except Exception as exc:
             self._alert(rid, str(exc))
             raise
@@ -102,13 +124,22 @@ class CertRenewer:
         now = self._now()
         cert, reg, fp = await asyncio.to_thread(self.ca.sign_robot_csr, rid, csr, days=CERT_DAYS,
                                                 now_ms=now)
-        self.registry.renew(rid, fingerprint=fp, issued_at=reg.issued_at,
-                            expires_at=reg.expires_at)
-        got = await self.dispatcher.map_command(
-            rid, "cert_install", {"cert": cert, "registration": reg.to_wire()}, issued_by=by)
+        self.registry.stage(rid, fingerprint=fp, issued_at=reg.issued_at,
+                            expires_at=reg.expires_at, now_ms=now)
+        try:
+            got = await self.dispatcher.map_command(
+                rid, "cert_install", {"cert": cert, "registration": reg.to_wire()}, issued_by=by)
+        except Exception as exc:
+            # 没回执:可能已经换上了(回执丢了)。新证书挂着,机器人拿它连上来时自动生效
+            raise RenewError(f"机器人未回执(可能已换上,连上来时自动生效):{exc}") from exc
         ack = got.get("ack", {})
         if ack.get("result") != "accepted":
-            raise RenewError(f"机器人未换上新证书:{ack.get('reason') or ack.get('result')}")
+            self.registry.drop_pending(rid, fp)
+            reason = str(ack.get("reason") or ack.get("result"))
+            if reason.startswith("busy"):
+                raise RenewBusy(f"机器人正忙,未换证书:{reason}")
+            raise RenewError(f"机器人未换上新证书:{reason}")
+        self.registry.promote(rid, fp)
         log.info("%s 证书已续签,到期 %s", rid, reg.expires_at)
         return {"robot_id": rid, "expires_at": reg.expires_at, "fingerprint": fp}
 

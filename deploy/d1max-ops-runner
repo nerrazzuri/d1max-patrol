@@ -16,6 +16,15 @@
 - 请求文件按 ``O_NOFOLLOW`` 打开、属主必须是请求方、必须是普通文件、不超过 64 KB。
 - 从机器人可写目录里拿来要装进系统的东西(证书、服务单元、站点包)先读进内存 / 拷进 root 目录,再核,再装
   (核完再读一遍会被中途换掉)。服务单元、站点包要过发行签名。
+- 外审 W55-1 之后:
+  - **服务单元**:读一遍包,算指纹的同一份字节就是要装的(不先读单元、后算指纹)。
+  - **站点包**:解进 root 目录以后,不在签名范围里的(``build/``、``*.egg-info`` 这些)先删掉再验签、
+    再装 —— 装的东西全在签名里。
+  - **VPN**:站点只给结构化的数据(``vpn/apply.json``:密钥、地址、端口),逐项核;``wg-quick`` 的配置
+    和防火墙规则由这里自己生成,请求方给不了命令钩子。
+  - **站点目录里的文件**(库、VPN 状态)是站点账号能换成符号链接的:一律相对目录描述符、
+    ``O_NOFOLLOW`` 打开,写回用临时文件 + 原子替换,不沿着链接写、不沿着链接改属主。
+  - root 跑、代码在机器人可写目录里的服务(``d1max-bind``)不在重启白名单里。
 
 配置 ``/etc/d1max-ops.json``(装机脚本写):``{"profile": "robot"|"site", "requester": <用户>,
 "spool": <目录>, ...}``。
@@ -43,8 +52,9 @@ from typing import Any, Callable
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 #: 我们自己的服务(机器人上)。重启、读日志、装单元只在这里挑。
+#: 外审 W55-1:``d1max-bind`` 以 root 跑、代码在机器人可写的版本目录里 —— 不让代理借执行器重启它。
 ROBOT_UNITS = ("d1max-localizer", "d1max-obstacles", "d1max-persons", "d1max-lidar-merge",
-               "d1max-nav2", "d1max-sidecar", "d1max-zenohd", "d1max-bind", "d1max-agent")
+               "d1max-nav2", "d1max-sidecar", "d1max-zenohd", "d1max-agent")
 SITE_UNITS = ("d1max-site", "d1max-mosquitto")
 ID_RE = re.compile(r"^[0-9a-f]{8,32}$")
 NAME_RE = re.compile(r"^\d{4}-\d{2}-\d{2}-[0-9a-f]{6,12}$")      # 版本目录名(同 engine/release)
@@ -97,7 +107,10 @@ def read_nofollow(path: Path, *, limit: int, owner: int | None = None) -> bytes:
         if st.st_size > limit:
             raise OpError(f"{path.name} 过大")
         with os.fdopen(fd, "rb", closefd=False) as f:
-            return f.read(limit + 1)
+            data = f.read()
+        if len(data) > limit:
+            raise OpError(f"{path.name} 过大")
+        return data
     finally:
         os.close(fd)
 
@@ -120,27 +133,192 @@ def write_atomic(path: Path, data: bytes, *, mode: int, uid: int = 0, gid: int =
 
 
 def tree_ok(root: Path, manifest: dict[str, Any], pubkey: Path,
-            override: dict[str, bytes] | None = None) -> None:
-    """``root`` 这个包:签名对、内容指纹对。``override`` 里的文件按给的内容算(已经读进内存、要装的那几个)。"""
+            capture: frozenset[str] = frozenset()) -> dict[str, bytes]:
+    """``root`` 这个包:签名对、内容指纹对。**一遍读完**:每个文件只读一次(``O_NOFOLLOW``),算指纹用的
+    就是这份字节;``capture`` 里列的文件把这份字节交回去 —— 装的跟验的是同一份(外审 W55-1 第 5 条:先读
+    单元、后算指纹的话,中间放进再删掉一个文件就能混进没签名的单元)。"""
     from d1max_contract import relsign
     try:
         relsign.verify(manifest, pubkey)
     except relsign.SignError as exc:
         raise OpError(f"发行签名不通过:{exc}") from exc
-    override = override or {}
     digest = hashlib.sha256()
+    got: dict[str, bytes] = {}
     files = sorted((p.relative_to(root).as_posix(), p) for p in root.rglob("*")
                    if p.is_file() and not p.is_symlink())
     for rel, p in files:
         if rel == "release.json" or not packed(rel):
             continue
-        data = override[rel] if rel in override else p.read_bytes()
+        data = read_nofollow(p, limit=1 << 30)
+        if rel in capture:
+            got[rel] = data
         digest.update(rel.encode())
         digest.update(b"\0")
         digest.update(hashlib.sha256(data).hexdigest().encode())
         digest.update(b"\0")
     if digest.hexdigest() != manifest.get("content_sha256"):
         raise OpError("包的内容与签名的清单不匹配")
+    return got
+
+
+def prune_unsigned(root: Path) -> list[str]:
+    """删掉不在签名范围里的(``packed`` 不收的、符号链接、除普通文件和目录以外的):root 装的时候
+    只剩签过名的东西(外审 W55-1 第 3 条:``build/lib/*.pth`` 不算指纹却会被 setuptools 打进 wheel)。"""
+    gone = []
+    for dirpath, dirnames, filenames in os.walk(root, topdown=True, followlinks=False):
+        here = Path(dirpath)
+        for name in list(dirnames) + filenames:
+            p = here / name
+            rel = p.relative_to(root).as_posix()
+            st = os.lstat(p)
+            if stat.S_ISDIR(st.st_mode) and not stat.S_ISLNK(st.st_mode):
+                if not packed(rel) and rel != "release.json":
+                    shutil.rmtree(p)
+                    gone.append(rel + "/")
+                    dirnames.remove(name)
+                continue
+            if not stat.S_ISREG(st.st_mode) or (rel != "release.json" and not packed(rel)):
+                p.unlink()
+                gone.append(rel)
+    return gone
+
+
+def _dir_fd(path: Path) -> int:
+    try:
+        return os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    except OSError as exc:
+        raise OpError(f"打不开目录 {path}:{exc}") from exc
+
+
+def read_in_dir(dfd: int, name: str, *, limit: int) -> bytes | None:
+    """目录描述符底下的一个普通文件(不跟链接);没有 → None。"""
+    try:
+        fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=dfd)
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        raise OpError(f"打不开 {name}:{exc}") from exc
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode) or st.st_size > limit:
+            raise OpError(f"{name} 不是普通文件或过大")
+        with os.fdopen(fd, "rb", closefd=False) as f:
+            data = f.read()
+        if len(data) > limit:
+            raise OpError(f"{name} 过大")
+        return data
+    finally:
+        os.close(fd)
+
+
+def write_in_dir(dfd: int, name: str, data: bytes, *, mode: int, uid: int, gid: int) -> None:
+    """写进目录描述符底下:临时文件(O_EXCL、不跟链接)→ 改属主(fchown)→ 原子替换。原来那个是链接
+    也只是换掉链接本身,不写到链接指的地方。"""
+    tmp = f".{name}.d1max-{os.getpid()}"
+    try:
+        os.unlink(tmp, dir_fd=dfd)
+    except FileNotFoundError:
+        pass
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, mode, dir_fd=dfd)
+    try:
+        with os.fdopen(fd, "wb", closefd=False) as f:
+            f.write(data)
+            f.flush()
+            os.fsync(fd)
+        if os.geteuid() == 0:
+            os.fchown(fd, uid, gid)
+        os.fchmod(fd, mode)
+    except BaseException:
+        os.close(fd)
+        os.unlink(tmp, dir_fd=dfd)
+        raise
+    os.close(fd)
+    os.replace(tmp, name, src_dir_fd=dfd, dst_dir_fd=dfd)
+
+
+# ---------------------------------------------------------------- VPN(外审 W55-1 第 1、9 条)
+
+VPN_NET = "172.29.70"                   # 同 d1max_site.vpn.SUBNET(测试核两边一致)
+VPN_CHAIN = "D1MAX-VPN"
+VPN_KINDS = ("robot", "phone", "engineer")
+_B64KEY = re.compile(r"^[A-Za-z0-9+/]{43}=$")
+_PEER_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
+
+
+def _host(addr: Any, *, prefix: int) -> int:
+    if not isinstance(addr, str) or not addr.startswith(VPN_NET + ".") \
+            or not addr.endswith(f"/{prefix}"):
+        raise OpError(f"VPN 地址错误:{addr!r}")
+    h = addr[len(VPN_NET) + 1:-len(f"/{prefix}")]
+    if not h.isdigit() or not 1 <= int(h) <= 254 or str(int(h)) != h:
+        raise OpError(f"VPN 地址错误:{addr!r}")
+    return int(h)
+
+
+def _key(v: Any, what: str) -> str:
+    import base64
+    if not isinstance(v, str) or not _B64KEY.fullmatch(v) or len(base64.b64decode(v)) != 32:
+        raise OpError(f"VPN {what} 格式错误")
+    return v
+
+
+def check_vpn_doc(doc: Any) -> dict[str, Any]:
+    """站点给的 VPN 数据逐项核:只认这几项,值都要是该有的样子(密钥是 32 字节 base64、地址在隧道网段里)。"""
+    if not isinstance(doc, dict) or set(doc) != {"address", "port", "private", "peers"}:
+        raise OpError("VPN 数据只认 address、port、private、peers")
+    if _host(doc["address"], prefix=24) != 1:
+        raise OpError("站点的 VPN 地址要是 .1")
+    port = doc["port"]
+    if isinstance(port, bool) or not isinstance(port, int) or not 1 <= port <= 65535:
+        raise OpError("VPN 端口错误")
+    _key(doc["private"], "私钥")
+    peers = doc["peers"]
+    if not isinstance(peers, list) or len(peers) > 300:
+        raise OpError("VPN peers 要是不超过 300 个的列表")
+    hosts, keys = set(), set()
+    for p in peers:
+        if not isinstance(p, dict) or set(p) != {"name", "kind", "public", "psk", "address"}:
+            raise OpError("VPN peer 只认 name、kind、public、psk、address")
+        if not isinstance(p["name"], str) or not _PEER_NAME.fullmatch(p["name"]):
+            raise OpError("VPN peer 名字错误")
+        if p["kind"] not in VPN_KINDS:
+            raise OpError("VPN peer 种类错误")
+        _key(p["public"], "公钥")
+        _key(p["psk"], "预共享密钥")
+        h = _host(p["address"], prefix=32)
+        if h == 1 or h in hosts or p["public"] in keys:
+            raise OpError("VPN peer 地址或公钥重复")
+        hosts.add(h)
+        keys.add(p["public"])
+    return doc
+
+
+def vpn_rules(doc: dict[str, Any]) -> list[str]:
+    """隧道里谁能连谁(同 ``d1max_site.vpn.VpnState._forward_rules``,测试核两边一致):只放行
+    工程师 → 隧道里的 TCP 22,别的隧道内转发一律丢。规则单独一条链,起停整条清掉重建。"""
+    eng = [p for p in doc["peers"] if p["kind"] == "engineer"]
+    up = ["sysctl -q -w net.ipv4.conf.%i.forwarding=1",
+          f"iptables -N {VPN_CHAIN} 2>/dev/null || true", f"iptables -F {VPN_CHAIN}",
+          f"iptables -C FORWARD -i %i -j {VPN_CHAIN} 2>/dev/null || "
+          f"iptables -I FORWARD -i %i -j {VPN_CHAIN}",
+          f"iptables -A {VPN_CHAIN} -o %i -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT"]
+    up += [f"iptables -A {VPN_CHAIN} -o %i -s {p['address']} -p tcp --dport 22 -j ACCEPT"
+           for p in eng]
+    up += [f"iptables -A {VPN_CHAIN} -j DROP"]
+    down = [f"iptables -D FORWARD -i %i -j {VPN_CHAIN} 2>/dev/null || true",
+            f"iptables -F {VPN_CHAIN} 2>/dev/null || true",
+            f"iptables -X {VPN_CHAIN} 2>/dev/null || true"]
+    return [f"PostUp = {r}" for r in up] + [f"PostDown = {r}" for r in down]
+
+
+def render_wg(doc: dict[str, Any]) -> str:
+    out = ["# d1max 站点 VPN(W45、W55):由特权执行器生成,别手改", "[Interface]",
+           f"Address = {doc['address']}", f"ListenPort = {doc['port']}",
+           f"PrivateKey = {doc['private']}", *vpn_rules(doc), ""]
+    for p in doc["peers"]:
+        out += [f"# {p['kind']} {p['name']}", "[Peer]", f"PublicKey = {p['public']}",
+                f"PresharedKey = {p['psk']}", f"AllowedIPs = {p['address']}", ""]
+    return "\n".join(out)
 
 
 class Ops:
@@ -259,13 +437,9 @@ class Ops:
         pubkey = Path(self.cfg.get("pubkey", "/etc/d1max/release-pub.pem"))
         if not pubkey.is_file():
             raise OpError("机器人上没装发行公钥:服务单元不更新")
-        units = {}
-        for u in ROBOT_UNITS:
-            p = root / "deploy" / f"{u}.service"
-            if p.is_file() and not p.is_symlink():
-                units[f"deploy/{u}.service"] = read_nofollow(p, limit=MAX_REQ)
         manifest = json.loads(read_nofollow(root / "release.json", limit=MAX_REQ))
-        tree_ok(root, manifest, pubkey, units)
+        want = frozenset(f"deploy/{u}.service" for u in ROBOT_UNITS)
+        units = tree_ok(root, manifest, pubkey, want)
         changed = []
         for rel, data in units.items():
             dest = self.systemd_dir / Path(rel).name
@@ -295,45 +469,193 @@ class Ops:
         _, after = self.run(["systemctl", "show", "-p", "NRestarts", "--value", "d1max-site.service"], 30)
         return rc == 0 and before.strip() == after.strip()
 
+    def _keep_vpn(self, aside: Path, home: Path, uid: int, gid: int) -> int:
+        """恢复备份(外审 W55-1 第 12 条):备份里没有 VPN 状态,同一台主机恢复时把原来的
+        ``vpn/`` 带过来(站点起来以后会照它重装 VPN 配置、收回到期的工程师)。原来的目录是站点账号的,
+        一律不跟链接,只拷两层里的普通文件。回拷了几个文件。"""
+        try:
+            src = os.open(aside / "vpn", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        except OSError:
+            return 0
+        n = 0
+        try:
+            dst_dir = home / "vpn"
+            if not dst_dir.exists():
+                dst_dir.mkdir(mode=0o700)
+                if os.geteuid() == 0:
+                    os.chown(dst_dir, uid, gid)
+            dst = _dir_fd(dst_dir)
+            try:
+                for name in os.listdir(src):
+                    st = os.stat(name, dir_fd=src, follow_symlinks=False)
+                    if stat.S_ISREG(st.st_mode):
+                        data = read_in_dir(src, name, limit=MAX_REQ * 16)
+                        if data is not None:
+                            write_in_dir(dst, name, data, mode=0o600, uid=uid, gid=gid)
+                            n += 1
+                    elif stat.S_ISDIR(st.st_mode) and name == "peers":
+                        sub = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                                      dir_fd=src)
+                        try:
+                            if not (dst_dir / "peers").exists():
+                                (dst_dir / "peers").mkdir(mode=0o700)
+                                if os.geteuid() == 0:
+                                    os.chown(dst_dir / "peers", uid, gid)
+                            dsub = _dir_fd(dst_dir / "peers")
+                            try:
+                                for pn in os.listdir(sub):
+                                    if not stat.S_ISREG(os.stat(pn, dir_fd=sub,
+                                                                follow_symlinks=False).st_mode):
+                                        continue
+                                    data = read_in_dir(sub, pn, limit=MAX_REQ)
+                                    if data is not None:
+                                        write_in_dir(dsub, pn, data, mode=0o600, uid=uid, gid=gid)
+                                        n += 1
+                            finally:
+                                os.close(dsub)
+                        finally:
+                            os.close(sub)
+            finally:
+                os.close(dst)
+        finally:
+            os.close(src)
+        return n
+
     def restore(self, args: dict[str, Any]) -> dict[str, Any]:
-        """从站点配置的备份目录恢复(恢复要空目录):停站点 → 现在的站点目录挪开 → 恢复 → 起。
-        恢复不成就挪回去再起。"""
+        """从站点配置的备份目录恢复(恢复要空目录):停站点 → 现在的站点目录挪开 → 恢复 → 带回 VPN 状态
+        → 起。恢复不成就挪回去再起。"""
         home, venv, user = self._site()
-        cfg = json.loads(read_nofollow(home / "site.json", limit=MAX_REQ))
+        hfd = _dir_fd(home)
+        try:
+            raw = read_in_dir(hfd, "site.json", limit=MAX_REQ)
+        finally:
+            os.close(hfd)
+        cfg = json.loads(raw) if raw else None
         dest = cfg.get("backup_dir") if isinstance(cfg, dict) else None
         if not isinstance(dest, str) or not Path(dest).is_dir():
             raise OpError("站点未配置备份目录")
         aside = home.with_name(f"{home.name}.before-restore-{int(time.time())}")
         self._sys("systemctl", "stop", "d1max-site.service", timeout=180)
         os.rename(home, aside)
+        pw = pwd.getpwnam(user)
         try:
             home.mkdir(mode=0o700)
-            pw = pwd.getpwnam(user)
-            os.chown(home, pw.pw_uid, pw.pw_gid)
+            if os.geteuid() == 0:
+                os.chown(home, pw.pw_uid, pw.pw_gid)
             self._sys("runuser", "-u", user, "--", str(venv / "bin" / "d1max-site"), "--home",
                       str(home), "restore", dest, timeout=3600)
+            kept = self._keep_vpn(aside, home, pw.pw_uid, pw.pw_gid)
         except Exception:
             shutil.rmtree(home, ignore_errors=True)
             os.rename(aside, home)
             self.run(["systemctl", "start", "d1max-site.service"], 120)
             raise
         self._sys("systemctl", "start", "d1max-site.service", timeout=120)
-        return {"aside": str(aside)}
+        return {"aside": str(aside), "vpn_files": kept}
+
+    def _system_files(self) -> list[Path]:
+        """站点升级(``install-site.sh --upgrade``)会改到的系统文件、目录(外审 W55-1 第 11 条:回退要连它们
+        一起换回去)。"""
+        lib = Path(self.cfg.get("lib_dir", "/usr/local/lib/d1max"))
+        etc_site = self.etc / "d1max-site"
+        return [self.systemd_dir / "d1max-site.service", self.systemd_dir / "d1max-mosquitto.service",
+                self.systemd_dir / "d1max-ops.path", self.systemd_dir / "d1max-ops.service",
+                lib, self.etc / "d1max-ops.json", etc_site / "release-pub.pem",
+                etc_site / "release-pub.d", self.etc / "chrony" / "conf.d" / "d1max-site.conf"]
+
+    def _save_system(self, keep: Path) -> list[tuple[Path, Path | None]]:
+        saved: list[tuple[Path, Path | None]] = []
+        for i, src in enumerate(self._system_files()):
+            if not os.path.lexists(src):
+                saved.append((src, None))
+                continue
+            dst = keep / "sys" / str(i)
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            if src.is_dir() and not src.is_symlink():
+                shutil.copytree(src, dst, symlinks=True)
+            else:
+                shutil.copy2(src, dst, follow_symlinks=False)
+            saved.append((src, dst))
+        return saved
+
+    @staticmethod
+    def _put_system(saved: list[tuple[Path, Path | None]]) -> None:
+        for src, dst in saved:
+            if src.is_dir() and not src.is_symlink():
+                shutil.rmtree(src)
+            elif os.path.lexists(src):
+                src.unlink()
+            if dst is None:
+                continue
+            if dst.is_dir() and not dst.is_symlink():
+                shutil.copytree(dst, src, symlinks=True)
+            else:
+                shutil.copy2(dst, src, follow_symlinks=False)
+
+    def _db_save(self, home: Path, keep: Path) -> bool:
+        """站点库(站点账号的目录里,可能被换成链接):相对目录描述符、不跟链接读出来。"""
+        hfd = _dir_fd(home)
+        try:
+            data = read_in_dir(hfd, "site.db", limit=64 << 30)
+        finally:
+            os.close(hfd)
+        if data is None:
+            return False
+        (keep / "site.db").write_bytes(data)
+        return True
+
+    def _db_put(self, home: Path, keep: Path, uid: int, gid: int) -> None:
+        """库放回去:临时文件 + 原子替换(换掉的是目录项,不沿链接写);WAL、SHM 删掉(unlink 不跟链接)。"""
+        hfd = _dir_fd(home)
+        try:
+            write_in_dir(hfd, "site.db", (keep / "site.db").read_bytes(), mode=0o600,
+                         uid=uid, gid=gid)
+            for side in ("site.db-wal", "site.db-shm"):
+                try:
+                    os.unlink(side, dir_fd=hfd)
+                except FileNotFoundError:
+                    pass
+        finally:
+            os.close(hfd)
 
     def update(self, args: dict[str, Any]) -> dict[str, Any]:
-        """升级站点:站点放在 ``<site_home>/updates/<包>.tar.gz`` 的包 → 拷进 root 目录 → 解开 → 验签 →
-        停站点、留一份程序和库 → 装 → 起 → 看 30 秒;不行就把程序和库换回去再起。"""
+        """升级站点:站点放在 ``<site_home>/updates/<包>.tar.gz`` 的包 → 读进内存 → 解进 root 目录 → 删掉签名
+        范围以外的 → 验签 → 停站点、留一份程序、库、系统文件 → 装 → 起 → 看 30 秒;不行就全换回去再起、
+        再看一遍。换回去也起不来:恢复材料留着,说清楚在哪。"""
         home, venv, user = self._site()
         pkg_name = args.get("package")
         if not isinstance(pkg_name, str) or not PKG_RE.fullmatch(pkg_name):
             raise OpError("升级包名错误")
         pw = pwd.getpwnam(user)
-        raw = read_nofollow(home / "updates" / pkg_name, limit=512 * 1024 * 1024, owner=pw.pw_uid)
+        hfd = _dir_fd(home)
+        try:
+            ufd = os.open("updates", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=hfd)
+        except OSError as exc:
+            raise OpError(f"没有升级包目录:{exc}") from exc
+        finally:
+            os.close(hfd)
+        try:
+            fd = os.open(pkg_name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=ufd)
+        except OSError as exc:
+            raise OpError(f"打不开升级包:{exc}") from exc
+        finally:
+            os.close(ufd)
+        try:
+            st = os.fstat(fd)
+            if not stat.S_ISREG(st.st_mode) or st.st_uid != pw.pw_uid \
+                    or st.st_size > 512 * 1024 * 1024:
+                raise OpError("升级包不是站点账号的普通文件,或过大")
+            with os.fdopen(fd, "rb", closefd=False) as f:
+                raw = f.read()
+        finally:
+            os.close(fd)
         pubkey = Path(self.cfg.get("site_pubkey", "/etc/d1max-site/release-pub.pem"))
         if not pubkey.is_file():
             raise OpError("站点上没装发行公钥:不升级")
-        work = Path(tempfile.mkdtemp(prefix="d1max-site-update-", dir="/var/lib/d1max-ops"))
+        spool = Path(self.cfg.get("spool", "/var/lib/d1max-ops"))
+        work = Path(tempfile.mkdtemp(prefix="d1max-site-update-", dir=spool))
         os.chmod(work, 0o700)
+        keep_work = False
         try:
             with tarfile.open(fileobj=io.BytesIO(raw), mode="r:gz") as tar:
                 safe_extract(tar, work)
@@ -341,15 +663,21 @@ class Ops:
             if len(tops) != 1:
                 raise OpError("升级包里要正好一个目录")
             pkg = tops[0]
+            prune_unsigned(pkg)
             manifest = json.loads((pkg / "release.json").read_text(encoding="utf-8"))
             tree_ok(pkg, manifest, pubkey)
             if not (pkg / "deploy" / "site" / "install-site.sh").is_file():
                 raise OpError("这不是站点升级包(没有 deploy/site/install-site.sh)")
             keep = work / "prev"
+            keep.mkdir()
             self._sys("systemctl", "stop", "d1max-site.service", timeout=180)
-            shutil.copytree(venv, keep / "venv", symlinks=True)
-            if (home / "site.db").is_file():
-                shutil.copy2(home / "site.db", keep / "site.db")
+            try:
+                shutil.copytree(venv, keep / "venv", symlinks=True)
+                had_db = self._db_save(home, keep)
+                saved = self._save_system(keep)
+            except Exception as exc:
+                self.run(["systemctl", "start", "d1max-site.service"], 120)
+                raise OpError(f"升级前留底失败,未升级(站点已重新启动):{exc}") from exc
             ok = False
             try:
                 self._sys("bash", str(pkg / "deploy" / "site" / "install-site.sh"), "--upgrade",
@@ -360,34 +688,68 @@ class Ops:
             if ok:
                 return {"version": manifest.get("version"), "rolled_back": False}
             self.run(["systemctl", "stop", "d1max-site.service"], 180)
-            shutil.rmtree(venv, ignore_errors=True)
-            shutil.copytree(keep / "venv", venv, symlinks=True)
-            if (keep / "site.db").is_file():
-                shutil.copy2(keep / "site.db", home / "site.db")
-                os.chown(home / "site.db", pw.pw_uid, pw.pw_gid)
-                for side in ("site.db-wal", "site.db-shm"):
-                    (home / side).unlink(missing_ok=True)
-            self.run(["systemctl", "start", "d1max-site.service"], 120)
-            raise OpError("新版本未能正常运行,已退回原版本")
+            try:
+                shutil.rmtree(venv, ignore_errors=True)
+                shutil.copytree(keep / "venv", venv, symlinks=True)
+                if had_db:
+                    self._db_put(home, keep, pw.pw_uid, pw.pw_gid)
+                self._put_system(saved)
+                self.run(["systemctl", "daemon-reload"], 60)
+                self.run(["systemctl", "start", "d1max-site.service"], 120)
+                back = self._healthy(30)
+            except Exception as exc:          # noqa: BLE001 - 换回去出错:材料留着
+                back = False
+                log_err = str(exc)
+            else:
+                log_err = ""
+            if back:
+                raise OpError("新版本未能正常运行,已退回原版本")
+            keep_work = True
+            raise OpError(f"新版本未能正常运行,退回原版本后站点仍未正常运行{(':' + log_err) if log_err else ''};"
+                          f"恢复材料留在 {keep}(venv、site.db、sys/)")
         finally:
-            shutil.rmtree(work, ignore_errors=True)
+            if not keep_work:
+                shutil.rmtree(work, ignore_errors=True)
 
     def vpn_apply(self, args: dict[str, Any]) -> dict[str, Any]:
-        """站点生成好的 VPN 配置(``<site_home>/vpn/server.conf``)装进 ``/etc/wireguard/d1max.conf``、生效。"""
+        """站点给的 VPN 数据(``<site_home>/vpn/apply.json``,结构化:密钥、地址、端口)逐项核过,
+        由这里生成 ``/etc/wireguard/d1max.conf``(含固定的转发规则)、生效。请求方给不了命令钩子
+        (外审 W55-1 第 1 条)。"""
         home, _, user = self._site()
         pw = pwd.getpwnam(user)
-        conf = read_nofollow(home / "vpn" / "server.conf", limit=MAX_REQ, owner=pw.pw_uid)
-        if not conf.startswith(b"[Interface]"):
-            raise OpError("VPN 配置格式错误")
+        hfd = _dir_fd(home)
+        try:
+            vfd = os.open("vpn", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=hfd)
+        except OSError as exc:
+            raise OpError(f"没有 VPN 目录:{exc}") from exc
+        finally:
+            os.close(hfd)
+        try:
+            fd = os.open("apply.json", os.O_RDONLY | os.O_NOFOLLOW, dir_fd=vfd)
+        except OSError as exc:
+            raise OpError(f"打不开 VPN 数据:{exc}") from exc
+        finally:
+            os.close(vfd)
+        try:
+            st = os.fstat(fd)
+            if not stat.S_ISREG(st.st_mode) or st.st_uid != pw.pw_uid or st.st_size > MAX_REQ * 4:
+                raise OpError("VPN 数据不是站点账号的普通文件,或过大")
+            with os.fdopen(fd, "rb", closefd=False) as f:
+                doc = json.loads(f.read())
+        except ValueError as exc:
+            raise OpError("VPN 数据不是 JSON") from exc
+        finally:
+            os.close(fd)
+        conf = render_wg(check_vpn_doc(doc))
         wg = self.etc / "wireguard"
-        wg.mkdir(mode=0o700, exist_ok=True)
-        write_atomic(wg / "d1max.conf", conf, mode=0o600)
+        wg.mkdir(mode=0o700, parents=True, exist_ok=True)
+        write_atomic(wg / "d1max.conf", conf.encode(), mode=0o600)
         rc, _ = self.run(["systemctl", "is-active", "--quiet", "wg-quick@d1max.service"], 30)
         if rc == 0:
             self._sys("systemctl", "restart", "wg-quick@d1max.service")
         else:
             self._sys("systemctl", "enable", "--now", "wg-quick@d1max.service")
-        return {}
+        return {"peers": len(doc["peers"])}
 
     def wg_status(self, args: dict[str, Any]) -> dict[str, Any]:
         rc, out = self.run(["wg", "show", "d1max", "dump"], 30)

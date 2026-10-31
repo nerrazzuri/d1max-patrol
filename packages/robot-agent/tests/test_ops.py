@@ -34,7 +34,9 @@ def test_我们的服务名单_跟特权执行器一致():
     spec = importlib.util.spec_from_loader("r", loader)
     r = importlib.util.module_from_spec(spec)
     loader.exec_module(r)
-    assert set(O.OUR_UNITS) == set(r.ROBOT_UNITS)
+    assert set(O.RESTART_UNITS) == set(r.ROBOT_UNITS)
+    assert "d1max-bind" in O.OUR_UNITS and "d1max-bind" not in O.RESTART_UNITS, \
+        "root 跑的配网服务能看日志、不能远程重启(外审 W55-1 第 2 条)"
 
 
 def test_没装执行器_要root的不报_发了也说不支持(tmp_path):
@@ -248,8 +250,48 @@ async def test_接进代理_能力里有_命令走得通(tmp_path):
     # 接上以后问的是代理自己的「在不在忙」(空闲):重启整机照发
     assert acks["o2"]["result"] == "accepted"
     assert s.calls == [("restart", {"unit": "d1max-localizer"}), ("reboot", {"delay_s": 5})]
+    # 外审 W55-1 第 8 条:收下重启整机的那一刻起什么都不接,直到重启
+    assert rt._restarting
+    await rt._on_cmd(_cmd("ops_diag", {}, "o3", c))
+    await broker.drain()
+    acks = {a["command_id"]: a for a in ears.by["cmd/ack"]}
+    assert acks["o3"]["result"] != "accepted" and "restarting" in str(acks["o3"].get("reason"))
+
+
+async def test_外审W55_1_重启服务_忙就拒_做完放开(tmp_path):
+    broker, c = MemoryBroker(), 钟()
+    ears = 耳朵()
+    st = MemoryTransport(broker, "site")
+    await st.connect()
+    await st.subscribe(f"{T.prefix}/#", ears)
+    rt = AgentRuntime(transport=MemoryTransport(broker, "dog"), registration=REG,
+                      hal=SimRobot(now_ms=c), store_dir=tmp_path / "agent", now_ms=c,
+                      loaded_map=("m", "1"), boot_id="b", home=Pose.from_xy_yaw(0, 0, 0),
+                      monotonic=lambda: c.mono)
+    s = SimOps()
+    rt.attach_ops(O.OpsDesk(robot_id=REG.robot_id, priv=s, data_root=tmp_path / "data",
+                            busy=lambda: ""))
+    await rt.start()
+    rt._busy_reason = lambda: "正在执行任务 t1"
+    await rt._on_cmd(_cmd("ops_restart", {"unit": "d1max-localizer"}, "r1", c))
+    await rt._on_cmd(_cmd("cert_install", {"cert": "x", "registration": {}}, "r2", c))
+    await broker.drain()
+    acks = {a["command_id"]: a for a in ears.by["cmd/ack"]}
+    assert all("busy" in str(acks[k].get("reason")) for k in ("r1", "r2")), acks
+    assert s.calls == [] and not rt._restarting
+    rt._busy_reason = lambda: ""
+    await rt._on_cmd(_cmd("ops_restart", {"unit": "d1max-localizer"}, "r3", c))
+    await broker.drain()
+    assert s.calls == [("restart", {"unit": "d1max-localizer"})]
+    assert not rt._restarting, "重启的不是代理自己:做完放开"
 
 
 @pytest.fixture(autouse=True)
 def _quiet():
     yield
+
+
+def test_外审W55_1_钟不准时_对时和读诊断不判过期():
+    from d1max_agent.commands import NEVER_EXPIRE
+    assert {"ops_timesync", "ops_diag", "ops_journal"} <= NEVER_EXPIRE
+    assert "ops_reboot" not in NEVER_EXPIRE

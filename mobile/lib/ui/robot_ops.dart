@@ -15,7 +15,7 @@ import 'nw/nw_widgets.dart';
 /// 能看日志、能重启的服务（跟机器人上执行器的白名单一致）。
 const List<String> opsUnits = <String>[
   'd1max-agent', 'd1max-localizer', 'd1max-obstacles', 'd1max-persons', 'd1max-lidar-merge',
-  'd1max-nav2', 'd1max-sidecar', 'd1max-zenohd', 'd1max-bind',
+  'd1max-nav2', 'd1max-sidecar', 'd1max-zenohd',
 ];
 
 /// 机器人报的全部运维能力（测试、版面矩阵用）。

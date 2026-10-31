@@ -151,6 +151,55 @@ class VpnState:
             os.fsync(fh.fileno())
         os.replace(tmp, self.path)
 
+    @staticmethod
+    def _changed(d: dict[str, Any]) -> None:
+        """改了谁能连(外审 W55-1 第 10 条):记一笔「待生效」,装成功以后才清;没装成一直重试。"""
+        d["gen"] = int(d.get("gen", 0)) + 1
+        d["apply_pending"] = True
+
+    @property
+    def pending(self) -> bool:
+        return bool(self._load().get("apply_pending"))
+
+    def mark_pending(self) -> None:
+        """站点起来时调一次:按状态文件重装一遍(恢复备份、改过系统配置之后都对得上)。"""
+        with self._locked():
+            d = self._load()
+            if "server" in d:
+                d["apply_pending"] = True
+                self._save(d)
+
+    def apply_doc(self) -> dict[str, Any]:
+        """给特权执行器的结构化数据(它自己生成 wg-quick 配置和防火墙规则,不收命令行)。"""
+        d = self._need()
+        s = d["server"]
+        return {"address": f"{SUBNET[SITE_HOST]}/{SUBNET.prefixlen}", "port": s["port"],
+                "private": s["private"],
+                "peers": [{"name": p["name"], "kind": p["kind"], "public": p["public"],
+                           "psk": p["psk"], "address": f"{SUBNET[p['host']]}/32"}
+                          for p in d["peers"]]}
+
+    def write_apply(self) -> int:
+        """写 ``<vpn>/apply.json``(0600),回这一份对应的修订号(装成功后交给 :meth:`applied`)。"""
+        with self._locked():
+            d = self._need()
+            gen = int(d.get("gen", 0))
+            f = self.root / "apply.json"
+            tmp = f.with_name(f"apply.json.{os.getpid()}.{secrets.token_hex(4)}.tmp")
+            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                fh.write(json.dumps(self.apply_doc(), ensure_ascii=False))
+            os.replace(tmp, f)
+            return gen
+
+    def applied(self, gen: int) -> None:
+        """修订号 ``gen`` 那一份装成功了:期间没再改过就清掉「待生效」。"""
+        with self._locked():
+            d = self._load()
+            if int(d.get("gen", 0)) == gen:
+                d["apply_pending"] = False
+                self._save(d)
+
     def _need(self) -> dict[str, Any]:
         d = self._load()
         if "server" not in d:
@@ -172,6 +221,7 @@ class VpnState:
         priv, pub = keypair()
         d = {"server": {"private": priv, "public": pub, "endpoint": endpoint, "port": port},
              "peers": [], "used": []}
+        self._changed(d)
         self._save(d)
         return {"public": pub, "address": str(SUBNET[SITE_HOST])}
 
@@ -203,6 +253,7 @@ class VpnState:
             peer["expires_ms"] = int(expires_ms)
         d["peers"].append(peer)
         d["used"] = sorted(used | {host})
+        self._changed(d)
         self._save(d)
         self._write_peer(d, peer)
         return {"name": name, "kind": kind, "address": str(SUBNET[host]),
@@ -217,6 +268,7 @@ class VpnState:
             if not gone:
                 return []
             d["peers"] = [p for p in d["peers"] if p["name"] not in gone]
+            self._changed(d)
             self._save(d)
             for n in gone:
                 (self.root / "peers" / f"{n}.conf").unlink(missing_ok=True)
@@ -235,6 +287,7 @@ class VpnState:
         if not any(p["name"] == name for p in d["peers"]):
             raise VpnError(f"没有 {name}")
         d["peers"] = [p for p in d["peers"] if p["name"] != name]
+        self._changed(d)
         self._save(d)
         (self.root / "peers" / f"{name}.conf").unlink(missing_ok=True)
 
@@ -273,14 +326,6 @@ class VpnState:
                 f"iptables -F {CHAIN} 2>/dev/null || true",
                 f"iptables -X {CHAIN} 2>/dev/null || true"]
         return [f"PostUp = {r}" for r in up] + [f"PostDown = {r}" for r in down]
-
-    def write_server_conf(self) -> Path:
-        """把站点这边的配置写到 ``<vpn>/server.conf``(0600),特权执行器从这儿装进 /etc/wireguard。"""
-        f = self.root / "server.conf"
-        fd = os.open(f, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            fh.write(self.server_conf())
-        return f
 
     def peer_conf(self, name: str) -> str:
         d = self._need()

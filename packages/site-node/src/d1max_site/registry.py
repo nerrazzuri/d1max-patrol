@@ -57,6 +57,42 @@ class Registry:
                           "revoked=0, enrolled_at=? WHERE robot_id=?",
                           (fingerprint, issued_at, expires_at, now_ms or issued_at, robot_id))
 
+    def stage(self, robot_id: str, *, fingerprint: str, issued_at: int, expires_at: int,
+              now_ms: int) -> None:
+        """W55 自动续签:新证书签好了、机器人还没换上 —— 记下来,旧证书照常认(外审 W55-1 第 6 条)。"""
+        with self.db.tx() as c:
+            c.execute("INSERT INTO cert_pending(robot_id, fingerprint, issued_at, expires_at, "
+                      "created_ms) VALUES (?,?,?,?,?) ON CONFLICT(robot_id) DO UPDATE SET "
+                      "fingerprint=excluded.fingerprint, issued_at=excluded.issued_at, "
+                      "expires_at=excluded.expires_at, created_ms=excluded.created_ms",
+                      (robot_id, fingerprint, issued_at, expires_at, now_ms))
+
+    def pending(self, robot_id: str) -> dict | None:
+        rows = self.db.query("SELECT * FROM cert_pending WHERE robot_id=?", (robot_id,))
+        return dict(rows[0]) if rows else None
+
+    def drop_pending(self, robot_id: str, fingerprint: str | None = None) -> None:
+        with self.db.tx() as c:
+            if fingerprint is None:
+                c.execute("DELETE FROM cert_pending WHERE robot_id=?", (robot_id,))
+            else:
+                c.execute("DELETE FROM cert_pending WHERE robot_id=? AND fingerprint=?",
+                          (robot_id, fingerprint))
+
+    def promote(self, robot_id: str, fingerprint: str) -> bool:
+        """机器人确认换上了(或拿这张新证书连上来了):登记表换成它。不是挂着的那张 → False。"""
+        with self.db.tx() as c:
+            rows = c.execute("SELECT * FROM cert_pending WHERE robot_id=? AND fingerprint=?",
+                             (robot_id, fingerprint)).fetchall()
+            if not rows:
+                return False
+            r = rows[0]
+            n = c.execute("UPDATE robots SET fingerprint=?, issued_at=?, expires_at=? "
+                          "WHERE robot_id=? AND revoked=0",
+                          (fingerprint, r["issued_at"], r["expires_at"], robot_id)).rowcount
+            c.execute("DELETE FROM cert_pending WHERE robot_id=?", (robot_id,))
+            return n == 1
+
     def renew(self, robot_id: str, *, fingerprint: str, issued_at: int, expires_at: int) -> None:
         """工单 9:续签 —— 换指纹和有效期;代次、只许手动派这些都不动。没登记、吊销了的不许续。"""
         with self.db.tx() as c:

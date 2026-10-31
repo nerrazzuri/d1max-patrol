@@ -759,6 +759,15 @@ CREATE TABLE IF NOT EXISTS client_errors (
     received_ms INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS client_errors_at ON client_errors(at_ms);
+-- W55(库 69,外审 W55-1 第 6 条):自动续签签好、机器人还没确认换上的新证书。旧证书照常认;
+-- 机器人确认换上了、或者拿新证书连上来了,才把登记表换成新的。remote_ops.py、intake.py。
+CREATE TABLE IF NOT EXISTS cert_pending (
+    robot_id    TEXT PRIMARY KEY,
+    fingerprint TEXT NOT NULL,
+    issued_at   INTEGER NOT NULL,
+    expires_at  INTEGER NOT NULL,
+    created_ms  INTEGER NOT NULL
+);
 """
 
 

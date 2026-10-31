@@ -168,7 +168,9 @@ class _NwShellState extends State<NwShell> {
   @override
   void initState() {
     super.initState();
-    ErrorLog.instance.attach(widget.api);                 // W55：错误记录定时传给站点
+    // W55：错误记录定时传给站点（只传在这个站点里出的；外审 W55-1 第 15 条）
+    final e = widget.entry;
+    ErrorLog.instance.attach(widget.api, site: e == null ? '' : '${e.url}|${e.fingerprint}');
     final u = widget.updater?.call(widget.api);
     if (u != null) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
