@@ -72,10 +72,10 @@ describe("主题跟着系统走(prefers-color-scheme)", () => {
     expect(root.dataset.theme).toBe("light");
     q.flip(true);
     expect(root.dataset.theme).toBe("dark");
-    pinScheme(pinFor("admin/users", "auto", true), root);           // 回到按页面:管理页浅色,不跟系统
+    pinScheme(pinFor("admin/users", "auto", false), root);          // 回到默认:深色(W60 全站深色),不跟系统
     q.flip(false);
     q.flip(true);
-    expect(root.dataset.theme).toBe("light");
+    expect(root.dataset.theme).toBe("dark");
     pinScheme(null, root);
     stop();
   });

@@ -8,9 +8,17 @@ import mobile from "../../../design/mobile.json";
 export type Scheme = "light" | "dark";
 export type Palette = Record<string, string>;
 
-/** 网页多出来的几样(手机没有对应的):视频底两套都是黑的;地图的底跟手机一样用 surfaceVariant。 */
-function webExtras(p: Palette): Palette {
-  return { well: "#000000", mapBg: p.surfaceVariant, focus: p.tertiary };
+/** 品牌色(W60):只用在导航选中、焦点、主按钮、地图上选中的东西 —— 不表示健康(绿)、也不表示提示。 */
+const BRAND: Record<Scheme, { brand: string; brandSoft: string; onBrand: string; brandText: string }> = {
+  dark: { brand: "#4EA8F0", brandSoft: "#14263A", onBrand: "#04121F", brandText: "#E8F3FE" },
+  light: { brand: "#1F6FB8", brandSoft: "#E3EFFB", onBrand: "#FFFFFF", brandText: "#0B3A66" },
+};
+
+/** 网页多出来的几样(手机没有对应的):视频底两套都是黑的;地图的底跟手机一样用 surfaceVariant;侧栏比底亮一点。 */
+function webExtras(p: Palette, s: Scheme): Palette {
+  const b = BRAND[s];
+  return { well: "#000000", mapBg: p.surfaceVariant, focus: b.brand, ...b,
+    sidebar: s === "dark" ? "#0F1218" : "#ECEEF1" };
 }
 
 /** 深色下底图反亮度的那个 a(CSS invert(a))。 */
@@ -18,7 +26,7 @@ const RASTER_INVERT = 0.91;
 
 export function palette(s: Scheme): Palette {
   const base = (mobile.color as Record<Scheme, Palette>)[s];
-  return { ...base, ...webExtras(base) };
+  return { ...base, ...webExtras(base, s) };
 }
 
 /**
