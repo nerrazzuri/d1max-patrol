@@ -421,3 +421,46 @@ def test_外审W55_3_I4_换版本后服务起不来_在途就退回上一版(tmp
     monkeypatch.setattr(rel, "read_pending", lambda layout: None)
     ops2 = 版本()
     assert M.after_switch(执行器(), ops2) is False and not ops2.rolled
+
+
+def test_外审W55_4_I4_执行器不可用或结果未知_在途就退回(monkeypatch):
+    from d1max_agent import main as M
+    from d1max_agent.engine import release as rel
+    from d1max_contract.privops import PrivTimeout
+
+    class 执行器:
+        def call(self, action, args=None, *, timeout_s=60.0, rid=None):
+            raise PrivTimeout("还没回", "r1")
+
+    class 版本:
+        layout = object()
+        rolled = False
+
+        def current(self):
+            return "2026-10-31-abcdef12"
+
+        def rollback(self):
+            self.rolled = True
+    ops = 版本()
+    monkeypatch.setattr(rel, "read_pending", lambda layout: object())
+    assert M.after_switch(执行器(), ops) is True and ops.rolled
+
+
+def test_外审W55_4_N3_退回本身出错_不卡住_交回去让代理退出(monkeypatch):
+    from d1max_agent import main as M
+    from d1max_agent.engine import release as rel
+
+    class 执行器:
+        def call(self, action, args=None, *, timeout_s=60.0, rid=None):
+            return {"ok": action != "restart_all", "error": "x"}
+
+    class 版本:
+        layout = object()
+
+        def current(self):
+            return "2026-10-31-abcdef12"
+
+        def rollback(self):
+            raise OSError("上一版的启动文件坏了")
+    monkeypatch.setattr(rel, "read_pending", lambda layout: object())
+    assert M.after_switch(执行器(), 版本()) is False, "回假:调用方照常退出,不悄悄卡住"

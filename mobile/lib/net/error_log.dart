@@ -110,13 +110,15 @@ class ErrorLog {
 
 /// 接上 Flutter 的出错钩子（`main()` 里调一次）：记下来，原来的处理照旧。
 ///
-/// 外审 W55-3 I3：画面出错（构建、布局）出在眼前这个站点的页面上，记在当前站点名下；**没接住的异步
-/// 异常**说不清是哪个站点的请求留下的（可能是刚离开的那个），不记站点 —— 留在手机上、不上传。
+/// 外审 W55-3、W55-4 I3：全局钩子收到的错（框架报的、没接住的异步异常）说不清是哪个站点留下的
+/// （可能是刚离开的那个），不记站点 —— 留在手机上、不上传。上传给站点的只有能确定来源的
+/// （站点连接自己记的，比如接口回 5xx）。
 void installErrorHooks([ErrorLog? log]) {
   final l = log ?? ErrorLog.instance;
   final prev = FlutterError.onError;
   FlutterError.onError = (details) {
-    l.note('flutter', details.exceptionAsString(), detail: '${details.stack ?? ''}');
+    // 外审 W55-4 I3:框架报上来的错也可能是刚离开的站点留下的(图片解码这类异步回调)—— 不归属、不上传
+    l.note('flutter', details.exceptionAsString(), detail: '${details.stack ?? ''}', site: '');
     prev?.call(details);
   };
   PlatformDispatcher.instance.onError = (error, stack) {

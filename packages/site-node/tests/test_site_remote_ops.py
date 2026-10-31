@@ -517,3 +517,44 @@ def test_外审W55_3_I2_拿到申请以后解绑重登_这次续签作废_新身
     assert reg.get("A").fingerprint == "sha256:fresh" and reg.pending("A") is None
     assert ("A", "cert_install") not in d.calls, "作废了就不往机器人上装"
     db.close()
+
+
+def test_外审W55_4_N2_老库里挂着的证书_补列后照样能转正(tmp_path):
+    import sqlite3
+    now = 1_800_000_000_000
+    ca, reg, db = _ca_reg(tmp_path, 10 * 86_400_000, now)
+    old_fp = reg.get("A").fingerprint
+    db.close()
+    con = sqlite3.connect(tmp_path / "site.db")
+    con.execute("DROP TABLE cert_pending")
+    con.execute("CREATE TABLE cert_pending (robot_id TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, "
+                "issued_at INTEGER NOT NULL, expires_at INTEGER NOT NULL, "
+                "created_ms INTEGER NOT NULL)")
+    con.execute("INSERT INTO cert_pending VALUES ('A', 'sha256:new', ?, ?, ?)",
+                (now, now + 365 * 86_400_000, now))
+    con.commit()
+    con.close()
+    db = SiteDB(tmp_path / "site.db")
+    reg = Registry(db, site_id="estate-1")
+    assert reg.pending("A")["old_fingerprint"] == old_fp
+    assert reg.promote("A", "sha256:new") and reg.get("A").fingerprint == "sha256:new"
+    db.close()
+
+
+def test_外审W55_4_N4_接收口先转正_回执后到_也算续签成功(tmp_path):
+    now = 1_800_000_000_000
+    ca, reg, db = _ca_reg(tmp_path, 10 * 86_400_000, now)
+    d, al = _Disp(tmp_path), _Alerts()
+    orig = d.map_command
+
+    async def 回执晚到(rid, kind, payload, *, issued_by):
+        got = await orig(rid, kind, payload, issued_by=issued_by)
+        if kind == "cert_install":                       # 机器人换上、先连上接收口转正了
+            fp = reg.pending("A")["fingerprint"]
+            assert reg.promote("A", fp)
+        return got
+    d.map_command = 回执晚到
+    r = CertRenewer(dispatcher=d, registry=reg, ca=ca, alerts=al, now_ms=lambda: now)
+    got = asyncio.run(r.renew("A", by="site:cert"))
+    assert got["fingerprint"] == reg.get("A").fingerprint and al.raised == []
+    db.close()
