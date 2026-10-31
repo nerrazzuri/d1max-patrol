@@ -1,6 +1,6 @@
 // W44 第四期 地图编辑器的操作栈:撤销重做、面积估算、特殊地面默认放慢。
 import { describe, expect, it } from "vitest";
-import { apply, areaOf, newTerrain, redo, start, summary, undo, type GridOp } from "./mapeditops";
+import { apply, areaOf, closedLoop, newTerrain, redo, start, summary, undo, type GridOp } from "./mapeditops";
 
 const D = { rotate_deg: null, basemap: null, regions: [], terrain: [] };
 const erase: GridOp = { op: "erase", shape: "stroke", points: [[0, 0], [2, 0]], width_m: 0.2 };
@@ -34,5 +34,20 @@ describe("操作栈", () => {
     const b = newTerrain([a], "grass", [[0, 0], [1, 0], [1, 1]]);
     expect(b.slow_mps).toBeNull();
     expect(b.id).not.toBe(a.id);
+  });
+});
+
+describe("W61 画笔首尾接上就是圈(跟站点 map_edit.closed_loop 同一条规矩)", () => {
+  const loop: GridOp = { op: "erase", shape: "stroke", width_m: 0.1, points: [[1, 1], [2.6, 1], [2.6, 2.6], [1, 2.6], [1.1, 1.05]] };
+  it("至少 3 个点、终点离起点 ≤ max(0.5 m, 3 倍粗细)", () => {
+    expect(closedLoop(loop)).toBe(true);
+    expect(closedLoop({ ...loop, points: loop.points.slice(0, -1) })).toBe(false);
+    expect(closedLoop({ ...loop, points: [[0, 0], [0.2, 0]] })).toBe(false);
+    expect(closedLoop({ ...loop, shape: "line", points: [[0, 0], [0, 0.1]] })).toBe(false);
+    expect(closedLoop({ ...loop, width_m: 1, points: [[0, 0], [5, 0], [5, 5], [2, 2.5]] })).toBe(false);
+  });
+  it("估面积按圈里面算(不是笔划长 × 粗细)", () => {
+    expect(areaOf(loop)).toBeGreaterThan(2.4);
+    expect(areaOf(loop)).toBeLessThan(3.2);
   });
 });

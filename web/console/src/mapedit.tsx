@@ -10,7 +10,7 @@ import { Confirm } from "./dialogs";
 import { t, type Key } from "./i18n";
 import { polyPx, toMap, type OwnLayer } from "./layoutpage";
 import { MapCanvas } from "./mapcanvas";
-import { apply, newTerrain, redo, start, summary, undo, type Display, type GridOp, type History, type TerrainKind } from "./mapeditops";
+import { apply, closedLoop, type Display, type GridOp, type History, newTerrain, redo, start, summary, type TerrainKind, undo } from "./mapeditops";
 import type { PreviewMeta, Pt } from "./mapview";
 
 type Say = (s: string) => void;
@@ -186,7 +186,9 @@ function Editor({ say, target, Canvas }: { say: Say; target: Target; Canvas?: Fu
               {now.display.terrain.map((tr) => <polygon key={tr.id} class={`me-terrain ${tr.kind}`} points={polyPx(meta, tr.polygon)} />)}
               {now.ops.map((o, i) => o.shape === "rect"
                 ? <polygon key={i} class={`me-op ${o.op}`} points={polyPx(meta, [o.points[0], [o.points[1][0], o.points[0][1]], o.points[1], [o.points[0][0], o.points[1][1]]])} />
-                : <polyline key={i} class={`me-op ${o.op}`} points={polyPx(meta, o.points.length > 1 ? o.points : [o.points[0], o.points[0]])} stroke-width={strokeW(o.width_m)} />)}
+                : closedLoop(o)
+                  ? <polygon key={i} class={`me-op loop ${o.op}`} points={polyPx(meta, o.points)} stroke-width={strokeW(o.width_m)} />
+                  : <polyline key={i} class={`me-op ${o.op}`} points={polyPx(meta, o.points.length > 1 ? o.points : [o.points[0], o.points[0]])} stroke-width={strokeW(o.width_m)} />)}
               {pts.length > 0 && <polyline class="draft-line" points={polyPx(meta, pts)} />}
             </> : null} />
         </div>

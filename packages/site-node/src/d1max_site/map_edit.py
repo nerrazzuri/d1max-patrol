@@ -7,6 +7,8 @@
 "points": [[x, y], ...](米), "width_m": 0.05–2.0}``。``stroke`` 是一笔(点连成线、按粗细画),
 ``line`` 两个点的直线,``rect`` 两个对角的
 方框(实心,不看粗细)。``erase`` 改成空地(图里空闲格最常见的灰度),``obstacle`` 改成占用。
+W61(用户 2026-11-01:圈起来的杂物没擦掉):画笔**首尾接上**(:func:`closed_loop`)就是圈,
+圈里面整块一起改;统计(``erased_m2``、``obstacle_m2``)按**实际变了的格子**算,原来就是空地的不算擦了。
 空地、占用写哪个灰度按这张图的 ``floor.yaml``(``negate``、两个阈值)算(外审 R4:``negate=1`` 的图 0 是
 空地);阈值让某一种写不出来就拒绝,不写错。
 """
@@ -23,6 +25,32 @@ SHAPES = ("stroke", "line", "rect")
 MAX_OPS = 500
 MAX_POINTS = 2000
 WIDTH_M = (0.05, 2.0)
+#: 画笔终点离起点不超过这么远(米;跟 3 倍粗细取大的)就算圈(W61)。网页 mapeditops.ts 同一个数。
+CLOSE_M = 0.5
+
+
+def closed_loop(o: dict[str, Any]) -> bool:
+    """画笔首尾接上了(至少 3 个点,终点回到起点附近):圈里面整块算进去。"""
+    pts = o["points"]
+    if o["shape"] != "stroke" or len(pts) < 3:
+        return False
+    (ax, ay), (bx, by) = pts[0], pts[-1]
+    return math.hypot(bx - ax, by - ay) <= max(CLOSE_M, 3 * o["width_m"])
+
+
+def _inside(xs: Any, ys: Any, poly: list[tuple[float, float]]) -> Any:
+    """每一格中心在不在多边形里(奇偶规则,射线法)。"""
+    import numpy as np
+    inside = np.zeros(xs.shape, dtype=bool)
+    n = len(poly)
+    for i in range(n):
+        (x1, y1), (x2, y2) = poly[i], poly[(i + 1) % n]
+        if y1 == y2:
+            continue
+        cross = (y1 > ys) != (y2 > ys)
+        xint = (x2 - x1) * (ys - y1) / (y2 - y1) + x1
+        inside ^= cross & (xs < xint)
+    return inside
 
 
 class EditError(ValueError):
@@ -104,12 +132,16 @@ def apply_ops(pgm: bytes, meta: dict[str, Any], ops: list[dict[str, Any]]) -> tu
         else:
             r = max(o["width_m"] / 2, res * 0.71)          # 再细也盖住线经过的那一格
             mask = np.zeros((h, w), dtype=bool)
-            segs = list(zip(pts, pts[1:], strict=False)) or [(pts[0], pts[0])]
+            loop = closed_loop(o)
+            line = [*pts, pts[0]] if loop else pts
+            segs = list(zip(line, line[1:], strict=False)) or [(pts[0], pts[0])]
             for (ax, ay), (bx, by) in segs:
                 dx, dy = bx - ax, by - ay
                 ll = dx * dx + dy * dy
                 t = np.clip(((xs - ax) * dx + (ys - ay) * dy) / ll, 0, 1) if ll > 0 else 0.0
                 mask |= (xs - (ax + t * dx)) ** 2 + (ys - (ay + t * dy)) ** 2 <= r * r
+            if loop:
+                mask |= _inside(xs, ys, pts)
         if o["op"] == "erase":
             img[mask] = free
             erased |= mask
@@ -119,6 +151,9 @@ def apply_ops(pgm: bytes, meta: dict[str, Any], ops: list[dict[str, Any]]) -> tu
             added |= mask
             erased &= ~mask
     cell = res * res
+    # W61:只数真的变了的格子(原来就是空地的不算擦了,原来就是障碍的不算画了)
+    erased &= ranks != 1
+    added &= ranks != 0
     stats = {"erased_m2": round(float(erased.sum()) * cell, 2),
              "obstacle_m2": round(float(added.sum()) * cell, 2)}
     return b"P5\n%d %d\n255\n" % (w, h) + img.tobytes(), stats
