@@ -35,10 +35,14 @@ class ErrorLog {
   /// 一批最多多少字节（留余量）。
   static const int batchBytes = 48000;
 
-  void note(String kind, String message, {String detail = '', String page = ''}) {
+  /// 一个站点连接（[SiteApi] 对象）的标识：错误记在发起它的那个连接名下（外审 W55-2 I3：离开 A 以后
+  /// A 那边迟到的错误不许记到 B 头上）。
+  static String keyOf(Object api) => 'api-${identityHashCode(api)}';
+
+  void note(String kind, String message, {String detail = '', String page = '', String? site}) {
     String cut(String s) => s.length > 2000 ? s.substring(0, 2000) : s;
     _items.add(<String, dynamic>{
-      '_site': _site,
+      '_site': site ?? _site,
       'at_ms': _now(),
       'kind': kind,
       'page': page,
@@ -50,12 +54,12 @@ class ErrorLog {
     if (_items.length > max) _items.removeRange(0, _items.length - max);
   }
 
-  /// 登录进站点时接上：之后每 [every] 传一次。换站点、退出时 [detach]。[site] 认站点用（地址 + 证书指纹）：
-  /// 不是这个站点的记录（别的站点的、登录前的）都扔掉。
-  void attach(SiteApi api, {String site = '', Duration every = const Duration(minutes: 10)}) {
+  /// 登录进站点时接上：之后每 [every] 传一次。换站点、退出时 [detach]。按这个站点连接认记录：
+  /// 不是它的（别的站点的、登录前的）都扔掉。
+  void attach(SiteApi api, {Duration every = const Duration(minutes: 10)}) {
     _timer?.cancel();
     _api = api;
-    _site = site.isEmpty ? 'api-${identityHashCode(api)}' : site;
+    _site = keyOf(api);
     _items.removeWhere((e) => e['_site'] != _site);
     _timer = Timer.periodic(every, (_) => unawaited(flush()));
   }

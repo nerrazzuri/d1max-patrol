@@ -447,3 +447,32 @@ def test_外审W55_1_钟不准的时候_对时和读诊断放行():
     assert temporal_class("ops_timesync") == SAFE
     assert temporal_class("ops_diag") == READ and temporal_class("ops_journal") == READ
     assert temporal_class("ops_reboot") not in (SAFE, READ)
+
+
+
+def test_外审W55_2_I2_续签挂着时解绑重登_迟到的转正不覆盖新身份(tmp_path):
+    now = 1_800_000_000_000
+    ca, reg, db = _ca_reg(tmp_path, 10 * 86_400_000, now)
+    old_fp = reg.get("A").fingerprint
+    reg.stage("A", fingerprint="sha256:new", issued_at=now, expires_at=now + 365 * 86_400_000,
+              now_ms=now, old_fingerprint=old_fp)
+    reg.revoke("A")
+    reg.enroll("A", fingerprint="sha256:fresh", issued_at=now, expires_at=now + 30 * 86_400_000)
+    assert reg.pending("A") is None, "解绑、重新登记:挂着的作废"
+    reg.stage("A", fingerprint="sha256:new2", issued_at=now, expires_at=now + 1,
+              now_ms=now, old_fingerprint=old_fp)               # 拿旧身份发起的(迟到)
+    assert reg.promote("A", "sha256:new2") is False
+    assert reg.get("A").fingerprint == "sha256:fresh"
+    db.close()
+
+
+def test_外审W55_2_C3_机器人上执行器结果未知_挂着的新证书留着(tmp_path):
+    now = 1_800_000_000_000
+    ca, reg, db = _ca_reg(tmp_path, 10 * 86_400_000, now)
+    d, al = _Disp(tmp_path), _Alerts()
+    d.install = {"result": "rejected", "reason": "priv_pending: abc123 结果未知"}
+    r = CertRenewer(dispatcher=d, registry=reg, ca=ca, alerts=al, now_ms=lambda: now)
+    with pytest.raises(Exception, match="未及时回复"):
+        asyncio.run(r.renew("A", by="site:cert"))
+    assert reg.pending("A") is not None, "可能已经换上了:留着,连上来时转正"
+    db.close()

@@ -168,14 +168,15 @@ def _release(tmp: Path, unit_text: str) -> tuple[Path, Path]:
 
 def test_装服务单元_验签过了才装_有变化才daemon_reload(tmp_path):
     cfg = _cfg(tmp_path)
-    root, _ = _release(tmp_path, "[Unit]\nDescription=new\n")
+    unit = "[Unit]\nDescription=new\n[Service]\nUser=robot\n"
+    root, _ = _release(tmp_path, unit)
     sysd = tmp_path / "systemd"
     sysd.mkdir()
     rec = Rec()
     ops = R.Ops(cfg, run=rec, systemd_dir=sysd)
     got = ops.do("units_apply", {"release": root.name})
     assert got == {"changed": ["d1max-localizer.service"], "bind": False}
-    assert (sysd / "d1max-localizer.service").read_text() == "[Unit]\nDescription=new\n"
+    assert (sysd / "d1max-localizer.service").read_text() == unit
     assert rec.calls == [["systemctl", "daemon-reload"]]
     rec.calls.clear()
     assert ops.do("units_apply", {"release": root.name}) == {"changed": [], "bind": False}
@@ -244,8 +245,36 @@ def test_调用端_写请求_读结果_超时说清楚(tmp_path):
     lazy = SpoolOps(cfg["spool"], sleep=lambda s: t.__setitem__(0, t[0] + s),
                     monotonic=lambda: t[0])
     from d1max_contract.privops import PrivOpsError
-    with pytest.raises(PrivOpsError, match="无响应"):
+    with pytest.raises(PrivOpsError, match="未处理,请求已撤回"):
         lazy.call("timesync", timeout_s=1)
+    assert not list((Path(cfg["spool"]) / "req").glob("*.json")), "撤回了:执行器再也拿不到"
+
+
+def test_外审W55_2_执行器拿走了请求但没回结果_算结果未知(tmp_path):
+    """C3:超时以后先撤回;撤不回(执行器已经改名认领)就是结果未知,不许当没执行。"""
+    from d1max_contract.privops import PrivTimeout
+    cfg = _cfg(tmp_path)
+    t = [0.0]
+    req = Path(cfg["spool"]) / "req"
+
+    def sleep(s):
+        t[0] += s
+        for f in req.glob("*.json"):                   # 执行器认领了,但一直没做完
+            f.rename(f.with_name(f.name + ".claim"))
+    c = SpoolOps(cfg["spool"], sleep=sleep, monotonic=lambda: t[0])
+    with pytest.raises(PrivTimeout) as e:
+        c.call("reboot", {"delay_s": 5}, timeout_s=1)
+    assert e.value.rid and not c.cancel(e.value.rid)
+
+
+def test_外审W55_2_请求被撤回了_执行器不执行(tmp_path):
+    cfg = _cfg(tmp_path)
+    c = SpoolOps(cfg["spool"])
+    rid = c.submit("restart", {"unit": "d1max-persons"})
+    assert c.cancel(rid)
+    rec = Rec()
+    assert R.process(cfg, R.Ops(cfg, run=rec), uid=ME.pw_uid, gid=ME.pw_gid) == 0
+    assert rec.calls == []
 
 
 def test_模拟版_记下调用():

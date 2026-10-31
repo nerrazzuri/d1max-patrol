@@ -120,7 +120,7 @@ void main() {
       final api = FakeApi('admin');
       await log.flush();                                     // 没接站点：不传
       expect(api.errorReports, isEmpty);
-      log.attach(api, site: 'A');
+      log.attach(api);
       for (var i = 0; i < 5; i++) {
         log.note('flutter', 'e$i');
       }
@@ -141,12 +141,13 @@ void main() {
       final log = ErrorLog();
       log.note('flutter', 'before login');
       final a = FakeApi('admin');
-      log.attach(a, site: 'A');
+      log.attach(a);
       log.note('flutter', 'in A');
       log.detach(a);                                         // 离线时离开 A：没传出去
       final b = FakeApi('admin');
-      log.attach(b, site: 'B');
+      log.attach(b);
       log.note('flutter', 'in B');
+      log.note('api', 'late from A', site: ErrorLog.keyOf(a));   // 外审 W55-2 I3：A 迟到的错误
       await log.flush();
       expect(b.errorReports.single.map((e) => e['message']), <String>['in B']);
       log.detach(b);
@@ -155,7 +156,7 @@ void main() {
     test('外审 W55-1：按字节分批，站点收不下的那一批扔掉不卡住', () async {
       final log = ErrorLog();
       final api = FakeApi('admin');
-      log.attach(api, site: 'A');
+      log.attach(api);
       for (var i = 0; i < 60; i++) {
         log.note('flutter', 'x' * 1900, detail: 'y' * 1900);
       }

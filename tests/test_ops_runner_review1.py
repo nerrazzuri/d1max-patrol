@@ -313,3 +313,114 @@ def test_恢复备份_原来的VPN状态带过来_不跟链接(tmp_path):
     assert (home / "vpn" / "state.json").read_text() == '{"server": {}}'
     assert (home / "vpn" / "peers" / "A.conf").is_file()
     assert not (home / "vpn" / "evil").exists()
+
+
+# ================================================================== 外审 W55-2
+
+def test_外审W55_2_C1_解包不用包里的权限_根目录条目跳过(tmp_path):
+    src = tmp_path / "src" / "pkg"
+    (src / "sub").mkdir(parents=True)
+    (src / "sub" / "a.sh").write_text("echo hi\n")
+    os.chmod(src / "sub" / "a.sh", 0o777)
+    os.chmod(src / "sub", 0o777)
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+        root = tarfile.TarInfo(".")
+        root.type, root.mode = tarfile.DIRTYPE, 0o777
+        tar.addfile(root)
+        tar.add(src, arcname="pkg")
+    work = tmp_path / "work"
+    work.mkdir(mode=0o700)
+    with tarfile.open(fileobj=io.BytesIO(buf.getvalue()), mode="r:gz") as tar:
+        R.safe_extract(tar, work)
+    assert oct(work.stat().st_mode & 0o777) == "0o700", "解压根目录的权限不许被包改掉"
+    assert oct((work / "pkg" / "sub").stat().st_mode & 0o777) == "0o755"
+    assert oct((work / "pkg" / "sub" / "a.sh").stat().st_mode & 0o777) == "0o755"
+
+
+def test_外审W55_2_C1_同一个文件出现两次_拒(tmp_path):
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+        for body in (b"good", b"evil"):
+            ti = tarfile.TarInfo("pkg/a.sh")
+            ti.size = len(body)
+            tar.addfile(ti, io.BytesIO(body))
+    work = tmp_path / "work"
+    work.mkdir()
+    with tarfile.open(fileobj=io.BytesIO(buf.getvalue()), mode="r:gz") as tar, \
+            pytest.raises(R.OpError, match="两次"):
+        R.safe_extract(tar, work)
+
+
+@pytest.mark.parametrize("name, unit, ok", [
+    ("d1max-localizer.service", "[Service]\nUser=robot\nExecStart=/x\n", True),
+    ("d1max-localizer.service", "[Service]\nExecStart=/x\n", False),
+    ("d1max-localizer.service", "[Service]\nUser=root\nExecStart=/x\n", False),
+    ("d1max-bind.service", "[Service]\nUser=root\n" + R.BIND_EXEC + "\n", True),
+    ("d1max-bind.service",
+     "[Service]\nUser=root\nExecStart=/opt/d1max/current/deploy/d1max-bind-start\n", False),
+])
+def test_外审W55_2_C2_服务单元_只装非root的和从root目录跑的配网(name, unit, ok):
+    assert (R.unit_problem(name, unit.encode(), bind_ok=True) == "") is ok
+
+
+def test_外审W55_2_C2_老签名包装不回老的配网单元(tmp_path):
+    cfg = _cfg(tmp_path)
+    old = "[Service]\nUser=root\nExecStart=/opt/d1max/current/deploy/d1max-bind-start\n"
+    root, _ = _release(tmp_path, "[Service]\nUser=robot\n")
+    (root / "deploy" / "d1max-bind.service").write_text(old)
+    from d1max_agent.engine.release import _packed
+    man = json.loads((root / "release.json").read_text())
+    man.pop("signature")
+    man["content_sha256"] = tree_sha256(root, skip="release.json", keep=_packed)
+    man["signature"] = relsign.sign(man, tmp_path / "keys" / "priv.pem")
+    (root / "release.json").write_text(json.dumps(man))
+    sysd = tmp_path / "systemd"
+    sysd.mkdir()
+    (sysd / "d1max-bind.service").write_text("SAFE")
+    got = R.Ops(cfg, run=Rec(), systemd_dir=sysd).do("units_apply", {"release": root.name})
+    assert (sysd / "d1max-bind.service").read_text() == "SAFE"
+    assert any("d1max-bind.service" in x for x in got["skipped"])
+
+
+def test_外审W55_2_C5_换证书_旧证书留底不跟链接(tmp_path):
+    cfg = _cfg(tmp_path)
+    new = Path(cfg["data_root"]) / "cert-new"
+    new.mkdir(parents=True)
+    (new / "robot.crt").write_text("-----BEGIN CERTIFICATE-----\nNEW\n")
+    (new / "robot.key").write_text("-----BEGIN PRIVATE KEY-----\nNEW\n")
+    (new / "registration.json").write_text("{}")
+    etc = tmp_path / "etc"
+    tls = etc / "d1max" / "tls"
+    tls.mkdir(parents=True)
+    (tls / "robot.crt").write_text("OLD")
+    victim = tmp_path / "victim"
+    victim.write_text("ROOT FILE")
+    (tls / "robot.crt.prev").symlink_to(victim)            # 布下的链接
+    R.Ops(cfg, run=Rec(), etc=etc).do("cert_install", {})
+    assert victim.read_text() == "ROOT FILE"
+    prev = tls / "robot.crt.prev"
+    assert prev.read_text() == "OLD" and not prev.is_symlink()
+    assert (tls / "robot.crt").read_text().endswith("NEW\n")
+
+
+def test_外审W55_2_C4_恢复VPN_目标目录被换成链接_不写过去(tmp_path, monkeypatch):
+    cfg = _cfg(tmp_path, "site")
+    home = Path(cfg["site_home"])
+    aside = tmp_path / "aside"
+    (aside / "vpn").mkdir(parents=True)
+    (aside / "vpn" / "state.json").write_text("{}")
+    home.mkdir(parents=True)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (home / "vpn").symlink_to(elsewhere)                     # 站点账号先布好链接
+    with pytest.raises(R.OpError):
+        R.Ops(cfg, run=Rec())._keep_vpn(aside, home, ME.pw_uid, ME.pw_gid)
+    assert not list(elsewhere.iterdir())
+
+
+def test_外审W55_2_I4_全部重启_有服务起不来就说_不重启代理(tmp_path):
+    rec = Rec({"systemctl restart d1max-localizer.service": 1})
+    with pytest.raises(R.OpError, match="d1max-localizer"):
+        R.Ops(_cfg(tmp_path), run=rec).do("restart_all", {})
+    assert ["systemctl", "--no-block", "restart", "d1max-agent.service"] not in rec.calls

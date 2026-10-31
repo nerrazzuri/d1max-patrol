@@ -238,20 +238,23 @@ say "2/7 装一个跟版本无关的解释器到 $ROOT/bin"
 if [[ -L "$ROOT/bin/python" ]]; then
   rm -f "$ROOT/bin/python"
 fi
+# 外审 W55-2 C8:$ROOT 归 $RUN_USER,里面的解释器、venv、pip 它都改得了 —— **root 一样都不执行**,
+# 建 venv、升 pip、装依赖全以 $RUN_USER 跑。
 if [[ ! -x "$ROOT/bin/python" ]]; then
-  python3 -m venv "$ROOT/bin-venv"
-  cat > "$ROOT/bin/python" <<解释器包装
+  sudo -u "$RUN_USER" python3 -m venv "$ROOT/bin-venv"
+  # 以 $RUN_USER 写(目录归它:root 写的话,它布个链接就能把 root 的写入带到别处去)
+  sudo -u "$RUN_USER" tee "$ROOT/bin/python" >/dev/null <<解释器包装
 #!/bin/sh
 # 由 deploy/install.sh 生成。**不要改成软链** —— 理由见 install.sh 的 2/7 步。
 exec "$ROOT/bin-venv/bin/python" "\$@"
 解释器包装
-  chmod 0755 "$ROOT/bin/python"
+  sudo -u "$RUN_USER" chmod 0755 "$ROOT/bin/python"
   # **升 pip 收在这个 if 里面,而且失败不致命。** 原来它在 if 外面,于是
   # 每一次重跑都强制联网一次 —— 而重跑正是"填完 SN 让它生效"的路子(见
   # 7/7),离线现场照着清单跑第二趟就会卡死在这一步,set -e 直接中止在
   # 2/7,连服务都不会被 restart。升不上去本来也不是中止装机的理由:venv
   # 自带的那个 pip 装得动我们的包。
-  "$ROOT/bin/python" -m pip install --quiet $PIP_ARGS --upgrade pip \
+  sudo -u "$RUN_USER" "$ROOT/bin/python" -m pip install --quiet $PIP_ARGS --upgrade pip \
     || echo "  (pip 没升上去,用 venv 自带的那个接着装 —— 不影响装机)"
 fi
 # **从一份临时副本装,绝不直接 pip install "$PKG"。** pyproject.toml 用的是
@@ -273,12 +276,13 @@ ROOT_SENTINEL_WANT="d1max_patrol $REL_NAME"
 if [[ "$(cat "$ROOT_SENTINEL" 2>/dev/null)" != "$ROOT_SENTINEL_WANT" ]]; then
   TMP_PKG=$(mktemp -d)
   cp -a "$PKG/." "$TMP_PKG/"
-  "$ROOT/bin/python" -m pip install --quiet $PIP_ARGS "$TMP_PKG"
+  chown -R "$RUN_USER":"$RUN_USER" "$TMP_PKG"
+  sudo -u "$RUN_USER" "$ROOT/bin/python" -m pip install --quiet $PIP_ARGS "$TMP_PKG"
   # W00b 起引擎在 robot-agent 里(W00c4 删了根包的别名壳),根包 import 引擎就要那三个包。boot-guard、
   # bundle guard、3/7 的 release install、7/7 的 activate/migrate-data 全从这个解释器跑,
   # 所以这里也装(顺序按依赖)。老包没带 packages/ 就跳过 —— 那一版的根包里 engine 还是真身。
   if [[ -d "$TMP_PKG/packages/robot-agent" ]]; then
-    "$ROOT/bin/python" -m pip install --quiet $PIP_ARGS \
+    sudo -u "$RUN_USER" "$ROOT/bin/python" -m pip install --quiet $PIP_ARGS \
       "$TMP_PKG/packages/contract[mqtt]" \
       "$TMP_PKG/packages/adapter-sim" \
       "$TMP_PKG/packages/adapter-d1max" \
@@ -769,8 +773,10 @@ for f in /etc/d1max/registration.json /etc/d1max/tls/ca.crt /etc/d1max/tls/robot
 done
 if [[ -f /etc/d1max/registration.json && -n "$MISSING" ]]; then
   echo "  代理先不起,这几样还不行:$MISSING" >&2
-  echo "  站点值填进 /etc/d1max/env;证书包 sudo chown -R $RUN_USER:$RUN_USER /etc/d1max/tls" >&2
-  echo "  /etc/d1max/registration.json。好了之后:sudo systemctl start d1max-agent(不用重跑这个脚本)。" >&2
+  # 外审 W55-2 C5:只把**文件**交给 $RUN_USER 读,目录(/etc/d1max/tls)留 root —— 目录交出去,
+  # 它就能在里面换目录项,root 的换证书会被它布下的链接带偏
+  echo "  站点值填进 /etc/d1max/env;证书包 sudo chown $RUN_USER:$RUN_USER /etc/d1max/tls/* \\" >&2
+  echo "  /etc/d1max/registration.json(只改文件,目录别改)。好了之后:sudo systemctl start d1max-agent。" >&2
 else
   systemctl start d1max-agent.service
 fi

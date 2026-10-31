@@ -225,6 +225,22 @@ def read_in_dir(dfd: int, name: str, *, limit: int) -> bytes | None:
         os.close(fd)
 
 
+def _sub_dir(dfd: int, name: str, uid: int, gid: int) -> int:
+    """目录描述符底下的子目录:没有就建(0700);打开时不跟链接;改属主用 fchown(不按路径重新解析)。"""
+    try:
+        os.mkdir(name, 0o700, dir_fd=dfd)
+    except FileExistsError:
+        pass
+    try:
+        fd = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=dfd)
+    except OSError as exc:
+        raise OpError(f"打不开目录 {name}:{exc}") from exc
+    if os.geteuid() == 0:
+        os.fchown(fd, uid, gid)
+    os.fchmod(fd, 0o700)
+    return fd
+
+
 def write_in_dir(dfd: int, name: str, data: bytes, *, mode: int, uid: int, gid: int) -> None:
     """写进目录描述符底下:临时文件(O_EXCL、不跟链接)→ 改属主(fchown)→ 原子替换。原来那个是链接
     也只是换掉链接本身,不写到链接指的地方。"""
@@ -335,6 +351,28 @@ def render_wg(doc: dict[str, Any]) -> str:
     return "\n".join(out)
 
 
+BIND_EXEC = "ExecStart=/usr/bin/python3 -I /usr/local/lib/d1max/bind/run.py"
+
+
+def unit_problem(name: str, data: bytes, *, bind_ok: bool) -> str:
+    """这个服务单元装不装(外审 W55-2 C2:发行公钥认的老包里,配网服务还是从版本目录跑 root 代码)。
+    配网服务:只装从 root 独占目录跑的那种,而且这一版带齐了它的代码;别的服务:必须写明以非 root 账号跑。
+    回空串 = 能装,否则是原因。"""
+    text = data.decode("utf-8", "replace")
+    svc = text.split("[Service]", 1)[1] if "[Service]" in text else ""
+    if name == "d1max-bind.service":
+        if not bind_ok:
+            return "这一版没带配网服务的代码(老版本),不装它的单元"
+        execs = [ln.strip() for ln in svc.splitlines() if ln.strip().startswith("Exec")]
+        if execs != [BIND_EXEC]:
+            return "配网服务只许从 root 独占目录跑"
+        return ""
+    users = re.findall(r"^\s*User=(.*)$", svc, re.M)
+    if not users or users[-1].strip() in ("", "root", "0"):
+        return "没有写明以非 root 账号跑"
+    return ""
+
+
 def install_bind(files: dict[str, bytes], lib_dir: Path) -> bool:
     """配网服务的代码装进 ``<lib_dir>/bind/``(root 属主、只读):先在旁边建好整棵,再换名。``files`` 是
     包里路径 → 内容(已经验过签的那一份)。跟现在装着的一样就不动;回装没装。"""
@@ -403,18 +441,21 @@ class Ops:
 
     def restart_all(self, args: dict[str, Any]) -> dict[str, Any]:
         """换版本以后:我们的服务里已启用或正在跑的,全重启;代理最后、不等。"""
-        done = []
+        done, failed = [], []
         for u in ROBOT_UNITS:
+            if u == "d1max-agent":
+                continue
             rc_a, _ = self.run(["systemctl", "is-active", "--quiet", f"{u}.service"], 30)
             rc_e, _ = self.run(["systemctl", "is-enabled", "--quiet", f"{u}.service"], 30)
             if rc_a != 0 and rc_e != 0:
                 continue
-            if u == "d1max-agent":
-                self._sys("systemctl", "--no-block", "restart", f"{u}.service")
-            else:
-                self.run(["systemctl", "restart", f"{u}.service"], 180)
-            done.append(u)
-        return {"restarted": done}
+            rc, out = self.run(["systemctl", "restart", f"{u}.service"], 180)
+            (done if rc == 0 else failed).append(u)
+        if failed:
+            # 外审 W55-2 I4:有服务起不来要明说,不当成功;代理不重启(请求方还在,由它记下、再自己退出)
+            raise OpError(f"这几个服务重启失败:{'、'.join(failed)}(已重启:{'、'.join(done) or '无'})")
+        self._sys("systemctl", "--no-block", "restart", "d1max-agent.service")
+        return {"restarted": [*done, "d1max-agent"]}
 
     def reboot(self, args: dict[str, Any]) -> dict[str, Any]:
         delay = args.get("delay_s", 5)
@@ -452,18 +493,34 @@ class Ops:
             json.loads(reg)
         except ValueError as exc:
             raise OpError("登记文件不是 JSON") from exc
-        tls = self.etc / "d1max" / "tls"
-        for name, data, mode, dest in (("robot.crt", crt, 0o644, tls / "robot.crt"),
-                                       ("robot.key", key, 0o600, tls / "robot.key"),
-                                       ("registration.json", reg, 0o644,
-                                        self.etc / "d1max" / "registration.json")):
-            if dest.is_file():
-                st = dest.stat()
-                shutil.copy2(dest, dest.with_name(dest.name + ".prev"))
-                uid, gid = st.st_uid, st.st_gid
-            else:
-                uid, gid = user.pw_uid, user.pw_gid
-            write_atomic(dest, data, mode=mode, uid=uid, gid=gid)
+        # 外审 W55-2 C5:旧的留 .prev、新的写进去,都相对目录描述符、不跟链接(TLS 目录万一被交给了
+        # 代理的账号,它布下的链接也只会被换掉,不会被沿着写)
+        etc_fd = _dir_fd(self.etc / "d1max")
+        try:
+            tls_fd = os.open("tls", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=etc_fd)
+        except OSError as exc:
+            os.close(etc_fd)
+            raise OpError(f"打不开 TLS 目录:{exc}") from exc
+        try:
+            for dfd, name, data, mode in ((tls_fd, "robot.crt", crt, 0o644),
+                                          (tls_fd, "robot.key", key, 0o600),
+                                          (etc_fd, "registration.json", reg, 0o644)):
+                try:
+                    st = os.stat(name, dir_fd=dfd, follow_symlinks=False)
+                except FileNotFoundError:
+                    st = None
+                if st is not None and stat.S_ISREG(st.st_mode):
+                    old = read_in_dir(dfd, name, limit=MAX_PEM)
+                    if old is not None:
+                        write_in_dir(dfd, name + ".prev", old, mode=st.st_mode & 0o600 or 0o600,
+                                     uid=st.st_uid, gid=st.st_gid)
+                    uid, gid = st.st_uid, st.st_gid
+                else:
+                    uid, gid = user.pw_uid, user.pw_gid
+                write_in_dir(dfd, name, data, mode=mode, uid=uid, gid=gid)
+        finally:
+            os.close(tls_fd)
+            os.close(etc_fd)
         self._sys("systemctl", "--no-block", "restart", "d1max-agent.service")
         return {"installed": ["robot.crt", "robot.key", "registration.json"]}
 
@@ -480,6 +537,13 @@ class Ops:
         want = frozenset(f"deploy/{u}.service" for u in ROBOT_UNITS) | frozenset(BIND_FILES)
         got = tree_ok(root, manifest, pubkey, want)
         units = {k: v for k, v in got.items() if k.endswith(".service")}
+        bind_ok = all(k in got for k in BIND_FILES)
+        skipped = []
+        for rel in list(units):
+            why = unit_problem(Path(rel).name, units[rel], bind_ok=bind_ok)
+            if why:
+                skipped.append(f"{Path(rel).name}:{why}")
+                del units[rel]
         changed = []
         for rel, data in units.items():
             dest = self.systemd_dir / Path(rel).name
@@ -489,13 +553,16 @@ class Ops:
             changed.append(Path(rel).name)
         # 配网服务的代码(验过签的那一份)换进 root 独占目录;老包没带全就不动
         bind = False
-        if all(k in got for k in BIND_FILES):
+        if bind_ok:
             bind = install_bind(got, Path(self.cfg.get("lib_dir", "/usr/local/lib/d1max")))
         if changed:
             self._sys("systemctl", "daemon-reload")
         if bind or "d1max-bind.service" in changed:
             self.run(["systemctl", "--no-block", "try-restart", "d1max-bind.service"], 30)
-        return {"changed": changed, "bind": bind}
+        out: dict[str, Any] = {"changed": changed, "bind": bind}
+        if skipped:
+            out["skipped"] = skipped
+        return out
 
     # ---------------------------------------------------------------- 站点
     def _site(self) -> tuple[Path, Path, str]:
@@ -517,20 +584,16 @@ class Ops:
 
     def _keep_vpn(self, aside: Path, home: Path, uid: int, gid: int) -> int:
         """恢复备份(外审 W55-1 第 12 条):备份里没有 VPN 状态,同一台主机恢复时把原来的
-        ``vpn/`` 带过来(站点起来以后会照它重装 VPN 配置、收回到期的工程师)。原来的目录是站点账号的,
-        一律不跟链接,只拷两层里的普通文件。回拷了几个文件。"""
+        ``vpn/`` 带过来。两边的目录都是站点账号的:一律从固定的目录描述符出发、逐级 ``O_NOFOLLOW`` 打开,
+        新建的目录用 ``fchown`` 改属主(外审 W55-2 C4:不按路径重新解析)。只拷两层里的普通文件。"""
         try:
             src = os.open(aside / "vpn", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
         except OSError:
             return 0
         n = 0
+        hfd = _dir_fd(home)
         try:
-            dst_dir = home / "vpn"
-            if not dst_dir.exists():
-                dst_dir.mkdir(mode=0o700)
-                if os.geteuid() == 0:
-                    os.chown(dst_dir, uid, gid)
-            dst = _dir_fd(dst_dir)
+            dst = _sub_dir(hfd, "vpn", uid, gid)
             try:
                 for name in os.listdir(src):
                     st = os.stat(name, dir_fd=src, follow_symlinks=False)
@@ -542,28 +605,23 @@ class Ops:
                     elif stat.S_ISDIR(st.st_mode) and name == "peers":
                         sub = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
                                       dir_fd=src)
+                        dsub = _sub_dir(dst, "peers", uid, gid)
                         try:
-                            if not (dst_dir / "peers").exists():
-                                (dst_dir / "peers").mkdir(mode=0o700)
-                                if os.geteuid() == 0:
-                                    os.chown(dst_dir / "peers", uid, gid)
-                            dsub = _dir_fd(dst_dir / "peers")
-                            try:
-                                for pn in os.listdir(sub):
-                                    if not stat.S_ISREG(os.stat(pn, dir_fd=sub,
-                                                                follow_symlinks=False).st_mode):
-                                        continue
-                                    data = read_in_dir(sub, pn, limit=MAX_REQ)
-                                    if data is not None:
-                                        write_in_dir(dsub, pn, data, mode=0o600, uid=uid, gid=gid)
-                                        n += 1
-                            finally:
-                                os.close(dsub)
+                            for pn in os.listdir(sub):
+                                if not stat.S_ISREG(os.stat(pn, dir_fd=sub,
+                                                            follow_symlinks=False).st_mode):
+                                    continue
+                                data = read_in_dir(sub, pn, limit=MAX_REQ)
+                                if data is not None:
+                                    write_in_dir(dsub, pn, data, mode=0o600, uid=uid, gid=gid)
+                                    n += 1
                         finally:
+                            os.close(dsub)
                             os.close(sub)
             finally:
                 os.close(dst)
         finally:
+            os.close(hfd)
             os.close(src)
         return n
 
@@ -825,15 +883,37 @@ SITE_ACTIONS: dict[str, Callable[[Ops, dict[str, Any]], dict[str, Any]]] = {
 
 
 def safe_extract(tar: tarfile.TarFile, dest: Path) -> None:
-    """只解普通文件和目录,路径不许跑出 ``dest``。"""
+    """只解普通文件和目录,路径不许跑出 ``dest``;**不用包里带的权限、属主**(外审 W55-2 C1:``.`` 这种条目
+    会把解压根目录的权限改掉,打破 root 独占)—— 目录一律 0755、文件 0644(可执行的 0755),属主就是
+    执行器自己(root)。指向解压根目录本身的条目跳过;同名文件出现两次拒。"""
+    import posixpath
     base = dest.resolve()
     for m in tar.getmembers():
-        target = (dest / m.name).resolve()
-        if base not in target.parents and target != base:
-            raise OpError(f"包里的路径越界:{m.name}")
         if not (m.isfile() or m.isdir()):
             raise OpError(f"包里有不允许的条目:{m.name}")
-    tar.extractall(dest)  # noqa: S202 —— 上面逐条核过
+        name = posixpath.normpath(m.name)
+        if name in (".", ""):
+            continue
+        if name.startswith("/") or name == ".." or name.startswith("../"):
+            raise OpError(f"包里的路径越界:{m.name}")
+        target = base / name
+        if base not in target.parents:
+            raise OpError(f"包里的路径越界:{m.name}")
+        if m.isdir():
+            target.mkdir(mode=0o755, parents=True, exist_ok=True)
+            continue
+        target.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
+        src = tar.extractfile(m)
+        data = src.read() if src is not None else b""
+        try:
+            fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                         0o755 if m.mode & 0o111 else 0o644)
+        except FileExistsError as exc:
+            raise OpError(f"包里同一个文件出现了两次:{m.name}") from exc
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
+    for d in [base, *(p for p in base.rglob("*") if p.is_dir() and not p.is_symlink())]:
+        os.chmod(d, 0o755 if d != base else 0o700)
 
 
 def process(cfg: dict[str, Any], ops: Ops, *, uid: int, gid: int) -> int:
@@ -849,12 +929,19 @@ def process(cfg: dict[str, Any], ops: Ops, *, uid: int, gid: int) -> int:
             pass
     for path in sorted(req.glob("*.json")):
         rid = path.stem
+        # 改名认领(外审 W55-2 C3):跟请求方的撤回(删掉 <id>.json)只有一个能成 —— 请求方撤回成功
+        # 就一定不会执行,撤回不了就知道已经在这儿了
+        claimed = path.with_name(path.name + ".claim")
         try:
-            raw = read_nofollow(path, limit=MAX_REQ, owner=uid)
-        except OpError:
-            path.unlink(missing_ok=True)
+            os.rename(path, claimed)
+        except FileNotFoundError:
             continue
-        path.unlink(missing_ok=True)
+        try:
+            raw = read_nofollow(claimed, limit=MAX_REQ, owner=uid)
+        except OpError:
+            claimed.unlink(missing_ok=True)
+            continue
+        claimed.unlink(missing_ok=True)
         if not ID_RE.fullmatch(rid):
             continue
         out: dict[str, Any] = {"id": rid, "ok": False, "error": ""}

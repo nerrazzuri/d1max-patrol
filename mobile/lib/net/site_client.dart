@@ -1092,7 +1092,8 @@ class SiteClient implements SiteApi {
         session = null; // 令牌死了：要人重新登录
       }
       if (resp.statusCode >= 500 && path != '/api/client-errors') {
-        ErrorLog.instance.note('api', '$method ${path.split('?').first} → ${resp.statusCode}', detail: msg);
+        ErrorLog.instance.note('api', '$method ${path.split('?').first} → ${resp.statusCode}',
+            detail: msg, site: ErrorLog.keyOf(this));
       }
       throw SiteError(resp.statusCode, msg,
           body: decoded is Map<String, dynamic> ? decoded : const <String, dynamic>{});

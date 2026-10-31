@@ -31,7 +31,7 @@ from pathlib import Path
 from typing import Any
 
 from d1max_contract import debuglog
-from d1max_contract.privops import PrivOps, PrivOpsError
+from d1max_contract.privops import PrivOps, PrivOpsError, PrivTimeout
 
 #: 我们自己的服务(同 deploy/d1max-ops-runner 的 ROBOT_UNITS;测试核一致)。
 OUR_UNITS = ("d1max-agent", "d1max-localizer", "d1max-obstacles", "d1max-persons",
@@ -118,6 +118,9 @@ class OpsDesk:
             return "unsupported"
         try:
             return fn(payload)
+        except PrivTimeout as exc:
+            # 执行器已经拿走了、结果未知(外审 W55-2 C3):不能当没执行 —— 运行时按请求号接着查
+            return f"priv_pending: {exc.rid} {exc}"[:300]
         except PrivOpsError as exc:
             return f"priv_failed: {exc}"[:300]
 

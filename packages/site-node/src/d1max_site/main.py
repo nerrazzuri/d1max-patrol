@@ -1082,6 +1082,7 @@ class Server:
             log.exception("VPN 状态无法读取")
         self.api.priv, self.api.cert_renewer = self.priv, self.cert_renewer
         self.api.client_errors, self.api.vpn = self.client_errors, self.vpn
+        self.api.vpn_sync = self.vpn_sync
         self.api.apps = AppStore(home / "apps", pubkey=release_pubkey(home))
         self._stop = threading.Event()
         self._chores = threading.Thread(target=self._chore_loop, daemon=True,
