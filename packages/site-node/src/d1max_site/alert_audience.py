@@ -31,7 +31,8 @@ _OWNER = ("agent_args_skipped", "agent_too_old", "archive_failed", "backup_stale
           "bind_request", "wifi_change",
           # W53 / W52:临时巡逻的通知、账号申请 —— 不进保安的报警列表(保安在「今天的巡逻」里看)
           "adhoc_patrol", "adhoc_queue", "account_request",
-          "lens_blocked", "backup_verify_failed", "bundle_lag", "cert_expiring", "charge_overlap",
+          "lens_blocked", "backup_verify_failed", "bundle_lag", "cert_expiring",
+          "cert_renew_failed", "charge_overlap",
           "clock_skew",
           "disk_80", "evidence_plain", "evidence_seal_failed", "evidence_unopened", "finding",
           "force_bump", "force_config_bad", "incident_flood", "lane_stuck", "loc_degraded",

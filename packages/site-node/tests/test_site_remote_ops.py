@@ -351,3 +351,15 @@ def test_命令行签App包_站点认(tmp_path):
     man = json.loads((tmp_path / "nw-1.0.0.apk.manifest.json").read_text())
     st = AppStore(tmp_path / "apps", pubkey=tmp_path / "pub.pem")
     assert st.add("android", b"APK!", man, now_ms=1)["build"] == 7
+
+
+def test_自动续签早于体检告警_剩40天就续(tmp_path):
+    """体检剩 30 天以内报「证书快到期」;自动续签要更早动手,告警才只在自动续签不成时出现。"""
+    from d1max_site import health, remote_ops
+    assert remote_ops.RENEW_WITHIN_DAYS > health.CERT_WARN_DAYS
+    now = 1_800_000_000_000
+    ca, reg, db = _ca_reg(tmp_path, 40 * 86_400_000, now)
+    r = CertRenewer(dispatcher=_Disp(tmp_path), registry=reg, ca=ca, alerts=_Alerts(),
+                    now_ms=lambda: now)
+    assert r.due() == ["A"]
+    db.close()

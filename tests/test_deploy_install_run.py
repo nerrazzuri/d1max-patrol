@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
@@ -35,7 +36,10 @@ def _准备(root: Path) -> Path:
     subs = {"/opt/d1max": root / "opt/d1max", "/etc/d1max": root / "etc/d1max",
             "/etc/systemd": root / "etc/systemd", "/etc/sudoers.d": root / "etc/sudoers.d",
             "/etc/chrony": root / "etc/chrony",
-            "/usr/local/sbin": root / "usr/local/sbin", "/var/lib/d1max": root / "var/lib/d1max"}
+            "/usr/local/sbin": root / "usr/local/sbin", "/var/lib/d1max": root / "var/lib/d1max",
+            # W55:特权执行器、日志留盘(/etc/d1max-ops.json、/var/lib/d1max-ops 跟着上面两条换)
+            "/usr/local/lib/d1max": root / "usr/local/lib/d1max",
+            "/var/log/journal": root / "var/log/journal"}
     text = (DEPLOY / "install.sh").read_text(encoding="utf-8")
     for old, new in subs.items():
         text = text.replace(old, str(new))
@@ -65,6 +69,18 @@ exec "$@"
 ''')
     _stub(stub / "chown", f'echo "chown $*" >> "{log}"\n')
     _stub(stub / "id", "exit 0\n")
+    # W55:install -o root 在假根里改不了属主:记下来、去掉 -o/-g 再装;加组、装 VPN 工具只记
+    _stub(stub / "install", f'''echo "install $*" >> "{log}"
+skip=0
+for a do
+  shift
+  if [ $skip = 1 ]; then skip=0; continue; fi
+  case "$a" in -o|-g) skip=1 ;; *) set -- "$@" "$a" ;; esac
+done
+exec /usr/bin/install "$@"
+''')
+    _stub(stub / "usermod", f'echo "usermod $*" >> "{log}"\n')
+    _stub(stub / "apt-get", f'echo "apt-get $*" >> "{log}"\n')
     _stub(stub / "python3", f'''echo "python3 $*" >> "{log}"
 if [ "$1" = "-m" ] && [ "$2" = "venv" ]; then
   mkdir -p "$3/bin"
@@ -77,6 +93,13 @@ exit 0
     (pkg / "deploy").mkdir(parents=True)
     shutil.copy2(DEPLOY / "d1max-agent.service", pkg / "deploy")
     shutil.copy2(DEPLOY / "d1max-agent-start", pkg / "deploy")
+    # W55:特权执行器、它的单元、验签用的两个模块
+    for f in ("d1max-ops-runner", "d1max-ops.path", "d1max-ops.service"):
+        shutil.copy2(DEPLOY / f, pkg / "deploy")
+    (pkg / "packages/contract/src/d1max_contract").mkdir(parents=True)
+    for m in ("ed25519", "relsign"):
+        shutil.copy2(ROOT / f"packages/contract/src/d1max_contract/{m}.py",
+                     pkg / "packages/contract/src/d1max_contract")
     (pkg / "pyproject.toml").write_text("[project]\nname='x'\n", encoding="utf-8")
     return script
 
@@ -106,6 +129,23 @@ def test_新机器_装上代理并自启_env模板没有PIN(tmp_path):
     calls = _调用(tmp_path)
     assert "systemctl start d1max-agent.service" in calls, "没有注册文件:交给单元的条件去跳过"
 
+
+
+def test_W55_装上特权执行器_日志留盘_读日志的组(tmp_path):
+    script = _准备(tmp_path)
+    got = _跑(tmp_path, script)
+    assert got.returncode == 0, got.stdout + got.stderr
+    lib = tmp_path / "usr/local/lib/d1max"
+    assert (lib / "ops-runner").is_file() and (lib / "d1max_contract/relsign.py").is_file()
+    cfg = json.loads((tmp_path / "etc/d1max-ops.json").read_text(encoding="utf-8"))
+    assert cfg["profile"] == "robot" and cfg["spool"] == str(tmp_path / "var/lib/d1max-ops")
+    assert (tmp_path / "var/lib/d1max-ops/req").is_dir()
+    assert "Storage=persistent" in (tmp_path / "etc/systemd/journald.conf.d/d1max.conf").read_text()
+    calls = _调用(tmp_path)
+    assert "systemctl enable --now d1max-ops.path" in calls
+    assert any(c.startswith("install -m 0755 -o root -g root") and c.endswith("ops-runner")
+               for c in calls), "执行器要 root 属主"
+    assert any(c.startswith("usermod -aG systemd-journal") for c in calls), "代理要读得了系统日志"
 
 def test_老机器_清掉老服务助手白名单任务包_老env的PIN行不动只提示(tmp_path):
     script = _准备(tmp_path)

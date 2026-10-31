@@ -81,4 +81,5 @@ const Map<String, (String, String)> alertTitles = <String, (String, String)>{
   'run_start': ('Patrol started', '开始巡逻'),
   'battery_swap': ('Battery swap needed', '要换电池'),
   'authorized_person': ('Authorized person present', '授权人员在场'),
+  'cert_renew_failed': ('Automatic certificate renewal failed', '证书自动续签失败'),
 };

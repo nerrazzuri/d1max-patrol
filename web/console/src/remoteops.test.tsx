@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { setFetch } from "./api";
 import { flush, note } from "./errlog";
 import { lang } from "./i18n";
-import { AppPackages, RobotOps, SiteOps } from "./remoteops";
+import { AppPackages, RobotOps, SiteMetrics, SiteOps } from "./remoteops";
 
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
 let posted: { url: string; body: unknown; headers: Record<string, string> }[];
@@ -39,6 +39,10 @@ beforeEach(() => {
     if (url === "/api/system/backups") return Promise.resolve(json({ dest: "/mnt/bak", last_ok_ms: 1 }));
     if (url.startsWith("/api/app-update?platform=android")) return Promise.resolve(json({ available: true, version: "1.2.0+12" }));
     if (url.startsWith("/api/app-update")) return Promise.resolve(json({ available: false }));
+    if (url.startsWith("/api/metrics")) {
+      return Promise.resolve(json({ metrics: [{ ts: 1, key: "site_disk_free", value: 0.31 }, { ts: 2, key: "site_disk_free", value: 0.2 },
+        { ts: 1, key: "robots_online", value: 2 }] }));
+    }
     return Promise.resolve(json({}, 404));
   }) as typeof fetch);
 });
@@ -78,7 +82,7 @@ describe("机器人远程运维", () => {
     await waitFor(() => expect(document.querySelector("form.confirm-pw .error")).not.toBeNull());
     fireEvent.input(pw(), { target: { value: "pw" } });
     fireEvent.submit(document.querySelector("form.confirm-pw")!);
-    await waitFor(() => expect(said).toContain("机器人正在重启,约两分钟后重新上线。"));
+    await waitFor(() => expect(said).toContain("机器人正在重启，约两分钟后重新上线。"));
     expect(document.querySelector("form.confirm-pw")).toBeNull();
   });
   it("重启服务带上选的服务名", async () => {
@@ -109,6 +113,13 @@ describe("站点运维", () => {
     await waitFor(() => expect(posted.length).toBe(1));
     expect(posted[0].url).toBe("/api/app-update/upload?platform=android");
     expect(JSON.parse(atob(posted[0].headers["X-App-Manifest"]))).toEqual({ name: "nw.apk", version: "1.3.0+13" });
+  });
+});
+
+describe("运行指标", () => {
+  it("站点磁盘剩余是比例:显示百分比", async () => {
+    const { container: c } = render(<SiteMetrics />);
+    await waitFor(() => expect(c.querySelector('[data-metric="site_disk_free"] b')!.textContent).toBe("20%"));
   });
 });
 
