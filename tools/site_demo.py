@@ -124,9 +124,12 @@ def _unbound(a: argparse.Namespace, logs: Path, start) -> list[dict]:
         etc, data = base / "etc", base / "data"
         data.mkdir(parents=True)
         router = f"fake:{base / 'router.json'}"
+        chip = base / "chip-serial"                    # W63:台式机没有芯片序号,演示用一个假的
+        chip.write_bytes(f"DEMO-CHIP-{serial}".encode() + b"\x00")
         _patrol("factory", "--no-service", "burn", "--etc", str(etc), "--data-root", str(data),
                 "--router", router, "--serial", serial,
-                "--unbind-pub", str(keys / "unbind-pub.pem"), "--out", str(base / "label"))
+                "--unbind-pub", str(keys / "unbind-pub.pem"), "--out", str(base / "label"),
+                "--hw-source", str(chip))
         line = next(x for x in (base / "label" / f"{serial}.txt").read_text().splitlines()
                     if x.startswith("二维码 "))
         st = decode_sticker(line.split(" ", 1)[1])

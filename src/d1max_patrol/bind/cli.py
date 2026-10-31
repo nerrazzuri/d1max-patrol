@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import os
 import sys
@@ -46,9 +47,21 @@ def add_args(sub: argparse._SubParsersAction) -> None:
     b.add_argument("--model", default="D1 Max")
     b.add_argument("--out", required=True, help="贴纸打印文件放哪(打完删掉)")
     b.add_argument("--force", action="store_true", help="烧写过了也重来(小心:旧贴纸作废)")
-    c = fs.add_parser("check", help="出厂检验:扫贴纸,跟机器人里存的核对")
+    # W63:芯片编号从哪儿读(测试、演示用;真板子上读设备树,不用给)
+    b.add_argument("--hw-source", action="append", default=None, help=argparse.SUPPRESS)
+    c = fs.add_parser("check", help="出厂检验:扫贴纸,跟机器人里存的核对;设备身份(W63)")
     paths_args(c)
     c.add_argument("--scan", required=True, help="扫贴纸二维码得到的那一串")
+    c.add_argument("--hw-source", action="append", default=None, help=argparse.SUPPRESS)
+    sd = fs.add_parser("sign-device", help="W63:用出厂钥匙签出厂申请(在公司台式机上跑)")
+    sd.add_argument("requests", nargs="+", help="出厂申请 device-request.json(可以一次多份)")
+    sd.add_argument("--key", required=True, help="出厂钥匙(~/nexus-keys/factory.key)")
+    sd.add_argument("--out-dir", required=True, help="签好的出厂证书放哪(每台一份 <序列号>.json)")
+    sd.add_argument("--ledger", default="", help="出厂台账(CSV,追加;公司内部保存,不进仓库)")
+    ic = fs.add_parser("install-cert", help="W63:把签好的出厂证书装到这块板上(核是这块板的)")
+    paths_args(ic)
+    ic.add_argument("cert", help="出厂证书 <序列号>.json")
+    ic.add_argument("--hw-source", action="append", default=None, help=argparse.SUPPRESS)
     r = fs.add_parser("rekey", help="贴纸坏了重做(只能在没绑定的时候)")
     paths_args(r)
     r.add_argument("--out", required=True)
@@ -131,24 +144,76 @@ def _serve(args: argparse.Namespace) -> int:
 SERVICE = "d1max-bind.service"
 
 
+def _sign_devices(args: argparse.Namespace) -> int:
+    """W63:公司台式机上,用出厂钥匙签一份或几份出厂申请;每签一台记一行出厂台账。"""
+    import csv
+    from datetime import datetime, timezone
+
+    from d1max_contract import device_id as di
+    from d1max_contract import ed25519
+    try:
+        seed = ed25519.seed_from_pem(Path(args.key).read_bytes())
+    except (OSError, ValueError) as exc:
+        print(f"没成:读不了出厂钥匙 {args.key}:{exc}", file=sys.stderr)
+        return 1
+    out = Path(args.out_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    bad = 0
+    for r in args.requests:
+        try:
+            req = json.loads(Path(r).read_text(encoding="utf-8"))
+            cert = di.sign_device(seed, req, now_ms=_now())
+        except (OSError, ValueError) as exc:
+            print(f"没签:{r}:{exc}", file=sys.stderr)
+            bad += 1
+            continue
+        dst = out / f"{cert['serial']}.json"
+        dst.write_text(json.dumps(cert, ensure_ascii=False, indent=1), encoding="utf-8")
+        if args.ledger:
+            led = Path(args.ledger)
+            new = not led.exists()
+            with led.open("a", encoding="utf-8", newline="") as f:
+                w = csv.writer(f)
+                if new:
+                    w.writerow(["utc", "serial", "model", "hw_id", "device_pub", "key_id"])
+                w.writerow([datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                            cert["serial"], cert["model"], cert["hw_id"], cert["device_pub"],
+                            cert["key_id"]])
+        print(f"签好了:{cert['serial']} → {dst}")
+    return 1 if bad else 0
+
+
 def _factory(args: argparse.Namespace) -> int:
     from d1max_contract.binding import pretty_code
+    from d1max_patrol.bind import devid
     from d1max_patrol.bind import factory as fa
     from d1max_patrol.bind import wipe as wp
+    if args.factory_command == "sign-device":
+        return _sign_devices(args)
     paths = _paths(args)
+    hw = [Path(x) for x in args.hw_source] if getattr(args, "hw_source", None) else None
+    hw_kw = {"hw_sources": hw} if hw is not None else {}
     try:
+        if args.factory_command == "install-cert":
+            devid.install_cert(paths, devid.load_cert_file(Path(args.cert)),
+                               factory_pubs=devid.factory_pubs(paths), **hw_kw)
+            print(f"装好了:出厂证书 → {devid.cert_path(paths)}")
+            return 0
         if args.factory_command == "check":
             bad = fa.check(paths, args.scan)
+            pubs = devid.factory_pubs(paths)
+            bad += devid.problems(paths, factory_pubs=pubs, **hw_kw) if pubs else \
+                ["这台没有出厂公钥(/etc/d1max/factory-pub.pem):先装发行包"]
             for line in bad:
                 print(f"  FAIL  {line}")
             if not bad:
-                print("  PASS  贴纸跟机器人里存的对得上")
+                print("  PASS  贴纸跟机器人里存的对得上;出厂证书是这块板的、核得过")
             return 1 if bad else 0
         router = _router(args.router)
         svc = not args.no_service
         if args.factory_command == "burn":
             st = fa.burn(paths, args.serial, router=router, unbind_pub=Path(args.unbind_pub),
-                         model=args.model, force=args.force)
+                         model=args.model, force=args.force, **hw_kw)
             if svc and wp._run(["systemctl", "enable", "--now", SERVICE]) != 0:
                 print(f"注意:{SERVICE} 没起来(systemctl enable --now {SERVICE} 看原因)")
         else:
@@ -165,13 +230,15 @@ def _factory(args: argparse.Namespace) -> int:
                 print(f"贴纸已经换了(打印文件:{'、'.join(map(str, files))}),但 {SERVICE} 没起来:"
                       f"systemctl start {SERVICE} 起来以后新贴纸才能用", file=sys.stderr)
                 return 1
-    except fa.FactoryError as exc:
+    except (fa.FactoryError, devid.DevIdError) as exc:
         print(f"没成:{exc}", file=sys.stderr)
         return 1
     files = fa.label_files(st, Path(args.out))
     print(f"好了:序列号 {st.serial},绑定码 {pretty_code(st.code)},热点 {st.hotspot_ssid}")
     print("贴纸打印文件(**打完删掉**):" + "、".join(str(p) for p in files))
     print("二维码图在生产线电脑上出:python tools/sticker_label.py <上面那个 .txt>")
+    if args.factory_command == "burn":
+        print(f"出厂申请(W63,拿到台式机上用出厂钥匙签):{devid.request_path(paths)}")
     return 0
 
 
