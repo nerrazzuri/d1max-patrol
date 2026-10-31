@@ -355,6 +355,11 @@ void main() {
         throwsA(isA<SiteError>()
             .having((e) => e.status, 'status', 409)
             .having((e) => e.message, 'message', 'gina 正在遥控 A')));
+    // W54：站点带的原因代号也要带出来（画面还没起来 no_video：遥控页据此等一会儿再要）
+    site.teleopRefusal = 'A 没有画面:没画面不许动';
+    site.teleopRefusalReason = 'no_video';
+    await expectLater(
+        c.teleop('A'), throwsA(isA<SiteError>().having((e) => e.body['reason'], 'reason', 'no_video')));
     site.statusCodes['/api/robots/A/teleop'] = 401;
     await expectLater(c.teleop('A'), throwsA(isA<SiteError>()));
     expect(c.session, isNull);

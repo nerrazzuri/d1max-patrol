@@ -39,6 +39,9 @@ class FakeSite {
   /// `Sec-WebSocket-Accept`；连上之后收到的每条消息；站点这头的那条 WebSocket（测试拿来关）。
   String teleopRefusal = '';
 
+  /// 拒绝时带的原因代号（W54：`no_video`）；空就不带。
+  String teleopRefusalReason = '';
+
   /// 运行记录的照片（W00c5d）。
   List<int> photoBytes = <int>[0xFF, 0xD8, 1, 2, 3, 0xFF, 0xD9];
   bool teleopBadAccept = false;
@@ -209,7 +212,10 @@ class FakeSite {
     if (code != 200) {
       resp.statusCode = code;
       resp.headers.contentType = ContentType.json;
-      resp.write(jsonEncode(<String, dynamic>{'error': teleopRefusal}));
+      resp.write(jsonEncode(<String, dynamic>{
+        'error': teleopRefusal,
+        if (teleopRefusalReason.isNotEmpty) 'reason': teleopRefusalReason,
+      }));
       await resp.close();
       return;
     }

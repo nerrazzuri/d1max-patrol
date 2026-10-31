@@ -324,6 +324,7 @@ class MapWizardPage extends StatefulWidget {
   static const Key tipKey = Key('wizard-tip');
   static const Key teleopKey = Key('wizard-teleop');
   static const Key doneWalkKey = Key('wizard-done-walk');
+  static const Key walkBuiltKey = Key('wizard-walk-built');
   static const Key doneWalkOkKey = Key('wizard-done-walk-ok');
   static const Key buildStatusKey = Key('wizard-build-status');
   static const Key verdictKey = Key('wizard-verdict');
@@ -431,7 +432,10 @@ class _MapWizardPageState extends State<MapWizardPage> {
         } on SiteError {
           // 下次再问
         }
-      case 'walk' || 'origin':
+      case 'walk':
+        await _pollRobot();
+        await _reloadWizard(); // 机器人重启过、这一趟自己收尾了：站点上的建图结果会变
+      case 'origin':
         await _pollRobot();
       case 'build':
         await _reloadWizard();
@@ -876,6 +880,7 @@ class _MapWizardPageState extends State<MapWizardPage> {
     final st = _rv?['status'];
     final ready = st is Map ? st['ready'] : null;
     final control = ready is Map ? ready['control'] : null;
+    final built = '${(_w?['build'] as Map?)?['state'] ?? 'pending'}';
     final tip = walkTip(
         pathM: path, fromStartM: from, elapsed: Duration(minutes: mins), speed: _speed, turn: _turn);
     return _scroll([
@@ -918,7 +923,22 @@ class _MapWizardPageState extends State<MapWizardPage> {
         Text(tr('Keep the remote on LOW speed.', '遥控器档位放在低速。'),
             style: NwText.bodySmall.copyWith(color: c.fg(NwTone.warning))),
       ],
-      if (!live && !starting && !_busy) ...[
+      if (!live && !starting && built != 'pending') ...[
+        const SizedBox(height: Nw.s16),
+        NwNotice(
+            tone: NwTone.info,
+            text: built == 'failed'
+                ? tr('This run has already ended and the map could not be built (the robot may have restarted).',
+                    '这一趟已经收尾了，没建成（机器人可能重启过）。')
+                : tr('This run has already ended and the map is built (the robot may have restarted).',
+                    '这一趟已经收尾、图建好了（机器人可能重启过）。')),
+        const SizedBox(height: Nw.s8),
+        NwButton(
+            buttonKey: MapWizardPage.walkBuiltKey,
+            label: tr('See the result', '看建图结果'),
+            fullWidth: true,
+            onPressed: _busy ? null : () => _go('build')),
+      ] else if (!live && !starting && !_busy) ...[
         const SizedBox(height: Nw.s16),
         NwButton(
             buttonKey: MapWizardPage.startRecKey,
@@ -1067,14 +1087,16 @@ class _MapWizardPageState extends State<MapWizardPage> {
     ]);
   }
 
+  /// 重走一遍：站点换一个新版本号（旧的那一版留着），接着就开录（跟「开始录」一样）。
   Future<void> _rewalk() async {
     try {
       await _act(<String, dynamic>{'action': 'rewalk'});
-      _pv = const {};
-      _walkSince = null;
     } on SiteError {
-      // _err 里有
+      return; // _err 里有
     }
+    _pv = const {};
+    _walkSince = null;
+    if (_step == 'walk') await _startRec();
   }
 
   // ---- 5 禁行区
