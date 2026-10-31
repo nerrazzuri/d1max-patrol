@@ -151,7 +151,7 @@ def test_W40_狗没报左右_颜色_站点挡住不发(站点):
     code, d = s.req("POST", "/api/robots/A/deter",
                     {"output": "strobe", "on": True, "max_s": 30, "color": "red"}, token=gina)
     assert code == 409 and "red" in d["error"], d
-    assert len([c for c in s.disp.commands("A", 50) if c["kind"] == "deter"]) == n, "没发出去"
+    assert len([c for c in s.disp.commands("A", 50) if c["kind"] == "deter"]) == n, "未发出去"
     s.dog.deter_options = deter
 
 
@@ -176,7 +176,7 @@ def test_W40_设备健康_狗带上来_单狗视图里看得到(站点):
     d = s.req("GET", "/api/robots/A", token=gina)[1]["devices"]
     got = {x["id"]: x["state"] for x in d["items"]}
     assert got["relay"] == "online" and got["speaker"] == "online" and d["stale"] is False
-    s.dog.device_faults["relay"] = ("error", "左聚光灯没确认")
+    s.dog.device_faults["relay"] = ("error", "左聚光灯未确认")
     s.agent._next_devices_ms = 0                     # 不等 10 s
     _等(lambda: {x["id"]: x["state"] for x in s.req("GET", "/api/robots/A", token=gina)[1]
                 ["devices"]["items"]}["relay"] == "error", timeout=5)

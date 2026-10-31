@@ -324,7 +324,7 @@ def probe_tcp(host: str, port: int, timeout_s: float = 3.0) -> tuple[bool, str]:
         with socket.create_connection((host, port), timeout=timeout_s):
             return True, "TCP 可达"
     except TimeoutError:
-        return False, f"连接 {host}:{port} 超时({timeout_s}s) —— 网段不通或 IP 没配对"
+        return False, f"连接 {host}:{port} 超时({timeout_s}s) —— 网段不通或 IP 未配置对"
     except OSError as exc:
         return False, f"连接 {host}:{port} 失败: {exc}"
 
@@ -444,14 +444,14 @@ def render_report(result: ConformanceResult) -> str:
     a("## 字段级对拍(真机响应 vs golden fixture)")
     a("")
     if not result.diffs:
-        a("_没有采到任何可对拍的响应 —— 多半是链路就没通,先看阶段 0。_")
+        a("_没有采到任何可对拍的响应 —— 多半是链路就未通,先看阶段 0。_")
     for dfx in result.diffs:
         a(f"### `{dfx.resp_func}`")
         a("")
         if not dfx.fixture_files:
             a(
-                "**文档里没有这个响应的样本。** 真机发回了文档没写的报文 —— "
-                "这条要单独记下来带回去。字段:"
+                "**文档里没有此响应的样本。** 真机发回了文档未写的报文 —— "
+                "此条要单独记下来带回去。字段:"
             )
             a("")
             for p in dfx.extra_in_real:
@@ -472,7 +472,7 @@ def render_report(result: ConformanceResult) -> str:
                 a(f"- `{p}`")
             a("")
         if dfx.extra_in_real:
-            a("真机有、文档没写:")
+            a("真机有、文档未写:")
             a("")
             for p in dfx.extra_in_real:
                 a(f"- `{p}`")

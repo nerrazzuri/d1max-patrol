@@ -100,7 +100,7 @@ class _Handler(BaseHTTPRequestHandler):
         raw = self.headers.get("Content-Length") or "0"
         n = int(raw) if raw.isdigit() else -1          # 外审 C5:负数、乱写的一律拒,读的时候也有上限
         if n < 0:
-            raise BindRefused(400, "Content-Length 不对")
+            raise BindRefused(400, "Content-Length 错误")
         if n > MAX_BODY:
             raise BindRefused(413, "太大了")
         try:

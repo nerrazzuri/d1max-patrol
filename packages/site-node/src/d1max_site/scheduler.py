@@ -191,7 +191,7 @@ class SiteScheduler:
             if self.dispatcher.busy(r["robot_id"]) == r["task_id"]:
                 continue                                   # 狗在跑它
             self._tell(r["id"], r["entry_id"], r["scheduled_ms"], robot_of(r), "lost",
-                       f"{r['robot_id']} 回执超时,{LOST_MS // 60_000} 分钟了没见它跑这一趟")
+                       f"{r['robot_id']} 回执超时,{LOST_MS // 60_000} 分钟了未见它跑本次任务")
 
     def runs(self, entry_id: str | None = None, limit: int = 50) -> list[dict[str, Any]]:
         if entry_id is None:
@@ -215,7 +215,7 @@ class SiteScheduler:
         for r in rows:
             reason = e.data.get("reason", "") if isinstance(e.data, dict) else ""
             self._tell(r["id"], r["entry_id"], r["scheduled_ms"], r["robot_id"], "preempted",
-                       f"{r['robot_id']} 这一趟被更优先的任务打断了" + (f"({reason})" if reason
+                       f"{r['robot_id']} 本次任务被更优先的任务打断了" + (f"({reason})" if reason
                                                                       and reason != "preempted"
                                                                       else ""))
 
@@ -299,7 +299,7 @@ class SiteScheduler:
                     (entry.id, occ_ms, *_SETTLED)):
                 continue
             kind = "alarm" if entry.on_missed == "alarm" else "skip"
-            note = (f"迟了 {late} 分钟,按 on_missed={entry.on_missed}(站点那时没在排程:补记)"
+            note = (f"迟了 {late} 分钟,按 on_missed={entry.on_missed}(站点那时未在排程:补记)"
                     if entry.on_missed != "run_late" else
                     f"迟了 {late} 分钟,后面还有一轮,run_late 只补最近一轮(补记)")
             self._record(entry, occ_ms, kind, note=note)
@@ -324,7 +324,7 @@ class SiteScheduler:
                                 if self.dispatcher.autonomy(rid) == "manual_only"
                                 else f"{rid} 要人监护,不接排程"), "supervised"
             if not reason and self.dispatcher.busy(rid) is not None:
-                reason, kind = f"{rid} 正在跑 {self.dispatcher.busy(rid)}", "busy"
+                reason, kind = f"{rid} 正在执行 {self.dispatcher.busy(rid)}", "busy"
             if not reason and rid in self._site_busy():
                 reason, kind = f"{rid} 正在驱离", "busy"
             if not reason:
@@ -429,7 +429,7 @@ class SiteScheduler:
             # 狗可能收到了:这一轮不再派;过 LOST_MS 还没见它跑这一趟,``_sweep`` 说 ``lost``。
             with self.db.tx() as c:
                 c.execute("UPDATE schedule_runs SET note=? WHERE task_id=?",
-                          (f"{d.kind.value},{_TIMEOUT_NOTE}:可能已在跑,这一轮不再派"
+                          (f"{d.kind.value},{_TIMEOUT_NOTE}:可能已在运行,本轮不再派"
                            + (f";{why_pick}" if why_pick else ""), task_id))
             return
         if r["ack"]["result"] == "accepted":

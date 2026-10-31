@@ -212,7 +212,7 @@ class Frames:
         try:
             d = json.loads(Path(path).read_text(encoding="utf-8"))
         except (OSError, ValueError) as exc:
-            raise ContractError(f"frames:读不了 {path}:{exc}") from None
+            raise ContractError(f"frames:无法读取 {path}:{exc}") from None
         return cls.from_json(d)
 
 
@@ -269,7 +269,7 @@ def calibrate(poses: Sequence[tuple[Sequence[float], Sequence[float]]], *,
         if math.sqrt(_dot(ds, ds)) > 1e-9:
             steps.append(_unit(ds))
     if not steps:
-        raise ValueError("轨迹里狗没怎么动,估不出朝前")
+        raise ValueError("轨迹里机器人未怎么动,估不出朝前")
     fwd = _unit(_mean(steps))
     share = sum(1 for s in steps if _dot(s, fwd) > 0) / len(steps)
     why = f"「朝前」按 {len(steps)} 段位移估,{share:.0%} 跟它同向"

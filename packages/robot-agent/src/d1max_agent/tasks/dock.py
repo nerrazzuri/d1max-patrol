@@ -142,14 +142,14 @@ class DockTask(Task):
         now = self._now()
         # 期限先看(W13 外审 3):HAL 读不到、命令发不出去,期限照样到
         if self.phase == "docking" and now - self._phase_ms >= self.req.dock_timeout_s * 1000:
-            self._leave(TaskState.FAILED, f"没对上桩({self.req.dock_timeout_s} 秒没充上电)",
+            self._leave(TaskState.FAILED, f"未对上桩({self.req.dock_timeout_s} 秒未充上电)",
                         undock=False)
         elif self.phase == "charging" and now - self._t0 >= self.req.max_s * 1000:
-            self._leave(TaskState.FAILED, f"充了 {self.req.max_s} 秒还没到", undock=True)
+            self._leave(TaskState.FAILED, f"充了 {self.req.max_s} 秒尚未到", undock=True)
         elif self.phase in ("undocking", "stopping") and \
                 now - self._phase_ms >= SAFE_TIMEOUT_S * 1000:
-            why = ("出不了桩" if self.phase == "undocking" else "停不住对桩") + \
-                f"({SAFE_TIMEOUT_S:.0f} 秒确认不了离了桩)"
+            why = ("无法离开桩" if self.phase == "undocking" else "停不住对桩") + \
+                f"({SAFE_TIMEOUT_S:.0f} 秒无法确认离了桩)"
             if self._on_hazard is not None:
                 self._on_hazard(why)                  # 运动闸挂上:离桩确认之前不许动
             log.error("%s:%s,运动锁住", self.task_id, why)
@@ -169,7 +169,7 @@ class DockTask(Task):
             elif charging is False:
                 self._lost_ms = self._lost_ms or now
                 if now - self._lost_ms >= LOST_S * 1000:
-                    self._leave(TaskState.FAILED, "充电断了(碰掉了、桩断电?)", undock=True)
+                    self._leave(TaskState.FAILED, "充电已断开(碰掉了、桩断电?)", undock=True)
             elif charging:
                 self._lost_ms = None
             return

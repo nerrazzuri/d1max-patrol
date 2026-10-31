@@ -288,7 +288,7 @@ class OwnRtk(_Base):
             self.fed_bytes += n
             if err is not None:
                 self.dropped_bytes += len(data) - n
-                self.error = f"写改正没成: {err}"[:200]
+                self.error = f"写改正失败: {err}"[:200]
 
     def start(self) -> None:
         super().start()
@@ -317,7 +317,7 @@ class OwnRtk(_Base):
                 if self._vendor_running():
                     # 厂家驱动独占着这个口:两个进程读同一个口字节被分走、我们写的改正跟它的交错
                     # (W09e 内审应修 5)。停厂家驱动归装机、由人定
-                    raise RuntimeError(f"厂家的 {VENDOR_DRIVER} 在跑:先停它再用 --rtk own")
+                    raise RuntimeError(f"厂家的 {VENDOR_DRIVER} 正在运行:先停它再用 --rtk own")
                 fd = self._open(self.device, self.baud)
                 try:
                     fcntl.ioctl(fd, termios.TIOCEXCL)   # 独占(挡不住 root,主要靠上面查进程)

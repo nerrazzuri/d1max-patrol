@@ -59,7 +59,7 @@ def test_树指纹不把release_json自己算进去(tmp_path):
 
 def test_包的哈希对不上就拒收(tmp_path):
     where = _pkg(tmp_path, "2026-09-20-77b2de", sha="0" * 64)
-    with pytest.raises(ReleaseError, match="哈希对不上"):
+    with pytest.raises(ReleaseError, match="哈希不匹配"):
         verify_package(where)
 
 

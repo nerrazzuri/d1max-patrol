@@ -42,7 +42,7 @@ class LoopThread:
 
     def submit(self, factory: Callable[[], Awaitable[Any]]) -> concurrent.futures.Future:
         if self.loop is None or not self.loop.is_running():
-            raise RuntimeError("事件循环没在跑")
+            raise RuntimeError("事件循环未运行")
 
         async def _wrap() -> Any:
             return await factory()
@@ -55,7 +55,7 @@ class LoopThread:
             return fut.result(timeout_s)
         except concurrent.futures.TimeoutError:
             fut.cancel()
-            raise TimeoutError(f"事件循环里的调用 {timeout_s:g} s 没回来") from None
+            raise TimeoutError(f"事件循环里的调用 {timeout_s:g} s 未返回") from None
 
     def stop(self) -> None:
         loop, thread = self.loop, self._thread

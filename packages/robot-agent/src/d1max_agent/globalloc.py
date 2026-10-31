@@ -109,9 +109,9 @@ class Matcher:
     def __init__(self, occ: np.ndarray, free: np.ndarray, res: float,
                  origin: tuple[float, float]) -> None:
         if occ.shape != free.shape or occ.ndim != 2:
-            raise GlobalLocError("占用、可通行两张栅格大小不一样")
+            raise GlobalLocError("占用、可通行两张栅格大小不同")
         if not occ.any():
-            raise GlobalLocError("图里没有占用格(墙、柱子),套不了位置")
+            raise GlobalLocError("图里没有占用格(墙、柱子),无法匹配位置")
         self.res, self.origin = float(res), (float(origin[0]), float(origin[1]))
         self.occ, self.free = occ, free
         self.fine = _near(occ, self.res, SIGMA_FINE)
@@ -131,7 +131,7 @@ class Matcher:
             meta = parse_yaml((map_dir / "floor.yaml").read_text(encoding="utf-8"))
             img = parse_pgm((map_dir / "floor.pgm").read_bytes())
         except (OSError, CostmapError, ValueError) as exc:
-            raise GlobalLocError(f"读不了图:{exc}") from None
+            raise GlobalLocError(f"无法读取图:{exc}") from None
         p = img.astype(np.float32) / 255.0
         if not meta["negate"]:
             p = 1.0 - p                               # 黑是占用
@@ -232,7 +232,7 @@ def decide(cands: list[Candidate]) -> tuple[Candidate | None, str]:
     best = cands[0]
     if best.fit < MIN_FIT:
         return None, (f"最像的 ({best.x:.1f}, {best.y:.1f}) 贴合度只有 {best.fit:.2f}"
-                      f"(要 {MIN_FIT:g} 以上):看到的跟图对不上")
+                      f"(要 {MIN_FIT:g} 以上):看到的与图不匹配")
     if len(cands) > 1 and best.fit - cands[1].fit < MIN_GAP:
         o = cands[1]
         return None, (f"有两处差不多像:({best.x:.1f}, {best.y:.1f}) 贴合度 {best.fit:.2f}、"
@@ -325,7 +325,7 @@ class GlobalLoc:
         """感知最新一份墙那一层(狗身系):要新鲜、攒的时候狗没动、是 ``since`` 之后收到的。"""
         got = self.view.wall_scan(since=since) if self.view is not None else None
         if got is None:
-            raise GlobalLocError("没有新的点云(感知没连上、机器人在动,或者刚动过)")
+            raise GlobalLocError("没有新的点云(感知未连接、机器人在动,或者刚动过)")
         return got
 
     def scan_ref(self) -> tuple[float, float, float] | None:

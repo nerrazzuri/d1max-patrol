@@ -220,4 +220,4 @@ def parse(line: bytes) -> Message:
     try:
         return cls(**d)
     except (TypeError, ValueError, OverflowError) as exc:
-        raise ContractError(f"障碍桥:{cls.T} 的字段不对:{exc}") from None
+        raise ContractError(f"障碍桥:{cls.T} 的字段错误:{exc}") from None

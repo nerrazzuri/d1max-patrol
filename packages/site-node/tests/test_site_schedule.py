@@ -73,7 +73,7 @@ def test_版本不升_被改过_排程指向不存在的任务_都拒(tmp_path):
         import_bundle(db, 打包(tmp_path, 2, tag="again"), imported_by="alice", now_ms=2)
     改过 = 打包(tmp_path, 3)
     (改过 / "missions" / "loop.json").write_text("{}", encoding="utf-8")
-    with pytest.raises(CatalogError, match="校验没过"):
+    with pytest.raises(CatalogError, match="校验未通过"):
         import_bundle(db, 改过, imported_by="alice", now_ms=3)
     坏 = 排程.replace("mission: loop", "mission: ghost")
     with pytest.raises(CatalogError, match="ghost"):
@@ -105,7 +105,7 @@ async def _拍(t) -> None:
 async def test_到点派patrol_走完回写done(站):
     t = 站
     await _拍(t)
-    assert t.sched.runs() == [], "21:59 还没到"
+    assert t.sched.runs() == [], "21:59 尚未到"
     await t.run(15)                                   # 走到 22:00:00.5 之后
     t.clock.ms = 毫秒(22, 0, 30)
     await t.run(1)
@@ -129,21 +129,21 @@ async def test_记账写到一半失败_整个回滚_下一拍照样派(站):
     t.clock.ms = 毫秒(22, 0, 30)
     await t.run(2)
     with t.db.tx() as c:                             # 第三步(运行记录)写不进去
-        c.execute("CREATE TRIGGER 写不进去 BEFORE INSERT ON schedule_runs "
-                  "WHEN NEW.outcome = 'started' BEGIN SELECT RAISE(ABORT, '库写不进去'); END")
-    with pytest.raises(Exception, match="库写不进去"):
+        c.execute("CREATE TRIGGER 无法写入 BEFORE INSERT ON schedule_runs "
+                  "WHEN NEW.outcome = 'started' BEGIN SELECT RAISE(ABORT, '库无法写入'); END")
+    with pytest.raises(Exception, match="库无法写入"):
         await _拍(t)
-    assert t.sched.last_started("nightly") is None, "第二步跟着回滚:这一轮不算起跑过"
+    assert t.sched.last_started("nightly") is None, "第二步跟着回滚:本轮不算起跑过"
     assert not t.sched.runs("nightly")
-    assert not [c for c in t.site.commands("A") if c["kind"] == "patrol"], "命令没入账"
+    assert not [c for c in t.site.commands("A") if c["kind"] == "patrol"], "命令未入账"
     with t.db.tx() as c:
-        c.execute("DROP TRIGGER 写不进去")
+        c.execute("DROP TRIGGER 无法写入")
     t.clock.ms = 毫秒(22, 1)
     await t.run(1)
     await _拍(t)
     assert [r["outcome"] for r in t.sched.runs("nightly")] == ["started"], "下一拍照样派"
     [cmd] = [c for c in t.site.commands("A") if c["kind"] == "patrol"]
-    assert cmd["ack_result"] == "accepted", "机器人上没有一趟「发出去了、没记账」的在跑"
+    assert cmd["ack_result"] == "accepted", "机器人上没有一趟「发出去了、未记账」的正在运行"
 
 
 async def test_站点重启后同一轮不起第二次(站):
@@ -249,7 +249,7 @@ async def test_视图有下一轮与最近一次(站):
     assert v["bundle"] == {"bundle_id": "site-routes", "version": 1}
     assert v["entries"][0]["next_run"].startswith("2027-03-15T22:00")
     assert v["entries"][0]["last"] is None
-    assert v["clock_checked"] is False, "没接参照就如实说没核对"
+    assert v["clock_checked"] is False, "未接受参照就如实说未核对"
     assert SITE == "estate-1"
 
 
@@ -383,7 +383,7 @@ async def test_狗明确拒收_本轮记dispatch_failed_不每拍重发(站, tmp
     await t.run(2)
     await _拍(t)
     assert [r["outcome"] for r in t.sched.runs("nightly")] == ["no_robot"], \
-        "站点先看地图:对不上的不发"
+        "站点先看地图:不匹配的不发"
 
 
 async def test_狗明确拒收_记dispatch_failed_这一轮不再重发(tmp_path):
@@ -432,7 +432,7 @@ async def test_狗明确拒收_记dispatch_failed_这一轮不再重发(tmp_path
     await fake.publish(ta.status, json.dumps(st.to_wire()).encode())
     await t.broker.drain()
     await t.send(s.tick())
-    assert got == ["patrol"], "被拒之后这一轮不再每拍重发"
+    assert got == ["patrol"], "被拒之后本轮不再每拍重发"
     await t.site.close()
     t.db.close()
 
@@ -479,4 +479,4 @@ async def test_W29_雷暴到点不起跑_记weather_雷暴过了窗口里照跑(
     t.clock.ms = 毫秒(22, 5)
     await t.run(1)
     await _拍(t)
-    assert "started" in [r["outcome"] for r in t.sched.runs("nightly")], "雷暴过了:窗口里照跑"
+    assert "started" in [r["outcome"] for r in t.sched.runs("nightly")], "雷暴过了:窗口里照常执行"

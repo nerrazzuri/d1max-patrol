@@ -150,7 +150,7 @@ def plan(cost: bytes, hard: bytes, w: int, h: int, start: tuple[int, int],
         closed[i] = 1
         exp += 1
         if exp >= max_expansions:
-            raise PlanError("timeout", f"扩展了 {exp} 格还没找到路")
+            raise PlanError("timeout", f"扩展了 {exp} 格尚未找到路")
         if deadline is not None and not exp & 0x3FFF and time.monotonic() > deadline:
             raise PlanError("timeout", "规划超时")
         y, x = divmod(i, w)

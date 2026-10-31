@@ -91,9 +91,9 @@ def precheck(inputs: PrecheckInputs) -> tuple[PrecheckItem, ...]:
     out: list[PrecheckItem] = []
     out.append(PrecheckItem("busy", not i.busy, True,
                             "空闲:不跑任务、不换图、不录包、不重建、不在装版本" if not i.busy
-                            else f"{i.busy} —— 重启那几秒谁都停不了它,等它完", "busy"))
+                            else f"{i.busy} —— 重启那几秒谁都无法停止它,等它完", "busy"))
     if i.battery_pct is None:
-        out.append(PrecheckItem("battery", False, True, "读不到电量(适配器还没收到第一帧)",
+        out.append(PrecheckItem("battery", False, True, "无法读取电量(适配器尚未收到第一帧)",
                                 "battery_unknown"))
     else:
         ok = i.battery_pct >= MIN_BATTERY_PCT
@@ -106,15 +106,15 @@ def precheck(inputs: PrecheckInputs) -> tuple[PrecheckItem, ...]:
                             else "双槽所在的盘不够 —— 先清掉用不着的版本或数据", "storage_full"))
     same = i.name == i.current
     out.append(PrecheckItem("version", not same, True,
-                            f"在跑 {i.current or '(不知道)'},要切到 {i.name}" if not same
-                            else f"已经在跑 {i.name}", "already_running"))
+                            f"正在运行 {i.current or '(不知道)'},要切到 {i.name}" if not same
+                            else f"已在运行 {i.name}", "already_running"))
     out.append(PrecheckItem("installed", i.installed, True,
-                            "落了槽、venv 也建好了" if i.installed
-                            else f"{i.name} 没装(或者 venv 没建成)—— 先装", "not_installed"))
+                            "落了槽、venv 也已建好" if i.installed
+                            else f"{i.name} 未安装(或者 venv 建立失败)—— 先装", "not_installed"))
     if not i.installed:
-        out.append(PrecheckItem("package", False, True, "没装,没得核", "package_corrupt"))
+        out.append(PrecheckItem("package", False, True, "未安装,无法核对", "package_corrupt"))
     elif i.skipped:
-        out.append(PrecheckItem("package", False, False, "机器人在忙,槽里的包没核(空闲时再查)"))
+        out.append(PrecheckItem("package", False, False, "机器人在忙,槽里的包未核(空闲时再查)"))
     else:
         out.append(PrecheckItem("package", not i.package_error, True,
                                 "槽里的包跟自述的指纹对得上" if not i.package_error
@@ -123,7 +123,7 @@ def precheck(inputs: PrecheckInputs) -> tuple[PrecheckItem, ...]:
         # 没装(读不到自述)就不列:站点按自己的登记目录比的那一份补上。
         ok = i.requires_mission_schema <= i.mission_schema
         out.append(PrecheckItem("schema", ok, True,
-                                f"这一版要任务包 schema ≥ {i.requires_mission_schema},站点"
+                                f"此版本要任务包 schema ≥ {i.requires_mission_schema},站点"
                                 f"当前任务包是 {i.mission_schema}"
                                 + ("" if ok else " —— 先导入新格式的任务包"),
                                 "schema_mismatch"))
@@ -137,10 +137,10 @@ def precheck(inputs: PrecheckInputs) -> tuple[PrecheckItem, ...]:
         if name in got:
             continue
         if i.skipped:
-            out.append(PrecheckItem(name, False, False, f"{label}:机器人在忙,没问(空闲时再查)"))
+            out.append(PrecheckItem(name, False, False, f"{label}:机器人在忙,未问(空闲时再查)"))
         else:
             out.append(PrecheckItem(name, True, False,
-                                    f"{label}还没部署,这一项现在不查(接上之后不健康就拦)"))
+                                    f"{label}尚未部署,这一项现在不查(接上之后不健康就拦)"))
     # 接上来的来源一个不落地列出来(不认识的名字也列、也拦 —— 内审:以前被悄悄丢掉、照样切)。
     for s in i.sources:
         out.append(PrecheckItem(s.name, s.ok, True, f"{labels.get(s.name, s.name)}:{s.detail}",

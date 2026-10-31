@@ -80,8 +80,8 @@ class _SiteStandbyPageState extends State<SiteStandbyPage> {
               '$what：${ackReasonText('${ack['reason'] ?? res}')}');
     } on SiteError catch (e) {
       msg = e.status == 409
-          ? tr('$what failed: ${ackReasonText(e.message.replaceFirst(RegExp(r'^机器人没标[:：]'), ''))}',
-              '$what失败：${ackReasonText(e.message.replaceFirst(RegExp(r'^机器人没标[:：]'), ''))}')
+          ? tr('$what failed: ${ackReasonText(e.message.replaceFirst(RegExp(r'^机器人标记失败[:：]'), ''))}',
+              '$what失败：${ackReasonText(e.message.replaceFirst(RegExp(r'^机器人标记失败[:：]'), ''))}')
           : tr('$what failed: $e', '$what失败：$e');
     }
     if (!mounted) return;
@@ -254,7 +254,7 @@ class _SiteStandbyPageState extends State<SiteStandbyPage> {
                     style: head),
                 const SizedBox(height: Nw.s8),
                 if (_points.isEmpty)
-                  Text(tr('No standby points yet', '还没有待命点'), style: body.copyWith(color: c.textSecondary)),
+                  Text(tr('No standby points yet', '暂无待命点'), style: body.copyWith(color: c.textSecondary)),
                 if (_points.isNotEmpty)
                   NwCard(
                       padding: EdgeInsets.zero,

@@ -557,7 +557,7 @@ class _SiteDutyPageState extends State<SiteDutyPage> {
         key: SiteDutyPage.noMapKey,
         tone: NwTone.warning,
         child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-          Text(tr('The site has no map yet', '站点还没有地图'),
+          Text(tr('The site has no map yet', '站点尚无地图'),
               style: NwText.titleSmall.copyWith(color: c.text, fontWeight: FontWeight.w700)),
           const SizedBox(height: 2),
           Text(
@@ -615,7 +615,7 @@ class _SiteDutyPageState extends State<SiteDutyPage> {
                 NwNotice(
                     key: SiteDutyPage.noRobotsKey,
                     text: tr('No robots on this site yet. An administrator adds them under Robots → Add.',
-                        '站点上还没有机器人，请管理员在「机器人 → 添加」中添加。'))
+                        '站点暂无机器人，请管理员在「机器人 → 添加」中添加。'))
               else ...[
                 _chips(c),
                 nwGap8,

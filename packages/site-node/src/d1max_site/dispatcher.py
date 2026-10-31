@@ -43,7 +43,7 @@ from d1max_site.temporal import GATED, temporal_class
 
 log = logging.getLogger(__name__)
 
-_HEAD_TEXT = {"tail": "机器人尾为前", "unknown": "不知道"}
+_HEAD_TEXT = {"tail": "机器人尾为前", "unknown": "未知"}
 
 #: 多久没收到**实时** status 就算不新鲜(按站点自己的钟,见 ``DispatchClient.status_live_at``)。
 #: 代理空闲时每 30 s 发一次 status。
@@ -73,7 +73,7 @@ def version_mismatch_text(mission: str, map_id: str, version: str, robot_id: str
                           loaded: str) -> str:
     """任务绑的那一版跟狗加载的不一样(R1;派遣器、排程共用)。"""
     return (f"任务 {mission} 的点是在 {map_id} 第 {version} 版上量的,"
-            f"{robot_id} 加载的是第 {loaded} 版:每次建图原点都不一样,老坐标在新图上不可信 —— "
+            f"{robot_id} 加载的是第 {loaded} 版:每次建图原点都不同,老坐标在新图上不可信 —— "
             "在新图上核过点、改 map_version、重新打包导入(或者让机器人换回那一版图)")
 
 
@@ -400,7 +400,7 @@ class Dispatcher:
             raise DispatchRefused(f"{robot_id} 的登记已吊销或过期")
         c = self.clients.get(robot_id)
         if c is None:
-            raise DispatchRefused(f"{robot_id} 还没挂上派遣客户端")
+            raise DispatchRefused(f"{robot_id} 尚未挂上派遣客户端")
         return c
 
     # ------------------------------------------------------------ 叫停之后先不动(W00c5e)
@@ -434,11 +434,11 @@ class Dispatcher:
         if s is None or not s.online:
             raise DispatchRefused(f"{robot_id} 不在线")
         if not self._fresh(c):
-            raise DispatchRefused(f"{robot_id} 的状态不新鲜({self.stale_ms // 1000} s 内没收到"
+            raise DispatchRefused(f"{robot_id} 的状态不新鲜({self.stale_ms // 1000} s 内未收到"
                                   f"实时 status)")
         not_ready = [k for k, v in s.ready.to_wire().items() if k != "schema" and not v]
         if not_ready:
-            raise DispatchRefused(f"{robot_id} 没就绪: {', '.join(sorted(not_ready))}")
+            raise DispatchRefused(f"{robot_id} 未就绪: {', '.join(sorted(not_ready))}")
         if c.capabilities is not None and kind not in c.capabilities.tasks:
             raise DispatchRefused(f"{robot_id} 不支持 {kind}")
         self._check_skew(robot_id)
@@ -466,7 +466,7 @@ class Dispatcher:
         if head is not None and not head.get("autonomy", head.get("direction") == "head"):
             # W11a、W09i:狗报「这会儿不能自己走」就不派;老狗只报方向(那时只有狗头为前能走)
             d = head.get("direction")
-            why = ("后雷达没标定或没配避障,看不清身后" if d == "tail"
+            why = ("后雷达未标定或未配置避障,无法看清身后" if d == "tail"
                    else "只有头尾方向确定才能自己走")
             raise DispatchRefused(f"{robot_id} 的头尾方向是「{_HEAD_TEXT.get(d, d)}」:{why}"
                                   "(遥控照常)")
@@ -474,9 +474,9 @@ class Dispatcher:
         if obs is not None and obs.get("state") not in ("ok", "stale"):
             # 「不新鲜」是一两秒的事:狗那头原地等,跟后端一样放行(内审小)
             # W11:配了避障的狗,避障用不了(感知断了、外参自检没过、还在自检)就不派会自己走的
-            why = {"lost": "感知断了", "extrinsic_bad": "外参自检没过",
+            why = {"lost": "感知已断开", "extrinsic_bad": "外参自检未通过",
                    "initializing": "感知还在自检"}.get(str(obs.get("state")), str(obs.get("state")))
-            raise DispatchRefused(f"{robot_id} 的避障用不了:{why}"
+            raise DispatchRefused(f"{robot_id} 的避障不可用:{why}"
                                   + (f"({obs.get('reason')})" if obs.get("reason") else ""))
         if self.zones is None:
             return
@@ -488,8 +488,8 @@ class Dispatcher:
             # 这一版区域没人确认过,就不派自主走的任务(停止、遥控、安全降级不受影响)
             # 决策 66:只收紧的改动当场算确认了;走到这里的是放宽过(删、缩、调高限速)、
             # 或者从没确认过的
-            raise DispatchRefused(f"{loaded[0]}:{loaded[1]} 当前的区域修订还没做安全确认(放宽过、"
-                                  "或者从没确认过):先在地图页核对禁行区、确认这一版(图不在站点目录里"
+            raise DispatchRefused(f"{loaded[0]}:{loaded[1]} 当前的区域修订尚未做安全确认(放宽过、"
+                                  "或者从未确认过):先在地图页核对禁行区、确认此版本(图不在站点目录里"
                                   "就先导入)")
         site = self.zones.effective(*loaded)          # 狗守的是在生效的那份(外审 W38-I1)
         z = c.capabilities.tasks.get("zones_set") if c.capabilities is not None else None
@@ -499,9 +499,9 @@ class Dispatcher:
                                       "画了区域")
             return
         if z.get("plan_ok") is False:
-            raise DispatchRefused(f"{robot_id} 规划不了:{z.get('problem') or '没有规划栅格'}")
+            raise DispatchRefused(f"{robot_id} 无法规划:{z.get('problem') or '没有规划栅格'}")
         if z.get("rev") != site.revision:
-            raise DispatchRefused(f"{robot_id} 的区域还没同步(机器人上第 {z.get('rev')} 版,站点第 "
+            raise DispatchRefused(f"{robot_id} 的区域尚未同步(机器人上第 {z.get('rev')} 版,站点第 "
                                   f"{site.revision} 版)")
         if site.zones and not z.get("enforced"):
             # 限速区也一样(内审小 11):直线桥两样都不守
@@ -547,8 +547,8 @@ class Dispatcher:
             if not mp["match"]:
                 problems.append(
                     f"{m_id}:{m_ver} 机器人上的内容(摘要 {mp['dog'][:8]})跟站点登记的(摘要 "
-                    f"{mp['site'][:8]})不一样:机器人上的图被改过、或者站点换过这一版的文件;"
-                    "重新下发这一版(会重新下载、逐个核对)")
+                    f"{mp['site'][:8]})不同:机器人上的图被改过、或者站点换过此版本的文件;"
+                    "重新下发此版本(会重新下载、逐个核对)")
         out["map"] = mp
         # 区域
         zp: dict[str, Any] = {"dog_rev": rc.get("zones_rev"), "dog": rc.get("zones_digest"),
@@ -561,7 +561,7 @@ class Dispatcher:
                 zp["match"] = zp["dog"] == zp["site"] and zp["dog_rev"] == site.revision
                 if not zp["match"] and zp["dog_rev"] == site.revision:
                     problems.append(
-                        f"{m_id}:{m_ver} 的区域修订号一样(第 {site.revision} 版)但内容不一样:"
+                        f"{m_id}:{m_ver} 的区域修订号一样(第 {site.revision} 版)但内容不同:"
                         "站点多半从旧备份恢复过又改了一次;在地图页再保存一次区域(出新修订),"
                         "新内容会发给机器人")
             else:
@@ -576,7 +576,7 @@ class Dispatcher:
             return
         v = self.running_view(c)
         if v is not None and v["problems"]:
-            raise DispatchRefused(f"{robot_id} 在跑的配置跟站点登记的对不上:" + ";".join(
+            raise DispatchRefused(f"{robot_id} 正在运行的配置与站点登记的不匹配:" + ";".join(
                 v["problems"]))
 
     async def push_zones(self, zs: Any, *, tighten: bool, issued_by: str) -> dict[str, str]:
@@ -693,14 +693,14 @@ class Dispatcher:
         过期,起一趟没人握着的遥控)。"""
         skew = self.clock_skew_s(robot_id)
         if skew is None:
-            raise DispatchRefused(f"{robot_id} 的钟差还不知道(站点刚起来、机器人刚连上,"
-                                  "或者最近一分钟没"
+            raise DispatchRefused(f"{robot_id} 的钟差未知(站点刚起来、机器人刚连上,"
+                                  "或者最近一分钟未"
                                   "收到它的遥测):先不派会让它动、依赖命令有效期的命令")
         limit = min(SKEW_DISPATCH_MAX_S, ttl_ms / 2000.0)
         if abs(skew) > limit:
             # 狗按自己的钟判有效期 —— 差一半以上,旧命令不过期、新命令一到就过期
-            raise DispatchRefused(f"{robot_id} 的钟差 {skew:+.0f} 秒:这条命令的有效期 "
-                                  f"{ttl_ms / 1000:.0f} 秒,对不上,先对时(机器人向站点主机对时,见 "
+            raise DispatchRefused(f"{robot_id} 的钟差 {skew:+.0f} 秒:此条命令的有效期 "
+                                  f"{ttl_ms / 1000:.0f} 秒,不匹配,先对时(机器人向站点主机对时,见 "
                                   "W09d)")
 
     def _temporal_gate(self, robot_id: str, kind: str, payload: dict[str, Any],
@@ -773,7 +773,7 @@ class Dispatcher:
         caps = c.capabilities.tasks.get("patrol", {}) if c.capabilities is not None else {}
         loaded = (caps.get("map_id"), caps.get("map_version"))
         if loaded[0] is None or loaded[1] is None:
-            raise DispatchRefused(f"{robot_id} 没报已加载的地图")
+            raise DispatchRefused(f"{robot_id} 未上报已加载的地图")
         if m.map_id != loaded[0]:
             raise DispatchRefused(f"任务用的地图 {m.map_id!r},{robot_id} 加载的是 {loaded[0]!r}")
         if m.map_version != loaded[1]:
@@ -898,7 +898,7 @@ class Dispatcher:
             raise DispatchRefused(f"{robot_id} 不在线或状态不新鲜")
         bad = [k for k in ("control", "motion", "estop_clear") if not getattr(s.ready, k)]
         if bad:
-            raise DispatchRefused(f"{robot_id} 没就绪: {', '.join(bad)}")
+            raise DispatchRefused(f"{robot_id} 未就绪: {', '.join(bad)}")
         if c.capabilities is not None and "teleop" not in c.capabilities.tasks:
             raise DispatchRefused(f"{robot_id} 不支持遥控")
         return await self._send(c, robot_id, "teleop", teleop_grant_payload(
@@ -973,7 +973,7 @@ class Dispatcher:
         """发一帧遥控:专用主题、**QoS 0、不保留**(断线期间的帧不许补投)。"""
         c = self.clients.get(robot_id)
         if c is None:
-            raise DispatchRefused(f"{robot_id} 还没挂上派遣客户端")
+            raise DispatchRefused(f"{robot_id} 尚未挂上派遣客户端")
         await self._t.publish(c.topics.teleop, json.dumps(frame.to_wire()).encode(), qos=0,
                               retain=False)
 
@@ -1019,10 +1019,10 @@ class Dispatcher:
             raise DispatchRefused(str(exc)) from exc
         c = self._client_for(robot_id)
         if c.capabilities is None or "deter" not in c.capabilities.tasks:
-            raise Unsupported(f"{robot_id} 没装上装")
+            raise Unsupported(f"{robot_id} 未安装上装")
         caps = c.capabilities.tasks["deter"]
         if req.output not in caps.get("outputs", []):
-            raise Unsupported(f"{robot_id} 的上装没接 {req.output}")
+            raise Unsupported(f"{robot_id} 的上装未接入 {req.output}")
         # W40:老狗不认 side、color(会当成两边都开、缺省颜色),按能力在这里挡
         if req.side != "both" and req.side not in caps.get("spotlight_sides", []):
             raise Unsupported(f"{robot_id} 的聚光灯不分左右")

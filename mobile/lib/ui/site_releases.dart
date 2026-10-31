@@ -200,7 +200,7 @@ class _SiteReleasesPageState extends State<SiteReleasesPage> {
               await _data.catchError((Object _) => <String, dynamic>{});
             },
             child: NwListView(children: [
-              NwSectionLabel(tr('Running on each robot', '每台机器人在跑')),
+              NwSectionLabel(tr('Running on each robot', '各机器人运行版本')),
               nwGap8,
               for (final e in robots.entries)
                 Padding(
@@ -239,7 +239,7 @@ class _SiteReleasesPageState extends State<SiteReleasesPage> {
               NwSectionLabel(tr('Releases on the site', '站点上的版本')),
               nwGap8,
               NwListCard(children: [
-                if (rels.isEmpty) NwCardText(tr('No releases registered yet', '还没有登记过版本')),
+                if (rels.isEmpty) NwCardText(tr('No releases registered yet', '暂无已登记版本')),
                 for (final r in rels)
                   ListTile(
                     leading: Icon(Icons.inventory_2_rounded, color: nw.textSecondary),

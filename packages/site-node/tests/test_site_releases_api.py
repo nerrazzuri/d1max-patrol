@@ -129,7 +129,7 @@ def test_上一版退不回去_狗留在新版_站点告警说清楚(tmp_path):
         alice = _登(s, "alice")
         got = _等(lambda: [a for a in s.req("GET", "/api/alerts", token=alice)[1]["alerts"]
                            if a["kind"] == "release_failed"], timeout=8)
-        assert "退不回去" in got[0]["title"] and "留在新版" in got[0]["title"]
+        assert "无法回退" in got[0]["title"] and "留在新版" in got[0]["title"]
     finally:
         s.close()
 

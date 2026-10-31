@@ -125,7 +125,7 @@ class PriorPack:
             return cls()
         parts = s.split(":")
         if parts[0] != "regroup" or len(parts) != 3:
-            raise ValueError(f"先验打包写法不对:{s!r}(none 或 regroup:体素:范围倍数)")
+            raise ValueError(f"先验打包写法错误:{s!r}(none 或 regroup:体素:范围倍数)")
         v, e = float(parts[1]), float(parts[2])
         if not (0 < v <= 2 and 0 < e <= 5):
             raise ValueError(f"先验打包参数超出范围:{s!r}")
@@ -189,7 +189,7 @@ def package(work: Path, out: Path, *, prior_pack: PriorPack | None = None,
 
     for name in ("raw_prior.mm", "traj.tum", "map.simplemap"):
         if not (work / name).is_file():
-            raise BuildError(f"建图没出 {name}")
+            raise BuildError(f"建图未出 {name}")
     out.mkdir(parents=True, exist_ok=True)
     timings = dict(timings or {})
     n = len(read_tum(work / "traj.tum"))
@@ -210,7 +210,7 @@ def package(work: Path, out: Path, *, prior_pack: PriorPack | None = None,
                             clock_offset or bag_clock_offset)
     if hand["verdict"] == "mirrored":
         raise BuildError(
-            f"地图是镜像的,不出图:建图轨迹在地图平面上的转向跟狗自己的里程({hand['topic']})"
+            f"地图是镜像的,不出图:建图轨迹在地图平面上的转向跟机器人自己的里程({hand['topic']})"
             f"反号 —— 按转过的角度算 {1 - hand['agree']:.0%} 反着(一共转了 {hand['turn_deg']}°)。"
             f"多半是「上」判反了({why});这样的图上转向会反、导航会往反方向拐。"
             "核雷达的装法和 frames 的标定(对账 S2)")
@@ -257,11 +257,11 @@ def check_handedness(traj: Sequence[Any], frames: Frames, bag: Path | None, lida
     里程、读不了),带比的是哪个话题、按哪个钟对的时刻。先按报文头的钟对(狗上两边是一个钟);两边时段
     对不上再按「收到的时刻」对:轨迹加上雷达的「收到 − 报文头」(``clock_offset``)。"""
     if bag is None:
-        return {"verdict": "skipped", "why": "没给录包"}
+        return {"verdict": "skipped", "why": "未提供录包"}
     try:
         got = read_odom(bag)
     except Exception as exc:  # noqa: BLE001 —— 核不了照出图(没有 ROS、包坏了),写明为什么
-        why = f"读不了录包里的里程:{type(exc).__name__}: {exc}"
+        why = f"无法读取录包里的里程:{type(exc).__name__}: {exc}"
         return {"verdict": "skipped", "why": why[:300]}
     if got is None:
         return {"verdict": "skipped", "why": f"录包里没有里程({'、'.join(ODOM_TOPICS)})"}
@@ -295,7 +295,7 @@ def handedness(map_yaw: Sequence[tuple[float, float]], odom_yaw: Sequence[tuple[
     hi = min(m[-1, 0], o[-1, 0]) - HAND_MAX_LAG_S
     if hi - lo < 10 * HAND_STEP_S:
         return {"verdict": "unclear", "apart": True,
-                "why": f"两边的时段对不上(重叠 {max(0.0, hi - lo):.0f} s)"}
+                "why": f"两边的时段不匹配(重叠 {max(0.0, hi - lo):.0f} s)"}
     g = np.arange(lo, hi, HAND_STEP_S)
     do = np.diff(np.interp(g, o[:, 0], ou))
     sel = np.abs(do) >= HAND_MIN_STEP_RAD
@@ -326,7 +326,7 @@ def handedness(map_yaw: Sequence[tuple[float, float]], odom_yaw: Sequence[tuple[
         return {"verdict": "ok", **info, "why": "转向跟里程同号"}
     if agree <= 1 - HAND_AGREE:
         return {"verdict": "mirrored", **info, "why": "转向跟里程反号:地图是镜像的"}
-    return {"verdict": "unclear", **info, "why": "转向跟里程一阵同号一阵反号:说不清(时刻对不齐?)"}
+    return {"verdict": "unclear", **info, "why": "转向跟里程一阵同号一阵反号:无法确定(时刻对不齐?)"}
 
 
 def bag_odom(bag: Path, topics: Sequence[str] = ODOM_TOPICS
@@ -423,12 +423,12 @@ def _loop_close(work: Path, lc: Path, cli: str, run: Runner, info: dict[str, Any
     timings["lc_s"] = round(time.monotonic() - t0, 1)
     counts = _LC_COUNT.findall((lc / "lc.log").read_text(errors="replace"))
     if not counts:
-        raise _NoLoopClosure("回环日志里没有回环数(工具的版本不对?)")
+        raise _NoLoopClosure("回环日志里没有回环数(工具的版本错误?)")
     info["closures"] = int(counts[-1])
     if not info["closures"]:
-        raise _NoLoopClosure("没找到回环")
+        raise _NoLoopClosure("未找到回环")
     if not (lc / "map.simplemap").is_file():
-        raise _NoLoopClosure("回环没出 simplemap")
+        raise _NoLoopClosure("回环未出 simplemap")
     t0 = time.monotonic()
     for name, sm in (("kf_before.tum", work / "map.simplemap"),
                      ("kf_after.tum", lc / "map.simplemap")):
@@ -451,7 +451,7 @@ def _loop_close(work: Path, lc: Path, cli: str, run: Runner, info: dict[str, Any
          lc / "prior.log", "从回环后的 simplemap 出先验")
     timings["prior_s"] = round(time.monotonic() - t0, 1)
     if not (lc / "raw_prior.mm").is_file():
-        raise _NoLoopClosure("从回环后的 simplemap 出先验没出文件")
+        raise _NoLoopClosure("从回环后的 simplemap 出先验未出文件")
 
 
 def _lc_version(cli: str) -> str:
@@ -484,7 +484,7 @@ def correct_traj(traj: Sequence[Pose], before: Sequence[Pose], after: Sequence[P
 
     if not before or len(before) != len(after) or any(
             abs(a[0] - b[0]) > 1e-3 for a, b in zip(before, after, strict=True)):
-        raise BuildError(f"回环前后的关键帧对不上({len(before)} 个 / {len(after)} 个)")
+        raise BuildError(f"回环前后的关键帧不匹配({len(before)} 个 / {len(after)} 个)")
     stamps = np.array([t for t, _, _ in before])
     corr = []
     for (_, pb, qb), (_, pa, qa) in zip(before, after, strict=True):
@@ -593,7 +593,7 @@ def _render(points: Any, sensor: Any, frames: Frames, body: Any, traj: Sequence[
     from d1max_localizer import grid
 
     if bag is None:
-        why = "没给录包"
+        why = "未提供录包"
     elif topic not in FRONT_FRAME_TOPICS:
         why = f"话题 {topic} 不在前雷达系里"
     else:
@@ -613,7 +613,7 @@ def _render(points: Any, sensor: Any, frames: Frames, body: Any, traj: Sequence[
         try:
             g = grid.render(points, sensor, frames, scans=counted(), body_path=body)
         except _ScanReadError as exc:
-            why = f"读不了逐帧扫描:{exc}"[:300]
+            why = f"无法读取逐帧扫描:{exc}"[:300]
         else:
             if used[0]:
                 return g, f"scans:{used[0]}"
@@ -697,7 +697,7 @@ def orient(points: Any, traj: Sequence[Any]) -> tuple[Frames, str]:
         if peak < 0:
             return f, f"{why};地面在雷达下方 {-peak:.2f} m{note}"
         note = f"(按装法的「上」{_fmt(hint)} 标出来地面在雷达上方 {peak:.2f} m:雷达是倒装的,翻过来)"
-    raise BuildError("点云里找不到雷达下方的地面:标不出「上」")
+    raise BuildError("点云里未找到雷达下方的地面:标不出「上」")
 
 
 def coverage(traj: Sequence[Any], frames: Frames, step: float = COVERAGE_STEP_M
@@ -722,13 +722,13 @@ def _points(work: Path, run: Runner) -> Any:
          work / "mm2ply.log", "导出点云")
     plys = sorted(work.glob("points*.ply"))
     if not plys:
-        raise BuildError("导出点云没出文件")
+        raise BuildError("导出点云未出文件")
     with open(plys[0], "rb") as fh:
         start = fh.read(4096)
     try:
         head = start.index(b"end_header\n") + len(b"end_header\n")
     except ValueError:
-        raise BuildError("点云文件头不对") from None
+        raise BuildError("点云文件头错误") from None
     # 不先整个读成 bytes 再转(内审小 9:峰值是点云文件的好几倍)
     return np.fromfile(plys[0], dtype="<f4", offset=head).reshape(-1, 3).astype(float)
 
@@ -745,7 +745,7 @@ def _pack_prior(raw: Path, out: Path, pack: PriorPack, run: Runner, work: Path) 
                f"{pack.voxel:g}", "--extent-factor", f"{pack.extent:g}"], None,
          work / "regroup.log", "先验打包")
     if not out.is_file():
-        raise BuildError("先验打包没出文件")
+        raise BuildError("先验打包未出文件")
 
 
 def _run(run: Runner, cmd: list[str], env: dict[str, str] | None, log: Path, what: str,

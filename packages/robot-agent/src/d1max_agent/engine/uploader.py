@@ -194,7 +194,7 @@ class Uploader:
 
         if receipt.discarded:
             self.queue.finish(item.key)
-            return Step(key=item.key, action="discarded", detail="站点说这份已经删过了:不传了")
+            return Step(key=item.key, action="discarded", detail="站点说这份已删过了:不传了")
 
         if receipt.refused:
             # 站点永远不收:隔离起来,不再重试(每 5 分钟重传 1 MiB 一天就是几百 MB 的 4G);这一趟
@@ -226,7 +226,7 @@ class Uploader:
             self.queue.rewind(item.key)
             wait = backoff_ms(item.attempts + 1, rand=self._rand)
             self.queue.defer(item.key, next_ms=now_ms + wait)
-            return Step(key=item.key, action="rewound", detail="服务器算出来的哈希对不上")
+            return Step(key=item.key, action="rewound", detail="服务器算出来的哈希不匹配")
 
         self.queue.advance(item.key, offset=receipt.stored)
         if receipt.stored >= size:
@@ -256,17 +256,17 @@ class Uploader:
             return Step(
                 key=item.key,
                 action="deferred",
-                detail=f"归档盘不在(runs_root 读不到,等 {wait} ms)",
+                detail=f"归档盘不在(runs_root 无法读取,等 {wait} ms)",
             )
         if not (self.runs_root / run).is_dir():
             # 水位线把整趟删了(spec §4.4 的删除由水位驱动)。**销账,别永远卡着** ——
             # 一条读不到的文件挡在前面,后面的条目就永远轮不上。
             self.queue.finish(item.key)
-            return Step(key=item.key, action="gone", detail="这一趟已经被水位线删掉了")
+            return Step(key=item.key, action="gone", detail="本次任务已被水位线删掉了")
         wait = backoff_ms(item.attempts + 1, rand=self._rand)
         self.queue.defer(item.key, next_ms=now_ms + wait)
         return Step(
             key=item.key,
             action="deferred",
-            detail=f"run 目录还在但这个文件不见了(等 {wait} ms)",
+            detail=f"run 目录还在但此文件不见了(等 {wait} ms)",
         )

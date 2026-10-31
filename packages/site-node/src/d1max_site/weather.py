@@ -43,7 +43,7 @@ from d1max_site.db import SiteDB
 log = logging.getLogger(__name__)
 
 CONDITIONS = ("normal", "rain", "storm")
-LABEL = {"normal": "正常", "rain": "下雨", "storm": "雷暴", "unknown": "不知道"}
+LABEL = {"normal": "正常", "rain": "下雨", "storm": "雷暴", "unknown": "未知"}
 POLL_S = 600
 AUTO_STALE_S = 45 * 60
 DEFAULT_MANUAL_H = 3
@@ -250,7 +250,7 @@ class WeatherDesk:
             if t is not None and t.state.value in ("running", "pending"):
                 if t.task_id == tid:
                     continue                            # 还在撤:等它停
-                self._drop_return(rid, f"机器人在跑别的了({t.task_id}),不抢")
+                self._drop_return(rid, f"机器人正在执行其他任务({t.task_id}),不抢")
                 continue
             if self.standby is None:
                 continue
@@ -267,7 +267,7 @@ class WeatherDesk:
                 try:
                     with self.db.tx() as tx:
                         tx.execute("DELETE FROM weather_returns WHERE robot_id=?", (rid,))
-                        queue(tx, kind="standby_failed", robot=rid, title="没回待命点",
+                        queue(tx, kind="standby_failed", robot=rid, title="未返回待命点",
                               detail=f"雷暴撤了巡检 {tid},不能安全回待命点({exc}),"
                                      "机器人原地等,要人到场"[:300],
                               context={"task_id": tid}, now_ms=now)

@@ -370,11 +370,11 @@ class CommandProcessor:
         if self.loaded_map is None or (mission.map_id, version) != self.loaded_map:
             return "map_mismatch"
         if not mission.map_version:
-            return ("payload: 任务没绑地图版本(mission.map_version),不知道点是在哪一版图上量的,"
+            return ("payload: 任务未绑地图版本(mission.map_version),无法确定航点所属的地图版本,"
                     "不收 —— 站点要先升级(R1)")
         if mission.map_version != version:
             return (f"payload: 任务绑的是第 {mission.map_version} 版,命令说第 {version} 版:"
-                    "对不上不收")
+                    "不匹配不收")
         return ""
 
     async def _handle_abort(self, cmd: Command) -> Ack:

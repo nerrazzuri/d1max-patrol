@@ -15,11 +15,11 @@ const _allowed = <String, List<String>>{
     "site.contains('过期')"],
   'lib/ui/site_deter.dart': ["Text('中文')"],
   // 跟站点回的报错原文对：剥掉开头那几个字
-  'lib/ui/site_robot.dart': [r"RegExp(r'^机器人没标[:：]')"],
-  'lib/ui/site_standby.dart': [r"RegExp(r'^机器人没标[:：]')"],
+  'lib/ui/site_robot.dart': [r"RegExp(r'^机器人标记失败[:：]')"],
+  'lib/ui/site_standby.dart': [r"RegExp(r'^机器人标记失败[:：]')"],
   // W53：禁行区没确认的拒绝原话里抠出图号、版本
   'lib/ui/refusal.dart': [r"RegExp(r'^(\S+?):(\S+?)\s*当前的区域修订')"],
-  'lib/ui/site_intercepts.dart': [r"RegExp(r'^机器人没标[:：]')"],
+  'lib/ui/site_intercepts.dart': [r"RegExp(r'^机器人标记失败[:：]')"],
   // 存到站点上的区域名字（数据，不是界面文字）；显示的时候另外翻（zoneLabelText）
   'lib/ui/site_mapping.dart': [
     "'nogo' => '禁行区', 'erase' => '抹掉区', 'wall' => '虚拟墙', _ => '限速区'",

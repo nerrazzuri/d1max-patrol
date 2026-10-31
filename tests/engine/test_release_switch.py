@@ -55,7 +55,7 @@ def test_坏包落不了槽而且不留半个目录(tmp_path):
     layout = _layout(tmp_path)
     pkg = _pkg(tmp_path / "pkg", "2026-09-20-77b2de")
     (pkg / "bin" / "run.py").write_text("偷偷改了\n", encoding="utf-8")
-    with pytest.raises(ReleaseError, match="哈希对不上"):
+    with pytest.raises(ReleaseError, match="哈希不匹配"):
         stage(layout, pkg, now_ms=NOW)
     # 半个目录比没有目录更坏:它看着像装上了。
     assert installed(layout) == ()
@@ -128,7 +128,7 @@ def test_切到正在跑的那版要拒绝(tmp_path):
     stage(layout, _pkg(tmp_path / "p1", "2026-09-20-77b2de"), now_ms=NOW)
     activate(layout, "2026-09-20-77b2de", now_ms=NOW)
     commit(layout)
-    with pytest.raises(ReleaseError, match="已经是"):
+    with pytest.raises(ReleaseError, match="已是"):
         activate(layout, "2026-09-20-77b2de", now_ms=NOW)
 
 

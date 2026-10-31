@@ -353,7 +353,7 @@ async def test_两台狗_同防区两条事件并发_只出动一台(站, monkey
     h1 = asyncio.ensure_future(t.desk.handle("nvr-1", _签好(t, "e1")))
     for _ in range(5):
         await asyncio.sleep(0)
-    assert len(fake.calls) == 1, "第一条已经在等回执"
+    assert len(fake.calls) == 1, "第一条已在等回执"
     r2 = await asyncio.wait_for(t.desk.handle("nvr-1", _签好(t, "e2")), 2)
     assert r2["outcome"] == "merged", r2
     fake.gate.set()
@@ -544,7 +544,7 @@ async def test_W16_入侵没狗去_报P1没狗去_防区合在标题里(带告�
     assert r2["outcome"] == "unmapped"
     [a] = _开着的(t)
     assert a["kind"] == "intrusion_unanswered" and a["level"] == "P1" and a["robot"] == "site"
-    assert "back-yard" in a["title"] and "pond" in a["title"] and "没机器人去" in a["title"]
+    assert "back-yard" in a["title"] and "pond" in a["title"] and "无机器人去" in a["title"]
     # 演示站点实测记下:给保安看的说明不写「事件源 nvr-1 · intrusion」这种技术用语
     assert "事件源" not in a["detail"] and "intrusion" not in a["detail"]
     assert "nvr-1 报的" in a["detail"] and "拦截点" in a["detail"]
@@ -567,7 +567,7 @@ async def test_W16_告警报不出去_不带走派遣(站):
     await t.run(12)
 
     def 炸(_row):
-        raise RuntimeError("告警台坏了")
+        raise RuntimeError("告警台已损坏")
     t.desk.on_outcome = 炸
     r = await _报(t, "e1")
     assert r["outcome"] == "dispatched" and len(_gotos(t)) == 1
@@ -672,12 +672,12 @@ async def test_W16外审_告警第一次报不出去_派遣照常_下一拍补�
     def 头一回炸(row):
         tries.append(row["id"])
         if len(tries) == 1:
-            raise RuntimeError("告警库一时写不进")
+            raise RuntimeError("告警库一时无法写入")
         real(row)
     t.desk.on_outcome = 头一回炸
     r = await _报(t, "e1")
     assert r["outcome"] == "dispatched" and len(_gotos(t)) == 1, "派遣照常"
-    assert not _开着的(t) and t.desk.list()[0]["told_ms"] is None, "没报成:不记说过"
+    assert not _开着的(t) and t.desk.list()[0]["told_ms"] is None, "未上报成:不记说过"
     assert t.desk.retell() == 1
     [a] = _开着的(t)
     assert a["kind"] == "intrusion" and a["count"] == 1
@@ -796,7 +796,8 @@ async def test_W17_狗报能拍_派去拦截的goto带photo_不报就不带(站)
     t = 站
     await t.run(12)
     await _报(t, "e1")
-    assert "photo" not in _gotos(t)[0]["payload"], "机器人没报 goto_photo(老代理、真机器人还没取流)"
+    assert "photo" not in _gotos(t)[0]["payload"], ("机器人未上报 "
+                                                    "goto_photo(老代理、真机器人尚未取流)")
     await t.run(200)
     t.agent.parts.engine._media = sim_media(t.clock)     # 给这只仿真狗装上相机、重报能力
     await t.agent._publish_caps()
@@ -810,7 +811,7 @@ async def test_W17_狗报能拍_派去拦截的goto带photo_不报就不带(站)
     await t.run(200)
     assert t.desk.list()[0]["result"] == "done"
     shots = list((t.tmp / "agent").rglob("*.jpg")) + list(t.tmp.rglob("runs/**/*.jpg"))
-    assert shots, "到了拍的那张在这一趟的归档里"
+    assert shots, "到了拍的那张在本次任务的归档里"
 
 
 # ------------------------------------------------------------ W19:固定摄像头报的入侵

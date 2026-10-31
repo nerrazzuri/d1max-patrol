@@ -55,7 +55,7 @@ def test_重名拒_没初始化拒_名字写错拒(tmp_path):
         st.add("robot", "C40221")
     st.init(endpoint="1.2.3.4")
     st.add("robot", "C40221")
-    with pytest.raises(vpn.VpnError, match="已经有了"):
+    with pytest.raises(vpn.VpnError, match="已存在"):
         st.add("phone", "C40221")
     for bad in ("", "a b", "x" * 65, "../x"):
         with pytest.raises(vpn.VpnError):
@@ -76,7 +76,7 @@ def test_删了的地址不复用_站点配置里没了它(tmp_path):
     assert st.add("robot", "C")["address"] == "172.29.70.12", \
         "删掉的地址不马上给新来的(旧配置还在谁手里)"
     with pytest.raises(vpn.VpnError):
-        st.remove("没有这个")
+        st.remove("没有此")
 
 
 def test_命令行_init_add_list_server_conf(tmp_path, capsys):

@@ -79,7 +79,7 @@ void main() {
   });
 
   testWidgets('机器人拒了：说原因', (t) async {
-    final api = _api('admin')..standbyError = SiteError(409, '机器人没标:moving');
+    final api = _api('admin')..standbyError = SiteError(409, '机器人标记失败:moving');
     await _open(t, api);
     await t.tap(find.byKey(SiteStandbyPage.hereKey));
     await t.pumpAndSettle();

@@ -105,7 +105,7 @@ class LoopBridge:
                 ) -> concurrent.futures.Future[Any]:
         loop = self._loop
         if self._closed or loop is None or not loop.is_running():
-            raise RuntimeError("事件循环没在跑")
+            raise RuntimeError("事件循环未运行")
 
         async def _wrap() -> Any:
             return await factory()
@@ -124,7 +124,7 @@ class LoopBridge:
             return future.result(timeout_s)
         except concurrent.futures.TimeoutError as exc:
             future.cancel()
-            raise TimeoutError(f"等了 {timeout_s:g}s 还没结果") from exc
+            raise TimeoutError(f"等了 {timeout_s:g}s 尚未结果") from exc
 
     def spawn(self, coro_factory: Callable[[], Awaitable[Any]]) -> None:
         """丢过去就不管了。给"点一下就走"的动作用,比如启动一趟巡检。"""

@@ -156,8 +156,8 @@ def test_录包录的话题_前后雷达和两台的IMU都录(orch, tmp_path):
     for topic in RECORD_TOPICS:
         assert topic in line
     for topic in ("/rear_lidar", "/front_lidar/imu", "/rear_lidar/imu"):
-        assert topic in RECORD_TOPICS, "W34:后雷达不录就标不了、建不了双雷达图"
-    assert "-s mcap" in line, "mcap 是文档定的格式,换了格式回放的工具就对不上"
+        assert topic in RECORD_TOPICS, "W34:后雷达不录就标无法完成、无法建立双雷达图"
+    assert "-s mcap" in line, "mcap 是文档定的格式,换了格式回放的工具就不匹配"
 
 
 # ------------------------------------------------------------------ 状态机
@@ -232,7 +232,7 @@ async def test_重建的时候录包会被拒(orch, procs, bag, monkeypatch):
 
 async def test_包不存在就重建会被拒并说清楚(orch, tmp_path):
     with pytest.raises(MappingError, match="不存在"):
-        await orch.rebuild(tmp_path / "没有这个包", "m1")
+        await orch.rebuild(tmp_path / "没有此包", "m1")
 
 
 async def test_图名不合法被拒_一个目录也不删(orch, bag, cfg):
@@ -576,7 +576,7 @@ async def test_预览停不掉不碍停录(orch, procs, monkeypatch):
     async def fake_stop(name, *, term_grace_s=3.0):
         stopped.append(name)
         if name == "mapview":
-            raise OSError("停不了")
+            raise OSError("无法停止")
     await orch.start_record("w1", live_map_id="m1")
     monkeypatch.setattr(procs, "stop", fake_stop)
     bag = await orch.stop_record()
@@ -611,7 +611,7 @@ async def test_打包在线建好的_不重跑_MOLA_不清中间目录(orch, pro
     assert spec.name == "mappack" and spec.argv[-1] == "--reuse", "自己一份日志:退回重建不盖掉它"
     assert spec.argv[spec.argv.index("--work") + 1] == str(work)
     assert out == cfg.maps_dir / "m1" and orch.phase == "idle"
-    assert not work.exists(), "打好了:中间文件不留"
+    assert not work.exists(), "打完成:中间文件不留"
 
 
 async def test_打包失败留着中间目录_说日志在哪(orch, procs, cfg, bag):
@@ -630,7 +630,7 @@ async def test_停录一个停不掉_另一个照样停_回到闲着(orch, procs
     async def fake_stop(name, *, term_grace_s=3.0):
         stopped.append(name)
         if name == "bagrecord":
-            raise OSError("停不了")
+            raise OSError("无法停止")
     await orch.start_record("w1", live_map_id="m1")
     monkeypatch.setattr(procs, "stop", fake_stop)
     with pytest.raises(OSError):
@@ -655,7 +655,7 @@ async def test_停录部分失败_服务层跟编排一起回到不在录_边走
     async def 录包停不干净(name, *, term_grace_s=3.0):
         await real(name, term_grace_s=term_grace_s)
         if name == "bagrecord":
-            raise OSError("mcap 索引没写完")
+            raise OSError("mcap 索引未写完")
     monkeypatch.setattr(procs, "stop", 录包停不干净)
     with pytest.raises(OSError):
         await svc.stop()
@@ -679,7 +679,7 @@ async def test_停录部分失败_只录包的_之后马上能再开(orch, procs
 
     async def 停不干净(name, *, term_grace_s=3.0):
         await real(name, term_grace_s=term_grace_s)
-        raise OSError("停不了")
+        raise OSError("无法停止")
     monkeypatch.setattr(procs, "stop", 停不干净)
     with pytest.raises(OSError):
         await svc.stop()
@@ -695,7 +695,7 @@ async def test_编排说没在录_服务层也不在录(orch, cfg, tmp_path):
     svc = MappingService(orch, bags_root=cfg.bags_dir, maps_out=tmp_path / "outbox" / "maps")
     await svc.start("yard")
     await orch.stop_record()                           # 下层先停了
-    with pytest.raises(Exception, match="没在录"):
+    with pytest.raises(Exception, match="未在录"):
         await svc.stop()
     assert not svc.recording
     await svc.start("yard2")

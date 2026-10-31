@@ -10,20 +10,20 @@ SRC = (Path(__file__).resolve().parents[1] / "src" / "d1max_site")
 
 真原话 = {
     "held": "A 被 gina 叫停了:先点「恢复」再派",
-    "zones_unconfirmed": "estate-1:7 当前的区域修订还没做安全确认(放宽过、或者从没确认过)",
+    "zones_unconfirmed": "estate-1:7 当前的区域修订尚未做安全确认(放宽过、或者从未确认过)",
     "supervision": "A 要人现场监护:先在手机上打开「我在现场监护」",
     "teleop": "A 正在遥控",
     "offline": "A 不在线",
-    "not_localized": "A 没就绪: localized",
-    "not_ready": "A 没就绪: standing",
+    "not_localized": "A 未就绪: localized",
+    "not_ready": "A 未就绪: standing",
     "map_mismatch": "任务用的地图 'm1',A 加载的是 'm2'",
-    "obstacles": "A 的避障用不了:感知断了",
-    "clock": "A 的钟差还不知道(站点刚起来",
-    "zones_sync": "A 的区域还没同步(机器人上第 3 版,站点第 4 版)",
+    "obstacles": "A 的避障不可用:感知已断开",
+    "clock": "A 的钟差未知(站点刚起来",
+    "zones_sync": "A 的区域尚未同步(机器人上第 3 版,站点第 4 版)",
     "deterring": "A 正在驱离",
     "manual_only": "A 站点设成只许手动派,不接排程",
     "heading": "A 的头尾方向是「反」:x",
-    "unreachable": "第 2 个点走不到",
+    "unreachable": "第 2 个点无法到达",
 }
 
 
@@ -35,9 +35,9 @@ def test_每个代号认得一句原话_每句原话认成对的代号():
 
 def test_原话里的关键词还在源码里():
     src = "".join(p.read_text(encoding="utf-8") for p in SRC.glob("*.py"))
-    for kw in ("叫停了", "区域修订还没做安全确认", "要人现场监护", "正在遥控", "不在线",
-               "没就绪", "加载的是", "避障用不了", "钟差", "区域还没同步", "正在驱离",
-               "只许手动派", "头尾方向", "走不到"):
+    for kw in ("叫停了", "区域修订尚未做安全确认", "要人现场监护", "正在遥控", "不在线",
+               "未就绪", "加载的是", "避障不可用", "钟差", "区域尚未同步", "正在驱离",
+               "只许手动派", "头尾方向", "无法到达"):
         assert kw in src, kw
 
 

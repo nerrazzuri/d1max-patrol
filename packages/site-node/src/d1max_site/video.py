@@ -123,7 +123,7 @@ class _Feed:
     def join(self) -> None:
         with self._ready:
             if self._viewers >= self.hub.max_viewers:
-                raise VideoError(429, f"{self.robot_id} 的 {self.camera} 已经有 {self._viewers} "
+                raise VideoError(429, f"{self.robot_id} 的 {self.camera} 已有 {self._viewers} "
                                       f"个人在看了,最多 {self.hub.max_viewers} 个 —— 关掉一个再开")
             self._viewers += 1
             if self._stop_timer is not None:
@@ -224,7 +224,7 @@ class _Feed:
                 proc = subprocess.Popen(self._argv(port, pw), stdin=subprocess.DEVNULL,
                                         stdout=subprocess.PIPE, stderr=errs)  # 没有 shell
             except OSError as exc:
-                self.fail(gen, f"站点起不了 ffmpeg({self.hub.ffmpeg}): {exc}")
+                self.fail(gen, f"站点无法启动 ffmpeg({self.hub.ffmpeg}): {exc}")
                 return
             with self._ready:
                 if gen != self._gen:
@@ -249,7 +249,7 @@ class _Feed:
                         self._ready.notify_all()
             except (OSError, ValueError):
                 pass
-            self.fail(gen, f"{self.robot_id} 的 {self.camera} 画面断了: "
+            self.fail(gen, f"{self.robot_id} 的 {self.camera} 画面中断: "
                            f"{_tail(errs) or '机器人那头停了推流'}")
         except Exception as exc:
             log.exception("收流线程炸了")
@@ -279,7 +279,7 @@ class _Feed:
                     with self._ready:
                         flowing = self._online_locked()
                     if first or not flowing:
-                        self.fail(gen, f"机器人没接推流命令: {why}")
+                        self.fail(gen, f"机器人未接受推流命令: {why}")
                         return
                     if "钟差" in why:
                         # 时间权威闸拒的(W09h):不是一时没回话,马上再续也是拒 —— 按正常节奏再试,
@@ -352,11 +352,11 @@ class _Feed:
                         if self._detail:
                             raise VideoError(502, self._detail)
                         if not self._running:
-                            raise VideoError(502, f"{self.robot_id} 的 {self.camera} 画面没了")
+                            raise VideoError(502, f"{self.robot_id} 的 {self.camera} 画面丢失")
                         if first:
                             left = deadline - self.hub.clock()
                             if left <= 0:
-                                why = (f"{self.hub.first_frame_timeout_s:g} s 没等到"
+                                why = (f"{self.hub.first_frame_timeout_s:g} s 未等到"
                                        f" {self.robot_id} 的 {self.camera} 第一帧 ——"
                                        f"机器人不在线、相机不通,或者机器人到站点的端口不通")
                                 self._ready.release()
@@ -369,7 +369,7 @@ class _Feed:
                         else:
                             self._ready.wait(1.0)
                             if not self._online_locked() and self._running and not self._detail:
-                                why = f"{self.robot_id} 的 {self.camera} 画面冻住了"
+                                why = f"{self.robot_id} 的 {self.camera} 画面冻结"
                                 self._ready.release()
                                 try:
                                     self.fail(gen, why)

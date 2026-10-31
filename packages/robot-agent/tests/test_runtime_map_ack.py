@@ -56,7 +56,7 @@ async def test_定位器不收_不报成功_退回原来那张_不重新下载(�
     t, site, keeper = 台
     a = await _activate(t, site, "2", "a1")
     site.calls = []
-    t.loc.prior_answer = (False, "先验坏了")
+    t.loc.prior_answer = (False, "先验已损坏")
     b = site.add("m", "3", {**FILES, "x": b"3"})
     n_ok = len(_events(t, "map_activated"))
     await t.rt._on_cmd(_cmd("map_activate", b, "a2", t.c))
@@ -65,7 +65,7 @@ async def test_定位器不收_不报成功_退回原来那张_不重新下载(�
     failed = _events(t, "map_activate_failed")
     assert len(failed) == 1
     why = failed[0]["data"]["reason"]
-    assert "先验坏了" in why and "已退回原来的 m:2" in why
+    assert "先验已损坏" in why and "已退回原来的 m:2" in why
     assert len(_events(t, "map_activated")) == n_ok, "没有为这次换图发成功"
     assert t.rt.loaded_map == ("m", "2") and keeper.active() == a, "机器人还在原来那张"
     assert keeper.previous() is None, "失败的 3 不记成上一张"
@@ -91,7 +91,7 @@ async def test_定位器一直不回_超时算没成_也退回(台, monkeypatch)
     await t.rt.step(0.1)
     await t.broker.drain()
     failed = _events(t, "map_activate_failed")
-    assert failed and "没确认" in failed[-1]["data"]["reason"], failed
+    assert failed and "未确认" in failed[-1]["data"]["reason"], failed
     assert t.rt.loaded_map == ("m", "2") and keeper.active() == a
 
 

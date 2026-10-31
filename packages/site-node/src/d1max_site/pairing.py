@@ -70,9 +70,9 @@ def decode(code: str) -> dict[str, str]:
     try:
         d = json.loads(base64.urlsafe_b64decode(body + "=" * (-len(body) % 4)).decode("utf-8"))
     except (ValueError, TypeError) as exc:
-        raise PairingError("配对码坏了") from exc
+        raise PairingError("配对码无效") from exc
     if not isinstance(d, dict) or not all(isinstance(d.get(k), str) for k in ("n", "u", "f")):
-        raise PairingError("配对码坏了")
+        raise PairingError("配对码无效")
     if _FP.match(d["f"]) is None or not d["n"].strip() or len(d["n"]) > MAX_NAME:
-        raise PairingError("配对码坏了")
+        raise PairingError("配对码无效")
     return {"name": d["n"], "url": check_url(d["u"]), "fingerprint": d["f"]}

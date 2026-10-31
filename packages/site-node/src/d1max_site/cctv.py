@@ -157,12 +157,12 @@ class OnvifClient:
         except urllib.error.HTTPError as exc:
             raw = exc.read() or b""
             if exc.code in (401, 403):
-                raise OnvifAuthError(f"{url} 回 {exc.code}:口令不对?") from exc
+                raise OnvifAuthError(f"{url} 回 {exc.code}:密码错误?") from exc
             if b"NotAuthorized" in raw:
                 raise OnvifAuthError(f"{url}:NotAuthorized") from exc
             raise OnvifError(f"{url} 回 {exc.code}:{_fault(raw)}") from exc
         except (urllib.error.URLError, OSError) as exc:
-            raise OnvifError(f"{url} 连不上:{getattr(exc, 'reason', exc)}") from exc
+            raise OnvifError(f"{url} 无法连接:{getattr(exc, 'reason', exc)}") from exc
         try:
             root = ET.fromstring(raw)
         except ET.ParseError as exc:
@@ -178,7 +178,7 @@ class OnvifClient:
                          "</tds:Category></tds:GetCapabilities>")
         x = _find(root, "Events", "XAddr")
         if x is None or not (x.text or "").strip():
-            raise OnvifError("这台摄像头不报事件服务(不支持 ONVIF 事件?)")
+            raise OnvifError("此摄像头不报事件服务(不支持 ONVIF 事件?)")
         return x.text.strip()
 
     def subscribe(self, events_url: str) -> str:
@@ -188,7 +188,7 @@ class OnvifClient:
                          action=f"{NS['tev']}/EventPortType/CreatePullPointSubscriptionRequest")
         a = _find(root, "SubscriptionReference", "Address")
         if a is None or not (a.text or "").strip():
-            raise OnvifError("订阅没回地址")
+            raise OnvifError("订阅未返回地址")
         return a.text.strip()
 
     def pull(self, sub_url: str) -> list[ET.Element]:
@@ -389,7 +389,7 @@ def add_camera(db: SiteDB, cam: Camera, *, now_ms: int) -> None:
     if not SAFE_ID.match(cam.name):
         raise ValueError(f"摄像头名字只许字母、数字、. _ -:{cam.name!r}")
     if not cam.zone:
-        raise ValueError("要防区(--zone):这台摄像头报的入侵算哪个防区")
+        raise ValueError("要防区(--zone):此摄像头报的入侵算哪个防区")
     from d1max_site.sealbox import seal_value
     sealed = seal_value(db, cam.password)             # 口令加密落库(W30,决策 43)
     with db.tx() as c:
@@ -514,8 +514,8 @@ class CctvManager:
             if not self._alerts.has_open(robot, "cctv_offline"):
                 self._alerts.raise_alert(
                     kind="cctv_offline", robot=robot,
-                    title=f"摄像头 {name} 连不上(防区 {w.cam.zone})",
-                    detail=f"{scrub(st.error) or '连不上'};这一路的入侵现在收不到")
+                    title=f"摄像头 {name} 无法连接(防区 {w.cam.zone})",
+                    detail=f"{scrub(st.error) or '连不上'};此路的入侵现在无法接收")
         except Exception:
             log.exception("报「摄像头 %s 连不上」失败,下一拍再试", name)
             return
@@ -801,7 +801,7 @@ class CctvView:
             with self._cond:
                 if self._gen != gen:
                     return
-                self.error = "画面断了"
+                self.error = "画面中断"
                 tail = self._tail_locked()
                 if tail:
                     log.warning("摄像头 %s 的画面断了:%s", self.cam.name, scrub(tail))
@@ -862,7 +862,7 @@ class CctvView:
     def frames(self, *, first_timeout_s: float = 15.0) -> Iterator[bytes]:
         with self._cond:
             if self._closed:
-                raise TimeoutError("这台摄像头的画面已经关了")
+                raise TimeoutError("此摄像头的画面已关闭")
             self._viewers += 1
             if self._proc is None:
                 self._start_locked()
@@ -881,7 +881,7 @@ class CctvView:
                             left = STALL_S - (time.monotonic() - at) if at is not None else 0
                         if left <= 0 or not self._cond.wait(left):
                             if not got_any:
-                                raise TimeoutError("摄像头没出画面")
+                                raise TimeoutError("摄像头未出画面")
                             break
                     if self._gen != gen or self._proc is None:
                         return                           # 这一代没了(断了、关了)
@@ -889,7 +889,7 @@ class CctvView:
                         at = self._frame_at
                         if at is None or time.monotonic() - at >= STALL_S:
                             # 卡住了(外审 R6):收掉这一代,结束这条流;浏览器那头断开、重连
-                            self.error = "画面卡住了"
+                            self.error = "画面卡住"
                             log.warning("摄像头 %s 的画面 %g 秒没动,收掉重拉", self.cam.name,
                                         STALL_S)
                             self._reap_locked()

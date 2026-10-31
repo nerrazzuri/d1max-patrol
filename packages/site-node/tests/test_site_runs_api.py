@@ -21,7 +21,7 @@ S1 = "20260925T010000Z"
 
 class 假模型:
     def judge(self, prompt, images):
-        return {"verdict": "abnormal", "confidence": 0.8, "reason": "门没关", "evidence": ""}
+        return {"verdict": "abnormal", "confidence": 0.8, "reason": "门未关", "evidence": ""}
 
 
 @pytest.fixture
@@ -128,7 +128,7 @@ def test_值守汇总_狗的盘况与站点的备份(站点):
     _等(lambda: s.disp.telemetry_at.get("A"))
     d = s.req("GET", "/api/watch/summary", token=olga)[1]
     r = d["robots"][0]
-    assert r["disk_used_ratio"] is None and "不知道" in r["why"]["disk_used_ratio"]
+    assert r["disk_used_ratio"] is None and "未知" in r["why"]["disk_used_ratio"]
     assert r["bundle_lag"] is None and "任务包" in r["why"]["bundle_lag"]
     assert r["backup"] is None and "站点" in r["why"]["backup"]
     assert d["site"]["backup"]["configured"] is True and d["site"]["backup"]["last_ok_ms"] is None

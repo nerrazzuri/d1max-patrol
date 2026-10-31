@@ -214,7 +214,7 @@ class SimMappingOrchestrator:
         if closed:
             lc["max_shift_m"] = 0.06
         else:
-            lc["why"] = "没找到回环"
+            lc["why"] = "未找到回环"
         h, w = self._grid.shape
         (out / "coverage.json").write_text(json.dumps({"version": 1, "step_m": STEP_M,
                                                        "path": trail}) + "\n")

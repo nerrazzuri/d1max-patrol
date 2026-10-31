@@ -86,7 +86,7 @@ class RecordingStore:
         ``video.mp4.d1e``,W30b:收齐了解开再登记)。收齐了登记。"""
         got = split_video(run)
         if got is None or rel not in (VIDEO_FILE, VIDEO_SEALED):
-            raise PathRefused(f"录像的路径不对:{run!r}/{rel!r}")
+            raise PathRefused(f"录像的路径错误:{run!r}/{rel!r}")
         camera, stamp = got
         with self.locks("rec", robot_id, f"{camera}/{stamp}"):
             if is_purged(self.db, "rec", robot_id, f"{camera}/{stamp}"):

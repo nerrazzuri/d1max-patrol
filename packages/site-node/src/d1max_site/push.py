@@ -172,9 +172,9 @@ class JPush:
                 raise PushRetryNow(f"极光不认去重字段(400):{detail}") from exc
             raise PushError(f"极光回 {exc.code}:{detail}") from exc
         except (urllib.error.URLError, OSError, ValueError) as exc:
-            raise PushError(f"连不上极光:{exc}") from exc
+            raise PushError(f"无法连接极光:{exc}") from exc
         if "msg_id" not in got:
-            raise PushError(f"极光的回复看不懂:{str(got)[:200]}")
+            raise PushError(f"极光的回复无法解析:{str(got)[:200]}")
         return str(got["msg_id"])
 
 
@@ -187,9 +187,9 @@ def openssl_rs256(private_key_pem: str, data: bytes) -> bytes:
             out = subprocess.run(["openssl", "dgst", "-sha256", "-sign", "/dev/stdin", f.name],
                                  input=private_key_pem.encode(), capture_output=True, timeout=10)
         except (OSError, subprocess.SubprocessError) as exc:
-            raise PushError(f"openssl 签名没成:{exc}") from exc
+            raise PushError(f"openssl 签名失败:{exc}") from exc
     if out.returncode != 0 or not out.stdout:
-        raise PushError("openssl 签名没成:服务账号的私钥不对")
+        raise PushError("openssl 签名失败:服务账号的私钥错误")
     return out.stdout
 
 
@@ -255,9 +255,9 @@ class Fcm:
             with self._open(req, timeout=self.timeout_s) as resp:
                 got = json.loads(resp.read() or b"{}")
         except urllib.error.HTTPError as exc:
-            raise PushError(f"FCM 鉴权回 {exc.code}:服务账号不对,或者站点的钟不准") from exc
+            raise PushError(f"FCM 鉴权回 {exc.code}:服务账号错误,或者站点的钟不准") from exc
         except (urllib.error.URLError, OSError, ValueError) as exc:
-            raise PushError(f"连不上 Google 鉴权:{exc}") from exc
+            raise PushError(f"无法连接 Google 鉴权:{exc}") from exc
         tok = str(got.get("access_token") or "")
         if not tok:
             raise PushError("FCM 鉴权的回复里没有访问令牌")
@@ -297,21 +297,21 @@ class Fcm:
                 why = f"FCM 回 {exc.code}:{detail[:200]}"
             except (urllib.error.URLError, OSError, ValueError) as exc:
                 failed += 1
-                why = f"连不上 FCM:{exc}"
+                why = f"无法连接 FCM:{exc}"
         if failed:
-            raise PushError(f"{why}({failed} / {len(reg_ids)} 台没发出去)")
+            raise PushError(f"{why}({failed} / {len(reg_ids)} 台未发出去)")
         return last
 
 
 def _jpush(p: dict[str, Any]) -> tuple[Any, str]:
     key = str(p.get("app_key") or "")
     if not key:
-        return None, "push.app_key 没填"
+        return None, "push.app_key 未填"
     sf = Path(p.get("secret_file") or DEFAULT_SECRET)
     try:
         secret = sf.read_text(encoding="utf-8").strip()
     except OSError as exc:
-        return None, f"读不了极光 Master Secret {sf}:{exc}"
+        return None, f"无法读取极光 Master Secret {sf}:{exc}"
     if not secret:
         return None, f"{sf} 是空的"
     return JPush(key, secret), ""
@@ -322,7 +322,7 @@ def _fcm(p: dict[str, Any]) -> tuple[Any, str]:
     try:
         acct = json.loads(sf.read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
-        return None, f"读不了 FCM 服务账号 {sf}:{exc}"
+        return None, f"无法读取 FCM 服务账号 {sf}:{exc}"
     need = {k: str(acct.get(k) or "") for k in ("project_id", "client_email", "private_key")} \
         if isinstance(acct, dict) else {}
     if not need or not all(need.values()):
@@ -335,7 +335,7 @@ def load_senders(cfg: dict[str, Any]) -> tuple[dict[str, Any], str]:
     """按 ``site.json`` 造推送通道。回 ({通道名: 通道}, 没配 / 配不好的原因,几条用分号连)。"""
     p = cfg.get("push") or {}
     if not p:
-        return {}, "没配推送(site.json 的 push)"
+        return {}, "未配置推送(site.json 的 push)"
     parts: dict[str, dict[str, Any]] = {}
     if "app_key" in p or "provider" in p:            # 老写法:平铺的就是极光
         if p.get("provider", "jpush") != "jpush":
@@ -426,7 +426,7 @@ class PushDesk:
             raise ValueError(f"provider 要是 {' / '.join(PROVIDERS)}")
         reg_id = str(reg_id).strip()
         if not reg_id or len(reg_id) > REG_MAX[provider] or not reg_id.isascii():
-            raise ValueError("registration_id 不对")
+            raise ValueError("registration_id 错误")
         if platform not in ("android", "ios", "harmony"):
             raise ValueError("platform 要是 android / ios / harmony")
         with self.db.tx() as c:
@@ -593,7 +593,7 @@ class PushDesk:
             self.last_error = ""
             with self.db.tx() as c:                       # 记实际发完的时刻
                 c.execute("UPDATE push_outbox SET sent_ms=?, error=? WHERE id=?",
-                          (self._now(), f"发了一部分,{stopped},后面的没发" if stopped else "",
+                          (self._now(), f"发了一部分,{stopped},后面的未发" if stopped else "",
                            row["id"]))
             if stopped and not sent_any:
                 self._drop(row, stopped)
@@ -619,7 +619,7 @@ class PushDesk:
             if again:
                 why = self._skip(row, self._now())
                 if why:
-                    raise PushError(f"马上重发之前核对没过:{why}")
+                    raise PushError(f"马上重发之前核对未通过:{why}")
             left = (EXPIRE_MS - (self._now() - row["created_ms"])) // 1000
             try:
                 sender.send(chunk, title, row["title"], extras, ttl_s=max(1, left))
@@ -631,11 +631,11 @@ class PushDesk:
 
     def _skip(self, row: dict[str, Any], now: int) -> str:
         if now - row["created_ms"] > EXPIRE_MS:
-            return "一个小时没发出去,作废"
+            return "一个小时未发出去,作废"
         a = self.db.query("SELECT acked_ms, resolved_ms FROM alerts WHERE key=?",
                           (row["alert_key"],))
         if a and (a[0]["acked_ms"] is not None or a[0]["resolved_ms"] is not None):
-            return "已经有人确认或解决了"
+            return "已有人确认或解决了"
         return ""
 
     def _stuck(self, now: int) -> None:
@@ -648,8 +648,8 @@ class PushDesk:
         open_ = self.alerts.has_open(SITE, "push_failed")
         if stuck and not open_:
             self.alerts.raise_alert(kind="push_failed", robot=SITE,
-                                    title="P1 告警推送发不出去:手机收不到通知",
-                                    detail=(self.last_error or "推送一直没发出去")[:250]
-                                    + ";看站点能不能上外网、推送通道的密钥对不对")
+                                    title="P1 告警推送发不出去:手机无法接收通知",
+                                    detail=(self.last_error or "推送一直未发出去")[:250]
+                                    + ";看站点能不能上外网、推送通道的密钥是否正确")
         elif not stuck and oldest is None and open_:
             self.alerts.resolve_all(SITE, "push_failed", who="site:push_ok")

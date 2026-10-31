@@ -45,7 +45,7 @@ def test_没标过原点要抛错而不是回一个零点(tmp_path):
     # 派往一个谁也没标过的地方,而调用方看不出区别。
     with pytest.raises(HomeError) as e:
         load_home(tmp_path, "一号厂房")
-    assert "没标过" in str(e.value)
+    assert "未标原点" in str(e.value)
 
 
 def test_原点文件坏了要抛错不能当成没标过(tmp_path):

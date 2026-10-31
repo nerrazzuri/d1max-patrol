@@ -110,7 +110,7 @@ def check_wifi(ssid: Any, psk: Any) -> tuple[str, str]:
             or any(ord(ch) < 0x20 for ch in ssid):
         raise BindingError("WiFi 名要有,最长 32 字节")
     if not isinstance(psk, str):
-        raise BindingError("WiFi 密码不对")
+        raise BindingError("WiFi 密码错误")
     if psk and not (_HEX64.match(psk) or (8 <= len(psk) <= 63
                                           and all(0x20 <= ord(ch) < 0x7f for ch in psk))):
         raise BindingError("WiFi 密码要 8–63 位(字母、数字、符号),不加密的留空")
@@ -151,14 +151,14 @@ def decode_sticker(text: str) -> Sticker:
     try:
         d = json.loads(base64.urlsafe_b64decode(body + "=" * (-len(body) % 4)).decode("utf-8"))
     except (ValueError, TypeError) as exc:
-        raise BindingError("贴纸二维码坏了") from exc
+        raise BindingError("贴纸二维码已损坏") from exc
     if not isinstance(d, dict) or not all(isinstance(d.get(k), str) for k in "scwpf"):
-        raise BindingError("贴纸二维码坏了")
+        raise BindingError("贴纸二维码已损坏")
     if _FP32.match(d["f"]) is None:
-        raise BindingError("贴纸二维码坏了")
+        raise BindingError("贴纸二维码已损坏")
     a = d.get("a", "")
     if not isinstance(a, str) or (a and _ADDR.match(a) is None):
-        raise BindingError("贴纸二维码坏了")
+        raise BindingError("贴纸二维码已损坏")
     check_wifi(d["w"], d["p"])
     return Sticker(check_serial(d["s"]), normalize_code(d["c"]), d["w"], d["p"], d["f"], a)
 
@@ -201,19 +201,19 @@ def verify_unbind(text: str, pub: bytes, *, serial: str, now_ms: int) -> UnbindT
         body, sig = _unb64(body_s), _unb64(sig_s)
         d = json.loads(body)
     except (ValueError, TypeError) as exc:
-        raise BindingError("解绑令坏了") from exc
+        raise BindingError("解绑令已损坏") from exc
     if not ed25519.verify(pub, _UNBIND_DOMAIN + body, sig):
-        raise BindingError("解绑令签名不对")
+        raise BindingError("解绑令签名错误")
     if not isinstance(d, dict) or d.get("s") != serial:
-        raise BindingError("这张解绑令不是给这台机器人的")
+        raise BindingError("这张解绑令不是给此机器人的")
     exp, nonce = d.get("exp"), d.get("n")
     if not isinstance(exp, int) or isinstance(exp, bool) or not isinstance(nonce, str) \
             or _NONCE.match(nonce) is None:
-        raise BindingError("解绑令坏了")
+        raise BindingError("解绑令已损坏")
     if now_ms > exp:
-        raise BindingError("解绑令过期了:请公司重新签一张")
+        raise BindingError("解绑令已过期:请公司重新签一张")
     if exp - now_ms > UNBIND_MAX_MS:
-        raise BindingError("解绑令的有效期不对(机器人的钟可能不准)")
+        raise BindingError("解绑令的有效期错误(机器人的钟可能不准)")
     return UnbindToken(serial, exp, nonce)
 
 

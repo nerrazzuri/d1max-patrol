@@ -76,7 +76,7 @@ def load(path: Path) -> dict[str, Any]:
     try:
         got = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
-        raise InventoryError(f"读不了清点记录 {path}: {exc}") from exc
+        raise InventoryError(f"无法读取清点记录 {path}: {exc}") from exc
     if not isinstance(got, dict) or got.get("kind") != KIND \
             or not isinstance(got.get("counts"), dict):
         raise InventoryError(f"{path} 不是站点清点记录")
@@ -95,7 +95,7 @@ def compare(before: dict[str, Any], after: dict[str, Any]) -> dict[str, Any]:
             add("same", name, str(after.get(key)))
         else:
             add("fail", name, f"原来 {before.get(key)},现在 {after.get(key)}:"
-                              "机器人和手机认的是原来那个,都会连不上")
+                              "机器人和手机认的是原来那个,都会无法连接")
     b_schema, a_schema = int(before.get("schema") or 0), int(after.get("schema") or 0)
     if a_schema < b_schema:
         add("fail", "库结构", f"原来 {b_schema},现在 {a_schema}:新主机上的程序比原来的老")
@@ -116,7 +116,7 @@ def compare(before: dict[str, Any], after: dict[str, Any]) -> dict[str, Any]:
             add("expected", name, f"{b} → {a}(少了 {b - a}):这一项不备份,恢复后没有是意料之中")
         else:
             add("review", name, f"{b} → {a}(少了 {b - a}):最后一次备份之后才加的会少,"
-                                "再多就是备份有毛病,对一下是哪几条")
+                                "再多就是备份有问题,核对是哪几条")
     return {"ok": not any(x["level"] == "fail" for x in lines),
             "review": any(x["level"] == "review" for x in lines), "lines": lines,
             "before_ms": before.get("taken_ms"), "after_ms": after.get("taken_ms")}
@@ -130,7 +130,7 @@ def render(result: dict[str, Any]) -> str:
     if not result["ok"]:
         out.append("结论:不过。")
     elif result["review"]:
-        out.append("结论:站点身份没变;有少了的,对一下是不是都在最后一次备份之后。")
+        out.append("结论:站点身份未变;有少了的,核对是不是都在最后一次备份之后。")
     else:
         out.append("结论:过。")
     return "\n".join(out)

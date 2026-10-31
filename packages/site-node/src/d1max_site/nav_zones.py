@@ -199,7 +199,7 @@ class NavZones:
                 if u <= now:
                     if (d.get("id"), u) in stale:
                         continue
-                    raise ZonesError(f"区域 {d.get('id')}:到期时间已经过了(按站点的钟)")
+                    raise ZonesError(f"区域 {d.get('id')}:到期时间已过了(按站点的钟)")
                 if u > now + MAX_TEMP_MS:
                     raise ZonesError(f"区域 {d.get('id')}:到期时间太远(最多一年)")
             out.append(d)
@@ -228,8 +228,8 @@ class NavZones:
             cur = (ZoneSet.from_wire(json.loads(rows[0]["body"])) if rows
                    else ZoneSet(map_id, version, 0, ()))
             if base_revision != cur.revision:
-                raise ZonesConflict(f"区域已经被改过(现在是第 {cur.revision} 版,你看到的是第 "
-                                    f"{base_revision} 版):重新拉一下再改")
+                raise ZonesConflict(f"区域已被修改(现在是第 {cur.revision} 版,你看到的是第 "
+                                    f"{base_revision} 版):请刷新后再改")
             try:
                 new = ZoneSet.from_wire({"map_id": map_id, "map_version": version,
                                          "revision": cur.revision + 1,
@@ -505,7 +505,7 @@ def _frame(mine: str, prev: str, prev_version: str) -> dict[str, Any]:
         return {"same": True, "note": f"坐标系参数(frames.json)跟第 {prev_version} 版一样;"
                                       "重新建的图坐标照样可能整体挪了,每一个都要对着新图核"}
     if a and b:
-        return {"same": False, "note": f"坐标系参数(frames.json)跟第 {prev_version} 版不一样:"
-                                       "带过来的坐标很可能是错的,对不上的删掉重画"}
+        return {"same": False, "note": f"坐标系参数(frames.json)跟第 {prev_version} 版不同:"
+                                       "带过来的坐标很可能是错的,不匹配的删掉重画"}
     return {"same": None, "note": "看不出两版坐标系是不是一样(有一版没有 frames.json):"
                                   "每一个都要对着新图核"}

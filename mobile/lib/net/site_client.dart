@@ -1021,12 +1021,12 @@ class SiteClient implements SiteApi {
       throw SiteError(
           0,
           seen != null && seen != fingerprint
-              ? tr('Site certificate fingerprint does not match: got $seen', '站点证书指纹对不上：实际是 $seen')
+              ? tr('Site certificate fingerprint does not match: got $seen', '站点证书指纹不匹配：实际为 $seen')
               : tr('TLS handshake with the site failed: $e', '与站点的加密连接失败：$e'));
     } on TimeoutException {
       throw SiteError(0, tr('No reply from the site (timed out)', '站点无响应（超时）'));
     } on SocketException catch (e) {
-      throw SiteError(0, tr("Can't reach the site: ${e.message}", '连不上站点：${e.message}'));
+      throw SiteError(0, tr("Can't reach the site: ${e.message}", '无法连接站点：${e.message}'));
     } on HttpException catch (e) {
       throw SiteError(0, tr(
           'Connection to the site dropped: ${e.message}',
@@ -1564,10 +1564,10 @@ class SiteClient implements SiteApi {
       return WsTeleopLink(ws, io);
     } on SocketException catch (e) {
       io.close(force: true);
-      throw SiteError(0, tr("Can't reach the site: ${e.message}", '连不上站点：${e.message}'));
+      throw SiteError(0, tr("Can't reach the site: ${e.message}", '无法连接站点：${e.message}'));
     } on HandshakeException {
       io.close(force: true);
-      throw SiteError(0, tr('Site certificate does not match', '站点的证书对不上'));
+      throw SiteError(0, tr('Site certificate does not match', '站点证书不匹配'));
     } on TimeoutException {
       io.close(force: true);
       throw SiteError(0, tr('Timed out connecting to the site', '连站点超时'));

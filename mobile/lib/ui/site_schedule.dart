@@ -32,7 +32,7 @@ class SiteSchedulePage extends StatelessWidget {
         final entries = (d['entries'] as List? ?? const []).whereType<Map>().toList();
         if (d['bundle'] == null) {
           return NwEmpty(
-              icon: Icons.event_busy_rounded, text: tr('No task bundle on the site yet', '站点上还没有任务包'));
+              icon: Icons.event_busy_rounded, text: tr('No task bundle on the site yet', '站点暂无任务包'));
         }
         return NwListView(children: [
           NwCard(

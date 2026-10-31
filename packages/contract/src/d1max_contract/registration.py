@@ -68,5 +68,5 @@ class Registration:
         try:
             raw = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError) as exc:
-            raise ContractError(f"registration 文件读不了: {path}: {exc}") from exc
+            raise ContractError(f"registration 文件无法读取: {path}: {exc}") from exc
         return cls.from_wire(raw)

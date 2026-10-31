@@ -116,7 +116,7 @@ def parse_manifest(raw: Mapping[str, Any]) -> BundleManifest:
     if 多的:
         raise BundleError(
             f"bundle.yaml 里有不认识的键: {sorted(多的)} —— 包是从网上来的,"
-            "多一个没人认识的键要么是版本对不上,要么是有人在试探")
+            "多一个无人认识的键要么是版本不匹配,要么是有人在试探")
 
     for 键 in ("bundle_id", "version", "schema", "content_sha256", "built_at"):
         if 键 not in raw:
@@ -134,7 +134,7 @@ def parse_manifest(raw: Mapping[str, Any]) -> BundleManifest:
     if ver > MAX_VERSION:
         raise BundleError(
             f"version {ver} 超过上界 {MAX_VERSION} —— 看着像时间戳。§3.2 要的是"
-            "单调递增的整数:两台机器的钟不一样,而哪一版更新必须是确定的")
+            "单调递增的整数:两台机器的钟不同,而哪一版更新必须是确定的")
 
     sch = raw["schema"]
     if not _整数(sch) or sch < 1:
@@ -197,7 +197,7 @@ def read_manifest(bundle_dir: Path | str) -> BundleManifest:
     try:
         text = p.read_text(encoding="utf-8")
     except OSError as e:
-        raise BundleError(f"读不到 {BUNDLE_MANIFEST}: {p}") from e
+        raise BundleError(f"无法读取 {BUNDLE_MANIFEST}: {p}") from e
     except UnicodeDecodeError as e:
         raise BundleError(f"{BUNDLE_MANIFEST} 不是合法 UTF-8: {p}") from e
     try:
@@ -368,7 +368,7 @@ def verify_pure_data(root: Path | str, *,
         return
     详 = "; ".join(f"{v.path}({v.gate}: {v.detail})" for v in vs[:5])
     更多 = f" 等共 {len(vs)} 条" if len(vs) > 5 else ""
-    raise BundleError(f"这个包里有不是纯数据的东西: {详}{更多}")
+    raise BundleError(f"此包里有不是纯数据的东西: {详}{更多}")
 
 
 # ------------------------------------------------------------ 打包与校验
@@ -382,8 +382,8 @@ def unbound_mission_text(name: str, map_id: str, versions: Sequence[str] = ()) -
     (新的在前),给了就列出来 —— **只列,不替人挑**:哪一版是这些点量的,只有画点的人知道。"""
     have = (f";站点上 {map_id} 有这几版:{'、'.join(versions)}(新的在前)" if versions
             else "")
-    return (f"任务 {name} 没写 map_version:这些点是在 {map_id} 的哪一版图上量的?"
-            "每次建图原点都不一样,不写就核不了坐标对不对得上(R1)。"
+    return (f"任务 {name} 未写 map_version:这些点是在 {map_id} 的哪一版图上量的?"
+            "每次建图原点都不同,不写就无法核对坐标(R1)。"
             f"在任务里加 \"map_version\": \"<版本>\"(核过点再写),重新打包{have}")
 
 
@@ -413,11 +413,11 @@ def verify_bundle(bundle_dir: Path | str) -> BundleManifest:
     m = read_manifest(bundle_dir)
     if bundle_dir.name != m.slot_name:
         raise BundleError(f"目录名 {bundle_dir.name} 跟自述里的 "
-                          f"{m.slot_name} 对不上")
+                          f"{m.slot_name} 不匹配")
     verify_pure_data(bundle_dir)
     got = bundle_sha256(bundle_dir)
     if got != m.content_sha256:
-        raise BundleError(f"content_sha256 对不上: 自述说 {m.content_sha256}, "
+        raise BundleError(f"content_sha256 不匹配: 自述说 {m.content_sha256}, "
                           f"实际是 {got}")
     return m
 
@@ -468,7 +468,7 @@ def build_bundle(src: Path | str, dest_root: Path | str, *,
                          "targets": list(targets)})
     dest = dest_root / 临.slot_name
     if dest.exists():
-        raise BundleError(f"{临.slot_name} 已经在 {dest_root} 底下了 —— "
+        raise BundleError(f"{临.slot_name} 已在 {dest_root} 底下了 —— "
                           "版本号要单调递增,不许覆盖")
 
     # verify_pure_data 对一个不存在的目录会静静地扫出零条违规(os.walk 对

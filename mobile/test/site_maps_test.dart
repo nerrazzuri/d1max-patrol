@@ -20,7 +20,7 @@ void main() {
     await t.tap(find.byKey(const Key('activate-go')));
     await t.pumpAndSettle();
     expect(api.calls, contains('map A estate-1:8'));
-    expect(find.textContaining('还没有原点'), findsWidgets);
+    expect(find.textContaining('尚未标原点'), findsWidgets);
     await t.tap(find.text('取消'));
     await t.pumpAndSettle();
     expect(api.calls.where((c) => c.endsWith('without_home')), isEmpty);

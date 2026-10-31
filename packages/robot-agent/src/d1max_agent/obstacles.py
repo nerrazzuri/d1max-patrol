@@ -422,7 +422,7 @@ def _nearest(hits: tuple[tuple[float, float], ...]) -> str:
     return f"(最近一处在机身{fb}、{lr})"
 
 
-_STATE_TEXT = {"stale": "不新鲜", "lost": "断了", "extrinsic_bad": "外参自检没过",
+_STATE_TEXT = {"stale": "不新鲜", "lost": "已断开", "extrinsic_bad": "外参自检未通过",
                "initializing": "还在自检", "none": "没有"}
 
 

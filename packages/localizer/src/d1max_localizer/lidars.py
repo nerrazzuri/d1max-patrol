@@ -110,5 +110,5 @@ def load(path: Path | str | None, *, up: tuple[float, float, float],
     try:
         d = json.loads(p.read_text("utf-8"))
     except (OSError, ValueError) as exc:
-        raise LidarsError(f"lidars.json 读不了:{exc}") from exc
+        raise LidarsError(f"lidars.json 无法读取:{exc}") from exc
     return Lidars.from_json(d)

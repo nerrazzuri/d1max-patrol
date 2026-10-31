@@ -394,7 +394,7 @@ async def _run(a: argparse.Namespace) -> int:
     if a.video:
         ff = shutil.which("ffmpeg")
         if ff is None:
-            print("没有 ffmpeg:--video 做不了", file=sys.stderr)
+            print("没有 ffmpeg:--video 无法执行", file=sys.stderr)
             return 2
         reps += [Repeat(f"video{i}", video_cmd(ff)) for i in range(a.video)]
     writer = DiskWriter(a.write_dir, mbps=a.write_mbps, keep_mb=a.write_keep_gb * 1024) \
@@ -476,7 +476,7 @@ async def _run(a: argparse.Namespace) -> int:
     print("——— 总结 ———")
     hi = "?" if peak is None else f"{peak:.1f}"
     lo = "?" if last is None else f"{last:.1f}"
-    calm = "稳定了" if told_stable else "还没稳定(要跑满 2 小时、最近 30 分钟变化 < 1 °C)"
+    calm = "稳定了" if told_stable else "尚未稳定(要跑满 2 小时、最近 30 分钟变化 < 1 °C)"
     print(f"跑了 {(time.monotonic() - t0) / 60:.1f} 分钟;SoC 最高 {hi} °C,最后 {lo} °C;温度{calm}")
     if a.ambient is not None and peak is not None:
         hot = project(peak, a.ambient)
@@ -508,7 +508,8 @@ def main(argv: list[str] | None = None) -> int:
     if a.replay_bag and not a.prior:
         build_parser().error("--replay-bag 要配 --prior(回放用的先验图)")
     if not (a.replay_bag or a.cpu or a.video or a.write_dir or a.upload or a.payload):
-        build_parser().error("一样负载都没开:至少给 --replay-bag / --cpu / --video / --write-dir / "
+        build_parser().error("一样负载都未开启:至少给 --replay-bag / "
+                             "--cpu / --video / --write-dir / "
                              "--upload / --payload 里的一样")
     for k in ("strobe", "spotlight", "siren"):
         try:

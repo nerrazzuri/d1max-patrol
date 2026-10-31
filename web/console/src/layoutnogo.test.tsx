@@ -66,7 +66,7 @@ describe("布置 → 禁行区", () => {
     const { container: c } = render(<NogoTab {...props(n)} />);
     expect(c.querySelector(".nogo-status")!.textContent).toContain("待你确认");
     expect(c.querySelector(".nogo-status")!.textContent).toContain("泳池");
-    fireEvent.click(btn(c, "确认这一版"));
+    fireEvent.click(btn(c, "确认此版本"));
     const yes = btn(document.querySelector(".modal")!, "确认");
     expect(yes.disabled).toBe(true);
     fireEvent.click(document.querySelector('.modal input[name="sure"]')!);

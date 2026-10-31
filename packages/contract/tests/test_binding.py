@@ -69,7 +69,7 @@ def test_解绑令_签了能验_序列号过期签名都要对():
     tok = b.sign_unbind(seed, "D1M-7", now_ms=1_000, hours=24)
     got = b.verify_unbind(tok, pub, serial="D1M-7", now_ms=2_000)
     assert got.serial == "D1M-7" and got.expires_ms == 1_000 + 24 * 3600_000
-    with pytest.raises(b.BindingError, match="不是给这台"):
+    with pytest.raises(b.BindingError, match="不是给此机器人"):
         b.verify_unbind(tok, pub, serial="D1M-8", now_ms=2_000)
     with pytest.raises(b.BindingError, match="过期"):
         b.verify_unbind(tok, pub, serial="D1M-7", now_ms=1_000 + 24 * 3600_000 + 1)

@@ -124,7 +124,7 @@ class PahoTransport:
 
     def _on_connect_fail(self, client, userdata) -> None:
         self._post(lambda: self._fail_connect(
-            ConnectionError("连不上 broker(TCP 或 TLS 握手失败)")))
+            ConnectionError("无法连接 broker(TCP 或 TLS 握手失败)")))
 
     def _fail_connect(self, exc: ConnectionError) -> None:
         self._set_connected(False)

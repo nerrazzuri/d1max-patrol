@@ -104,7 +104,7 @@ def _读回执(读: Any) -> bytes:
         还能读 -= len(片)
     body = b"".join(片段)
     if len(body) > 回执上限字节:
-        raise SinkError(f"回执太长: 读到超过 {回执上限字节} 字节还没完, 这不是一张回执")
+        raise SinkError(f"回执太长: 读到超过 {回执上限字节} 字节尚未完, 这不是一张回执")
     return body
 
 
@@ -143,7 +143,7 @@ def _认字段(
     """
     值 = payload.get(键, 缺省)
     if 值 is _必填:
-        raise SinkError(f"回执里没有 {键} 字段: 服务器没表态, 我们不替它把话说了")
+        raise SinkError(f"回执里没有 {键} 字段: 服务器未表态, 我们不替它把话说了")
     if isinstance(值, 形状) and not (形状 is int and isinstance(值, bool)):
         # ``bool`` 是 ``int`` 的子类 —— ``{"stored": true}`` 不该被当成 stored=1。
         if 非负 and 值 < 0:
@@ -299,7 +299,7 @@ class HttpSink:
             # 口令填了中文时,这条以前原样穿出去。翻成 SinkError:证据继续排
             # 着队重试,不会把上传线程炸掉。单独一支单独的话术,免得跟"网络
             # 不好"混成一句让人去查线路。
-            raise SinkError(f"请求头里有 latin-1 编不出来的字符(sn/口令?): {err}") from err
+            raise SinkError(f"请求头里有 latin-1 编不出来的字符(sn/密码?): {err}") from err
         except (
             urllib.error.URLError,
             TimeoutError,

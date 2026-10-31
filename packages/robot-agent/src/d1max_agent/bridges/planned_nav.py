@@ -295,7 +295,7 @@ class PlannedNavBackend(HalNavBackend):
             blocked, pres = cmod.downsample(free, res)
         except (OSError, CostmapError, ValueError) as exc:
             log.error("规划栅格载不了:%s", exc)
-            return None, f"规划栅格载不了:{exc}"[:200]
+            return None, f"规划栅格无法加载:{exc}"[:200]
         return (blocked, pres, origin), None
 
     def install_grid(self, base: Any, problem: str | None) -> None:
@@ -318,7 +318,7 @@ class PlannedNavBackend(HalNavBackend):
         cm = cms.get(key)
         if cm is None:
             if base is None:
-                raise NavRequestError("goto", f"规划不了:{self.plan_problem}")
+                raise NavRequestError("goto", f"无法规划:{self.plan_problem}")
             blocked, res, origin = base
             now = self._secs()
             temp = [k for k, t in tuple(self._temp.items()) if t > now]   # 过期的不算(内审阻断 2)
@@ -614,12 +614,12 @@ class PlannedNavBackend(HalNavBackend):
 
     async def _plan_from_here(self, pose: Pose, op: str) -> tuple[PlannedPath, Costmap, Pose]:
         if self._base is None:
-            raise NavRequestError(op, f"规划不了:{self.plan_problem}")
+            raise NavRequestError(op, f"无法规划:{self.plan_problem}")
         if self.obstacles is not None:
             st = self.obstacles.state()
             if st not in ("ok", "stale"):
                 from d1max_agent.obstacles import describe
-                raise NavRequestError(op, f"避障用不了:障碍数据{describe(st)}"
+                raise NavRequestError(op, f"避障不可用:障碍数据{describe(st)}"
                                           + (f"({self.obstacles.reason})"
                                              if self.obstacles.reason else ""))
         here = await self._here()
@@ -865,7 +865,7 @@ class PlannedNavBackend(HalNavBackend):
                     await self._send(0.0, 0.0, dt_s)
                     return
                 log.warning("重规划没成:%s", out[1])
-                await self._fail(f"重规划没成:{out[1]}")
+                await self._fail(f"重规划失败:{out[1]}")
                 return
             if out[2] != self._epoch:
                 # 重规划完到这一拍之间区域又换了(内审应修 9):旧区域上的路不装,再来一次
@@ -1087,8 +1087,8 @@ class PlannedNavBackend(HalNavBackend):
                 vx, v = 0.0, turn
         if v.ok and self._stalled():
             from d1max_agent.obstacles import Verdict
-            await self._blocked(Verdict(False, f"发了运动命令、机器人 {STALL_S:.0f} 秒没动"
-                                        "(运控或第二层许可门没执行)"), here, dt_s, vx, wz)
+            await self._blocked(Verdict(False, f"发了运动命令、机器人 {STALL_S:.0f} 秒未动"
+                                        "(运控或第二层许可门未执行)"), here, dt_s, vx, wz)
             return
         if v.ok:
             if (self._unblock_owed and self._blocked_since is None and abs(vx) > 1e-6
@@ -1184,7 +1184,7 @@ class PlannedNavBackend(HalNavBackend):
         await self._send(0.0, 0.0, dt_s)                 # 原地等(零速保住步态)
         if waited >= BLOCK_GIVEUP_S:
             log.warning("被挡 %.0f s 还没走成:放弃这一段(%s)", waited, reason)
-            await self._fail(f"被挡 {waited:.0f} 秒还没走成({reason})")
+            await self._fail(f"被挡 {waited:.0f} 秒还未完成({reason})")
             return
         if (waited >= BLOCK_REPORT_S or self._goal_covered) and not self._blocked_told:
             self._blocked_told = True

@@ -91,8 +91,8 @@ def test_站点从旧备份恢复_修订号一样内容不一样_拒派_再保�
                    json.dumps(other.to_wire()), MAP[0]))
     assert s.disp.zones.confirmed_current(*MAP) and s.disp.zones.current(*MAP).revision == 1
     code, d = s.req("POST", "/api/robots/A/goto", {"target": target(1.0)}, token=alice)
-    assert code == 409 and "内容不一样" in d["error"] and "第 1 版" in d["error"], (code, d)
-    assert "内容不一样" in s.disp.dispatchable("A", "patrol")
+    assert code == 409 and "内容不同" in d["error"] and "第 1 版" in d["error"], (code, d)
+    assert "内容不同" in s.disp.dispatchable("A", "patrol")
     assert s.disp.dispatchable("A", "teleop") == "", "遥控不挡"
     # 管理员在地图页再保存一次(出第 2 版)→ 发给狗 → 狗的摘要对上 → 放行
     code, d = s.req("POST", ZP, {"zones": [LAWN, POND], "base_revision": 1}, token=alice)
@@ -110,7 +110,7 @@ def test_robot_view里有running_每项match和依据(站点):
     v = s.disp.robot_view("A")["running"]
     assert v["legacy"] is False and v["problems"] == []
     assert v["zones"]["basis"] == "digest" and v["zones"]["match"] is True
-    assert v["map"]["match"] is None, "机器人开机加载的图没有清单(命令行指定的):查不了,不挡"
+    assert v["map"]["match"] is None, "机器人开机加载的图没有清单(命令行指定的):无法检查,不挡"
     assert v["mission"] is None
 
 
@@ -170,7 +170,7 @@ def test_图摘要不一样_拒派_说清楚是哪一版_一样放行(tmp_path):
     bad = good | {"map_digest": "0" * 64}
     v = d.running_view(_fake_client(bad))
     assert v["map"]["match"] is False and "m:3" in v["problems"][0]
-    with pytest.raises(DispatchRefused, match="m:3.*不一样"):
+    with pytest.raises(DispatchRefused, match="m:3.*不同"):
         d._check_running("A", _fake_client(bad), "goto")
     with pytest.raises(DispatchRefused):
         d._check_running("A", _fake_client(bad), "patrol")
@@ -208,7 +208,7 @@ def test_站点这边换了同一版的文件_狗上的旧内容被认出来(站
     _zc(s)["enforced"] = True
     code, d = s.req("POST", "/api/robots/A/goto", {"target": {**target(1.0), "map_version": "8"}},
                     token=alice)
-    assert code == 409 and "不一样" in d["error"] and "重新下发" in d["error"], (code, d)
+    assert code == 409 and "不同" in d["error"] and "重新下发" in d["error"], (code, d)
 
 
 # ------------------------------------------------------------ 任务修订

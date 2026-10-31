@@ -59,11 +59,11 @@ def test_P1新起排一条_同一条再来不重排_升档再排一条_P2不排(
     desk, p, j, clock, db = 台
     desk.raise_alert(kind="dog_sees_person", robot="A", title="机器人看见人了:2 个人")
     desk.raise_alert(kind="dog_sees_person", robot="A", title="机器人看见人了:2 个人")
-    desk.raise_alert(kind="evidence_plain", robot="A", title="机器人上没加密")
+    desk.raise_alert(kind="evidence_plain", robot="A", title="机器人上未加密")
     assert [(r["tier"], r["title"]) for r in _队(db)] == [(0, "机器人看见人了:2 个人")]
     clock[0] += 3 * 60_000
     desk.escalate()
-    assert [r["tier"] for r in _队(db)] == [0, 1], "没人确认、升档:再推一次"
+    assert [r["tier"] for r in _队(db)] == [0, 1], "无人确认、升档:再推一次"
 
 
 def test_只推标题给登记了的手机_停用账号不推(台):
@@ -111,7 +111,7 @@ def test_W53_临时巡逻推经理和管理员_排队结果只推派的人_账�
     j.sent.clear()
     desk.raise_alert(kind="adhoc_queue", robot="A", title="排队的临时巡逻开始了",
                      context={"to": "gina"})
-    desk.raise_alert(kind="adhoc_queue", robot="B", title="没人收", context={})
+    desk.raise_alert(kind="adhoc_queue", robot="B", title="无人收", context={})
     p.tick()
     assert [reg for reg, _, _, _ in j.sent] == [["rid-gina"]]
     j.sent.clear()
@@ -126,8 +126,8 @@ def test_已经确认或解决的不推_一小时没发出去作废_没有手机
     desk.ack(a.key, who="gina")
     p.tick()
     assert not j.sent and "确认" in _队(db)[0]["dropped"]
-    desk.raise_alert(kind="force_flipped", robot="B", title="机器人翻倒了")
-    j.fail = "没外网"
+    desk.raise_alert(kind="force_flipped", robot="B", title="机器人翻倒")
+    j.fail = "未外网"
     p.tick()
     clock[0] += 3601_000
     p.tick()
@@ -135,7 +135,7 @@ def test_已经确认或解决的不推_一小时没发出去作废_没有手机
     j.fail = None
     with db.tx() as c:
         c.execute("DELETE FROM push_devices")
-    desk.raise_alert(kind="force_lifted", robot="C", title="被抱起来了")
+    desk.raise_alert(kind="force_lifted", robot="C", title="被抱起")
     p.tick()
     assert _队(db)[-1]["dropped"] == "没有登记的手机"
 
@@ -143,7 +143,7 @@ def test_已经确认或解决的不推_一小时没发出去作废_没有手机
 def test_发不出去退避_连续10分钟报P2_发出去了自动解决_P2自己不推(台):
     desk, p, j, clock, db = 台
     desk.raise_alert(kind="dog_sees_person", robot="A", title="x")
-    j.fail = "连不上极光"
+    j.fail = "无法连接极光"
     p.tick()
     row = _队(db)[0]
     assert row["attempts"] == 1 and row["next_ms"] == NOW + 10_000
@@ -182,17 +182,17 @@ def test_极光报文_鉴权_出错抛PushError():
         seen["req"], seen["timeout"] = req, timeout
         return 回(b'{"sendno":"0","msg_id":"123"}')
     jp = JPush("key1", "sec1", opener=开)
-    assert jp.send(["r1"], "站 · P1", "机器人翻倒了", {"alert_key": "k"}) == "123"
+    assert jp.send(["r1"], "站 · P1", "机器人翻倒", {"alert_key": "k"}) == "123"
     req = seen["req"]
     assert req.get_header("Authorization") == "Basic " + base64.b64encode(b"key1:sec1").decode()
     body = json.loads(req.data)
     assert body["audience"] == {"registration_id": ["r1"]}
     assert body["notification"]["android"]["title"] == "站 · P1"
-    assert body["notification"]["android"]["alert"] == "机器人翻倒了"
+    assert body["notification"]["android"]["alert"] == "机器人翻倒"
 
     def 坏(req, timeout):
-        raise urllib.error.URLError("没网")
-    with pytest.raises(PushError, match="连不上"):
+        raise urllib.error.URLError("未网")
+    with pytest.raises(PushError, match="无法连接"):
         JPush("k", "s", opener=坏).send(["r"], "t", "b", {})
 
     def 拒(req, timeout):
@@ -202,9 +202,9 @@ def test_极光报文_鉴权_出错抛PushError():
 
 
 def test_配置_没配_没密钥文件_配好了(tmp_path):
-    assert load_sender({})[0] is None and "没配" in load_sender({})[1]
+    assert load_sender({})[0] is None and "未配置" in load_sender({})[1]
     s, why = load_sender({"push": {"app_key": "k", "secret_file": str(tmp_path / "无")}})
-    assert s is None and "读不了" in why
+    assert s is None and "无法读取" in why
     (tmp_path / "jpush.secret").write_text("sec\n")
     s, why = load_sender({"push": {"app_key": "k", "secret_file": str(tmp_path / "jpush.secret")}})
     assert isinstance(s, JPush) and why == ""
@@ -218,9 +218,9 @@ def test_没配推送_告警不排队_值守汇总说没配(tmp_path):
     desk = AlertDesk(db, now_ms=lambda: NOW)
     desk.raise_alert(kind="dog_sees_person", robot="A", title="x")
     assert not db.query("SELECT 1 FROM push_outbox")
-    p = PushDesk(db, now_ms=lambda: NOW, why_off="没配推送(site.json 的 push)")
+    p = PushDesk(db, now_ms=lambda: NOW, why_off="未配置推送(site.json 的 push)")
     out = watch_summary(SimpleNamespace(clients={}), desk, now_ms=NOW, push=p)
-    assert out["site"]["push"]["configured"] is False and "没配" in out["site"]["why"]["push"]
+    assert out["site"]["push"]["configured"] is False and "未配置" in out["site"]["why"]["push"]
     db.close()
 
 
@@ -286,7 +286,7 @@ def test_F4_前一条等网络跨过了一小时_后一条不再发(台):
     j.send = 慢
     p.tick()
     q = {r["title"]: r for r in _队(db)}
-    assert [b for _, _, b, _ in j.sent] == ["一"], "第二条发之前已经过期:不发"
+    assert [b for _, _, b, _ in j.sent] == ["一"], "第二条发之前已过期:不发"
     assert "作废" in q["二"]["dropped"] and q["一"]["sent_ms"] == clock[0], "记实际发完的时刻"
 
 
@@ -306,7 +306,7 @@ def test_F4_分批发_第一批发着的时候有人确认了_后面的批次不
     p.tick()
     assert len(j.sent) == 1, "确认以后后面的批次不发"
     row = _队(db)[0]
-    assert row["sent_ms"] is not None and "后面的没发" in row["error"]
+    assert row["sent_ms"] is not None and "后面的未发" in row["error"]
 
 
 def test_外审I2_推送跟着退出和撤权走_不跟着闲置过期走(tmp_path):
@@ -418,12 +418,12 @@ def test_H9_各走各的通道_同一部手机两个都登记了只走FCM(双通
 def test_H9_一个通道没发出去_另一个照发_重试只补没发的那个(双通道):
     desk, p, j, f, clock, db = 双通道
     desk.raise_alert(kind="dog_sees_person", robot="A", title="x")
-    f.fail = "连不上 FCM"
+    f.fail = "无法连接 FCM"
     p.tick()
     row = _队(db)[0]
     assert j.sent == [["jp-gina"]] and f.sent == []
     assert row["sent_ms"] is None and row["done"] == "jpush" and row["attempts"] == 1
-    assert "连不上 FCM" in row["error"]
+    assert "无法连接 FCM" in row["error"]
     f.fail = None
     clock[0] += 11_000
     p.tick()
@@ -434,7 +434,7 @@ def test_H9_一个通道没发出去_另一个照发_重试只补没发的那个
 def test_H9_两个通道都不通_连续10分钟报P2_通了一个还剩一个仍算没发完(双通道):
     desk, p, j, f, clock, db = 双通道
     desk.raise_alert(kind="dog_sees_person", robot="A", title="x")
-    j.fail = f.fail = "没外网"
+    j.fail = f.fail = "未外网"
     for _ in range(12):
         p.tick()
         clock[0] += 60_000
@@ -443,7 +443,7 @@ def test_H9_两个通道都不通_连续10分钟报P2_通了一个还剩一个�
     clock[0] += 300_000
     p.tick()
     assert _队(db)[0]["sent_ms"] is None and _队(db)[0]["done"] == "jpush"
-    assert [a for a in desk.book.open() if a.kind == "push_failed"], "FCM 的手机还没收到"
+    assert [a for a in desk.book.open() if a.kind == "push_failed"], "FCM 的手机尚未收到"
 
 
 def test_H9_手机登记的通道站点没配_不推它_体检说得出有几台收不到(tmp_path):
@@ -461,7 +461,7 @@ def test_H9_手机登记的通道站点没配_不推它_体检说得出有几台
     assert v["providers"] == ["jpush"] and v["devices_unreachable"] == 1
     assert v["devices_by_provider"] == {"fcm": 1}
     from d1max_site.health import HealthDesk
-    assert "1 台登记的通道站点没配,收不到" in HealthDesk._push_detail(v)
+    assert "1 台登记的通道站点未配置,无法接收" in HealthDesk._push_detail(v)
     db.close()
 
 
@@ -486,7 +486,7 @@ def test_H9_有人确认了_后面的通道不再发(双通道, monkeypatch):
     p.tick()
     assert f.sent == [["fcm-omar"]] and j.sent == [], "FCM 发完有人确认了,极光那批不发"
     row = _队(db)[0]
-    assert row["sent_ms"] is not None and "后面的没发" in row["error"] and row["done"] == "fcm"
+    assert row["sent_ms"] is not None and "后面的未发" in row["error"] and row["done"] == "fcm"
 
 
 def test_H9_登记_通道名不认识_令牌太长_拒(双通道):
@@ -514,7 +514,7 @@ def test_H9_配置_老写法是极光_新写法两个并列_一个配坏了另�
     assert both["fcm"].url.endswith("/v1/projects/proj/messages:send")
     half, why = load_senders({"push": {"jpush": jp,
                                        "fcm": {"service_account_file": str(tmp_path / "无")}}})
-    assert list(half) == ["jpush"] and "读不了 FCM 服务账号" in why
+    assert list(half) == ["jpush"] and "无法读取 FCM 服务账号" in why
     acct.write_text('{"project_id": "p"}', "utf-8")
     bad = load_senders({"push": {"fcm": {"service_account_file": str(acct)}}})
     assert bad[0] == {} and "不是服务账号文件" in bad[1]
@@ -554,7 +554,7 @@ def test_H9_FCM_报文_鉴权换一次令牌反复用_快到期再换():
     signed = []
     f = Fcm("p", "svc@p.iam", "KEY", opener=opener, now_s=lambda: clock[0],
             signer=lambda key, data: signed.append((key, data)) or b"SIG")
-    assert f.send(["t1", "t2"], "站 · P1", "机器人翻倒了", {"alert_key": "A/x#1", "tier": "2"}) \
+    assert f.send(["t1", "t2"], "站 · P1", "机器人翻倒", {"alert_key": "A/x#1", "tier": "2"}) \
         == "projects/p/messages/9"
     assert [("oauth" in c.full_url) for c in calls] == [True, False, False], "令牌只换一次"
     key, signing = signed[0]
@@ -568,7 +568,7 @@ def test_H9_FCM_报文_鉴权换一次令牌反复用_快到期再换():
     assert calls[1].full_url == "https://fcm.googleapis.com/v1/projects/p/messages:send"
     assert calls[1].get_header("Authorization") == "Bearer tok1"
     assert msg["token"] == "t1" and msg["notification"] == {"title": "站 · "
-                                                                     "P1", "body": "机器人翻倒了"}
+                                                                     "P1", "body": "机器人翻倒"}
     assert msg["data"] == {"alert_key": "A/x#1", "tier": "2"}
     assert msg["android"]["priority"] == "HIGH" and msg["android"]["ttl"] == "3600s"
     assert msg["android"]["notification"]["tag"] == collapse_id("A/x#1", 2), "重发盖掉原来那条,不叠"
@@ -601,9 +601,9 @@ def test_H9_FCM_令牌失效记下不算失败_别的错算失败并发完其余
     f = Fcm("p", "e", "K", opener=opener, signer=lambda k, d: b"s", now_s=lambda: 0.0)
     assert f.send(["gone", "ok"], "t", "b", {}) == "m" and f.take_dead() == ["gone"]
     assert f.take_dead() == []
-    with pytest.raises(PushError, match=r"FCM 回 503.*1 / 3 台没发出去"):
+    with pytest.raises(PushError, match=r"FCM 回 503.*1 / 3 台未发出去"):
         f.send(["ok", "busy", "ok2"], "t", "b", {})
-    assert seen[-3:] == ["ok", "busy", "ok2"], "一台没发出去不耽误后面的"
+    assert seen[-3:] == ["ok", "busy", "ok2"], "一台未发出去不耽误后面的"
     with pytest.raises(PushError, match="401"):
         f.send(["auth"], "t", "b", {})
     f.send(["ok"], "t", "b", {})
@@ -620,7 +620,7 @@ def test_H9_FCM_鉴权失败_连不上_都是PushError():
 
     def 断(req, timeout):
         raise urllib.error.URLError("no route")
-    for opener, why in ((拒, "FCM 鉴权回 400"), (断, "连不上 Google 鉴权")):
+    for opener, why in ((拒, "FCM 鉴权回 400"), (断, "无法连接 Google 鉴权")):
         f = Fcm("p", "e", "K", opener=opener, signer=lambda k, d: b"s")
         with pytest.raises(PushError, match=why):
             f.send(["t"], "t", "b", {})
@@ -647,7 +647,7 @@ def test_H9_用系统openssl签RS256_验得过_私钥不对说得出(tmp_path):
     ok = subprocess.run(["openssl", "dgst", "-sha256", "-verify", str(pub), "-signature",
                          str(tmp_path / "sig"), str(tmp_path / "data")], capture_output=True)
     assert ok.returncode == 0 and len(sig) == 256
-    with pytest.raises(PushError, match="私钥不对"):
+    with pytest.raises(PushError, match="私钥错误"):
         openssl_rs256("not a key", b"x")
 
 
@@ -754,7 +754,7 @@ def test_外审I1_FCM同一批里_发着第一台跨过了一小时_后面的不
     clock[0] += 50 * 60_000                                   # 排队 50 分钟才轮到(站点刚上外网)
     hook[0] = lambda: clock.__setitem__(0, clock[0] + 6 * 60_000)   # 每台等网络 6 分钟
     p.tick()
-    assert seen == ["reg0", "reg1"], "发第三台之前已经过了一小时"
+    assert seen == ["reg0", "reg1"], "发第三台之前已过了一小时"
     assert ttl == ["600s", "240s"], "手机那头的有效期按此刻还剩多少给,不是再给一小时"
     db.close()
 
@@ -772,7 +772,7 @@ def test_外审I2_FCM一台成功一台503_重试只补没成功的那台_重启
     desk, p, clock, db = _FCM台(tmp_path, opener)
     desk.raise_alert(kind="dog_sees_person", robot="A", title="x")
     p.tick()
-    assert seen == ["reg0", "reg1", "reg2"], "一台没发出去不耽误后面的"
+    assert seen == ["reg0", "reg1", "reg2"], "一台未发出去不耽误后面的"
     row = _队(db)[0]
     assert row["sent_ms"] is None and row["attempts"] == 1 and "503" in row["error"]
     busy.clear()
@@ -816,7 +816,7 @@ def test_外审I2_整个通道不通_连着几台都失败就先停_不把每一
     desk, p, clock, db = _FCM台(tmp_path, opener, n=12)
     desk.raise_alert(kind="dog_sees_person", robot="A", title="x")
     p.tick()
-    assert len(seen) == 3, "一台最多等 10 秒:没外网时 500 台要等一个多小时"
+    assert len(seen) == 3, "一台最多等 10 秒:未外网时 500 台要等一个多小时"
     db.close()
 
 
@@ -877,7 +877,7 @@ def test_外审I2_库从55升上来_发了一半的那条_已经发完的通道�
     p = PushDesk(db, now_ms=lambda: NOW, senders={"jpush": j, "fcm": f}, site_name="站")
     p.tick()
     assert j.sent == [], "升级前极光那一路发完了:不重发"
-    assert f.sent == [["fc"]], "FCM 那一路当时没发完:照发"
+    assert f.sent == [["fc"]], "FCM 那一路当时未发完:照发"
     assert _队(db)[0]["sent_ms"] == NOW
     db.close()
 
@@ -895,7 +895,7 @@ def test_外审I2_隔一台失败一台_不算整个通道不通_每一台都发
     desk, p, clock, db = _FCM台(tmp_path, opener, n=8)
     desk.raise_alert(kind="dog_sees_person", robot="A", title="x")
     p.tick()
-    assert len(seen) == 8, "失败的没连着:不停"
+    assert len(seen) == 8, "失败的未连着:不停"
     db.close()
 
 
@@ -968,7 +968,7 @@ def test_复查R1_手机的FCM令牌失效了_另一台要重试_极光那一路
     state["b"] = 0
     clock[0] += 11_000
     mk().tick()                                                 # 站点重启过也一样
-    assert j.sent == [["jp-a"]], "A 的 FCM 没了:它登记的极光号要补上"
+    assert j.sent == [["jp-a"]], "A 的 FCM 没了:机器人登记的极光号要补上"
     assert seen.count("fcm-b") == 2 and _队(db)[0]["sent_ms"] is not None
     db.close()
 
@@ -1038,4 +1038,4 @@ def test_复查R1_通道一次回了失败又说有推送号没了_当轮也重�
     f.fail, f.dead = "FCM 回 503", ["fcm-lee"]
     p.tick()
     assert ["jp-lee"] in j.sent, "lee 的 FCM 号没了:当轮就走它的极光"
-    assert _队(db)[0]["sent_ms"] is None, "fcm-omar 还没发成"
+    assert _队(db)[0]["sent_ms"] is None, "fcm-omar 尚未发成"

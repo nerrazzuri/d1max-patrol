@@ -59,7 +59,7 @@ Future<void> maybeOfferMapping(BuildContext context, SiteApi api) async {
       key: mapOfferKey,
       title: Text(wiz != null
           ? tr('Mapping stopped at step $step. Continue?', '上次建图停在第 $step 步，是否继续？')
-          : tr('This site has no map yet', '这个站点还没有地图')),
+          : tr('This site has no map yet', '此站点尚无地图')),
       content: Text(tr(
           'A map is needed before patrolling. Start mapping now? (about 20–40 minutes)',
           '巡逻前需先建图。现在开始建图？（约 20–40 分钟）')),
@@ -650,7 +650,7 @@ class _MapWizardPageState extends State<MapWizardPage> {
         const SizedBox(height: Nw.s16),
       ],
       if (_robots.isEmpty)
-        NwNotice(tone: NwTone.warning, text: tr('No robots on this site yet. Add one under Robots → Add.', '站点上还没有机器人，请先在「机器人 → 添加」中添加。')),
+        NwNotice(tone: NwTone.warning, text: tr('No robots on this site yet. Add one under Robots → Add.', '站点暂无机器人，请先在「机器人 → 添加」中添加。')),
       _label2(tr('Site type', '场地类型')),
       siteCard('indoor', tr('Indoor', '室内'), tr('Offices, warehouses, corridors, lobbies', '办公室、仓库、走廊、大堂')),
       siteCard('outdoor', tr('Outdoor', '室外'), tr('Coming soon. Contact your delivery engineer for now.', '即将支持，目前请联系交付工程师'),
@@ -1437,7 +1437,7 @@ class _MapWizardPageState extends State<MapWizardPage> {
       const SizedBox(height: Nw.s16),
       Icon(Icons.check_circle_outline_rounded, size: 64, color: c.success),
       const SizedBox(height: Nw.s8),
-      Text(tr('Ready to patrol', '可以开始巡逻了'),
+      Text(tr('Ready to patrol', '可以开始巡逻'),
           textAlign: TextAlign.center, style: NwText.headlineSmall.copyWith(color: c.text, fontWeight: FontWeight.w700)),
       Text(tr('"$name" is active on ${f['robot_id']}', '「$name」已在 ${f['robot_id']} 上启用'),
           textAlign: TextAlign.center, style: NwText.bodyMedium.copyWith(color: c.textSecondary)),

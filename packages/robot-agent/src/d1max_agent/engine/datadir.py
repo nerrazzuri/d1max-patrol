@@ -230,8 +230,8 @@ def _merge_into(src: Path, dst: Path) -> tuple[int, int]:
     """
     if (src.is_dir() and dst.exists() and not dst.is_dir()) or (
             src.is_file() and dst.is_dir()):
-        raise OSError(f"数据根里 {dst} 的类型跟槽里的 {src} 对不上"
-                      f"(一个是文件一个是目录),不敢合并")
+        raise OSError(f"数据根里 {dst} 的类型跟槽里的 {src} 不匹配"
+                      f"(一个是文件一个是目录),无法合并")
     _clean_stale_parts(dst)
     if src.is_file():
         if dst.exists():

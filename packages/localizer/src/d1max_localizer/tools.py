@@ -53,11 +53,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                    help="雷达系里的「上」。C40011 的 RS-Airy 是 X **朝下**装的(W11 #64:录包里"
                         "地面在 +X 0.5 m;按 +X 标出来的地图是镜像的,跟雷达自带陀螺的转向反相关 "
                         "−0.98)。"
-                        "建图流水线(build.orient)按点云判,不靠这个")
+                        "建图流水线(build.orient)按点云判,不靠此")
     c.add_argument("--forward-hint", type=lambda s: _floats(s, 3), default=(0.0, 0.0, 1.0),
                    help="装法上雷达系里的「朝前」(RS-Airy 是 Z),拿来核")
     c.add_argument("--sensor-in-base", type=lambda s: _floats(s, 2), default=(0.4043, 0.0),
-                   help="雷达在狗身上的水平偏移(朝前,朝左,米;前雷达按 SDK 文档 2.10 节)")
+                   help="雷达在机器人身上的水平偏移(朝前,朝左,米;前雷达按 SDK 文档 2.10 节)")
     b = sub.add_parser("build", help="从录包建一个地图版本(MOLA 建图 + 打包)")
     b.add_argument("--bag", type=Path, required=True)
     b.add_argument("--out", type=Path, required=True, help="版本文件放这儿")
@@ -66,7 +66,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     b.add_argument("--prior-pack", default="none", help="none 或 regroup:<体素米>:<范围倍数>")
     b.add_argument("--reuse", action="store_true", help="用 --work 里已有的 MOLA 输出,只打包")
     b.add_argument("--rtk-antenna", type=lambda s: _floats(s, 2), default=(0.0, 0.0),
-                   help="RTK 天线在狗身上的水平位置(朝前,朝左,米;W09e 配经纬度用,真机量)")
+                   help="RTK 天线在机器人身上的水平位置(朝前,朝左,米;W09e 配经纬度用,真机量)")
     b.add_argument("--loop-closure", default="auto",
                    help="回环(可选,docs/建图回环.md):auto = 找得到回环工具就跑(环境变量 "
                         "D1MAX_LOOP_CLOSURE、PATH、/opt/d1max/loop-closure),off = 不跑,或者给"
@@ -75,7 +75,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     cr.add_argument("--bag", type=Path, required=True)
     cr.add_argument("--traj", type=Path, required=True,
                     help="前雷达建图轨迹(build 的 work/traj.tum)")
-    cr.add_argument("--out", type=Path, required=True, help="lidars.json(狗上 /etc/d1max/)")
+    cr.add_argument("--out", type=Path, required=True, help="lidars.json(机器人上 /etc/d1max/)")
     cr.add_argument("--init", type=Path, default=None, help="初值的 lidars.json(默认几何初值)")
     cr.add_argument("--every", type=int, default=5, help="每几个前雷达帧取一个")
     for x in (cr,):
@@ -104,7 +104,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         r.add_argument("--only-first-n", type=int, default=None)
         r.add_argument("--skip-first-n", type=int, default=None)
         r.add_argument("--imu-topic", default=None,
-                       help="接 IMU(跟狗上 d1max-localizer 同一个参数)")
+                       help="接 IMU(跟机器人上 d1max-localizer 同一个参数)")
         r.add_argument("--imu-ypr", type=parse_ypr, default=None,
                        help="IMU 安装角 yaw,pitch,roll(度;写成 --imu-ypr=-90,0,180)")
         if name == "replay":
@@ -173,13 +173,13 @@ def _calibrate_rear(a: argparse.Namespace) -> int:
     print(f"对上 {r.inlier:.0%}、残差中位数 {r.median_m * 100:.1f} cm、离初值 {r.shift_m:.3f} m / "
           f"{r.turn_deg:.2f}°:{r.why}")
     if not r.ok:
-        print("没写文件")
+        print("未写文件")
         return 1
     Lidars(T_front_rear=[[float(v) for v in row] for row in r.T], calibrated=True,
            residual_m=round(r.median_m, 4), stamp_offset_s=off,
            calibrated_at=time.strftime("%Y-%m-%dT%H:%M:%S"),
            note=f"{a.bag.name}:{r.frames} 帧").save(a.out)
-    print(f"写好了 {a.out}")
+    print(f"写完成 {a.out}")
     return 0
 
 
@@ -189,11 +189,11 @@ def _merge_bag(a: argparse.Namespace) -> int:
     lid = (load(a.lidars, up=a.sensor_up, forward=a.forward_hint) if a.lidars
            else Lidars(T_front_rear=geometry_guess(a.sensor_up, a.forward_hint)))
     if not lid.calibrated:
-        print("后雷达外参没标定(几何初值):合并出来的图可能重影,先 calibrate-rear")
+        print("后雷达外参未标定(几何初值):合并出来的图可能重影,先 calibrate-rear")
     n = dualbag.write_merged(a.bag, a.out, lid.T_front_rear,
                              traj=replay.read_tum(a.traj) if a.traj else None,
                              front_topic=a.front_topic, rear_topic=a.rear_topic)
-    print(f"写好了 {a.out}:{n} 帧合并点云在 {dualbag.MERGED_TOPIC}")
+    print(f"写完成 {a.out}:{n} 帧合并点云在 {dualbag.MERGED_TOPIC}")
     return 0
 
 
@@ -219,7 +219,7 @@ def _calibrate(a: argparse.Namespace) -> int:
     f = f.with_sensor_in_base(*a.sensor_in_base)
     f.save(a.out)
     print(why)
-    print(f"写好了 {a.out}")
+    print(f"写完成 {a.out}")
     return 0
 
 

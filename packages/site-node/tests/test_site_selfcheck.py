@@ -96,7 +96,7 @@ def test_探活_不通_回503_端口没开_都是FAIL(装好的):
     by = _by(_check(装好的, healthz=lambda p, ca: (0, "Connection refused")))
     assert by["探活"].level == "FAIL" and "不通" in by["探活"].detail
     by = _by(_check(装好的, healthz=lambda p, ca: (503, {"ok": False})))
-    assert by["探活"].level == "FAIL" and "体检项没过" in by["探活"].detail
+    assert by["探活"].level == "FAIL" and "体检项未通过" in by["探活"].detail
     by = _by(_check(装好的, healthz=lambda p, ca: (200, {"ok": False})))
     assert by["探活"].level == "FAIL"
     by = _by(_check(装好的, tcp=lambda h, p: "refused"))
@@ -138,7 +138,7 @@ def test_少一块的是WARN_没管理员_没备份_没推送_读不到日志_�
 
 def test_备份目录配了但不在_没有站点用户_库打不开_是FAIL(装好的, tmp_path):
     home, *_ = 装好的
-    by = _by(_check(装好的, cfg_over={"backup_dir": str(tmp_path / "没挂上")},
+    by = _by(_check(装好的, cfg_over={"backup_dir": str(tmp_path / "未挂上")},
                     run=_runner({("id",): (1, "no such user")})))
     assert by["备份"].level == "FAIL" and by["站点用户"].level == "FAIL"
     shutil.move(home / "site.db", home / "site.db.moved")
@@ -155,7 +155,7 @@ def test_盘快满了是WARN_量不了也是WARN(装好的):
     by = _by(sc.selfcheck(home, cfg, run=_runner(), tcp=lambda h, p: "", keys_root=keys,
                           healthz=lambda port, ca: (200, {"ok": True}), disk_free=boom,
                           release_pub=tmp / "release-pub.pem"))
-    assert by["盘"].level == "WARN" and "量不了" in by["盘"].detail
+    assert by["盘"].level == "WARN" and "无法测量" in by["盘"].detail
 
 
 def test_命令行_有FAIL退出码1_这台开发机上服务没装所以一定有(装好的, capsys):

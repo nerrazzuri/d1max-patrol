@@ -228,7 +228,7 @@ def _parse_action(raw: Any, where: str) -> Action:
     if kind == "photo":
         camera = raw.get("camera")
         _require(isinstance(camera, str) and camera in CAMERAS,
-                 f"{where} 的 photo 动作没说清楚哪个相机: {camera!r}"
+                 f"{where} 的 photo 动作未说清楚哪个相机: {camera!r}"
                  f"(支持 {sorted(CAMERAS)})")
         return Action(type="photo", camera=camera)  # type: ignore[arg-type]
     if kind == "dwell":
@@ -388,7 +388,7 @@ def load_mission(path: Path) -> Mission:
     try:
         text = Path(path).read_text(encoding="utf-8")
     except OSError as exc:
-        raise MissionError(f"读不了任务文件 {path}: {exc}") from exc
+        raise MissionError(f"无法读取任务文件 {path}: {exc}") from exc
     try:
         raw = yaml.safe_load(text)
     except yaml.YAMLError as exc:

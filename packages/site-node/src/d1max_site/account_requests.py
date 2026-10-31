@@ -90,10 +90,10 @@ class AccountRequests:
         rid = secrets.token_hex(8)
         with self.db.tx() as c:
             if c.execute("SELECT 1 FROM accounts WHERE name=?", (name,)).fetchone():
-                raise RequestRefused(409, f"账号 {name} 已经有了,换一个")
+                raise RequestRefused(409, f"账号 {name} 已存在,换一个")
             if c.execute("SELECT 1 FROM account_requests WHERE name=? AND state='pending'",
                          (name,)).fetchone():
-                raise RequestRefused(409, f"账号 {name} 已经在申请中了,等管理员批准")
+                raise RequestRefused(409, f"账号 {name} 已在申请中了,等管理员批准")
             n = c.execute("SELECT COUNT(*) FROM account_requests WHERE state='pending'"
                           ).fetchone()[0]
             if n >= MAX_PENDING:
@@ -127,11 +127,11 @@ class AccountRequests:
         with self.db.tx() as c:
             r = c.execute("SELECT * FROM account_requests WHERE id=?", (str(rid)[:32],)).fetchone()
             if r is None:
-                raise RequestRefused(404, "没有这条申请")
+                raise RequestRefused(404, "没有此条申请")
             if r["state"] != "pending":
-                raise RequestRefused(409, "这条申请已经处理过了或者过期了")
+                raise RequestRefused(409, "此条申请已处理或者已过期")
             if c.execute("SELECT 1 FROM accounts WHERE name=?", (r["name"],)).fetchone():
-                raise RequestRefused(409, f"账号 {r['name']} 已经有了")
+                raise RequestRefused(409, f"账号 {r['name']} 已存在")
             self.accounts.add_hashed(r["name"], role=role, salt=r["salt"], pw_hash=r["pw_hash"],
                                      display_name=r["display"], tx=c)
             c.execute("UPDATE account_requests SET state='approved', role=?, decided_by=?, "
@@ -146,7 +146,7 @@ class AccountRequests:
                           "decided_ms=? WHERE id=? AND state='pending'",
                           (by, now, str(rid)[:32])).rowcount
         if not n:
-            raise RequestRefused(404, "没有这条等批准的申请")
+            raise RequestRefused(404, "没有此条等批准的申请")
         self._settle(by)
 
     def _settle(self, by: str) -> None:
@@ -165,6 +165,6 @@ class AccountRequests:
                              "ORDER BY created_ms DESC LIMIT 1", (str(name)[:64],))
         if not rows:
             return ""
-        return {"pending": "这个账号还在等管理员批准",
-                "rejected": "这个账号的申请被管理员拒了",
-                "expired": "这个账号的申请过期了(7 天没人批),重新申请"}.get(rows[0]["state"], "")
+        return {"pending": "此账号还在等管理员批准",
+                "rejected": "此账号的申请被管理员拒了",
+                "expired": "此账号的申请已过期(7 天无人批),重新申请"}.get(rows[0]["state"], "")

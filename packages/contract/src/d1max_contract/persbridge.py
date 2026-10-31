@@ -160,10 +160,10 @@ def unseal(ks: bytes, direction: str, line: bytes, last_seq: int) -> tuple[int, 
     seq, body, mac = d["seq"], d["body"], d["mac"]
     if isinstance(seq, bool) or not isinstance(seq, int) or not isinstance(body, str) \
             or not isinstance(mac, str):
-        raise ContractError("人员桥:sealed 的字段不对")
+        raise ContractError("人员桥:sealed 的字段错误")
     want = hmac.new(ks, f"{direction}|{seq}|{body}".encode(), hashlib.sha256).hexdigest()
     if not hmac.compare_digest(mac, want):
-        raise ContractError("人员桥:签名不对(被改过、或者不是这条连接的)")
+        raise ContractError("人员桥:签名错误(被改过、或者不是此条连接的)")
     if seq <= last_seq:
         raise ContractError(f"人员桥:序号 {seq} 不比上一条 {last_seq} 大(重放?)")
     return seq, parse(body.encode("utf-8"))
@@ -335,4 +335,4 @@ def parse(line: bytes) -> Message:
     try:
         return cls(**d)
     except (TypeError, ValueError, OverflowError) as exc:
-        raise ContractError(f"人员桥:{cls.T} 的字段不对:{exc}") from None
+        raise ContractError(f"人员桥:{cls.T} 的字段错误:{exc}") from None

@@ -136,7 +136,7 @@ class SiteCA:
         try:
             return (self.root / "site_id").read_text(encoding="utf-8").strip()
         except OSError as exc:
-            raise CAError(f"CA 还没初始化: {self.root}") from exc
+            raise CAError(f"CA 尚未初始化: {self.root}") from exc
 
     def robot_dir(self, robot_id: str) -> Path:
         return self.root / "issued" / robot_id
@@ -164,7 +164,7 @@ class SiteCA:
         if not SAFE_ID.match(site_id or ""):
             raise CAError(f"site_id 只许 ASCII 字母、数字、. _ -: {site_id!r}")
         if self.ca_cert.exists() or self.ca_key.exists():
-            raise CAError(f"{self.root} 已经有 CA 了,不覆盖(换 CA 等于让所有机器人失联)")
+            raise CAError(f"{self.root} 已有 CA 了,不覆盖(换 CA 等于让所有机器人失联)")
         self.root.mkdir(parents=True, exist_ok=True)
         os.chmod(self.root, 0o700)
         (self.root / "newcerts").mkdir(exist_ok=True)
@@ -282,7 +282,7 @@ class SiteCA:
         for serial in serials:
             crt = self.root / "newcerts" / f"{serial}.pem"
             if not crt.is_file():
-                raise CAError(f"{robot_id} 的证书 {serial} 在 newcerts/ 里找不到,吊销不了")
+                raise CAError(f"{robot_id} 的证书 {serial} 在 newcerts/ 里未找到,无法吊销")
             self._run("ca", "-batch", "-config", str(self._cnf), "-revoke", str(crt))
         self._gencrl()
 

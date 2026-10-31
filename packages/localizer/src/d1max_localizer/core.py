@@ -413,14 +413,14 @@ class LocalizerCore:
 
     def _judge(self, now: float) -> tuple[str, str]:
         if self._map is None:
-            return "initializing", "还没有先验"
+            return "initializing", "尚无先验"
         was = "lost" if self._good is not None else "initializing"
         if self._down:
             return was, self._down                       # 起不来、退了:先说这个(在载图也一样)
         if self._loading or self._frames is None:
             return "initializing", "在载入先验"
         if self._restart or self._restarting:
-            return was, "定位程序卡住了,在重启"
+            return was, "定位程序卡住,在重启"
         if self._reloc_failed:
             return "lost", self._reloc_failed
         if self._need_init:
@@ -429,14 +429,14 @@ class LocalizerCore:
             elif self._retry is not None:
                 why = self._retry_why
             elif self._expired:
-                why = "人给的位置放太久没用上,请重新设位置"
+                why = "人给的位置放太久未启用,请重新设位置"
             elif self._want_reloc:
                 why = "在按最后的位置重定位"
             else:
                 why = "等人给初始位置"
             return "initializing", why
         if self._last_scan is None or now - self._last_scan > NO_SCAN_S:
-            return "lost", "雷达没数据"
+            return "lost", "雷达未数据"
         if self._jump_lost:
             return "lost", "匹配在来回跳"
         return "tracking", ""
@@ -465,10 +465,10 @@ class LocalizerCore:
         self._reloc_tag = None
         log.warning("重定位之后第一帧离给的位置 %.1f m:MOLA 没照办(第 %d 次)", d, self._misses)
         if self._misses >= RELOC_MAX_TRIES:
-            self._reloc_failed = f"定位程序没按给的位置重定位(差 {d:.1f} m),请重新设位置"
+            self._reloc_failed = f"定位程序未按给的位置重定位(差 {d:.1f} m),请重新设位置"
             self._retry = None
         else:
-            self._retry, self._retry_why = t, "定位程序没照给的位置定位,再请一次"
+            self._retry, self._retry_why = t, "定位程序未照给的位置定位,再请一次"
         return True
 
     def _forget_reloc(self) -> None:

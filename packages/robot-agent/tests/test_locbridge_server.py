@@ -121,7 +121,7 @@ async def test_第一行不是这一版的hello_回一句错误就断(桥, first
     r, w = await _连(path, hello=first)
     got = await _读(r)
     assert isinstance(got, Error) and got.reason
-    assert await _读(r) is None, "断开了"
+    assert await _读(r) is None, "已断开"
     assert sink.calls == []
 
 
@@ -151,13 +151,13 @@ async def test_一次只接一个_旧的活着拒新的_旧的没声了新的顶
     await _读(ra)
     rb, wb = await _连(path)
     got = await _读(rb)
-    assert isinstance(got, Error) and "已经有" in got.reason
+    assert isinstance(got, Error) and "已有" in got.reason
     assert await _读(rb) is None
     c.t += HB_DEAD_S + 0.5                               # 旧的这么久没声
     rc, wc = await _连(path)
     assert await _读(rc) == Hello(proto=PROTO)
     await _等(lambda: sink.calls == ["connect", "disconnect", "connect"])
-    assert await _读(ra) is None, "旧的被断了"
+    assert await _读(ra) is None, "旧的被已断开"
 
 
 async def test_每秒一条心跳_没声超过两秒当它断了(桥):
@@ -273,7 +273,7 @@ async def test_两个几乎同时连_后握手的不顶掉先握手的活连接(
     wa.write(encode(_HELLO))
     await wa.drain()
     got = await _读(ra)
-    assert isinstance(got, Error) and "已经有" in got.reason
+    assert isinstance(got, Error) and "已有" in got.reason
     wb.write(encode(_pose(1)))
     await wb.drain()
     await _等(lambda: ("pose", 1) in sink.calls)

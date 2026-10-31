@@ -440,10 +440,10 @@ def test_任务包路由的错误(站点, tmp_path):
     tok = 站点.login()
     assert 站点.req("POST", "/api/bundles", {}, token=tok)[0] == 400
     code, d = 站点.req("POST", "/api/bundles", {"path": str(tmp_path / "nope")}, token=tok)
-    assert code == 409 and "校验没过" in d["error"]
+    assert code == 409 and "校验未通过" in d["error"]
     assert 站点.req("POST", "/api/robots/A/patrol", {"mission_id": "loop"}, token=tok)[0] == 404
     assert 站点.req("POST", "/api/robots/A/patrol", {}, token=tok)[0] == 400
-    assert 站点.req("GET", "/api/schedule", token=tok)[0] == 404, "没开排程的站点"
+    assert 站点.req("GET", "/api/schedule", token=tok)[0] == 404, "未开启排程的站点"
     assert 站点.req("POST", "/api/bundles", {"path": "x"})[0] == 401
 
 
@@ -471,7 +471,7 @@ def test_请求体里的priority不起作用_手动派单一律按MANUAL(站点)
 def test_待命点API(站点):
     from d1max_site.standby import StandbyManager
     tok = 站点.login()
-    assert 站点.req("GET", "/api/robots/A/standby", token=tok)[0] == 404, "没开待命点的站点"
+    assert 站点.req("GET", "/api/robots/A/standby", token=tok)[0] == 404, "未开启待命点的站点"
     站点.api.standby = StandbyManager(站点.db, 站点.disp, now_ms=wall)
     code, d = 站点.req("POST", "/api/robots/A/standby",
                      {"name": "dock", "map_id": "estate-1", "map_version": "7", "x": 0,
@@ -499,7 +499,7 @@ def test_事件回调要签名_不要登录_管理路由要登录(站点):
 
     from d1max_site.incidents import IncidentDesk
     tok = 站点.login()
-    assert 站点.req("GET", "/api/incidents", token=tok)[0] == 404, "没开事件派遣的站点"
+    assert 站点.req("GET", "/api/incidents", token=tok)[0] == 404, "未开启事件派遣的站点"
     desk = IncidentDesk(站点.db, 站点.disp, now_ms=wall)
     站点.api.incidents = desk
     secret = desk.add_source("nvr-1")
@@ -531,7 +531,7 @@ def test_事件回调要签名_不要登录_管理路由要登录(站点):
     bad = 报(body, sig="00" * 32)
     expired = 报(body, ts=wall() - 10 * 60_000)
     assert bad[0] == expired[0] == 401
-    assert bad[1] == expired[1] == {"error": "验签没过"}, "401 不说是哪一步没过(源名不可探测)"
+    assert bad[1] == expired[1] == {"error": "验签未通过"}, "401 不说是哪一步未通过(源名不可探测)"
     assert 报(b'{"event_id": ""}')[0] == 400
     code, d = 报(body)
     assert code == 200 and d["outcome"] == "dispatched" and d["robot_id"] == "A", d
@@ -650,7 +650,7 @@ def test_狗说停车没成_站点回502让人按机身急停(站点):
     _等(lambda: s.req("GET", "/api/robots/A", token=alice)[1].get("fresh"))
 
     async def 坏():
-        raise RuntimeError("旁路进程没回")
+        raise RuntimeError("旁路进程未返回")
     s.agent.processor.halt_hook = 坏
     s.dog.stop = 坏
     code, d = s.req("POST", "/api/robots/A/halt", {}, token=alice)

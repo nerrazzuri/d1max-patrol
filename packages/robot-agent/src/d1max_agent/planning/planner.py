@@ -79,7 +79,7 @@ class Planner:
             raise PlanError("timeout", "规划超时") from None
         except BrokenProcessPool:
             self._reset()
-            raise PlanError("worker", "规划子进程坏了(下一次重起)") from None
+            raise PlanError("worker", "规划子进程已损坏(下一次重起)") from None
         mid = [cm.center(r, c) for r, c in cells[1:-1]]
         return PlannedPath(((float(start[0]), float(start[1])), *mid,
                             (float(goal[0]), float(goal[1]))))

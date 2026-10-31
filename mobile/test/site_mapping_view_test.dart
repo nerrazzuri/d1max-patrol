@@ -265,7 +265,7 @@ void main() {
     await openZonePanel(t);
     await t.tap(find.byKey(SiteMapPreviewPage.confirmKey));
     await t.pumpAndSettle();
-    expect(find.textContaining('确认之后这张图才能下发'), findsOneWidget, reason: '弹框念一遍那句话');
+    expect(find.textContaining('确认后此地图才能下发'), findsOneWidget, reason: '弹框念一遍那句话');
     await t.tap(find.text('返回检查'));
     await t.pumpAndSettle();
     expect(api.calls.where((c) => c.startsWith('confirmZones')), isEmpty);
@@ -493,7 +493,7 @@ void main() {
     await tapVis(t, find.byKey(SiteMapPreviewPage.proposedKey('zone', 'pond')));
     await tapVis(t, find.byKey(SiteMapPreviewPage.proposedKey('standby', 'A/dock')));
     await tapVis(t, find.byKey(SiteMapPreviewPage.confirmKey));
-    expect(find.textContaining('采纳勾上的 2 个'), findsOneWidget, reason: '确认框说清楚采纳几个');
+    expect(find.textContaining('采纳已勾选的 2 项'), findsOneWidget, reason: '确认框说清楚采纳几个');
     await t.tap(find.byKey(SiteMapPreviewPage.confirmOkKey));
     await t.pumpAndSettle();
     expect(api.calls, contains('confirmZones estate-1:8 rev=0'));

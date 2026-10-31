@@ -48,7 +48,7 @@ async def test_登记待命点_默认只有一个_不合规矩的拒(站):
     with pytest.raises(StandbyError):
         t.stb.set("A", "big", map_id="estate-1", map_version="7", x=10**400, y=0, yaw=0)
     t.stb.set("A", "gate", map_id="estate-1", map_version="7", x=2.0, y=0.0, yaw=0.0)
-    assert t.stb.default("A")["name"] == "gate", "改点时没写 default,原来的默认标记保留"
+    assert t.stb.default("A")["name"] == "gate", "改点时未写 default,原来的默认标记保留"
     t.stb.remove("A", "gate")
     assert t.stb.default("A") is None and [p["name"] for p in t.stb.list("A")] == ["dock"]
 
@@ -75,7 +75,7 @@ async def test_W33_只许手动派的狗_任务完了不自动回_也不报没�
     t.site.feed.listen(feed.append)
     await t.send(t.site.goto("A", target(0.8), 0.8, issued_by="alice", priority=MANUAL))
     await t.run(200)
-    assert len(_cmds(t, "goto")) == 1, "人手动派的那趟照走,完了不自动回"
+    assert len(_cmds(t, "goto")) == 1, "人手动派的那趟照常进行,完了不自动回"
     assert not [e for e in feed if e.get("kind") == "standby_failed"]
     r = await t.stb.return_to("A", issued_by="alice")
     assert r["ack"]["result"] == "accepted", "人手动叫回照收"
@@ -209,7 +209,7 @@ async def test_巡检跑完_直线狗沿来路回待命点(站):
         (1.0, 1.0), (1.0, 0.0), (0.0, 0.0)], "倒序 + 待命点"
     assert all("actions" not in w for w in wps), "回程不拍照、不停留"
     pol = back["payload"]["mission"]["policy"]
-    assert pol["on_waypoint_failed"] == "abort", "内审阻断 3:跳过一点就是一条没走过的直线"
+    assert pol["on_waypoint_failed"] == "abort", "内审阻断 3:跳过一点就是一条未走过的直线"
     assert pol["on_battery_low"] == "continue", "内审阻断 2:剩下的路就是回原点的路"
     await t.run(400)
     assert len(_cmds(t, "patrol")) == 2, "回程结束不再回"
@@ -507,7 +507,7 @@ async def test_钟差一直不知道_试够了才推standby_failed(站):
     from d1max_site.standby import STANDBY_TRANSIENT_RETRIES
     assert len(waits) == STANDBY_TRANSIENT_RETRIES
     failed = [i for i in _feed(sub) if i["kind"] == "standby_failed"]
-    assert len(failed) == 1 and "钟差还不知道" in failed[0]["reason"]
+    assert len(failed) == 1 and "钟差未知" in failed[0]["reason"]
 
 
 # ------------------------------------------------------------ W14
@@ -651,7 +651,7 @@ async def test_W14外审_站点重启之后晚到的结束事件_照派单时的
                   "note, decided_at) VALUES ('nightly', 2, 'started', 'A', 'sched-old', '', 1)")
     重启后 = StandbyManager(t.db, t.site, now_ms=t.clock)          # 没有任务包也认
     assert 重启后._target("A", "sched-abc") == "gate"
-    assert 重启后._target("A", "sched-old") is None, "老记录没写:回默认的"
+    assert 重启后._target("A", "sched-old") is None, "老记录未写:回默认的"
     assert 重启后._target("A", "task-1") is None
 
 

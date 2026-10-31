@@ -78,7 +78,7 @@ class ForceConfig:
         known = {f.name for f in fields(cls)}
         bad = sorted(set(raw) - known)
         if bad:
-            raise ValueError(f"{path}:认不出 {', '.join(bad)}")
+            raise ValueError(f"{path}:无法识别 {', '.join(bad)}")
         for k, v in raw.items():
             if isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v) \
                     or v <= 0:

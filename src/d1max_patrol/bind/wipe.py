@@ -96,7 +96,7 @@ def wipe(paths: BindPaths, *, router: Router, run: Run = _run, trim: Trim = _tri
     bad = stop_services(run)
     if bad:
         # 外审 I8:服务没停下就不删(它们还在写);下一轮整套再来
-        return [f"停不下:{'、'.join(bad)}(数据还没删)"]
+        return [f"停不下:{'、'.join(bad)}(数据尚未删)"]
     for d in (paths.data_root, *paths.extra_data):
         try:
             _clear_dir(d)

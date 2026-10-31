@@ -40,7 +40,7 @@ class 假静音脚:
 
     def set(self, value: bool) -> None:
         if self.fail:
-            raise OSError("GPIO 写不进去")
+            raise OSError("GPIO 无法写入")
         self.value = value
         self.history.append((asyncio.get_running_loop().time(), value))
 
@@ -73,7 +73,7 @@ def test_V2配置_警笛继电器加喇叭_功放走GPIO(tmp_path):
 
 @pytest.mark.parametrize("audio, 说", [
     ({"device": "hw:1", "amp": "x", "mute": {"chip": "gpiochip1", "line": 1}}, "只能二选一"),
-    ({"device": "hw:1", "mute": {"chip": "gpiochip1", "line": -1}}, "还没填"),
+    ({"device": "hw:1", "mute": {"chip": "gpiochip1", "line": -1}}, "尚未填"),
     ({"device": "hw:1", "mute": {"chip": "sda", "line": 1}}, "gpiochip"),
     ({"device": "hw:1", "mute": {"chip": "gpiochip1", "line": 1, "mute_level": "x"}}, "high"),
     ({"device": "hw:1", "mute": {"chip": "gpiochip1", "line": 1}, "amp_lead_s": 5}, "amp_lead_s"),
@@ -110,7 +110,7 @@ async def test_V2功放_先放开MUTE_等够提前量再出声_闲了再静音(t
     await p.sound("warn-zh", 5)
     n = len(mute.history)
     await p.sound("warn-zh", 5)
-    assert len(mute.history) == n, "已经放开着:不再等提前量、不再写"
+    assert len(mute.history) == n, "已放开着:不再等提前量、不再写"
     await p.close()
     assert mute.value is True and mute.closed, "收尾:静音、放掉这根线"
 
@@ -133,7 +133,7 @@ async def test_V2功放GPIO写不进去_喇叭当没放_报功放故障(tmp_path
     mute.fail = True
     log: list = []
     p = _v2(tmp_path, run=_假跑(log), mute=mute)
-    with pytest.raises(PayloadError, match="功放开不了"):
+    with pytest.raises(PayloadError, match="功放无法开启"):
         await p.sound("warn-zh", 5)
     assert log == [] and not p.playing()
     assert "amp" in p.faults() and "MUTE" in p.faults()["amp"]
@@ -174,7 +174,7 @@ async def test_V2警笛_继电器板不回_报错_喇叭不单独响(板子, tmp
     板子.mute = True
     with pytest.raises(PayloadError):
         await p.set("siren", True, 30)
-    assert not p.siren_on(), "警笛主体没响成:这一下当没开,喇叭也别响"
+    assert not p.siren_on(), "警笛主体未响成:这一下当未开启,喇叭也别响"
     板子.mute = False
     await p.close()
 
@@ -187,7 +187,7 @@ async def test_V2继电器板自己掉电重启_代理发现了重新下发(板�
     await p.set("strobe", True, 60)
     assert 板子.coils[0] and 板子.coils[3]
     板子.coils = [False] * 8                               # 板子掉电重启:输出全关
-    assert await _等到(lambda: 板子.coils[0] and 板子.coils[3], 2.0), "回读发现不对,重新合上"
+    assert await _等到(lambda: 板子.coils[0] and 板子.coils[3], 2.0), "回读发现错误,重新合上"
     assert not 板子.coils[1] and not 板子.coils[2]
     板子.coils[1] = True                                    # 板子上多出一路开着的:关回去
     assert await _等到(lambda: not 板子.coils[1], 2.0)
@@ -198,7 +198,7 @@ def test_V2配置样例_引脚没填就起不来_填了能读(tmp_path):
     raw = json.loads((ROOT / "deploy" / "payload.v2.example.json").read_text())
     tmp = tmp_path / "payload.json"
     tmp.write_text(json.dumps(raw))
-    with pytest.raises(PayloadError, match="还没填"):
+    with pytest.raises(PayloadError, match="尚未填"):
         PayloadConfig.load(tmp)
     raw["audio"]["mute"]["line"] = 5
     tmp.write_text(json.dumps(raw))

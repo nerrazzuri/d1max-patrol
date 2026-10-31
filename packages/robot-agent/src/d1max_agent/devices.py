@@ -32,7 +32,7 @@ log = logging.getLogger(__name__)
 CONNECT_TIMEOUT_S = 1.0
 #: 发件箱那块盘剩不到这么多算降级。
 LOW_FREE = 0.10
-_RTK_FIX = {"float": "浮点解", "dgps": "差分", "single": "单点(没收到改正?)"}
+_RTK_FIX = {"float": "浮点解", "dgps": "差分", "single": "单点(未收到改正?)"}
 
 
 def tcp_reachable(host: str, port: int, timeout: float = CONNECT_TIMEOUT_S) -> bool:
@@ -114,7 +114,7 @@ class DeviceHealth:
             held = getattr(self.recorder, "held", set())
             for cam, why in self.recorder.camera_health().items():
                 if cam in held:
-                    out.append(device(f"camera:{cam}", "degraded", "上装过热,暂停录这一路"))
+                    out.append(device(f"camera:{cam}", "degraded", "上装过热,暂停录此路"))
                     continue
                 out.append(device(f"camera:{cam}", "error" if why else "online", why or "在录"))
         if self.board is not None:
@@ -135,7 +135,7 @@ class DeviceHealth:
             for n, up in zip(names, ok, strict=True):
                 host, port = self.links[n]
                 out.append(device(f"link:{n}", "online" if up else "offline",
-                                  f"{host}:{port}" if up else f"连不上 {host}:{port}"))
+                                  f"{host}:{port}" if up else f"无法连接 {host}:{port}"))
         self.last = out
         return out
 
@@ -143,9 +143,9 @@ class DeviceHealth:
         fix = self.rtk.latest()
         err = str(getattr(self.rtk, "error", "") or "")
         if fix is None:
-            return device("rtk", "offline", err or "还没收到过定位")
+            return device("rtk", "offline", err or "尚未收到过定位")
         if fix.get("stale"):
-            return device("rtk", "offline", err or "好一会儿没更新了")
+            return device("rtk", "offline", err or "长时间未更新")
         f = fix.get("fix")
         hd = fix.get("heading_deg")
         tail = f",朝向 {hd:.0f}°" if isinstance(hd, (int, float)) else ""
@@ -158,11 +158,11 @@ class DeviceHealth:
     def _disk(self) -> dict[str, Any]:
         assert self.outbox is not None
         if self.outbox_mount and not self._ismount(self.outbox_mount):
-            return device("disk", "error", f"{self.outbox_mount} 没挂上(证据不往系统盘写)")
+            return device("disk", "error", f"{self.outbox_mount} 未挂上(证据不往系统盘写)")
         try:
             u = self._disk_usage(self.outbox)
         except OSError as exc:
-            return device("disk", "error", f"读不了盘:{exc}")
+            return device("disk", "error", f"无法读取盘:{exc}")
         free = u.free / u.total if u.total else 0.0
         gb = u.free / 2**30
         if free < LOW_FREE:

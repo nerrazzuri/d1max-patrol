@@ -151,7 +151,7 @@ def _parse_entry(raw: Any, index: int) -> ScheduleEntry:
     assert isinstance(days_raw, list)
     for d in days_raw:
         _require(d in DAYS,
-                 f"{where}(id={ident}) 的 days 里有认不出来的 {d!r},"
+                 f"{where}(id={ident}) 的 days 里有无法识别的 {d!r},"
                  f"只认 {'、'.join(DAYS)}")
 
     window = raw.get("window_min")
@@ -191,7 +191,7 @@ def _parse_entry(raw: Any, index: int) -> ScheduleEntry:
         # 的告警会被新的一轮盖掉、永远不响。
         _require(window < every,
                  f"{where}(id={ident}) 的 window_min({window})要小于 every_min({every})"
-                 f" —— 不然上一轮还没过窗口下一轮就到了")
+                 f" —— 不然上一轮尚未过窗口下一轮就到了")
 
     standby = raw.get("standby", "")
     _require(isinstance(standby, str),
@@ -223,7 +223,7 @@ def parse_schedule(raw: Any) -> Schedule:
     try:
         ZoneInfo(tzname)                            # type: ignore[arg-type]
     except (ZoneInfoNotFoundError, ValueError) as exc:
-        raise ScheduleError(f"timezone 认不出来: {tzname!r}") from exc
+        raise ScheduleError(f"timezone 无法识别: {tzname!r}") from exc
 
     entries_raw = raw.get("entries", [])
     _require(isinstance(entries_raw, list),

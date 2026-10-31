@@ -70,8 +70,8 @@ class _SiteInterceptsPageState extends State<SiteInterceptsPage> {
       msg = tr('$what: done', '$what：完成');
     } on SiteError catch (e) {
       msg = e.status == 409
-          ? tr('$what failed: ${ackReasonText(e.message.replaceFirst(RegExp(r'^机器人没标[:：]'), ''))}',
-              '$what失败：${ackReasonText(e.message.replaceFirst(RegExp(r'^机器人没标[:：]'), ''))}')
+          ? tr('$what failed: ${ackReasonText(e.message.replaceFirst(RegExp(r'^机器人标记失败[:：]'), ''))}',
+              '$what失败：${ackReasonText(e.message.replaceFirst(RegExp(r'^机器人标记失败[:：]'), ''))}')
           : tr('$what failed: $e', '$what失败：$e');
     }
     if (mounted) setState(() => _msg = msg);
@@ -218,7 +218,7 @@ class _SiteInterceptsPageState extends State<SiteInterceptsPage> {
               NwListCard(children: [
                 if (_zones.isEmpty)
                   NwCardText(tr('No zones yet: intrusions are logged as "not mapped" and no robot is sent',
-                      '还没有防区：入侵将记为「未映射」，不派机器人')),
+                      '暂无防区：入侵将记为「未映射」，不派机器人')),
                 for (final z in _zones)
                   ListTile(
                     key: Key('zone-${z['zone']}'),
@@ -243,7 +243,7 @@ class _SiteInterceptsPageState extends State<SiteInterceptsPage> {
               Text(tr('Intercept points', '拦截点'), style: NwText.titleSmall.copyWith(color: nw.text)),
               nwGap8,
               NwListCard(children: [
-                if (_points.isEmpty) NwCardText(tr('No intercept points yet', '还没有拦截点')),
+                if (_points.isEmpty) NwCardText(tr('No intercept points yet', '暂无拦截点')),
                 for (final p in _points)
                   ListTile(
                     key: Key('intercept-${p['name']}'),

@@ -228,7 +228,7 @@ class MapWizard:
         if st is None:
             raise WizardError(409, "现在没有在做的建图向导", "no_wizard")
         if d.get("wizard_id") != st.get("id"):
-            raise WizardError(409, f"这份建图向导已经换成 {st.get('by', '?')} 开的了,"
+            raise WizardError(409, f"这份建图向导已换成 {st.get('by', '?')} 开的了,"
                                    "重新进一次", "stale_wizard")
         if action == "abandon":
             self.settings.put(KEY, None)
@@ -243,12 +243,12 @@ class MapWizard:
         if action == "finish":
             m, v, r = st["map_id"], st["version"], st["robot_id"]
             if not self._built(m, v):
-                raise WizardError(409, "这一版还没建好", "not_built")
+                raise WizardError(409, "此版本尚未建好", "not_built")
             if self.zones is not None and not self.zones.confirmed_current(m, v):
-                raise WizardError(409, f"{m}:{v} 的禁行区还没确认", "zones_unconfirmed")
+                raise WizardError(409, f"{m}:{v} 的禁行区尚未确认", "zones_unconfirmed")
             if not self.db.query("SELECT 1 FROM homes WHERE robot_id=? AND map_id=? AND "
                                  "map_version=?", (r, m, v)):
-                raise WizardError(409, f"{r} 在 {m}:{v} 上还没标原点", "no_home")
+                raise WizardError(409, f"{r} 在 {m}:{v} 上尚未标原点", "no_home")
             self.settings.put(KEY, None)
             return st | {"step": "done"}
         if action != "step":
@@ -262,7 +262,7 @@ class MapWizard:
             st["drive"] = d["drive"]
         if STEPS.index(step) >= STEPS.index("zones"):
             if not self._built(st["map_id"], st["version"]):
-                raise WizardError(409, f"{st['map_id']}:{st['version']} 还没建好", "not_built")
+                raise WizardError(409, f"{st['map_id']}:{st['version']} 尚未建好", "not_built")
             if st["step"] in ("walk", "build") and st.get("label"):
                 # 用这一张:显示名记成这一版的备注(地图管理里看得到)
                 self.cat.set_note(st["map_id"], st["version"], st["label"])
@@ -276,7 +276,7 @@ class MapWizard:
                                    " 步);要换掉就带上 replace", "wizard_active")
         site_type = d.get("site_type")
         if site_type in COMING_SOON:
-            raise WizardError(400, "这种场地的建图参数还没调好,现在请联系交付工程师", "coming_soon")
+            raise WizardError(400, "这种场地的建图参数尚未调好,现在请联系交付工程师", "coming_soon")
         if site_type not in SITE_TYPES:
             raise WizardError(400, f"site_type 只认 {'、'.join(SITE_TYPES + COMING_SOON)}")
         drive = d.get("drive")
@@ -284,14 +284,14 @@ class MapWizard:
             raise WizardError(400, f"drive 只认 {'、'.join(DRIVES)}")
         robot = d.get("robot_id")
         if not isinstance(robot, str) or not self.known(robot):
-            raise WizardError(400, "没有这台机器人")
+            raise WizardError(400, "机器人不存在")
         label = d.get("label", "")
         if not isinstance(label, str) or len(label.strip()) > MAX_LABEL:
             raise WizardError(400, f"显示名最多 {MAX_LABEL} 个字")
         map_id = d.get("map_id") or DEFAULT_MAP
         if not isinstance(map_id, str) or d.get("map_id") and not any(
                 m["map_id"] == map_id for m in self.cat.list()):
-            raise WizardError(400, "没有这张图(新图不用给地图号)")
+            raise WizardError(400, "地图不存在(新图不用给地图号)")
         now = self.now_ms()
         st = {"id": secrets.token_hex(8), "step": "prepare", "robot_id": robot,
               "site_type": site_type, "drive": drive,

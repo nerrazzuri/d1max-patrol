@@ -88,7 +88,7 @@ def write_guide(accounts: Any, name: str, patch: Any) -> dict[str, Any]:
     for k, typ in _GUIDE_KEYS.items():
         if k in patch and (not isinstance(patch[k], typ) or isinstance(patch[k], bool)
                            and typ is int):
-            raise GuideError(f"{k} 类型不对")
+            raise GuideError(f"{k} 类型错误")
     for k in ("tour", "web_tour"):
         if k in patch and not 0 <= patch[k] <= 1000:
             raise GuideError(f"{k} 是 0–1000 的版本号")
@@ -100,5 +100,5 @@ def write_guide(accounts: Any, name: str, patch: Any) -> dict[str, Any]:
         g.update(patch)
         return json.dumps(g, ensure_ascii=False)
     if not accounts.set_guide(name, merge):
-        raise GuideError("没有这个账号")
+        raise GuideError("没有此账号")
     return read_guide(accounts, name)

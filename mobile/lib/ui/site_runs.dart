@@ -147,7 +147,7 @@ class _SiteRunsPageState extends State<SiteRunsPage> {
             NwSectionLabel(tr('Recent rounds', '最近的巡检')),
             nwGap8,
             if (rows.isEmpty)
-              NwCard(child: Text(tr('No records yet', '还没有记录'), style: NwText.bodyMedium.copyWith(color: c.textSecondary))),
+              NwCard(child: Text(tr('No records yet', '暂无记录'), style: NwText.bodyMedium.copyWith(color: c.textSecondary))),
             for (final r in rows)
               Padding(
                   padding: const EdgeInsets.only(bottom: Nw.s8),

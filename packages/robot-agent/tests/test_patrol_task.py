@@ -112,7 +112,7 @@ async def test_到不了的点被跳过_failed并列出点名(台子, monkeypatc
     await t.start()
     await _跑(c, r, parts, t, 2000)
     assert t.state is TaskState.FAILED, (t.state, t.detail)
-    assert "p1" in t.detail["reason"] and "1 个航点没到" in t.detail["reason"]
+    assert "p1" in t.detail["reason"] and "1 个航点未到达" in t.detail["reason"]
     assert [g["ok"] for g in _点事件(book)] == [True, False, True]
 
 

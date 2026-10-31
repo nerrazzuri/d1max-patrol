@@ -42,12 +42,12 @@ def test_全都好_每一项都过_没有拦的():
 def test_定位器感知外参_还没部署_写明白_不拦():
     got = _项(precheck(_好()))
     for n in ("localizer", "perception", "extrinsic"):
-        assert got[n].ok and not got[n].blocking and "还没部署" in got[n].detail
+        assert got[n].ok and not got[n].blocking and "尚未部署" in got[n].detail
 
 
 def test_接上来源之后_不健康就拦():
     from d1max_agent.release_precheck import SourceCheck
-    items = precheck(_好(sources=(SourceCheck("localizer", False, "定位器 3 s 没出位姿"),)))
+    items = precheck(_好(sources=(SourceCheck("localizer", False, "定位器 3 s 未出位姿"),)))
     got = _项(items)
     assert not got["localizer"].ok and got["localizer"].blocking
     assert first_block(items) == "localizer"
@@ -63,8 +63,8 @@ def test_不认识的来源_也列出来_不健康照样拦():
 
 
 def test_狗在忙_包和来源都没查_写明白_不装作过了():
-    got = _项(precheck(_好(busy="在跑任务 goto-1", skipped=True)))
-    assert not got["package"].ok and not got["package"].blocking and "没核" in got["package"].detail
+    got = _项(precheck(_好(busy="正在执行任务 goto-1", skipped=True)))
+    assert not got["package"].ok and not got["package"].blocking and "未核" in got["package"].detail
 
 
 def test_站点给了任务包schema_槽里那一版要的更高_拦():
@@ -74,17 +74,17 @@ def test_站点给了任务包schema_槽里那一版要的更高_拦():
     assert not got["schema"].ok and got["schema"].blocking
     assert first_block(items) == "schema_mismatch"
     assert _项(precheck(_好(mission_schema=2, requires_mission_schema=2)))["schema"].ok
-    assert "schema" not in _项(precheck(_好())), "站点没给就不列(老站点)"
+    assert "schema" not in _项(precheck(_好())), "站点未提供就不列(老站点)"
 
 
 def test_每一项不过的原因码_跟以前切版本回的一样():
-    cases = [(dict(busy="在跑任务 goto-1"), "busy"),
+    cases = [(dict(busy="正在执行任务 goto-1"), "busy"),
              (dict(battery_pct=None), "battery_unknown"),
              (dict(battery_pct=29.9), "low_battery"),
              (dict(disk_ok=False), "storage_full"),
              (dict(name="2026-09-20-aaaaaa"), "already_running"),
              (dict(installed=False), "not_installed"),
-             (dict(package_error="包的哈希对不上"), "package_corrupt"),
+             (dict(package_error="包的哈希不匹配"), "package_corrupt"),
              (dict(can_switch=False), "no_agent_start")]
     for kw, code in cases:
         items = precheck(_好(**kw))
@@ -105,7 +105,7 @@ def test_电量门槛是30():
 
 def test_没装的版本_不去核包():
     got = _项(precheck(_好(installed=False, package_error="")))
-    assert not got["installed"].ok and "没装" in got["installed"].detail
+    assert not got["installed"].ok and "未安装" in got["installed"].detail
 
 
 # ------------------------------------------------------------ 槽里的包现在还对不对
@@ -148,7 +148,7 @@ def test_槽里的包被改了一个字节_核不过(tmp_path):
     import pytest
     layout = _槽(tmp_path)
     (layout.release_dir(NEW) / "src" / "x.py").write_text("x = 2\n")
-    with pytest.raises(rel.ReleaseError, match="对不上"):
+    with pytest.raises(rel.ReleaseError, match="不匹配"):
         rel.verify_slot(layout, NEW)
 
 
@@ -164,7 +164,7 @@ async def test_release_precheck_回执里带清单_什么都不做(tmp_path):
     await rt.start()
     await broker.drain()
     caps = ears.by["capabilities"][-1]["tasks"]
-    assert "release_precheck" in caps, "站点据此知道这台机器人会回清单"
+    assert "release_precheck" in caps, "站点据此知道此机器人会回清单"
     await rt._on_cmd(_cmd("release_precheck", {"name": NEW}, "p1", c))
     await broker.drain()
     ack = _ack(ears)
@@ -202,14 +202,14 @@ async def test_切版本被拒_回执里带整份清单_原因码照旧(tmp_path
 async def test_槽里的包坏了_不切(tmp_path):
     broker, c, ears, relops, dog, rt = await _发布台(tmp_path)
     await rt.start()
-    relops.corrupt = "包的哈希对不上: 自述写 aa,算出 bb"
+    relops.corrupt = "包的哈希不匹配: 自述写 aa,算出 bb"
     await rt._on_cmd(_cmd("release_activate", {"name": NEW}, "a2", c))
     await broker.drain()
     ack = _ack(ears)
     assert ack["reason"] == "package_corrupt" and not rt._restarting
     assert [c for c in relops.calls if c[0] != "check"] == []
     pkg = next(x for x in ack["data"]["checks"] if x["name"] == "package")
-    assert "对不上" in pkg["detail"]
+    assert "不匹配" in pkg["detail"]
     await rt.close()
 
 
@@ -234,7 +234,7 @@ async def test_接上健康来源_不健康就拦切版本_来源炸了卡住了
     await rt.start()
 
     async def 定位器():
-        return SourceCheck("whatever", False, "3 s 没出位姿")
+        return SourceCheck("whatever", False, "3 s 未出位姿")
     rt.precheck_sources.append(("localizer", 定位器))
     await rt._on_cmd(_cmd("release_activate", {"name": NEW}, "s1", c))
     await broker.drain()
@@ -242,7 +242,7 @@ async def test_接上健康来源_不健康就拦切版本_来源炸了卡住了
     assert ack["reason"] == "localizer" and "localizer" in ack["data"]["blocking"]
 
     async def 炸():
-        raise RuntimeError("桥断了")
+        raise RuntimeError("桥已断开")
 
     async def 卡住():
         await asyncio.sleep(10)
@@ -252,8 +252,8 @@ async def test_接上健康来源_不健康就拦切版本_来源炸了卡住了
     ack = _ack(ears)
     got = {x["name"]: x for x in ack["data"]["checks"]}
     assert ack["result"] == "rejected"
-    assert not got["perception"]["ok"] and "桥断了" in got["perception"]["detail"]
-    assert not got["extrinsic"]["ok"] and "没回" in got["extrinsic"]["detail"]
+    assert not got["perception"]["ok"] and "桥已断开" in got["perception"]["detail"]
+    assert not got["extrinsic"]["ok"] and "未返回" in got["extrinsic"]["detail"]
     assert ("activate", NEW) not in relops.calls
     await rt.close()
 
@@ -316,7 +316,7 @@ async def test_退版本_又忙又读不到电量_先说忙(tmp_path):
     await rt.step(0.1)
 
     async def 读不到():
-        raise RuntimeError("还没收到第一帧")
+        raise RuntimeError("尚未收到第一帧")
     dog.battery = 读不到
     await rt._on_cmd(_cmd("release_rollback", {}, "b2", c))
     await broker.drain()

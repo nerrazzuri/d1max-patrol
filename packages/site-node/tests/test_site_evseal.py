@@ -72,8 +72,8 @@ def test_站点没配私钥_封好的留着报P2_配好了补解(站点, ca, tmp
     assert not run.exists(), "站点照样确认:机器人那份删了,站点这份是唯一的"
     d = 站点.store.run_dir("A", "巡检一", STAMP) / "photos"
     assert sorted(p.name for p in d.iterdir()) == sorted(n + ".d1e" for n in want)
-    assert len(got_unopened) == 2 and "没配证据私钥" in got_unopened[0][3]
-    assert 站点.store.runs(robot_id="A")[0]["photos"] == 0, "没解开的不登记"
+    assert len(got_unopened) == 2 and "未配置证据私钥" in got_unopened[0][3]
+    assert 站点.store.runs(robot_id="A")[0]["photos"] == 0, "未解开的不登记"
     站点.store.evidence_key = 钥匙.priv
     assert 站点.store.open_leftovers() == (2, 0)
     assert _照片(d.parent) == want and 站点.store.runs(robot_id="A")[0]["photos"] == 2
@@ -90,9 +90,9 @@ def test_私钥不对_解不开_封好的留着(站点, ca, tmp_path, 钥匙):
     _一趟(box.root, photos=1)
     box.seal_leftovers(钥匙.sealer, lambda rel: rel.startswith("photos/"))
     _跑(box, 3)
-    assert got and "对不上" in got[0][3]
+    assert got and "不匹配" in got[0][3]
     d = 站点.store.run_dir("A", "巡检一", STAMP) / "photos"
-    assert [p.suffix for p in d.iterdir()] == [".d1e"], "一个字节明文都没写"
+    assert [p.suffix for p in d.iterdir()] == [".d1e"], "一个字节明文都未写"
     box.close()
 
 
@@ -188,7 +188,7 @@ class 时好时坏:
 
     def seal_file(self, src, dst):
         if self.broken:
-            raise E.SealError("openssl 坏了")
+            raise E.SealError("openssl 已损坏")
         self.real.seal_file(src, dst)
 
 
@@ -202,14 +202,14 @@ def test_外审1_补封失败_明文扣着不传_这一趟不删_修好了重封
     box.uploader.scan()                                   # 升级前:明文已经排进队列了
     s = 时好时坏(钥匙.sealer)
     assert box.seal_leftovers(s, lambda rel: rel.startswith("photos/")) == 0
-    assert len(box.unsealed) == 2 and "openssl 坏了" in next(iter(box.unsealed.values()))
+    assert len(box.unsealed) == 2 and "openssl 已损坏" in next(iter(box.unsealed.values()))
     _跑(box, 5)
     got = 站点.store.run_dir("A", "巡检一", STAMP)
     assert not (got / "photos").exists() or not list((got / "photos").iterdir()), \
-        "明文照片一个字节都没传"
-    assert run.exists(), "照片没传完:这一趟不删"
+        "明文照片一个字节都未上传"
+    assert run.exists(), "照片未传完:本次任务不删"
     box.step()
-    assert len(box.unsealed) == 2, "没到重封的点"
+    assert len(box.unsealed) == 2, "未到达重封的点"
     s.broken = False
     clock[0] += 60_000
     _跑(box, 3)
@@ -243,7 +243,7 @@ def test_复查_狗报封不上的件数_站点报P2一次_封好了自动解决
     w, desk, 报 = _封不上台(tmp_path)
     报(None)
     w.tick()
-    assert not _开着的(desk), "老代理、没配加密:不报"
+    assert not _开着的(desk), "老代理、未配置加密:不报"
     报(3)
     w.tick()
     w.tick()
@@ -261,7 +261,7 @@ def test_复查_狗报封不上的件数_站点报P2一次_封好了自动解决
     w.tick()
     报(1)
     w.tick()
-    assert len(_开着的(desk)) == 1, "封好了又坏了:新的一回,再报"
+    assert len(_开着的(desk)) == 1, "封完成又已损坏:新的一回,再报"
     报(0)
     w.tick()
     assert not _开着的(desk)
@@ -270,13 +270,13 @@ def test_复查_狗报封不上的件数_站点报P2一次_封好了自动解决
 def test_复查_报P2失败了_下一拍再报(tmp_path):
     w, desk, 报 = _封不上台(tmp_path)
     real = desk.raise_alert
-    desk.raise_alert = lambda **kw: (_ for _ in ()).throw(OSError("库写不进"))
+    desk.raise_alert = lambda **kw: (_ for _ in ()).throw(OSError("库无法写入"))
     报(2)
     w.tick()
     assert not _开着的(desk)
     desk.raise_alert = real
     w.tick()
-    assert len(_开着的(desk)) == 1, "封不上一直在:报失败了下一拍再报"
+    assert len(_开着的(desk)) == 1, "无法加密一直在:报失败了下一拍再报"
 
 
 def test_复查_自动解决失败了_下一拍再解决(tmp_path):
@@ -284,20 +284,20 @@ def test_复查_自动解决失败了_下一拍再解决(tmp_path):
     报(2)
     w.tick()
     real = desk.resolve_all
-    desk.resolve_all = lambda *a, **kw: (_ for _ in ()).throw(OSError("库写不进"))
+    desk.resolve_all = lambda *a, **kw: (_ for _ in ()).throw(OSError("库无法写入"))
     报(0)
     w.tick()
     assert len(_开着的(desk)) == 1
     desk.resolve_all = real
     w.tick()
-    assert not _开着的(desk), "都封好了:解决失败了下一拍再解决"
+    assert not _开着的(desk), "都封完成:解决失败了下一拍再解决"
 
 
 def test_复查_盘况带封不上的件数_老站点老代理都兼容():
     from d1max_contract.storage import StorageFacts
     base = dict(disk_used_ratio=0.1, outbox_bytes=0, outbox_cap_bytes=1, backlog_files=0,
                 backlog_bytes=0, oldest_backlog_s=None)
-    assert "unsealed" not in StorageFacts(**base).to_wire(), "没配加密:线上跟老的一样"
+    assert "unsealed" not in StorageFacts(**base).to_wire(), "未配置加密:线上与老的一样"
     w = StorageFacts(**base, unsealed=3).to_wire()
     assert StorageFacts.from_wire(w).unsealed == 3
     assert StorageFacts.from_wire(StorageFacts(**base).to_wire()).unsealed is None
@@ -316,13 +316,13 @@ def test_外审2_照片解开了登记失败_封好的留着_补解能登记(站
 
     def 坏(robot, mission, stamp, rel, **kw):
         if rel.startswith("photos/"):
-            raise OSError("库写不进")
+            raise OSError("库无法写入")
         return real(robot, mission, stamp, rel, **kw)
     monkeypatch.setattr(站点.store, "_index", 坏)
     with pytest.raises(OSError):
         站点.store.open_leftovers()
     d = 站点.store.run_dir("A", "巡检一", STAMP) / "photos"
-    assert any(p.suffix == ".d1e" for p in d.iterdir()), "登记没成:封好的不许删"
+    assert any(p.suffix == ".d1e" for p in d.iterdir()), "登记失败:封好的不许删"
     monkeypatch.setattr(站点.store, "_index", real)
     assert 站点.store.open_leftovers() == (1, 0)
     assert _照片(d.parent) == want and 站点.store.runs(robot_id="A")[0]["photos"] == 1
@@ -344,8 +344,8 @@ def test_外审2_录像解开了登记失败_封好的留着_补解能登记(tmp
     rec.put("A", "front/20261009T010000Z", "video.mp4.d1e", offset=0, data=data, total=len(data))
     rec.evidence_key = 钥匙.priv
     real = db.tx
-    monkeypatch.setattr(db, "tx", lambda: (_ for _ in ()).throw(OSError("库写不进")))
-    assert rec.open_leftovers() == (0, 1), "登记没成:算还没解开"
+    monkeypatch.setattr(db, "tx", lambda: (_ for _ in ()).throw(OSError("库无法写入")))
+    assert rec.open_leftovers() == (0, 1), "登记失败:算尚未解开"
     assert list((tmp_path / "rec").rglob("*.mp4.d1e")), "封好的留着"
     monkeypatch.setattr(db, "tx", real)
     assert rec.open_leftovers() == (1, 0)
@@ -362,7 +362,7 @@ def test_外审3_解不开的录像段登记成封着_不列不放_过了留存�
     rec.put("A", "front/20261009T010000Z", "video.mp4.d1e", offset=0, data=data, total=len(data))
     [row] = [dict(r) for r in db.query("SELECT * FROM recordings")]
     assert row["sealed"] == 1 and row["bytes"] == len(data)
-    assert rec.list(robot_id="A") == [] and rec.get(row["id"]) is None, "放不了:不列、不给"
+    assert rec.list(robot_id="A") == [] and rec.get(row["id"]) is None, "放无法完成:不列、不给"
     clock[0] += 91 * 86400_000
     assert rec.prune() == (1, 0)
     assert not list((tmp_path / "rec").rglob("*.d1e")) and not db.query("SELECT 1 FROM recordings")
@@ -416,7 +416,7 @@ def test_工单8_没加密的报警被处理掉了_狗还是明文_隔一天再�
     assert not w.alerts.raised, "一小时内不催"
     clock[0] += 24 * 3600_000
     w.tick()
-    assert [a["kind"] for a in w.alerts.raised] == ["evidence_plain"], "过了一天还没修:再提醒"
+    assert [a["kind"] for a in w.alerts.raised] == ["evidence_plain"], "过了一天尚未修:再提醒"
     clock[0] += 24 * 3600_000
     w.tick()
     assert len(w.alerts.raised) == 1, "告警还开着:不重复报"

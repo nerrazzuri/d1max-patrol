@@ -87,7 +87,7 @@ async def test_配了定位器_没连上不可信_连上换好先验_按它的�
     assert t.ears.by["capabilities"][-1]["tasks"]["relocalize"] == {"needs_pose": True}
     await t.拍(2)
     loc = _遥测(t.ears).loc
-    assert loc["localizer"] == "bridge" and "没连上" in loc["reason"]
+    assert loc["localizer"] == "bridge" and "未连接" in loc["reason"]
     await t.连()
     assert [(p.map_id, p.map_version, p.dir) for p in t.loc.priors] == [("m", "1", "")]
     loc = _遥测(t.ears).loc
@@ -166,9 +166,9 @@ async def test_定位器冻住了_狗在走_抓住停下_重置之后接着走(�
         if not t.rt.parts.nav.anchor.ok(True):
             break
     assert not t.rt.parts.nav.anchor.ok(True)
-    assert t.dog.x - x0 < 0.8, "冻住之后没走出多远就停"
+    assert t.dog.x - x0 < 0.8, "冻住之后未走出多远就停"
     await t.拍(SETTLE_FIXES + 5)
-    assert t.loc.relocs and t.loc.frozen is None, "重置请它重定位,它对回来了"
+    assert t.loc.relocs and t.loc.frozen is None, "重置请它重定位,机器人对回来了"
     await t.拍(80)
     assert _事件(t.ears, "task_done"), t.ears.by.get("event")
     assert abs(t.dog.x - 4.0) < 0.3
@@ -243,9 +243,9 @@ async def test_设位置经定位器_不在线拒_拒了说原因_收下之后�
     assert _事件(t.ears, "relocalized")[-1]["source"] == "manual"
     await t.rt._on_cmd(_cmd("relocalize", {"x": 3.0, "y": 0.0, "yaw": 0.0}, "r3", t.c))
     await t.broker.drain()
-    assert _ack(t.ears)["result"] == "accepted", "收下了;对不对得上看之后"
+    assert _ack(t.ears)["result"] == "accepted", "收下了;是否正确得上看之后"
     await t.拍(2)
-    assert "初值附近对不上" in t.rt.parts.nav.anchor.why_not(True)
+    assert "初值附近不匹配" in t.rt.parts.nav.anchor.why_not(True)
 
 
 async def test_换图的时候不收设位置(台):
@@ -289,7 +289,7 @@ async def test_换图请定位器换先验_升级前检查有定位器这一项(
     await t.loc.close()
     await t.拍(25)
     got = await src()
-    assert not got.ok and "没连上" in got.detail
+    assert not got.ok and "未连接" in got.detail
 
 
 async def test_没配定位器的狗_照旧里程锚定_不开套接字(tmp_path):
@@ -313,7 +313,7 @@ async def test_定位器连着却一声不吭_两秒后当它断了(台):
         await t.rt.step(0.1)
         t.c.mono += 0.1
         await asyncio.sleep(0.005)
-    assert "没连上" in t.rt.parts.nav.anchor.why_not(True)
+    assert "未连接" in t.rt.parts.nav.anchor.why_not(True)
 
 
 async def test_换图时告诉定位器这张图在狗上的目录(tmp_path):

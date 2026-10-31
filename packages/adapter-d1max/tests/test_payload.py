@@ -116,7 +116,7 @@ def test_写线圈_读线圈(板子):
 def test_板子不回_CRC错_回异常码_都报错不当成成了(板子):
     r = ModbusRelay(板子.open, timeout_s=0.1, retries=1)
     板子.mute = True
-    with pytest.raises(PayloadError, match="没回|不全"):
+    with pytest.raises(PayloadError, match="未返回|不全"):
         r.write_coil(0, True)
     板子.mute, 板子.garble = False, True
     with pytest.raises(PayloadError, match="CRC"):
@@ -169,7 +169,7 @@ async def test_开一路带最长时间_到点自己关_再开从现在重算(�
 
 async def test_没接的一路_时长不对_都拒(板子):
     p = Payload(PayloadConfig(coils={"siren": 1}), relay=ModbusRelay(板子.open))
-    with pytest.raises(PayloadError, match="没接"):
+    with pytest.raises(PayloadError, match="未接入"):
         await p.set("spotlight", True, 5)
     for bad in (0, -1, 601):
         with pytest.raises(PayloadError, match="max_s"):
@@ -262,7 +262,7 @@ async def test_喇叭到点掐掉_新的一段打断旧的(tmp_path):
 async def test_TTS_没配就拒_配了先合成再放(tmp_path):
     log: list = []
     p = Payload(PayloadConfig(audio_device="hw:1"), run=_假跑(log))
-    with pytest.raises(PayloadError, match="没配 TTS"):
+    with pytest.raises(PayloadError, match="未配置 TTS"):
         await p.sound("tts:zh:请离开", 5)
     p = Payload(PayloadConfig(audio_device="hw:1",
                               tts_command="espeak-ng -v {lang} -w {wav} {text}"), run=_假跑(log))
@@ -278,7 +278,7 @@ async def test_TTS_没配就拒_配了先合成再放(tmp_path):
 
 async def test_没接喇叭_放就拒(tmp_path):
     p = Payload(PayloadConfig())
-    with pytest.raises(PayloadError, match="没接喇叭"):
+    with pytest.raises(PayloadError, match="未接入喇叭"):
         await p.sound("x", 5)
 
 
@@ -374,7 +374,7 @@ async def test_外审1_开着时手动关失败_原截止时间过了照样关(�
     assert 板子.coils[1] and "siren" in p.problems()
     await asyncio.sleep(0.6)                              # 原截止时间也过了
     板子.mute = False
-    assert await _等到(lambda: not 板子.coils[1]), "关没成要一直接着关"
+    assert await _等到(lambda: not 板子.coils[1]), "关失败要一直接着关"
     assert await _等到(lambda: p.problems() == [])
     await p.close()
 
@@ -386,7 +386,7 @@ async def test_外审1_再开一次失败_不丢关闭保障(板子):
     with pytest.raises(PayloadError):
         await p.set("spotlight", True, 60)               # 再开(续时间)没成
     板子.mute = False
-    assert await _等到(lambda: not 板子.coils[2]), "开没成就当「要关」接着关"
+    assert await _等到(lambda: not 板子.coils[2]), "开失败就当「要关」接着关"
     await p.close()
 
 
@@ -466,7 +466,7 @@ async def test_外审3_播放器不存在_当场报错_不回调(tmp_path):
     ends: list = []
     p = Payload(PayloadConfig(audio_device="hw:1", clips_dir=str(tmp_path)), run=没有播放器)
     p.on_sound_end = lambda ok, why: ends.append((ok, why))
-    with pytest.raises(PayloadError, match="放不出来"):
+    with pytest.raises(PayloadError, match="无法播放"):
         await p.sound("w", 5)
     assert not p.playing() and ends == []
 
@@ -664,7 +664,7 @@ async def test_V12警灯换色开到一半没成_开了的那个也关回去(板
 
     def 绿的写不进去(coil, on):
         if coil == 3 and on:
-            raise PayloadError("没回")
+            raise PayloadError("未返回")
         return orig(coil, on)
     p.relay.write_coil = 绿的写不进去
     with pytest.raises(PayloadError):
@@ -717,7 +717,7 @@ async def test_V12功放合不上_喇叭当没放(板子, tmp_path):
     log: list = []
     p = _v12(tmp_path, 板子, run=_假跑(log))
     板子.mute = True
-    with pytest.raises(PayloadError, match="功放开不了"):
+    with pytest.raises(PayloadError, match="功放无法开启"):
         await p.sound("warn-zh", 5)
     assert log == [] and not p.playing()
     板子.mute = False
@@ -841,7 +841,7 @@ async def test_V12设备健康_继电器板_喇叭_喇叭警笛(板子, tmp_path
     p = _v12(tmp_path, 板子, run=_假跑([]))
     p.card_present = lambda dev: True
     h = {d["id"]: d for d in p.health()}
-    assert h["relay"]["state"] == "offline", "还一个都没确认过"
+    assert h["relay"]["state"] == "offline", "还一个都未确认过"
     assert h["siren"]["state"] == "error" and "警笛声" in h["siren"]["detail"]
     await p.start()
     h = {d["id"]: d for d in p.health()}

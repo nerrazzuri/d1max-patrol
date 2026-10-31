@@ -126,7 +126,7 @@ class VideoMux:
     # ------------------------------------------------------------ 拉(每一路一条线程)
 
     def _pull(self, s: _Stream) -> None:
-        status, message = 502, "画面没了"
+        status, message = 502, "画面丢失"
         try:
             frames = self._open(s.id)
             try:

@@ -119,7 +119,7 @@ def _publish(h: Any, adm: MapAdmin, user: Any, map_id: str, version: str, d: dic
     for rid in robots:
         if rid not in known:
             results[rid] = {"robot_id": rid, "ok": False, "state": "refused",
-                            "reason": "没有这台机器人"}
+                            "reason": "机器人不存在"}
             continue
         try:
             jobs.append((rid, h._map_activate_payload(rid, ref, d.get("without_home", False))))
@@ -178,7 +178,7 @@ _IMG = {"image/png": "png", "image/jpeg": "jpg"}
 
 def _basemap_dir(h: Any, map_id: str, version: str) -> Any:
     if h.site.home is None:
-        raise HttpError(404, "这个站点没接站点目录")
+        raise HttpError(404, "此站点未接入站点目录")
     return h.site.home / "map-display" / map_id / version
 
 
@@ -191,7 +191,7 @@ def _basemap(h: Any, adm: MapAdmin, method: str, map_id: str, version: str) -> N
         for ext, ctype in (("png", "image/png"), ("jpg", "image/jpeg")):
             if (d / f"basemap.{ext}").is_file():
                 return h._send_bytes((d / f"basemap.{ext}").read_bytes(), ctype)
-        raise HttpError(404, "这一版还没有底图")
+        raise HttpError(404, "此版本尚无底图")
     if method != "POST":
         raise HttpError(405, "只支持 GET/POST")
     ext = _IMG.get((h.headers.get("Content-Type") or "").split(";")[0].strip().lower())
@@ -219,11 +219,11 @@ def _rollback(h: Any, adm: MapAdmin, user: Any) -> None:
     d = h._body()
     rid = d.get("robot_id")
     if not isinstance(rid, str) or not SAFE_ID.match(rid) or rid not in set(adm.robot_ids()):
-        raise AdminError(404, "没有这台机器人")
+        raise AdminError(404, "机器人不存在")
     h._audit_target = rid
     target = adm.rollback_target(rid)
     if target is None:
-        raise AdminError(409, f"{rid} 没有可以退回的上一版(机器人上没留、"
+        raise AdminError(409, f"{rid} 没有可以退回的上一版(机器人上未留、"
                               "命令账里也没有换过别的版本)",
                          reason="no_previous")
     ref = adm.ref(target["map_id"], target["version"])

@@ -74,15 +74,15 @@ def _kinds(desk) -> list[str]:
 
 def test_告警落库_站点重启读回_序号接着走_还在吸收(台, tmp_path):
     c, db, desk, src, pushed, _ = 台
-    a = desk.raise_alert(kind="stuck", robot="A", title="点位 gate 没到")
+    a = desk.raise_alert(kind="stuck", robot="A", title="点位 gate 未到达")
     desk.ack(a.key, who="gina")
-    b = desk.raise_alert(kind="stuck", robot="A", title="点位 pond 没到")
+    b = desk.raise_alert(kind="stuck", robot="A", title="点位 pond 未到达")
     assert b.key != a.key
     desk2 = AlertDesk(db, now_ms=c)
     got = {x.key: x for x in desk2.book.all()}
     assert got[a.key].acked_by == "gina" and got[b.key].count == 1
     c.ms += 1000
-    again = desk2.raise_alert(kind="stuck", robot="A", title="点位 pond 又没到")
+    again = desk2.raise_alert(kind="stuck", robot="A", title="点位 pond 又未到达")
     assert again.key == b.key and again.count == 2, "重启后未确认的那条仍在吸收"
     desk2.ack(b.key, who="gina")
     new = desk2.raise_alert(kind="stuck", robot="A", title="x")
@@ -92,7 +92,7 @@ def test_告警落库_站点重启读回_序号接着走_还在吸收(台, tmp_p
 
 def test_确认要人名_不存在的键404(台):
     c, db, desk, *_ = 台
-    a = desk.raise_alert(kind="run_done", robot="A", title="跑完了")
+    a = desk.raise_alert(kind="run_done", robot="A", title="已完成")
     with pytest.raises(ValueError):
         desk.ack(a.key, who="")
     with pytest.raises(AlertNotFound):
@@ -193,7 +193,7 @@ def test_跑着任务时丢定位_先P2_30秒没好再P1_空闲时丢不报(台)
     c.ms += 1_000
     src.tick()
     src.tick()
-    assert _kinds(desk).count("loc_lost_paused") == 1, "30 秒还没好:P1,只报一次"
+    assert _kinds(desk).count("loc_lost_paused") == 1, "30 秒尚未好:P1,只报一次"
     src.on_status("A", _status(task=_running()))            # 恢复了
     src.on_status("A", _status(task=_running(), loc_ok=False))
     n = sum(a.count for a in desk.book.all() if a.kind == "loc_degraded")
@@ -288,7 +288,7 @@ def test_排程这一拍没办成报一次_好了再坏再报(台):
     assert desk.book.all()[0].level.value == "P1"
     src.on_site_error("schedule", "")
     src.on_site_error("schedule", "OSError: 盘满")
-    assert desk.book.all()[0].count == 2, "好了再坏是新的一次"
+    assert desk.book.all()[0].count == 2, "完成再坏是新的一次"
 
 
 def test_主循环一拍_看掉线再升档(台):
@@ -405,7 +405,7 @@ def test_写库失败_内存不动_接口报错之后仍是没确认(台, monkey
     desk.book._sink = 坏
     with pytest.raises(RuntimeError):
         desk.ack(a.key, who="gina")
-    assert desk.book.all()[0].acked_ms is None, "库里没记,内存也不许算确认"
+    assert desk.book.all()[0].acked_ms is None, "库里未记,内存也不许算确认"
     with pytest.raises(RuntimeError):
         desk.raise_alert(kind="fallen", robot="A", title="跌倒")
     assert [x.kind for x in desk.book.all()] == ["estop_pressed"]
@@ -424,11 +424,11 @@ def test_开张只读回未解决的与最近的_序号照样接着走(tmp_path)
     for i in range(alert_store.RESTORE_RECENT + 10):  # 新的:把「最近 N 条」占满
         c.ms += 1
         d.resolve(d.raise_alert(kind="run_start", robot="A", title=f"{i}").key, who="")
-    keep = d.raise_alert(kind="estop_pressed", robot="A", title="还没解决")
+    keep = d.raise_alert(kind="estop_pressed", robot="A", title="尚未解决")
     d2 = AlertDesk(db, now_ms=c)
     loaded = {x.key for x in d2.book.all()}
     assert len(loaded) <= alert_store.RESTORE_RECENT + 1 and keep.key in loaded
-    assert not any(k.startswith("A/run_done#") for k in loaded), "老的那几条确实没读回来"
+    assert not any(k.startswith("A/run_done#") for k in loaded), "老的那几条确实未读回来"
     c.ms += 1
     nxt = d2.raise_alert(kind="run_done", robot="A", title="新的")
     assert nxt.key == "A/run_done#6", nxt.key
@@ -450,13 +450,13 @@ def test_狗上正在用的图坏了_报图的告警_说重新下发这一版(�
     """W09g:起来时校验不过,狗不载、不宣告能自主 —— 站点要让人知道、怎么修。"""
     c, db, desk, src, *_ = 台
     src.on_event("A", _ev("map_integrity_failed", map_id="estate-1", version="7",
-                          reason="正在用的图 estate-1:7 的 prior.mm sha256 不对(内容坏了)"))
+                          reason="正在用的图 estate-1:7 的 prior.mm sha256 错误(内容已损坏)"))
     [a] = desk.book.all()
-    assert a.kind == "map_integrity" and "estate-1:7" in a.title and "坏了" in a.title
+    assert a.kind == "map_integrity" and "estate-1:7" in a.title and "已损坏" in a.title
     assert "prior.mm" in a.detail and "重新下发" in a.detail
     src.on_event("A", _ev("map_build_failed", map_id="estate-1", version="8", reason="x"))
     kinds = sorted(x.kind for x in desk.book.all())
-    assert kinds == ["map_failed", "map_integrity"], "重建没成不盖掉「图坏了」那条"
+    assert kinds == ["map_failed", "map_integrity"], "重建失败不盖掉「图已损坏」那条"
 
 
 def test_RTK的三种事件_报RTK告警(台):
@@ -473,9 +473,9 @@ def test_RTK的三种事件_报RTK告警(台):
 def test_点位照片存不下_不报没到_并进记录写不进去(台):
     c, db, desk, src, *_ = 台
     src.on_event("A", _ev("patrol_waypoint", task_id="t1", index=0, name="gate", ok=False,
-                          note="照片存不下: [Errno 28] No space left on device"))
+                          note="照片无法保存: [Errno 28] No space left on device"))
     [a] = desk.book.all()
-    assert a.kind == "archive_failed" and "照片存不下" in a.title and "没到" not in a.title
+    assert a.kind == "archive_failed" and "照片无法保存" in a.title and "未到达" not in a.title
 
 
 
@@ -495,7 +495,7 @@ def test_钟差估计_狗慢的方向要攒够样本_超过一分钟的样本不
     cs.note("B", now["ms"] + 3000, now["ms"])            # 狗快:一条就算
     assert cs.skew_s("B") == 3.0
     now["ms"] += 61_000
-    assert cs.skew_s("A") is None and cs.skew_s("B") is None, "一分钟没新样本:不知道"
+    assert cs.skew_s("A") is None and cs.skew_s("B") is None, "一分钟未新样本:未知"
 
 
 
@@ -546,7 +546,7 @@ def test_对账S6_空闲的狗定位不可信_过两分钟报P2_好了自己解�
     src.on_status("A", _status())
     c.ms += LOC_IDLE_BOOT_S * 1000                        # 狗起来的那一阵过去了
     src.on_status("A", _status(loc_ok=False))
-    src.on_telemetry("A", _遥测(c, "定位器说定位丢了:雷达没数据"))
+    src.on_telemetry("A", _遥测(c, "定位器说定位丢了:雷达未数据"))
     c.ms += LOC_IDLE_P2_S * 1000 - 1000
     src.tick()
     assert _空闲丢定位(desk) == [], "两分钟以内:定位器自己能好的(雷达挡了又恢复、重定位)不报"
@@ -555,7 +555,7 @@ def test_对账S6_空闲的狗定位不可信_过两分钟报P2_好了自己解�
     src.tick()
     [a] = _空闲丢定位(desk)
     assert a.level.value == "P2" and a.count == 1 and a.resolved_ms is None
-    assert "雷达没数据" in a.detail and "派不了" in a.title
+    assert "雷达未数据" in a.detail and "无法派单" in a.title
     src.on_status("A", _status(loc_ok=False))             # 状态重发、一直不好:不重复报
     c.ms += 600_000
     src.tick()
@@ -579,7 +579,7 @@ def test_对账S6_空闲丢定位_短的不报_刚起来和刚换图宽限五分
     assert _空闲丢定位(desk) == [], "刚起来:人多半正在设位置"
     c.ms = t0 + LOC_IDLE_BOOT_S * 1000
     src.tick()
-    assert [a.robot for a in _空闲丢定位(desk)] == ["A"], "宽限过了还没设:报"
+    assert [a.robot for a in _空闲丢定位(desk)] == ["A"], "宽限过了尚未设:报"
     src.on_status("B", _status())
     c.ms += LOC_IDLE_BOOT_S * 1000
     t1 = c.ms
@@ -643,7 +643,7 @@ def test_对账S6_站点重启前报过_重启后不重复报_好了照样解决
     desk.raise_alert(kind="loc_lost_idle", robot="B", title="空闲的机器人定位不可信")
     src.seed("B", _status(loc_ok=False))                  # 站点重启时还丢着;停机期间好了
     src.on_status("B", _status())
-    assert all(x.resolved_ms is not None for x in _空闲丢定位(desk)), "重启后第一份状态就好了也解决"
+    assert all(x.resolved_ms is not None for x in _空闲丢定位(desk)), "重启后第一份状态就完成也解决"
     desk.raise_alert(kind="loc_lost_idle", robot="A", title="空闲的机器人定位不可信")
     src.seed("A", _status(loc_ok=False))                  # 站点重启:读回库里的状态做种
     src.on_status("A", _status(loc_ok=False))

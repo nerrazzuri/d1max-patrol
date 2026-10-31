@@ -56,7 +56,7 @@ def load_cameras(path: Path) -> dict[str, dict[str, Any]]:
     except FileNotFoundError:
         return {}
     except (OSError, ValueError) as exc:
-        raise CameraConfigError(f"相机配置 {path} 读不了: {exc}") from exc
+        raise CameraConfigError(f"相机配置 {path} 无法读取: {exc}") from exc
     if not isinstance(d, dict):
         raise CameraConfigError("相机配置要是 JSON 对象")
     out: dict[str, dict[str, Any]] = {}
@@ -144,7 +144,7 @@ class VideoPusher:
     def request(self, req: VideoRequest) -> str:
         """收下一条 ``video`` 命令。返回空串 = 收下;否则是拒绝原因。"""
         if req.camera not in self.cameras():
-            return f"unsupported: 这台机器人没有 {req.camera} 这路相机"
+            return f"unsupported: 此机器人没有 {req.camera} 这路相机"
         if req.stop:
             self._stop(req.camera)                    # 站点收流之前说停:安静地停,不报失败
             return ""
@@ -163,7 +163,7 @@ class VideoPusher:
                                     stdout=subprocess.DEVNULL, stderr=errs)
         except OSError as exc:
             errs.close()
-            return f"起不了 ffmpeg({self._ffmpeg}): {exc}"
+            return f"无法启动 ffmpeg({self._ffmpeg}): {exc}"
         self.starts += 1
         self._push[req.camera] = _Push(req=req, proc=proc, until=now + req.ttl_ms / 1000.0,
                                        errs=errs)
@@ -181,7 +181,7 @@ class VideoPusher:
                 log.info("%s 的推流到期没续,停", cam)
                 self._stop(cam)
             elif p.proc.poll() is not None:
-                why = _tail(p.errs) or "ffmpeg 没说原因"
+                why = _tail(p.errs) or "ffmpeg 未说原因"
                 reason = f"推流进程退了(rc={p.proc.returncode}): {why}"
                 self._stop(cam)
                 log.warning("%s %s", cam, reason)

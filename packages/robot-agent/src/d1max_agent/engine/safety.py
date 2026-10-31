@@ -147,8 +147,9 @@ def rule(event: Event | DeviceEvent, ctx: SafetyContext) -> Ruling:
         if event.level == "critical":
             # 决策 74:上装严重过热,结束这一趟、回原点(回到出发的地方,一般是充电桩)。返航路上再来一次
             # 不打断返航(``_apply`` 管)。
-            return Ruling(Decision.RETURN_HOME, f"上装严重过热({event.reason}),结束这一趟、回原点")
-        return Ruling(Decision.CONTINUE, f"上装温度 {event.level},巡逻照走")
+            return Ruling(Decision.RETURN_HOME, (f"上装严重过热({event.reason}),"
+                                                 f"结束本次任务、回原点"))
+        return Ruling(Decision.CONTINUE, f"上装温度 {event.level},巡逻照常进行")
     return Ruling(Decision.CONTINUE, f"{type(event).__name__} 无对应规则,只记录")
 
 
@@ -203,7 +204,7 @@ def battery_ruling(ctx: SafetyContext) -> Ruling:
         # 这一趟本身就是回原点的路(站点的回程巡检,W00c6b 内审):掉头是往远端走。接着走,到中止线再停。
         return Ruling(Decision.CONTINUE,
                       f"电量 {ctx.battery_pct:.0f}% 低于返航线 {line:.0f}%,"
-                      f"这一趟就是回原点的路,接着走")
+                      f"本次任务就是回原点的路,继续执行")
     if ctx.battery_pct < line:
         # 这句话是这一关唯一给人的解释,**两支各说各的**。静态下限赢的时候
         # 照印"中止线 + 回原点",人读到的是"低于返航线 60%(中止线 25% +

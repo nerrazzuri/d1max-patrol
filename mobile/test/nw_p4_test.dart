@@ -183,7 +183,7 @@ void main() {
       final api = _Api('admin')..mapsBody = <String, dynamic>{'maps': <dynamic>[], 'bags': <dynamic>[]};
       await _pump(t, SiteMapTab(api: api));
       expect(find.byKey(SiteMapTab.emptyKey), findsOneWidget);
-      expect(find.text('站点上还没有地图'), findsOneWidget);
+      expect(find.text('站点暂无地图'), findsOneWidget);
       expect(find.byKey(SiteMapTab.canvasKey), findsNothing);
       expect(api.calls.where((c) => c.startsWith('mapPreview')), isEmpty);
       expect(find.byKey(SiteMapTab.listKey), findsOneWidget);
@@ -196,7 +196,7 @@ void main() {
       await _pump(t, SiteMapTab(api: api));
       expect(find.textContaining('无法加载地图目录'), findsOneWidget);
       expect(find.byKey(SiteMapTab.emptyKey), findsNothing);
-      expect(find.text('站点上还没有地图'), findsNothing);
+      expect(find.text('站点暂无地图'), findsNothing);
       api
         ..mapsError = null
         ..previewMissing = true;

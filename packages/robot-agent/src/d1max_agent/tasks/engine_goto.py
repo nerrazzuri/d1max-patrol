@@ -135,7 +135,7 @@ class EngineMissionTask(Task):
                 # 看门的最后一道(W00c6a):引擎任务已经结束、快照却不是终态。正常路径走不到
                 # (收尾一定落成终态);真走到了,不等一个死掉的引擎 —— 停车,然后跟正常收尾一样
                 # 等停车确认、导航回待命,再按失败收尾(内审:不然下一趟在驻留期起跑、预飞变红)。
-                await self._engine_died(engine.crash or "引擎任务已经结束")
+                await self._engine_died(engine.crash or "引擎任务已结束")
             else:
                 return
         if not await self._parts.hal.stopped():

@@ -24,7 +24,7 @@ class ShiftNotes:
         if not body:
             raise ValueError("留言是空的")
         if len(body) > MAX_CHARS:
-            raise ValueError(f"留言最多 {MAX_CHARS} 字,这条 {len(body)} 字")
+            raise ValueError(f"留言最多 {MAX_CHARS} 字,此条 {len(body)} 字")
         now = self._now()
         with self.db.tx() as c:
             cur = c.execute("INSERT INTO shift_notes(at_ms, author, text) VALUES (?, ?, ?)",

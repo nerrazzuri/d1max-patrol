@@ -311,7 +311,7 @@ class _SiteHealthPageState extends State<SiteHealthPage> {
       ],
       Text(tr('Robot software', '机器人上的软件'), style: heading),
       nwGap8,
-      if (robots.isEmpty) Text(tr('No robots.', '还没有机器人。'), style: none),
+      if (robots.isEmpty) Text(tr('No robots.', '暂无机器人。'), style: none),
       NwGrid(minTile: _versionTile, children: [
         for (final r in robots)
           () {

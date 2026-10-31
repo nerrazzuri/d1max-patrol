@@ -57,7 +57,7 @@ async def test_没设位置_走远了偏差大_在走_都拒(tmp_path):
     await rt._on_cmd(_cmd("mark_home", {}, "n3", c))
     await broker.drain()
     assert _ack(ears)["reason"] == "moving"
-    assert rt.parts.home.pose.position.x == 0.0, "都没换"
+    assert rt.parts.home.pose.position.x == 0.0, "都未换"
     await rt.close()
 
 
@@ -169,7 +169,7 @@ async def test_在跑任务_拒忙_原点不变(tmp_path):
     assert rt.processor.current is not None and rt.processor.current.kind == "goto"
     await rt._on_cmd(_cmd("mark_home", {}, "b2", c))
     await broker.drain()
-    assert _ack(ears)["reason"] == "busy: 在跑任务 goto-g", _ack(ears)
+    assert _ack(ears)["reason"] == "busy: 正在执行任务 goto-g", _ack(ears)
     assert rt.parts.home.pose.position.x == 0.0
     assert not _事件(ears, "home_marked")
     await rt.close()
@@ -293,7 +293,7 @@ async def test_只标待命点_同样的检查同样回位置_狗上的原点不
     assert ack["result"] == "accepted", ack
     d = ack["data"]
     assert d["target"] == "standby" and (round(d["x"], 2), round(d["y"], 2)) == (5.0, 1.0)
-    assert rt.parts.home is home and rt.homes.get("m", "1") == saved, "原点没动"
+    assert rt.parts.home is home and rt.homes.get("m", "1") == saved, "原点未动"
     assert len(_事件(ears, "home_marked")) == 1, "只标待命点不发 home_marked"
     await rt._on_cmd(_cmd("mark_home", {"target": "dock"}, "s2", c))
     await _跑(rt, broker, n=2, r=dog, c=c)

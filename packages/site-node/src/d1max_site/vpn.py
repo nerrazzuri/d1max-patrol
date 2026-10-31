@@ -119,7 +119,7 @@ class VpnState:
         except FileNotFoundError:
             return {}
         if not isinstance(d, dict):
-            raise VpnError(f"{self.path} 坏了")
+            raise VpnError(f"{self.path} 已损坏")
         return d
 
     @contextmanager
@@ -150,7 +150,7 @@ class VpnState:
     def _need(self) -> dict[str, Any]:
         d = self._load()
         if "server" not in d:
-            raise VpnError("还没 init:先 d1max-site vpn init --endpoint <域名或公网 IP>")
+            raise VpnError("尚未 init:先 d1max-site vpn init --endpoint <域名或公网 IP>")
         return d
 
     def init(self, *, endpoint: str, port: int = DEFAULT_PORT) -> dict[str, Any]:
@@ -159,7 +159,7 @@ class VpnState:
 
     def _init(self, *, endpoint: str, port: int = DEFAULT_PORT) -> dict[str, Any]:
         if "server" in self._load():
-            raise VpnError("已经 init 过了(站点密钥不覆盖;真要重来先删掉 vpn 目录,"
+            raise VpnError("已 init 过了(站点密钥不覆盖;真要重来先删掉 vpn 目录,"
                            "所有配置都要重发)")
         if not endpoint or not re.fullmatch(r"[A-Za-z0-9.:-]{1,253}", endpoint):
             raise VpnError("--endpoint 要是域名或公网 IP(机器人、手机从外面连站点用的地址)")
@@ -182,7 +182,7 @@ class VpnState:
             raise VpnError("名字要是 1–64 个字母、数字、点、下划线、减号(字母或数字开头)")
         d = self._need()
         if any(p["name"] == name for p in d["peers"]):
-            raise VpnError(f"{name} 已经有了")
+            raise VpnError(f"{name} 已存在")
         lo, hi = RANGES[kind]
         used = set(d.get("used", [])) | {p["host"] for p in d["peers"]}
         host = next((h for h in range(lo, hi + 1) if h not in used), None)

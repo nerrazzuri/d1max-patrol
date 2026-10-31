@@ -170,11 +170,11 @@ class Nav2NavBackend(PlannedNavBackend):
     def nav2_ready(self) -> str:
         """Nav2 能不能用;能用回空串,不能用回原因。"""
         if self.link is None:
-            return "没配 Nav2 转接"
+            return "未配置 Nav2 转接"
         if not self.link.connected:
-            return "Nav2 转接节点没连上"
+            return "Nav2 转接节点未连接"
         if not self.link.ready:
-            return f"Nav2 没就绪({self.link.reason})"
+            return f"Nav2 未就绪({self.link.reason})"
         return ""
 
     async def _go(self, pose: Pose, op: str) -> None:

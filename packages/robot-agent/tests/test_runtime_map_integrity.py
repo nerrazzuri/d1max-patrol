@@ -85,7 +85,7 @@ async def test_好的图_重启照常载(t):
 async def test_同尺寸坏了_重启不载_不报自主_不退回命令行的图_记事件(t):
     _flip(t.keeper.dir_of(t.keeper.active()) / "m.pgm")
     await t.重启()
-    assert t.r.loaded_map is None, "HAL 没载坏图"
+    assert t.r.loaded_map is None, "HAL 未载坏图"
     assert t.rt.loaded_map is None, "不退回 --map 的 m:1"
     caps = t.caps()
     for kind in ("goto", "patrol", "relocalize", "mark_home"):
@@ -267,7 +267,7 @@ async def test_起来时读不了_站点再发同一版_修好(t, monkeypatch):
         return real(p)
     monkeypatch.setattr(M, "_sha256", eio)
     await t.重启()
-    assert t.rt.loaded_map is None and "读不了" in t.events("map_integrity_failed")[-1]["reason"]
+    assert t.rt.loaded_map is None and "无法读取" in t.events("map_integrity_failed")[-1]["reason"]
     await t.换("2", "a9")
     assert t.rt.loaded_map == ("m", "2") and t.events("map_activated")[-1]["task_id"] == \
         "map_activate-a9"
@@ -304,7 +304,7 @@ async def test_配了定位器_校验的时候定位桥还没开_定位器拿不
         keeper.verify_active = 看
         t.rt = t.新代理()
         await t.rt.start()
-        assert seen == [False], "校验的时候定位桥还没开"
+        assert seen == [False], "校验的时候定位桥尚未开"
         assert (t.d / "loc.sock").exists(), "校验完照样开"
     finally:
         await t.收()

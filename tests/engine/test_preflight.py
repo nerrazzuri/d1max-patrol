@@ -163,11 +163,11 @@ async def test_不管前面哪项挂了后面几项照样查(tmp_path, sample_mi
 async def test_后端抛异常算这一项没过而不是整个炸掉(tmp_path, sample_mission,
                                                     fake_nav, fake_device):
     async def boom():
-        raise RuntimeError("连不上")
+        raise RuntimeError("无法连接")
     fake_nav.nav_status = boom
     r = await _run(fake_nav, fake_device, sample_mission, tmp_path)
     assert [c.name for c in r.failures] == ["nav_ready"]
-    assert "连不上" in r.failures[0].detail
+    assert "无法连接" in r.failures[0].detail
     assert len(r.checks) == 7, "一项炸了不该让后面几项不查"
 
 
@@ -175,7 +175,7 @@ async def test_读不到状态算没过而不是当成好的(tmp_path, sample_mi
                                               fake_device):
     """"不知道有没有急停"和"确认没有急停"是两回事,前者不该放行。"""
     async def boom():
-        raise RuntimeError("还没收到过状态帧")
+        raise RuntimeError("尚未收到过状态帧")
     fake_device.emergency = boom
     r = await _run(fake_nav, fake_device, sample_mission, tmp_path)
     assert [c.name for c in r.failures] == ["device_ready"]
@@ -193,7 +193,7 @@ async def test_状态认不出来就不放行(tmp_path, sample_mission, fake_nav
     setattr(fake_nav, field, None)
     r = await _run(fake_nav, fake_device, sample_mission, tmp_path)
     assert [c.name for c in r.failures] == [failed]
-    assert "认不出" in r.failures[0].detail
+    assert "无法识别" in r.failures[0].detail
 
 
 async def test_没标过原点就不让起飞(tmp_path, sample_mission, fake_nav, fake_device):
@@ -260,7 +260,7 @@ async def test_通过时也说得出出发线是多少(tmp_path, sample_mission,
                                           fake_device):
     r = await _run(fake_nav, fake_device, sample_mission, tmp_path)
     battery = next(c for c in r.checks if c.name == "battery")
-    assert "出发线" in battery.detail, "过了也要让人看见这条线画在哪儿"
+    assert "出发线" in battery.detail, "过了也要让人看见此条线画在哪儿"
 
 
 class _FakeUpload:
@@ -304,7 +304,7 @@ async def test_盘过了报警线但还没到拦停线时这一项要把话说�
     monkeypatch.setattr("shutil.disk_usage", _盘用到(0.85))
     r = await _run(fake_nav, fake_device, sample_mission, tmp_path)
     storage = next(c for c in r.checks if c.name == "storage")
-    assert storage.ok, "85% 还没到拦停线,该放行"
+    assert storage.ok, "85% 尚未到拦停线,该放行"
     assert "已用 85%" in storage.detail
     assert "80% 报警线" in storage.detail
     assert "清盘" in storage.detail
@@ -336,7 +336,7 @@ async def test_七项里随便哪一项炸了都只算那一项没过(tmp_path, 
     r = await _run(fake_nav, fake_device, sample_mission, tmp_path)
     assert [c.name for c in r.checks] == NAMES, "炸掉一项不许少报另外六项"
     assert [c.name for c in r.failures] == [name]
-    assert f"{name} 这一项炸了" in r.failures[0].detail, "异常本身就是没过的理由"
+    assert f"{name} 这一项炸了" in r.failures[0].detail, "异常本身就是未通过的理由"
 
 
 async def test_还插着取走盘就不让起飞(tmp_path, sample_mission, fake_nav,
@@ -390,7 +390,7 @@ async def test_没扫过盘跟没插盘不是一回事(tmp_path, sample_mission,
     r = await run_preflight(fake_nav, fake_device, sample_mission, tmp_path,
                             home=_HOME, removable=None)
     assert [c.name for c in r.failures] == ["removable"]
-    assert "没扫过" in r.failures[0].detail
+    assert "未扫过" in r.failures[0].detail
 
 
 async def test_默认就是没扫过而不是没有盘(tmp_path, sample_mission, fake_nav,
@@ -460,7 +460,7 @@ async def test_起飞检查用狗当前在哪_回原点这一趟只算单程(tmp
     far = Pose.from_xy_yaw(150.0, 0.0)
     nav = _报位姿的导航(far, "straight")
     want = departure_line_pct(m, _HOME, start=far, back="none")
-    assert f"{want:.1f}" != f"{departure_line_pct(m, _HOME):.1f}", "前提:两种算法的线不一样"
+    assert f"{want:.1f}" != f"{departure_line_pct(m, _HOME):.1f}", "前提:两种算法的线不同"
     fake_device.batt = want + 0.5
     report = await _run(nav, fake_device, m, tmp_path / "runs")
     battery = next(c for c in report.checks if c.name == "battery")

@@ -76,7 +76,7 @@ def 台(tmp_path):
         got["n"] += 1
         got["at"] = (lat, lon)
         if got["fail"]:
-            raise OSError("没网")
+            raise OSError("未网")
         return got["cur"]
     disp = 假派遣(A=_狗(), B=_狗())
     pushed = []
@@ -117,10 +117,10 @@ async def test_查不到_照用最后一次_旧了算不知道(台):
     t.got["fail"] = True
     t.clock.go(POLL_S)
     await t.desk.tick()
-    assert t.desk.current() == "storm" and "没网" in t.desk.view()["auto"]["error"]
+    assert t.desk.current() == "storm" and "未网" in t.desk.view()["auto"]["error"]
     t.clock.go(AUTO_STALE_S)
-    assert t.desk.current() == "unknown" and t.desk.view()["label"] == "不知道"
-    assert t.desk.speed_cap() is None and not t.desk.storm(), "不知道按正常管"
+    assert t.desk.current() == "unknown" and t.desk.view()["label"] == "未知"
+    assert t.desk.speed_cap() is None and not t.desk.storm(), "未知按正常管"
 
 
 async def test_手动以手动为准_到点回自动_能直接切回自动(台):
@@ -132,7 +132,7 @@ async def test_手动以手动为准_到点回自动_能直接切回自动(台):
     assert t.desk.storm()
     t.clock.go(2)
     t.got["fail"] = True
-    assert t.desk.current() == "unknown", "手动到点:回到联网查的(这里已经旧了)"
+    assert t.desk.current() == "unknown", "手动到点:回到联网查的(这里已旧了)"
     t.desk.set_manual("rain", by="gina")
     assert t.desk.current() == "rain"
     t.desk.set_manual("auto", by="gina")
@@ -162,7 +162,7 @@ async def test_雷暴_撤在跑的排程巡检_别的不撤_15秒最多撤一次
     assert len(t.disp.aborts) == 1
     t.clock.go(15)
     await t.desk.tick()
-    assert len(t.disp.aborts) == 2, "还在跑:接着撤"
+    assert len(t.disp.aborts) == 2, "还正在运行:接着撤"
     t.desk.set_manual("rain", by="gina")
     t.clock.go(15)
     await t.desk.tick()
@@ -249,7 +249,7 @@ class 假待命:
             raise StandbyError(self.unsafe)
         if self.fail:
             self.fail -= 1
-            raise RuntimeError("机器人没就绪")
+            raise RuntimeError("机器人未就绪")
         if self.reject:
             self.reject -= 1
             return {"ack": {"result": "rejected", "reason": "busy"}}
@@ -325,7 +325,7 @@ async def test_外审2_限速_狗不重发能力也按时续_站点重启先补�
     desk2 = WeatherDesk(t.db, t.disp, now_ms=t.clock, latlon=None)   # 站点重启
     t.clock.go(15)
     await desk2.tick()
-    assert len(t.disp.caps) == 3, "重启不知道上次什么时候发的:先补发"
+    assert len(t.disp.caps) == 3, "重启未知上次什么时候发的:先补发"
 
     async def 拒(rid, cap, *, issued_by):
         t.disp.caps.append((rid, "拒"))
@@ -344,7 +344,7 @@ async def test_W29复查_回不得_意图作废_报没回待命点_不再派(台
     t = 台
     t.desk.standby = stb = 假待命()
     t.desk.alerts = AlertDesk(t.db, now_ms=t.clock)
-    stb.unsafe = "sched-1 只报了 1/3 个点到了,不知道机器人停在哪,不回"
+    stb.unsafe = "sched-1 只报了 1/3 个点到了,无法确定机器人位置,不回"
     t.disp.clients = {"A": _狗("sched-1")}
     t.desk.set_manual("storm", by="gina")
     await t.desk.tick()
@@ -354,7 +354,7 @@ async def test_W29复查_回不得_意图作废_报没回待命点_不再派(台
     assert stb.back == [] and not t.db.query("SELECT 1 FROM weather_returns")
     [a] = t.desk.alerts.open()
     assert a["kind"] == "standby_failed" and a["robot"] == "A"
-    assert "原地等" in a["detail"] and "不知道机器人停在哪" in a["detail"]
+    assert "原地等" in a["detail"] and "无法确定机器人位置" in a["detail"]
     assert a["context"]["task_id"] == "sched-1"
 
 
@@ -371,12 +371,12 @@ async def test_W29复查二_回不得的告警写不进去_下一拍补_重启�
     real = desk.raise_alert
 
     def 炸(**kw):
-        raise RuntimeError("告警库写不进")
+        raise RuntimeError("告警库无法写入")
     monkeypatch.setattr(desk, "raise_alert", 炸)
     t.clock.go(15)
     await t.desk.tick()
     assert desk.open() == [] and len(t.db.query("SELECT 1 FROM pending_alerts")) == 1, \
-        "告警没写成:意图留着"
+        "告警未写成:意图留着"
     await t.desk.tick()
     assert desk.open() == []
     monkeypatch.setattr(desk, "raise_alert", real)

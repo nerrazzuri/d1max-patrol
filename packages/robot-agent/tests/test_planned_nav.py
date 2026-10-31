@@ -115,7 +115,7 @@ class 台子:
             if self.nav._status is NavStatus.STANDBY and self.status and self.status[-1] in (
                     NavStatus.SUCCEED, NavStatus.FAILED, NavStatus.CANCELLED, NavStatus.STANDBY):
                 return
-        raise AssertionError(f"{limit_s} s 没走完;状态 {self.status[-5:]}")
+        raise AssertionError(f"{limit_s} s 未走完;状态 {self.status[-5:]}")
 
     async def 在(self):
         return await self.r.odometry()
@@ -185,7 +185,7 @@ async def test_终点在禁行区_没图_没定位_都同步拒_狗不动(tmp_pa
     with pytest.raises(NavRequestError, match="没有规划栅格"):
         await t.nav.goto(Pose.from_xy_yaw(3.0, 3.0))
     t.nav.load_grid(tmp_path / "没有")
-    assert "载不了" in t.nav.plan_problem
+    assert "无法加载" in t.nav.plan_problem
     t.nav.load_grid(tmp_path)
     t.r.inject_loc_lost(True)
     await t.一拍()
@@ -544,13 +544,13 @@ async def test_窄限速带_两端都在外面也减速_进带之前已经降下
          "polygon": [[6.1, 3.5], [6.2, 3.5], [6.2, 4.5], [6.1, 4.5]]}))
     await t.start(1.5, 4.0)
     await t.nav.goto(Pose.from_xy_yaw(10.5, 4.0))
-    assert len(t.nav._path.points) == 2, "一整条长线段(剪枝没被限速带打断)"
+    assert len(t.nav._path.points) == 2, "一整条长线段(剪枝未被限速带打断)"
     await t.走到头()
     assert NavStatus.SUCCEED in t.status
     in_band = [v for x, _, v in t.speeds if 6.0 <= x <= 6.3]
     assert in_band and max(in_band) <= 0.1 + 1e-6, "叠着取最低"
     before = [v for x, _, v in t.speeds if 5.9 <= x < 6.0]
-    assert before and max(before) <= 0.1 + 1e-6, "进带之前已经降到上限"
+    assert before and max(before) <= 0.1 + 1e-6, "进带之前已降到上限"
     assert max(v for x, _, v in t.speeds if 2.5 <= x <= 4.0) > 0.4, "远处照常走"
 
 

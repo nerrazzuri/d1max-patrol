@@ -112,7 +112,7 @@ class SiteBackup:
             self.run_once()
         stale = self.stale()
         if stale and not self._stale_told and self.alerts is not None:
-            self.alerts.raise_alert(kind="backup_stale", robot=SITE, title="站点备份过期了",
+            self.alerts.raise_alert(kind="backup_stale", robot=SITE, title="站点备份已过期",
                                     detail=self.last_error or "超过 25 小时没有备份成功")
         self._stale_told = stale
 
@@ -227,7 +227,7 @@ class SiteBackup:
         open_ = self.alerts.has_open(SITE, "backup_verify_failed")
         if not rep.get("ok") and not open_:
             self.alerts.raise_alert(kind="backup_verify_failed", robot=SITE,
-                                    title="站点备份校验没过:出了事可能恢复不了",
+                                    title="站点备份校验未通过:出了事可能无法恢复",
                                     detail=";".join(rep.get("problems", []))[:300])
         elif rep.get("ok") and open_:
             self.alerts.resolve_all(SITE, "backup_verify_failed", who="site:backup_verify")

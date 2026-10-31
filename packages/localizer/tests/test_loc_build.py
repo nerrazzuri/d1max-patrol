@@ -176,7 +176,7 @@ def test_哪一步不成_说是哪一步_带日志尾巴(tmp_path):
     with pytest.raises(B.BuildError, match="simplemap 转点云失败.*内存不够"):
         B.package(work, tmp_path / "out", run=假MOLA(pts, fail="sm2mm"))
     (work / "traj.tum").unlink()
-    with pytest.raises(B.BuildError, match="没出 traj.tum"):
+    with pytest.raises(B.BuildError, match="未出 traj.tum"):
         B.package(work, tmp_path / "out", run=假MOLA(pts))
 
 
@@ -227,7 +227,7 @@ def test_有录包就用逐帧扫描打真射线_读不了退回模拟射线_写
     assert rays.startswith("synthetic") and "rosbag2_py" in rays
     B.package(work, tmp_path / "out3", run=假MOLA(pts))
     assert json.loads((tmp_path / "out3" / "build.json").read_text())["grid"]["rays"] == \
-        "synthetic:没给录包"
+        "synthetic:未提供录包"
 
     def 一帧没配上(bag, traj, topic):
         return iter(())
@@ -521,9 +521,9 @@ def test_没有回环工具_出的文件跟原来一样_build_json说没有(tmp_
 
 @pytest.mark.parametrize("case, kw, why", [
     ("失败", {"lc_fail": True}, "退出码 1"),
-    ("没找到", {"closures": 0}, "没找到回环"),
+    ("未找到", {"closures": 0}, "未找到回环"),
     ("挪得太多", {"shift": (0.0, 0.5, 0.0)}, "挪得太多"),
-    ("关键帧对不上", {"lc_kfs_drop": 1}, "关键帧"),
+    ("关键帧不匹配", {"lc_kfs_drop": 1}, "关键帧"),
     ("别的错", {"kf_garbage": True}, "回环出错: ValueError"),
 ])
 def test_回环不成_退回原来的打包_build_json说为什么(tmp_path, case, kw, why):
@@ -541,9 +541,9 @@ def test_回环不成_退回原来的打包_build_json说为什么(tmp_path, cas
     assert lcj["ran"] is True and lcj["used"] is False and why in lcj["why"], lcj
     if case == "失败":
         assert "ICP 炸了" in lcj["why"], "带日志尾巴"
-    if case == "没找到":
+    if case == "未找到":
         assert lcj["closures"] == 0
-        assert not [c for c in fake.calls if c[0] == "sm-cli"], "没回环就不用再导关键帧"
+        assert not [c for c in fake.calls if c[0] == "sm-cli"], "未返回环就不用再导关键帧"
 
 
 def test_轨迹按前后两个关键帧的改动插值():
@@ -695,7 +695,7 @@ def test_S2_上判反了_里程是对的_核出来不出图(tmp_path, monkeypatc
     def 判反(points, traj):
         poses = [(p, q) for _, p, q in traj]
         f = calibrate(poses, sensor_up=B.SENSOR_UP_HINT, forward_hint=B.SENSOR_FORWARD_HINT)
-        return f, "按装法的「上」(没翻)"
+        return f, "按装法的「上」(未翻)"
     monkeypatch.setattr(B, "orient", 判反)
     with pytest.raises(B.BuildError, match="镜像"):
         B.package(work, tmp_path / "out", run=假MOLA(pts), bag=tmp_path / "bag",
@@ -710,16 +710,16 @@ def test_S2_核不了的照出图_build_json写着为什么(tmp_path):
         B.package(work, tmp_path / name, run=假MOLA(pts), read_scans=lambda *a: iter(()), **kw)
         return json.loads((tmp_path / name / "build.json").read_text())["handedness"]
 
-    assert 打包("o1") == {"verdict": "skipped", "why": "没给录包"}
+    assert 打包("o1") == {"verdict": "skipped", "why": "未提供录包"}
     h = 打包("o2", bag=tmp_path / "bag", read_odom=lambda bag: None)
     assert h["verdict"] == "skipped" and "/odom/mc_odom" in h["why"], h
 
     def 坏(bag):
-        raise RuntimeError("包坏了")
+        raise RuntimeError("包已损坏")
     h = 打包("o3", bag=tmp_path / "bag", read_odom=坏)
-    assert h["verdict"] == "skipped" and "包坏了" in h["why"], h
+    assert h["verdict"] == "skipped" and "包已损坏" in h["why"], h
     h = 打包("o4", bag=tmp_path / "bag")                    # 默认读法:这里没有 ROS / 不是录包
-    assert h["verdict"] == "skipped" and "读不了" in h["why"], h
+    assert h["verdict"] == "skipped" and "无法读取" in h["why"], h
     still = [(t, r, 0.3) for t, r, _ in _里程(yaws)]         # 里程一直不转:说不清
     h = 打包("o5", bag=tmp_path / "bag", read_odom=lambda bag: ("/odom/mc_odom", still))
     assert h["verdict"] == "unclear", h

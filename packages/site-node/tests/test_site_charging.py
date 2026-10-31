@@ -63,7 +63,7 @@ async def test_低电量_去桩前_对桩_充到90出桩_这一轮完(站):
     await _跑(t, 60)
     assert not t.dog.docked and t.dog.undock_calls == 1
     assert (await t.dog.battery()).percent >= 90
-    assert t.charge.view()["cycles"] == [], "这一轮完"
+    assert t.charge.view()["cycles"] == [], "本轮完"
     await _跑(t, 30)
     assert len(_cmds(t, "goto")) == 1, "充满了不再去,也不自动派回待命点"
 
@@ -78,9 +78,9 @@ async def test_电量够_不去充_狗忙着不去充(站):
     await t.send(t.site.goto("A", target(-3.0), 0.5, issued_by="alice", priority=60))
     await _跑(t, 3)
     charge = [c for c in _cmds(t, "goto") if c["task_id"].startswith("charge-")]
-    assert all(c["ack_result"] == "rejected" for c in charge), "机器人在跑人派的任务:去充也被拒"
-    assert t.dog.x < -0.1, "人派的那一趟照走"
-    assert not t.charge.view()["cycles"], "没派成:不记这一轮"
+    assert all(c["ack_result"] == "rejected" for c in charge), "机器人正在运行人派的任务:去充也被拒"
+    assert t.dog.x < -0.1, "人派的那一趟照常进行"
+    assert not t.charge.view()["cycles"], "未派成:不记本轮"
 
 
 async def test_充电中来了入侵_电量够就出桩去_回来接着充_不够就不派(站):
@@ -122,7 +122,7 @@ async def test_对不上桩_报P1_歇10分钟再试(站, monkeypatch):
     await _跑(t, 30)
     await _跑(t, 30)
     [a] = t.charge.alerts.raised
-    assert a["kind"] == "charge_failed" and "没对上桩" in a["detail"]
+    assert a["kind"] == "charge_failed" and "未对上桩" in a["detail"]
     assert t.charge.view()["cycles"][0]["state"] == "cooldown"
     await _跑(t, 30)
     assert len(_cmds(t, "dock")) == 1, "歇着:不再试"
@@ -213,7 +213,7 @@ async def test_电量在返航线下面_去桩前的路上不掉头回原点(站
     t = 站
     t.dog.inject_battery(26.5)                            # 高于中止线 25%,低于返航线(25% + 回原点)
     await _跑(t, 40)
-    assert abs(t.dog.x - CHARGER[0]) < 0.3, "去充是回原点的路:接着走到桩前"
+    assert abs(t.dog.x - CHARGER[0]) < 0.3, "去充是回原点的路:继续执行到桩前"
     assert _cmds(t, "dock")
 
 
@@ -224,7 +224,7 @@ async def test_派了的回充丢了_狗上没在跑也没终态_过一阵当被
         c.execute("INSERT INTO charge_cycles(robot_id, state, task_id, sent_ms, started_ms) "
                   "VALUES ('A','dock','charge-dock-ghost',?,?)", (t.clock.ms, t.clock.ms))
     await _跑(t, 30)
-    assert t.charge.view()["cycles"][0]["state"] == "dock", "还没到时候"
+    assert t.charge.view()["cycles"][0]["state"] == "dock", "尚未到时候"
     await _跑(t, 70)
     gotos = _cmds(t, "goto")
     assert gotos and gotos[-1]["task_id"].startswith("charge-goto-"), "当被打断:接着充(不看电量线)"
@@ -259,7 +259,7 @@ async def test_外审4_对桩任务号先落库_写不进去就不派_库好了�
     t.charge.db = 写不进()                                 # 只坏回充台的写(站点别的照常)
     await _跑(t, 20)
     t.charge.db = real_db
-    assert calls and _cmds(t, "dock") == [], "写不进去:不派"
+    assert calls and _cmds(t, "dock") == [], "无法写入:不派"
     await _跑(t, 10)
     [d] = _cmds(t, "dock")
     assert t.charge.view()["cycles"][0]["task_id"] == d["task_id"], "派的就是记着的那个"
@@ -273,16 +273,16 @@ async def test_外审4_对桩发出去回执没到_狗其实收了_它失败了�
 
     async def 回执没到(rid, tid, req, *, issued_by):
         await real(rid, tid, req, issued_by=issued_by)
-        raise TimeoutError("回执没到")
+        raise TimeoutError("回执未到达")
 
     async def 对不上():
         return None
     t.dog.recharge_start = 对不上
     monkeypatch.setattr(t.site, "dock", 回执没到)
     await _跑(t, 60)
-    assert len(_cmds(t, "dock")) == 1, "说不清收没收:按记着的任务号对账,不另派"
+    assert len(_cmds(t, "dock")) == 1, "无法确定收未接收:按记着的任务号对账,不另派"
     [a] = t.charge.alerts.raised
-    assert a["kind"] == "charge_failed" and "没对上桩" in a["detail"]
+    assert a["kind"] == "charge_failed" and "未对上桩" in a["detail"]
     assert a["context"]["task_id"] == _cmds(t, "dock")[0]["task_id"]
     t.charge = ChargeDesk(t.db, t.site, now_ms=t.clock)    # 站点重启:歇着照歇,不另派、不重报
     t.charge.alerts = 假告警台()
@@ -311,11 +311,11 @@ async def test_外审4_对桩被拒_退回走到了_过一阵再派(站, monkeyp
 async def test_桩上危险_报P1一次_摘了清_再挂再报(站):
     t = 站
     caps = t.site.clients["A"].capabilities.tasks
-    caps["dock"] = {"mode": "vendor_dock", "on_dock": True, "hazard": "出不了桩(120 秒)"}
+    caps["dock"] = {"mode": "vendor_dock", "on_dock": True, "hazard": "无法离开桩(120 秒)"}
     await t.send(t.charge.tick())
     await t.send(t.charge.tick())
     [a] = t.charge.alerts.raised
-    assert a["kind"] == "dock_stuck" and "出不了桩" in a["detail"]
+    assert a["kind"] == "dock_stuck" and "无法离开桩" in a["detail"]
     caps["dock"] = {"mode": "vendor_dock", "on_dock": False}
     await t.send(t.charge.tick())
     assert not t.db.query("SELECT 1 FROM dock_hazards")

@@ -612,7 +612,7 @@ class MissionEngine(EventEmitter[RunSnapshot]):
         某个 ``_busy_checks`` 上的请求,不许动正在飞的那趟手里的原点。
         """
         if self.running:
-            raise EngineBusy(f"已经在跑 {self._snapshot.mission},先停下来再开新的")
+            raise EngineBusy(f"已在运行 {self._snapshot.mission},先停下来再开新的")
         blocked = self._busy_reason()
         if blocked:
             raise EngineBusy(blocked)
@@ -875,7 +875,7 @@ class MissionEngine(EventEmitter[RunSnapshot]):
                     # 按返航失败中止(下面的 NavBackendError 那一支),不走沿来路回 —— 没路、没规划图时
                     # 沿来路大概率同样走不通。
                     if self._home is None:
-                        raise _AbortRun(f"返航失败: 没标原点(返航起因: {reason})")
+                        raise _AbortRun(f"返航失败: 未标原点(返航起因: {reason})")
                     try:
                         await return_to(self._home.pose)
                     except NavNotLocalizedError as exc:
@@ -979,9 +979,9 @@ class MissionEngine(EventEmitter[RunSnapshot]):
         live = self._live
         assert live is not None
         if self._home is None:
-            raise _FailWaypoint("没有原点,不知道该回哪儿")
+            raise _FailWaypoint("没有原点,无法确定返回位置")
         if live.trail_invalid:
-            raise _FailWaypoint(f"来路作废({live.trail_invalid}),不走没把握的线,原地停")
+            raise _FailWaypoint(f"来路作废({live.trail_invalid}),不走无把握的线,原地停")
         # 每一段的超时不短于这一趟自己的点位超时(内审:长腿的任务给了 600 s,固定 300 s 半路就
         # 判超时)。
         budget = max(RETURN_TIMEOUT_S, live.mission.policy.waypoint_timeout_s)
@@ -993,7 +993,7 @@ class MissionEngine(EventEmitter[RunSnapshot]):
         gap = start.distance_to(home)
         if gap > HOME_NEAR_M:
             await self._leg(start, budget)
-            raise _FailWaypoint(f"回到了出发点,出发点离原点 {gap:.1f} m —— 那一段没走过,不走直线,"
+            raise _FailWaypoint(f"回到了出发点,出发点离原点 {gap:.1f} m —— 那一段未走过,不走直线,"
                                 f"原地停")
         await self._leg(home, budget)
 
@@ -1208,7 +1208,7 @@ class MissionEngine(EventEmitter[RunSnapshot]):
             remaining = deadline - self._clock()
             if remaining <= 0:
                 raise _FailWaypoint(
-                    f"导航没回到 StandBy,停在 "
+                    f"导航未返回到 StandBy,停在 "
                     f"{status.value if status else '未知'}")
             item = await self._next(min(remaining, _STANDBY_POLL_S))
             if item is None:
@@ -1241,8 +1241,8 @@ class MissionEngine(EventEmitter[RunSnapshot]):
                 # 现场的人会分不清"该去找狗"还是"该去看这个点走不通"。
                 # W34:导航后端说得出原因(急停、被挡/看不见、定位不行……)就写上
                 why = getattr(self._nav, "fail_reason", "")
-                raise _FailWaypoint(f"到不了下一个点:{why}" if why
-                                    else f"到不了下一个点(导航回了 {item.status.value})")
+                raise _FailWaypoint(f"无法到达下一个点:{why}" if why
+                                    else f"无法到达下一个点(导航回了 {item.status.value})")
 
     async def _do_actions(self, wp: MissionWaypoint) -> None:
         for action in wp.actions:
@@ -1263,7 +1263,7 @@ class MissionEngine(EventEmitter[RunSnapshot]):
         except OSError as exc:
             # 盘满、只读重挂(W00c6a):这个点按失败走任务包的策略,不整趟中止 ——
             # 已经在跑的那一趟不因为盘满而停(storage.py),巡逻本身照样有价值。
-            raise _FailWaypoint(f"照片存不下: {exc}") from exc
+            raise _FailWaypoint(f"照片无法保存: {exc}") from exc
 
     @property
     def cameras(self) -> list[str]:
@@ -1578,7 +1578,7 @@ class MissionEngine(EventEmitter[RunSnapshot]):
                                 # **不离开 SUSPENDED**:报错不是中止,人可以把狗
                                 # 牵回地图里再点一次。走 abort 的话这一趟就没了,
                                 # 而人要的恰恰是把它救回来。
-                                deny = "机器人不在地图里,找不到下一个点"
+                                deny = "机器人不在地图里,未找到下一个点"
                                 self._note("resume_refused", reason=deny)
                                 base = live.suspended.reason if live.suspended else ""
                                 self._publish(f"{base} —— 还不能继续: {deny}"

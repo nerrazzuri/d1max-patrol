@@ -125,7 +125,7 @@ class _SiteMapsPageState extends State<SiteMapsPage> {
         final go = await showDialog<bool>(
           context: context,
           builder: (c) => AlertDialog(
-            title: Text(tr('$robot has no origin on $label', '$robot 在 $label 上还没有原点')),
+            title: Text(tr('$robot has no origin on $label', '$robot 在 $label 上尚未标原点')),
             content: Text(tr(
                 'Without an origin, the robot won\'t navigate or patrol on this map; remote control and set position still work. Drive it to the dock, set its position, then tap "Mark origin here".',
                 '没有原点时，机器人在此地图上不执行导航和巡逻，遥控和设位置不受影响。请将机器人开到充电桩前，设好位置后点「在这儿标原点」。')),
@@ -140,7 +140,7 @@ class _SiteMapsPageState extends State<SiteMapsPage> {
           ),
         );
         if (go != true) {
-          _snack(tr('Not sent: $robot has no origin on $label', '未下发：$robot 在 $label 上还没有原点'));
+          _snack(tr('Not sent: $robot has no origin on $label', '未下发：$robot 在 $label 上尚未标原点'));
           return;
         }
         r = await widget.api.activateMap(robot, '${m['map_id']}', '${m['version']}',
@@ -221,7 +221,7 @@ class _SiteMapsPageState extends State<SiteMapsPage> {
               NwSectionLabel(tr('Maps', '地图')),
               nwGap8,
               NwListCard(children: [
-                if (maps.isEmpty) NwCardText(tr('No maps on the site yet', '站点上还没有地图')),
+                if (maps.isEmpty) NwCardText(tr('No maps on the site yet', '站点暂无地图')),
                 for (final m in maps)
                   ListTile(
                     key: SiteMapsPage.mapKey('${m['map_id']}', '${m['version']}'),
@@ -256,7 +256,7 @@ class _SiteMapsPageState extends State<SiteMapsPage> {
               NwSectionLabel(tr('Mapping recordings', '录包')),
               nwGap8,
               NwListCard(children: [
-                if (bags.isEmpty) NwCardText(tr('No mapping recordings yet', '还没有录包')),
+                if (bags.isEmpty) NwCardText(tr('No mapping recordings yet', '暂无录包')),
                 for (final b in bags)
                   ListTile(
                     key: SiteMapsPage.bagKey('${b['robot_id']}', '${b['name']}'),
@@ -611,7 +611,7 @@ class _SiteMapTabState extends State<SiteMapTab> {
                 overline: tr('Map', '地图'),
                 title: v?.mapId == null ? tr('Site map', '地图') : v!.tag,
                 subtitle:
-                    v?.mapId == null ? null : tr('$onMap robot(s) on this map', '这张图上 $onMap 台机器人'),
+                    v?.mapId == null ? null : tr('$onMap robot(s) on this map', '此地图上 $onMap 台机器人'),
                 trailing: [
                   IconButton(
                       key: SiteMapTab.refreshKey,
@@ -646,7 +646,7 @@ class _SiteMapTabState extends State<SiteMapTab> {
       return NwEmpty(
           key: SiteMapTab.emptyKey,
           icon: Icons.map_outlined,
-          text: tr('No maps on the site yet', '站点上还没有地图'),
+          text: tr('No maps on the site yet', '站点暂无地图'),
           hint: admin
               ? tr('Walk the robot around the site once and it builds the map (20–40 minutes).',
                   '开着机器人在场地内走一圈即可建图（约 20–40 分钟）。')
@@ -1001,14 +1001,14 @@ class _SiteMapTabState extends State<SiteMapTab> {
             top: side ? BorderSide.none : BorderSide(color: c.outline),
             left: side ? BorderSide(color: c.outline) : BorderSide.none),
         child: ListView(shrinkWrap: true, padding: const EdgeInsets.all(Nw.s16), children: [
-          NwSectionLabel(tr('Robots on this map', '这张图上的机器人')),
+          NwSectionLabel(tr('Robots on this map', '此地图上的机器人')),
           nwGap8,
           if (v.robotsError != null)
             NwNotice(
                 tone: NwTone.warning,
                 text: tr('Robot list unavailable: ${v.robotsError}', '无法加载机器人列表：${v.robotsError}'))
           else if (rows.isEmpty)
-            Text(tr('No robots yet.', '还没有机器人。'), style: sub)
+            Text(tr('No robots yet.', '暂无机器人。'), style: sub)
           else if (!rows.any(here))
             Padding(
                 padding: const EdgeInsets.only(bottom: Nw.s8),

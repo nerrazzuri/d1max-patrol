@@ -150,7 +150,7 @@ class ReleaseOps:
         except rel.ReleaseError as exc:
             return str(exc)
         except OSError as exc:
-            return f"读不了槽: {exc}"
+            return f"无法读取槽: {exc}"
         return ""
 
     def requires_mission_schema(self, name: str) -> int | None:
@@ -204,7 +204,7 @@ class ReleaseOps:
                 except Exception as exc:
                     raise ReleaseOpError(f"下载失败: {type(exc).__name__}: {exc}") from exc
             if n != ref.size or h.hexdigest() != ref.sha256:
-                raise ReleaseOpError("包的大小或哈希对不上")
+                raise ReleaseOpError("包的大小或哈希不匹配")
             shutil.rmtree(top, ignore_errors=True)
             safe_extract(tar, top)
             pkg = top / ref.name
@@ -249,13 +249,13 @@ class ReleaseOps:
     def activate(self, name: str) -> dict[str, Any]:
         """写在途标记 → 换链 → 重启代理。**调用方先查空闲**。"""
         if not self.ready(name):
-            raise ReleaseOpError(f"{name} 还没装好(先 release_install)")
+            raise ReleaseOpError(f"{name} 尚未装好(先 release_install)")
         try:
             pending = rel.activate(self.layout, name, now_ms=self._now(), sn=self.sn)
         except rel.ReleaseError as exc:
             raise ReleaseOpError(str(exc)) from exc
         except OSError as exc:
-            raise ReleaseOpError(f"没切:{exc}") from exc
+            raise ReleaseOpError(f"未切:{exc}") from exc
         self._restart()
         return {"pending": pending.to_wire()}
 
@@ -270,7 +270,7 @@ class ReleaseOps:
             return back
         back = self.previous()
         if back is None:
-            raise ReleaseOpError("盘上没有比在跑的这版更早、装好了的版本可退")
+            raise ReleaseOpError("盘上没有比正在运行的这版更早、已安装的版本可退")
         self.activate(back)
         return back
 

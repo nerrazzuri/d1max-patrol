@@ -397,7 +397,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     """ROS 节点(系统 Python)。编排经 ``deploy/d1max-live-preview`` 起,SIGTERM 停(停前再写一张)。"""
     ap = argparse.ArgumentParser(prog="d1max-live-preview")
     ap.add_argument("--out", required=True, type=Path, help="快照写到哪个目录")
-    ap.add_argument("--run", required=True, help="这一趟的号(录包名)")
+    ap.add_argument("--run", required=True, help="本次任务的号(录包名)")
     ap.add_argument("--lidar-topic", default="/front_lidar")
     ap.add_argument("--pose-topic", default="/d1max_mapping/lidar_odometry/pose")
     ap.add_argument("--period", type=float, default=PERIOD_S)

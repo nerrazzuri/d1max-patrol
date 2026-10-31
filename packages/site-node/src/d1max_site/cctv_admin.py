@@ -64,7 +64,7 @@ def _onvif_url(raw: str) -> str:
         rest = raw
     authority = rest.split("/", 1)[0]
     if "@" in authority:
-        raise ValueError("地址里不要带账号口令:账号、口令在各自的栏里填")
+        raise ValueError("地址里不要带账号密码:账号、密码在各自的栏里填")
     if not authority or authority.startswith(":"):
         raise ValueError("onvif_url 里没有主机地址")
     return raw
@@ -127,10 +127,11 @@ def zone_warnings(db: SiteDB, zone: str) -> list[dict[str, str]]:
     out = []
     if not db.query("SELECT 1 FROM zones WHERE zone=?", (zone,)):
         out.append({"code": "zone_unmapped",
-                    "text": f"防区「{zone}」还没映射到拦截点:这台摄像头报入侵时没有机器人可派"})
+                    "text": f"防区「{zone}」尚未映射到拦截点:此摄像头报入侵时没有机器人可派"})
     if not db.query("SELECT 1 FROM zone_areas WHERE zone=? LIMIT 1", (zone,)):
         out.append({"code": "zone_no_polygon",
-                    "text": f"防区「{zone}」没在任何一张图上画多边形:名单(时段 / 人员授权)判不了"})
+                    "text": (f"防区「{zone}」未在任何一张图上画多边形:"
+                             f"名单(时段 / 人员授权)无法判断")})
     return out
 
 
@@ -169,7 +170,7 @@ def save(db: SiteDB, d: Any, *, now_ms: int) -> dict[str, Any]:
     if edit and not old:
         raise CameraConflict(f"没有摄像头 {f['name']},不能改(要新登记就别带 edit)")
     if not edit and old:
-        raise CameraConflict(f"摄像头 {f['name']} 已经有了:要改就带 edit")
+        raise CameraConflict(f"摄像头 {f['name']} 已存在:要改就带 edit")
     if edit and pw is None:
         # 保留原口令(库里是加密的,原样留着):只改别的列
         update_camera_keep_password(db, Camera(

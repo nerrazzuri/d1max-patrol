@@ -44,7 +44,7 @@ def keygen(private: Path, public: Path) -> None:
     """生成一对 Ed25519 密钥(私钥 0600,PEM 跟 OpenSSL 一样)。私钥已经在就拒(不许盖掉)。"""
     import os
     if private.exists():
-        raise SignError(f"{private} 已经有了,不盖")
+        raise SignError(f"{private} 已存在,不盖")
     private.parent.mkdir(parents=True, exist_ok=True)
     seed = ed25519.new_seed()
     fd = os.open(private, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
@@ -58,7 +58,7 @@ def sign(manifest: dict[str, Any], private: Path) -> str:
     try:
         seed = ed25519.seed_from_pem(Path(private).read_bytes())
     except (OSError, ValueError) as exc:
-        raise SignError(f"读不了私钥 {private}: {exc}") from exc
+        raise SignError(f"无法读取私钥 {private}: {exc}") from exc
     return base64.b64encode(ed25519.sign(seed, message(manifest))).decode("ascii")
 
 
@@ -97,13 +97,13 @@ def verify(manifest: dict[str, Any], public: Path) -> None:
         try:
             pub = ed25519.pub_from_pem(k.read_bytes())
         except (OSError, ValueError) as exc:
-            bad.append(f"{k.name} 读不了: {exc}")
+            bad.append(f"{k.name} 无法读取: {exc}")
             continue
         if ed25519.verify(pub, msg, raw):
             return
     if bad and len(bad) == len(keys):
-        raise SignError("发行公钥读不了: " + ";".join(bad))
-    raise SignError("签名对不上(不是我们发行的,或者包被改过,或者签它的钥匙已经吊销)")
+        raise SignError("发行公钥无法读取: " + ";".join(bad))
+    raise SignError("签名不匹配(不是我们发行的,或者包被改过,或者签它的钥匙已吊销)")
 
 
 def check_package(pkg: Path, public: Path | None, *, allow_unsigned: bool = False) -> str:
@@ -112,9 +112,9 @@ def check_package(pkg: Path, public: Path | None, *, allow_unsigned: bool = Fals
     try:
         manifest = json.loads((Path(pkg) / "release.json").read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
-        return f"读不了 release.json: {exc}"
+        return f"无法读取 release.json: {exc}"
     if public is None or not trusted_keys(Path(public)):
-        return "" if allow_unsigned else f"机器人上没装发行公钥({public or DEFAULT_PUBKEY}),不装"
+        return "" if allow_unsigned else f"机器人上未安装发行公钥({public or DEFAULT_PUBKEY}),不装"
     try:
         verify(manifest, public)
     except SignError as exc:

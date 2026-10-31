@@ -189,7 +189,7 @@ class D1MaxHal:
             if self._monotonic() >= deadline:
                 await self._b.close()
                 raise DeviceBackendError(
-                    f"连上旁路进程 {FIRST_FRAME_TIMEOUT_S}s 还没收到状态帧与里程帧")
+                    f"连上旁路进程 {FIRST_FRAME_TIMEOUT_S}s 尚未收到状态帧与里程帧")
             await asyncio.sleep(0.02)
 
     async def close(self) -> None:
@@ -403,7 +403,7 @@ class D1MaxHal:
         """两块电池里低的那块。充没充电旁路进程不报,按没充。"""
         st = self._b.last_state
         if st is None:
-            raise DeviceBackendError("还没收到过状态帧,读不到电量")
+            raise DeviceBackendError("尚未收到过状态帧,无法读取电量")
         return Battery(percent=float(st.battery), charging=False)
 
     async def faults(self) -> tuple[Fault, ...]:
@@ -430,7 +430,7 @@ class D1MaxHal:
 
     def _up(self, output: str) -> Payload:
         if self._payload is None or not self._payload.has(output):
-            raise HalUnsupported(f"没装上装的 {output}")
+            raise HalUnsupported(f"未安装上装的 {output}")
         return self._payload
 
     async def strobe(self, channel: str, pattern: str, max_s: float) -> None:
@@ -482,7 +482,7 @@ class D1MaxHal:
         return self._payload.options() if self._payload is not None else {}
 
     async def head(self, pan: float, tilt: float) -> None:
-        raise HalUnsupported("ControlHead 的单位与方向没验过,先不开")
+        raise HalUnsupported("ControlHead 的单位与方向未验过,先不开")
 
     async def camera_sources(self) -> tuple[str, ...]:
         return ()                                     # RTSP 归媒体那一层,不在 HAL 里

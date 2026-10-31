@@ -88,14 +88,14 @@ def test_新建_读回_平的点_修订号从1起(台):
 def test_改_带基准修订号_对不上不许盖_新建撞名也是冲突(台):
     s = 台.store
     s.put_route("night", body(), by="alice")
-    with pytest.raises(RouteConflict, match="已经被改过"):
+    with pytest.raises(RouteConflict, match="已被修改"):
         s.put_route("night", body(base=0), by="bob")              # 新建撞了现有的
     r = s.put_route("night", body(pts=[pt("门", 1.0, 2.0)], base=1), by="bob")
     assert r["revision"] == 2 and len(r["waypoints"]) == 1
     with pytest.raises(RouteConflict, match="第 2 版.*第 1 版"):
         s.put_route("night", body(base=1), by="alice")             # alice 看的是旧的
     assert s.get("night")["revision"] == 2 and s.get("night")["updated_by"] == "bob"
-    with pytest.raises(RouteConflict, match="已经被删"):
+    with pytest.raises(RouteConflict, match="已被删"):
         s.put_route("ghost", body(base=3), by="alice")
     for bad in (None, "1", True, -1, 1.5):
         with pytest.raises(RouteError, match="base_revision"):
@@ -130,7 +130,7 @@ def test_删路线_修订号对得上才删_还有排程用不许删(台):
         s.delete_route("night", base_revision=9, by="alice")
     with pytest.raises(RouteError, match="s1 还在用"):
         s.delete_route("night", base_revision=1, by="alice")
-    assert "night" in active_bundle(台.db).missions, "没删"
+    assert "night" in active_bundle(台.db).missions, "未删"
     s.delete_schedule("s1", base_revision=1, by="alice")
     s.delete_route("night", base_revision=1, by="alice")
     assert s.view()["routes"] == [] and active_bundle(台.db) is None
@@ -215,7 +215,7 @@ def test_排程_先设时区_路线要存在_语义照契约(台):
     s.put_route("night", body(), by="a")
     with pytest.raises(RouteError, match="时区"):
         s.put_schedule("s1", _sched(), by="a")
-    with pytest.raises(RouteError, match="认不出来"):
+    with pytest.raises(RouteError, match="无法识别"):
         s.set_timezone("Mars/Base", by="a")
     s.set_timezone("Asia/Kuala_Lumpur", by="a")
     with pytest.raises(RouteError, match="不存在"):
@@ -296,7 +296,7 @@ def test_迁移_当前包抄进库_排程从那次导入起算_老包不抄(台,
     try:
         v = RouteStore(db, now_ms=lambda: 1).view()
         assert [(r["id"], r["map_version"], r["bound"]) for r in v["routes"]] \
-            == [("loop", "7", True), ("unbound", "", False)], "没绑版本的老任务照抄、标出来"
+            == [("loop", "7", True), ("unbound", "", False)], "未绑版本的老任务照抄、标出来"
         assert v["timezone"] == "Asia/Kuala_Lumpur"
         [e] = v["schedules"]
         assert e["id"] == "nightly" and e["active_from_ms"] == 5000 and e["updated_by"] == "cli:old"
@@ -463,12 +463,12 @@ def test_导出再导入_原样回来_自己导出的包站点收得下(台):
 
 
 def test_导出_没绑版本的拒_空库拒(台):
-    with pytest.raises(RouteError, match="没什么可导出"):
+    with pytest.raises(RouteError, match="没有什么可导出"):
         台.store.export_bundle(台.tmp / "e", by="a")
     台.store.put_route("night", body(), by="a")
     with 台.db.tx() as c:
         c.execute("UPDATE routes SET map_version=''")
-    with pytest.raises(RouteError, match="night 没绑地图版本"):
+    with pytest.raises(RouteError, match="night 未绑地图版本"):
         台.store.export_bundle(台.tmp / "e", by="a")
 
 
@@ -527,7 +527,7 @@ def test_接口_错误码_400带逐点_409冲突_审计(站点):
     assert code == 400 and [e["index"] for e in d["errors"]] == [0, 2], d
     assert s.req("POST", "/api/routes/night", _b(), token=alice)[0] == 200
     code, d = s.req("POST", "/api/routes/night", _b(), token=alice)         # 基准 0 对不上了
-    assert code == 409 and "已经被改过" in d["error"]
+    assert code == 409 and "已被修改" in d["error"]
     assert s.req("POST", "/api/routes/night", {"map_id": MAP[0], "waypoints": GOOD,
                                               "base_revision": 1}, token=alice)[0] == 400
     code, d = s.req("POST", "/api/route-schedules/s1", _sched(), token=alice)

@@ -123,10 +123,10 @@ def test_站点登记没成_500带狗上的位置和命令号_审计也有(站�
     _能标(s)
 
     def 坏(*a, **k):
-        raise StandbyError("库写不进去")
+        raise StandbyError("库无法写入")
     monkeypatch.setattr(s.api.standby, "set", 坏)
     code, d = s.req("POST", "/api/robots/A/home/here", {"name": "dock"}, token=alice)
-    assert code == 500 and "换了" in d["error"], (code, d)
+    assert code == 500 and "已更换" in d["error"], (code, d)
     assert d["command_id"] and isinstance(d["data"]["x"], float) and d["data"]["map_id"], d
     [a] = _等(lambda: [a for a in s.req("GET", "/api/audit", token=alice)[1]["audit"]
                        if "home/here" in a["action"] and a["status"] == 500])
@@ -142,7 +142,7 @@ def test_同名待命点在别的图上_409_明说替换才搬(站点):
                       default=False)
     code, d = s.req("POST", "/api/robots/A/home/here", {}, token=alice)
     assert code == 409 and d["name_taken"] == {"map_id": "other", "map_version": "9"}, (code, d)
-    assert not s.db.query("SELECT 1 FROM commands WHERE kind='mark_home'"), "没发给机器人"
+    assert not s.db.query("SELECT 1 FROM commands WHERE kind='mark_home'"), "未发给机器人"
     [p] = s.stb_list("A")
     assert (p["map_id"], p["x"]) == ("other", 1.0)
     code, d = s.req("POST", "/api/robots/A/home/here", {"replace": True}, token=alice)
@@ -167,7 +167,7 @@ def test_回执超时_狗其实标了_站点按事件补登记_504说可能标�
         raise DispatchTimeout("回执丢了")
     monkeypatch.setattr(cl, "send", 回执丢了)
     code, d = s.req("POST", "/api/robots/A/home/here", {"name": "dock"}, token=alice)
-    assert code == 504 and "可能已经标了" in d["error"], (code, d)
+    assert code == 504 and "可能已标了" in d["error"], (code, d)
     [p] = _等(lambda: [x for x in s.stb_list("A") if x["name"] == "dock"])
     assert p["default"]
     h = s.agent.parts.home.pose.position
@@ -197,7 +197,7 @@ def test_补登记只认这台狗最新那条没被拒的标原点(站点):
     stb._on_event("A", _标了(s, "mark_home-2", 2.0, 2))
     stb._on_event("A", _标了(s, "mark_home-1", 1.0, 1))              # 晚到的旧的
     [p] = s.stb_list("A")
-    assert p["x"] == 2.0 and p["default"], "这张图上还没有待命点:顺手用原点建一个默认的"
+    assert p["x"] == 2.0 and p["default"], "此地图上尚无待命点:顺手用原点建一个默认的"
     assert stb.homes("A")[0]["x"] == 2.0
     _命令(s, "c3", "mark_home-3", 3000, "rejected")
     _命令(s, "c4", "mark_home-4", 4000, None)
@@ -209,7 +209,7 @@ def test_补登记只认这台狗最新那条没被拒的标原点(站点):
     stb._on_event("A", _标了(s, "mark_home-2", 2.5, 5))
     assert stb.homes("A")[0]["x"] == 2.5, "3 被拒、4 过期:机器人上是 2 那次的"
     stb._on_event("A", _标了(s, "mark_home-9", 9.0, 6))
-    assert stb.homes("A")[0]["x"] == 2.5, "站点没发过的不认"
+    assert stb.homes("A")[0]["x"] == 2.5, "站点未发过的不认"
 
 
 def test_W13a_标原点只改原点_已有待命点不动_GET带原点(站点):
@@ -222,7 +222,7 @@ def test_W13a_标原点只改原点_已有待命点不动_GET带原点(站点):
     code, d = s.req("POST", "/api/robots/A/home/here", {"name": "dock"}, token=alice)
     assert code == 200, d
     assert d["home"]["name"] == "dock" and d["home"]["x"] == d["ack"]["data"]["x"]
-    assert d["standby"] is None, "这张图上已经有待命点:不另建"
+    assert d["standby"] is None, "此地图上已有待命点:不另建"
     [p] = s.stb_list("A")
     assert (p["name"], p["x"], p["default"]) == ("gate", 7.0, True), "待命点不动"
     code, g = s.req("GET", "/api/robots/A/standby", token=alice)
@@ -252,7 +252,7 @@ def test_W13a_在这儿设待命点_不动原点_老代理不发(站点, monkeyp
     code, d = s.req("POST", "/api/robots/A/standby/here", {"name": "x"}, token=alice)
     assert code == 409 and "老代理" in d["error"], d
     assert not s.db.query("SELECT 1 FROM commands WHERE kind='mark_home' AND payload LIKE "
-                          "'%\"x\"%'"), "没发给机器人"
+                          "'%\"x\"%'"), "未发给机器人"
 
 
 def test_W13a_回指定的待命点(站点):
@@ -351,7 +351,7 @@ def test_回执与晚到的事件同时登记_这张图上的默认待命点不�
     other[0].join()
     stb.list = real
     [p] = stb.list("A")
-    assert p["default"], "这张图上的默认待命点还在"
+    assert p["default"], "此地图上的默认待命点还在"
 
 
 def test_W23_在这儿设拦截点_走不到就不收_409带原因(站点):
@@ -365,7 +365,7 @@ def test_W23_在这儿设拦截点_走不到就不收_409带原因(站点):
 
     class 走不到:
         def check(self, name, map_id, version, x, y):
-            return SimpleNamespace(problem=f"从待命点走不到 {name}(门太窄)", note="")
+            return SimpleNamespace(problem=f"从待命点无法到达 {name}(门太窄)", note="")
 
         def key(self, *a):
             return "k"

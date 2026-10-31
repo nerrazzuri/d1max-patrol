@@ -144,7 +144,7 @@ async def test_哈希不对_或适配器载不进_不换图_发失败事件(台)
     await _跑(rt, broker)
     assert rt.loaded_map == ("m", "1")
     fails = [e for e in ears.by["event"] if e["kind"] == "map_activate_failed"]
-    assert fails and "对不上" in fails[-1]["data"]["reason"]
+    assert fails and "不匹配" in fails[-1]["data"]["reason"]
     ref = site.add("m", "4", {"m.pgm": b"z"})
     r.fail_load = "定位起不来"
     await rt._on_cmd(_cmd("map_activate", ref, "b2", c))
@@ -524,7 +524,7 @@ async def test_切版本收下之后到重启前什么都不接_切不成就放�
     new = "2026-09-25-bbbbbb"
     goto = {"target": MapPose(map_id="m", map_version="1", frame_id="map", x=1.0, y=0.0,
                               yaw=0.0).to_wire()}
-    rel.fail = "盘坏了"
+    rel.fail = "盘已损坏"
     await rt._on_cmd(_cmd("release_activate", {"name": new}, "s1", c))
     await rt._on_cmd(_cmd("goto", goto, "s2", c))
     await broker.drain()
@@ -560,7 +560,7 @@ async def test_切版本_录包时不切_电量读不到不切_在跑的不切_�
     rt.mapper.recording = False
 
     async def 读不到():
-        raise RuntimeError("还没收到第一帧")
+        raise RuntimeError("尚未收到第一帧")
     real = dog.battery
     dog.battery = 读不到
     await rt._on_cmd(_cmd("release_activate", {"name": new}, "a2", c))
@@ -639,7 +639,7 @@ async def test_建好了的事件带着栅格用的哪种射线(tmp_path):
     rec = 假录包()
 
     async def build(bag, map_id, version):
-        rec.last_rays = "synthetic:读不了逐帧扫描:ImportError"
+        rec.last_rays = "synthetic:无法读取逐帧扫描:ImportError"
     rec.build = build
     rt = AgentRuntime(transport=MemoryTransport(broker, "dog"), registration=REG,
                       hal=SimRobot(now_ms=c), store_dir=tmp_path, now_ms=c, loaded_map=("m", "1"),
@@ -804,7 +804,7 @@ async def test_停录报错_有待打包的照样去收尾_不卡住(tmp_path):
     async def stop():
         rec.recording = False
         rec.pending, rec.pending_task = ("yard-x", "m", "5"), "mapping-s1"
-        raise OSError("mcap 索引没写完")
+        raise OSError("mcap 索引未写完")
 
     async def finish():
         rec.pending = None

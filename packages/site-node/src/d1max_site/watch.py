@@ -22,14 +22,14 @@ from d1max_site.alert_store import AlertDesk
 from d1max_site.dispatcher import Dispatcher
 
 #: 狗上存储那几项为什么是 ``None``。印给值班的人看,不许有排期黑话。
-NO_DOG_STORAGE = "机器人上的存储情况还没接到站点,这一档是「不知道」,不是「没问题」"
-NO_BATTERY = "还没收到过电量遥测 —— 这一档是「不知道」,不是「电量为 0」"
-NO_SKEW = ("钟差还不知道(没收到过遥测、机器人慢的样本还不够、或者最近一分钟没遥测)—— 这一档是"
-           "「不知道」,不是「钟是准的」;这期间会让机器人动的命令都不派(W09h)")
-NO_SCHEDULER = "这个站点没开排程"
+NO_DOG_STORAGE = "机器人上的存储情况尚未接到站点,此项是「未知」,不是「正常」"
+NO_BATTERY = "尚未收到过电量遥测 —— 此项是「未知」,不是「电量为 0」"
+NO_SKEW = ("钟差未知(未收到过遥测、机器人慢的样本还不够、或者最近一分钟未遥测)—— 此项是"
+           "「未知」,不是「钟是准的」;这期间会让机器人动的命令都不派(W09h)")
+NO_SCHEDULER = "此站点未启用排程"
 NO_BUNDLE = "任务随命令下发,机器人上没有任务包,没有落差可言"
 BACKUP_AT_SITE = "备份在站点做(决策 8:数据都在站点),看站点那一行"
-NO_BACKUP = "站点没配备份目录:站点的库和证据只有这一份"
+NO_BACKUP = "站点未配置备份目录:站点的库和证据只有这一份"
 
 
 def watch_summary(dispatcher: Dispatcher, desk: AlertDesk, *, now_ms: int,
@@ -90,5 +90,5 @@ def watch_summary(dispatcher: Dispatcher, desk: AlertDesk, *, now_ms: int,
     site["push"] = push.view() if push is not None else None
     if push is None or not site["push"]["configured"]:
         site["why"]["push"] = ((push.why_off if push is not None else "")
-                               or "没配推送:P1 只在 App 里")
+                               or "未配置推送:P1 只在 App 里")
     return {"now_ms": now_ms, "robots": robots, "site": site}

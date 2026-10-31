@@ -40,8 +40,8 @@ def test_契约_设备名状态写错就拒_遥测里坏的扔掉():
 
 
 @pytest.mark.parametrize("fix, state, word", [
-    (None, "offline", "还没收到"),
-    ({"fix": "fixed", "stale": True}, "offline", "没更新"),
+    (None, "offline", "尚未收到"),
+    ({"fix": "fixed", "stale": True}, "offline", "未更新"),
     ({"fix": "fixed", "heading_deg": 87.4}, "online", "朝向 87°"),
     ({"fix": "float"}, "degraded", "浮点"),
     ({"fix": "single"}, "degraded", "单点"),
@@ -78,7 +78,7 @@ async def test_网络设备_连得上在线_连不上离线_并着查():
                                            "thermal": ("192.168.10.64", 554)}, reach=reach)
     got = _by(await dh.refresh())
     assert got["link:router"][0] == "online" and got["link:thermal"] == (
-        "offline", "连不上 192.168.10.64:554")
+        "offline", "无法连接 192.168.10.64:554")
     assert sorted(seen) == [("192.168.10.1", 80), ("192.168.10.64", 554)]
 
 
@@ -135,7 +135,7 @@ async def test_仿真狗装了上装_随遥测带设备健康(tmp_path):
     await st.connect()
     await st.subscribe(f"{T.prefix}/#", ears)
     dog = SimRobot(now_ms=c, max_vx=1.0, max_wz=1.5, stop_latency_s=0.2, payload=True)
-    dog.device_faults["relay"] = ("error", "左聚光灯没确认")
+    dog.device_faults["relay"] = ("error", "左聚光灯未确认")
     rt = AgentRuntime(transport=MemoryTransport(broker, "dog"), registration=REG, hal=dog,
                       store_dir=tmp_path, now_ms=c, loaded_map=("m", "1"), boot_id="b",
                       home=Pose.from_xy_yaw(0.0, 0.0), monotonic=lambda: c.mono,
@@ -145,9 +145,9 @@ async def test_仿真狗装了上装_随遥测带设备健康(tmp_path):
         await _跑(rt, broker, n=3, r=dog, c=c)
         await asyncio.sleep(0.02)                      # 后台那一份收好
     with_dev = [t for t in ears.by.get("telemetry", []) if "devices" in t]
-    assert with_dev, "收好了下一拍带上"
+    assert with_dev, "收完成下一拍带上"
     got = _by(with_dev[-1]["devices"])
-    assert got["relay"] == ("error", "左聚光灯没确认") and got["speaker"][0] == "online"
+    assert got["relay"] == ("error", "左聚光灯未确认") and got["speaker"][0] == "online"
     n = len(with_dev)
     await _跑(rt, broker, n=10, r=dog, c=c)            # 不到 10 s 不再带
     assert len([t for t in ears.by.get("telemetry", []) if "devices" in t]) == n

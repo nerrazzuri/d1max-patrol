@@ -30,7 +30,7 @@ ALIGN_OK_SHARE = 0.4
 ALIGN_MIN_WALLS = 30
 
 CAVEAT = ("分开建的版本不一定在同一个坐标系里(每次建图以那一趟的起点为原点,回环和重建会让整张图"
-          "挪一点、转一点)。这张图只按两版各自的原点和分辨率对齐,没有做配准:大面积的差异很可能是"
+          "挪一点、转一点)。此地图只按两版各自的原点和分辨率对齐,没有做配准:大面积的差异很可能是"
           "坐标系不同,不是地方变了。")
 
 # 类别编码(同时是并集里的优先级:缩图时取大的 —— 差异盖过一样)
@@ -153,5 +153,5 @@ def diff_grids(ranks_a, meta_a: dict[str, Any], ranks_b, meta_b: dict[str, Any])
              "same_resolution": abs(meta_a["resolution"] - meta_b["resolution"]) < 1e-9,
              "caveat": CAVEAT}
     if meta_a.get("origin_yaw") or meta_b.get("origin_yaw"):
-        stats["warning"] = "地图 origin 带转角,对比图没按转角转"
+        stats["warning"] = "地图 origin 带转角,对比图未按转角转"
     return Diff(png=_png_rgb(ow, oh, rgb.tobytes()), stats=stats)

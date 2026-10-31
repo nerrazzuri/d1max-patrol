@@ -92,7 +92,7 @@ class SealBox:
         ct, tag = raw[:-_TAG], raw[-_TAG:]
         if len(raw) <= _TAG or not hmac.compare_digest(
                 tag, hmac.new(self._mac, ct, hashlib.sha256).digest()):
-            raise SealError("加密值对不上(密钥不对,或者被改过)")
+            raise SealError("加密值不匹配(密钥错误,或者被改过)")
         return self._run(["-d"], ct).decode("utf-8")
 
     @staticmethod
@@ -137,7 +137,7 @@ class SealBox:
                 left -= len(chunk)
             tag = f.read(_TAG)
         if not hmac.compare_digest(tag, mac.digest()):
-            raise SealError(f"{src.name} 对不上(密钥不对,或者被改过)")
+            raise SealError(f"{src.name} 不匹配(密钥错误,或者被改过)")
 
     def open_file(self, src: Path, dst: Path) -> None:
         """解密 ``src`` 写到 ``dst``。先核 MAC,对不上一个字节都不写。"""
@@ -160,7 +160,7 @@ class SealBox:
                     left -= len(chunk)
                 tag = f.read(_TAG)
             if not hmac.compare_digest(tag, mac.digest()):
-                raise SealError(f"{src.name} 对不上(密钥不对,或者被改过)")
+                raise SealError(f"{src.name} 不匹配(密钥错误,或者被改过)")
             self._run(["-d"], src=body, dst=dst)
         finally:
             body.unlink(missing_ok=True)
@@ -180,7 +180,7 @@ def site_box(cfg: dict, which: str) -> SealBox | None:
     path = Path(cfg.get(f"{which}_key") or DEFAULT_KEYS[which])
     if not path.is_file():
         logging.getLogger(__name__).warning("没有 %s 密钥 %s:%s不加密(装机脚本会生成)",
-                                            which, path, "口令" if which == "secrets" else "备份")
+                                            which, path, "密码" if which == "secrets" else "备份")
         return None
     return SealBox(load_or_create_key(path))
 
@@ -204,7 +204,7 @@ def open_value(db, value: str) -> str:
         return _opened[value]
     box = getattr(db, "sealbox", None)
     if box is None:
-        raise SealError("库里的口令加密过,站点没配密钥(secrets_key)")
+        raise SealError("库里的密码加密过,站点未配置密钥(secrets_key)")
     try:
         plain = box.open(value)
     except SealError as exc:

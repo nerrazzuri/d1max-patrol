@@ -85,7 +85,7 @@ def burn(paths: BindPaths, serial: str, *, router: Router, unbind_pub: Path,
         raise FactoryError(str(exc)) from exc
     dev = read_json(paths.device, None)
     if dev and not force:
-        raise FactoryError(f"这台已经烧写过了(序列号 {dev.get('serial')}):重做贴纸用 rekey")
+        raise FactoryError(f"此机器人已烧写过了(序列号 {dev.get('serial')}):重做贴纸用 rekey")
     if not unbind_pub.is_file():
         raise FactoryError(f"没有公司解绑公钥 {unbind_pub}")
     paths.etc.mkdir(parents=True, exist_ok=True)
@@ -105,10 +105,11 @@ def burn(paths: BindPaths, serial: str, *, router: Router, unbind_pub: Path,
 def rekey(paths: BindPaths, *, router: Router) -> Sticker:
     dev = read_json(paths.device, None)
     if not dev:
-        raise FactoryError("这台还没烧写过:先 burn")
+        raise FactoryError("此机器人尚未烧写过:先 burn")
     st = (read_json(paths.state, None) or {}).get("state", "unbound")
     if st != "unbound":
-        raise FactoryError(f"这台现在是「{st}」:先在站点上解绑(站点坏了先用解绑令解),再重做贴纸")
+        raise FactoryError(f"此机器人现在是「{st}」:"
+                            f"先在站点上解绑(站点已损坏先用解绑令解),再重做贴纸")
     return _new_secrets(paths, dev["serial"], router, ssid=dev["hotspot_ssid"],
                         model=dev.get("model", ""))
 
@@ -117,24 +118,24 @@ def check(paths: BindPaths, scanned: str) -> list[str]:
     """出厂检验:回对不上的地方(空 = 都对)。"""
     dev = read_json(paths.device, None)
     if not dev:
-        return ["这台还没烧写过"]
+        return ["此机器人尚未烧写过"]
     try:
         s = decode_sticker(scanned)
     except BindingError as exc:
         return [f"贴纸读不出来:{exc}"]
     bad = []
     if s.serial != dev["serial"]:
-        bad.append(f"序列号对不上:贴纸 {s.serial},机器人 {dev['serial']}")
+        bad.append(f"序列号不匹配:贴纸 {s.serial},机器人 {dev['serial']}")
     if code_hash(s.code) != dev["code_hash"]:
-        bad.append("绑定码对不上(贴错了机器人,或者重做过贴纸)")
+        bad.append("绑定码不匹配(贴错了机器人,或者重做过贴纸)")
     if s.hotspot_ssid != dev["hotspot_ssid"]:
-        bad.append(f"热点名对不上:贴纸 {s.hotspot_ssid},机器人 {dev['hotspot_ssid']}")
+        bad.append(f"热点名不匹配:贴纸 {s.hotspot_ssid},机器人 {dev['hotspot_ssid']}")
     try:
         fp = short_fp(_der(paths.tls_cert.read_bytes()))
     except (OSError, IndexError, ValueError):
         fp = ""
     if s.fingerprint != fp or fp != dev.get("fingerprint"):
-        bad.append("配网证书指纹对不上")
+        bad.append("配网证书指纹不匹配")
     return bad
 
 

@@ -129,7 +129,7 @@ class InterceptReach:
         try:
             self.maps.get(map_id, version)
         except Exception:                                # noqa: BLE001 - 不认识的不挡(同巡检点)
-            return Reach(note=f"站点没有 {map_id}:{version} 这一版图,没查走不走得到")
+            return Reach(note=f"站点没有 {map_id}:{version} 此版本地图,未检查能否到达")
         problem = self.maps.reach_problem(map_id, version, [(name, x, y)])
         if problem:
             return Reach(problem=problem)
@@ -137,9 +137,9 @@ class InterceptReach:
         try:
             cm = self._costmap(map_id, version)
         except Exception as exc:                         # noqa: BLE001 - 栅格坏了:查不了
-            return Reach(note=f"规划栅格读不了,没查走不走得到: {exc}")
+            return Reach(note=f"规划栅格无法读取,未检查能否到达: {exc}")
         if cm is None:
-            return Reach(note="这一版图没有规划栅格(floor.pgm),没查走不走得到")
+            return Reach(note="此版本地图没有规划栅格(floor.pgm),未检查能否到达")
         g = cm.cell_of(x, y)
         if g is None:
             return Reach(problem=f"{name} 在规划栅格外面")
@@ -149,7 +149,7 @@ class InterceptReach:
             return Reach(problem=f"{name} 离障碍太近,机器人站不下(机身半径 0.52 m 加余量)")
         starts = self.starts(map_id, version)
         if not starts:
-            return Reach(note="这张图上还没有待命点、原点,没查从哪儿走得到")
+            return Reach(note="此地图上尚无待命点、原点,未检查从何处可以到达")
         h, w = cm.shape
         cost, hard = cm.cost.tobytes(), cm.hard.astype("uint8").tobytes()
         import time
@@ -168,5 +168,5 @@ class InterceptReach:
                     timed_out = True
                 why.append(f"{sname}:{exc}")
         if timed_out:
-            return Reach(note="规划超时,没查完走不走得到")
-        return Reach(problem=f"从待命点走不到 {name}(" + ";".join(why)[:300] + ")")
+            return Reach(note="规划超时,未完成可达性检查")
+        return Reach(problem=f"从待命点无法到达 {name}(" + ";".join(why)[:300] + ")")
