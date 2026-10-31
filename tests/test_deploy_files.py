@@ -904,8 +904,25 @@ def test_装机脚本清掉老服务与特权助手_先停老服务再删sudoers
     # 清老东西要在 daemon-reload 之前,不然这一次 reload 读到的还是它。
     assert 删单元 < 装机脚本.index("systemctl daemon-reload")
     代码 = [行 for 行 in 装机脚本.splitlines() if 行.strip() and not 行.lstrip().startswith("#")]
+    # W55 起装的是新的特权执行器(d1max-ops-runner,systemd 路径单元拉起,不经 sudo);老助手照旧不许装
+    老代码 = [行 for 行 in 代码 if "d1max-ops-runner" not in 行 and "d1max_contract" not in 行]
     for 老 in ("visudo", "install -m 0755 -o root", "install -m 0440", "d1max-restart-now\" "):
-        assert not any(老 in 行 for 行 in 代码), f"装机脚本还在装老东西:{老}"
+        assert not any(老 in 行 for 行 in 老代码), f"装机脚本还在装老东西:{老}"
+
+
+def test_W55特权执行器_root属主_不经sudo_不从版本目录跑(装机脚本):
+    """W55:执行器拷到 root 属主的 /usr/local/lib/d1max/(版本目录属主是 robot,root 不跑那里的代码);
+    请求目录只有代理的账号能写;结果目录 root 写、代理的组能读;不写任何 sudoers。"""
+    assert 'install -m 0755 -o root -g root "$PKG/deploy/d1max-ops-runner" ' \
+           "/usr/local/lib/d1max/ops-runner" in 装机脚本
+    assert 'install -d -m 0700 -o "$RUN_USER" -g "$RUN_USER" /var/lib/d1max-ops/req' in 装机脚本
+    assert 'install -d -m 0750 -o root -g "$RUN_USER" /var/lib/d1max-ops/done' in 装机脚本
+    assert "systemctl enable --now d1max-ops.path" in 装机脚本
+    代码 = [行 for 行 in 装机脚本.splitlines() if 行.strip() and not 行.lstrip().startswith("#")]
+    assert not any("sudoers" in 行 and "rm -f" not in 行 for 行 in 代码)
+    单元 = (ROOT / "deploy" / "d1max-ops.service").read_text()
+    assert "ExecStart=/usr/bin/python3 /usr/local/lib/d1max/ops-runner" in 单元
+    assert "/opt/d1max" not in 单元.split("[Service]")[1]
 
 
 def test_装机脚本不再生成PIN_老env里的老行不动只提示(装机脚本):

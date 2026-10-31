@@ -38,6 +38,13 @@ set -euo pipefail
 # @写盘 /etc/systemd/system/d1max-bind.service                            配网服务(W42;只装,factory burn 才 enable;没烧写不起)
 # @写盘 /etc/systemd/timesyncd.conf.d/d1max.conf                          对时配置:向站点主机对时(W09d)
 # @写盘 /etc/chrony/conf.d/d1max.conf                                     对时归 chrony 管的狗:向站点主机对时(决策 61)
+# @写盘 /usr/local/lib/d1max                                             特权执行器和它验签用的模块(W55;root 属主,不从版本目录跑代码)
+# @写盘 /etc/d1max-ops.json                                              特权执行器的配置(W55)
+# @写盘 /var/lib/d1max-ops                                               特权执行器的请求、结果目录(W55)
+# @写盘 /etc/systemd/system/d1max-ops.path                               特权执行器的路径单元(W55)
+# @写盘 /etc/systemd/system/d1max-ops.service                            特权执行器(W55;root、一次性)
+# @写盘 /etc/systemd/system/paths.target.wants/d1max-ops.path            上面路径单元的自启链
+# @写盘 /etc/systemd/journald.conf.d/d1max.conf                          日志留盘 14 天、最多 500 MB(W55:远程取日志、重启不丢)
 #
 # 这份脚本不写、但 uninstall.sh 要负责收掉的(老机器上可能还在;这里只 rm/disable 它们,从来不写):
 #
@@ -504,6 +511,46 @@ if grep -qE '^[[:space:]]*D1MAX_(PIN|CONSOLE_URL|CONSOLE_TOKEN)=' /etc/d1max/env
 fi
 systemctl daemon-reload
 systemctl enable d1max-agent.service
+
+# W55 远程运维。① 特权执行器:代理(robot 用户)要 root 才能做的几件事(重启我们的服务、重启机器人、
+# 对时、换证书、装验过签的服务单元、清日志)交给它。执行器和验签用的两个小模块拷到 root 属主的
+# /usr/local/lib/d1max/ —— 版本目录属主是 robot,root 绝不跑那里的代码。
+install -d -m 0755 -o root -g root /usr/local/lib/d1max /usr/local/lib/d1max/d1max_contract
+install -m 0755 -o root -g root "$PKG/deploy/d1max-ops-runner" /usr/local/lib/d1max/ops-runner
+install -m 0644 -o root -g root /dev/null /usr/local/lib/d1max/d1max_contract/__init__.py
+for m in ed25519 relsign; do
+  install -m 0644 -o root -g root "$PKG/packages/contract/src/d1max_contract/$m.py" /usr/local/lib/d1max/d1max_contract/
+done
+install -d -m 0755 -o root -g root /var/lib/d1max-ops
+install -d -m 0700 -o "$RUN_USER" -g "$RUN_USER" /var/lib/d1max-ops/req
+install -d -m 0750 -o root -g "$RUN_USER" /var/lib/d1max-ops/done
+cat > /etc/d1max-ops.json <<OPS
+{"profile": "robot", "requester": "$RUN_USER", "spool": "/var/lib/d1max-ops",
+ "data_root": "/var/lib/d1max", "release_root": "$ROOT", "pubkey": "/etc/d1max/release-pub.pem"}
+OPS
+chmod 0644 /etc/d1max-ops.json
+install -m 0644 "$PKG/deploy/d1max-ops.path" "$PKG/deploy/d1max-ops.service" /etc/systemd/system/
+systemctl daemon-reload
+systemctl enable --now d1max-ops.path
+# ② 日志留在盘上(重启不丢)、留 14 天、最多 500 MB;代理的账号进 systemd-journal 组,站点远程能取日志。
+install -d -m 0755 /etc/systemd/journald.conf.d
+cat > /etc/systemd/journald.conf.d/d1max.conf <<'JOURNAL'
+# D1 Max(W55 远程运维):日志留盘,重启不丢;远程取日志、诊断包要用
+[Journal]
+Storage=persistent
+SystemMaxUse=500M
+MaxRetentionSec=14day
+JOURNAL
+install -d -m 2755 -o root -g systemd-journal /var/log/journal 2>/dev/null || install -d -m 2755 /var/log/journal
+systemctl restart systemd-journald || true
+if getent group systemd-journal >/dev/null 2>&1; then
+  usermod -aG systemd-journal "$RUN_USER"
+fi
+# ③ VPN 工具(站点 VPN:4G 上连回站点、工程师远程 SSH)。离线装不上只提示,局域网照常。
+if ! command -v wg >/dev/null 2>&1; then
+  apt-get install -y wireguard-tools >/dev/null 2>&1 \
+    || echo "  提示: 没装上 wireguard-tools(离线?):站点 VPN 用不了,局域网照常。离线装法见装机清单「一」" >&2
+fi
 
 # 运行期要的系统件(决策 47:只查、只提示,不替厂家的系统装东西、改账号)。C40221 上三样都缺
 # (2026-10-08):没有 ffmpeg 画面和录像都没有;人员检测要系统 Python 里的 onnxruntime;

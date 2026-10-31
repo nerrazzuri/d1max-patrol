@@ -8,6 +8,10 @@
 # contract[mqtt] 与 site-node → 没 init 过就 `d1max-site init` → 装两个单元并启用。
 # 之后:`d1max-site add-admin <名字>`、`d1max-site enroll <robot_id>`(见文末提示)。
 #
+# **只升级软件**(W55;远程运维的「升级站点」由特权执行器这样调,也可以手工跑):
+#   sudo bash deploy/site/install-site.sh --upgrade
+# 不装系统包(站点可能不能上外网)、不 init、不动密钥;装新的 Python 包、服务单元、特权执行器,再起服务。
+#
 # **恢复到新主机**(A2,docs/备份恢复与灾备演练.md):
 #   sudo bash deploy/site/install-site.sh --recover
 # 只装软件、用户、目录、服务单元:**不生成密钥**(三把要先从离线另存的那份放回 /etc/d1max-site/,
@@ -22,6 +26,8 @@ SITE_ID=""
 HOSTS=()
 BROKER_PORT=8883
 RECOVER=0
+UPGRADE=0
+NO_VPN=0
 KEYS_FILE=""
 
 while [[ $# -gt 0 ]]; do
@@ -30,12 +36,16 @@ while [[ $# -gt 0 ]]; do
     --hostname) HOSTS+=("$2"); shift 2 ;;
     --broker-port) BROKER_PORT="$2"; shift 2 ;;
     --recover) RECOVER=1; shift ;;
+    --upgrade) UPGRADE=1; shift ;;
+    --no-vpn) NO_VPN=1; shift ;;
     --keys) KEYS_FILE="$2"; shift 2 ;;
     *) echo "不认识的参数: $1" >&2; exit 2 ;;
   esac
 done
 [[ $EUID -eq 0 ]] || { echo "要 root(sudo)" >&2; exit 1; }
-if [[ $RECOVER -eq 1 && -n "$KEYS_FILE" ]]; then
+if [[ $UPGRADE -eq 1 ]]; then
+  [[ -f "$HOME_DIR/site.json" ]] || { echo "--upgrade 只用在已经装好的站点上($HOME_DIR 没有站点)" >&2; exit 2; }
+elif [[ $RECOVER -eq 1 && -n "$KEYS_FILE" ]]; then
   [[ -f "$KEYS_FILE" ]] || { echo "托管包 $KEYS_FILE 不在" >&2; exit 2; }
   echo "  恢复模式:密钥从托管包放回(装好软件以后,会问托管包口令)"
 elif [[ $RECOVER -eq 1 ]]; then
@@ -53,8 +63,16 @@ else
 fi
 
 echo "[1/5] 系统包"
-apt-get update
-apt-get install -y mosquitto openssl python3-venv ffmpeg chrony   # ffmpeg:视频经站点(W00c5b);chrony:给狗对时(W09d)
+if [[ $UPGRADE -eq 1 ]]; then
+  echo "  只升级软件:不装系统包"
+else
+  apt-get update
+  apt-get install -y mosquitto openssl python3-venv ffmpeg chrony   # ffmpeg:视频经站点(W00c5b);chrony:给狗对时(W09d)
+  # W55:站点 VPN 的工具(工程师远程进来、4G 上的机器人连回站点);客户要求只在局域网的加 --no-vpn
+  if [[ $NO_VPN -eq 0 ]]; then
+    apt-get install -y wireguard-tools || echo "  !! 没装上 wireguard-tools:VPN 用不了(局域网照常)" >&2
+  fi
+fi
 # 发行版自带的 mosquitto 实例我们不用(配置冲突、多开一个端口),停掉;我们跑自己的单元。
 systemctl disable --now mosquitto.service 2>/dev/null || true
 
@@ -105,6 +123,24 @@ if [[ -d "$PKG/deploy/release-pub.d" ]]; then
   done
 fi
 
+# W55 特权执行器:站点服务(NoNewPrivileges)要 root 才能做的几件事(重启自己、恢复备份、升级、装 VPN 配置)
+# 交给它。执行器和验签用的两个小模块拷到 root 属主的 /usr/local/lib/d1max/,不从站点可写的地方跑代码。
+install -d -m 0755 -o root -g root /usr/local/lib/d1max /usr/local/lib/d1max/d1max_contract
+install -m 0755 -o root -g root "$PKG/deploy/d1max-ops-runner" /usr/local/lib/d1max/ops-runner
+install -m 0644 -o root -g root /dev/null /usr/local/lib/d1max/d1max_contract/__init__.py
+for m in ed25519 relsign; do
+  install -m 0644 -o root -g root "$PKG/packages/contract/src/d1max_contract/$m.py" /usr/local/lib/d1max/d1max_contract/
+done
+install -d -m 0755 -o root -g root /var/lib/d1max-ops
+install -d -m 0700 -o d1max-site -g d1max-site /var/lib/d1max-ops/req
+install -d -m 0750 -o root -g d1max-site /var/lib/d1max-ops/done
+cat > /etc/d1max-ops.json <<OPS
+{"profile": "site", "requester": "d1max-site", "spool": "/var/lib/d1max-ops",
+ "site_home": "$HOME_DIR", "site_venv": "$VENV",
+ "site_pubkey": "/etc/d1max-site/release-pub.pem"}
+OPS
+chmod 0644 /etc/d1max-ops.json
+
 echo "[3/5] Python 环境"
 [[ -x "$VENV/bin/python" ]] || python3 -m venv "$VENV"
 "$VENV/bin/pip" install --upgrade "$PKG/packages/contract[mqtt,planning]" "$PKG/packages/site-node"
@@ -130,7 +166,9 @@ fi
 echo "[5/5] systemd 单元"
 install -m 0644 "$PKG/deploy/site/d1max-mosquitto.service" "$UNIT_DIR/"
 install -m 0644 "$PKG/deploy/site/d1max-site.service" "$UNIT_DIR/"
+install -m 0644 "$PKG/deploy/d1max-ops.path" "$PKG/deploy/d1max-ops.service" "$UNIT_DIR/"
 systemctl daemon-reload
+systemctl enable --now d1max-ops.path                 # W55 特权执行器(只有请求来了才跑)
 if [[ $RECOVER -eq 1 ]]; then
   systemctl enable d1max-mosquitto.service d1max-site.service      # 不起:先恢复
   cat <<TXT
@@ -148,6 +186,10 @@ TXT
   exit 0
 fi
 systemctl enable --now d1max-mosquitto.service d1max-site.service
+if [[ $UPGRADE -eq 1 ]]; then
+  echo "升级好了(站点服务已起)。"
+  exit 0
+fi
 
 cat <<TXT
 装好了。接下来:

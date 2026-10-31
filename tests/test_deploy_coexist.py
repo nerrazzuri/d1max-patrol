@@ -391,11 +391,15 @@ def test_范围只盖我们自己的东西():
     # 决策 61 的 chrony 对时片段也是:精确路径、名字带 d1max(厂家的 chrony.conf 不在里面)。
     精确的 = {"/usr/local/sbin/d1max-privileged", "/usr/local/sbin/d1max-restart-now",
            "/etc/sudoers.d/d1max", "/etc/systemd/timesyncd.conf.d/d1max.conf",
-           "/etc/chrony/conf.d/d1max.conf"}
+           "/etc/chrony/conf.d/d1max.conf",
+           # W55:特权执行器的目录、日志留盘设置 —— 同样精确、名字带 d1max
+           "/usr/local/lib/d1max", "/etc/systemd/journald.conf.d/d1max.conf"}
     for 一组 in 形状:
         for 一条 in 一组.split("|"):
             if 一条 in 精确的:
                 assert "*" not in 一条 and "d1max" in 一条
+                continue
+            if 一条 == "/usr/local/lib/d1max/*":         # W55:只是上面那个目录底下
                 continue
             assert 一条.startswith("/opt/d1max") or 一条.startswith("/etc/d1max") \
                 or 一条.startswith("/var/lib/d1max") \

@@ -1,0 +1,12 @@
+# D1 Max 特权执行器的请求目录(W55 远程运维)。代理 / 站点往 req/ 里写一个 *.json,
+# 这个路径单元看见就拉起 d1max-ops.service(root)处理,处理完请求文件就删掉。
+# 机器人、站点主机共用;装机脚本装、enable。
+[Unit]
+Description=D1 Max 特权执行器的请求目录(W55)
+
+[Path]
+PathExistsGlob=/var/lib/d1max-ops/req/*.json
+Unit=d1max-ops.service
+
+[Install]
+WantedBy=paths.target

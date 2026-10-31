@@ -238,8 +238,9 @@ def test_R2_装机脚本有恢复模式_不生成密钥_不init_不起服务():
     assert s.index("恢复要先把离线另存的") < gen, "先查密钥、后才会走到生成那一步"
     assert '恢复模式:不 init' in s
     tail = s[s.index("systemctl daemon-reload"):]
+    # (W55 的执行器路径单元在前面就 enable --now 了:它只有请求来了才跑,恢复模式也要)
     assert tail.index("systemctl enable d1max-mosquitto.service d1max-site.service") \
-        < tail.index("exit 0") < tail.index("enable --now")
+        < tail.index("exit 0") < tail.index("enable --now d1max-mosquitto")
 
 
 def test_R3_明文备份恢复也不抄源文件的宽权限(站, tmp_path):
