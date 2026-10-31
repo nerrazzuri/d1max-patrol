@@ -96,11 +96,44 @@ def _ensure_key(p: BindPaths) -> bytes:
     return seed
 
 
-def make_request(p: BindPaths, *, hw_sources: Iterable[Path] = HW_SOURCES) -> dict[str, Any]:
-    """出厂申请(``factory burn`` 里调;序列号、型号从 device.json 来)。设备钥匙没有就生成。"""
+def identity_path(p: BindPaths) -> Path:
+    """没走过烧写的老机器(开发样机)补设备身份时,序列号、型号记在这里(不写 device.json)。"""
+    return device_dir(p) / "identity.json"
+
+
+def _identity(p: BindPaths) -> dict[str, Any]:
+    """这块板的序列号、型号:烧写过的看 device.json,只补过身份的看 identity.json。"""
+    return read_json(p.device, None) or read_json(identity_path(p), None) or {}
+
+
+def init_identity(p: BindPaths, *, serial: str, model: str = "",
+                  hw_sources: Iterable[Path] = HW_SOURCES) -> dict[str, Any]:
+    """W63:只补设备身份(设备钥匙 + 出厂申请),不烧写绑定码、热点 —— 给没走过烧写的老机器
+    (开发样机)。``serial`` 要是它在站点上的编号。烧写过的,序列号要跟烧写的一样。"""
     dev = read_json(p.device, None)
+    if dev and dev.get("serial") != serial:
+        raise DevIdError(f"这块板烧写时的序列号是 {dev.get('serial')},不是 {serial}")
+    old = read_json(identity_path(p), None)
+    if old and old.get("serial") != serial:
+        raise DevIdError(f"这块板已经补过设备身份,序列号是 {old.get('serial')},不是 {serial}")
     if not dev:
-        raise DevIdError("此机器人尚未烧写过:先 burn")
+        try:
+            di.make_request(serial=serial, model=model or "d1max", device_pub=b"\0" * 32,
+                            hw_id="0" * 64)
+        except di.DeviceIdError as exc:
+            raise DevIdError(str(exc)) from exc
+        read_hw_id(hw_sources)                 # 读不到芯片编号就什么都不写
+        device_dir(p).mkdir(mode=0o700, parents=True, exist_ok=True)
+        write_json(identity_path(p), {"serial": serial, "model": model or "d1max"}, mode=0o644)
+    return make_request(p, hw_sources=hw_sources)
+
+
+def make_request(p: BindPaths, *, hw_sources: Iterable[Path] = HW_SOURCES) -> dict[str, Any]:
+    """出厂申请(``factory burn`` 里调;序列号、型号从 device.json 来,只补身份的从 identity.json)。
+    设备钥匙没有就生成。"""
+    dev = _identity(p)
+    if not dev:
+        raise DevIdError("此机器人尚未烧写过:先 burn(老机器只补设备身份:factory device-init)")
     hw = read_hw_id(hw_sources)
     seed = _ensure_key(p)
     try:
@@ -137,7 +170,7 @@ def problems(p: BindPaths, *, factory_pubs: Iterable[bytes],
 def _check_cert(p: BindPaths, cert: dict[str, Any], *, factory_pubs: Iterable[bytes],
                 hw_sources: Iterable[Path]) -> None:
     """出厂证书是不是这块板的、是不是认的出厂钥匙签的(装之前、出厂检验都用)。"""
-    dev = read_json(p.device, None) or {}
+    dev = _identity(p)
     seed = _seed(p)
     if cert.get("serial") != dev.get("serial"):
         raise DevIdError(f"出厂证书的序列号 {cert.get('serial')} 不是这块板的({dev.get('serial')})")
