@@ -526,6 +526,7 @@ def build(args: argparse.Namespace) -> Assembled:
 
     def _assemble() -> tuple[Any, EngineParts, AgentRuntime]:
         media: dict | None
+        payload = None
         if args.hal == "sim":
             from d1max_adapter_sim.robot import SimRobot
             from d1max_agent.bridges.sim_media import sim_media
@@ -534,7 +535,6 @@ def build(args: argparse.Namespace) -> Assembled:
         else:
             from d1max_adapter_d1max.hal import D1MaxHal
             host, port = args.sidecar
-            payload = None
             if args.payload.is_file():
                 from d1max_adapter_d1max.payload import Payload, PayloadConfig
                 payload = Payload(PayloadConfig.load(args.payload))
@@ -629,7 +629,9 @@ def build(args: argparse.Namespace) -> Assembled:
         bind = _bindlink()
         if bind is not None:
             runtime.bind = bind                         # W42:WiFi 状态、解绑、确认换 WiFi
-        board = _board(args)
+        # W56:风扇堵转报警线接在上装继电器板的输入上(上装每秒读一次)
+        board = _board(args, relay_inputs=payload.input_bits
+                       if payload is not None and payload.cfg.inputs_reg >= 0 else None)
         if board is not None:
             runtime.attach_board(board)
         if kind == "rtsp" and "thermal" in extra_cameras(args):   # W46:热像镜头被挡
@@ -755,7 +757,7 @@ def after_switch(priv: Any, ops: Any) -> bool:
     return False
 
 
-def _board(args: argparse.Namespace) -> Any:
+def _board(args: argparse.Namespace, *, relay_inputs: Any = None) -> Any:
     """``--board``(W46):文件在才看板子温度、风扇;写错了代理不起(说清楚哪里错)。"""
     path = getattr(args, "board", None)
     if path is None or not Path(path).is_file():
@@ -765,7 +767,7 @@ def _board(args: argparse.Namespace) -> Any:
         cfg = BoardConfig.load(path)
     except BoardConfigError as exc:
         raise SystemExit(f"{path}:{exc}") from exc
-    mon = BoardMonitor(cfg, emit=lambda k, d: None)
+    mon = BoardMonitor(cfg, emit=lambda k, d: None, relay_inputs=relay_inputs)
     mon.start()
     return mon
 

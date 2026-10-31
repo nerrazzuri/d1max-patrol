@@ -1,9 +1,12 @@
 {
   "relay": {
     "port": "/dev/serial/by-id/<USB 转 RS485 的名字>",
-    "baud": 9600,
+    "baud": 38400,
     "slave": 1,
-    "coils": {"spot_l": 0, "spot_r": 1, "siren": 2, "beacon": 3}
+    "coils": {"spot_l": 0, "spot_r": 1, "siren": 2, "beacon": 3},
+    "inputs_reg": 50,
+    "watchdog_reg": 48,
+    "watchdog_ds": 50
   },
   "spotlight": {"left": "spot_l", "right": "spot_r"},
   "strobe": {"colors": {"red": "beacon"}, "default": "red", "blink_s": 0},
@@ -11,8 +14,7 @@
   "audio": {
     "device": "plughw:CARD=rockchipes8388",
     "clips_dir": "/var/lib/d1max/clips",
-    "mute": {"chip": "gpiochip1", "line": -1, "mute_level": "high"},
-    "amp_lead_s": 0.2,
+    "mute": {"mixer": {"card": "rockchipes8388", "control": "Headphone"}},
     "amp_idle_s": 15
   }
 }

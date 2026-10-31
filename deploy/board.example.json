@@ -1,8 +1,8 @@
 {
   "fans": [
-    {"name": "exhaust_l", "chip": "gpiochip3", "line": 0, "pulses": 2, "min_rpm": 300},
-    {"name": "exhaust_r", "chip": "gpiochip3", "line": 1, "pulses": 2, "min_rpm": 300},
-    {"name": "stir", "chip": "gpiochip3", "line": 2, "pulses": 2, "min_rpm": 300}
+    {"name": "exhaust_l", "relay_input": 0, "alarm_active": "high"},
+    {"name": "exhaust_r", "relay_input": 1, "alarm_active": "high"},
+    {"name": "stir", "relay_input": 2, "alarm_active": "high"}
   ],
   "log_dir": "/var/lib/d1max/board",
   "limits": {"warn_soc": 80, "shed_soc": 85, "crit_soc": 95,
