@@ -1,0 +1,12 @@
+# D1 Max 特权执行器(W55 远程运维):只认白名单动作(重启我们的服务、重启机器人、对时、换证书、
+# 装验过签的服务单元;站点:重启、恢复备份、升级、装 VPN 配置)。由 d1max-ops.path 拉起。
+# 执行器和它验签用的三个小模块在 /usr/local/lib/d1max/(root 属主,装机脚本拷的),
+# **不从机器人可写的版本目录里跑任何代码**。
+[Unit]
+Description=D1 Max 特权执行器(W55)
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /usr/local/lib/d1max/ops-runner --config /etc/d1max-ops.json
+# 站点升级、恢复备份要停站点、装软件,最长给半小时
+TimeoutStartSec=1800

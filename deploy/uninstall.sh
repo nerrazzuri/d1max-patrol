@@ -72,6 +72,13 @@ set -euo pipefail
 # @删除 /etc/systemd/system/multi-user.target.wants/d1max-bind.service   配网服务的自启链(烧写时 enable 的)
 # @删除 /etc/systemd/timesyncd.conf.d/d1max.conf                          对时配置(W09d;删了之后按系统原来的配置对时)
 # @删除 /etc/chrony/conf.d/d1max.conf                                     对时片段(决策 61;删了之后 chrony 回到厂家的配置)
+# @删除 /usr/local/lib/d1max                                             特权执行器和它验签用的模块(W55)
+# @删除 /etc/d1max-ops.json                                              特权执行器的配置(W55)
+# @删除 /var/lib/d1max-ops                                               特权执行器的请求、结果目录(W55)
+# @删除 /etc/systemd/system/d1max-ops.path                               特权执行器的路径单元(W55)
+# @删除 /etc/systemd/system/d1max-ops.service                            特权执行器(W55)
+# @删除 /etc/systemd/system/paths.target.wants/d1max-ops.path            路径单元的自启链
+# @删除 /etc/systemd/journald.conf.d/d1max.conf                          日志留盘设置(W55;删了回到系统原来的设置)
 # @删除 /etc/systemd/system/d1max-bootguard.service                      老的守卫单元(多数机器上没有)
 # @删除 /etc/systemd/system/d1max-patrol.service                         老服务(W00c5e 退役;没重跑过装机脚本的老机器上还在)
 # @删除 /etc/systemd/system/multi-user.target.wants/d1max-patrol.service 老服务的自启链
@@ -213,6 +220,12 @@ rm_sys() {
     /etc/sudoers.d/d1max) ;;
     /etc/systemd/timesyncd.conf.d/d1max.conf) ;;
     /etc/chrony/conf.d/d1max.conf) ;;
+    /usr/local/lib/d1max|/usr/local/lib/d1max/*) ;;
+    /etc/d1max-ops.json) ;;
+    /var/lib/d1max-ops|/var/lib/d1max-ops/*) ;;
+    /etc/systemd/system/d1max-ops.path) ;;
+    /etc/systemd/system/paths.target.wants/d1max-ops.path) ;;
+    /etc/systemd/journald.conf.d/d1max.conf) ;;
     *)
       warn "  拒绝删除 $target —— 不在允许的范围里。这是护栏,不是错误。"
       return 0
@@ -442,6 +455,17 @@ stop_service() {
   if [ "$DO_IT" = 1 ]; then
     systemctl try-restart chrony >/dev/null 2>&1 || true
   fi
+  # W55 特权执行器:先停路径单元(不再拉起),再删单元、执行器、配置、目录
+  if [ "$DO_IT" = 1 ]; then
+    systemctl disable --now d1max-ops.path >/dev/null 2>&1 || true
+  fi
+  rm_sys "/etc/systemd/system/paths.target.wants/d1max-ops.path" "特权执行器路径单元的自启链"
+  rm_sys "/etc/systemd/system/d1max-ops.path" "特权执行器的路径单元(W55)"
+  rm_sys "$UNIT_DIR/d1max-ops.service" "特权执行器(W55)"
+  rm_sys "/usr/local/lib/d1max" "特权执行器和它验签用的模块(W55)"
+  rm_sys "/etc/d1max-ops.json" "特权执行器的配置(W55)"
+  rm_sys "/var/lib/d1max-ops" "特权执行器的请求、结果目录(W55)"
+  rm_sys "/etc/systemd/journald.conf.d/d1max.conf" "日志留盘设置(W55)"
   rm_sys "$UNIT_DIR/$OLD_UNIT" "老的守卫单元,多数机器上本来就没有"
   rm_sys "$UNIT_DIR/$LEGACY_UNIT" "老服务(W00c5e 退役),重跑过装机脚本的机器上已经没有"
   rm_sys "$LEGACY_WANTS_LINK" "老服务的自启链"
