@@ -62,9 +62,9 @@ describe("机器人页", () => {
     await waitFor(() => expect(cardOf(c, "B")).not.toBeNull());
     const b = cardOf(c, "B").textContent!;
     expect(b).toContain("离线");
-    expect(b).toContain("2 个毛病");
+    expect(b).toContain("2 个故障");
     expect(cardOf(c, "A").textContent).toContain("76%");
-    expect(cardOf(c, "A").textContent).toContain("今天巡了 3 趟");
+    expect(cardOf(c, "A").textContent).toContain("今日巡逻 3 次");
   });
 
   it("没毛病写正常", async () => {
@@ -101,7 +101,7 @@ describe("机器人页", () => {
     fireEvent.input(document.querySelector('form.confirm-pw input[type="password"]')!, { target: { value: "my-own-password" } });
     fireEvent.submit(document.querySelector("form.confirm-pw")!);
     await waitFor(() => expect(posted.find((p) => p.url === "/api/admin/robots/A/revoke")?.body).toEqual({ confirm_password: "my-own-password" }));
-    await waitFor(() => expect(said.join()).toContain("下次连上站点时会自己清掉数据"));
+    await waitFor(() => expect(said.join()).toContain("下次连接站点时将自动清除数据"));
   });
 
   it("解绑确认写明恢复出厂、数据删掉", async () => {
@@ -124,7 +124,7 @@ describe("机器人页", () => {
     fireEvent.input(form.querySelector('input:not([type="password"])')!, { target: { value: "西区" } });
     fireEvent.input(form.querySelector('input[type="password"]')!, { target: { value: "wrong" } });
     fireEvent.submit(form);
-    await waitFor(() => expect(document.querySelector("form.bind-approve .error")?.textContent).toContain("密码不对"));
+    await waitFor(() => expect(document.querySelector("form.bind-approve .error")?.textContent).toContain("密码错误"));
     fireEvent.input(form.querySelector('input[type="password"]')!, { target: { value: "pw" } });
     fireEvent.submit(form);
     await waitFor(() => expect(said.join()).toContain("D1M-7 已加入站点"));
@@ -145,11 +145,11 @@ describe("机器人页", () => {
     robots = [card({ wifi: { ssid: "Estate", link: "4g", change: { id: "0a1b2c3d4e5f", ssid: "New", mode: "trial", expires_ms: NOW } } })];
     const { container: c } = page();
     await waitFor(() => expect(cardOf(c, "A")).not.toBeNull());
-    expect(cardOf(c, "A").textContent).toContain("换 WiFi 等确认");
+    expect(cardOf(c, "A").textContent).toContain("WiFi 变更待确认");
     fireEvent.click(cardOf(c, "A"));
     const d = c.querySelector(".robot-detail")!;
-    expect(d.textContent).toContain("Estate · 走 4G");
-    expect(d.querySelector(".wifi-change")!.textContent).toContain("正在试 WiFi「New」");
+    expect(d.textContent).toContain("Estate · 4G 连接");
+    expect(d.querySelector(".wifi-change")!.textContent).toContain("正在尝试 WiFi「New」");
     fireEvent.click(btn(d, "确认换 WiFi"));
     await waitFor(() => expect(posted.at(-1)).toEqual({ url: "/api/robots/A/wifi", body: { id: "0a1b2c3d4e5f", approve: true } }));
   });
@@ -159,7 +159,7 @@ describe("机器人页", () => {
     await waitFor(() => expect(cardOf(c, "A")).not.toBeNull());
     fireEvent.click(btn(c, "添加四足机器人"));
     const m = document.querySelector(".modal")!;
-    expect(m.textContent).toContain("扫机器人身上的贴纸");
+    expect(m.textContent).toContain("扫描机器人贴纸");
     expect(m.querySelector("form")).toBeNull();
     fireEvent.click(btn(m, "工程师：用开通码手动添加"));
     expect(document.querySelector(".modal form")!.textContent).toContain("provision --code");

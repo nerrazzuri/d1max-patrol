@@ -112,7 +112,7 @@ class _SiteRobotsPageState extends State<SiteRobotsPage> {
               content: Text(tr(
                   '${a['level']} ${a['robot']} · '
                       '${alertTitle('${a['kind']}', '${a['title']}')} (unacknowledged)',
-                  '${a['level']} ${a['robot']} · ${a['title']}（没人确认）'))));
+                  '${a['level']} ${a['robot']} · ${a['title']}（无人确认）'))));
         }
       }
       _soon();
@@ -137,7 +137,7 @@ class _SiteRobotsPageState extends State<SiteRobotsPage> {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
             content: Text(tr(
                 '${a.level} ${a.robot} · ${alertTitle(a.kind, a.title)} (unacknowledged)',
-                '${a.level} ${a.robot} · ${a.title}（没人确认）'))));
+                '${a.level} ${a.robot} · ${a.title}（无人确认）'))));
       }
     } on Exception {
       return; // 读不到就算了：值守屏自己会报读不到
@@ -163,7 +163,7 @@ class _SiteRobotsPageState extends State<SiteRobotsPage> {
   void _backToLogin() {
     if (!_disposed && mounted) {
       Navigator.of(context)
-          .pop(tr('Your session has expired. Sign in again', '登录过期了，重新登录'));
+          .pop(tr('Your session has expired. Sign in again', '登录已过期，请重新登录'));
     }
   }
 
@@ -242,9 +242,9 @@ class _SiteRobotsPageState extends State<SiteRobotsPage> {
           site: e.name, url: e.url, fingerprint: e.fingerprint, token: '${t['token']}');
       _bgOn = true;
     } on SiteError catch (err) {
-      why = tr("Can't start background watch: $err", '后台值守开不了：$err');
+      why = tr("Can't start background watch: $err", '无法开启后台值守：$err');
     } on PlatformException catch (err) {
-      why = tr("Can't start background watch: ${err.message}", '后台值守开不了：${err.message}');
+      why = tr("Can't start background watch: ${err.message}", '无法开启后台值守：${err.message}');
     }
     if (!mounted) return;
     setState(() => _bgBusy = false);
@@ -262,7 +262,7 @@ class _SiteRobotsPageState extends State<SiteRobotsPage> {
         });
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
             content: Text(tr('Background watch off: no alarms arrive while the app is in the background',
-                '后台值守关了：app 退到后台就收不到告警'))));
+                '后台值守已关闭：App 在后台时收不到告警'))));
       }
     } else {
       await _bgStart();
@@ -316,7 +316,7 @@ class _SiteRobotsPageState extends State<SiteRobotsPage> {
                                 message: st == PushState.ready
                                     ? tr('P1 push: ready', 'P1 推送：已就绪')
                                     : tr('P1 push: not ready (${widget.push!.reason})',
-                                        'P1 推送：还没就绪（${widget.push!.reason}）'),
+                                        'P1 推送：未就绪（${widget.push!.reason}）'),
                                 // 就绪是绿的；没就绪换一个图标（不只靠颜色）
                                 child: Icon(
                                     st == PushState.ready
@@ -327,8 +327,8 @@ class _SiteRobotsPageState extends State<SiteRobotsPage> {
                 IconButton(
                     key: SiteRobotsPage.bgWatchKey,
                     tooltip: _bgOn
-                        ? tr('Background watch: on (tap to turn off)', '后台值守：开着（点了关）')
-                        : tr('Background watch: off (tap to turn on)', '后台值守：关着（点了开）'),
+                        ? tr('Background watch: on (tap to turn off)', '后台值守：已开启（点击关闭）')
+                        : tr('Background watch: off (tap to turn on)', '后台值守：已关闭（点击开启）'),
                     icon: Icon(_bgOn ? Icons.shield : Icons.shield_outlined,
                         color: _bgOn ? c.success : c.textSecondary),
                     onPressed: _bgBusy ? null : _bgToggle),
@@ -345,7 +345,7 @@ class _SiteRobotsPageState extends State<SiteRobotsPage> {
                         tone: NwTone.neutral,
                         icon: Icons.sync_problem_rounded,
                         text: tr('Live updates disconnected. Reconnecting; pull down to refresh',
-                            '实时更新没连上，正在重连；下拉可以手动刷新'))),
+                            '实时更新已断开，正在重连；可下拉手动刷新'))),
               if (_error != null)
                 Padding(
                     padding: const EdgeInsets.only(bottom: Nw.s8),

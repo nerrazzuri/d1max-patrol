@@ -72,7 +72,7 @@ void main() {
       await t.tap(find.byKey(SiteModeBar.homeKey));
       await t.pumpAndSettle();
       expect(api.calls.where((c) => c.startsWith('mode')), isEmpty, reason: '撤防先问');
-      await t.tap(find.text('算了'));
+      await t.tap(find.text('取消'));
       await t.pumpAndSettle();
       expect(api.calls.where((c) => c.startsWith('mode')), isEmpty);
       await t.tap(find.byKey(SiteModeBar.homeKey));
@@ -92,7 +92,7 @@ void main() {
       await _duty(t, api);
       expect(_canTap(t, SiteModeBar.homeKey), isFalse);
       expect(_canTap(t, SiteModeBar.visitorKey), isFalse);
-      expect(find.text('撤防（留守、临时撤防）要管理员或经理切'), findsOneWidget);
+      expect(find.text('撤防（留守、临时撤防）需管理员或经理操作'), findsOneWidget);
       await t.tap(find.byKey(SiteModeBar.homeKey), warnIfMissed: false);
       await t.tap(find.byKey(SiteModeBar.visitorKey), warnIfMissed: false);
       await t.pumpAndSettle();
@@ -111,7 +111,7 @@ void main() {
       await t.tap(find.byKey(SiteModeBar.armKey));
       await t.pumpAndSettle();
       expect(find.byKey(SiteModeBar.msgKey), findsOneWidget);
-      expect(find.textContaining('切到布防没成'), findsOneWidget);
+      expect(find.textContaining('切换为布防失败'), findsOneWidget);
       expect(find.text('现在：留守'), findsOneWidget);
     });
 
@@ -137,7 +137,7 @@ void main() {
         ..modeView = _mode('home')
         ..hold = true;
       await _duty(t, slow);
-      expect(find.text('布防模式还没读到'), findsOneWidget);
+      expect(find.text('布防模式未加载'), findsOneWidget);
       expect(find.textContaining('现在：'), findsNothing);
       slow.gates.single.complete(slow.modeView);
       await t.pumpAndSettle();
@@ -148,7 +148,7 @@ void main() {
         ..modeError = const SiteError(502, '站点没回');
       await t.pump(const Duration(seconds: 31));
       await t.pumpAndSettle();
-      expect(find.textContaining('布防模式读不到'), findsOneWidget);
+      expect(find.textContaining('无法读取布防模式'), findsOneWidget);
       expect(find.textContaining('现在：'), findsNothing);
     });
 
@@ -223,7 +223,7 @@ void main() {
       (site['backup'] as Map<String, dynamic>)['stale'] = true;
       await _duty(t, FakeApi('guard')..summaryBody = body);
       final chips = t.widgetList<NwHealthChip>(find.byType(NwHealthChip, skipOffstage: false)).toList();
-      expect(chips.map((c) => (c.label, c.bad)), [('机器人在线 0/1', true), ('备份过期了', true)]);
+      expect(chips.map((c) => (c.label, c.bad)), [('机器人在线 0/1', true), ('备份已过期', true)]);
       await _duty(t, FakeApi('guard')..summaryError = const SiteError(500, '站点内部错误'));
       expect(find.byType(NwHealthChip, skipOffstage: false), findsNothing);
       expect(find.byKey(SiteWatchPage.summaryErrorKey, skipOffstage: false), findsOneWidget);
@@ -312,7 +312,7 @@ void main() {
       final api = FakeApi('owner')..modeView = _mode('armed');
       await _duty(t, api);
       expect(find.text('Now: Armed'), findsOneWidget);
-      expect(find.text('RESPOND TO INCIDENT'), findsOneWidget);
+      expect(find.text('Respond'), findsOneWidget);
       expect(find.text('Robots online 1/1', skipOffstage: false), findsOneWidget);
     });
   });

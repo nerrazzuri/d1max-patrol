@@ -86,7 +86,7 @@ void main() {
     await t.enterText(find.byKey(SiteStandbyPage.nameKey), 'x');
     await t.tap(find.byKey(SiteStandbyPage.goKey));
     await t.pumpAndSettle();
-    expect(find.textContaining('没成'), findsOneWidget);
+    expect(find.textContaining('失败'), findsOneWidget);
   });
 
   testWidgets('设默认、删（先确认）', (t) async {
@@ -128,7 +128,7 @@ void main() {
     await t.tap(find.byKey(const Key('standby-charger-go')));
     await t.pumpAndSettle();
     expect(api.calls, contains('charger-here A'));
-    expect(find.textContaining('充电桩对准点设好了（2.0, 0.5）'), findsOneWidget);
+    expect(find.textContaining('充电桩对准点已设置（2.0, 0.5）'), findsOneWidget);
   });
 
   testWidgets('W13 保安没有设充电桩', (t) async {
@@ -138,7 +138,7 @@ void main() {
 
   test('W13 回充那几趟说人话', () {
     expect(taskLabel(<String, dynamic>{'kind': 'dock', 'task_id': 'charge-dock-1', 'state': 'running'}),
-        '充电中（对桩、充电、出桩）');
+        '充电中（对桩、充电、离桩）');
     expect(taskLabel(<String, dynamic>{'kind': 'goto', 'task_id': 'charge-goto-1', 'state': 'running'}), '去充电');
     expect(taskLabel(<String, dynamic>{'kind': 'goto', 'task_id': 'x', 'state': 'running'}), 'goto running');
   });

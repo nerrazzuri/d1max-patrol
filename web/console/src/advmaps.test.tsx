@@ -22,7 +22,7 @@ afterEach(cleanup);
 describe("高级 → 地图", () => {
   it("重新建图五步,一步步往下走", () => {
     const { container: c } = render(<AdvMapsPage say={() => {}} />);
-    expect(c.textContent).toContain("家具挪动很多");
+    expect(c.textContent).toContain("家具大量移动");
     fireEvent.click(Array.from(c.querySelectorAll("button")).find((b) => b.textContent?.startsWith("重新建图"))!);
     expect(c.querySelectorAll(".rb-steps li").length).toBe(5);
     expect(c.querySelector(".rb-steps li.now")!.textContent).toContain("起点");

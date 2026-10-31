@@ -41,9 +41,9 @@ const btn = (root: Element, text: string) => Array.from(root.querySelectorAll("b
 describe("布置 → 防区", () => {
   it("画一个防区存下", async () => {
     const { container: c } = render(<ZonesTab {...props()} />);
-    fireEvent.click(btn(c, "画一个防区"));
+    fireEvent.click(btn(c, "绘制防区"));
     for (let i = 0; i < 3; i++) fireEvent.click(c.querySelector(".pick")!);
-    fireEvent.click(btn(c, "画好了"));
+    fireEvent.click(btn(c, "完成绘制"));
     fireEvent.input(document.querySelector('.modal input[name="zone"]')!, { target: { value: "A区" } });
     fireEvent.submit(document.querySelector(".modal form")!);
     expect(dirty).toBe(true);

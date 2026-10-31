@@ -60,11 +60,11 @@ describe("布置 → 路网", () => {
   it("加点、连线、存:带修订号", async () => {
     const { container: c } = render(<RoadnetTab {...props()} />);
     await waitFor(() => expect(node(c, "P2")).not.toBeNull());
-    fireEvent.click(btn(c, "加点"));
+    fireEvent.click(btn(c, "添加节点"));
     fireEvent.click(c.querySelector(".pick1")!);
     fireEvent.click(c.querySelector(".pick2")!);
-    fireEvent.click(btn(c, "放好了"));
-    expect(c.querySelector(".ly-side")!.textContent).toContain("没连上线的点：P3、P4");
+    fireEvent.click(btn(c, "完成添加"));
+    expect(c.querySelector(".ly-side")!.textContent).toContain("未连接的节点：P3、P4");
     fireEvent.click(node(c, "P2"));
     fireEvent.click(node(c, "P3"));                       // 先后点两个点:连上
     fireEvent.click(node(c, "P3"));
@@ -85,7 +85,7 @@ describe("布置 → 路网", () => {
     fireEvent.click(node(c, "P1"));
     fireEvent.click(node(c, "P2"));                       // 再连上
     fireEvent.click(node(c, "P1"));
-    fireEvent.click(btn(c.querySelector(".ly-detail")!, "删掉这个点"));
+    fireEvent.click(btn(c.querySelector(".ly-detail")!, "删除此节点"));
     await save!();
     const body = posted.find((p) => p.url === URL)!.body;
     expect(body.nodes).toEqual([{ id: "P2", x: 5, y: 1 }]);
@@ -95,7 +95,7 @@ describe("布置 → 路网", () => {
   it("别人改过:存的时候抛出来(外框说刚才有人改过)", async () => {
     const { container: c } = render(<RoadnetTab {...props()} />);
     await waitFor(() => expect(node(c, "P2")).not.toBeNull());
-    fireEvent.click(btn(c, "加点"));
+    fireEvent.click(btn(c, "添加节点"));
     fireEvent.click(c.querySelector(".pick1")!);
     status = 409;
     await expect(save!()).rejects.toMatchObject({ status: 409 });
@@ -104,6 +104,6 @@ describe("布置 → 路网", () => {
   it("没有路网:说清楚", async () => {
     net = { map_id: "home", map_version: "3", revision: 0, nodes: [], edges: [], length_m: 0 };
     const { container: c } = render(<RoadnetTab {...props()} />);
-    await waitFor(() => expect(c.querySelector(".ly-side")!.textContent).toContain("这张图还没有路网"));
+    await waitFor(() => expect(c.querySelector(".ly-side")!.textContent).toContain("此地图尚无路网"));
   });
 });

@@ -42,7 +42,7 @@ void main() {
     await t.pumpAndSettle();
     await t.tap(find.byKey(const Key('btn-mark-home')));
     await t.pumpAndSettle();
-    await t.tap(find.text('算了'));
+    await t.tap(find.text('取消'));
     await t.pumpAndSettle();
     expect(api.calls.where((c) => c.startsWith('markHome')), isEmpty);
   });
@@ -77,9 +77,9 @@ void main() {
   });
 
   test('忙、落不了盘、在走：说人话', () {
-    expect(ackReasonText('busy: 在跑任务 goto-1'), '它正忙着别的：在跑任务 goto-1');
-    expect(ackReasonText('busy'), '它正忙着别的');
-    expect(ackReasonText('persist_failed: [Errno 28] No space left'), contains('记不下'));
+    expect(ackReasonText('busy: 在跑任务 goto-1'), '机器人忙：在跑任务 goto-1');
+    expect(ackReasonText('busy'), '机器人忙');
+    expect(ackReasonText('persist_failed: [Errno 28] No space left'), contains('无法保存'));
     expect(ackReasonText('moving'), isNot(contains('设位置')), reason: '标原点也用这句');
   });
 
@@ -96,7 +96,7 @@ void main() {
     await t.tap(find.byKey(const Key('mark-home-replace')));
     await t.pumpAndSettle();
     expect(api.calls.where((c) => c.startsWith('markHome')), ['markHome A', 'markHome A replace']);
-    expect(find.textContaining('原点标好了'), findsOneWidget);
+    expect(find.textContaining('原点已标记'), findsOneWidget);
   });
 
   testWidgets('同名的点在别的图上：点「算了」不搬', (t) async {
@@ -107,10 +107,10 @@ void main() {
     await t.pumpAndSettle();
     await t.tap(find.byKey(const Key('mark-home-go')));
     await t.pumpAndSettle();
-    await t.tap(find.text('算了'));
+    await t.tap(find.text('取消'));
     await t.pumpAndSettle();
     expect(api.calls.where((c) => c.startsWith('markHome')), ['markHome A']);
-    expect(find.textContaining('没标'), findsOneWidget);
+    expect(find.textContaining('未标记'), findsOneWidget);
   });
 
   testWidgets('站点登记没成：说机器人上已经换了、给坐标好手工登记', (t) async {
@@ -125,7 +125,7 @@ void main() {
     await t.tap(find.byKey(const Key('mark-home-go')));
     await t.pumpAndSettle();
     expect(find.textContaining('(4.2, 1.0)'), findsOneWidget);
-    expect(find.textContaining('没标'), findsNothing, reason: '机器人上已经换了，不许说「没标」');
+    expect(find.textContaining('未标记'), findsNothing, reason: '机器人上已经换了，不许说「没标」');
   });
 
   testWidgets('等回话超时：照站点说的（机器人可能已经标了）', (t) async {
@@ -137,7 +137,7 @@ void main() {
     await t.tap(find.byKey(const Key('mark-home-go')));
     await t.pumpAndSettle();
     expect(find.textContaining('可能已经标了'), findsOneWidget);
-    expect(find.textContaining('没标'), findsNothing);
+    expect(find.textContaining('未标记'), findsNothing);
   });
 }
 

@@ -32,13 +32,13 @@ import 'widget/fields_dialog.dart';
 String robotStatusLine(Map<String, dynamic> r) {
   final st = r['status'];
   if (r['revoked'] == true) return tr('Revoked', '已吊销');
-  if (st is! Map) return tr('No status', '没有状态');
+  if (st is! Map) return tr('No status', '无状态');
   final online = st['online'] == true && r['fresh'] == true;
   final task = st['task'];
   final taskText = task is Map ? taskLabel(task) : tr('Idle', '空闲');
   final held = r['held'] is Map ? tr('Stopped · ', '已叫停 · ') : '';
   // W33：只许手动派的狗（站点自己不让它动）；狗确认看见人（决策 48）
-  final manual = r['manual_only'] is Map ? tr('Manual only · ', '只许手动 · ') : '';
+  final manual = r['manual_only'] is Map ? tr('Manual only · ', '仅限手动 · ') : '';
   final caps = r['capabilities'];
   final tasks = caps is Map ? caps['tasks'] : null;
   final p = tasks is Map ? tasks['persons'] : null;
@@ -53,7 +53,7 @@ String robotStatusLine(Map<String, dynamic> r) {
 /// 一趟任务说人话（W13：回充那几趟）；别的照原样 `kind state`。
 String taskLabel(Map task) {
   final id = '${task['task_id'] ?? ''}';
-  if (task['kind'] == 'dock') return tr('Charging (docking, charging, undocking)', '充电中（对桩、充电、出桩）');
+  if (task['kind'] == 'dock') return tr('Charging (docking, charging, undocking)', '充电中（对桩、充电、离桩）');
   if (task['kind'] == 'goto' && id.startsWith('charge-')) return tr('Going to charge', '去充电');
   return '${task['kind']} ${task['state']}';
 }
@@ -61,9 +61,9 @@ String taskLabel(Map task) {
 /// 机器人连的 WiFi 一行：`Estate · 走 4G`（W42）。
 String robotWifiLine(Map w) {
   final link = switch (w['link']) {
-    'wifi' => tr('on WiFi', '走 WiFi'),
-    '4g' => tr('on 4G', '走 4G'),
-    _ => tr('no network', '没网'),
+    'wifi' => tr('on WiFi', 'WiFi 连接'),
+    '4g' => tr('on 4G', '4G 连接'),
+    _ => tr('no network', '无网络'),
   };
   final ssid = '${w['ssid'] ?? ''}';
   return ssid.isEmpty ? link : '$ssid · $link';
@@ -111,7 +111,7 @@ class _SiteRobotPageState extends State<SiteRobotPage> {
           ? tr('$what: $res', '$what：$res')
           : tr('$what: $res (${ackReasonText(reason)})', '$what：$res（${ackReasonText(reason)}）');
     } on SiteError catch (e) {
-      msg = tr('$what failed: ${refusalText(e)}', '$what 没成：${refusalText(e)}');
+      msg = tr('$what failed: ${refusalText(e)}', '$what 失败：${refusalText(e)}');
       if (e.status == 409 && e.body['reason_code'] is String && mounted) {
         // W53：常见的拒绝说清楚、给去处理的按钮
         await showRefusal(context, widget.api, e, robotId: widget.robotId, title: what, onChanged: _reload);
@@ -148,7 +148,7 @@ class _SiteRobotPageState extends State<SiteRobotPage> {
     if (mapId.isEmpty != version.isEmpty) {
       setState(() => _msg = tr(
           'Build while driving: fill in both map ID and version (leave both empty to record only)',
-          '边走边建：地图号与版本要一起填（只录包就都空着）'));
+          '边走边建：地图号和版本需同时填写（只录包则都留空）'));
       return;
     }
     final ok = await _do(
@@ -164,7 +164,7 @@ class _SiteRobotPageState extends State<SiteRobotPage> {
   Future<void> _relocalize() async {
     final how = await showDialog<String>(
       context: context,
-      builder: (c) => SimpleDialog(title: Text(tr('Where is the robot now', '机器人现在在哪')), children: [
+      builder: (c) => SimpleDialog(title: Text(tr('Where is the robot now', '机器人当前位置')), children: [
         SimpleDialogOption(
             key: const Key('reloc-home'),
             onPressed: () => Navigator.pop(c, 'home'),
@@ -177,13 +177,13 @@ class _SiteRobotPageState extends State<SiteRobotPage> {
           SimpleDialogOption(
               key: const Key('reloc-find'),
               onPressed: () => Navigator.pop(c, 'find'),
-              child: Text(tr('Let it find itself (match the walls it sees)', '让机器人自己找（拿看到的墙去套地图）'))),
+              child: Text(tr('Auto-localize (match the scanned walls to the map)', '自动定位（用扫描到的墙体匹配地图）'))),
       ]),
     );
     if (how == null || !mounted) return;
     if (how == 'find') {
       // W41：狗拿看到的墙在整张图上套；认不准它会拒、说原因（有两处差不多像……），那时再手动设。
-      await _do(() => widget.api.relocalize(widget.robotId, global: true), tr('Find position', '自动找位置'));
+      await _do(() => widget.api.relocalize(widget.robotId, global: true), tr('Auto-localize', '自动定位'));
       return;
     }
     if (how == 'home') {
@@ -191,13 +191,12 @@ class _SiteRobotPageState extends State<SiteRobotPage> {
       final sure = await showDialog<bool>(
         context: context,
         builder: (c) => AlertDialog(
-          title: Text(tr('Is the robot at the origin now?', '机器人现在就在原点？')),
+          title: Text(tr('Is the robot at the origin now?', '机器人当前在原点？')),
           content: Text(tr(
-              'It must stand on the origin (dock), facing the same way as when the origin was marked. '
-                  'If it is anywhere else, the robot will navigate from the wrong position.',
-              '要站在原点（充电桩）上、朝向跟标原点时一样。站在别处点了，机器人会按错的位置走。')),
+              'The robot must be on the origin (dock), facing as when the origin was marked; otherwise navigation will be wrong.',
+              '机器人须站在原点（充电桩）上，朝向与标原点时一致，否则导航会出错。')),
           actions: [
-            TextButton(onPressed: () => Navigator.pop(c, false), child: Text(tr('Cancel', '算了'))),
+            TextButton(onPressed: () => Navigator.pop(c, false), child: Text(tr('Cancel', '取消'))),
             FilledButton(
                 key: const Key('reloc-home-go'),
                 onPressed: () => Navigator.pop(c, true),
@@ -210,7 +209,7 @@ class _SiteRobotPageState extends State<SiteRobotPage> {
       return;
     }
     final got = await showFieldsDialog(context,
-        title: tr('Where is the robot on the map', '机器人现在在地图上哪儿'),
+        title: tr('Where is the robot on the map', '机器人在地图上的当前位置'),
         fields: [
           DialogField(tr('x (m)', 'x（米）'), key: const Key('reloc-x')),
           DialogField(tr('y (m)', 'y（米）'), key: const Key('reloc-y')),
@@ -221,12 +220,12 @@ class _SiteRobotPageState extends State<SiteRobotPage> {
               key: const Key('reloc-yaw'),
               initial: '0'),
         ],
-        confirm: tr('Set', '设'),
+        confirm: tr('Set', '设置'),
         confirmKey: const Key('reloc-go'));
     if (got == null) return;
     final x = double.tryParse(got[0]), y = double.tryParse(got[1]), deg = double.tryParse(got[2]);
     if (x == null || y == null || deg == null || !x.isFinite || !y.isFinite || !deg.isFinite) {
-      if (mounted) setState(() => _msg = tr('Coordinates and heading must be numbers', '坐标、朝向要是数字'));
+      if (mounted) setState(() => _msg = tr('Coordinates and heading must be numbers', '坐标和朝向须为数字'));
       return;
     }
     await _do(() => widget.api.relocalize(widget.robotId, x: x, y: y, yaw: deg * pi / 180),
@@ -241,20 +240,14 @@ class _SiteRobotPageState extends State<SiteRobotPage> {
       builder: (c) => AlertDialog(
         title: Text(tr('Mark origin here', '在这儿标原点')),
         content: Text(tr(
-            'Move the origin of ${widget.robotId} on this map (used for safe return and charging, named home) '
-                'to where it is now? Standby points stay as they are (if this map has none yet, a default '
-                'one is created).\n'
-                'The robot checks its localization first: it will not mark if the position is not set or the '
-                'error is large, or while it is running a task or switching maps.',
-            '把 ${widget.robotId} 在这张图上的原点（安全返航、回充用，名字叫 home）换成它现在的'
-                '位置？待命点不动（这张图上还没有待命点的话，顺手建一个默认的）。\n'
-                '机器人会先核定位：没设位置、偏差大就不标；在跑任务、在换图也不标。')),
+            'Set the origin of ${widget.robotId} on this map to its current position? Standby points are unchanged.\nThe robot verifies its localization first and won\'t mark it if the position isn\'t set, the error is large, or it is busy or switching maps.',
+            '将 ${widget.robotId} 在此地图上的原点改为当前位置？待命点不变。\n机器人会先核验定位：未设置位置、偏差过大、正在执行任务或换图时不会标记。')),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(c, false), child: Text(tr('Cancel', '算了'))),
+          TextButton(onPressed: () => Navigator.pop(c, false), child: Text(tr('Cancel', '取消'))),
           FilledButton(
               key: const Key('mark-home-go'),
               onPressed: () => Navigator.pop(c, true),
-              child: Text(tr('Mark', '标'))),
+              child: Text(tr('Mark', '标记'))),
         ],
       ),
     );
@@ -276,9 +269,9 @@ class _SiteRobotPageState extends State<SiteRobotPage> {
             content: Text(tr(
                 'Standby point home is registered on $where. Move it to the map the robot is using now '
                     '(it is removed from $where)?',
-                '待命点 home 现在登记在 $where 上。换到机器人现在用的这张图上（$where 上就没有它了）？')),
+                '待命点 home 目前登记在 $where 上。是否移到机器人当前使用的地图？（$where 上将删除）')),
             actions: [
-              TextButton(onPressed: () => Navigator.pop(c, false), child: Text(tr('Cancel', '算了'))),
+              TextButton(onPressed: () => Navigator.pop(c, false), child: Text(tr('Cancel', '取消'))),
               FilledButton(
                   key: const Key('mark-home-replace'),
                   onPressed: () => Navigator.pop(c, true),
@@ -289,7 +282,7 @@ class _SiteRobotPageState extends State<SiteRobotPage> {
         if (move != true) {
           if (mounted) {
             setState(() => _msg = tr('Not marked: standby point home is still on $where',
-                '没标：待命点 home 还在 $where 上'));
+                '未标记：待命点 home 仍在 $where 上'));
           }
           return;
         }
@@ -300,9 +293,9 @@ class _SiteRobotPageState extends State<SiteRobotPage> {
         final x = (d['x'] as num).toStringAsFixed(1), y = (d['y'] as num).toStringAsFixed(1);
         final sigma = (d['sigma_m'] as num? ?? 0).toStringAsFixed(1);
         msg = tr('Origin marked: ($x, $y), error about $sigma m',
-            '原点标好了：($x, $y)，偏差约 $sigma m');
+            '原点已标记：($x, $y)，偏差约 $sigma m');
       } else {
-        msg = tr('Origin marked', '原点标好了');
+        msg = tr('Origin marked', '原点已标记');
       }
     } on SiteError catch (e) {
       final d = e.body['data'];
@@ -311,11 +304,11 @@ class _SiteRobotPageState extends State<SiteRobotPage> {
         final at = '${d['map_id']}:${d['map_version']}';
         final x = (d['x'] as num).toStringAsFixed(1), y = (d['y'] as num).toStringAsFixed(1);
         msg = tr("${e.message}: the robot's origin is at ($x, $y) on $at",
-            '${e.message}：机器人上的原点在 $at 的 ($x, $y)');
+            '${e.message}：机器人上的原点位于 $at 的 ($x, $y)');
       } else if (e.status == 409) {
         // 站点回的是「狗没标:<狗的原因>」：原因照拒收那一套说人话。
         final why = ackReasonText(e.message.replaceFirst(RegExp(r'^机器人没标[:：]'), ''));
-        msg = tr('Not marked: $why', '没标：$why');
+        msg = tr('Not marked: $why', '未标记：$why');
       } else {
         msg = e.toString(); // 504「狗可能已经标了」等：照站点说的
       }
@@ -331,7 +324,7 @@ class _SiteRobotPageState extends State<SiteRobotPage> {
     try {
       v = await widget.api.robot(widget.robotId);
     } on SiteError catch (e) {
-      if (mounted) setState(() => _msg = tr('Stop failed: $e', '叫停没成：$e'));
+      if (mounted) setState(() => _msg = tr('Stop failed: $e', '叫停失败：$e'));
       return;
     }
     final st = v['status'];
@@ -341,7 +334,7 @@ class _SiteRobotPageState extends State<SiteRobotPage> {
       if (mounted) {
         setState(() {
           _view = v;
-          _msg = tr('It is not running a task now', '它现在没在跑任务');
+          _msg = tr('The robot isn\'t running a task', '机器人当前无任务');
         });
       }
       return;
@@ -370,10 +363,10 @@ class _SiteRobotPageState extends State<SiteRobotPage> {
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Text(
               trial
-                  ? tr("The robot lost the site and is trying WiFi \u201c${ch['ssid']}\u201d. Approve within 30 minutes to keep it, otherwise it switches back.",
-                      '机器人连不上站点，正在试 WiFi「${ch['ssid']}」。30 分钟内确认就留下，不然退回原来的。')
-                  : tr("Someone at the robot asked to switch its WiFi to \u201c${ch['ssid']}\u201d. Nothing changes until it is approved.",
-                      '有人在机器人那里提了把 WiFi 换成「${ch['ssid']}」。确认了才换。'),
+                  ? tr("The robot lost the site and is trying WiFi “${ch['ssid']}”. Approve within 30 minutes to keep it, otherwise it reverts.",
+                      '机器人连不上站点，正在尝试 WiFi「${ch['ssid']}」。30 分钟内确认则保留，否则恢复原网络。')
+                  : tr("Someone at the robot asked to switch its WiFi to “${ch['ssid']}”. Nothing changes until it is approved.",
+                      '请确认机器人端申请将 WiFi 切换为「${ch['ssid']}」'),
               style: NwText.bodyMedium.copyWith(color: c.text)),
           if (manage) ...[
             const SizedBox(height: Nw.s8),
@@ -388,9 +381,9 @@ class _SiteRobotPageState extends State<SiteRobotPage> {
                   buttonKey: const Key('btn-wifi-reject'),
                   size: NwButtonSize.small,
                   variant: NwButtonVariant.ghost,
-                  label: tr("Don't change", '不换'),
+                  label: tr("Reject", '拒绝'),
                   onPressed: () => _do(() => widget.api.confirmRobotWifi(widget.robotId, '${ch['id']}', false),
-                      tr("Don't change WiFi", '不换 WiFi'))),
+                      tr("Reject WiFi change", '拒绝更换 WiFi'))),
             ]),
           ],
         ]),
@@ -523,14 +516,13 @@ class _SiteRobotPageState extends State<SiteRobotPage> {
               child: Row(children: [
                 Expanded(
                     child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Text(tr('Stopped by ${(v!['held'] as Map)['by']}', '被 ${(v['held'] as Map)['by']} 叫停了'),
+                  Text(tr('Stopped by ${(v!['held'] as Map)['by']}', '已被 ${(v['held'] as Map)['by']} 叫停'),
                       style: NwText.titleSmall.copyWith(color: c.text)),
                   const SizedBox(height: Nw.s4),
                   Text(
                       tr(
-                          'The site will not dispatch it (schedule, incidents, return to standby, remote control) '
-                              'until you tap Resume',
-                          '站点不会再派它（排程、事件、回待命点、遥控都不派），点「恢复」之后才派'),
+                          'Until you tap Resume, the site won\'t dispatch it (schedule, incidents, return to standby, remote control)',
+                          '点「恢复」前，站点不会再派出此机器人（日程、事件、回待命点、遥控均不派）'),
                       style: NwText.bodySmall.copyWith(color: c.textSecondary)),
                 ])),
                 if (dispatch) ...[
@@ -573,7 +565,7 @@ class _SiteRobotPageState extends State<SiteRobotPage> {
                     label: tr('Position', '定位'),
                     value: locText((v!['loc'] as Map).cast<String, dynamic>()))
                 : NwInfoTile(
-                    icon: Icons.location_on_rounded, label: tr('Position', '定位'), value: tr('Not reported', '没上报'))),
+                    icon: Icons.location_on_rounded, label: tr('Position', '定位'), value: tr('Not reported', '未上报'))),
       ])),
       if (v?['nav'] is Map && navText((v!['nav'] as Map).cast<String, dynamic>()).isNotEmpty)
         Padding(
@@ -723,7 +715,7 @@ class _Devices extends StatelessWidget {
     return Column(key: listKey, crossAxisAlignment: CrossAxisAlignment.start, children: [
       Text(
           view['stale'] == true
-              ? tr('Devices (not updated for a while)', '设备（好一会儿没更新了）')
+              ? tr('Devices (stale)', '设备（长时间未更新）')
               : tr('Devices', '设备'),
           style: NwText.titleSmall.copyWith(color: view['stale'] == true ? c.warning : c.text)),
       for (final d in items)

@@ -30,7 +30,7 @@ void main() {
     expect(rtkText(<String, dynamic>{'fix': 'fixed', 'sats': 22, 'std_h_m': 0.012, 'age_s': 1.2}),
         'RTK：固定解，卫星 22，精度约 1 cm，改正 1 秒前');
     expect(rtkText(<String, dynamic>{'fix': 'single', 'sats': 8, 'std_h_m': 2.4, 'stale': true}),
-        'RTK：单点，卫星 8，精度约 2.4 m，（好一会儿没更新了）');
+        'RTK：单点，卫星 8，精度约 2.4 m，（长时间未更新）');
     expect(rtkText(<String, dynamic>{'fix': 'none'}), 'RTK：没有定位');
     // W40：双天线（UM982）报朝向
     expect(rtkText(<String, dynamic>{'fix': 'fixed', 'sats': 30, 'heading_deg': 87.6}),
@@ -47,10 +47,10 @@ void main() {
     Map<String, dynamic> c(String d) => {'tasks': {'head': {'direction': d}}};
     expect(headText(null), '');
     expect(headText(c('head')), '');
-    expect(headText(c('tail')), '头尾：机器人尾为前（后雷达没标定，不能自己走，遥控照常）');
-    expect(headText(c('unknown')), '头尾：不知道（不能自己走，遥控照常）');
+    expect(headText(c('tail')), '朝向识别：机器人尾为前（后雷达未标定，不能自主行走，可遥控）');
+    expect(headText(c('unknown')), '朝向识别：未知（不能自主行走，可遥控）');
     expect(headText({'tasks': {'head': {'direction': 'tail', 'autonomy': true}}}),
-        '头尾：机器人尾为前（后雷达标过，照常自己走）');
+        '朝向识别：机器人尾为前（后雷达已标定，可自主行走）');
   });
 
   test('避障说人话（W11）', () {
@@ -58,33 +58,33 @@ void main() {
     expect(obstaclesText(null), '');
     expect(obstaclesText(<String, dynamic>{'tasks': <String, dynamic>{}}), '');
     expect(obstaclesText(c({'state': 'ok', 'rear': true})), '避障：正常');
-    expect(obstaclesText(c({'state': 'ok', 'rear': false})), '避障：正常，后雷达没用上');
+    expect(obstaclesText(c({'state': 'ok', 'rear': false})), '避障：正常，后雷达未启用');
     expect(obstaclesText(c({'state': 'extrinsic_bad', 'rear': false, 'reason': '雷达离地 2.9 m'})),
-        '避障：外参自检没过（不派会自己走的任务）：雷达离地 2.9 m');
-    expect(obstaclesText(c({'state': 'lost', 'rear': false})), '避障：感知断了（不派会自己走的任务）');
+        '避障：外参自检未通过（暂停自主任务）：雷达离地 2.9 m');
+    expect(obstaclesText(c({'state': 'lost', 'rear': false})), '避障：感知中断（暂停自主任务）');
   });
 
   test('配了定位器的机器人：设位置被拒的原因说人话（W09a）', () {
-    expect(ackReasonText('localizer_unavailable: 定位器没连上'), '定位器没连上或没回：定位器没连上');
-    expect(ackReasonText('localizer_refused: 初值离地图太远'), '定位器没接这个位置：初值离地图太远');
+    expect(ackReasonText('localizer_unavailable: 定位器没连上'), '定位服务未连接或无响应：定位器没连上');
+    expect(ackReasonText('localizer_refused: 初值离地图太远'), '定位服务拒绝了该位置：初值离地图太远');
   });
 
   test('配了定位器的机器人：定位状态按来源说人话（W09a）', () {
     Map<String, dynamic> l(bool a, String reason, String source, [double s = 0.12]) =>
         {'localizer': 'bridge', 'anchored': a, 'reason': reason, 'source': source, 'sigma_m': s};
-    expect(locText(l(false, '定位器没连上', 'localizer')), '定位：定位器还没给出位置 —— 定位器没连上');
+    expect(locText(l(false, '定位器没连上', 'localizer')), '定位：定位服务尚未给出位置 — 定位器没连上');
     expect(locText(l(true, '定位器跟里程对不上(位移差 0.54 m),等它稳下来', 'scan_match')),
         '定位不可信：定位器跟里程对不上(位移差 0.54 m),等它稳下来');
     expect(locText(l(true, '', 'scan_match')), '定位：点云匹配，偏差约 0.1 m');
     expect(locText(l(true, '', 'rtk', 0.03)), '定位：RTK，偏差约 0.0 m');
     expect(locText(l(true, '', 'fused')), '定位：融合，偏差约 0.1 m');
-    expect(locText(l(true, '', 'dead_reckoning', 0.3)), '定位：里程推算中（定位器一时没来），偏差约 0.3 m');
+    expect(locText(l(true, '', 'dead_reckoning', 0.3)), '定位：里程推算中（定位服务暂无数据），偏差约 0.3 m');
   });
 
   test('定位状态的人话', () {
     expect(locText(null), '');
     expect(locText({'anchored': false, 'reason': '换了地图,要重新设位置', 'source': 'odom_anchor'}),
-        startsWith('定位：没设位置'));
+        startsWith('定位：未设置位置'));
     expect(locText({'anchored': true, 'reason': '', 'sigma_m': 0.64, 'source': 'odom_anchor'}),
         '定位：偏差约 0.6 m');
     expect(locText({'anchored': true, 'reason': '设位置之后走了 8.2 m', 'sigma_m': 2.02}),
@@ -124,7 +124,7 @@ void main() {
     await t.pumpAndSettle();
     await t.tap(find.byKey(const Key('reloc-home')));
     await t.pumpAndSettle();
-    await t.tap(find.text('算了'));
+    await t.tap(find.text('取消'));
     await t.pumpAndSettle();
     expect(api.calls.where((c) => c.startsWith('relocalize')), isEmpty);
   });
@@ -175,7 +175,7 @@ void main() {
   test('拒收的原因说人话', () {
     expect(ackReasonText('moving'), contains('停'));
     expect(ackReasonText('no_home'), contains('原点'));
-    expect(ackReasonText('map_mismatch'), contains('图'));
+    expect(ackReasonText('map_mismatch'), contains('换图'));
   });
 
   testWidgets('W41 让机器人自己找：机器人报了能力才有这一项；点了发 global', (t) async {

@@ -64,7 +64,7 @@ class _ClipPageState extends State<_ClipPage> {
         _c.play();
       }
     }, onError: (Object e) {
-      if (mounted) setState(() => _error = tr("Can't play: $e", '放不了：$e'));
+      if (mounted) setState(() => _error = tr("Can't play: $e", '无法播放：$e'));
     });
   }
 
@@ -173,8 +173,8 @@ class _SiteRecordingsPageState extends State<SiteRecordingsPage> {
         setState(() {
           _loading = false;
           _msg = e.status == 404
-              ? tr('Recording is not enabled on this site', '这个站点没开录像')
-              : tr("Can't load recordings: $e", '录像读不到：$e');
+              ? tr('Recording is not enabled on this site', '此站点未启用录像')
+              : tr("Can't load recordings: $e", '无法加载录像：$e');
         });
       }
     }
@@ -199,9 +199,9 @@ class _SiteRecordingsPageState extends State<SiteRecordingsPage> {
       setState(() => _msg = '');
       await widget.player.play(context, bytes, '${r['camera']} · ${clipTime((r['start_ms'] as num).toInt())}');
     } on SiteError catch (e) {
-      if (mounted) setState(() => _msg = tr("Can't download: $e", '下载不了：$e'));
+      if (mounted) setState(() => _msg = tr("Can't download: $e", '下载失败：$e'));
     } on Exception catch (e) {
-      if (mounted) setState(() => _msg = tr("Can't play: $e", '放不了：$e'));
+      if (mounted) setState(() => _msg = tr("Can't play: $e", '无法播放：$e'));
     } finally {
       if (mounted) setState(() => _busyId = null);
     }
@@ -215,11 +215,11 @@ class _SiteRecordingsPageState extends State<SiteRecordingsPage> {
       await _load();
       if (mounted) {
         setState(() => _msg = want
-            ? tr('Marked to keep: not deleted after 30 days', '标了留着：过了 30 天也不删')
-            : tr('No longer kept: deleted after 30 days as usual', '不留了：30 天后照常删'));
+            ? tr('Marked to keep: not deleted after 30 days', '已标记保留：超过 30 天也不删除')
+            : tr('No longer kept: deleted after 30 days as usual', '已取消保留：30 天后正常删除'));
       }
     } on SiteError catch (e) {
-      if (mounted) setState(() => _msg = tr("Couldn't change the keep mark: $e", '没标上：$e'));
+      if (mounted) setState(() => _msg = tr("Couldn't change the keep mark: $e", '标记失败：$e'));
     }
   }
 
@@ -252,7 +252,7 @@ class _SiteRecordingsPageState extends State<SiteRecordingsPage> {
               padding: const EdgeInsets.only(bottom: Nw.s8),
               child: Text(
                   tr('Alarm time: ${clipTime(around)} (times are by the robot clock)',
-                      '告警那一刻：${clipTime(around)}（时刻是机器人的钟）'),
+                      '告警时刻：${clipTime(around)}（按机器人时钟）'),
                   style: NwText.bodyMedium.copyWith(color: c.text))),
         if (_msg.isNotEmpty)
           Padding(
@@ -263,7 +263,7 @@ class _SiteRecordingsPageState extends State<SiteRecordingsPage> {
           Text(
               tr(
                   'No recordings in this period (recording is off on the robot, not uploaded yet, or deleted after 30 days)',
-                  '这段时间没有录像（机器人没开录像、还没传上来，或者过了 30 天删了）'),
+                  '此时段没有录像（机器人未开录像、尚未上传，或已超过 30 天删除）'),
               style: NwText.bodyMedium.copyWith(color: c.textSecondary)),
         // 一段一行，装在一张卡里；盖住告警那一刻的那一段有底色（selected）
         if (_rows.isNotEmpty)
@@ -282,7 +282,7 @@ class _SiteRecordingsPageState extends State<SiteRecordingsPage> {
                         : const Icon(Icons.play_circle_outline_rounded),
                     title: Text('${clipTime((r['start_ms'] as num).toInt())} · ${r['camera']}'),
                     subtitle: Text('${((r['bytes'] as num) / 1048576).toStringAsFixed(1)} MB'
-                        '${r['keep'] == 1 ? tr(' · kept', ' · 留着') : ''}'),
+                        '${r['keep'] == 1 ? tr(' · kept', ' · 已保留') : ''}'),
                     selected: around != null &&
                         (r['start_ms'] as num) <= around &&
                         around < (r['start_ms'] as num) + 60000,
@@ -291,8 +291,8 @@ class _SiteRecordingsPageState extends State<SiteRecordingsPage> {
                         ? IconButton(
                             key: SiteRecordingsPage.keepKey((r['id'] as num).toInt()),
                             tooltip: r['keep'] == 1
-                                ? tr('Stop keeping', '不留了')
-                                : tr('Keep (not deleted after 30 days)', '留着（过了 30 天也不删）'),
+                                ? tr('Stop keeping', '取消保留')
+                                : tr('Keep (not deleted after 30 days)', '保留（超过 30 天也不删除）'),
                             icon: Icon(r['keep'] == 1 ? Icons.bookmark_rounded : Icons.bookmark_border_rounded),
                             onPressed: () => _keep(r))
                         : null,

@@ -51,7 +51,7 @@ describe("布置 → 摄像头", () => {
     const pl = { map_id: "home", map_version: "3", x: 1, y: 1, yaw: 0, fov_deg: 90 };
     const { container: c } = render(<CamerasTab {...props([cam({ placement: pl })])} />);
     fireEvent.click(btn(c, "cam1"));
-    fireEvent.click(btn(c, "从图上拿掉"));
+    fireEvent.click(btn(c, "从地图移除"));
     await save!();
     expect(posted.find((p) => p.url === "/api/admin/cameras")!.body.placement).toBeNull();
   });
@@ -70,7 +70,7 @@ describe("布置 → 摄像头", () => {
     }) as typeof fetch);
     const r = render(<CamerasTab {...props([cam({ warnings: [{ code: "zone_unmapped", text: "x" }] })])} say={(s: string) => said.push(s)} />);
     expect(r.container.querySelector('.ly-list [data-warning="zone_unmapped"]')).not.toBeNull();
-    fireEvent.click(btn(r.container, "加一台摄像头"));
+    fireEvent.click(btn(r.container, "添加摄像头"));
     const ins = Array.from(document.querySelectorAll(".modal input:not([type=checkbox]):not([type=password])")) as HTMLInputElement[];
     fireEvent.input(ins[0], { target: { value: "cam2" } });
     fireEvent.input(ins[1], { target: { value: "http://10.0.0.6" } });

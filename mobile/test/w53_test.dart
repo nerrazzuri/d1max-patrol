@@ -128,7 +128,7 @@ void main() {
       await t.tap(find.byKey(patrolSendKey));
       await t.pumpAndSettle();
       expect(api.calls.where((c) => c.startsWith('patrol ')), isNotEmpty);
-      expect(find.textContaining('排上了'), findsOneWidget);
+      expect(find.textContaining('已排队'), findsOneWidget);
     });
 
     testWidgets('被拒（叫停了）：弹框说原因，「恢复」就恢复', (t) async {
@@ -143,7 +143,7 @@ void main() {
       await t.tap(find.byKey(patrolSendKey));
       await t.pumpAndSettle();
       expect(find.byKey(refusalDialogKey), findsOneWidget);
-      expect(find.textContaining('叫停了'), findsWidgets);
+      expect(find.textContaining('叫停'), findsWidgets);
       await t.tap(find.byKey(refusalActionKey));
       await t.pumpAndSettle();
       expect(api.calls, contains('resume A'));
@@ -159,7 +159,7 @@ void main() {
       await t.pumpAndSettle();
       await t.tap(find.byKey(patrolSendKey));
       await t.pumpAndSettle();
-      expect(find.textContaining('机器人没接'), findsOneWidget);
+      expect(find.textContaining('机器人未接受'), findsOneWidget);
       expect(find.textContaining('派出去了'), findsNothing);
     });
 
@@ -193,7 +193,7 @@ void main() {
       await t.pumpWidget(MaterialApp(home: AdminHomeTab(api: api, switchTab: (_) {})));
       await t.pumpAndSettle();
       expect(find.byKey(AdminHomeTab.todoKey), findsOneWidget);
-      expect(find.textContaining('m1:3 的禁行区还没确认'), findsOneWidget);
+      expect(find.textContaining('m1:3 的禁行区未确认'), findsOneWidget);
       await t.tap(find.byKey(SetupChecklist.skipKey('zones')));
       await t.pumpAndSettle();
       expect(api.calls, contains('setGuide skip'));
@@ -398,10 +398,10 @@ void main() {
 
     testWidgets('常见问题按角色：保安没有「怎么加账号」，管理员有', (t) async {
       await t.pumpWidget(const MaterialApp(home: HelpPage(role: 'guard')));
-      expect(find.text('怎么加账号'), findsNothing);
-      expect(find.text('报警来了怎么办'), findsOneWidget);
+      expect(find.text('如何添加账号'), findsNothing);
+      expect(find.text('收到报警如何处理'), findsOneWidget);
       await t.pumpWidget(const MaterialApp(home: HelpPage(role: 'admin')));
-      expect(find.text('怎么加账号'), findsOneWidget);
+      expect(find.text('如何添加账号'), findsOneWidget);
     });
   });
 }

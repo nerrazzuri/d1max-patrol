@@ -135,10 +135,10 @@ class _SiteWatchPageState extends State<SiteWatchPage> {
         _alertsAt = widget.now();
       });
     } on SiteError catch (e) {
-      if (mounted) setState(() => _alertsError = tr("Can't load alarms: $e", '告警读不到：$e'));
+      if (mounted) setState(() => _alertsError = tr("Can't load alarms: $e", '无法加载告警：$e'));
     } on FormatException catch (e) {
       // 读不懂的名单不许当成「没有 P1」：那是这一屏能说的最坏的假话。
-      if (mounted) setState(() => _alertsError = tr("Can't read the alarm list: ${e.message}", '告警读不懂：${e.message}'));
+      if (mounted) setState(() => _alertsError = tr("Can't read the alarm list: ${e.message}", '无法解析告警：${e.message}'));
     }
   }
 
@@ -151,9 +151,9 @@ class _SiteWatchPageState extends State<SiteWatchPage> {
         _summaryError = null;
       });
     } on SiteError catch (e) {
-      if (mounted) setState(() => _summaryError = tr("Can't load the summary: $e", '汇总读不到：$e'));
+      if (mounted) setState(() => _summaryError = tr("Can't load the summary: $e", '无法加载汇总：$e'));
     } on FormatException catch (e) {
-      if (mounted) setState(() => _summaryError = tr("Can't read the summary: ${e.message}", '汇总读不懂：${e.message}'));
+      if (mounted) setState(() => _summaryError = tr("Can't read the summary: ${e.message}", '无法解析汇总：${e.message}'));
     }
   }
 
@@ -163,7 +163,7 @@ class _SiteWatchPageState extends State<SiteWatchPage> {
     } on SiteError catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text(tr('$what failed: $e', '$what 没成：$e'))));
+            .showSnackBar(SnackBar(content: Text(tr('$what failed: $e', '$what 失败：$e'))));
       }
     }
     await _loadAlerts();
@@ -189,7 +189,7 @@ class _SiteWatchPageState extends State<SiteWatchPage> {
     final c = Nw.of(context);
     final can = widget.api.session?.canHandleAlerts ?? false;
     final state = <String>[
-      if (a.ackedBy.isNotEmpty) tr('Acknowledged by ${a.ackedBy}', '${a.ackedBy} 已确认') else tr('Unacknowledged', '还没有人确认'),
+      if (a.ackedBy.isNotEmpty) tr('Acknowledged by ${a.ackedBy}', '${a.ackedBy} 已确认') else tr('Unacknowledged', '无人确认'),
       if (a.escalated > 0) tr('Escalated to ${a.channel}', '已升级到 ${a.channel}'),
       if (a.count > 1) tr('${a.count} times', '${a.count} 次'),
     ].join(' · ');
@@ -251,7 +251,7 @@ class _SiteWatchPageState extends State<SiteWatchPage> {
                               size: NwButtonSize.large,
                               fullWidth: true,
                               icon: Icons.warning_rounded,
-                              label: tr('RESPOND TO INCIDENT', '去处理'),
+                              label: tr('Respond', '去处理'),
                               onPressed: () => _openScene(a))
                           : NwButton(
                               buttonKey: SiteWatchPage.viewKey(a.key),
@@ -264,7 +264,7 @@ class _SiteWatchPageState extends State<SiteWatchPage> {
     });
   }
 
-  String _num(Object? v, String unit, String why) => v == null ? tr('Unknown ($why)', '不知道（$why）') : '$v$unit';
+  String _num(Object? v, String unit, String why) => v == null ? tr('Unknown ($why)', '未知（$why）') : '$v$unit';
 
   int? _pct(double? r) => r == null ? null : (r * 100).round();
 
@@ -277,37 +277,36 @@ class _SiteWatchPageState extends State<SiteWatchPage> {
   /// 站点自己的备份（W00c5d）。
   String _backupText(SiteWatchSummary s) {
     final b = s.siteBackup;
-    if (b == null || b['configured'] != true) return tr('Backup: ${s.siteWhy['backup'] ?? 'not configured'}', '备份：${s.siteWhy['backup'] ?? '没配'}');
+    if (b == null || b['configured'] != true) return tr('Backup: ${s.siteWhy['backup'] ?? 'not configured'}', '备份：${s.siteWhy['backup'] ?? '未配置'}');
     final ok = (b['last_ok_ms'] as num?)?.toInt();
     final ago = ok == null ? '' : _ago(((s.nowMs - ok) ~/ 1000).clamp(0, 1 << 31));
     final when = ok == null
-        ? tr('never succeeded', '还没成功过')
-        : tr('last succeeded $ago ago', '上次成功在 $ago前');
+        ? tr('never succeeded', '从未成功')
+        : tr('last succeeded $ago ago', '上次成功于 $ago前');
     final err = '${b['error'] ?? ''}';
     return tr('Backup: $when${b['stale'] == true ? ' (overdue)' : ''}${err.isEmpty ? '' : '; $err'}',
-        '备份：$when${b['stale'] == true ? '（过期了）' : ''}${err.isEmpty ? '' : '；$err'}');
+        '备份：$when${b['stale'] == true ? '（已过期）' : ''}${err.isEmpty ? '' : '；$err'}');
   }
 
   Widget _robotTile(SiteWatchRobot r) {
     final lines = <String>[
       r.online
           ? (r.fresh ? tr('Online', '在线') : tr('Online (status out of date)', '在线（状态过期）'))
-          : tr('Offline', '掉线'),
+          : tr('Offline', '离线'),
       tr('Battery ${_num(r.batteryPct?.toStringAsFixed(0), '%', r.whyFor('battery_pct'))}',
           '电量 ${_num(r.batteryPct?.toStringAsFixed(0), '%', r.whyFor('battery_pct'))}'),
       tr('Clock offset ${_num(r.clockSkewS?.toStringAsFixed(1), ' s', r.whyFor('clock_skew_s'))}',
-          '钟偏 ${_num(r.clockSkewS?.toStringAsFixed(1), ' 秒', r.whyFor('clock_skew_s'))}'),
+          '时钟偏差 ${_num(r.clockSkewS?.toStringAsFixed(1), ' 秒', r.whyFor('clock_skew_s'))}'),
       r.alerts == null
-          ? tr('Open alarms: unknown (not reported by the site)', '未解决告警 不知道（站点没给）')
+          ? tr('Open alarms: unknown (not reported by the site)', '未解决告警：未知（站点未提供）')
           : tr('Open P1 ${r.alerts!['P1']} · P2 ${r.alerts!['P2']} · P3 ${r.alerts!['P3']}',
               '未解决 P1 ${r.alerts!['P1']} · P2 ${r.alerts!['P2']} · P3 ${r.alerts!['P3']}'),
       tr('Disk used ${_num(_pct(r.diskUsedRatio), '%', r.whyFor('disk_used_ratio'))}',
-          '盘水位 ${_num(_pct(r.diskUsedRatio), '%', r.whyFor('disk_used_ratio'))}'),
+          '磁盘占用 ${_num(_pct(r.diskUsedRatio), '%', r.whyFor('disk_used_ratio'))}'),
       tr(
           'Evidence backlog ${_num(r.uploadBacklog, ' files', r.whyFor('upload_backlog'))}'
               '${(r.oldestBacklogS ?? 0) > 0 ? ' (oldest waiting ${_ago(r.oldestBacklogS!)})' : ''}',
-          '证据积压 ${_num(r.uploadBacklog, ' 个文件', r.whyFor('upload_backlog'))}'
-              '${(r.oldestBacklogS ?? 0) > 0 ? '（最老的等了 ${_ago(r.oldestBacklogS!)}）' : ''}'),
+          '证据积压 ${_num(r.uploadBacklog, ' 个文件', r.whyFor('upload_backlog'))}${(r.oldestBacklogS ?? 0) > 0 ? '（最早的已等待 ${_ago(r.oldestBacklogS!)}）' : ''}'),
     ];
     final c = Nw.of(context);
     final up = r.online && r.fresh;
@@ -329,7 +328,7 @@ class _SiteWatchPageState extends State<SiteWatchPage> {
                       dot: true,
                       label: up
                           ? tr('ONLINE', '在线')
-                          : (r.online ? tr('OUT OF DATE', '状态过期') : tr('OFFLINE', '掉线')),
+                          : (r.online ? tr('OUT OF DATE', '状态过期') : tr('OFFLINE', '离线')),
                       tone: up ? nwToneOf('online') : (r.online ? NwTone.neutral : nwToneOf('offline'))),
                 ]),
                 subtitle: Text(lines.join('\n'), style: NwText.bodySmall.copyWith(color: c.textSecondary)),
@@ -354,14 +353,14 @@ class _SiteWatchPageState extends State<SiteWatchPage> {
       if (s.scheduleOk != null)
         NwHealthChip(
             icon: s.scheduleOk! ? Icons.event_available_rounded : Icons.event_busy_rounded,
-            label: s.scheduleOk! ? tr('Schedule OK', '排程正常') : tr('Schedule failed', '排程没办成'),
+            label: s.scheduleOk! ? tr('Schedule OK', '排程正常') : tr('Schedule failed', '排程执行失败'),
             bad: !s.scheduleOk!),
       if (backup)
         NwHealthChip(
             icon: stale || failing ? Icons.sync_problem_rounded : Icons.cloud_done_rounded,
             label: stale
-                ? tr('Backup overdue', '备份过期了')
-                : (failing ? tr('Backup failing', '备份没成') : tr('Backup OK', '备份正常')),
+                ? tr('Backup overdue', '备份已过期')
+                : (failing ? tr('Backup failing', '备份失败') : tr('Backup OK', '备份正常')),
             bad: stale || failing),
     ];
   }
@@ -388,13 +387,13 @@ class _SiteWatchPageState extends State<SiteWatchPage> {
                 icon: Icons.sync_problem_rounded,
                 text: tr(
                     'Live updates lost, reconnecting. The figures below may be out of date; pull down to refresh',
-                    '实时更新断了，正在重连；下面的数可能是旧的，下拉可以再问一次'))),
+                    '实时更新已断开，正在重连；以下数据可能已过时，可下拉刷新'))),
         gap8,
       ],
       Text(
           _alertsAt == null
-              ? tr('Alarms not loaded yet', '告警还没读到过')
-              : tr('Alarms loaded at ${_hms(_alertsAt!)}; pull down to refresh', '告警读于 ${_hms(_alertsAt!)}；下拉可以再问一次'),
+              ? tr('Alarms not loaded yet', '告警尚未加载')
+              : tr('Alarms loaded at ${_hms(_alertsAt!)}; pull down to refresh', '告警更新于 ${_hms(_alertsAt!)}；可下拉刷新'),
           key: SiteWatchPage.loadedAtKey,
           style: NwText.bodySmall.copyWith(color: c.textSecondary)),
       gap8,
@@ -402,14 +401,14 @@ class _SiteWatchPageState extends State<SiteWatchPage> {
       gap24,
     ];
     final incidents = <Widget>[
-      NwSectionLabel(tr('Act now (P1)', '要立刻动身的（P1）')),
+      NwSectionLabel(tr('Act now (P1)', '需立即处理（P1）')),
       gap8,
       if (_alertsError != null)
         KeyedSubtree(
             key: SiteWatchPage.alertsErrorKey, child: NwNotice(text: _alertsError!, tone: NwTone.error))
       else if (_alertsAt == null)
         // 还没读到过：**不许说「没有」** —— 那是这一屏能说的最坏的假话。
-        line(SiteWatchPage.p1LoadingKey, tr('Not loaded yet', '还没读到'))
+        line(SiteWatchPage.p1LoadingKey, tr('Not loaded yet', '未加载'))
       else if (p1.isEmpty)
         line(SiteWatchPage.p1NoneKey, tr('None', '没有'), icon: Icons.check_circle_rounded, iconColor: c.success)
       else
@@ -448,10 +447,10 @@ class _SiteWatchPageState extends State<SiteWatchPage> {
                 subtitle: Text(
                     '${s.scheduleOk == null
                         ? tr('Schedule: ${s.siteWhy['schedule_ok'] ?? 'unknown'}',
-                            '排程：${s.siteWhy['schedule_ok'] ?? '不知道'}')
+                            '排程：${s.siteWhy['schedule_ok'] ?? '未知'}')
                         : s.scheduleOk!
                             ? tr('Schedule OK', '排程正常')
-                            : tr('Schedule failed: ${s.scheduleError}', '排程没办成：${s.scheduleError}')}\n${_backupText(s)}',
+                            : tr('Schedule failed: ${s.scheduleError}', '排程执行失败：${s.scheduleError}')}\n${_backupText(s)}',
                     style: NwText.bodySmall.copyWith(color: c.textSecondary)))),
       ],
     ];
@@ -469,7 +468,7 @@ class _SiteWatchPageState extends State<SiteWatchPage> {
         NwHeader(
             key: SiteWatchPage.headerKey,
             overline: tr('Nexus Warden', 'Nexus Warden'),
-            title: widget.title ?? tr('Watch', '值守'),
+            title: widget.title ?? tr('Duty', '值守'),
             compact: MediaQuery.sizeOf(context).height < SiteWatchPage.compactBelow),
         Expanded(
           // 宽屏（桌面版、值守大屏，W15）：告警一栏、每台狗一栏并排，一眼都看得见；窄的照旧一栏往下排。

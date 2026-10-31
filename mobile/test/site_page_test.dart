@@ -1091,7 +1091,7 @@ void main() {
     final api = FakeApi('guard', robotView: v)..robotsOverride = <Map<String, dynamic>>[v];
     await t.pumpWidget(MaterialApp(home: SiteRobotsPage(api: api)));
     await t.pumpAndSettle();
-    expect(find.textContaining('只许手动'), findsOneWidget);
+    expect(find.textContaining('仅限手动'), findsOneWidget);
     expect(find.textContaining('看见 2 人'), findsOneWidget);
   });
 
@@ -1101,7 +1101,7 @@ void main() {
     final guard = FakeApi('guard', robotView: held);
     await openRobot(t, guard);
     expect(find.byKey(const Key('robot-held')), findsOneWidget);
-    expect(find.textContaining('被 olga 叫停了'), findsOneWidget);
+    expect(find.textContaining('已被 olga 叫停'), findsOneWidget);
     expect(find.textContaining('已叫停'), findsOneWidget);
     await t.tap(find.byKey(const Key('btn-resume')));
     await t.pumpAndSettle();
@@ -1125,14 +1125,14 @@ void main() {
     expect(find.byKey(const Key('btn-abort')), findsOneWidget);
     await t.tap(find.byKey(const Key('btn-abort')));
     await t.pumpAndSettle();
-    expect(find.textContaining('它现在没在跑任务'), findsOneWidget);
+    expect(find.textContaining('机器人当前无任务'), findsOneWidget);
     expect(api.calls.where((c) => c.startsWith('abort ')), isEmpty);
   });
 
   testWidgets('打开就是站点列表：没有直连入口（W00c5e）', (t) async {
     await t.pumpWidget(PatrolApp(siteStore: MemorySiteStore()));
     await t.pumpAndSettle();
-    expect(find.text('还没有站点。右下角添加。'), findsOneWidget);
+    expect(find.text('还没有站点，点右下角添加。'), findsOneWidget);
     expect(find.byKey(const Key('mode-direct')), findsNothing);
     expect(find.textContaining('直连'), findsNothing);
   });
@@ -1243,7 +1243,7 @@ void main() {
     await t.enterText(find.byKey(const Key('site-password')), 'pw');
     await t.tap(find.text('登录'));
     await t.pumpAndSettle();
-    expect(find.text('填你的账号'), findsOneWidget, reason: '没填账号不登');
+    expect(find.text('请输入账号'), findsOneWidget, reason: '没填账号不登');
     await t.enterText(find.byKey(const Key('site-account')), 'gina');
     await t.tap(find.text('登录'));
     await t.pumpAndSettle();
@@ -1270,7 +1270,7 @@ void main() {
     await t.enterText(find.byKey(const Key('site-password')), 'pw');
     await t.tap(find.text('登录'));
     await t.pumpAndSettle();
-    expect(find.text('还没有站点。右下角添加。'), findsNothing);
+    expect(find.text('还没有站点，点右下角添加。'), findsNothing);
     expect(find.textContaining('重新登录'), findsOneWidget);
   });
 
@@ -1302,7 +1302,7 @@ void main() {
     await t.tap(find.text('保存'));
     await t.pumpAndSettle();
     expect(store.sites, isEmpty);
-    expect(find.textContaining('没保存'), findsOneWidget);
+    expect(find.textContaining('未保存'), findsOneWidget);
   });
 
   testWidgets('站点文件坏了：说出来，不给添加（免得覆盖掉其余站点）；能删站点', (t) async {
@@ -1344,7 +1344,7 @@ class _FailingApi extends FakeApi {
 
 class _BrokenStore implements SiteStore {
   @override
-  Future<List<SiteEntry>> load() async => throw const FormatException('站点文件的顶层应该是个数组');
+  Future<List<SiteEntry>> load() async => throw const FormatException('站点文件格式错误（顶层应为数组）');
   @override
   Future<void> save(List<SiteEntry> s) async => throw StateError('不许写');
 

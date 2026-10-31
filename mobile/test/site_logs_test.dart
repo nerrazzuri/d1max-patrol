@@ -42,7 +42,7 @@ void main() {
     await t.pumpAndSettle();
     expect(api.calls, contains('procLog A slam'));
     expect(find.textContaining('[slam_toolbox] 回环'), findsOneWidget);
-    expect(find.textContaining('只显示最后'), findsOneWidget, reason: '前面还有没给的，要说');
+    expect(find.textContaining('仅显示最后'), findsOneWidget, reason: '前面还有没给的，要说');
     final n = api.calls.where((c) => c == 'procLog A slam').length;
     await t.tap(find.byKey(SiteProcLogPage.refreshKey));
     await t.pumpAndSettle();
@@ -65,12 +65,12 @@ void main() {
     final api = FakeApi('admin', robotView: _view())..procLogRows = <Map<String, dynamic>>[];
     await t.pumpWidget(MaterialApp(home: SiteProcLogsPage(api: api, robotId: 'A')));
     await t.pumpAndSettle();
-    expect(find.textContaining('还没有日志'), findsOneWidget);
+    expect(find.textContaining('暂无日志'), findsOneWidget);
     api.procLogError = const SiteError(404, '机器人没给:no_such_log');
     await t.pumpWidget(MaterialApp(
         home: SiteProcLogPage(key: UniqueKey(), api: api, robotId: 'A', name: 'slam')));
     await t.pumpAndSettle();
-    expect(find.textContaining('取不到'), findsOneWidget);
+    expect(find.textContaining('无法加载'), findsOneWidget);
     expect(find.textContaining('no_such_log'), findsOneWidget);
   });
 

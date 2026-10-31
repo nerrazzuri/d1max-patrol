@@ -163,7 +163,7 @@ class _SiteListPageState extends State<SiteListPage> {
       // body 可以只剩零高，这样摆不溢出。
       appBar: nwHeaderBar(
           context,
-          NwHeader(overline: 'Nexus Warden', title: tr('Site Selection', '选择站点'), trailing: [
+          NwHeader(overline: 'Nexus Warden', title: tr('Select site', '选择站点'), trailing: [
             // 语言（App V2）：英文为主，中文可选。只在这一页能换 —— 换了整个 app 重建。
             PopupMenuButton<AppLang>(
                 key: const Key('lang-switch'),
@@ -205,7 +205,7 @@ class _SiteListPageState extends State<SiteListPage> {
                                 constraints: const BoxConstraints(maxWidth: _maxWidth - 2 * Nw.s24),
                                 child: NwButton(
                                     buttonKey: const Key('site-add'),
-                                    label: tr('Add New Station', '添加新站点'),
+                                    label: tr('Add site', '添加站点'),
                                     icon: Icons.qr_code_scanner_rounded,
                                     variant: NwButtonVariant.outline,
                                     fullWidth: true,
@@ -221,7 +221,7 @@ class _SiteListPageState extends State<SiteListPage> {
                       child: Column(mainAxisSize: MainAxisSize.min, children: [
                         Icon(Icons.error_outline_rounded, size: 48, color: c.error),
                         const SizedBox(height: Nw.s16),
-                        Text(tr("Can't read the site list: $_loadError", '站点列表读不出来：$_loadError'),
+                        Text(tr("Can't read the site list: $_loadError", '无法读取站点列表：$_loadError'),
                             key: const Key('site-load-error'),
                             textAlign: TextAlign.center,
                             style: NwText.bodyMedium.copyWith(color: c.text)),
@@ -230,9 +230,9 @@ class _SiteListPageState extends State<SiteListPage> {
                   ? NwEmpty(
                       icon: Icons.domain_add_rounded,
                       text: tr('No sites yet. Add one with the button at the bottom right.',
-                          '还没有站点。右下角添加。'),
+                          '还没有站点，点右下角添加。'),
                       hint: tr('Scan the site code shown on the duty console, or enter the address by hand.',
-                          '扫值班台上的配对码，或者手填站点地址。'))
+                          '扫描值班台上的配对码，或手动输入站点地址。'))
                   // 宽屏（桌面版）上卡片不拉满一整行
                   : Align(
                       alignment: Alignment.topCenter,
@@ -263,7 +263,7 @@ class _SiteListPageState extends State<SiteListPage> {
                     value: true,
                     child: Text(
                         tr('Remove (after the certificate is reissued, remove and add again)',
-                            '删掉（证书重签后删了重加）'),
+                            '删除（证书重签后需删除重加）'),
                         style: NwText.bodyMedium.copyWith(color: c.error))),
               ]));
 }
@@ -321,7 +321,7 @@ class _SiteLoginPageState extends State<SiteLoginPage> {
   Future<void> _submit() async {
     if (_busy) return;
     if (_account.text.trim().isEmpty) {
-      setState(() => _error = tr('Enter your account', '填你的账号'));
+      setState(() => _error = tr('Enter your account', '请输入账号'));
       return;
     }
     setState(() {
@@ -337,7 +337,7 @@ class _SiteLoginPageState extends State<SiteLoginPage> {
           _busy = false;
           _error = e is SiteError && e.body['apply'] is String
               ? applyStateText(e.message)
-              : tr("Can't sign in: $e", '登录不了：$e');
+              : tr("Can't sign in: $e", '登录失败：$e');
         });
       }
       return;
@@ -440,7 +440,7 @@ class _SiteLoginPageState extends State<SiteLoginPage> {
                               NwField(
                                   fieldKey: const Key('site-password'),
                                   controller: _pw,
-                                  label: tr('Password', '口令'),
+                                  label: tr('Password', '密码'),
                                   icon: Icons.lock_outline_rounded,
                                   obscureText: true,
                                   autofocus: s.username.isNotEmpty, // 桌面版（W15）：一进来就能打字，回车就登录
@@ -518,11 +518,11 @@ class _AccountApplyPageState extends State<AccountApplyPage> {
   Future<void> _submit() async {
     final name = _account.text.trim(), display = _display.text.trim();
     if (display.isEmpty || name.isEmpty) {
-      setState(() => _error = tr('Fill in your name and an account name', '填你的名字和账号'));
+      setState(() => _error = tr('Enter your name and an account name', '请填写姓名和账号'));
       return;
     }
     if (_pw.text.length < 10) {
-      setState(() => _error = tr('Password needs at least 10 characters', '密码至少 10 个字符'));
+      setState(() => _error = tr('Password needs at least 10 characters', '密码至少 10 位'));
       return;
     }
     setState(() {
@@ -557,22 +557,21 @@ class _AccountApplyPageState extends State<AccountApplyPage> {
                       Icon(Icons.hourglass_top_rounded, size: 48, color: c.primary),
                       const SizedBox(height: Nw.s16),
                       Text(
-                          tr('Sent. An administrator of ${widget.site.name} has to approve it. '
-                              'Once approved, sign in with account "${_account.text.trim()}" and the password you chose.',
-                              '交上去了。要「${widget.site.name}」的管理员批准；批了就用账号「${_account.text.trim()}」和你设的密码登录。'),
+                          tr('Submitted. Waiting for an administrator of ${widget.site.name} to approve. Then sign in as "${_account.text.trim()}".',
+                              '已提交，待「${widget.site.name}」管理员批准。批准后使用账号「${_account.text.trim()}」登录。'),
                           textAlign: TextAlign.center,
                           style: NwText.bodyLarge.copyWith(color: c.text)),
                       const SizedBox(height: Nw.s24),
                       NwButton(label: tr('Back to sign in', '回到登录'), onPressed: () => Navigator.pop(context)),
                     ])
                   : Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-                      Text(tr('The administrator sees your name and decides what you can do.', '管理员看到你的名字，再决定你能做什么。'),
+                      Text(tr('The administrator assigns your role based on your name.', '管理员根据你的姓名分配权限。'),
                           style: NwText.bodyMedium.copyWith(color: c.textSecondary)),
                       const SizedBox(height: Nw.s16),
                       NwField(
                           fieldKey: AccountApplyPage.nameKey,
                           controller: _display,
-                          label: tr('Your name (for the administrator)', '你的名字（给管理员看）'),
+                          label: tr('Your name (shown to the administrator)', '姓名（供管理员识别）'),
                           icon: Icons.badge_outlined),
                       const SizedBox(height: Nw.s16),
                       NwField(

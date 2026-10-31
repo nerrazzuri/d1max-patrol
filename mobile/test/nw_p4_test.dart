@@ -172,7 +172,7 @@ void main() {
       expect(find.text('estate-1:8'), findsOneWidget);
       expect(find.byKey(SiteMapTab.canvasKey), findsOneWidget);
       expect(find.byKey(SiteMapTab.markerKey('A')), findsNothing, reason: '坐标系不是这张图的');
-      expect(find.textContaining('没有机器人在这张图上'), findsOneWidget);
+      expect(find.textContaining('此地图上没有机器人'), findsOneWidget);
       expect(find.descendant(of: find.byKey(SiteMapTab.robotKey('A')), matching: find.textContaining('estate-1:7')),
           findsOneWidget, reason: '它在哪张图上照实写');
       await t.pumpWidget(Container());
@@ -183,7 +183,7 @@ void main() {
       final api = _Api('admin')..mapsBody = <String, dynamic>{'maps': <dynamic>[], 'bags': <dynamic>[]};
       await _pump(t, SiteMapTab(api: api));
       expect(find.byKey(SiteMapTab.emptyKey), findsOneWidget);
-      expect(find.text('站点上还没有图'), findsOneWidget);
+      expect(find.text('站点上还没有地图'), findsOneWidget);
       expect(find.byKey(SiteMapTab.canvasKey), findsNothing);
       expect(api.calls.where((c) => c.startsWith('mapPreview')), isEmpty);
       expect(find.byKey(SiteMapTab.listKey), findsOneWidget);
@@ -194,16 +194,16 @@ void main() {
       _size(t);
       final api = _Api('guard')..mapsError = const SiteError(502, '站点忙');
       await _pump(t, SiteMapTab(api: api));
-      expect(find.textContaining('地图目录拿不到'), findsOneWidget);
+      expect(find.textContaining('无法加载地图目录'), findsOneWidget);
       expect(find.byKey(SiteMapTab.emptyKey), findsNothing);
-      expect(find.text('站点上还没有图'), findsNothing);
+      expect(find.text('站点上还没有地图'), findsNothing);
       api
         ..mapsError = null
         ..previewMissing = true;
       await t.tap(find.byKey(SiteMapTab.refreshKey));
       await t.pumpAndSettle();
       expect(find.textContaining('地图目录拿不到'), findsNothing);
-      expect(find.textContaining('看不了'), findsOneWidget);
+      expect(find.textContaining('无法预览'), findsOneWidget);
       expect(find.textContaining('没有栅格'), findsOneWidget);
       expect(find.byKey(SiteMapTab.canvasKey), findsNothing);
       expect(find.byKey(SiteMapTab.robotKey('A')), findsOneWidget, reason: '机器人的列表照样看');
@@ -362,12 +362,12 @@ void main() {
       expect(cards.map((c) => c.entity), ['站点', 'A', 'B', 'gina', 'alice']);
       final pills = t.widgetList<NwStatusPill>(find.byType(NwStatusPill)).toList();
       expect(pills.map((p) => (p.label, p.tone)), [
-        ('机器人太老', NwTone.warning),
-        ('不清楚', NwTone.neutral),
-        ('太老', NwTone.warning),
+        ('机器人版本过旧', NwTone.warning),
+        ('未知', NwTone.neutral),
+        ('版本过旧', NwTone.warning),
       ]);
       // 小标各在各的格子里
-      for (final (entity, label) in [('A', '机器人太老'), ('B', '不清楚'), ('GINA', '太老')]) {
+      for (final (entity, label) in [('A', '机器人版本过旧'), ('B', '未知'), ('GINA', '版本过旧')]) {
         final card = t.getRect(find.widgetWithText(NwVersionCard, entity));
         expect(card.contains(t.getCenter(find.text(label))), isTrue, reason: '$entity $label');
       }
@@ -380,7 +380,7 @@ void main() {
         addTearDown(() => appLang.value = AppLang.zh);
         await health(t, FakeApi('admin'));
         final labels = t.widgetList<NwSectionLabel>(find.byType(NwSectionLabel)).map((l) => l.text).toList();
-        expect(labels, lang == AppLang.zh ? ['站点状态', '固件与软件', '维护'] : ['Station status', 'Firmware & software', 'Maintenance']);
+        expect(labels, lang == AppLang.zh ? ['站点状态', '固件与软件', '维护'] : ['Site status', 'Firmware & software', 'Maintenance']);
         expect(find.textContaining('重启'), findsNothing);
         expect(find.textContaining(RegExp('reboot', caseSensitive: false)), findsNothing);
         expect(find.byKey(SiteHealthPage.bundleKey), findsOneWidget);

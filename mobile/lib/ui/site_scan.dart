@@ -48,7 +48,7 @@ class _SiteScanPageState extends State<SiteScanPage> {
     return Scaffold(
       backgroundColor: c.bg,
       appBar: nwHeaderBar(
-          context, NwHeader(leading: BackButton(color: c.text), title: tr('Scan site code', '扫配对码'))),
+          context, NwHeader(leading: BackButton(color: c.text), title: tr('Scan site code', '扫描配对码'))),
       body: Stack(
         fit: StackFit.expand,
         children: [
@@ -64,9 +64,9 @@ class _SiteScanPageState extends State<SiteScanPage> {
                   text: error.errorCode == MobileScannerErrorCode.permissionDenied
                       ? tr(
                           'Camera access is off for this app. Allow it in the phone settings, or go back and paste the code.',
-                          '这个 App 没有相机权限。到手机设置里允许，或者返回去粘贴配对码。',
+                          'App 没有相机权限。请在手机设置中允许，或返回粘贴配对码。',
                         )
-                      : tr("The camera didn't start. Go back and paste the code instead.", '相机没起来。返回去粘贴配对码。'),
+                      : tr("The camera didn't start. Go back and paste the code instead.", '相机未能启动，请返回粘贴配对码。'),
                 ),
               ),
             ),
@@ -81,7 +81,7 @@ class _SiteScanPageState extends State<SiteScanPage> {
                 child: Padding(
                   padding: const EdgeInsets.all(Nw.s16),
                   child: Text(
-                    tr('Point the camera at the code on the console: Admin, System.', '对准值班台上的二维码：管理、系统。'),
+                    tr('Point the camera at the code on the console: Admin, System.', '对准值班台「管理 → 系统」中的二维码。'),
                     textAlign: TextAlign.center,
                     style: NwText.bodyMedium.copyWith(color: c.onScrim),
                   ),

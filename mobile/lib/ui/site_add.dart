@@ -120,7 +120,7 @@ class _SiteAddPageState extends State<SiteAddPage> {
   void _save() {
     final bad = checkSiteEntry(_url.text, _fp.text);
     if (bad != null || _name.text.trim().isEmpty) {
-      _say(tr('Not saved: ${bad ?? 'enter a name'}', '没保存：${bad ?? '名字要填'}'));
+      _say(tr('Not saved: ${bad ?? 'enter a name'}', '未保存：${bad ?? '请填写名称'}'));
       return;
     }
     Navigator.pop(
@@ -157,8 +157,8 @@ class _SiteAddPageState extends State<SiteAddPage> {
                 children: [
                   Text(
                     tr(
-                      'Get the site code from the duty console: Admin, System, "Add this site to the phone app".',
-                      '配对码在值班台上：管理、系统、「把这个站点加到手机 App」。',
+                      'The site code is on the duty console under Admin → System → "Add this site to the phone app".',
+                      '配对码位于值班台「管理 → 系统 →「把这个站点加到手机 App」」。',
                     ),
                     style: NwText.bodySmall.copyWith(color: c.textSecondary),
                   ),
@@ -190,8 +190,8 @@ class _SiteAddPageState extends State<SiteAddPage> {
                       padding: const EdgeInsets.only(bottom: Nw.s16),
                       child: NwNotice(
                         text: tr(
-                          'Check that the site name and certificate fingerprint below match the ones on the console, then save.',
-                          '核对下面的站点名和证书指纹跟值班台上显示的一样，再保存。',
+                          'Check that the site name and certificate fingerprint match the duty console, then save.',
+                          '请核对下方站点名称和证书指纹与值班台一致后再保存。',
                         ),
                       ),
                     ),

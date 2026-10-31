@@ -25,30 +25,30 @@ void main() {
   test('站点夹具：一场驱离说人话', () {
     final s = _rows().first;
     expect(deterSessionText(s), startsWith('L2 语音警告（自动，'));
-    expect(deterSessionText(<String, dynamic>{'level': 1, 'auto': false, 'by': 'gina'}), 'L1 灯光（gina 在管）');
+    expect(deterSessionText(<String, dynamic>{'level': 1, 'auto': false, 'by': 'gina'}), 'L1 灯光（gina 正在控制）');
     expect(deterSessionText(<String, dynamic>{'level': 3, 'auto': true, 'next_in_s': null}),
-        'L3 警笛（自动，已到最高的自动一级）');
+        'L3 警笛（自动，已达自动最高级）');
   });
 
   test('看到的人说人话', () {
-    expect(deterPersonsText(_rows().first), '看到 2 个人，最近 7.5 m');
-    expect(deterPersonsText(<String, dynamic>{'persons': <String, dynamic>{'gone': true}}), '人走了');
+    expect(deterPersonsText(_rows().first), '检测到 2 人，最近 7.5 m');
+    expect(deterPersonsText(<String, dynamic>{'persons': <String, dynamic>{'gone': true}}), '人员已离开');
     expect(deterPersonsText(<String, dynamic>{'persons': null}), '');
-    expect(deterPersonsText(<String, dynamic>{'persons': <String, dynamic>{'count': 1}}), '看到 1 个人');
+    expect(deterPersonsText(<String, dynamic>{'persons': <String, dynamic>{'count': 1}}), '检测到 1 人');
   });
 
   test('保持距离说人话（W25）', () {
-    expect(deterStandoffText(_rows().first), '人太近，在往后退');
-    expect(deterStandoffText(<String, dynamic>{'standoff': 'cornered'}), '无路可退，原地站定');
+    expect(deterStandoffText(_rows().first), '人员过近，正在后退');
+    expect(deterStandoffText(<String, dynamic>{'standoff': 'cornered'}), '无法后退，原地保持');
     expect(deterStandoffText(<String, dynamic>{'standoff': 'idle'}), '');
     expect(deterStandoffText(<String, dynamic>{'standoff': null}), '');
-    expect(deterSceneText(_rows().first), ' · 看到 2 个人，最近 7.5 m · 人太近，在往后退');
+    expect(deterSceneText(_rows().first), ' · 检测到 2 人，最近 7.5 m · 人员过近，正在后退');
     expect(deterSceneText(<String, dynamic>{}), '');
   });
 
   testWidgets('驱离页显示看到的人', (t) async {
     await _open(t, FakeApi('guard')..deterRows = _rows());
-    expect(find.textContaining('看到 2 个人，最近 7.5 m'), findsOneWidget);
+    expect(find.textContaining('检测到 2 人，最近 7.5 m'), findsOneWidget);
   });
 
   testWidgets('保安：跳级、解除', (t) async {
@@ -61,13 +61,13 @@ void main() {
     await t.tap(find.byKey(SiteDeterrencePage.levelKey(4)));
     await t.pumpAndSettle();
     expect(api.calls, contains('deter-level A 4'));
-    expect(find.textContaining('L4 人工（u 在管）'), findsOneWidget);
+    expect(find.textContaining('L4 人工（u 正在控制）'), findsOneWidget);
     await t.tap(find.byKey(SiteDeterrencePage.releaseKey));
     await t.pumpAndSettle();
     await t.tap(find.byKey(const Key('deterrence-release-go')));
     await t.pumpAndSettle();
     expect(api.calls.last, 'deter-release A');
-    expect(find.text('没在驱离'), findsOneWidget);
+    expect(find.text('未在驱离'), findsOneWidget);
   });
 
   testWidgets('管理员：只能解除，不能跳级', (t) async {
@@ -82,7 +82,7 @@ void main() {
     await _open(t, api);
     api.sse.add(<String, dynamic>{'kind': 'deterrence', 'robot_id': 'A', 'session': null, 'ended': '到 10 分钟自动收'});
     await t.pump(const Duration(milliseconds: 50));
-    expect(find.text('没在驱离'), findsOneWidget);
+    expect(find.text('未在驱离'), findsOneWidget);
     expect(find.textContaining('到 10 分钟自动收'), findsOneWidget);
   });
 

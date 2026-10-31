@@ -41,9 +41,9 @@ describe("定位页", () => {
     { robot: robot({ robot_id: "B", fresh: false }), state: "offline", battery: null, task: "" }];
   it("每台一行写人话,离线的不给找位置", () => {
     const { container: c } = render(<LocPage units={units} alerts={[alert({})]} now={0} role="admin" />);
-    expect(c.querySelector('.loc-row[data-robot="A"]')!.textContent).toContain("迷路了");
+    expect(c.querySelector('.loc-row[data-robot="A"]')!.textContent).toContain("定位丢失");
     expect(c.querySelector('.loc-row[data-robot="B"] button')).toBeNull();
-    expect(c.querySelector('.loc-row[data-robot="B"]')!.textContent).toContain("不知道");
+    expect(c.querySelector('.loc-row[data-robot="B"]')!.textContent).toContain("未知");
   });
   it("帮它找位置进选点,详细默认收着", () => {
     const { container: c } = render(<LocPage units={units} alerts={[]} now={0} role="admin" />);

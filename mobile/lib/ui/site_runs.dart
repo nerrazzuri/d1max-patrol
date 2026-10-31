@@ -21,7 +21,7 @@ import 'nw/nw_widgets.dart';
 String verdictText(String? v) => switch (v) {
       'normal' => tr('Normal', '正常'),
       'abnormal' => tr('Abnormal', '异常'),
-      'unclear' => tr('Unclear', '看不清'),
+      'unclear' => tr('Unclear', '无法判断'),
       'pending' => tr('Pending', '待判读'),
       null => tr('Pending', '待判读'),
       _ => v,
@@ -117,7 +117,7 @@ class _SiteRunsPageState extends State<SiteRunsPage> {
             return NwListView(children: [
               NwNotice(
                   tone: NwTone.error,
-                  text: tr("Can't load records: ${snap.error}", '记录拿不到：${snap.error}')),
+                  text: tr("Can't load records: ${snap.error}", '无法加载记录：${snap.error}')),
             ]);
           }
           if (!snap.hasData) return const Center(child: CircularProgressIndicator());
@@ -131,7 +131,7 @@ class _SiteRunsPageState extends State<SiteRunsPage> {
                   child: NwStatTile(
                       key: SiteRunsPage.todayKey,
                       icon: Icons.route_rounded,
-                      label: tr('Rounds', '巡了几趟'),
+                      label: tr('Rounds', '巡逻次数'),
                       value: '${stats.today}')),
               const SizedBox(width: Nw.s8),
               // 判成异常的照片是要人去看的：有就标红（跟下面卡片上的标记一个色），没有不上色
@@ -139,7 +139,7 @@ class _SiteRunsPageState extends State<SiteRunsPage> {
                   child: NwStatTile(
                       key: SiteRunsPage.anomalyKey,
                       icon: Icons.warning_amber_rounded,
-                      label: tr('With anomalies', '有异常的'),
+                      label: tr('With anomalies', '有异常'),
                       value: '${stats.anomalies}',
                       tone: stats.anomalies > 0 ? NwTone.error : NwTone.neutral)),
             ]),
@@ -163,9 +163,7 @@ class _SiteRunsPageState extends State<SiteRunsPage> {
                                 '${r['robot_id']} · ${r['photos']} photos · '
                                     '${r['finished'] == true ? '' : 'not finished · '}${_verdictSummary(r)}'
                                     ' · ${r['reviewed'] ?? 0} reviewed',
-                                '${r['robot_id']} · 照片 ${r['photos']} · '
-                                    '${r['finished'] == true ? '' : '没跑完 · '}${_verdictSummary(r)}'
-                                    ' · 已复核 ${r['reviewed'] ?? 0}'),
+                                '${r['robot_id']} · 照片 ${r['photos']} · ${r['finished'] == true ? '' : '未完成 · '}${_verdictSummary(r)} · 已复核 ${r['reviewed'] ?? 0}'),
                             anomaly: _abnormal(r),
                             tone: _abnormal(r) ? NwTone.error : NwTone.neutral,
                             // 只把「异常 N」那一段标红，「正常 1 · 已复核 1」照常
@@ -234,9 +232,9 @@ class _SiteRunPageState extends State<SiteRunPage> {
       // 站点在后台判（几十张照片要好几分钟）：这里只是开个头，过一会儿下拉刷新看结论。
       await widget.api.judgeRun(widget.runId);
       _snack(tr('The site has started reassessing. Refresh in a few minutes for the results',
-          '站点开始重判了，过一会儿刷新看结论'));
+          '站点已开始重新判读，请稍后刷新查看结果'));
     } on SiteError catch (e) {
-      _snack(tr('Reassessment failed: $e', '判读没成：$e'));
+      _snack(tr('Reassessment failed: $e', '判读失败：$e'));
     } finally {
       if (mounted) setState(() => _judging = false);
     }
@@ -247,11 +245,11 @@ class _SiteRunPageState extends State<SiteRunPage> {
     try {
       await widget.api.setRunKeep(widget.runId, want);
       _snack(want
-          ? tr('Kept: not deleted after the retention period', '留着：过了留存期也不删')
-          : tr('No longer kept: deleted when the retention period ends', '不留了：到期照常删'));
+          ? tr('Kept: not deleted after the retention period', '已标记保留：超过留存期也不删除')
+          : tr('No longer kept: deleted when the retention period ends', '已取消保留：到期后正常删除'));
       _reload();
     } on SiteError catch (e) {
-      _snack(tr('Not changed: $e', '没改成：$e'));
+      _snack(tr('Not changed: $e', '修改失败：$e'));
     }
   }
 
@@ -272,7 +270,7 @@ class _SiteRunPageState extends State<SiteRunPage> {
   Widget build(BuildContext context) {
     final canReview = widget.api.session?.canReview ?? false;
     return Scaffold(
-      appBar: AppBar(title: Text(tr('This run', '这一趟')), actions: [
+      appBar: AppBar(title: Text(tr('This run', '本次巡逻')), actions: [
         if (canReview)
           FutureBuilder<Map<String, dynamic>>(
               future: _detail,
@@ -281,8 +279,8 @@ class _SiteRunPageState extends State<SiteRunPage> {
                 return IconButton(
                     key: SiteRunPage.keepKey,
                     tooltip: kept
-                        ? tr('Stop keeping', '不留了')
-                        : tr('Keep (not deleted after the retention period)', '留着（过了留存期也不删）'),
+                        ? tr('Stop keeping', '取消保留')
+                        : tr('Keep (not deleted after the retention period)', '保留（超过留存期也不删除）'),
                     icon: Icon(kept ? Icons.bookmark : Icons.bookmark_border),
                     onPressed: snap.hasData ? () => _keep(!kept) : null);
               }),
@@ -301,7 +299,7 @@ class _SiteRunPageState extends State<SiteRunPage> {
         builder: (c, snap) {
           if (snap.hasError) {
             return NwListView(children: [
-              NwNotice(tone: NwTone.error, text: tr("Can't load: ${snap.error}", '拿不到：${snap.error}')),
+              NwNotice(tone: NwTone.error, text: tr("Can't load: ${snap.error}", '无法加载：${snap.error}')),
             ]);
           }
           if (!snap.hasData) return const Center(child: CircularProgressIndicator());
@@ -320,15 +318,14 @@ class _SiteRunPageState extends State<SiteRunPage> {
                   tr(
                       '${run['robot_id']} · ${run['photos']} photos · '
                           '${run['finished'] == true ? 'finished (${run['result']})' : 'not finished'}',
-                      '${run['robot_id']} · 照片 ${run['photos']} · '
-                          '${run['finished'] == true ? '跑完了（${run['result']}）' : '没跑完'}'),
+                      '${run['robot_id']} · 照片 ${run['photos']} · ${run['finished'] == true ? '已完成（${run['result']}）' : '未完成'}'),
                   style: NwText.bodySmall.copyWith(color: nw.textSecondary)),
             ])),
             nwGap24,
             NwSectionLabel(tr('Photos', '照片')),
             nwGap8,
             NwListCard(children: [
-              if (photos.isEmpty) NwCardText(tr('No photos in this run', '这一趟没有照片')),
+              if (photos.isEmpty) NwCardText(tr('No photos in this run', '本次巡逻没有照片')),
               for (final p in photos) _photoTile(p),
             ]),
           ]);
@@ -363,8 +360,7 @@ class _SiteRunPageState extends State<SiteRunPage> {
           tr(
               '${p['waypoint']} · ${p['camera']} · ${verdictText(shown as String?)}'
                   '${r != null ? ' (reviewed)' : ''}',
-              '${p['waypoint']} · ${p['camera']} · ${verdictText(shown)}'
-                  '${r != null ? '（人已复核）' : ''}'),
+              '${p['waypoint']} · ${p['camera']} · ${verdictText(shown)}${r != null ? '（已人工复核）' : ''}'),
           style: NwText.titleSmall.copyWith(color: nw.text)),
       subtitle: Text(
           r != null
@@ -372,7 +368,7 @@ class _SiteRunPageState extends State<SiteRunPage> {
                   '复核：${verdictText(r['verdict'] as String?)} ${r['note'] ?? ''}')
               : f != null
                   ? tr('Assessment: ${f['reason'] ?? ''}', '判读：${f['reason'] ?? ''}')
-                  : tr('Not assessed yet', '还没判读'),
+                  : tr('Not assessed yet', '未判读'),
           style: NwText.bodySmall.copyWith(color: nw.textSecondary)),
       trailing: shown == 'abnormal' ? Icon(Icons.report, color: nw.error) : null,
       onTap: () => _open(p),
@@ -425,7 +421,7 @@ class _SitePhotoPageState extends State<SitePhotoPage> {
     } on SiteError catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text(tr('Review not saved: $e', '复核没记下：$e'))));
+            .showSnackBar(SnackBar(content: Text(tr('Review not saved: $e', '复核保存失败：$e'))));
       }
     } finally {
       if (mounted) setState(() => _busy = false);
@@ -446,7 +442,7 @@ class _SitePhotoPageState extends State<SitePhotoPage> {
           future: widget.bytes,
           builder: (_, s) => s.hasError
               ? NwNotice(
-                  tone: NwTone.error, text: tr("Can't load photo: ${s.error}", '照片拿不到：${s.error}'))
+                  tone: NwTone.error, text: tr("Can't load photo: ${s.error}", '无法加载照片：${s.error}'))
               : s.hasData
                   ? ClipRRect(
                       borderRadius: BorderRadius.circular(Nw.r8),
@@ -458,7 +454,7 @@ class _SitePhotoPageState extends State<SitePhotoPage> {
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
           Text(
               f == null
-                  ? tr('Model: not assessed yet', '模型：还没判读')
+                  ? tr('Model: not assessed yet', '模型：未判读')
                   : tr(
                       'Model: ${verdictText(f['verdict'] as String?)} (confidence '
                           '${((f['confidence'] as num? ?? 0) * 100).round()}%) ${f['reason'] ?? ''}'
@@ -470,9 +466,9 @@ class _SitePhotoPageState extends State<SitePhotoPage> {
           nwGap8,
           Text(
               r == null
-                  ? tr('Reviewer: not reviewed yet', '人：还没复核')
+                  ? tr('Reviewer: not reviewed yet', '人工：未复核')
                   : tr('Reviewer: ${verdictText(r['verdict'] as String?)} ${r['note'] ?? ''}',
-                      '人：${verdictText(r['verdict'] as String?)} ${r['note'] ?? ''}'),
+                      '人工：${verdictText(r['verdict'] as String?)} ${r['note'] ?? ''}'),
               style: line),
         ])),
         if (canReview) ...[
@@ -480,7 +476,7 @@ class _SitePhotoPageState extends State<SitePhotoPage> {
           TextField(
               key: SitePhotoPage.noteKey,
               controller: _note,
-              decoration: InputDecoration(labelText: tr('Note (optional)', '说一句（可不填）')),
+              decoration: InputDecoration(labelText: tr('Note (optional)', '备注（选填）')),
               maxLength: 200),
           Wrap(spacing: Nw.s8, runSpacing: Nw.s8, children: [
             for (final v in ['normal', 'abnormal', 'unclear'])

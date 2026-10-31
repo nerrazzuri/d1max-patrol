@@ -64,11 +64,11 @@ describe("录像页", () => {
   it("保安没有导出按钮,管理员有", async () => {
     const g = page("guard");
     await waitFor(() => expect(g.container.querySelector("video.feed")).not.toBeNull());
-    expect(btn(g.container, "导出这一段")).toBeUndefined();
+    expect(btn(g.container, "导出此片段")).toBeUndefined();
     expect(btn(g.container, "截图")).toBeDefined();
     cleanup();
     const a = page("admin");
-    await waitFor(() => expect(btn(a.container, "导出这一段")).toBeDefined());
+    await waitFor(() => expect(btn(a.container, "导出此片段")).toBeDefined());
   });
 
   it("右边地图写那一刻机器人在哪", async () => {

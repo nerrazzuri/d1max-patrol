@@ -62,9 +62,9 @@ describe("画面位", () => {
     fireEvent.error(r.container.querySelector(".slot-main img.feed")!);
     r.rerender(<VideoSlot u={unit()} now={t0 + 5000} pinned={false} onPin={() => {}} onZoom={() => {}} />);
     const lost = r.container.querySelector(".slot-main .lost")!;
-    expect(lost.textContent).toContain("画面断了");
+    expect(lost.textContent).toContain("画面中断");
     expect(lost.textContent).toContain("23:10:00");
-    expect(lost.textContent).toContain("已断 5 秒");
+    expect(lost.textContent).toContain("已中断 5 秒");
   });
 
   it("报警现场:大画面放现场,小窗放这台机器人的前摄像头", () => {
@@ -125,9 +125,9 @@ describe("外审R6 报警现场断流", () => {
     r.rerender(slot(t0 + 15000));
     expect(subscribed()).not.toContain("/api/cameras/cam3/live");  // 断着:这一路退订了
     const lost = r.container.querySelector(".slot-main .lost")!;
-    expect(lost.textContent).toContain("画面断了");
+    expect(lost.textContent).toContain("画面中断");
     expect(lost.textContent).toContain("23:10:00");
-    expect(lost.textContent).toContain("已断 15 秒");
+    expect(lost.textContent).toContain("已中断 15 秒");
     await vi.advanceTimersByTimeAsync(3100);
     expect(sceneImg(r.container)!.getAttribute("data-src")).toBe("/api/cameras/cam3/live");
     expect(subscribed()).toContain("/api/cameras/cam3/live");     // W51:重连 = 重新订阅

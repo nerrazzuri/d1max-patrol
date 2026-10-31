@@ -75,14 +75,14 @@ class _SiteStandbyPageState extends State<SiteStandbyPage> {
       final ack = r['ack'];
       final res = ack is Map ? ack['result'] : null;
       msg = (res == null || res == 'accepted')
-          ? tr('$what: done', '$what：好了')
+          ? tr('$what: done', '$what：完成')
           : tr('$what: ${ackReasonText('${ack['reason'] ?? res}')}',
               '$what：${ackReasonText('${ack['reason'] ?? res}')}');
     } on SiteError catch (e) {
       msg = e.status == 409
           ? tr('$what failed: ${ackReasonText(e.message.replaceFirst(RegExp(r'^机器人没标[:：]'), ''))}',
-              '$what没成：${ackReasonText(e.message.replaceFirst(RegExp(r'^机器人没标[:：]'), ''))}')
-          : tr('$what failed: $e', '$what没成：$e');
+              '$what失败：${ackReasonText(e.message.replaceFirst(RegExp(r'^机器人没标[:：]'), ''))}')
+          : tr('$what failed: $e', '$what失败：$e');
     }
     if (!mounted) return;
     setState(() => _msg = msg);
@@ -102,11 +102,8 @@ class _SiteStandbyPageState extends State<SiteStandbyPage> {
             mainAxisSize: MainAxisSize.min,
             children: [
               Text(tr(
-                "Uses the robot's current position as a standby point (the origin is not "
-                    'changed). The robot checks its localization first: it refuses if no position '
-                    'is set or the error is large, and while a task is running.',
-                '用机器人现在的位置当一个待命点（原点不动）。机器人会先核定位：没设位置、偏差大就不设；'
-                    '在跑任务也不设。',
+                "Sets the robot's current position as a standby point (origin unchanged). Not possible if the position isn't set, the error is large, or a task is running.",
+                '将机器人当前位置设为待命点（原点不变）。未设置位置、偏差过大或执行任务时无法设置。',
               )),
               TextField(
                 key: SiteStandbyPage.nameKey,
@@ -119,16 +116,16 @@ class _SiteStandbyPageState extends State<SiteStandbyPage> {
                 contentPadding: EdgeInsets.zero,
                 value: isDefault,
                 onChanged: (v) => set(() => isDefault = v ?? false),
-                title: Text(tr('Make default (the robot returns here after a task)', '设成默认（任务做完回这儿）')),
+                title: Text(tr('Make default (the robot returns here after a task)', '设为默认（任务结束后返回此处）')),
               ),
             ],
           ),
           actions: [
-            TextButton(onPressed: () => Navigator.pop(c, false), child: Text(tr('Cancel', '算了'))),
+            TextButton(onPressed: () => Navigator.pop(c, false), child: Text(tr('Cancel', '取消'))),
             FilledButton(
               key: SiteStandbyPage.goKey,
               onPressed: () => Navigator.pop(c, true),
-              child: Text(tr('Set', '设')),
+              child: Text(tr('Set', '设置')),
             ),
           ],
         ),
@@ -144,20 +141,20 @@ class _SiteStandbyPageState extends State<SiteStandbyPage> {
     final ok = await showDialog<bool>(
       context: context,
       builder: (c) => AlertDialog(
-        title: Text(tr('Delete standby point $n?', '删掉待命点 $n？')),
+        title: Text(tr('Delete standby point $n?', '删除待命点 $n？')),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(c, false), child: Text(tr('Cancel', '算了'))),
+          TextButton(onPressed: () => Navigator.pop(c, false), child: Text(tr('Cancel', '取消'))),
           FilledButton(
             key: Key('standby-remove-go-$n'),
             onPressed: () => Navigator.pop(c, true),
-            child: Text(tr('Delete', '删')),
+            child: Text(tr('Delete', '删除')),
           ),
         ],
       ),
     );
     if (ok == true) {
       await _run(() => widget.api.removeStandby(widget.robotId, n),
-          tr('Delete standby point $n', '删待命点 $n'));
+          tr('Delete standby point $n', '删除待命点 $n'));
     }
   }
 
@@ -174,15 +171,14 @@ class _SiteStandbyPageState extends State<SiteStandbyPage> {
         title: Text(tr("Set the robot's current position as the dock alignment point?",
             '把机器人现在的位置设成充电桩对准点？')),
         content: Text(tr(
-            'First lead the robot to about 1.5 m directly in front of the dock, facing it. After '
-                'that, when the battery falls below 30% it walks here by itself and docks to charge.',
-            '先把机器人领到充电桩正前方约 1.5 米、头朝着桩。之后电量低于 30% 它会自己走到这儿对桩充电。')),
+            'Lead the robot to about 1.5 m in front of the dock, facing it. Below 30% battery it docks to charge automatically.',
+            '请将机器人引导到充电桩正前方约 1.5 米处，朝向充电桩。电量低于 30% 时将自动回充。')),
         actions: [
           TextButton(onPressed: () => Navigator.pop(c, false), child: Text(tr('Cancel', '取消'))),
           FilledButton(
               key: const Key('standby-charger-go'),
               onPressed: () => Navigator.pop(c, true),
-              child: Text(tr('Set', '设'))),
+              child: Text(tr('Set', '设置'))),
         ],
       ),
     );
@@ -192,9 +188,9 @@ class _SiteStandbyPageState extends State<SiteStandbyPage> {
       final d = await widget.api.setChargerHere(widget.robotId);
       msg = tr(
           'Dock alignment point set (${(d['x'] as num).toStringAsFixed(1)}, ${(d['y'] as num).toStringAsFixed(1)})',
-          '充电桩对准点设好了（${(d['x'] as num).toStringAsFixed(1)}, ${(d['y'] as num).toStringAsFixed(1)}）');
+          '充电桩对准点已设置（${(d['x'] as num).toStringAsFixed(1)}, ${(d['y'] as num).toStringAsFixed(1)}）');
     } on SiteError catch (e) {
-      msg = tr('Not set: $e', '没设成：$e');
+      msg = tr('Not set: $e', '设置失败：$e');
     }
     if (mounted) setState(() => _msg = msg);
   }
@@ -236,14 +232,14 @@ class _SiteStandbyPageState extends State<SiteStandbyPage> {
                   tr(
                       'Origin (safe return and charging; one per map; change it with '
                           '"Mark origin here" on the robot page)',
-                      '原点（安全返航、回充；每张图一个，在机器人页「在这儿标原点」改）'),
+                      '原点（用于安全返航和回充；每张地图一个，在机器人页「在这儿标原点」修改）'),
                   style: head,
                 ),
                 const SizedBox(height: Nw.s8),
                 NwCard(
                     child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
                   if (_homes.isEmpty)
-                    Text(tr('No origin marked yet', '还没标过原点'), style: body.copyWith(color: c.textSecondary)),
+                    Text(tr('No origin marked yet', '尚未标原点'), style: body.copyWith(color: c.textSecondary)),
                   for (final h in _homes)
                     Text(
                       '${h['name']}  ${_xy(h)}',
@@ -254,7 +250,7 @@ class _SiteStandbyPageState extends State<SiteStandbyPage> {
                 const SizedBox(height: Nw.s24),
                 Text(
                     tr('Standby points (the robot returns to the default one after a task)',
-                        '待命点（任务做完回默认的那一个）'),
+                        '待命点（任务结束后返回默认待命点）'),
                     style: head),
                 const SizedBox(height: Nw.s8),
                 if (_points.isEmpty)
@@ -282,7 +278,7 @@ class _SiteStandbyPageState extends State<SiteStandbyPage> {
                                           .returnToStandby(widget.robotId, name: '${p['name']}'),
                                       tr('Return to standby ${p['name']}', '回待命点 ${p['name']}'),
                                     ),
-                                    child: Text(tr('Return here', '回这儿')),
+                                    child: Text(tr('Return here', '返回此处')),
                                   ),
                                 if (manage && p['default'] != true)
                                   OutlinedButton(
@@ -296,7 +292,7 @@ class _SiteStandbyPageState extends State<SiteStandbyPage> {
                                 if (manage)
                                   IconButton(
                                     key: Key('standby-remove-${p['name']}'),
-                                    tooltip: tr('Delete', '删掉'),
+                                    tooltip: tr('Delete', '删除'),
                                     onPressed: () => _remove('${p['name']}'),
                                     icon: const Icon(Icons.delete_outline_rounded),
                                   ),

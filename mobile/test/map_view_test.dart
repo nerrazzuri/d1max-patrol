@@ -337,7 +337,7 @@ void main() {
     testWidgets('图例只列图上有的：底图三样总有；没画的机器人、原点、区域、片区不列', (t) async {
       _size(t);
       await _pump(t, SiteMapTab(api: FakeApi('guard'))); // 狗不在这张图上、只有待命点
-      for (final s in ['地面', '墙、障碍物', '没扫到', '待命点']) {
+      for (final s in ['地面', '墙、障碍物', '未扫描', '待命点']) {
         expect(inLegend(s), findsOneWidget, reason: s);
       }
       for (final s in ['机器人', '原点', '禁行区', '限速区', '片区']) {
@@ -360,7 +360,7 @@ void main() {
           <String, dynamic>{'id': 'b', 'kind': 'slow', 'label': 'y', 'max_speed_mps': 0.3, 'polygon': [[2, 0], [3, 0], [3, 1]]},
         ]};
       await _pump(t, SiteMapTab(api: api));
-      for (final s in ['地面', '墙、障碍物', '没扫到', '机器人', '待命点', '原点', '禁行区', '限速区', '片区']) {
+      for (final s in ['地面', '墙、障碍物', '未扫描', '机器人', '待命点', '原点', '禁行区', '限速区', '片区']) {
         expect(inLegend(s), findsOneWidget, reason: s);
       }
       appLang.value = AppLang.en;
@@ -383,7 +383,7 @@ void main() {
       expect(inLegend('图例'), findsOneWidget);
       await t.tap(find.byKey(SiteMapTab.legendToggleKey));
       await t.pump();
-      for (final s in ['地面', '墙、障碍物', '没扫到', '机器人', '待命点', '原点', '禁行区', '限速区', '片区']) {
+      for (final s in ['地面', '墙、障碍物', '未扫描', '机器人', '待命点', '原点', '禁行区', '限速区', '片区']) {
         expect(inLegend(s), findsOneWidget, reason: s);
       }
       expect(t.takeException(), isNull);
@@ -412,7 +412,7 @@ void main() {
         } else {
           expect(filter, findsNothing);
         }
-        expect(find.descendant(of: find.byKey(SiteMapTab.legendKey), matching: find.text('没扫到')), findsOneWidget);
+        expect(find.descendant(of: find.byKey(SiteMapTab.legendKey), matching: find.text('未扫描')), findsOneWidget);
         await t.pumpWidget(Container());
       });
     }

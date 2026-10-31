@@ -23,9 +23,9 @@ void main() {
     appLang.value = AppLang.zh;
     expect(robotEventDetail('task_failed', {'reason': '急停按下', 'task_id': 'task-1'}), '急停按下');
     expect(robotEventDetail('task_preempted', {'reason': 'preempted', 'task_id': 'task-1'}), '');
-    expect(robotEventDetail('task_progress', {'distance_m': 4.04, 'task_id': 't'}), '还有 4.0 米');
+    expect(robotEventDetail('task_progress', {'distance_m': 4.04, 'task_id': 't'}), '剩余 4.0 米');
     expect(robotEventDetail('patrol_waypoint', {'name': '东门', 'ok': false, 'note': '被挡'}),
-        '东门 · 没到 · 被挡');
+        '东门 · 未到达 · 被挡');
     expect(robotEventDetail('robot_fault', {'faults': []}), '');
     expect(robotEventTitle('robot_fault', {'faults': []}), '故障已清除', reason: '空列表 = 清了，不是有故障');
     expect(robotEventTitle('robot_fault', {'faults': [{'code': 'E1', 'fatal': false, 'text': '左前腿过热'}]}),

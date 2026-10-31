@@ -33,14 +33,14 @@ Future<String?> scanRobotCode(BuildContext context) =>
 /// 机器人配网服务报的「在干什么」→ 给人看的一行。
 String bindPhaseText(Map<String, dynamic> st) {
   final state = st['state'], phase = st['phase'];
-  if (state == 'bound') return tr('Joined the site', '已经加入站点');
-  if (state == 'wiping') return tr('Resetting to factory state (deleting data)…', '正在恢复出厂（删数据）…');
-  if (state == 'unbound') return tr('Not joined to any site', '还没加入站点');
+  if (state == 'bound') return tr('Joined the site', '已加入站点');
+  if (state == 'wiping') return tr('Resetting to factory settings (erasing data)…', '正在恢复出厂设置（清除数据）…');
+  if (state == 'unbound') return tr('Not joined to any site', '未加入站点');
   if (phase == 'waiting') {
     return tr('Waiting for the site to approve. Check code ${st['check'] ?? ''}',
-        '等站点批准。核对码 ${st['check'] ?? ''}');
+        '等待站点批准。核对码 ${st['check'] ?? ''}');
   }
-  return tr('Connecting to the WiFi and the site…', '正在连 WiFi 和站点…');
+  return tr('Connecting to the WiFi and the site…', '正在连接 WiFi 和站点…');
 }
 
 /// 怎么连上热点的：App 自动连的（离开时 App 自己断）/ 人在系统设置里手动连的（离开时要人自己切回去）。
@@ -63,17 +63,17 @@ Future<HotspotJoin?> joinRobotHotspot(BuildContext context, HotspotJoiner joiner
           key: const Key('hotspot-failed'),
           scrollable: true,
           backgroundColor: nw.surface,
-          title: Text(tr("Couldn't find the robot's hotspot", '没找到机器人的热点'),
+          title: Text(tr("Robot hotspot not found", '未找到机器人热点'),
               style: NwText.titleLarge.copyWith(color: nw.text)),
           content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
             Text(
-                tr('Hotspot ${s.ssid}. Make sure the robot is on, its payload light is on, and you are right next to it, then try again.',
-                    '热点 ${s.ssid}。确认机器人开着、上装亮着灯、你就在它旁边，再试一次。'),
+                tr('Hotspot ${s.ssid}. Make sure the robot is on, the payload light is on and you\'re next to it, then try again.',
+                    '热点 ${s.ssid}。请确认机器人已开机、上装指示灯亮起、你在机器人旁边，然后重试。'),
                 style: NwText.bodyMedium.copyWith(color: nw.text)),
             const SizedBox(height: Nw.s16),
             Text(
-                tr('Still no luck: join it by hand in the phone WiFi settings, then come back and tap "I\'m connected".',
-                    '还是不行：在手机的 WiFi 设置里手动连上，回来点「已经连上」。'),
+                tr('Still not connected: join it manually in the phone\'s WiFi settings, then come back and tap "I\'m connected".',
+                    '仍无法连接：请在手机 WiFi 设置中手动连接，然后返回点「已连接」。'),
                 style: NwText.bodySmall.copyWith(color: nw.textSecondary)),
             const SizedBox(height: Nw.s8),
             SelectableText(tr('Network: ${s.ssid}', '网络：${s.ssid}'),
@@ -86,7 +86,7 @@ Future<HotspotJoin?> joinRobotHotspot(BuildContext context, HotspotJoiner joiner
                 onPressed: () => Navigator.pop(c)),
             NwButton(buttonKey: const Key('hotspot-retry'), label: tr('Try again', '再试一次'),
                 variant: NwButtonVariant.outline, onPressed: () => Navigator.pop(c, 'retry')),
-            NwButton(buttonKey: const Key('hotspot-joined'), label: tr("I'm connected", '已经连上'),
+            NwButton(buttonKey: const Key('hotspot-joined'), label: tr("I'm connected", '已连接'),
                 onPressed: () => Navigator.pop(c, 'joined')),
           ],
         );
@@ -111,16 +111,16 @@ Future<bool> leaveRobotHotspot(
       return AlertDialog(
         scrollable: true,
         backgroundColor: nw.surface,
-        title: Text(tr('Switch back to your network', '切回平时的网络'),
+        title: Text(tr('Switch back to your network', '切回常用网络'),
             style: NwText.titleLarge.copyWith(color: nw.text)),
         content: Text(
-            tr('Open the phone WiFi settings, leave \u201c$ssid\u201d and join the WiFi you normally use (or use mobile data), then come back.',
-                '打开手机的 WiFi 设置，断开「$ssid」，连回平时用的 WiFi（或者用移动数据），再回来。'),
+            tr('Open the phone\'s WiFi settings, disconnect from “$ssid” and rejoin your usual WiFi (or use mobile data), then come back.',
+                '打开手机 WiFi 设置，断开「$ssid」，连回常用 WiFi（或使用移动数据），然后返回。'),
             style: NwText.bodyMedium.copyWith(color: nw.text)),
         actions: [
           NwButton(label: tr('Cancel', '取消'), variant: NwButtonVariant.ghost,
               onPressed: () => Navigator.pop(c, false)),
-          NwButton(buttonKey: const Key('hotspot-left'), label: tr("I've switched back", '已经切回'),
+          NwButton(buttonKey: const Key('hotspot-left'), label: tr("I've switched back", '已切回'),
               onPressed: () => Navigator.pop(c, true)),
         ],
       );
@@ -210,7 +210,7 @@ mixin _StickerScan<T extends StatefulWidget> on State<T> {
         return AlertDialog(
           scrollable: true,
           backgroundColor: nw.surface,
-          title: Text(tr('Type serial and code', '手输序列号和绑定码'), style: NwText.titleLarge.copyWith(color: nw.text)),
+          title: Text(tr('Enter serial and code', '手动输入序列号和绑定码'), style: NwText.titleLarge.copyWith(color: nw.text)),
           content: Column(mainAxisSize: MainAxisSize.min, children: [
             NwField(fieldKey: const Key('manual-serial'), controller: serial, autocorrect: false,
                 label: tr('Serial number', '序列号')),
@@ -222,7 +222,7 @@ mixin _StickerScan<T extends StatefulWidget> on State<T> {
           actions: [
             NwButton(label: tr('Cancel', '取消'), variant: NwButtonVariant.ghost,
                 onPressed: () => Navigator.pop(c, false)),
-            NwButton(buttonKey: const Key('manual-ok'), label: tr('Use', '用这个'),
+            NwButton(buttonKey: const Key('manual-ok'), label: tr('Use', '使用'),
                 onPressed: () => Navigator.pop(c, true)),
           ],
         );
@@ -257,7 +257,7 @@ mixin _StickerScan<T extends StatefulWidget> on State<T> {
             buttonKey: const Key('bind-scan'),
             onPressed: scanSticker,
             icon: Icons.qr_code_scanner_rounded,
-            label: tr('Scan the sticker on the robot', '扫机器人身上的贴纸'),
+            label: tr('Scan the robot sticker', '扫描机器人贴纸'),
           ),
         NwButton(
           buttonKey: const Key('bind-paste'),
@@ -271,7 +271,7 @@ mixin _StickerScan<T extends StatefulWidget> on State<T> {
           onPressed: typeSticker,
           icon: Icons.keyboard_rounded,
           variant: NwButtonVariant.ghost,
-          label: tr('Type serial and code', '手输序列号和绑定码'),
+          label: tr('Enter serial and code', '手动输入序列号和绑定码'),
         ),
       ]);
 
@@ -341,8 +341,8 @@ class _RobotAddPageState extends State<RobotAddPage> with _StickerScan<RobotAddP
       final link = _link ??= widget.link(s);
       final now = await link.status();
       if (now['state'] == 'bound' || now['state'] == 'wiping') {
-        return say(tr('This robot already belongs to a site. Unbind it there first.',
-            '这台机器人已经绑在一个站点上了：先在原来的站点上解绑。'));
+        return say(tr('This robot is bound to another site. Unbind it there first.',
+            '此机器人已绑定其他站点，请先在原站点解绑。'));
       }
       final nets = await link.scan();
       if (mounted) setState(() => _nets = nets);
@@ -410,15 +410,15 @@ class _RobotAddPageState extends State<RobotAddPage> with _StickerScan<RobotAddP
       final req = rows.where((r) => r['serial'] == serial).firstOrNull;
       if (!mounted) return;
       if (req == null) {
-        return setState(() => _approveErr = tr("The site doesn't show this robot yet. Try again in a moment.",
-            '站点上还没看到这台的申请，等一下再试。'));
+        return setState(() => _approveErr = tr("The site hasn't received this robot's request yet. Try again shortly.",
+            '站点尚未收到此机器人的申请，请稍后重试。'));
       }
       final ok = await approveBindDialog(context, widget.api, req);
       if (ok && mounted) setState(() => _approved = true);
     } on SiteError catch (e) {
       if (mounted) {
-        setState(() => _approveErr = tr("Can't reach the site: $e. Is the phone back on its usual network?",
-            '连不上站点：$e。手机切回平时的网络了吗？'));
+        setState(() => _approveErr = tr("Can't reach the site: $e. Check the phone is back on its usual network.",
+            '无法连接站点：$e。请确认手机已切回常用网络。'));
       }
     }
   }
@@ -439,8 +439,8 @@ class _RobotAddPageState extends State<RobotAddPage> with _StickerScan<RobotAddP
     final waiting = st != null && st['state'] == 'pending' && st['phase'] == 'waiting';
     return _Frame(title: tr('Add robot', '添加机器人'), children: [
       Text(tr(
-          'Stand next to the robot. Scan the sticker on its payload, pick the WiFi it should use and enter the password, then approve it on the site.',
-          '站在机器人旁边：扫上装上的贴纸，选机器人要连的 WiFi、填密码，然后在站点上批准。'),
+          'At the robot: scan the payload sticker, choose the robot\'s WiFi and enter the password, then approve it on the site.',
+          '在机器人旁：扫描上装贴纸，选择机器人要连接的 WiFi 并输入密码，然后在站点上批准。'),
           style: NwText.bodySmall.copyWith(color: c.textSecondary)),
       _gap,
       if (s == null) scanButton(),
@@ -448,7 +448,7 @@ class _RobotAddPageState extends State<RobotAddPage> with _StickerScan<RobotAddP
         NwNotice(key: const Key('bind-serial'), text: tr('Robot ${s.serial}', '机器人 ${s.serial}')),
         _gap,
         if (_nets == null)
-          NwButton(buttonKey: const Key('bind-join'), label: tr('Connect to the robot', '连机器人'),
+          NwButton(buttonKey: const Key('bind-join'), label: tr('Connect to the robot', '连接机器人'),
               icon: Icons.wifi_tethering_rounded, onPressed: _busy ? null : _connect)
         else
           WifiPicker(networks: _nets!, busy: _busy, onRescan: _rescan, onSend: _send),
@@ -473,7 +473,7 @@ class _RobotAddPageState extends State<RobotAddPage> with _StickerScan<RobotAddP
               onPressed: _leaveAndApprove),
         ],
         _gap,
-        NwButton(buttonKey: const Key('bind-cancel'), label: tr('Give up adding', '不加了'),
+        NwButton(buttonKey: const Key('bind-cancel'), label: tr('Cancel', '取消添加'),
             variant: NwButtonVariant.ghost, onPressed: _cancel),
       ],
       if (_left)
@@ -481,12 +481,12 @@ class _RobotAddPageState extends State<RobotAddPage> with _StickerScan<RobotAddP
             key: const Key('bind-done'),
             tone: _approved ? NwTone.success : NwTone.info,
             text: _approved
-                ? tr('Approved. The robot shows up in the robot list in a few seconds.',
-                    '已批准。机器人几秒后出现在机器人列表里。')
+                ? tr('Approved. The robot appears in the list within a few seconds.',
+                    '已批准，机器人将在几秒内出现在列表中。')
                 : widget.api.session?.canManageRobots == true
-                    ? tr('Check code ${st?['check'] ?? ''}. Tap Approve below.', '核对码 ${st?['check'] ?? ''}。点下面「去批准」。')
+                    ? tr('Check code ${st?['check'] ?? ''}. Tap Approve below.', '核对码 ${st?['check'] ?? ''}，点下方「去批准」。')
                     : tr('Ask the control room to approve it on the site (Robots page). Check code ${st?['check'] ?? ''}.',
-                        '请控制室在站点上批准（机器人页）。核对码 ${st?['check'] ?? ''}。')),
+                        '请控制室在站点（机器人页）批准。核对码 ${st?['check'] ?? ''}。')),
       if (_left && !_approved && _approveErr != null) ...[
         _gap,
         NwNotice(key: const Key('bind-approve-error'), tone: NwTone.warning, text: _approveErr!),
@@ -543,8 +543,8 @@ class _RobotWifiPageState extends State<RobotWifiPage> with _StickerScan<RobotWi
   void onSticker(RobotSticker s) {
     if (s.serial != widget.robotId) {
       setState(() => sticker = null);
-      say(tr("That sticker is for robot ${s.serial}, not ${widget.robotId}",
-          '这张贴纸是机器人 ${s.serial} 的，不是 ${widget.robotId}'));
+      say(tr("This sticker belongs to robot ${s.serial}, not ${widget.robotId}",
+          '此贴纸属于机器人 ${s.serial}，不是 ${widget.robotId}'));
     }
   }
 
@@ -643,9 +643,9 @@ class _RobotWifiPageState extends State<RobotWifiPage> with _StickerScan<RobotWi
         _watch?.cancel();
         setState(() => _result = '${r['result']}');
       } else if (pending is Map && pending['id'] == id) {
-        say(tr('The robot is still waiting for this change (${pending['phase']}).', '机器人那边这个改动还在进行（${pending['phase']}）。'));
+        say(tr('The change is still in progress on the robot (${pending['phase']}).', '机器人端的改动仍在进行（${pending['phase']}）。'));
       } else {
-        say(tr("The robot doesn't know this change any more. Set the WiFi again.", '机器人那边已经没有这个改动了，重新配一次 WiFi。'));
+        say(tr("The robot no longer has this change. Set the WiFi again.", '机器人端已没有此改动，请重新配置 WiFi。'));
       }
     } on RobotBindError catch (e) {
       say(e.message);
@@ -682,14 +682,14 @@ class _RobotWifiPageState extends State<RobotWifiPage> with _StickerScan<RobotWi
     final manage = widget.api.session?.canManageRobots == true;
     return _Frame(title: tr('Change WiFi', '换 WiFi'), children: [
       Text(tr(
-          'Stand next to the robot and scan its sticker. The new WiFi only takes effect after someone with management rights approves it on the site.',
-          '站在机器人旁边扫它的贴纸。新 WiFi 要有管理权限的人在站点上确认了才生效。'),
+          'Scan the sticker next to the robot. The new WiFi takes effect after it is approved on the site.',
+          '在机器人旁扫描贴纸。新 WiFi 在站点确认后生效。'),
           style: NwText.bodySmall.copyWith(color: c.textSecondary)),
       _gap,
       if (sticker == null) scanButton(),
       if (sticker != null && ch == null)
         if (_nets == null)
-          NwButton(buttonKey: const Key('wifi-join'), label: tr('Connect to the robot', '连机器人'),
+          NwButton(buttonKey: const Key('wifi-join'), label: tr('Connect to the robot', '连接机器人'),
               icon: Icons.wifi_tethering_rounded, onPressed: _busy ? null : _connect)
         else
           WifiPicker(networks: _nets!, busy: _busy, onRescan: _rescan, onSend: _send),
@@ -698,28 +698,28 @@ class _RobotWifiPageState extends State<RobotWifiPage> with _StickerScan<RobotWi
             key: const Key('wifi-sent'),
             tone: _confirmed ? NwTone.success : NwTone.info,
             text: _confirmed
-                ? tr('Approved. The robot switches, and switches back if it cannot reach the site within 5 minutes.',
-                    '已确认。机器人换过去，5 分钟内连不上站点会自己退回。')
+                ? tr('Approved. The robot switches over and reverts if it can\'t reach the site within 5 minutes.',
+                    '已确认。机器人切换网络，5 分钟内连不上站点将自动恢复原网络。')
                 : ch['mode'] == 'trial'
-                    ? tr("The robot can't reach the site, so it is trying “${ch['ssid']}” now. Approve it on the robot page within 30 minutes once the robot is back online, otherwise it switches back.",
-                        '机器人现在连不上站点，正在试「${ch['ssid']}」。它连上站点后 30 分钟内在机器人页确认，不然退回原来的。')
-                    : tr('Sent. Nothing changes until it is approved on the site.',
-                        '已发给机器人。站点上确认了才换。')),
+                    ? tr("The robot can't reach the site and is trying “${ch['ssid']}”. Approve it on the robot page within 30 minutes of it coming back online, or it reverts.",
+                        '机器人当前连不上站点，正在尝试「${ch['ssid']}」。重新上线后请在 30 分钟内于机器人页确认，否则恢复原网络。')
+                    : tr('Sent. It switches only after approval on the site.',
+                        '已发送，站点确认后才切换。')),
         if (_result != null) ...[
           _gap,
           NwNotice(
               key: const Key('wifi-result'),
               tone: _result == 'applied' ? NwTone.success : NwTone.warning,
               text: switch (_result) {
-                'applied' => tr('Done: the robot is on \u201c${ch['ssid']}\u201d now.', '换好了：机器人现在连的是「${ch['ssid']}」。'),
-                'rejected' => tr('Not approved on the site. The robot keeps its WiFi.', '站点上没同意，机器人还用原来的 WiFi。'),
-                'unreachable' => tr("The robot couldn't reach the site on the new WiFi and switched back. Check the name and password.",
-                    '机器人用新 WiFi 连不上站点，退回原来的了。核对一下 WiFi 名和密码。'),
-                _ => tr('Nobody approved it in time. The robot keeps its WiFi.', '没人及时确认，机器人还用原来的 WiFi。'),
+                'applied' => tr('Done: the robot is now on “${ch['ssid']}”.', '已切换：机器人当前连接「${ch['ssid']}」。'),
+                'rejected' => tr('Not approved on the site. The robot keeps its WiFi.', '站点未批准，机器人保持原 WiFi。'),
+                'unreachable' => tr("The robot couldn't reach the site on the new WiFi and reverted. Check the name and password.",
+                    '机器人用新 WiFi 连不上站点，已恢复原网络。请核对 WiFi 名称和密码。'),
+                _ => tr('Not approved in time. The robot keeps its WiFi.', '未在时限内确认，机器人保持原 WiFi。'),
               }),
           if (_result != 'applied') ...[
             _gap,
-            NwButton(buttonKey: const Key('wifi-again'), label: tr('Try again', '再改一次'), onPressed: _again),
+            NwButton(buttonKey: const Key('wifi-again'), label: tr('Try again', '重新修改'), onPressed: _again),
           ],
         ],
         if (_result == null && ch['mode'] == 'online' && manage && !_confirmed) ...[
@@ -731,10 +731,10 @@ class _RobotWifiPageState extends State<RobotWifiPage> with _StickerScan<RobotWi
         if (_result == null) ...[
           _gap,
           Wrap(spacing: Nw.s8, runSpacing: Nw.s8, children: [
-            NwButton(buttonKey: const Key('wifi-ask-robot'), label: tr('Ask the robot directly', '到机器人旁边问结果'),
+            NwButton(buttonKey: const Key('wifi-ask-robot'), label: tr('Check at the robot', '在机器人旁查询结果'),
                 variant: NwButtonVariant.outline, icon: Icons.wifi_tethering_rounded,
                 onPressed: _busy ? null : _askRobot),
-            NwButton(buttonKey: const Key('wifi-again-now'), label: tr('Set the WiFi again', '重新配 WiFi'),
+            NwButton(buttonKey: const Key('wifi-again-now'), label: tr('Set the WiFi again', '重新配置 WiFi'),
                 variant: NwButtonVariant.ghost, onPressed: _again),
           ]),
         ],
@@ -802,8 +802,8 @@ class _EngineerUnbindPageState extends State<EngineerUnbindPage> with _StickerSc
     final c = Nw.of(context);
     return _Frame(title: tr('Unbind with a token', '用解绑令解绑'), children: [
       Text(tr(
-          'For engineers, when the site is gone and there is no backup. The company signs a token for this one robot (valid 24 hours, single use). The robot is reset to factory state.',
-          '给工程师用：站点主机坏了又没备份时。公司给这台机器人签一张解绑令（24 小时内有效、只能用一次）。机器人会恢复出厂。'),
+          'For engineers, when the site host is lost with no backup. The unbind token is valid for 24 hours, single use. The robot is reset to factory settings.',
+          '工程师专用：站点主机损坏且无备份时使用。解绑令 24 小时内有效、仅限一次，机器人将恢复出厂设置。'),
           style: NwText.bodySmall.copyWith(color: c.textSecondary)),
       _gap,
       NwField(fieldKey: const Key('unbind-token'), controller: _token, autocorrect: false,
@@ -818,8 +818,8 @@ class _EngineerUnbindPageState extends State<EngineerUnbindPage> with _StickerSc
       const SizedBox(height: Nw.s24),
       if (_done)
         NwNotice(key: const Key('unbind-done'), tone: NwTone.success,
-            text: tr('Accepted. The robot is deleting its data; in a few minutes it can be added to a site again.',
-                '机器人收下了，正在删数据；几分钟后就能重新添加到站点。'))
+            text: tr('Accepted. The robot is erasing its data and can be added to a site again in a few minutes.',
+                '机器人已接受，正在清除数据，几分钟后可重新添加到站点。'))
       else
         NwButton(buttonKey: const Key('unbind-send'), label: tr('Unbind', '解绑'),
             variant: NwButtonVariant.destructive,
@@ -863,7 +863,7 @@ class _ApproveDialogState extends State<_ApproveDialog> {
       if (mounted) Navigator.pop(context, true);
     } on SiteError catch (e) {
       if (!mounted) return;
-      setState(() => _err = e.status == 403 ? tr('Wrong password', '密码不对') : e.toString());
+      setState(() => _err = e.status == 403 ? tr('Wrong password', '密码错误') : e.toString());
       _pw.clear();
     } finally {
       if (mounted) setState(() => _busy = false);
@@ -880,8 +880,8 @@ class _ApproveDialogState extends State<_ApproveDialog> {
       title: Text(tr('Approve ${req['serial']}', '批准 ${req['serial']} 加入'),
           style: NwText.titleLarge.copyWith(color: nw.text)),
       content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-        Text(tr('Approve only if this check code matches the phone at the robot.',
-            '核对码跟机器人旁边那台手机上的一样才批准。'),
+        Text(tr('Approve only if the check code matches the phone at the robot.',
+            '核对码与机器人旁的手机一致时才批准。'),
             style: NwText.bodySmall.copyWith(color: nw.textSecondary)),
         const SizedBox(height: Nw.s8),
         Text('${req['check']}', key: const Key('approve-check'), textAlign: TextAlign.center,
@@ -890,7 +890,7 @@ class _ApproveDialogState extends State<_ApproveDialog> {
         NwField(fieldKey: const Key('approve-name'), controller: _name, label: tr('Name (optional)', '名字（可不填）')),
         const SizedBox(height: Nw.s16),
         NwField(fieldKey: const Key('approve-pw'), controller: _pw, obscureText: true,
-            label: tr('Your password again', '再输一次你的密码')),
+            label: tr('Your password again', '再次输入密码')),
         if (_err != null) ...[
           const SizedBox(height: Nw.s8),
           Text(_err!, key: const Key('approve-error'), style: NwText.bodySmall.copyWith(color: nw.error)),
@@ -1057,15 +1057,15 @@ class _WifiPickerState extends State<WifiPicker> {
     final picked = _picked;
     final needPsk = _manual || (picked != null && picked['secured'] != false);
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-      Text(tr("WiFi the robot can see (2.4 GHz only, which is all it can use)", '机器人附近的 WiFi（只列它连得上的 2.4 GHz）'),
+      Text(tr("WiFi visible to the robot (2.4 GHz only)", '机器人附近的 WiFi（仅 2.4 GHz）'),
           style: NwText.titleSmall.copyWith(color: c.text)),
       const SizedBox(height: Nw.s8),
       if (widget.networks.isEmpty)
         NwNotice(
             key: const Key('wifi-none'),
             tone: NwTone.warning,
-            text: tr("The robot doesn't see any WiFi. Move it closer to the router, check 2.4 GHz is on, then scan again.",
-                '机器人没扫到 WiFi。离路由器近一点、确认路由器开了 2.4 GHz，再重新扫。')),
+            text: tr("The robot found no WiFi. Move closer to the router, make sure 2.4 GHz is on, then scan again.",
+                '机器人未扫描到 WiFi。请靠近路由器并确认已开启 2.4 GHz，然后重新扫描。')),
       for (final n in widget.networks)
         Padding(
           padding: const EdgeInsets.only(bottom: Nw.s8),
@@ -1092,7 +1092,7 @@ class _WifiPickerState extends State<WifiPicker> {
         NwButton(buttonKey: const Key('wifi-rescan'), label: tr('Scan again', '重新扫'),
             variant: NwButtonVariant.ghost, icon: Icons.refresh_rounded,
             onPressed: _scanning || widget.busy ? null : _rescan),
-        NwButton(buttonKey: const Key('wifi-manual'), label: tr('Hidden WiFi: type the name', '隐藏的 WiFi：手输名字'),
+        NwButton(buttonKey: const Key('wifi-manual'), label: tr('Hidden WiFi: enter the name', '隐藏 WiFi：手动输入名称'),
             variant: NwButtonVariant.ghost, icon: Icons.keyboard_rounded,
             onPressed: () => setState(() {
                   _manual = true;

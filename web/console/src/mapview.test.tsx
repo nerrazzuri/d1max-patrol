@@ -398,7 +398,7 @@ describe("图例只列图上真有的东西", () => {
     const { container: c } = mapPage({ ...META, zones: [NOGO] }, { units: [unit(robot("A", null))] });
     await ready(c);
     const text = c.querySelector(".maplegend")!.textContent!;
-    for (const w of ["地面", "墙", "没建图", "禁行区"]) expect(text).toContain(w);
+    for (const w of ["地面", "墙", "未建图", "禁行区"]) expect(text).toContain(w);
   });
 });
 
@@ -617,7 +617,7 @@ describe("看到过、机器人没走过 + 抹掉区:图例只在有的时候列
     const { container: c } = mapPage({ ...META, seen: true, zones: [ERASE] }, { units: [unit(robot("A", null))] });
     await ready(c);
     const text = c.querySelector(".maplegend")!.textContent!;
-    for (const w of ["看到过、机器人没走过", "已抹掉（机器人不去）"]) expect(text).toContain(w);
+    for (const w of ["已扫描，机器人未到达", "已抹除（机器人不进入）"]) expect(text).toContain(w);
   });
   it("刚打开就按有内容的范围放;「全图」也回到它", async () => {
     installScreenCTM();
@@ -689,7 +689,7 @@ describe("防区页:抹掉一块(导航区域 erase),点出来的地图点原样
       fireEvent.click(r.getByText("Erase this region"));
       await tick();
       const dialog = r.container.ownerDocument.querySelector("dialog")!;
-      expect(dialog.textContent).toContain("Robots will never go into it");
+      expect(dialog.textContent).toContain("Robots never enter it");
       fireEvent.click([...dialog.querySelectorAll("button")].find((b) => b.textContent === "Erase this region")!);
       await waitFor(() => expect(s.posted.length).toBe(1));
       const got = s.posted[0];
@@ -718,7 +718,7 @@ describe("防区页:抹掉一块(导航区域 erase),点出来的地图点原样
     fireEvent.click(r.container.querySelector(".erased-list li button")!);
     await tick();
     const dialog = r.container.ownerDocument.querySelector("dialog")!;
-    expect(dialog.textContent).toContain("relaxes the robots' zones");
+    expect(dialog.textContent).toContain("until an administrator confirms the zones again");
     fireEvent.click([...dialog.querySelectorAll("button")].find((b) => b.textContent === "Cancel")!);
     await tick();
     expect(s.posted.length).toBe(0);

@@ -46,9 +46,9 @@ String checkLabel(String key) => switch (key) {
 /// 狗上的代理跟站点配不配。
 String verdictLabel(Object? v) => switch (v) {
       'ok' => tr('OK', '正常'),
-      'agent_too_old' => tr('Robot too old', '机器人太老'),
-      'site_too_old' => tr('Site too old', '站点太老'),
-      _ => tr('Unknown', '不清楚'),
+      'agent_too_old' => tr('Robot too old', '机器人版本过旧'),
+      'site_too_old' => tr('Site too old', '站点版本过旧'),
+      _ => tr('Unknown', '未知'),
     };
 
 /// 把诊断包存成文件，回存到哪儿了。测试换掉它（不碰真的盘）。
@@ -207,22 +207,22 @@ class _SiteHealthPageState extends State<SiteHealthPage> {
       final kb = (bytes.length / 1024).ceil();
       if (share) {
         msg = await widget.share(name, bytes)
-            ? tr('Handed $name ($kb KB) to the share sheet', '交给分享了（$kb KB）：$name')
-            : tr('Not shared: cancelled', '没分享：取消了');
+            ? tr('Shared $name ($kb KB)', '已分享（$kb KB）：$name')
+            : tr('Sharing cancelled', '已取消分享');
       } else {
         final path = await widget.save(name, bytes);
         msg = path == null
-            ? tr('Not saved: cancelled', '没存：取消了')
-            : tr('Saved $kb KB to $path', '存好了（$kb KB）：$path');
+            ? tr('Saving cancelled', '已取消保存')
+            : tr('Saved $kb KB to $path', '已保存（$kb KB）：$path');
       }
     } on FileSystemException catch (e) {
       msg = share
-          ? tr('Diagnostics bundle not shared: ${e.message}', '诊断包没分享出去：${e.message}')
-          : tr('Diagnostics bundle not saved: ${e.message}', '诊断包没存上：${e.message}');
+          ? tr('Failed to share the diagnostics bundle: ${e.message}', '诊断包分享失败：${e.message}')
+          : tr('Failed to save the diagnostics bundle: ${e.message}', '诊断包保存失败：${e.message}');
     } on Object catch (e) {
       msg = share
-          ? tr('Diagnostics bundle not shared: $e', '诊断包没分享出去：$e')
-          : tr('Diagnostics bundle not saved: $e', '诊断包没存上：$e');
+          ? tr('Failed to share the diagnostics bundle: $e', '诊断包分享失败：$e')
+          : tr('Failed to save the diagnostics bundle: $e', '诊断包保存失败：$e');
     } finally {
       if (mounted) {
         setState(() {
@@ -245,10 +245,10 @@ class _SiteHealthPageState extends State<SiteHealthPage> {
             : PriorityShape(level: critical ? 'P1' : 'P2', color: color, size: 20),
         title: Text(
             ok
-                ? tr('All checks passed', '各项都正常')
+                ? tr('All checks passed', '全部正常')
                 : critical
-                    ? tr('Site is not healthy', '站点有要紧的问题')
-                    : tr('Some checks need attention', '有几项要看一下'),
+                    ? tr('Site is not healthy', '站点存在严重问题')
+                    : tr('Some checks need attention', '有几项需要注意'),
             style: NwText.titleMedium.copyWith(color: ok ? nw.text : color)),
         subtitle: Text(tr('Site version ${h['version'] ?? '?'}', '站点版本 ${h['version'] ?? '?'}'),
             style: NwText.bodySmall.copyWith(color: nw.textSecondary)));
@@ -279,10 +279,10 @@ class _SiteHealthPageState extends State<SiteHealthPage> {
               key: SiteHealthPage.checkKey(k),
               dense: true,
               leading: ok ? Icon(Icons.check_circle_rounded, size: 20, color: color) : PriorityShape(level: crit ? 'P1' : 'P2', color: color, size: 16),
-              title: Text(crit ? tr('${checkLabel(k)} · critical', '${checkLabel(k)} · 要紧') : checkLabel(k),
+              title: Text(crit ? tr('${checkLabel(k)} · critical', '${checkLabel(k)} · 严重') : checkLabel(k),
                   style: NwText.bodyMedium.copyWith(color: nw.text)),
               subtitle: Text('${c['detail'] ?? ''}', style: NwText.bodySmall.copyWith(color: nw.textSecondary)),
-              trailing: Text(ok ? tr('OK', '正常') : tr('Failed', '没过'),
+              trailing: Text(ok ? tr('OK', '正常') : tr('Failed', '未通过'),
                   style: NwText.labelMedium.copyWith(color: color, fontWeight: FontWeight.w700)));
         }(),
     ];
@@ -331,7 +331,7 @@ class _SiteHealthPageState extends State<SiteHealthPage> {
       Text(tr('Signed-in apps', '登录着的 App'), style: heading),
       nwGap8,
       if (clients.isEmpty)
-        Text(tr('No app has reported its version yet (older apps do not).', '还没有 App 报过版本（老版本 App 不报）。'),
+        Text(tr('No app has reported its version yet (older apps do not).', '尚无 App 上报版本（旧版 App 不上报）。'),
             style: none),
       NwGrid(minTile: _versionTile, children: [
         for (final c in clients)
@@ -343,7 +343,7 @@ class _SiteHealthPageState extends State<SiteHealthPage> {
                   c['kind'] == 'web' ? tr('Web console', '网页值班台') : tr('Phone app ${c['version'] ?? '?'}', '手机 App ${c['version'] ?? '?'}'),
                   if (c['platform'] != null) '${c['platform']}',
                 ].join(' · '),
-                note: old ? tr('Too old', '太老') : null,
+                note: old ? tr('Too old', '版本过旧') : null,
                 tone: NwTone.warning);
           }(),
       ]),
@@ -369,20 +369,20 @@ class _SiteHealthPageState extends State<SiteHealthPage> {
       return SingleChildScrollView(
           padding: EdgeInsets.fromLTRB(side, Nw.s16, side, Nw.s24),
           child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-            NwSectionLabel(tr('Station status', '站点状态')),
+            NwSectionLabel(tr('Site status', '站点状态')),
             nwGap8,
             if (_loading)
               NwListCard(children: [
                 ListTile(
                     key: SiteHealthPage.loadingKey,
                     leading: Icon(Icons.hourglass_empty_rounded, color: nw.textSecondary),
-                    title: Text(tr('Loading…', '正在读…'), style: NwText.bodyMedium.copyWith(color: nw.textSecondary))),
+                    title: Text(tr('Loading…', '加载中…'), style: NwText.bodyMedium.copyWith(color: nw.textSecondary))),
               ]),
             if (_error != null)
               NwListCard(tone: NwTone.warning, children: [
                 ListTile(
                     leading: PriorityShape(level: 'P2', color: nw.warning, size: 16),
-                    title: Text(tr("Can't read the site's health: $_error", '站点体检没读到：$_error'),
+                    title: Text(tr("Can't read the site's health: $_error", '无法读取站点体检结果：$_error'),
                         style: NwText.bodyMedium.copyWith(color: nw.text))),
               ]),
             if (h != null) NwListCard(children: [_overall(h), ..._checks(h)]),
@@ -411,9 +411,8 @@ class _SiteHealthPageState extends State<SiteHealthPage> {
                   nwGap4,
                   Text(
                       tr(
-                          'The diagnostics bundle holds the health report, recent logs and settings. It has no passwords or private keys. '
-                              'Send it to support when asked.',
-                          '诊断包里是体检结果、最近的日志和配置，没有口令和私钥。厂家要的时候发给他们。'),
+                          'Diagnostics include the health report, recent logs and settings, with no passwords or private keys.',
+                          '诊断包含体检结果、近期日志和配置，不含密码和私钥。'),
                       style: NwText.bodySmall.copyWith(color: nw.textSecondary)),
                 ])),
               ]),
@@ -423,14 +422,14 @@ class _SiteHealthPageState extends State<SiteHealthPage> {
                     buttonKey: SiteHealthPage.bundleKey,
                     variant: NwButtonVariant.outline,
                     icon: Icons.download_rounded,
-                    label: _saving && !_sharing ? tr('Saving…', '正在存…') : tr('Save diagnostics bundle', '保存诊断包'),
+                    label: _saving && !_sharing ? tr('Saving…', '正在保存…') : tr('Save diagnostics bundle', '保存诊断包'),
                     onPressed: _saving ? null : _bundle),
                 if (widget.canShare ?? (Platform.isAndroid || Platform.isIOS))
                   NwButton(
                       buttonKey: SiteHealthPage.shareKey,
                       variant: NwButtonVariant.outline,
                       icon: Icons.share_rounded,
-                      label: _saving && _sharing ? tr('Preparing…', '正在取…') : tr('Share…', '分享…'),
+                      label: _saving && _sharing ? tr('Preparing…', '正在准备…') : tr('Share…', '分享…'),
                       onPressed: _saving ? null : () => _bundle(share: true)),
               ]),
               if (_msg.isNotEmpty) ...[

@@ -21,10 +21,10 @@ void main() {
     await t.pumpAndSettle();
     expect(api.calls, contains('map A estate-1:8'));
     expect(find.textContaining('还没有原点'), findsWidgets);
-    await t.tap(find.text('算了'));
+    await t.tap(find.text('取消'));
     await t.pumpAndSettle();
     expect(api.calls.where((c) => c.endsWith('without_home')), isEmpty);
-    expect(find.textContaining('没下发'), findsOneWidget);
+    expect(find.textContaining('未下发'), findsOneWidget);
     await t.tap(find.byKey(SiteMapsPage.mapKey('estate-1', '8')));
     await t.pumpAndSettle();
     await t.tap(find.byKey(const Key('pick-A')));
@@ -34,7 +34,7 @@ void main() {
     await t.tap(find.byKey(const Key('activate-without-home')));
     await t.pumpAndSettle();
     expect(api.calls, contains('map A estate-1:8 without_home'));
-    expect(find.textContaining('在下载、载入'), findsOneWidget);
+    expect(find.textContaining('正在下载并加载'), findsOneWidget);
   });
 
   testWidgets('管理员点一张图、选机器人、下发', (t) async {
@@ -50,7 +50,7 @@ void main() {
     await t.tap(find.byKey(const Key('activate-go')));
     await t.pumpAndSettle();
     expect(api.calls, contains('map A estate-1:8'));
-    expect(find.textContaining('在下载、载入'), findsOneWidget);
+    expect(find.textContaining('正在下载并加载'), findsOneWidget);
   });
 
   testWidgets('没报这种能力的机器人不列、不显示按钮', (t) async {
@@ -65,11 +65,11 @@ void main() {
     await t.tap(find.byKey(SiteMapsPage.mapKey('estate-1', '8')));
     await t.pumpAndSettle();
     expect(find.byKey(const Key('pick-A')), findsNothing);
-    expect(find.textContaining('没有能换图的机器人'), findsOneWidget);
+    expect(find.textContaining('可换图的机器人'), findsOneWidget);
     await t.tap(find.byKey(SiteMapsPage.bagKey('A', 'yard-0925')));
     await t.pumpAndSettle();
     expect(find.byKey(SiteMapsPage.versionKey), findsNothing);
-    expect(find.textContaining('现在不能重建'), findsOneWidget);
+    expect(find.textContaining('当前无法重建'), findsOneWidget);
     await t.pumpWidget(MaterialApp(home: SiteRobotPage(key: UniqueKey(), api: api, robotId: 'A')));
     await t.pump();
     expect(find.byKey(const Key('btn-record-start')), findsNothing);
@@ -83,7 +83,7 @@ void main() {
     await t.pumpAndSettle();
     await t.tap(find.byKey(const Key('pick-A')));
     await t.pumpAndSettle();
-    await t.tap(find.text('算了'));
+    await t.tap(find.text('取消'));
     await t.pumpAndSettle();
     expect(api.calls.where((c) => c.startsWith('map ')), isEmpty);
   });
@@ -143,7 +143,7 @@ void main() {
     await t.tap(find.byKey(const Key('record-go')));
     await t.pumpAndSettle();
     expect(admin.calls.where((c) => c.startsWith('mapping')), isEmpty);
-    expect(find.textContaining('地图号与版本要一起填'), findsOneWidget);
+    expect(find.textContaining('地图号和版本需同时填写'), findsOneWidget);
     await t.tap(find.byKey(const Key('btn-record-start')));
     await t.pumpAndSettle();
     await t.enterText(find.byKey(const Key('record-name')), 'yard');

@@ -256,13 +256,13 @@ class _SiteDutyPageState extends State<SiteDutyPage> {
       final task = st is Map ? st['task'] : null;
       final tid = task is Map ? task['task_id'] : null;
       if (tid is! String || tid.isEmpty) {
-        _say(tr('It is not running a task now', '它现在没在跑任务'));
+        _say(tr('The robot isn\'t running a task', '机器人当前无任务'));
         return;
       }
       await widget.api.abort(id, tid);
-      _say(tr('Stopped', '叫停了'));
+      _say(tr('Stopped', '已叫停'));
     } on SiteError catch (e) {
-      _say(tr('Stop failed: ${refusalText(e)}', '叫停没成：${refusalText(e)}'));
+      _say(tr('Stop failed: ${refusalText(e)}', '叫停失败：${refusalText(e)}'));
     }
     unawaited(_reload());
   }
@@ -380,7 +380,7 @@ class _SiteDutyPageState extends State<SiteDutyPage> {
                     key: SiteDutyPage.closeKey,
                     onPressed: () => setState(() => _playing = false),
                     icon: const Icon(Icons.close_rounded, size: 18),
-                    label: Text(tr('Stop video', '关画面'))),
+                    label: Text(tr('Stop video', '关闭画面'))),
               ),
               SiteVideo(key: ValueKey<String>('duty-video-$id'), api: widget.api, robotId: id),
             ])
@@ -398,7 +398,7 @@ class _SiteDutyPageState extends State<SiteDutyPage> {
                     child: Column(mainAxisSize: MainAxisSize.min, children: [
                       const Icon(Icons.play_circle_outline_rounded, size: 56, color: Colors.white70),
                       const SizedBox(height: 4),
-                      Text(tr('Tap to watch ${robotLabel(_selRobot!)} live', '点一下看 ${robotLabel(_selRobot!)} 的实时画面'),
+                      Text(tr('Tap to watch ${robotLabel(_selRobot!)} live', '点击查看 ${robotLabel(_selRobot!)} 的实时画面'),
                           style: NwText.bodySmall.copyWith(color: Colors.white70)),
                     ]),
                   ),
@@ -426,7 +426,7 @@ class _SiteDutyPageState extends State<SiteDutyPage> {
     final battery = robotBattery(r);
     final doing = run != null
         ? tr('Patrolling "${run['label']}"${run['end_ms'] is num ? ' · done around ${hhmm((run['end_ms'] as num).toInt(), _offsetMin)}' : ''}',
-            '在走「${run['label']}」${run['end_ms'] is num ? ' · 预计 ${hhmm((run['end_ms'] as num).toInt(), _offsetMin)} 走完' : ''}')
+            '正在巡逻「${run['label']}」${run['end_ms'] is num ? ' · 预计 ${hhmm((run['end_ms'] as num).toInt(), _offsetMin)} 结束' : ''}')
         : robotStatusLine(r);
     return Padding(
       key: _t.status,
@@ -450,8 +450,8 @@ class _SiteDutyPageState extends State<SiteDutyPage> {
             Row(children: [
               Expanded(
                   child: Text(
-                      tr('Stopped by ${(r['held'] as Map)['by']}. The site won\'t send it anywhere until it is resumed.',
-                          '被 ${(r['held'] as Map)['by']} 叫停了。点「恢复」之前站点不会再派它。'),
+                      tr('Stopped by ${(r['held'] as Map)['by']}. Not dispatched until resumed.',
+                          '已被 ${(r['held'] as Map)['by']} 叫停，恢复前不会派出。'),
                       style: NwText.bodySmall.copyWith(color: c.textSecondary))),
               if (s?.canDispatch ?? false)
                 NwButton(
@@ -512,7 +512,7 @@ class _SiteDutyPageState extends State<SiteDutyPage> {
     if (ev.isEmpty) return const [];
     return [
       const SizedBox(height: Nw.s16),
-      NwSectionLabel(tr('${robotLabel(_selRobot!)} recently', '${robotLabel(_selRobot!)} 最近')),
+      NwSectionLabel(tr('${robotLabel(_selRobot!)} recent events', '${robotLabel(_selRobot!)} 最近事件')),
       nwGap8,
       NwCard(
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -553,12 +553,12 @@ class _SiteDutyPageState extends State<SiteDutyPage> {
           const SizedBox(height: 2),
           Text(
               wiz != null
-                  ? tr('${wiz['by']} is mapping (step $step of 7).', '${wiz['by']} 正在建图（第 $step 步，共 7 步）。')
+                  ? tr('${wiz['by']} is mapping (step $step of 7).', '${wiz['by']} 正在建图（第 $step / 7 步）。')
                   : (admin
-                      ? tr('Robots need a map before they can patrol. Video and remote control work now.',
-                          '机器人要先建好地图才能巡逻。现在能看画面、能遥控，不能派巡逻。')
+                      ? tr('A map is needed before patrolling. Video and remote control are available now.',
+                          '巡逻前需先建图。当前可查看画面和遥控。')
                       : tr('Robots need a map before they can patrol. Ask an administrator to build it in the app.',
-                          '机器人要先建好地图才能巡逻。请管理员在 App 里建图。')),
+                          '机器人需要先建图才能巡逻，请管理员在 App 中建图。')),
               style: NwText.bodyMedium.copyWith(color: c.text)),
           if (admin) ...[
             const SizedBox(height: Nw.s8),
@@ -566,7 +566,7 @@ class _SiteDutyPageState extends State<SiteDutyPage> {
               alignment: Alignment.centerLeft,
               child: NwButton(
                   buttonKey: SiteDutyPage.mapWizardKey,
-                  label: wiz != null ? tr('Continue mapping', '接着建图') : tr('Start mapping', '开始建图'),
+                  label: wiz != null ? tr('Continue mapping', '继续建图') : tr('Start mapping', '开始建图'),
                   icon: Icons.add_location_alt_rounded,
                   size: NwButtonSize.small,
                   onPressed: () async {
@@ -606,7 +606,7 @@ class _SiteDutyPageState extends State<SiteDutyPage> {
                 NwNotice(
                     key: SiteDutyPage.noRobotsKey,
                     text: tr('No robots on this site yet. An administrator adds them under Robots → Add.',
-                        '站点上还没有机器人。管理员在「机器人 → 添加」里加。'))
+                        '站点上还没有机器人，请管理员在「机器人 → 添加」中添加。'))
               else ...[
                 _chips(c),
                 nwGap8,

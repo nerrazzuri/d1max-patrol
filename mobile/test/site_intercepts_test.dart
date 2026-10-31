@@ -44,7 +44,7 @@ void main() {
     await t.tap(find.byKey(SiteInterceptsPage.hereKey));
     await t.pumpAndSettle();
     await t.enterText(find.byType(TextField).first, 'back');
-    await t.tap(find.text('设'));
+    await t.tap(find.text('设置'));
     await t.pumpAndSettle();
     expect(api.calls, contains('intercept-here A back'));
     expect(find.byKey(const Key('intercept-back')), findsOneWidget);
@@ -56,9 +56,9 @@ void main() {
     await t.tap(find.byKey(SiteInterceptsPage.hereKey));
     await t.pumpAndSettle();
     await t.enterText(find.byType(TextField).first, 'back');
-    await t.tap(find.text('设'));
+    await t.tap(find.text('设置'));
     await t.pumpAndSettle();
-    expect(find.textContaining('没成'), findsOneWidget);
+    expect(find.textContaining('失败'), findsOneWidget);
   });
 
   testWidgets('管理员：绑防区、取消防区（先确认）、删拦截点（先确认）', (t) async {
@@ -109,7 +109,7 @@ void main() {
   });
 
   test('去向说人话', () {
-    expect(incidentOutcomeText('unreachable'), '拦截点走不到，没机器人去');
+    expect(incidentOutcomeText('unreachable'), '拦截点不可达，未派机器人');
     expect(incidentOutcomeText('no_robot'), '没有能派的机器人');
     expect(incidentOutcomeText('dispatched'), '已出动');
     expect(incidentOutcomeText('weird'), 'weird');

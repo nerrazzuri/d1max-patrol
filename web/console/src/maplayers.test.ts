@@ -20,7 +20,7 @@ describe("图层", () => {
   });
 });
 
-describe("多久没巡过", () => {
+describe("未巡逻时长", () => {
   it("超过两小时的格子才算没巡过", () => {
     expect(STALE_AFTER_MS).toBe(2 * 3_600_000);
     const now = 10 * 3_600_000;
@@ -29,7 +29,7 @@ describe("多久没巡过", () => {
   });
 });
 
-describe("今晚的事", () => {
+describe("今晚事件", () => {
   it("今晚的事只要给保安的,新的在前", () => {
     const a = [
       alert({ key: "a", first_ms: 100 }),

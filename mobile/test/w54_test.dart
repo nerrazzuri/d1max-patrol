@@ -163,7 +163,7 @@ void main() {
       expect(find.text('3 / 7'), findsOneWidget);
       await _tick(t);
       expect(find.byKey(MapWizardPage.controlKey), findsOneWidget);
-      expect(find.textContaining('回到起点了'), findsOneWidget, reason: '走了 40 米、回到起点：提示可以点走完了');
+      expect(find.textContaining('已回到起点'), findsOneWidget, reason: '走了 40 米、回到起点：提示可以点走完了');
 
       await _tap(t, MapWizardPage.doneWalkKey);
       await _tapLive(t, MapWizardPage.doneWalkOkKey);
@@ -173,7 +173,7 @@ void main() {
       api.wizardBuild = <String, dynamic>{'state': 'ready', 'quality': <String, dynamic>{
         'verdict': 'usable', 'reasons': <dynamic>[], 'closures': 1, 'path_m': 40.0, 'max_shift_m': 0.05}};
       await _tick(t);
-      expect(find.text('图建好了，能用'), findsOneWidget);
+      expect(find.text('地图已建成：可用'), findsOneWidget);
       expect(api.calls, contains('mapPreviewPng main:20261031-1'));
       await _tap(t, MapWizardPage.useKey);
       expect(api.calls, contains('wizard step zones'));
@@ -206,9 +206,9 @@ void main() {
         ..wizardBuild = <String, dynamic>{'state': 'ready', 'quality': <String, dynamic>{
           'verdict': 'problem', 'reasons': <dynamic>['no_loop', 'short_path'], 'path_m': 9.0}};
       await _wizard(t, api);
-      expect(find.text('图建好了，但有问题'), findsOneWidget);
-      expect(find.textContaining('没回到起点闭合'), findsOneWidget);
-      expect(find.textContaining('走得太少'), findsOneWidget);
+      expect(find.text('地图已建成：有问题'), findsOneWidget);
+      expect(find.textContaining('未回到起点闭合'), findsOneWidget);
+      expect(find.textContaining('行走距离过短'), findsOneWidget);
       expect(t.widget<FilledButton>(find.byKey(MapWizardPage.rewalkKey)), isNotNull, reason: '重走是实底主按钮');
       await _tap(t, MapWizardPage.rewalkKey);
       expect(api.calls, contains('wizard rewalk'));
@@ -228,7 +228,7 @@ void main() {
       expect(find.byKey(MapWizardPage.startRecKey), findsNothing, reason: '这一版已经有了，不能再录同一版');
       await _tap(t, MapWizardPage.walkBuiltKey);
       expect(api.calls, contains('wizard step build'));
-      expect(find.text('图建好了，但有问题'), findsOneWidget);
+      expect(find.text('地图已建成：有问题'), findsOneWidget);
     });
 
     testWidgets('没建成：写原因，只能重走', (t) async {
@@ -237,7 +237,7 @@ void main() {
           'drive': 'remote', 'by': 'u', 'label': ''}
         ..wizardBuild = <String, dynamic>{'state': 'failed', 'reason': 'MappingError: 录包是空的'};
       await _wizard(t, api);
-      expect(find.text('没建成'), findsOneWidget);
+      expect(find.text('建图失败'), findsOneWidget);
       expect(find.textContaining('录包是空的'), findsOneWidget);
       expect(find.byKey(MapWizardPage.useKey), findsNothing);
       expect(find.byKey(MapWizardPage.rewalkKey), findsOneWidget);
@@ -262,7 +262,7 @@ void main() {
       for (var i = 0; i < 5; i++) {
         await t.pump(const Duration(milliseconds: 200));
       }
-      expect(find.textContaining('离起点 3 米'), findsOneWidget, reason: '没走回起点：提醒一下');
+      expect(find.textContaining('距起点 3 米'), findsOneWidget, reason: '没走回起点：提醒一下');
       await _tapLive(t, MapWizardPage.doneWalkOkKey);
       expect(api.calls, containsAllInOrder(['mapping A stop ', 'wizard step build']));
     });
@@ -278,7 +278,7 @@ void main() {
       expect(api.wizard, isNotNull, reason: '先停下：站点上的向导留着');
       await t.tap(find.text('open'));
       await t.pumpAndSettle();
-      expect(find.text('2 / 7'), findsOneWidget, reason: '接着做');
+      expect(find.text('2 / 7'), findsOneWidget, reason: '继续');
       await _tap(t, MapWizardPage.exitKey);
       await _tap(t, MapWizardPage.exitAbandonKey);
       expect(api.calls, contains('wizard abandon'));
@@ -357,8 +357,8 @@ void main() {
         ..wizard = at('build')
         ..wizardBuild = <String, dynamic>{'state': 'ready', 'quality': <String, dynamic>{'verdict': 'unknown', 'reasons': <dynamic>[]}};
       await _wizard(t, api);
-      expect(find.text('图建好了，能用'), findsNothing);
-      expect(find.textContaining('说不清'), findsWidgets);
+      expect(find.text('地图已建成：可用'), findsNothing);
+      expect(find.textContaining('无法评估'), findsWidgets);
       expect(find.byKey(MapWizardPage.useKey), findsOneWidget);
     });
 
@@ -378,12 +378,12 @@ void main() {
   });
 
   testWidgets('走的时候的提示按规则', (t) async {
-    expect(walkTip(pathM: 5, fromStartM: 5, elapsed: Duration.zero, speed: 0.9), contains('慢一点'));
-    expect(walkTip(pathM: 5, fromStartM: 5, elapsed: Duration.zero, turn: 1.2), contains('转慢'));
+    expect(walkTip(pathM: 5, fromStartM: 5, elapsed: Duration.zero, speed: 0.9), contains('请减速'));
+    expect(walkTip(pathM: 5, fromStartM: 5, elapsed: Duration.zero, turn: 1.2), contains('放慢转向'));
     expect(walkTip(pathM: 30, fromStartM: 8, elapsed: Duration.zero), contains('回到起点'));
-    expect(walkTip(pathM: 30, fromStartM: 0.5, elapsed: Duration.zero), contains('走完了'));
-    expect(walkTip(pathM: 80, fromStartM: 8, elapsed: const Duration(minutes: 45)), contains('很久'));
-    expect(walkTip(pathM: 1, fromStartM: 0, elapsed: Duration.zero), contains('慢慢走'));
+    expect(walkTip(pathM: 30, fromStartM: 0.5, elapsed: Duration.zero), contains('结束行走'));
+    expect(walkTip(pathM: 80, fromStartM: 8, elapsed: const Duration(minutes: 45)), contains('较长时间'));
+    expect(walkTip(pathM: 1, fromStartM: 0, elapsed: Duration.zero), contains('缓慢行走'));
   });
 
   testWidgets('地图管理：每一版写结论、谁在用；在用的、最新的不能删；能把机器人退回上一版', (t) async {
@@ -409,7 +409,7 @@ void main() {
     expect(find.text('能用'), findsOneWidget);
     expect(find.text('有问题'), findsOneWidget);
     expect(find.text('A 在用'), findsOneWidget);
-    expect(find.textContaining('没回到起点闭合'), findsOneWidget);
+    expect(find.textContaining('未回到起点闭合'), findsOneWidget);
     expect(find.byKey(MapManagePage.deleteKey('main', '20261031-2')), findsNothing);
     expect(find.byKey(MapManagePage.deleteKey('main', '20261031-1')), findsOneWidget);
     await _tap(t, MapManagePage.rollbackKey('A'));

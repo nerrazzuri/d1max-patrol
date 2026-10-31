@@ -73,24 +73,24 @@ class _Entry extends StatelessWidget {
 
 /// 开站清单每一项的名字、说明（站点只给 id）。
 (String, String) setupItemText(String id) => switch (id) {
-      'robots' => (tr('Add robots', '加机器人'), tr('Robots → Add, scan the sticker on the robot.', '机器人 → 添加，扫机器人上的贴纸。')),
+      'robots' => (tr('Add robots', '添加机器人'), tr('Robots → Add, scan the sticker on the robot.', '在「机器人 → 添加」中扫描机器人贴纸。')),
       'map' => (
           tr('Map', '地图'),
           tr('Walk the robot around the site once with the mapping wizard (20–40 minutes).',
-              '跟着建图向导，开着机器人走一圈（二三十分钟）。')
+              '按建图向导操作，开着机器人走一圈（约 20–40 分钟）。')
         ),
       'zones' => (tr('Confirm no-go zones', '确认禁行区'),
-          tr("Robots don't go out on their own until the zones on this map are confirmed.", '这张图的禁行区确认之前，机器人不自己出去。')),
+          tr("Robots don't go out on their own until the no-go zones are confirmed.", '禁行区确认前，机器人不会自主出发。')),
       'standby' => (tr('Standby points', '待命点'),
-          tr('Where each robot waits and returns to after a patrol.', '每台机器人平时在哪等、巡逻完回哪。')),
+          tr('Where each robot waits and returns to after a patrol.', '每台机器人的待命位置和巡逻后返回位置。')),
       'routes' => (tr('Patrol routes', '巡逻路线'), tr('Draw routes on the map.', '在地图上画路线。')),
-      'schedule' => (tr('Patrol schedule', '巡逻日程'), tr('When each route runs, and on which robot.', '几点走哪条路线、哪台机器人。')),
+      'schedule' => (tr('Patrol schedule', '巡逻日程'), tr('When each route runs, and on which robot.', '各路线的执行时间和执行机器人。')),
       'arming' => (tr('Arming times', '布防时间'),
-          tr('When the site arms and disarms by itself (set on the web console). Skip it if you always switch by hand.',
-              '几点自动布防、撤防（在网页值班台设）。一直手动切就点「不用了」。')),
-      'accounts' => (tr('Accounts for your team', '给保安、经理开账号'),
-          tr('Approve applications or add accounts.', '批准申请，或者直接加账号。')),
-      'push' => (tr('Phone alerts', '手机收推送'), tr('At least one phone signed in and receiving P1 alerts.', '至少一部手机登录着、收得到 P1 推送。')),
+          tr('When the site arms and disarms automatically (set on the web console). Tap Skip if you always switch manually.',
+              '自动布防、撤防的时间（在网页值班台设置）。始终手动切换请点「跳过」。')),
+      'accounts' => (tr('Create accounts for your team', '为保安、经理开通账号'),
+          tr('Approve applications or add accounts.', '审批申请或直接添加账号。')),
+      'push' => (tr('Phone alerts', '手机推送'), tr('At least one phone signed in and receiving P1 alerts.', '至少一部手机已登录并能收到 P1 推送。')),
       _ => (id, ''),
     };
 
@@ -175,7 +175,7 @@ class _SetupChecklistState extends State<SetupChecklist> {
                     setState(() => _open = false);
                     unawaited(_patch(<String, dynamic>{'setup_hidden': true}));
                   },
-                  child: Text(all ? tr('Hide', '收起') : tr('Not now', '先不管了')))
+                  child: Text(all ? tr('Hide', '收起') : tr('Not now', '暂不处理')))
             else
               TextButton(
                   key: SetupChecklist.showKey,
@@ -205,11 +205,11 @@ class _SetupChecklistState extends State<SetupChecklist> {
                     TextButton(
                         key: SetupChecklist.skipKey('${it['id']}'),
                         onPressed: () => _patch(<String, dynamic>{'skip': <String>[...skip, '${it['id']}']}),
-                        child: Text(tr('Skip', '不用了'))),
+                        child: Text(tr('Skip', '跳过'))),
                     NwButton(
                         buttonKey: SetupChecklist.goKey('${it['id']}'),
                         size: NwButtonSize.small,
-                        label: tr('Do it', '去做'),
+                        label: tr('Do it', '前往'),
                         onPressed: () async {
                           widget.go(context, '${it['id']}');
                         }),
@@ -258,7 +258,7 @@ class _AdminHomeTabState extends State<AdminHomeTab> {
             final parts = '$m'.split(':');
             if (parts.length != 2) continue;
             todo.add(('zones-$m', tr('No-go zones on $m are not confirmed: robots won\'t go out on their own',
-                    '$m 的禁行区还没确认：机器人不自己出去'), () {
+                    '$m 的禁行区未确认：机器人不会自主出发'), () {
               _push(context, SiteMapPreviewPage(api: widget.api, mapId: parts[0], version: parts[1]));
             }));
           }
@@ -273,7 +273,7 @@ class _AdminHomeTabState extends State<AdminHomeTab> {
       try {
         final n = (await widget.api.bindRequests()).length;
         if (n > 0) {
-          todo.add(('bind', tr('$n robot(s) waiting to join', '$n 台机器人等批准加入'), () => widget.switchTab(1)));
+          todo.add(('bind', tr('$n robot(s) waiting to join', '$n 台机器人待批准加入'), () => widget.switchTab(1)));
         }
       } on SiteError {
         // 站点没开绑定
@@ -283,7 +283,7 @@ class _AdminHomeTabState extends State<AdminHomeTab> {
       try {
         final n = (await widget.api.accountRequests()).length;
         if (n > 0) {
-          todo.add(('accounts', tr('$n account application(s) waiting', '$n 个账号等批准'),
+          todo.add(('accounts', tr('$n account application(s) waiting', '$n 个账号待批准'),
               () => _push(context, AccountsPage(api: widget.api))));
         }
       } on SiteError {
@@ -296,7 +296,7 @@ class _AdminHomeTabState extends State<AdminHomeTab> {
       for (final i in (d['intercepts'] as List? ?? const [])) {
         if (i is Map && !used.contains('${i['name']}')) {
           todo.add(('intercept-${i['name']}', tr('Intercept point "${i['name']}" isn\'t linked to any zone',
-                  '拦截点「${i['name']}」没绑防区'), () => _push(context, SiteInterceptsPage(api: widget.api))));
+                  '拦截点「${i['name']}」未关联防区'), () => _push(context, SiteInterceptsPage(api: widget.api))));
         }
       }
     } on SiteError {
@@ -346,7 +346,7 @@ class _AdminHomeTabState extends State<AdminHomeTab> {
                     key: AdminHomeTab.todoKey,
                     tone: NwTone.warning,
                     child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-                      Text(tr('Needs you', '要你处理'),
+                      Text(tr('Needs you', '待处理'),
                           style: NwText.titleSmall.copyWith(color: c.text, fontWeight: FontWeight.w700)),
                       for (final t in _todo)
                         Padding(
@@ -370,13 +370,13 @@ class _AdminHomeTabState extends State<AdminHomeTab> {
                     icon: Icons.route_rounded,
                     title: tr('Patrol routes', '巡逻路线'),
                     hint: tr('Draw routes on the map: which points, how long to stop, what to photograph.',
-                        '在地图上画路线：走哪些点、每点停多久、拍什么。'),
+                        '在地图上绘制路线：途经点、停留时长、拍摄内容。'),
                     onTap: () => _push(context, SiteRoutesPage(api: api))),
                 _Entry(
                     entryKey: AdminHomeTab.entryKey('schedule'),
                     icon: Icons.event_rounded,
                     title: tr('Schedule', '日程'),
-                    hint: tr('What time, which route, which robot.', '几点、哪条路线、哪台机器人。'),
+                    hint: tr('What time, which route, which robot.', '执行时间、路线和机器人。'),
                     onTap: () => _push(context, SchedulePage(api: api))),
               ]),
               group(tr('Alarm response', '报警联动'), [
@@ -385,64 +385,64 @@ class _AdminHomeTabState extends State<AdminHomeTab> {
                     icon: Icons.videocam_rounded,
                     title: tr('Cameras', '摄像头'),
                     hint: tr('Fixed cameras: watch them, and send a robot when they report an intruder.',
-                        '登记固定摄像头：看画面、它报入侵时派机器人。'),
+                        '登记固定摄像头：查看画面，报入侵时派机器人。'),
                     onTap: () => _push(context, SiteCamerasPage(api: api))),
                 _Entry(
                     entryKey: AdminHomeTab.entryKey('intercepts'),
                     icon: Icons.fence_rounded,
                     title: tr('Intercept points', '拦截点'),
                     hint: tr('Where a robot goes when a zone reports an intrusion: mark the point, then link zones.',
-                        '防区报入侵时机器人去哪：标点，再绑防区。'),
+                        '防区报入侵时机器人前往的位置：先标点，再关联防区。'),
                     onTap: () => _push(context, SiteInterceptsPage(api: api))),
                 _Entry(
                     entryKey: AdminHomeTab.entryKey('weather'),
                     icon: Icons.cloud_rounded,
                     title: tr('Weather', '天气'),
                     hint: tr('Slow down in rain, pause patrols in thunderstorms; set the site location.',
-                        '下雨限速、雷暴暂停巡逻；设站点坐标。'),
+                        '雨天限速、雷暴暂停巡逻；设置站点坐标。'),
                     onTap: () => _push(context, SiteWeatherPage(api: api))),
               ]),
-              group(tr('People and system', '人和系统'), [
+              group(tr('People and system', '人员与系统'), [
                 if (s?.canManageAccounts ?? false)
                   _Entry(
                       entryKey: AdminHomeTab.entryKey('accounts'),
                       icon: Icons.people_alt_rounded,
                       title: tr('Accounts', '账号'),
-                      hint: tr('Approve applications, change roles, disable accounts.', '批准申请、改权限、停用。'),
+                      hint: tr('Approve applications, change roles, disable accounts.', '审批申请、修改权限、停用账号。'),
                       onTap: () => _push(context, AccountsPage(api: api))),
                 _Entry(
                     entryKey: AdminHomeTab.entryKey('health'),
                     icon: Icons.monitor_heart_rounded,
                     title: tr('Health check', '体检'),
                     hint: tr('Robots online, disk, backups, certificates; versions and clock offset of each robot.',
-                        '机器人在线、硬盘、备份、证书；每台的版本和钟差。'),
+                        '机器人在线、磁盘、备份、证书；各机器人的版本和时钟偏差。'),
                     onTap: () => _push(context, SiteHealthPage(api: api))),
                 _Entry(
                     entryKey: AdminHomeTab.entryKey('releases'),
                     icon: Icons.system_update_rounded,
                     title: tr('Software updates', '软件升级'),
                     hint: tr('Install new versions on the robots, roll back if something goes wrong.',
-                        '给机器人装新版本，出问题退回。'),
+                        '为机器人安装新版本，出现问题可回退。'),
                     onTap: () => _push(context, SiteReleasesPage(api: api))),
                 _Entry(
                     entryKey: AdminHomeTab.entryKey('tour'),
                     icon: Icons.school_rounded,
                     title: tr('How to use', '使用教程'),
-                    hint: tr('Walk through the duty page again.', '再走一遍值守页的导览。'),
+                    hint: tr('Replay the duty page tour.', '重新观看值守页导览。'),
                     onTap: () => restartTour(context, api)),
                 _Entry(
                     entryKey: AdminHomeTab.entryKey('help'),
                     icon: Icons.help_outline_rounded,
                     title: tr('Common questions', '常见问题'),
-                    hint: tr('What to do when an alarm comes in, when a robot won\'t go, and more.',
-                        '报警来了怎么办、派不出去怎么办……'),
+                    hint: tr('Handling alarms, robots that won\'t go, and more.',
+                        '报警处理、机器人无法派出等常见问题。'),
                     onTap: () => _push(context, HelpPage(role: s?.role ?? ''))),
                 _Entry(
                     entryKey: leaveSiteKey,
                     icon: Icons.logout_rounded,
                     title: tr('Leave this site', '退出站点'),
                     hint: tr('Signed in as ${s?.name ?? ''} (${roleName(s?.role ?? '')}).',
-                        '现在登录的是 ${s?.name ?? ''}（${roleName(s?.role ?? '')}）。'),
+                        '当前登录：${s?.name ?? ''}（${roleName(s?.role ?? '')}）。'),
                     onTap: () => leaveSite(context)),
               ]),
             ]),
@@ -497,7 +497,7 @@ class _AccountsPageState extends State<AccountsPage> {
               title: Text(tr('Approve ${r['display']}', '批准 ${r['display']}')),
               content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
                 Text(tr('Account "${r['name']}" as ${roleName(role)}. Enter your password to confirm.',
-                    '账号「${r['name']}」，权限：${roleName(role)}。输你的密码确认。')),
+                    '账号「${r['name']}」，权限：${roleName(role)}。请输入你的密码确认。')),
                 TextField(
                     key: const Key('acct-confirm-pw'),
                     controller: pw,
@@ -505,7 +505,7 @@ class _AccountsPageState extends State<AccountsPage> {
                     decoration: InputDecoration(labelText: tr('Your password', '你的密码'))),
               ]),
               actions: [
-                TextButton(onPressed: () => Navigator.pop(c, false), child: Text(tr('Cancel', '算了'))),
+                TextButton(onPressed: () => Navigator.pop(c, false), child: Text(tr('Cancel', '取消'))),
                 FilledButton(
                     key: const Key('acct-confirm-go'),
                     onPressed: () => Navigator.pop(c, true),
@@ -540,12 +540,12 @@ class _AccountsPageState extends State<AccountsPage> {
       appBar: AppBar(title: Text(tr('Accounts', '账号'))),
       body: NwListView(children: [
         if (_msg != null) ...[NwNotice(text: _msg!), nwGap8],
-        NwSectionLabel(tr('Waiting for approval', '等批准')),
+        NwSectionLabel(tr('Waiting for approval', '待批准')),
         nwGap8,
         if (reqs == null)
           const Center(child: CircularProgressIndicator())
         else if (reqs.isEmpty)
-          Text(tr('Nobody is waiting.', '没有等批准的。'), style: NwText.bodyMedium.copyWith(color: c.textSecondary))
+          Text(tr('No pending applications.', '没有待批准的申请。'), style: NwText.bodyMedium.copyWith(color: c.textSecondary))
         else
           for (final r in reqs)
             Padding(
@@ -568,7 +568,7 @@ class _AccountsPageState extends State<AccountsPage> {
                     TextButton(
                         key: AccountsPage.rejectKey('${r['id']}'),
                         onPressed: () => _reject(r),
-                        child: Text(tr('Turn down', '拒绝'))),
+                        child: Text(tr('Reject', '拒绝'))),
                     const SizedBox(width: Nw.s8),
                     NwButton(
                         buttonKey: AccountsPage.approveKey('${r['id']}'),
@@ -582,7 +582,7 @@ class _AccountsPageState extends State<AccountsPage> {
         const SizedBox(height: Nw.s16),
         Text(
             tr('To change roles, reset passwords or disable accounts, use Users on the web console.',
-                '改权限、重设密码、停用账号，在网页值班台的「用户」里。'),
+                '修改权限、重设密码、停用账号请在网页值班台「用户」中操作。'),
             style: NwText.bodySmall.copyWith(color: c.textSecondary)),
       ]),
     );
@@ -684,7 +684,7 @@ class _SchedulePageState extends State<SchedulePage> {
     if (!got.containsKey('robot')) body.remove('robot');
     try {
       await widget.api.saveSchedule(id, body);
-      if (mounted) setState(() => _msg = tr('Saved', '存好了'));
+      if (mounted) setState(() => _msg = tr('Saved', '已保存'));
     } on SiteError catch (e) {
       if (mounted) setState(() => _msg = refusalText(e));
     }
@@ -695,13 +695,13 @@ class _SchedulePageState extends State<SchedulePage> {
     final ok = await showDialog<bool>(
         context: context,
         builder: (c) => AlertDialog(
-              content: Text(tr('Delete the ${e['at']} "${e['mission']}" schedule?', '删掉 ${e['at']}「${e['mission']}」这条日程？')),
+              content: Text(tr('Delete the ${e['at']} "${e['mission']}" schedule?', '删除日程 ${e['at']}「${e['mission']}」？')),
               actions: [
-                TextButton(onPressed: () => Navigator.pop(c, false), child: Text(tr('Cancel', '算了'))),
+                TextButton(onPressed: () => Navigator.pop(c, false), child: Text(tr('Cancel', '取消'))),
                 FilledButton(
                     key: const Key('sched-delete-go'),
                     onPressed: () => Navigator.pop(c, true),
-                    child: Text(tr('Delete', '删掉'))),
+                    child: Text(tr('Delete', '删除'))),
               ],
             ));
     if (ok != true) return;
@@ -751,7 +751,7 @@ class _SchedulePageState extends State<SchedulePage> {
                       child: Text(
                           [
                             '${e['mission']}',
-                            if ('${e['robot'] ?? ''}'.isNotEmpty) '${e['robot']}' else tr('any robot', '任一台'),
+                            if ('${e['robot'] ?? ''}'.isNotEmpty) '${e['robot']}' else tr('any robot', '任意机器人'),
                             daysText(e['days'] as List? ?? const []),
                             if ((e['every_min'] as num? ?? 0) > 0) scheduleWhen(e),
                           ].join(' · '),
@@ -759,7 +759,7 @@ class _SchedulePageState extends State<SchedulePage> {
                   if (can)
                     IconButton(
                         key: Key('sched-delete-${e['id']}'),
-                        tooltip: tr('Delete', '删掉'),
+                        tooltip: tr('Delete', '删除'),
                         icon: const Icon(Icons.delete_outline_rounded),
                         onPressed: () => _delete(e)),
                 ]),
@@ -770,12 +770,12 @@ class _SchedulePageState extends State<SchedulePage> {
                 buttonKey: SchedulePage.addKey,
                 icon: Icons.add_rounded,
                 variant: NwButtonVariant.outline,
-                label: tr('Add a schedule', '加一条'),
+                label: tr('Add a schedule', '添加日程'),
                 onPressed: _routes.isEmpty ? null : () => _edit()),
           const SizedBox(height: Nw.s16),
           Text(
               tr('Arming times (when the site arms and disarms by itself) are set on the web console.',
-                  '布防时间（几点自动布防、撤防）在网页值班台里排。'),
+                  '布防时间（自动布防、撤防的时间）在网页值班台中设置。'),
               style: NwText.bodySmall.copyWith(color: c.textSecondary)),
         ],
       ]),
@@ -841,7 +841,7 @@ class _ScheduleEditorState extends State<_ScheduleEditor> {
   Widget build(BuildContext context) {
     String two(int v) => v.toString().padLeft(2, '0');
     return AlertDialog(
-      title: Text(widget.old == null ? tr('Add a schedule', '加一条日程') : tr('Edit schedule', '改日程')),
+      title: Text(widget.old == null ? tr('Add a schedule', '添加日程') : tr('Edit schedule', '编辑日程')),
       content: SingleChildScrollView(
         child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
           DropdownButtonFormField<String>(
@@ -858,7 +858,7 @@ class _ScheduleEditorState extends State<_ScheduleEditor> {
               initialValue: _robot,
               decoration: InputDecoration(labelText: tr('Robot', '机器人')),
               items: [
-                DropdownMenuItem(value: '', child: Text(tr('Any robot (the site picks)', '任一台（站点挑）'))),
+                DropdownMenuItem(value: '', child: Text(tr('Any robot (assigned by the site)', '任意机器人（站点分配）'))),
                 for (final r in widget.robots) DropdownMenuItem(value: r, child: Text(r)),
               ],
               onChanged: (v) {
@@ -885,12 +885,12 @@ class _ScheduleEditorState extends State<_ScheduleEditor> {
           ]),
           if (_est != null) ...[
             const SizedBox(height: Nw.s8),
-            Text(tr('${minutesText(_est!)} per patrol (including the walk back).', '一趟${minutesText(_est!)}（含走回去）。')),
+            Text(tr('${minutesText(_est!)} per patrol (including the walk back).', '每趟约${minutesText(_est!)}（含返回）。')),
           ],
         ]),
       ),
       actions: [
-        TextButton(onPressed: () => Navigator.pop(context), child: Text(tr('Cancel', '算了'))),
+        TextButton(onPressed: () => Navigator.pop(context), child: Text(tr('Cancel', '取消'))),
         FilledButton(
             key: const Key('sched-save'),
             onPressed: _picked.isEmpty
@@ -901,7 +901,7 @@ class _ScheduleEditorState extends State<_ScheduleEditor> {
                       'at': '${two(_at.hour)}:${two(_at.minute)}',
                       'days': [for (final d in _allDays) if (_picked.contains(d)) d],
                     }),
-            child: Text(tr('Save', '存'))),
+            child: Text(tr('Save', '保存'))),
       ],
     );
   }
@@ -943,21 +943,21 @@ class MeTab extends StatelessWidget {
                 entryKey: const Key('me-tour'),
                 icon: Icons.school_rounded,
                 title: tr('How to use', '使用教程'),
-                hint: tr('Walk through the duty page again.', '再走一遍值守页的导览。'),
+                hint: tr('Replay the duty page tour.', '重新观看值守页导览。'),
                 onTap: () => restartTour(context, api)),
             if (s?.canHandleAlerts ?? false)
               _Entry(
                   entryKey: const Key('me-practice'),
                   icon: Icons.sports_score_rounded,
-                  title: tr('Practice an alarm', '练一次报警'),
-                  hint: tr("A pretend alarm only you see. Nothing is sent to the site.", '一条只有你看得到的假报警，不发给站点。'),
+                  title: tr('Practice an alarm', '报警演练'),
+                  hint: tr("A simulated alarm visible only to you; nothing is sent to the site.", '模拟报警，仅你可见，不发送到站点。'),
                   onTap: () => _push(context, const PracticeAlarmPage())),
             _Entry(
                 entryKey: const Key('me-help'),
                 icon: Icons.help_outline_rounded,
                 title: tr('Common questions', '常见问题'),
-                hint: tr('What to do when an alarm comes in, when a robot won\'t go, and more.',
-                    '报警来了怎么办、派不出去怎么办……'),
+                hint: tr('Handling alarms, robots that won\'t go, and more.',
+                    '报警处理、机器人无法派出等常见问题。'),
                 onTap: () => _push(context, HelpPage(role: s?.role ?? ''))),
             const SizedBox(height: Nw.s16),
             NwButton(

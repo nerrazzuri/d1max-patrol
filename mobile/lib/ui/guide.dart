@@ -40,19 +40,19 @@ List<TourStep> tourSteps(String role, DutyTargets t) {
       t.mode,
       tr('Arming and weather', '布防和天气'),
       role == 'guard'
-          ? tr('This line shows whether the site is armed, and the weather. You can switch to Armed; disarming is up to the manager.',
-              '这一行是布防状态和天气。你能切到「布防」；撤防要经理定。')
+          ? tr('Arming status and weather. You can switch to Armed; disarming is done by the manager.',
+              '布防状态与天气。可切换为「布防」；撤防需经理操作。')
           : tr('Whether the site is armed, and the weather. Tap Change to arm or disarm (disarming asks you to confirm).',
               '布防状态和天气。点「切换」布防、撤防（撤防要确认）。'));
   final robots = TourStep(t.chips, tr('Robots', '机器人'),
-      tr('These are your robots. Tap a name to switch, or swipe left/right on the video.', '这一排是机器人。点名字切换，或者在画面上左右滑。'));
+      tr('Your robots: tap a name to switch, or swipe on the video.', '机器人列表：点名称切换，或在画面上左右滑动。'));
   final video = TourStep(t.video, tr('Live video', '实时画面'),
-      tr('Tap ▶ to watch live at full speed; tap ✕ to stop (saves data on 4G).', '点 ▶ 看实时画面（全速），✕ 关掉（4G 省流量）。'));
-  final status = TourStep(t.status, tr('What it is doing', '它在干嘛'),
-      tr('What the robot is doing, when it will finish, and its battery.', '这里写着它在干嘛、预计几点走完、电量。'));
+      tr('Tap ▶ to watch live; tap ✕ to stop (saves data on 4G).', '点 ▶ 查看实时画面，✕ 关闭（使用 4G 时可节省流量）。'));
+  final status = TourStep(t.status, tr('Current status', '当前状态'),
+      tr('Current task, estimated finish time and battery.', '显示当前任务、预计完成时间和电量。'));
   final today = TourStep(t.today, tr("Today's patrols", '今天的巡逻'),
-      tr('Every patrol today: scheduled ones and one-off ones. Tap one that didn\'t finish to see why.',
-          '今天所有的巡逻：日程的和临时派的。没完成的点开看原因。'));
+      tr('All patrols today. Tap an unfinished one to see why.',
+          '今日全部巡逻。点开未完成项可查看原因。'));
   return switch (role) {
     'guard' => [
         mode,
@@ -60,13 +60,12 @@ List<TourStep> tourSteps(String role, DutyTargets t) {
         video,
         status,
         TourStep(t.actions, tr('Patrol, drive, stop', '派巡逻、遥控、叫停'),
-            tr('Patrol: pick a route. If it runs into the schedule it waits until the schedule is done, and the manager is told. '
-                'Drive: steer it by hand. Stop: it stops where it is, right away.',
-                '派巡逻：选路线；撞上日程会排在日程后面，派了经理会知道。遥控：手动开着它走。叫停：机器人马上停在原地。')),
+            tr('Patrol: pick a route; if it clashes with the schedule it runs afterwards and the manager is notified. Drive: manual control. Stop: the robot stops where it is.',
+                '派巡逻：选择路线，与日程冲突时排在日程之后并通知经理。遥控：手动控制。叫停：机器人原地停止。')),
         today,
         TourStep(null, tr('When an alarm comes in', '有报警的时候'),
-            tr('A P1 alarm rings, and a red bar appears at the top. Tap Respond. Let\'s practise once now.',
-                '有 P1 报警会响铃，最上面出红条，点「去处理」。现在练一次。')),
+            tr('A P1 alarm rings and shows a red bar at the top; tap Respond. Start a practice run below.',
+                'P1 报警会响铃并在顶部显示红条，点「去处理」进入。下面进行一次演练。')),
       ],
     'owner' => [
         mode,
@@ -75,7 +74,7 @@ List<TourStep> tourSteps(String role, DutyTargets t) {
             tr('Send a one-off patrol, or stop a robot right away.', '临时派一趟巡逻，或者马上叫停。')),
         today,
         TourStep(null, tr('Schedule', '日程'),
-            tr('The 5th tab at the bottom is the schedule: when each route runs, on which robot.', '底部第 5 栏是日程：几点走哪条路线、哪台机器人。')),
+            tr('Schedule tab: when each route runs and on which robot.', '「日程」页：各路线的执行时间和机器人。')),
       ],
     'viewer' => [
         robots,
@@ -88,9 +87,8 @@ List<TourStep> tourSteps(String role, DutyTargets t) {
         video,
         today,
         TourStep(null, tr('Admin', '管理'),
-            tr('The Admin tab starts with "Needs you" and the site setup checklist: work through it once. '
-                'Robots → Add to add a robot; Map to confirm no-go zones; Admin → Accounts to approve people.',
-                '「管理」栏最上面是「要你处理」和开站清单，照着做一遍。加机器人在「机器人 → 添加」，确认禁行区在「地图」，批准账号在「管理 → 账号」。')),
+            tr('The Admin tab starts with pending items and the site setup checklist; complete them in order. Add robots: Robots → Add. Confirm no-go zones: Map. Approve accounts: Admin → Accounts.',
+                '「管理」页顶部是待处理事项和开站清单，请逐项完成。添加机器人：机器人 → 添加；确认禁行区：地图；审批账号：管理 → 账号。')),
       ],
   };
 }
@@ -195,7 +193,7 @@ Future<bool?> _showStep(BuildContext context, TourStep s, int i, int n) => showG
                 const Spacer(),
                 NwButton(
                     buttonKey: tourNextKey,
-                    label: i + 1 == n ? tr('Done', '好了') : tr('Next', '下一步'),
+                    label: i + 1 == n ? tr('Done', '完成') : tr('Next', '下一步'),
                     onPressed: () => Navigator.pop(c, true)),
               ]),
             ]),
@@ -266,7 +264,7 @@ class _PracticeAlarmPageState extends State<PracticeAlarmPage> {
     final steps = <Widget>[
       // 0：值守页最上面的红条
       Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-        Text(tr('This is how an alarm looks at the top of the duty page:', '报警来了，值守页最上面是这样：'),
+        Text(tr('During an alarm, the top of the duty page looks like this:', '报警时，值守页顶部显示如下：'),
             style: NwText.bodyMedium.copyWith(color: c.textSecondary)),
         nwGap8,
         NwCard(
@@ -299,9 +297,8 @@ class _PracticeAlarmPageState extends State<PracticeAlarmPage> {
                     style: NwText.bodySmall.copyWith(color: Colors.white70)))),
         nwGap8,
         Text(
-            tr('The alarm page shows the snapshot, the live video, and where it happened on the map. '
-                'Tap "I\'ll handle it" so everyone sees someone is on it.',
-                '报警页有抓拍、实时画面、地图上的位置。点「我来处理」，别人就知道有人在管了。'),
+            tr('The alarm page shows the snapshot, live video and map location. Tap "I\'ll handle it" so others see it is being handled.',
+                '报警页显示抓拍、实时画面和地图位置。点「我来处理」，其他人会看到已有人处理。'),
             style: NwText.bodyMedium.copyWith(color: c.text)),
         nwGap8,
         NwButton(
@@ -312,14 +309,14 @@ class _PracticeAlarmPageState extends State<PracticeAlarmPage> {
       // 2：写结论
       Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
         Text(
-            tr('After you check (video, or go there), record what it was:', '看过画面、或者去现场看过之后，写下结论：'),
+            tr('After checking the video or the site, record the outcome:', '查看画面或到现场核实后，记录结论：'),
             style: NwText.bodyMedium.copyWith(color: c.text)),
         nwGap8,
         Wrap(spacing: Nw.s8, runSpacing: Nw.s8, children: [
           for (final (o, label) in [
             ('real', tr('Real person', '真有人')),
             ('false', tr('False alarm', '误报')),
-            ('handled', tr('Handled', '处理好了')),
+            ('handled', tr('Handled', '已处理')),
           ])
             NwButton(
                 buttonKey: PracticeAlarmPage.outcomeKey(o),
@@ -332,10 +329,10 @@ class _PracticeAlarmPageState extends State<PracticeAlarmPage> {
       Column(key: PracticeAlarmPage.doneKey, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
         Icon(Icons.check_circle_rounded, size: 48, color: c.success),
         nwGap8,
-        Text(tr("That's it. When a real one comes in, do the same.", '好了，真的来了就这么处理。'),
+        Text(tr("Practice complete. Handle real alarms the same way.", '演练完成。实际报警按同样步骤处理。'),
             textAlign: TextAlign.center, style: NwText.titleSmall.copyWith(color: c.text)),
         nwGap8,
-        NwButton(label: tr('Back', '回去'), onPressed: () => Navigator.pop(context)),
+        NwButton(label: tr('Back', '返回'), onPressed: () => Navigator.pop(context)),
       ]),
     ];
     return Scaffold(
@@ -343,7 +340,7 @@ class _PracticeAlarmPageState extends State<PracticeAlarmPage> {
       body: NwListView(children: [
         NwNotice(
             tone: NwTone.info,
-            text: tr('Practice only: nothing here is sent to the site or recorded.', '只是练习：这里点的都不发给站点、不记录。')),
+            text: tr('Practice mode: nothing is sent to the site or recorded.', '演练模式：操作不会发送到站点，也不会记录。')),
         const SizedBox(height: Nw.s16),
         steps[_step],
       ]),
@@ -361,35 +358,30 @@ class _Faq {
 }
 
 List<_Faq> _faqs() => [
-      _Faq(null, tr('An alarm came in. What do I do?', '报警来了怎么办'),
-          tr('Tap the red bar → look at the snapshot and live video → tap "I\'ll handle it". If someone is really there, '
-              'go or call security; then record Real person / False alarm / Handled.',
-              '点红条 → 看抓拍和实时画面 → 点「我来处理」。真有人就去现场或者叫人；处理完写结论：真有人 / 误报 / 处理好了。')),
-      _Faq({'guard', 'owner', 'admin', 'engineer'}, tr('How do I stop a robot right now?', '怎么马上让它停'),
-          tr('Duty page → Stop. It stops where it is and the site won\'t send it anywhere until someone taps Resume. '
-              'The hardware emergency stop on the robot always works too.',
-              '值守页 →「叫停」。它停在原地，之后有人点「恢复」站点才会再派它。机器人身上的急停按钮任何时候都能按。')),
-      _Faq({'guard', 'owner', 'admin', 'engineer'}, tr("The robot won't go out. Why?", '机器人派不出去'),
-          tr('The message says why and has a button to fix it. Most common: no-go zones not confirmed (administrator), '
-              "the robot doesn't know where it is (set its position), it was stopped (Resume), it is offline or charging.",
-              '弹出来的框里写着原因，带着去处理的按钮。最常见：禁行区还没确认（找管理员）、机器人不知道自己在哪（设位置）、被叫停了（恢复）、离线或者在充电。')),
-      _Faq({'guard', 'owner'}, tr('My patrol was queued. Why?', '我派的巡逻怎么排队了'),
-          tr('Scheduled patrols come first. If yours would run into one, it starts after the scheduled one finishes. '
-              'You get a notification when it starts. To look right away, use Drive.',
-              '日程优先。你派的跟日程撞了，就等日程那趟走完再走，开始时会通知你。要马上去看，用「遥控」。')),
-      _Faq(null, tr('A robot is offline', '机器人掉线了'),
-          tr('Check it is powered on and the WiFi is up. If it changed WiFi, an administrator sets it under Robot → Change WiFi.',
-              '看一下它开着没有、WiFi 通不通。换过 WiFi 的，管理员在「机器人 → 换 WiFi」里重新配。')),
-      _Faq(null, tr('How do I find a recording?', '怎么看录像'),
+      _Faq(null, tr('How to handle an alarm', '收到报警如何处理'),
+          tr('Tap the red bar → check the snapshot and live video → tap "I\'ll handle it". If someone is there, go to the site or call security; then record Real intrusion / False alarm / Handled.',
+              '点红条 → 查看抓拍和实时画面 → 点「我来处理」。确认有人时到现场或通知安保；处理后记录结论：真实入侵 / 误报 / 已处理。')),
+      _Faq({'guard', 'owner', 'admin', 'engineer'}, tr('How to stop a robot immediately', '如何立即停止机器人'),
+          tr('Duty page → Stop. The robot stops where it is and is not dispatched again until someone taps Resume. The emergency stop on the robot always works.',
+              '值守页 →「叫停」。机器人原地停止，点「恢复」后才会再被派出。机器人上的急停按钮随时可用。')),
+      _Faq({'guard', 'owner', 'admin', 'engineer'}, tr("Robot can't be dispatched", '机器人无法派出'),
+          tr('The message explains why and offers a fix. Common causes: no-go zones not confirmed (contact the administrator), robot not localized (set its position), robot stopped (Resume), offline or charging.',
+              '弹窗会说明原因并提供处理按钮。常见原因：禁行区未确认（联系管理员）、机器人未定位（设位置）、已被叫停（恢复）、离线或正在充电。')),
+      _Faq({'guard', 'owner'}, tr('Why is my patrol queued?', '巡逻为何排队'),
+          tr('Scheduled patrols take priority. A one-off patrol that clashes with the schedule starts after it, and you are notified when it starts. To check right away, use Drive.',
+              '日程巡逻优先。临时巡逻与日程冲突时，在日程巡逻结束后开始，开始时会通知你。需要立即查看请用「遥控」。')),
+      _Faq(null, tr('A robot is offline', '机器人离线'),
+          tr('Check the robot is powered on and the WiFi works. If the WiFi changed, an administrator reconfigures it under Robot → Change WiFi.',
+              '检查机器人是否开机、WiFi 是否正常。如更换过 WiFi，请管理员在「机器人 → 换 WiFi」中重新配置。')),
+      _Faq(null, tr('How to find recordings', '如何查看录像'),
           tr('Robots → pick a robot → Recordings, or History → Patrols for the photos of each patrol.',
               '机器人 → 点一台 → 录像；每趟巡逻拍的照片在「记录 → 巡逻」。')),
-      _Faq({'admin', 'engineer'}, tr('How do I add people?', '怎么加账号'),
-          tr('People apply in the app (sign-in page → New Account Registration). You approve under Admin → Accounts and pick their role; '
-              'new accounts are View only by default.',
-              '让他们在 App 登录页点「新账号注册」；你在「管理 → 账号」里批准、选权限，默认「只看」。')),
-      _Faq({'admin', 'engineer'}, tr('Where do I start?', '从哪开始'),
-          tr('Admin → Site setup checklist. Work through it top to bottom; each line has a "Do it" button.',
-              '「管理」页的开站清单，从上往下做，每一项都有「去做」。')),
+      _Faq({'admin', 'engineer'}, tr('How to add accounts', '如何添加账号'),
+          tr('Applicants tap New Account Registration on the app sign-in page; administrators approve under Admin → Accounts and choose the role (View only by default).',
+              '申请人在 App 登录页点「新账号注册」；管理员在「管理 → 账号」中审批并选择权限（默认「只看」）。')),
+      _Faq({'admin', 'engineer'}, tr('Getting started', '从哪里开始'),
+          tr('Admin → Site setup checklist. Complete it in order; each item has a Do it button.',
+              '「管理」页的开站清单，按顺序完成，每项都有「前往」按钮。')),
     ];
 
 class HelpPage extends StatelessWidget {

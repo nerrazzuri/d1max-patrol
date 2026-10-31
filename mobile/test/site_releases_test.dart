@@ -43,9 +43,9 @@ void main() {
     await t.tap(find.byKey(const Key('pick-rel-2026-09-25-bbbbbb')));
     await t.pumpAndSettle();
     expect(api.calls, ['release A precheck 2026-09-25-bbbbbb'], reason: '不用确认，也不发别的');
-    expect(find.text('不能切：1 项拦着'), findsOneWidget);
+    expect(find.text('不能切换：1 项阻断检查未通过'), findsOneWidget);
     expect(find.text('双槽所在的盘不够'), findsOneWidget);
-    expect(find.text('站点备份（提示，不拦）'), findsOneWidget);
+    expect(find.text('站点备份（仅提示，不阻断）'), findsOneWidget);
     expect(find.text('定位器'), findsOneWidget, reason: '过了的、不拦的不标「提示」');
     final disk = t.getTopLeft(find.byKey(const Key('precheck-item-disk'))).dy;
     final busy = t.getTopLeft(find.byKey(const Key('precheck-item-busy'))).dy;

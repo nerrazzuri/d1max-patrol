@@ -82,9 +82,9 @@ describe("W53 网页", () => {
     const { container: c } = render(<SetupChecklist />);
     await waitFor(() => expect(c.querySelector('li[data-item="arming"]')).not.toBeNull());
     expect(c.textContent).toContain("开站清单 1/2");
-    fireEvent.click(btn(c.querySelector('li[data-item="arming"]')!, "不用了"));
+    fireEvent.click(btn(c.querySelector('li[data-item="arming"]')!, "跳过"));
     await waitFor(() => expect(posted.some((p) => p.url === "/api/me/guide" && Array.isArray(p.body.skip))).toBe(true));
-    fireEvent.click(btn(c, "先不管了"));
+    fireEvent.click(btn(c, "暂不处理"));
     await waitFor(() => expect(posted.some((p) => p.body.setup_hidden === true)).toBe(true));
   });
 
@@ -93,14 +93,14 @@ describe("W53 网页", () => {
     const { container: c } = render(<HelpDialog role="guard" onClose={() => { closed = true; }} />, { container: document.body });
     expect(c.textContent).toContain("1 / 5");
     for (let i = 0; i < 4; i++) fireEvent.click(btn(c, "下一步"));
-    fireEvent.click(btn(c, "好了"));
+    fireEvent.click(btn(c, "完成"));
     expect(closed).toBe(true);
     await waitFor(() => expect(posted.some((p) => p.url === "/api/me/guide" && p.body.web_tour === WEB_TOUR)).toBe(true));
     cleanup();
     const { container: d } = render(<HelpDialog role="guard" onClose={() => {}} />, { container: document.body });
     fireEvent.click(btn(d, "常见问题"));
-    expect(d.textContent).toContain("我派的巡逻怎么排队了");
-    expect(d.textContent).not.toContain("怎么加账号");
+    expect(d.textContent).toContain("巡逻为何排队");
+    expect(d.textContent).not.toContain("如何添加账号");
   });
 
   it("时刻按站点的钟(外审 #12)", () => {

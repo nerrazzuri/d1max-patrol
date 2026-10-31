@@ -41,13 +41,12 @@ String dispatchResultText(Map<String, dynamic> r, String label) {
     final at = r['start_after_ms'];
     final why = '${r['because'] ?? ''}';
     return tr(
-        'Queued: "$label" starts after ${at is num ? hhmm(at.toInt(), off) : '?'} (the schedule comes first${why.isEmpty ? '' : ': $why'}). '
-            "You'll be notified when it starts.",
-        '排上了：「$label」${at is num ? hhmm(at.toInt(), off) : '?'} 以后走（日程优先${why.isEmpty ? '' : '：$why'}）。开始时会通知你。');
+        'Queued: "$label" starts after ${at is num ? hhmm(at.toInt(), off) : '?'} (schedule first${why.isEmpty ? '' : ': $why'}). You\'ll be notified when it starts.',
+        '已排队：「$label」将在 ${at is num ? hhmm(at.toInt(), off) : '?'} 之后开始（日程优先${why.isEmpty ? '' : '：$why'}），开始时通知你。');
   }
   final est = r['estimate_s'];
-  return tr('Sent: "$label"${est is num ? ', ${minutesText(est)}' : ''}. The manager and administrator are notified.',
-      '派出去了：「$label」${est is num ? '，${minutesText(est)}' : ''}。经理和管理员会收到通知。');
+  return tr('Dispatched: "$label"${est is num ? ', ${minutesText(est)}' : ''}. The manager and administrator have been notified.',
+      '已派出：「$label」${est is num ? '，${minutesText(est)}' : ''}，已通知经理和管理员。');
 }
 
 /// 弹派巡逻框。派出去（或排上了）回给人看的那一句；没派回 null。
@@ -104,7 +103,7 @@ class _PatrolSheetState extends State<_PatrolSheet> {
         }, onError: (Object _) {}));
       }
     } on SiteError catch (e) {
-      if (mounted) setState(() => _error = tr("Can't load routes: ${refusalText(e)}", '拿不到路线：${refusalText(e)}'));
+      if (mounted) setState(() => _error = tr("Can't load routes: ${refusalText(e)}", '无法加载路线：${refusalText(e)}'));
     }
   }
 
@@ -121,7 +120,7 @@ class _PatrolSheetState extends State<_PatrolSheet> {
           setState(() {
             _busy = false;
             _error = tr('The robot did not accept: ${ack['result']} ${ack['reason'] ?? ''}',
-                '机器人没接：${ack['result']} ${ack['reason'] ?? ''}');
+                '机器人未接受：${ack['result']} ${ack['reason'] ?? ''}');
           });
         }
         return;
@@ -151,8 +150,8 @@ class _PatrolSheetState extends State<_PatrolSheet> {
     final p = tasks is Map ? tasks['patrol'] : null;
     if (p is! Map || p['map_id'] is! String || p['map_version'] is! String) {
       if (mounted) {
-        setState(() => _error = tr("${widget.robotId} hasn't reported which map it has loaded",
-            '${widget.robotId} 没报加载的是哪张图'));
+        setState(() => _error = tr("${widget.robotId} hasn't reported its loaded map",
+            '${widget.robotId} 未上报已加载的地图'));
       }
       return;
     }
@@ -182,7 +181,7 @@ class _PatrolSheetState extends State<_PatrolSheet> {
       child: Padding(
         padding: EdgeInsets.fromLTRB(Nw.s16, 0, Nw.s16, Nw.s16 + MediaQuery.viewInsetsOf(context).bottom),
         child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-          Text(tr('Send ${widget.robotId} on patrol', '派 ${widget.robotId} 去巡逻'),
+          Text(tr('Dispatch ${widget.robotId} on patrol', '派 ${widget.robotId} 巡逻'),
               style: NwText.titleMedium.copyWith(color: c.text, fontWeight: FontWeight.w700)),
           nwGap8,
           if (_error != null)
@@ -191,8 +190,8 @@ class _PatrolSheetState extends State<_PatrolSheet> {
             const Padding(padding: EdgeInsets.all(Nw.s16), child: Center(child: CircularProgressIndicator()))
           else if (rs.isEmpty)
             NwNotice(
-                text: tr('No patrol routes yet. An administrator draws them under Admin → Patrol routes.',
-                    '还没有巡逻路线。管理员在「管理 → 巡逻路线」里画。'))
+                text: tr('No patrol routes yet. An administrator adds them under Admin → Patrol routes.',
+                    '还没有巡逻路线，请管理员在「管理 → 巡逻路线」中添加。'))
           else
             ConstrainedBox(
               constraints: BoxConstraints(maxHeight: MediaQuery.sizeOf(context).height * 0.45),
@@ -221,7 +220,7 @@ class _PatrolSheetState extends State<_PatrolSheet> {
               buttonKey: patrolCustomKey,
               variant: NwButtonVariant.outline,
               icon: Icons.touch_app_rounded,
-              label: tr('Tap points on the map instead', '在地图上点点位（临时路线）'),
+              label: tr('Pick points on the map (one-off route)', '在地图上选点（临时路线）'),
               onPressed: _busy ? null : _custom),
           if (queued) ...[
             nwGap8,
@@ -229,15 +228,13 @@ class _PatrolSheetState extends State<_PatrolSheet> {
                 key: patrolQueuedKey,
                 tone: NwTone.warning,
                 text: tr(
-                    'This would run into the schedule (${plan['because']}). The schedule comes first: '
-                        'yours starts after $startAt.',
-                    '跟日程撞了（${plan['because']}）。日程优先：你这趟排到 $startAt 以后。')),
+                    'Clashes with the schedule (${plan['because']}). The schedule takes priority: this patrol starts after $startAt.',
+                    '与日程冲突（${plan['because']}），日程优先：本次巡逻将在 $startAt 之后开始。')),
           ],
           nwGap8,
           Text(
-              tr("This is a one-off patrol: it isn't saved to the schedule. The manager and administrator are notified. "
-                  'When it finishes the robot walks back to its standby point (included in the time).',
-                  '这是临时巡逻，不进日程；派出去经理和管理员会收到通知。走完机器人自己回待命点（算在时间里）。'),
+              tr("One-off patrols are not saved to the schedule. The manager and administrator are notified; the robot returns to standby afterwards.",
+                  '临时巡逻不保存到日程，派出后通知经理和管理员，结束后机器人返回待命点。'),
               style: NwText.bodySmall.copyWith(color: c.textSecondary)),
           nwGap8,
           Row(children: [
@@ -264,16 +261,16 @@ class _PatrolSheetState extends State<_PatrolSheet> {
 /// 一行的状态说人话 + 颜色。
 (String, NwTone) patrolStateText(String state) => switch (state) {
       'done' => (tr('Done', '完成'), NwTone.success),
-      'failed' => (tr('Not finished', '没完成'), NwTone.error),
-      'aborted' => (tr('Stopped', '叫停了'), NwTone.neutral),
+      'failed' => (tr('Not finished', '未完成'), NwTone.error),
+      'aborted' => (tr('Stopped', '已叫停'), NwTone.neutral),
       'running' => (tr('In progress', '进行中'), NwTone.info),
-      'waiting' => (tr('Waiting for a robot', '等机器人'), NwTone.warning),
-      'missed' => (tr('Missed', '没跑'), NwTone.error),
+      'waiting' => (tr('Waiting for a robot', '等待机器人'), NwTone.warning),
+      'missed' => (tr('Missed', '未执行'), NwTone.error),
       'next' => (tr('Next', '下一次'), NwTone.neutral),
       'later' => (tr('Later', '稍后'), NwTone.neutral),
       'queued' => (tr('Queued', '排队中'), NwTone.warning),
-      'cancelled' => (tr('Cancelled', '取消了'), NwTone.neutral),
-      'expired' => (tr('Expired', '作废了'), NwTone.neutral),
+      'cancelled' => (tr('Cancelled', '已取消'), NwTone.neutral),
+      'expired' => (tr('Expired', '已作废'), NwTone.neutral),
       _ => (state, NwTone.neutral),
     };
 
@@ -312,7 +309,7 @@ class TodayPatrolList extends StatelessWidget {
       '${hhmm((it['at_ms'] as num).toInt(), offsetMin)} · ${it['label']}${'${it['robot'] ?? ''}'.isEmpty ? '' : ' · ${it['robot']}'}',
       st,
       if (adhoc) tr('One-off patrol sent by ${it['by']}', '${it['by']} 派的临时巡逻'),
-      if (it['end_ms'] is num) tr('Ends around ${hhmm((it['end_ms'] as num).toInt(), offsetMin)}', '大约 ${hhmm((it['end_ms'] as num).toInt(), offsetMin)} 走完'),
+      if (it['end_ms'] is num) tr('Ends around ${hhmm((it['end_ms'] as num).toInt(), offsetMin)}', '预计 ${hhmm((it['end_ms'] as num).toInt(), offsetMin)} 结束'),
       if (reason.isNotEmpty) reason,
     ];
     final cancel = await showDialog<bool>(
@@ -324,7 +321,7 @@ class TodayPatrolList extends StatelessWidget {
                   TextButton(
                       key: const Key('today-cancel'),
                       onPressed: () => Navigator.pop(c, true),
-                      child: Text(tr('Cancel this patrol', '取消这一趟'))),
+                      child: Text(tr('Cancel this patrol', '取消本次巡逻'))),
                 TextButton(onPressed: () => Navigator.pop(c, false), child: Text(tr('Close', '关闭'))),
               ],
             ));

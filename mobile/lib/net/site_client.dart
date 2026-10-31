@@ -51,7 +51,7 @@ String? checkSiteEntry(String url, String fingerprint) {
   try {
     u = Uri.parse(url.trim());
   } on FormatException {
-    return tr('Invalid address', '地址写得不对');
+    return tr('Invalid address', '地址格式错误');
   }
   if (u.scheme != 'https' || u.host.isEmpty) {
     return tr(
@@ -60,8 +60,8 @@ String? checkSiteEntry(String url, String fingerprint) {
   }
   if (!RegExp(r'^[0-9a-f]{64}$').hasMatch(normalizeFingerprint(fingerprint))) {
     return tr(
-        'Certificate fingerprint must be 64 hex characters (the string printed by d1max-site fingerprint)',
-        '证书指纹要是 64 位十六进制（d1max-site fingerprint 打出来的那串）');
+        'Certificate fingerprint must be 64 hex characters',
+        '证书指纹应为 64 位十六进制字符');
   }
   return null;
 }
@@ -91,13 +91,13 @@ String? compatProblem(Map<String, dynamic> login) {
   final minApp = login['min_app_level'] is int ? login['min_app_level'] as int : 1;
   if (appApiLevel < minApp) {
     return tr(
-        'App too old: this site needs app API level $minApp or higher (this app is $appApiLevel). Update the app',
-        'App 太老了：这个站点要 App 接口级别 $minApp 以上（现在是 $appApiLevel），请升级 App');
+        'App version too old: this site requires API level $minApp or later (current: $appApiLevel). Update the app',
+        'App 版本过低：此站点需要接口级别 $minApp 及以上（当前为 $appApiLevel），请升级 App');
   }
   if (siteLevel < minSiteApiLevel) {
     return tr(
-        'Site too old: this app needs site API level $minSiteApiLevel or higher (the site is $siteLevel). Update the site first',
-        '站点太老了：这个 App 要站点接口级别 $minSiteApiLevel 以上（站点是 $siteLevel），请先升级站点');
+        'Site version too old: this app requires site API level $minSiteApiLevel or later (site: $siteLevel). Update the site first',
+        '站点版本过低：此 App 需要站点接口级别 $minSiteApiLevel 及以上（站点为 $siteLevel），请先升级站点');
   }
   return null;
 }
@@ -234,14 +234,14 @@ String incidentOutcomeText(String outcome) => switch (outcome) {
       'dispatching' => tr('Dispatching', '正在派'),
       'merged' => tr('Merged into an active dispatch', '并进已出动的'),
       'duplicate' => tr('Duplicate (same incident)', '重复（同一条事件）'),
-      'unmapped' => tr('Zone has no intercept point, no robot sent', '防区没映射到拦截点，没机器人去'),
+      'unmapped' => tr('Zone has no intercept point; no robot dispatched', '防区未关联拦截点，未派机器人'),
       'no_robot' => tr('No robot available', '没有能派的机器人'),
-      'dispatch_failed' => tr('Dispatched, but the robot did not accept', '派了，机器人没收'),
-      'ignored_type' => tr('Not an intrusion, logged only', '不是入侵，只记账'),
+      'dispatch_failed' => tr('Dispatched; the robot did not accept', '已派出，机器人未接受'),
+      'ignored_type' => tr('Not an intrusion; logged only', '非入侵，仅记录'),
       'disarmed' => tr(
           'Disarmed, logged only (no robot sent, no alarm sounded)',
           '撤防中，只记录（没派机器人、没响铃）'),
-      'unreachable' => tr('Intercept point unreachable, no robot sent', '拦截点走不到，没机器人去'),
+      'unreachable' => tr('Intercept point unreachable; no robot dispatched', '拦截点不可达，未派机器人'),
       _ => outcome,
     };
 
@@ -287,47 +287,47 @@ String ackReasonText(String reason) {
   if (reason.startsWith('localizer_unavailable')) {
     return tr(
         'Localizer not connected or not responding: ${reason.substring(reason.indexOf(':') + 1).trim()}',
-        '定位器没连上或没回：${reason.substring(reason.indexOf(':') + 1).trim()}');
+        '定位服务未连接或无响应：${reason.substring(reason.indexOf(':') + 1).trim()}');
   }
   if (reason.startsWith('localizer_refused')) {
     return tr(
         'Localizer rejected this position: ${reason.substring(reason.indexOf(':') + 1).trim()}',
-        '定位器没接这个位置：${reason.substring(reason.indexOf(':') + 1).trim()}');
+        '定位服务拒绝了该位置：${reason.substring(reason.indexOf(':') + 1).trim()}');
   }
   // 狗说了在忙什么（W00c6f 标原点：在跑任务、在换图……）。
   if (reason.startsWith('busy:')) {
     return tr(
         'Robot is busy: ${reason.substring(5).trim()}',
-        '它正忙着别的：${reason.substring(5).trim()}');
+        '机器人忙：${reason.substring(5).trim()}');
   }
   if (reason.startsWith('persist_failed')) {
     return tr(
-        'Robot could not save it (disk full?): ${reason.substring(14).replaceFirst(':', '').trim()}',
-        '机器人上记不下（盘满了？）：${reason.substring(14).replaceFirst(':', '').trim()}');
+        'Robot could not save it (storage may be full): ${reason.substring(14).replaceFirst(':', '').trim()}',
+        '机器人无法保存（存储可能已满）：${reason.substring(14).replaceFirst(':', '').trim()}');
   }
   return _ackReasonText(reason);
 }
 
 String _ackReasonText(String reason) => switch (reason) {
       'unsupervised' => tr(
-          "Robot needs on-site supervision: turn on \"I'm supervising on site\" first",
-          '它要人现场监护：先打开「我在现场监护」再派'),
-      'busy' => tr('Robot is busy', '它正忙着别的'),
+          "Supervision required: turn on \"I'm supervising on site\" first",
+          '需要现场监护：请先开启「我在现场监护」'),
+      'busy' => tr('Robot is busy', '机器人忙'),
       'expired' => tr(
-          'Command had expired when it reached the robot (robot clock may be off, or the network is too slow)',
-          '命令到机器人那儿已经过期了（机器人的钟可能不准，或者网络太慢）'),
+          'Command expired before reaching the robot (clock offset or network delay)',
+          '命令到达时已过期（机器人时钟偏差或网络延迟）'),
       'stale_epoch' => tr(
-          'Site and robot control epochs do not match. Refresh and try again',
-          '站点和机器人的控制代次对不上，刷新一下再试'),
-      'stale_seq' => tr('Late heartbeat, ignored by the robot', '这是一条迟到的旧心跳，机器人没认'),
-      'halting' => tr('Robot is stopping. Try again shortly', '它正在叫停，稍后再派'),
-      'moving' => tr('Robot is moving. Try again once it has stopped', '它在走：停稳了再试'),
-      'no_home' => tr('This map has no origin marked. Enter coordinates', '这张图没标过原点：输坐标'),
-      'map_mismatch' => tr('Robot just switched maps. Refresh and set again', '机器人刚换了图：刷新一下再设'),
-      'no_map' => tr('Robot has no map loaded', '机器人没加载地图'),
+          'Control state out of sync. Refresh and try again',
+          '控制状态不同步，请刷新后重试'),
+      'stale_seq' => tr('Stale heartbeat ignored', '心跳已过期，已忽略'),
+      'halting' => tr('Robot is stopping. Try again shortly', '机器人正在停止，请稍后再派'),
+      'moving' => tr('Robot is moving. Try again once it stops', '机器人正在移动，停稳后再试'),
+      'no_home' => tr('This map has no origin. Enter coordinates', '此地图未标原点，请输入坐标'),
+      'map_mismatch' => tr('The robot switched maps. Refresh and set again', '机器人已换图，请刷新后重新设置'),
+      'no_map' => tr('Robot has no map loaded', '机器人未加载地图'),
       'odom_invalid' => tr(
-          'Cannot read robot odometry (sidecar process down?)',
-          '机器人的里程读不到（旁路进程断了？）'),
+          'Cannot read robot odometry (sidecar process may be down)',
+          '无法读取机器人里程（旁路进程可能已断开）'),
       _ => reason,
     };
 
@@ -339,13 +339,13 @@ String locText(Map<String, dynamic>? loc) {
   if (loc['anchored'] != true) {
     return tr(
         'Localization: position not set — ${reason.isEmpty ? 'tap "Set position"' : reason}',
-        '定位：没设位置 —— ${reason.isEmpty ? '点「设位置」' : reason}');
+        '定位：未设置位置 — ${reason.isEmpty ? '点「设位置」' : reason}');
   }
   if (reason.isNotEmpty) return tr('Localization unreliable: $reason', '定位不可信：$reason');
   if (loc['source'] == 'odom_identity') {
     return tr(
-        'Localization: simulated (odometry is the position)',
-        '定位：仿真（里程就是位置）');
+        'Localization: simulated',
+        '定位：仿真');
   }
   final s = loc['sigma_m'];
   return tr(
@@ -441,7 +441,7 @@ String rtkText(Map<String, dynamic>? rtk) {
         'corrections ${age.toStringAsFixed(0)} s ago',
         '改正 ${age.toStringAsFixed(0)} 秒前'));
   }
-  if (rtk['stale'] == true) parts.add(tr('(not updated for a while)', '（好一会儿没更新了）'));
+  if (rtk['stale'] == true) parts.add(tr('(stale)', '（长时间未更新）'));
   return parts.join(tr(', ', '，'));
 }
 
@@ -451,16 +451,16 @@ String headText(Map<String, dynamic>? caps) {
   final h = tasks is Map ? tasks['head'] : null;
   if (h is! Map || h['direction'] == 'head') return '';
   final tail = h['direction'] == 'tail';
-  final d = tail ? tr('tail first', '机器人尾为前') : tr('unknown', '不知道');
+  final d = tail ? tr('tail first', '机器人尾为前') : tr('unknown', '未知');
   if (h['autonomy'] == true) {
     return tr(
-        'Heading: $d (rear lidar calibrated, autonomous as usual)',
-        '头尾：$d（后雷达标过，照常自己走）');
+        'Heading: $d (rear lidar calibrated; autonomy available)',
+        '朝向识别：$d（后雷达已标定，可自主行走）');
   }
   final why = tail
-      ? tr('rear lidar not calibrated, cannot move on its own', '后雷达没标定，不能自己走')
-      : tr('cannot move on its own', '不能自己走');
-  return tr('Heading: $d ($why, remote control still works)', '头尾：$d（$why，遥控照常）');
+      ? tr('Rear lidar not calibrated; autonomy disabled', '后雷达未标定，不能自主行走')
+      : tr('Autonomy disabled', '不能自主行走');
+  return tr('Heading: $d ($why; remote control available)', '朝向识别：$d（$why，可遥控）');
 }
 
 /// 局部避障的人话（W11）：能力里的 `obstacles`（配了感知节点的狗才有）。不是「正常」的时候站点不派
@@ -471,18 +471,18 @@ String obstaclesText(Map<String, dynamic>? caps) {
   if (o is! Map) return '';
   final state = switch ('${o['state']}') {
     'ok' => tr('OK', '正常'),
-    'stale' => tr('perception stale', '感知不新鲜'),
-    'lost' => tr('perception lost (autonomous tasks not dispatched)', '感知断了（不派会自己走的任务）'),
+    'stale' => tr('perception stale', '感知数据过期'),
+    'lost' => tr('Perception lost (autonomous tasks paused)', '感知中断（暂停自主任务）'),
     'extrinsic_bad' => tr(
-        'extrinsic self-check failed (autonomous tasks not dispatched)',
-        '外参自检没过（不派会自己走的任务）'),
-    'initializing' => tr('perception still self-checking', '感知还在自检'),
+        'Extrinsic self-check failed (autonomous tasks paused)',
+        '外参自检未通过（暂停自主任务）'),
+    'initializing' => tr('perception still self-checking', '感知自检中'),
     _ => '${o['state']}',
   };
   final reason = o['reason'] is String && (o['reason'] as String).isNotEmpty ? tr(
       ': ${o['reason']}',
       '：${o['reason']}') : '';
-  final rear = o['rear'] == true ? '' : tr(', rear lidar not in use', '，后雷达没用上');
+  final rear = o['rear'] == true ? '' : tr(', rear lidar not in use', '，后雷达未启用');
   return tr(
       'Obstacle avoidance: $state$reason${o['state'] == 'ok' ? rear : ''}',
       '避障：$state$reason${o['state'] == 'ok' ? rear : ''}');
@@ -493,14 +493,14 @@ String _bridgeLocText(Map<String, dynamic> loc, String reason) {
   if (loc['anchored'] != true) {
     return tr(
         'Localization: no position from the localizer yet${reason.isEmpty ? '' : ' — $reason'}',
-        '定位：定位器还没给出位置${reason.isEmpty ? '' : ' —— $reason'}');
+        '定位：定位服务尚未给出位置${reason.isEmpty ? '' : ' — $reason'}');
   }
   if (reason.isNotEmpty) return tr('Localization unreliable: $reason', '定位不可信：$reason');
   final src = switch ('${loc['source']}') {
     'scan_match' => tr('scan matching', '点云匹配'),
     'rtk' => 'RTK',
     'fused' => tr('fused', '融合'),
-    'dead_reckoning' => tr('dead reckoning (localizer briefly silent)', '里程推算中（定位器一时没来）'),
+    'dead_reckoning' => tr('Dead reckoning (localizer temporarily silent)', '里程推算中（定位服务暂无数据）'),
     final other => other,
   };
   final s = loc['sigma_m'];
@@ -522,13 +522,13 @@ String navText(Map<String, dynamic>? nav) {
     final n = b['for_s'] is num ? (b['for_s'] as num).toInt() : 0;
     final why = '${b['reason'] ?? ''}';
     lines.add(tr('Blocked $n s: ${why.isEmpty ? 'no reason given' : why}',
-        '被挡 $n 秒：${why.isEmpty ? '没说原因' : why}'));
+        '受阻 $n 秒：${why.isEmpty ? '未说明原因' : why}'));
   }
   final r = nav['replan'];
   if (r is Map) {
     final n = r['n'] is num ? (r['n'] as num).toInt() : 0;
     final why = switch ('${r['why']}') {
-      'zones' => tr('zones changed', '区域换了'),
+      'zones' => tr('zones changed', '区域已变更'),
       'near_nogo' => tr('too close to a no-go zone', '离禁行区太近'),
       'detour' => tr('detouring around an obstacle', '绕障'),
       'preview' => tr('obstacle seen ahead, going around early', '前方有障碍，提前绕'),
@@ -981,12 +981,12 @@ class SiteClient implements SiteApi {
     try {
       u = Uri.parse(url.trim());
     } on FormatException {
-      throw SiteError(0, tr('Invalid site address', '站点地址写得不对'));
+      throw SiteError(0, tr('Invalid site address', '站点地址格式错误'));
     }
     if (u.scheme != 'https') {
       throw SiteError(0, tr(
-          'Site address must be https:// (the password must not travel in clear text)',
-          '站点地址要是 https://（口令不能明文过网）'));
+          'Site address must start with https://',
+          '站点地址须以 https:// 开头'));
     }
     return u;
   }
@@ -995,8 +995,8 @@ class SiteClient implements SiteApi {
     final fp = normalizeFingerprint(raw);
     if (!RegExp(r'^[0-9a-f]{64}$').hasMatch(fp)) {
       throw SiteError(0, tr(
-          'Certificate fingerprint must be 64 hex characters (the string printed by d1max-site fingerprint)',
-          '证书指纹要是 64 位十六进制（d1max-site fingerprint 打出来的那串）'));
+          'Certificate fingerprint must be 64 hex characters',
+          '证书指纹应为 64 位十六进制字符'));
     }
     return fp;
   }
@@ -1022,9 +1022,9 @@ class SiteClient implements SiteApi {
           0,
           seen != null && seen != fingerprint
               ? tr('Site certificate fingerprint does not match: got $seen', '站点证书指纹对不上：实际是 $seen')
-              : tr('TLS handshake with the site failed: $e', '跟站点的加密握手失败：$e'));
+              : tr('TLS handshake with the site failed: $e', '与站点的加密连接失败：$e'));
     } on TimeoutException {
-      throw SiteError(0, tr('No reply from the site (timed out)', '站点没回话（超时）'));
+      throw SiteError(0, tr('No reply from the site (timed out)', '站点无响应（超时）'));
     } on SocketException catch (e) {
       throw SiteError(0, tr("Can't reach the site: ${e.message}", '连不上站点：${e.message}'));
     } on HttpException catch (e) {
@@ -1058,7 +1058,7 @@ class SiteClient implements SiteApi {
     if (resp.statusCode >= 300) { // 3xx 也算错：重定向一律不跟（见 _sendRaw）
       final msg = decoded is Map && decoded['error'] is String
           ? decoded['error'] as String
-          : tr('Site returned ${resp.statusCode}', '站点回了 ${resp.statusCode}');
+          : tr('Site returned ${resp.statusCode}', '站点返回 ${resp.statusCode}');
       if (resp.statusCode == 401) {
         session = null; // 令牌死了：要人重新登录
       }
@@ -1093,7 +1093,7 @@ class SiteClient implements SiteApi {
     final s = SiteSession(d['token'] as String? ?? '', d['name'] as String? ?? name,
         d['role'] as String? ?? '', displayName: d['display_name'] as String? ?? '');
     if (s.token.isEmpty) {
-      throw SiteError(0, tr('Site returned no token', '站点没给令牌'));
+      throw SiteError(0, tr('Site returned no token', '站点未返回令牌'));
     }
     session = s;
     return s;
@@ -1302,7 +1302,7 @@ class SiteClient implements SiteApi {
     if (rows is! List) {
       throw FormatException(tr(
           'Site reply for run records has no "runs" field',
-          '站点回的运行记录里没有 runs'));
+          '站点返回数据缺少 runs 字段'));
     }
     return rows.whereType<Map<String, dynamic>>().toList();
   }
@@ -1374,7 +1374,7 @@ class SiteClient implements SiteApi {
     if (rows is! List) {
       throw FormatException(tr(
           'Site reply for recordings has no "recordings" field',
-          '站点回的录像里没有 recordings'));
+          '站点返回数据缺少 recordings 字段'));
     }
     return rows.whereType<Map<String, dynamic>>().toList();
   }
@@ -1386,7 +1386,7 @@ class SiteClient implements SiteApi {
     if (rows is! List) {
       throw FormatException(tr(
           'Site reply for cameras has no "cameras" field',
-          '站点回的摄像头里没有 cameras'));
+          '站点返回数据缺少 cameras 字段'));
     }
     return rows.whereType<Map<String, dynamic>>().toList();
   }
@@ -1437,7 +1437,7 @@ class SiteClient implements SiteApi {
     if (resp.statusCode != 200) {
       await resp.drain<void>();
       if (resp.statusCode == 401) session = null;
-      throw SiteError(resp.statusCode, tr('$what unavailable', '$what拿不到'));
+      throw SiteError(resp.statusCode, tr('$what unavailable', '无法获取$what'));
     }
     final out = BytesBuilder(copy: false);
     await for (final chunk in resp.timeout(timeout)) {
@@ -1453,7 +1453,7 @@ class SiteClient implements SiteApi {
     if (d['maps'] is! List || d['bags'] is! List) {
       throw FormatException(tr(
           'Site reply for the map catalog has no "maps" / "bags" field',
-          '站点回的地图目录里没有 maps / bags'));
+          '站点返回数据缺少 maps / bags 字段'));
     }
     return d;
   }
@@ -1490,7 +1490,7 @@ class SiteClient implements SiteApi {
     if (d['releases'] is! List || d['robots'] is! Map) {
       throw FormatException(tr(
           'Site reply for the release catalog has no "releases" / "robots" field',
-          '站点回的发布目录里没有 releases / robots'));
+          '站点返回数据缺少 releases / robots 字段'));
     }
     return d;
   }
@@ -1537,7 +1537,7 @@ class SiteClient implements SiteApi {
       if (tok != null) req.headers.set(HttpHeaders.authorizationHeader, 'Bearer $tok');
       final resp = await req.close().timeout(timeout);
       if (resp.statusCode != 101) {
-        var why = tr("Can't start remote control", '遥控开不了');
+        var why = tr("Can't start remote control", '无法开始遥控');
         var body = const <String, dynamic>{};
         try {
           final d = jsonDecode(await utf8.decoder.bind(resp).join());
@@ -1555,7 +1555,7 @@ class SiteClient implements SiteApi {
           sha1.convert(utf8.encode('${key}258EAFA5-E914-47DA-95CA-C5AB0DC85B11')).bytes);
       if (resp.headers.value('Sec-WebSocket-Accept') != want) {
         io.close(force: true);
-        throw SiteError(0, tr('Bad remote-control handshake from the site', '站点的遥控握手不对'));
+        throw SiteError(0, tr('Bad remote-control handshake from the site', '遥控握手异常'));
       }
       final sock = await resp.detachSocket();
       final ws = WebSocket.fromUpgradedSocket(sock, serverSide: false)
@@ -1576,12 +1576,12 @@ class SiteClient implements SiteApi {
       io.close(force: true);
       throw SiteError(0, tr(
           'Remote-control handshake did not complete: ${e.message}',
-          '遥控握手没完成：${e.message}'));
+          '遥控握手未完成：${e.message}'));
     } on WebSocketException catch (e) {
       io.close(force: true);
       throw SiteError(0, tr(
           'Remote-control handshake did not complete: ${e.message}',
-          '遥控握手没完成：${e.message}'));
+          '遥控握手未完成：${e.message}'));
     }
   }
 
@@ -1602,7 +1602,7 @@ class SiteClient implements SiteApi {
   Future<Map<String, dynamic>> patrolsToday() async {
     final d = _map(await _send('GET', '/api/patrols/today'));
     if (d['items'] is! List) {
-      throw FormatException(tr('Site reply has no "items" field', '站点回的东西里没有 items'));
+      throw FormatException(tr('Site reply has no "items" field', '站点返回数据缺少 items 字段'));
     }
     return d;
   }
@@ -1660,7 +1660,7 @@ class SiteClient implements SiteApi {
   Future<List<Map<String, dynamic>>> accountRequests() async {
     final rows = _map(await _send('GET', '/api/account-requests'))['requests'];
     if (rows is! List) {
-      throw FormatException(tr('Site reply has no "requests" field', '站点回的东西里没有 requests'));
+      throw FormatException(tr('Site reply has no "requests" field', '站点返回数据缺少 requests 字段'));
     }
     return rows.whereType<Map<String, dynamic>>().toList();
   }
@@ -1678,7 +1678,7 @@ class SiteClient implements SiteApi {
   Future<List<Map<String, dynamic>>> bindRequests() async {
     final rows = _map(await _send('GET', '/api/admin/bind'))['requests'];
     if (rows is! List) {
-      throw FormatException(tr('Site reply has no "requests" field', '站点回的东西里没有 requests'));
+      throw FormatException(tr('Site reply has no "requests" field', '站点返回数据缺少 requests 字段'));
     }
     return rows.whereType<Map<String, dynamic>>().toList();
   }
@@ -1810,7 +1810,7 @@ class SiteClient implements SiteApi {
     if (resp.statusCode != 200) {
       await resp.drain<void>();
       if (resp.statusCode == 401) session = null;
-      throw SiteError(resp.statusCode, tr("Can't open the event stream", '事件流开不了'));
+      throw SiteError(resp.statusCode, tr("Can't open the event stream", '无法打开事件流'));
     }
     try {
       // **半开的连接要看得出来**：站点每 15 s 发一行心跳（注释行）；[sseIdleTimeout] 里一行都没来

@@ -90,7 +90,7 @@ void main() {
     expect(_count(api, 'renew'), n, reason: '后台里不续');
     t.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
     await t.pump();
-    expect(find.textContaining('切到后台了，监护已放'), findsOneWidget);
+    expect(find.textContaining('监护已解除'), findsOneWidget);
     expect(find.text('我在现场监护'), findsOneWidget, reason: '回来是关着的，要人重新打开');
     await t.pumpWidget(Container());
   });
@@ -103,10 +103,10 @@ void main() {
     await t.pump();
     await t.pump();
     expect(find.text('监护中'), findsOneWidget, reason: '丢一次还在');
-    expect(find.textContaining('再试一次'), findsWidgets);
+    expect(find.textContaining('正在重试'), findsWidgets);
     await t.pump(const Duration(seconds: 1));
     await t.pump();
-    expect(find.textContaining('监护续不上'), findsOneWidget);
+    expect(find.textContaining('监护续期失败'), findsOneWidget);
     expect(find.text('我在现场监护'), findsOneWidget, reason: '连续两次才关');
     final api2 = FakeApi('guard', robotView: _view('supervised'))
       ..superviseAck = <String, dynamic>{'result': 'rejected', 'reason': 'unsupported'};
@@ -115,7 +115,7 @@ void main() {
     await t.pump();
     await t.pump(const Duration(seconds: 1));
     await t.pump();
-    expect(find.textContaining('机器人没接监护'), findsOneWidget);
+    expect(find.textContaining('机器人未接受监护'), findsOneWidget);
     expect(find.text('我在现场监护'), findsOneWidget);
     await t.pumpWidget(Container());
   });
@@ -170,7 +170,7 @@ void main() {
     await t.tap(find.byKey(const Key('btn-standby')));
     await t.pump();
     await t.pump();
-    expect(find.textContaining('它要人现场监护'), findsOneWidget);
+    expect(find.textContaining('需要现场监护'), findsOneWidget);
     await t.pumpWidget(Container());
   });
 }

@@ -210,7 +210,7 @@ void main() {
       await t.pump();
       expect(rang, 1);
       await t.pump(const Duration(milliseconds: 100));
-      expect(find.textContaining('没人确认'), findsOneWidget, reason: '提示条在外壳上，哪一栏都看得见');
+      expect(find.textContaining('无人确认'), findsOneWidget, reason: '提示条在外壳上，哪一栏都看得见');
       expect(find.byType(SiteMapTab), findsOneWidget);
       await t.pumpWidget(Container());
     });

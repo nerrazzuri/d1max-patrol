@@ -43,9 +43,9 @@ describe("布置 → 待命点", () => {
       { name: "dock", map_id: "home", map_version: "3", x: 4, y: 7, yaw: 0, default: true });
   });
 
-  it("加一个待命点", async () => {
+  it("添加待命点", async () => {
     const { container: c } = render(<StandbyTab {...props()} />);
-    fireEvent.click(btn(c, "加一个待命点"));
+    fireEvent.click(btn(c, "添加待命点"));
     fireEvent.click(c.querySelector(".pick")!);
     fireEvent.change(document.querySelector('.modal select[name="robot"]')!, { target: { value: "B" } });
     fireEvent.input(document.querySelector('.modal input[name="name"]')!, { target: { value: "porch" } });

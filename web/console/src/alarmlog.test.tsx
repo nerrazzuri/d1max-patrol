@@ -54,7 +54,7 @@ const chip = (c: Element, text: string) => Array.from(c.querySelectorAll(".chip"
 describe("报警记录页", () => {
   it("实测查出:站点给的「在哪」写在那一行", async () => {
     duty = null;
-    alerts = [alert({ key: "w", kind: "robot_offline_idle", audience: "offline", robot: "A", title: "机器人掉线了", detail: "", context: { where: "A区" } as never, first_ms: at(21, 50) })];
+    alerts = [alert({ key: "w", kind: "robot_offline_idle", audience: "offline", robot: "A", title: "机器人离线", detail: "", context: { where: "A区" } as never, first_ms: at(21, 50) })];
     const { container: c } = page();
     await waitFor(() => expect(rows(c).length).toBe(1));
     expect(rows(c)[0].textContent).toContain("在A区");
@@ -77,11 +77,11 @@ describe("报警记录页", () => {
     expect(rows(c).length).toBe(2);
   });
 
-  it("只看没处理的", async () => {
+  it("仅显示未处理", async () => {
     alerts = [alert({ key: "a" }), alert({ key: "b", first_ms: at(20, 0), resolved_ms: at(20, 5), verdict: "handled" })];
     const { container: c } = page();
     await waitFor(() => expect(rows(c).length).toBe(2));
-    fireEvent.click(chip(c, "只看没处理的"));
+    fireEvent.click(chip(c, "仅显示未处理"));
     expect(rows(c).length).toBe(1);
     expect(rows(c)[0].classList.contains("open")).toBe(true);
   });
@@ -92,7 +92,7 @@ describe("报警记录页", () => {
     const { container: c } = page();
     await waitFor(() => expect(rows(c).length).toBe(3));
     const titles = () => rows(c).map((r) => r.querySelector("h5")!.textContent);
-    fireEvent.click(chip(c, "机器人需要帮忙"));
+    fireEvent.click(chip(c, "机器人需协助"));
     expect(titles()).toEqual([alertTitle("zh", "stuck", "C 被挡住了")]);
     expect(rows(c)[0].querySelector("h5")!.classList.contains("o")).toBe(true);
     fireEvent.click(chip(c, "全部"));
@@ -113,7 +113,7 @@ describe("报警记录页", () => {
     const { container: c } = page();
     await waitFor(() => expect(rows(c).length).toBe(2));
     const [open, done] = rows(c);
-    expect(open.querySelector(".res")!.textContent).toContain("还没处理");
+    expect(open.querySelector(".res")!.textContent).toContain("未处理");
     expect(open.querySelector("a.btn")!.getAttribute("href")).toBe("#/duty");
     expect(done.querySelector("a.btn")!.getAttribute("href")).toContain("#/recordings?robot=A&t=");
   });
@@ -136,7 +136,7 @@ describe("报警记录页", () => {
     alerts = [alert({})];
     truncated = true;
     const { container: c } = page();
-    await waitFor(() => expect(c.textContent).toContain("只显示最近 500 条"));
+    await waitFor(() => expect(c.textContent).toContain("仅显示最近 500 条"));
   });
 
   it("留话写进去显示成上一班的", async () => {
@@ -146,7 +146,7 @@ describe("报警记录页", () => {
     expect(c.querySelector(".note")!.textContent).toContain("li");
     expect(c.querySelector(".note")!.textContent).toContain("19:02");
     fireEvent.input(c.querySelector(".note textarea")!, { target: { value: "3 号摄像头误报多" } });
-    fireEvent.click(Array.from(c.querySelectorAll(".note button")).find((b) => b.textContent === "留话")!);
+    fireEvent.click(Array.from(c.querySelectorAll(".note button")).find((b) => b.textContent === "留言")!);
     await waitFor(() => expect(c.querySelector(".note")!.textContent).toContain("3 号摄像头误报多"));
     expect(posted).toEqual([{ text: "3 号摄像头误报多" }]);
   });

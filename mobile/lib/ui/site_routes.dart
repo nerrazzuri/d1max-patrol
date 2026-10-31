@@ -199,19 +199,19 @@ class _SiteRoutesPageState extends State<SiteRoutesPage> {
           DialogField(tr('Route name (letters, digits, . _ -)', '路线名（字母、数字、. _ -）'),
               key: const Key('route-new-name'))
         ],
-        confirm: tr('Create', '建'),
+        confirm: tr('Create', '创建'),
         confirmKey: const Key('route-new-go'));
     if (got == null || !mounted) return;
     final name = got[0].trim();
     if (!routeNameRe.hasMatch(name)) {
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
           content: Text(tr('Route name: letters, digits, . _ - only (1–64 characters)',
-              '路线名只许字母、数字、. _ -（1–64 个字符）'))));
+              '路线名只能包含字母、数字和 . _ -（1–64 个字符）'))));
       return;
     }
     if (_routes.any((r) => r['id'] == name)) {
       ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text(tr('A route with this name already exists', '已经有这个名字的路线'))));
+          .showSnackBar(SnackBar(content: Text(tr('A route with this name already exists', '路线名已存在'))));
       return;
     }
     await _open(newName: name);
@@ -227,9 +227,9 @@ class _SiteRoutesPageState extends State<SiteRoutesPage> {
         body: _loading
             ? const Center(child: CircularProgressIndicator())
             : NwListView(children: [
-                if (_error != null) NwNotice(tone: NwTone.error, text: tr('Routes unavailable: $_error', '路线读不到：$_error')),
+                if (_error != null) NwNotice(tone: NwTone.error, text: tr('Routes unavailable: $_error', '无法加载路线：$_error')),
                 if (_maps.isEmpty && _error == null)
-                  NwEmpty(icon: Icons.map_outlined, text: tr('No maps on the site yet', '站点上还没有图'))
+                  NwEmpty(icon: Icons.map_outlined, text: tr('No maps on the site yet', '站点上还没有地图'))
                 else if (_sel != null) ...[
                   Row(children: [
                     Text(tr('Map version', '地图版本'), style: sub),
@@ -263,7 +263,7 @@ class _SiteRoutesPageState extends State<SiteRoutesPage> {
                     NwEmpty(
                         key: SiteRoutesPage.emptyKey,
                         icon: Icons.route_rounded,
-                        text: tr('No routes on this map version yet', '这一版地图上还没有路线'))
+                        text: tr('No routes on this map version yet', '此版本地图上还没有路线'))
                   else
                     for (final r in _routes)
                       Padding(
@@ -495,7 +495,7 @@ class _SiteRouteEditorPageState extends State<SiteRouteEditorPage> {
           if (x is Map && x['index'] is num) _problems[(x['index'] as num).toInt()] = '${x['problem']}';
         }
         if (_problems.isNotEmpty) _sel = _problems.keys.first;
-        _msg = tr('Not saved: ${e.message}', '没存上：${e.message}');
+        _msg = tr('Not saved: ${e.message}', '保存失败：${e.message}');
       });
     }
   }
@@ -507,14 +507,14 @@ class _SiteRouteEditorPageState extends State<SiteRouteEditorPage> {
       if (!mounted) return;
       setState(() {
         if (r.isEmpty) {
-          _msg = tr('This route no longer exists', '这条路线已经没有了');
+          _msg = tr('This route no longer exists', '此路线已不存在');
         } else {
           _adopt(r.first);
-          _msg = tr('Reloaded from the site', '已从站点重新拉取');
+          _msg = tr('Reloaded from the site', '已从站点重新加载');
         }
       });
     } on SiteError catch (e) {
-      if (mounted) setState(() => _msg = tr('Reload failed: ${e.message}', '拉取失败：${e.message}'));
+      if (mounted) setState(() => _msg = tr('Reload failed: ${e.message}', '加载失败：${e.message}'));
     }
   }
 
@@ -523,9 +523,9 @@ class _SiteRouteEditorPageState extends State<SiteRouteEditorPage> {
         context: context,
         builder: (c) => AlertDialog(
               title: Text(tr('Delete route $_id?', '删除路线 $_id？')),
-              content: Text(tr('Schedules that use it must be removed first.', '还在用它的排程要先删掉。')),
+              content: Text(tr('Schedules that use it must be removed first.', '请先删除使用此路线的排程。')),
               actions: [
-                TextButton(onPressed: () => Navigator.pop(c, false), child: Text(tr('Cancel', '算了'))),
+                TextButton(onPressed: () => Navigator.pop(c, false), child: Text(tr('Cancel', '取消'))),
                 FilledButton(
                     key: SiteRouteEditorPage.deleteOkKey,
                     onPressed: () => Navigator.pop(c, true),
@@ -540,7 +540,7 @@ class _SiteRouteEditorPageState extends State<SiteRouteEditorPage> {
       if (mounted) {
         setState(() {
           _conflict = e.status == 409;
-          _msg = tr('Not deleted: ${e.message}', '没删掉：${e.message}');
+          _msg = tr('Not deleted: ${e.message}', '删除失败：${e.message}');
         });
       }
     }
@@ -551,17 +551,17 @@ class _SiteRouteEditorPageState extends State<SiteRouteEditorPage> {
     try {
       robots = (await widget.api.robots()).where((r) => robotCan(r, 'patrol')).toList();
     } on SiteError catch (e) {
-      setState(() => _msg = tr('Robot list unavailable: ${e.message}', '拿不到机器人的列表：${e.message}'));
+      setState(() => _msg = tr('Robot list unavailable: ${e.message}', '无法加载机器人列表：${e.message}'));
       return;
     }
     if (!mounted) return;
     if (robots.isEmpty) {
-      setState(() => _msg = tr('No robot can patrol right now', '现在没有能巡检的机器人'));
+      setState(() => _msg = tr('No robot can patrol right now', '当前没有可巡检的机器人'));
       return;
     }
     final id = await showDialog<String>(
         context: context,
-        builder: (c) => SimpleDialog(title: Text(tr('Send $_id to which robot', '把 $_id 派给哪台机器人')), children: [
+        builder: (c) => SimpleDialog(title: Text(tr('Send $_id to which robot', '将 $_id 派给哪台机器人')), children: [
               for (final r in robots)
                 SimpleDialogOption(
                     key: Key('route-send-${r['robot_id']}'),
@@ -577,10 +577,10 @@ class _SiteRouteEditorPageState extends State<SiteRouteEditorPage> {
         setState(() => _msg = ack['result'] == 'accepted'
             ? tr('Patrol sent to $id', '已派 $id 去巡检')
             : tr('The robot did not accept: ${ack['result']} ${ack['reason'] ?? ''}',
-                '机器人没接：${ack['result']} ${ack['reason'] ?? ''}'));
+                '机器人未接受：${ack['result']} ${ack['reason'] ?? ''}'));
       }
     } on SiteError catch (e) {
-      if (mounted) setState(() => _msg = tr('Refused: ${e.message}', '被拒：${e.message}'));
+      if (mounted) setState(() => _msg = tr('Refused: ${e.message}', '被拒绝：${e.message}'));
     }
   }
 
@@ -598,7 +598,7 @@ class _SiteRouteEditorPageState extends State<SiteRouteEditorPage> {
       final ack = r['ack'];
       if (r['queued'] != true && ack is Map && ack['result'] != 'accepted' && ack['result'] != 'duplicate') {
         setState(() => _msg = tr('The robot did not accept: ${ack['result']} ${ack['reason'] ?? ''}',
-            '机器人没接：${ack['result']} ${ack['reason'] ?? ''}'));
+            '机器人未接受：${ack['result']} ${ack['reason'] ?? ''}'));
         return;
       }
       Navigator.pop(context, dispatchResultText(r, tr('custom route', '临时路线')));
@@ -637,7 +637,7 @@ class _SiteRouteEditorPageState extends State<SiteRouteEditorPage> {
                     child: NwNotice(
                         tone: NwTone.warning,
                         text: tr('Preview unavailable: ${e is SiteError ? e.message : e}',
-                            '看不了：${e is SiteError ? e.message : e}')));
+                            '无法预览：${e is SiteError ? e.message : e}')));
               }
               if (!snap.hasData) return const Center(child: CircularProgressIndicator());
               final (meta, png, plan) = snap.data!;
@@ -738,7 +738,7 @@ class _SiteRouteEditorPageState extends State<SiteRouteEditorPage> {
         color: c.surface,
         child: ListView(padding: const EdgeInsets.all(Nw.s16), children: [
           Text(tr('Points are measured on map version ${widget.version}. A new map version needs its own route.',
-              '这些点是在地图第 ${widget.version} 版上量的。换了新版地图要重新画一条。'),
+              '这些点基于地图第 ${widget.version} 版。地图更新后需重新绘制路线。'),
               style: sub),
           nwGap8,
           if (edit)
@@ -746,18 +746,18 @@ class _SiteRouteEditorPageState extends State<SiteRouteEditorPage> {
                 values: _Mode.values,
                 selected: _mode,
                 onChanged: (v) => setState(() => _mode = v),
-                labelOf: (v) => v == _Mode.add ? tr('Add points', '加点') : tr('Move point', '挪点'),
+                labelOf: (v) => v == _Mode.add ? tr('Add points', '添加点') : tr('Move point', '移动点'),
                 keyOf: (v) => v == _Mode.add ? SiteRouteEditorPage.addModeKey : SiteRouteEditorPage.moveModeKey),
           if (edit)
             Padding(
                 padding: const EdgeInsets.only(top: Nw.s4),
                 child: Text(
                     _mode == _Mode.add
-                        ? tr('Tap the map to add a point. Tap a point to select it.', '点地图加点；点一个点选中它。')
-                        : tr('Select a point, then tap its new place on the map.', '先选中一个点，再点它的新位置。'),
+                        ? tr('Tap the map to add a point. Tap a point to select it.', '点地图添加点，点已有的点选中。')
+                        : tr('Select a point, then tap its new place on the map.', '先选中一个点，再点击新位置。'),
                     style: sub)),
           nwGap8,
-          if (_pts.isEmpty) Text(tr('No points yet. Tap the map.', '还没有点，点一下地图。'), style: sub),
+          if (_pts.isEmpty) Text(tr('No points yet. Tap the map.', '还没有点，请点击地图添加。'), style: sub),
           for (var i = 0; i < _pts.length; i++)
             Container(
                 key: SiteRouteEditorPage.rowKey(i),
@@ -807,7 +807,7 @@ class _SiteRouteEditorPageState extends State<SiteRouteEditorPage> {
             TextButton(
                 key: SiteRouteEditorPage.reloadKey,
                 onPressed: _reload,
-                child: Text(tr('Reload from the site (your edits are lost)', '从站点重新拉取（你的修改会丢）'))),
+                child: Text(tr('Reload from the site (unsaved changes are lost)', '从站点重新加载（未保存的修改将丢失）'))),
           nwGap8,
           if (_temp)
             NwButton(
@@ -825,7 +825,7 @@ class _SiteRouteEditorPageState extends State<SiteRouteEditorPage> {
             if (_canSend && !_isNew)
               NwButton(
                   buttonKey: SiteRouteEditorPage.sendKey,
-                  label: tr('Send to a robot', '派给一台机器人'),
+                  label: tr('Send to a robot', '派给机器人'),
                   icon: Icons.near_me_rounded,
                   variant: NwButtonVariant.outline,
                   onPressed: _dirty ? null : _send),
@@ -840,13 +840,13 @@ class _SiteRouteEditorPageState extends State<SiteRouteEditorPage> {
             Padding(
                 padding: const EdgeInsets.only(top: Nw.s4),
                 child: Text(
-                    tr("A one-off route: it isn't saved. When it finishes the robot walks back to where it started.",
-                        '临时路线：不保存。走完机器人自己走回出发的地方。'),
+                    tr("One-off route, not saved. The robot returns to where it started afterwards.",
+                        '临时路线不保存，结束后机器人返回出发点。'),
                     style: sub)),
           if (_dirty && _canSend && !_isNew && !_temp)
             Padding(
                 padding: const EdgeInsets.only(top: Nw.s4),
-                child: Text(tr('Save first: a patrol runs the saved route.', '先保存：派出去的是站点上存着的那一条。'),
+                child: Text(tr('Save first: patrols run the saved route.', '请先保存：派出的是站点上已保存的路线。'),
                     style: sub)),
         ]));
   }
@@ -930,7 +930,7 @@ class _SiteRouteEditorPageState extends State<SiteRouteEditorPage> {
               initialValue: p.check,
               enabled: edit,
               maxLength: 500,
-              decoration: dec(tr('What to check here', '这里要看什么')),
+              decoration: dec(tr('What to check here', '检查内容')),
               onChanged: (v) => setState(() => p.check = v)),
         ]);
   }

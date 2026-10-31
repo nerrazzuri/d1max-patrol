@@ -201,10 +201,10 @@ class _PoseBarState extends State<PoseBar> {
       msg = result == 'accepted'
           ? ok
           : tr('The robot did not accept: $result ${ack is Map ? (ack['reason'] ?? '') : ''}',
-              '机器人没接：$result ${ack is Map ? (ack['reason'] ?? '') : ''}');
+              '机器人未接受：$result ${ack is Map ? (ack['reason'] ?? '') : ''}');
     } on SiteError catch (e) {
       // 站点拒了：原因原样给人看（监护模式要租约、没就绪、点不可达……）
-      msg = tr('Refused: ${e.message}', '被拒：${e.message}');
+      msg = tr('Refused: ${e.message}', '被拒绝：${e.message}');
     }
     if (mounted) {
       setState(() {
@@ -220,7 +220,7 @@ class _PoseBarState extends State<PoseBar> {
     await _run(
         () => widget.api.goto(id,
             mapId: widget.mapId, version: widget.version, x: at.dx, y: at.dy, yaw: widget.controller.yaw),
-        tr('Go-to sent to $id', '已让 $id 去那里'));
+        tr('Go-to sent to $id', '已派 $id 前往'));
   }
 
   Future<void> _set() async {
@@ -231,14 +231,12 @@ class _PoseBarState extends State<PoseBar> {
     final ok = await showDialog<bool>(
         context: context,
         builder: (c) => AlertDialog(
-              title: Text(tr('Set the position of $id here?', '把 $id 的位置设在这里？')),
+              title: Text(tr('Set the position of $id here?', '将 $id 的位置设在这里？')),
               content: Text(tr(
-                  'Tell $id it is standing at x ${at.dx} m, y ${at.dy} m, heading ${yawDegText(yaw)}° on this map. '
-                      'If that is wrong the robot will navigate from the wrong place.',
-                  '告诉 $id：它现在站在这张图上 x ${at.dx} 米、y ${at.dy} 米、朝向 ${yawDegText(yaw)}°。'
-                      '设错了机器人会按错的位置走。')),
+                  'Set $id\'s position to x ${at.dx} m, y ${at.dy} m, heading ${yawDegText(yaw)}°. A wrong position makes the robot navigate incorrectly.',
+                  '设置 $id 的当前位置：x ${at.dx} 米、y ${at.dy} 米、朝向 ${yawDegText(yaw)}°。位置错误会导致机器人导航出错。')),
               actions: [
-                TextButton(onPressed: () => Navigator.pop(c, false), child: Text(tr('Cancel', '算了'))),
+                TextButton(onPressed: () => Navigator.pop(c, false), child: Text(tr('Cancel', '取消'))),
                 FilledButton(
                     key: PoseBar.setOkKey,
                     onPressed: () => Navigator.pop(c, true),
@@ -248,7 +246,7 @@ class _PoseBarState extends State<PoseBar> {
     if (ok != true || !mounted) return;
     // 确认框开着的时候图、狗、点换了：不发（外审 W39-I2）。换了图的狗由站点按带上的图号拒
     if (mine != _gen || _selected != id || widget.controller.at != at || widget.controller.yaw != yaw) {
-      setState(() => _msg = tr('The map, robot or spot changed — choose again.', '图、机器人或位置变了：请重新选。'));
+      setState(() => _msg = tr('The map, robot or spot changed — choose again.', '地图、机器人或位置已变化，请重新选择。'));
       return;
     }
     await _run(() => widget.api.relocalize(id, x: at.dx, y: at.dy, yaw: yaw, mapId: mapId, version: version),
@@ -273,7 +271,7 @@ class _PoseBarState extends State<PoseBar> {
                   child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
                     if (at == null)
                       Text(tr('Tap the map to choose a spot; drag the round handle to set the heading.',
-                          '点地图选一个位置；拖圆形把手定朝向。'),
+                          '点地图选择位置，拖动圆形手柄设置朝向。'),
                           style: NwText.bodySmall.copyWith(color: c.textSecondary))
                     else ...[
                       Text(
@@ -324,7 +322,7 @@ class _PoseBarState extends State<PoseBar> {
                             }),
                       ]),
                       if (sel == null)
-                        Text(tr('No robot on this map can be sent.', '这张图上没有能派的机器人。'),
+                        Text(tr('No robot on this map can be sent.', '此地图上没有可派的机器人。'),
                             style: NwText.bodySmall.copyWith(color: c.textSecondary)),
                     ],
                     if (_msg != null)

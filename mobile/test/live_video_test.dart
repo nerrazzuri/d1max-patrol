@@ -397,7 +397,7 @@ void main() {
     await t.pumpWidget(wrap(LiveVideo(
         baseUrl: dog.baseUrl, camera: 'front', health: ctl.stream)));
     ctl.add(const VideoHealth(<String, bool>{'front': true}));
-    await pumpUntil(t, () => find.textContaining('看的人满了').evaluate().isNotEmpty,
+    await pumpUntil(t, () => find.textContaining('观看人数已满').evaluate().isNotEmpty,
         '503 那句话');
     expect(find.textContaining('503'), findsNothing, reason: '状态码只进日志，不上屏');
     await teardown(t, ctl, dog.stop);
@@ -657,7 +657,7 @@ void main() {
     expect(fake, lessThan(const Duration(seconds: 7)),
         reason: '3 秒宽限 + 2 秒退避 ≈ 5 秒就该敲第二次;'
             '等 8 MiB 攒满的话这里根本走不到');
-    expect(find.textContaining('在不在线'), findsOneWidget,
+    expect(find.textContaining('是否在线'), findsOneWidget,
         reason: '"一直没画面"跟"人太多了"要做的事完全不同');
 
     await teardown(t, ctl, dog.stop);

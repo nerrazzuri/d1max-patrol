@@ -71,21 +71,21 @@ class RobotSticker {
 RobotSticker parseSticker(String raw) {
   final t = raw.trim();
   if (!t.startsWith(stickerPrefix)) {
-    throw FormatException(tr("This isn't a robot sticker", '这不是机器人身上的贴纸码'));
+    throw FormatException(tr("Not a valid robot sticker code", '不是有效的机器人贴纸码'));
   }
   final body = t.substring(stickerPrefix.length);
   Object? d;
   try {
     d = jsonDecode(utf8.decode(base64Url.decode(base64Url.normalize(body))));
   } catch (_) {
-    throw FormatException(tr('The sticker code is damaged', '贴纸码坏了'));
+    throw FormatException(tr('Invalid sticker code', '贴纸码无效'));
   }
-  if (d is! Map) throw FormatException(tr('The sticker code is damaged', '贴纸码坏了'));
+  if (d is! Map) throw FormatException(tr('Invalid sticker code', '贴纸码无效'));
   final s = d['s'], c = d['c'], w = d['w'], p = d['p'], f = d['f'], a = d['a'];
   if (s is! String || c is! String || w is! String || p is! String || f is! String ||
       !RegExp(r'^[0-9a-f]{32}$').hasMatch(f) || !RegExp(r'^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$').hasMatch(s) ||
       (a != null && (a is! String || !RegExp(r'^[A-Za-z0-9.\-]+:\d{1,5}$').hasMatch(a)))) {
-    throw FormatException(tr('The sticker code is damaged', '贴纸码坏了'));
+    throw FormatException(tr('Invalid sticker code', '贴纸码无效'));
   }
   return RobotSticker(s, c, w, p, f, addr: a is String ? a : defaultBindAddr);
 }
@@ -209,10 +209,10 @@ class RobotHotspot implements RobotBindLink {
     } on RobotBindError {
       rethrow;
     } on HandshakeException {
-      throw RobotBindError(0, tr("This isn't the robot on the sticker (certificate doesn't match)",
-          '连上的不是贴纸上这台机器人（证书对不上）'));
+      throw RobotBindError(0, tr("The connected robot doesn't match the sticker (certificate mismatch)",
+          '已连接的机器人与贴纸不符（证书不匹配）'));
     } catch (e) {
-      throw RobotBindError(0, tr("Can't reach the robot over its hotspot: $e", '经热点连不上机器人：$e'));
+      throw RobotBindError(0, tr("Can't connect to the robot over its hotspot: $e", '无法通过热点连接机器人：$e'));
     }
   }
 

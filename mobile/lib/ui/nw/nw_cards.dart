@@ -92,7 +92,7 @@ class NwSiteCard extends StatelessWidget {
                                 .copyWith(color: c.textSecondary, fontWeight: FontWeight.w700))),
             NwButton(
                 buttonKey: enterKey,
-                label: tr('Enter Station', '进入站点'),
+                label: tr('Enter site', '进入站点'),
                 icon: Icons.arrow_forward_rounded,
                 variant: NwButtonVariant.ghost,
                 size: NwButtonSize.small,

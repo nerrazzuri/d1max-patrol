@@ -60,16 +60,16 @@ void main() {
     final api = FakeApi('admin');
     await _open(t, api);
     final head = t.widget<ListTile>(find.byKey(SiteHealthPage.overallKey));
-    expect((head.title as Text).data, '各项都正常');
+    expect((head.title as Text).data, '全部正常');
     expect((head.subtitle as Text).data, '站点版本 1.4.0');
     expect(find.byType(PriorityShape), findsNothing);
     expect(_trailing(t, 'db'), '正常');
-    expect(find.text('数据库 · 要紧'), findsOneWidget);
+    expect(find.text('数据库 · 严重'), findsOneWidget);
     expect(find.text('证书'), findsOneWidget);
     expect(find.text('站点盘还剩 62%'), findsOneWidget);
     expect(find.text('代理 1.4.0 · 级别 2 · 在线'), findsOneWidget);
     expect(find.text('手机 App 1.0.0 · android'), findsOneWidget);
-    expect(find.text('太老'), findsNothing);
+    expect(find.text('版本过旧'), findsNothing);
   });
 
   testWidgets('要紧的一项没过：整体说有要紧的问题；没过的排在前面（要紧的最前），写没过', (t) async {
@@ -84,15 +84,15 @@ void main() {
         },
       };
     await _open(t, api);
-    expect((t.widget<ListTile>(find.byKey(SiteHealthPage.overallKey)).title as Text).data, '站点有要紧的问题');
+    expect((t.widget<ListTile>(find.byKey(SiteHealthPage.overallKey)).title as Text).data, '站点存在严重问题');
     final order = t.widgetList<ListTile>(find.byWidgetPredicate((w) => w is ListTile && '${w.key}'.contains('health-check-')))
         .map((w) => '${w.key}').toList();
     expect(order, [
       '${SiteHealthPage.checkKey('broker')}', '${SiteHealthPage.checkKey('backup')}',
       '${SiteHealthPage.checkKey('certs')}', '${SiteHealthPage.checkKey('new_thing')}',
     ]);
-    expect(_trailing(t, 'broker'), '没过');
-    expect(_trailing(t, 'backup'), '没过');
+    expect(_trailing(t, 'broker'), '未通过');
+    expect(_trailing(t, 'backup'), '未通过');
     expect(find.text('new_thing'), findsOneWidget, reason: '不认得的检查项原样摆');
     final shapes = t.widgetList<PriorityShape>(find.byType(PriorityShape)).map((s) => s.level).toList();
     expect(shapes, ['P1', 'P1', 'P2'], reason: '整体、要紧的没过是 P1 的形状；别的没过是 P2');
@@ -105,7 +105,7 @@ void main() {
         'checks': <String, dynamic>{'db': _check(true, 'ok'), 'push': _check(false, '没配')},
       };
     await _open(t, api);
-    expect((t.widget<ListTile>(find.byKey(SiteHealthPage.overallKey)).title as Text).data, '有几项要看一下');
+    expect((t.widget<ListTile>(find.byKey(SiteHealthPage.overallKey)).title as Text).data, '有几项需要注意');
     expect(t.widgetList<PriorityShape>(find.byType(PriorityShape)).map((s) => s.level), ['P2', 'P2']);
   });
 
@@ -125,10 +125,10 @@ void main() {
         ],
       };
     await _open(t, api);
-    expect(find.text('机器人太老'), findsOneWidget);
-    expect(find.text('不清楚'), findsOneWidget);
+    expect(find.text('机器人版本过旧'), findsOneWidget);
+    expect(find.text('未知'), findsOneWidget);
     expect(find.text('代理 0.9 · 级别 1 · 离线'), findsOneWidget);
-    expect(find.text('太老'), findsOneWidget, reason: '只有 gina 那一个：没报级别的、网页的都不算');
+    expect(find.text('版本过旧'), findsOneWidget, reason: '只有 gina 那一个：没报级别的、网页的都不算');
     expect(find.text('网页值班台'), findsOneWidget);
     expect(find.text('手机 App ?'), findsOneWidget);
   });
@@ -136,7 +136,7 @@ void main() {
   testWidgets('体检读不到：说读不到，不显示各项；版本一览照样看。刷新后读到了就显示', (t) async {
     final api = FakeApi('admin')..healthError = const SiteError(502, '坏了');
     await _open(t, api);
-    expect(find.textContaining('站点体检没读到'), findsOneWidget);
+    expect(find.textContaining('无法读取站点体检结果'), findsOneWidget);
     expect(find.byKey(SiteHealthPage.overallKey), findsNothing);
     expect(find.text('机器人上的软件'), findsOneWidget);
     api.healthError = null;
@@ -158,7 +158,7 @@ void main() {
     expect(find.byKey(SiteHealthPage.overallKey), findsNothing);
     expect(find.byKey(SiteHealthPage.checkKey('db')), findsNothing);
     expect(find.text('机器人上的软件'), findsNothing);
-    expect(find.textContaining('站点体检没读到'), findsOneWidget);
+    expect(find.textContaining('无法读取站点体检结果'), findsOneWidget);
   });
 
   testWidgets('保存诊断包：取回来、按时间起名、存下去，说存到哪儿了、多大；存的时候按钮按不了', (t) async {
@@ -171,7 +171,7 @@ void main() {
     expect(saved.single.$1, 'd1max-support-20261011-020409.tar.gz');
     expect(saved.single.$2.length, 3000);
     expect(t.widget<SelectableText>(find.byKey(SiteHealthPage.msgKey)).data,
-        '存好了（3 KB）：/downloads/d1max-support-20261011-020409.tar.gz');
+        '已保存（3 KB）：/downloads/d1max-support-20261011-020409.tar.gz');
     expect(t.widget<OutlinedButton>(find.byKey(SiteHealthPage.bundleKey)).onPressed, isNotNull);
   });
 
@@ -182,7 +182,7 @@ void main() {
     await t.tap(find.byKey(SiteHealthPage.bundleKey));
     await t.pumpAndSettle();
     expect(saved, isEmpty);
-    expect(t.widget<SelectableText>(find.byKey(SiteHealthPage.msgKey)).data, contains('诊断包没存上'));
+    expect(t.widget<SelectableText>(find.byKey(SiteHealthPage.msgKey)).data, contains('诊断包保存失败'));
     await t.pumpWidget(Container());
     final api2 = FakeApi('admin');
     await _open(t, api2, where: (_) => throw const FileSystemException('盘满了'));
@@ -190,8 +190,8 @@ void main() {
     await t.tap(find.byKey(SiteHealthPage.bundleKey));
     await t.pumpAndSettle();
     final msg = t.widget<SelectableText>(find.byKey(SiteHealthPage.msgKey)).data!;
-    expect(msg, contains('诊断包没存上：盘满了'));
-    expect(msg, isNot(contains('存好了')));
+    expect(msg, contains('诊断包保存失败：盘满了'));
+    expect(msg, isNot(contains('已保存')));
   });
 
   for (final (name, err) in <(String, Object)>[
@@ -209,14 +209,14 @@ void main() {
       await t.pumpAndSettle();
       expect(t.takeException(), isNull, reason: '错不许漏出页面');
       expect(saved, isEmpty);
-      expect(t.widget<SelectableText>(find.byKey(SiteHealthPage.msgKey)).data, startsWith('诊断包没存上'));
-      expect(find.text('正在存…'), findsNothing);
+      expect(t.widget<SelectableText>(find.byKey(SiteHealthPage.msgKey)).data, startsWith('诊断包保存失败'));
+      expect(find.text('正在保存…'), findsNothing);
       expect(t.widget<OutlinedButton>(find.byKey(SiteHealthPage.bundleKey)).onPressed, isNotNull);
       api.bundleError = null;
       await t.tap(find.byKey(SiteHealthPage.bundleKey));
       await t.pumpAndSettle();
       expect(saved.length, 1);
-      expect(t.widget<SelectableText>(find.byKey(SiteHealthPage.msgKey)).data, startsWith('存好了'));
+      expect(t.widget<SelectableText>(find.byKey(SiteHealthPage.msgKey)).data, startsWith('已保存'));
     });
   }
 
@@ -227,7 +227,7 @@ void main() {
     await t.tap(find.byKey(SiteHealthPage.bundleKey));
     await t.pumpAndSettle();
     expect(t.takeException(), isNull);
-    expect(t.widget<SelectableText>(find.byKey(SiteHealthPage.msgKey)).data, startsWith('诊断包没存上'));
+    expect(t.widget<SelectableText>(find.byKey(SiteHealthPage.msgKey)).data, startsWith('诊断包保存失败'));
     expect(t.widget<OutlinedButton>(find.byKey(SiteHealthPage.bundleKey)).onPressed, isNotNull);
   });
 
@@ -240,18 +240,18 @@ void main() {
     await t.ensureVisible(find.byKey(SiteHealthPage.bundleKey));
     await t.tap(find.byKey(SiteHealthPage.bundleKey));
     await t.pump();
-    expect(find.text('正在存…'), findsOneWidget);
+    expect(find.text('正在保存…'), findsOneWidget);
     expect(t.widget<OutlinedButton>(find.byKey(SiteHealthPage.bundleKey)).onPressed, isNull);
     gate.complete('/x/y.tar.gz');
     await t.pumpAndSettle();
-    expect(find.text('正在存…'), findsNothing);
+    expect(find.text('正在保存…'), findsNothing);
     expect(t.widget<OutlinedButton>(find.byKey(SiteHealthPage.bundleKey)).onPressed, isNotNull);
   });
 
   testWidgets('外审 M1 一刷新就撤掉上一次的结论、写正在读；体检坏了马上说，不等版本一览', (t) async {
     final api = FakeApi('admin');
     await _open(t, api);
-    expect((t.widget<ListTile>(find.byKey(SiteHealthPage.overallKey)).title as Text).data, '各项都正常');
+    expect((t.widget<ListTile>(find.byKey(SiteHealthPage.overallKey)).title as Text).data, '全部正常');
     api
       ..healthGate = Completer<void>()
       ..versionsGate = Completer<void>();
@@ -259,7 +259,7 @@ void main() {
     await t.pump();
     // 两个都还没回来：上一次的「各项都正常」已经不在了
     expect(find.byKey(SiteHealthPage.overallKey), findsNothing);
-    expect(find.text('各项都正常'), findsNothing);
+    expect(find.text('全部正常'), findsNothing);
     expect(find.byKey(SiteHealthPage.checkKey('db')), findsNothing);
     expect(find.text('机器人上的软件'), findsNothing);
     expect(find.byKey(SiteHealthPage.loadingKey), findsOneWidget);
@@ -268,7 +268,7 @@ void main() {
     api.healthGate!.complete();
     await t.pump();
     await t.pump();
-    expect(find.textContaining('站点体检没读到'), findsOneWidget);
+    expect(find.textContaining('无法读取站点体检结果'), findsOneWidget);
     expect(find.byKey(SiteHealthPage.loadingKey), findsNothing);
     expect(find.byKey(SiteHealthPage.overallKey), findsNothing);
     expect(find.text('机器人上的软件'), findsNothing, reason: '版本一览还没回来');
@@ -276,7 +276,7 @@ void main() {
     await t.pump();
     await t.pump();
     expect(find.text('机器人上的软件'), findsOneWidget);
-    expect(find.textContaining('站点体检没读到'), findsOneWidget);
+    expect(find.textContaining('无法读取站点体检结果'), findsOneWidget);
   });
 
   testWidgets('外审 M1 反过来：版本一览卡着，体检读到了就先显示', (t) async {
@@ -375,7 +375,7 @@ void main() {
     await press(t, SiteHealthPage.shareKey);
     expect(api.calls, contains('support-bundle'));
     expect(shared, [('d1max-support-20261011-020409.tar.gz', 3000)]);
-    expect(msg(t), '交给分享了（3 KB）：d1max-support-20261011-020409.tar.gz');
+    expect(msg(t), '已分享（3 KB）：d1max-support-20261011-020409.tar.gz');
     expect(enabled(t, SiteHealthPage.shareKey) && enabled(t, SiteHealthPage.bundleKey), isTrue);
   });
 
@@ -383,9 +383,9 @@ void main() {
     final api = FakeApi('admin');
     await page(t, api, share: (n, b) async => false, save: (n, b) async => null);
     await press(t, SiteHealthPage.shareKey);
-    expect(msg(t), '没分享：取消了');
+    expect(msg(t), '已取消分享');
     await press(t, SiteHealthPage.bundleKey);
-    expect(msg(t), '没存：取消了');
+    expect(msg(t), '已取消保存');
     expect(enabled(t, SiteHealthPage.shareKey) && enabled(t, SiteHealthPage.bundleKey), isTrue);
   });
 
@@ -397,7 +397,7 @@ void main() {
       final api = FakeApi('admin');
       await page(t, api, share: (n, b) async => throw err);
       await press(t, SiteHealthPage.shareKey);
-      expect(msg(t), startsWith('诊断包没分享出去：'));
+      expect(msg(t), startsWith('诊断包分享失败：'));
       expect(msg(t), contains(err is FileSystemException ? 'disk full' : 'no share plugin'));
       expect(enabled(t, SiteHealthPage.shareKey) && enabled(t, SiteHealthPage.bundleKey), isTrue);
       await t.pumpWidget(Container());
@@ -407,7 +407,7 @@ void main() {
     await page(t, api, share: (n, b) async => called = true);
     await press(t, SiteHealthPage.shareKey);
     expect(called, isFalse, reason: '没取到就没东西可分享');
-    expect(msg(t), startsWith('诊断包没分享出去：'));
+    expect(msg(t), startsWith('诊断包分享失败：'));
   });
 
   testWidgets('正在分享：两个按钮都按不了，只有分享那个写着正在取；完了都放开', (t) async {
@@ -418,8 +418,8 @@ void main() {
     await t.tap(find.byKey(SiteHealthPage.shareKey));
     await t.pump();
     await t.pump();
-    expect(find.text('正在取…'), findsOneWidget);
-    expect(find.text('正在存…'), findsNothing);
+    expect(find.text('正在准备…'), findsOneWidget);
+    expect(find.text('正在保存…'), findsNothing);
     expect(enabled(t, SiteHealthPage.shareKey) || enabled(t, SiteHealthPage.bundleKey), isFalse);
     gate.complete(true);
     await t.pumpAndSettle();

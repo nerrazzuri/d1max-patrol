@@ -184,7 +184,7 @@ void main() {
       await t.tap(find.byKey(const Key('bind-join')));
       await t.pumpAndSettle();
       expect(link.calls, ['status']);
-      expect(find.textContaining('先在原来的站点上解绑'), findsOneWidget);
+      expect(find.textContaining('请先在原站点解绑'), findsOneWidget);
     });
 
     testWidgets('自动连不上热点：摆出热点名和密码，人手动连好了接着发', (t) async {
@@ -289,7 +289,7 @@ void main() {
           scanner: (_) async => 'D1MAXSITE1.xx', joiner: FakeJoiner(), link: (_) => FakeLink())));
       await t.tap(find.byKey(const Key('bind-scan')));
       await t.pumpAndSettle();
-      expect(find.textContaining('不是机器人身上的贴纸码'), findsOneWidget);
+      expect(find.textContaining('不是有效的机器人贴纸码'), findsOneWidget);
     });
   });
 
@@ -322,7 +322,7 @@ void main() {
       await t.pump(const Duration(milliseconds: 150));
       await t.pumpAndSettle();
       expect(find.byKey(const Key('wifi-result')), findsOneWidget);
-      expect(find.textContaining('退回原来的了'), findsOneWidget);
+      expect(find.textContaining('已恢复原网络'), findsOneWidget);
       await t.tap(find.byKey(const Key('wifi-again')));
       await t.pumpAndSettle();
       expect(find.byKey(const Key('wifi-join')), findsOneWidget, reason: '没换成：再连机器人、再选');
@@ -383,7 +383,7 @@ void main() {
     });
 
     testWidgets('批准密码不对：对话框不关、说密码不对', (t) async {
-      final api = FakeApi('admin')..approveError = const SiteError(403, '密码不对');
+      final api = FakeApi('admin')..approveError = const SiteError(403, '密码错误');
       await t.pumpWidget(host(Builder(builder: (c) => TextButton(
           onPressed: () => approveBindDialog(c, api, <String, dynamic>{'id': 'ab12', 'serial': 'D1M-7', 'check': '1'}),
           child: const Text('go')))));
@@ -404,11 +404,11 @@ void main() {
       };
       await t.pumpWidget(host(SiteRobotPage(api: api, robotId: 'A')));
       await t.pumpAndSettle();
-      expect(find.textContaining('正在试 WiFi「New」'), findsOneWidget);
+      expect(find.textContaining('正在尝试 WiFi「New」'), findsOneWidget);
       await t.tap(find.byKey(const Key('btn-wifi-approve')));
       await t.pumpAndSettle();
       expect(api.calls, contains('confirmRobotWifi A 0a1b2c3d4e5f true'));
-      expect(robotWifiLine(<String, dynamic>{'ssid': 'Estate', 'link': '4g'}), 'Estate · 走 4G');
+      expect(robotWifiLine(<String, dynamic>{'ssid': 'Estate', 'link': '4g'}), 'Estate · 4G 连接');
     });
   });
 }

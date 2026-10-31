@@ -59,7 +59,7 @@ void main() {
     await t.tap(find.byKey(const Key('deter-on-siren')));
     await t.pumpAndSettle();
     expect(api.calls.last, 'deter A siren true 10.0');
-    expect(find.text('开警笛 10 秒：好了'), findsOneWidget);
+    expect(find.text('开启警笛 10 秒：完成'), findsOneWidget);
     await t.tap(find.byKey(const Key('deter-off-strobe')));
     await t.pumpAndSettle();
     expect(api.calls.last, 'deter A strobe false');
@@ -95,11 +95,11 @@ void main() {
     await _open(t, api);
     await t.tap(find.byKey(const Key('deter-play')));
     await t.pumpAndSettle();
-    expect(find.textContaining('更要紧'), findsOneWidget);
+    expect(find.textContaining('更紧急'), findsOneWidget);
     api.deterAck = <String, dynamic>{'result': 'rejected', 'reason': 'device: 继电器板(站号 1):没回'};
     await t.tap(find.byKey(const Key('deter-on-strobe')));
     await t.pumpAndSettle();
-    expect(find.textContaining('设备没做成：继电器板'), findsOneWidget);
+    expect(find.textContaining('设备执行失败：继电器板'), findsOneWidget);
   });
 
   testWidgets('W40：机器人报了左右灯、警灯颜色：多两行、颜色下拉框，开的时候带上', (t) async {
@@ -117,7 +117,7 @@ void main() {
     await t.tap(find.byKey(const Key('deter-on-spotlight-left')));
     await t.pumpAndSettle();
     expect(api.calls.last, 'deter A spotlight true 120.0 side=left');
-    expect(find.text('开左聚光灯 120 秒：好了'), findsOneWidget);
+    expect(find.text('开启左聚光灯 120 秒：完成'), findsOneWidget);
     await t.tap(find.byKey(const Key('deter-off-spotlight-right')));
     await t.pumpAndSettle();
     expect(api.calls.last, 'deter A spotlight false side=right');
@@ -169,6 +169,6 @@ void main() {
     (v['devices'] as Map)['stale'] = true;
     await _robotPage(t, FakeApi('guard', robotView: v));
     await t.scrollUntilVisible(find.byKey(const Key('robot-devices')), 200);
-    expect(find.text('设备（好一会儿没更新了）'), findsOneWidget);
+    expect(find.text('设备（长时间未更新）'), findsOneWidget);
   });
 }

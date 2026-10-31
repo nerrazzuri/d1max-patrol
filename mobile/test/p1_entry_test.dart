@@ -84,7 +84,7 @@ void main() {
     testWidgets('页头的加号和底下的「添加站点」进的是同一页', (t) async {
       await t.pumpWidget(MaterialApp(home: SiteListPage(store: MemorySiteStore())));
       await t.pumpAndSettle();
-      expect(find.descendant(of: find.byKey(const Key('site-add')), matching: find.text('添加新站点')),
+      expect(find.descendant(of: find.byKey(const Key('site-add')), matching: find.text('添加站点')),
           findsOneWidget);
       await t.tap(find.byKey(const Key('site-add-top')));
       await t.pumpAndSettle();
@@ -153,7 +153,7 @@ void main() {
       await t.pumpAndSettle();
       expect(find.byType(SiteLoginPage), findsOneWidget, reason: '没登上：留在登录页');
       expect(find.byType(NwShell), findsNothing);
-      expect(find.text('登录不了：账号或口令不对（401）'), findsOneWidget);
+      expect(find.text('登录失败：账号或口令不对（401）'), findsOneWidget);
       expect(api.closed, 1, reason: '没登上的那个连接关掉');
       await t.enterText(find.byKey(const Key('site-password')), 'right');
       await t.testTextInput.receiveAction(TextInputAction.done);
@@ -293,7 +293,7 @@ const _code = 'D1MAXSITE1.eyJmIjoiYWJhYmFiYWJhYmFiYWJhYmFiYWJhYmFiYWJhYmFiYWJhYm
 
 class _BrokenStore implements SiteStore {
   @override
-  Future<List<SiteEntry>> load() async => throw const FormatException('站点文件的顶层应该是个数组');
+  Future<List<SiteEntry>> load() async => throw const FormatException('站点文件格式错误（顶层应为数组）');
   @override
   Future<void> save(List<SiteEntry> s) async => throw StateError('不许写');
 }

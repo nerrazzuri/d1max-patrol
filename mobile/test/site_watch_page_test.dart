@@ -57,9 +57,9 @@ void main() {
     await _open(t, api);
     final tile = find.byKey(SiteWatchPage.robotKey('A'));
     final text = (t.widget<ListTile>(tile).subtitle! as Text).data!;
-    expect(text, contains('盘水位 42%'));
-    expect(text, contains('证据积压 3 个文件（最老的等了 95 秒）'));
-    expect(find.textContaining('备份：上次成功在', skipOffstage: false), findsOneWidget);
+    expect(text, contains('磁盘占用 42%'));
+    expect(text, contains('证据积压 3 个文件（最早的已等待 95 秒）'));
+    expect(find.textContaining('备份：上次成功于', skipOffstage: false), findsOneWidget);
   });
 
   testWidgets('机器人上存储那几项不知道就印「不知道」和理由，不写 0；站点没配备份就明说', (t) async {
@@ -77,8 +77,8 @@ void main() {
     await _open(t, api);
     final tile = find.byKey(SiteWatchPage.robotKey('A'));
     final text = (t.widget<ListTile>(tile).subtitle! as Text).data!;
-    expect(text, contains('盘水位 不知道（机器人上的存储情况还没接到站点'));
-    expect(text, contains('证据积压 不知道'));
+    expect(text, contains('磁盘占用 未知（机器人上的存储情况还没接到站点'));
+    expect(text, contains('证据积压 未知'));
     expect(text, contains('在线'));
     expect(find.textContaining('备份：站点没配备份目录', skipOffstage: false), findsOneWidget);
   });
@@ -192,7 +192,7 @@ void main() {
     await t.pumpWidget(MaterialApp(
         home: SiteWatchPage(api: api, now: () => DateTime(2026, 9, 25, 21, 7, 3))));
     await t.pumpAndSettle();
-    expect(find.text('告警读于 21:07:03；下拉可以再问一次'), findsOneWidget);
+    expect(find.text('告警更新于 21:07:03；可下拉刷新'), findsOneWidget);
     expect(find.byKey(SiteWatchPage.liveLostKey), findsNothing);
     final opened = api.eventsOpened;
     await api.sse.close();

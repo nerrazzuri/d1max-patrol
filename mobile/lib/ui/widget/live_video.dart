@@ -86,7 +86,7 @@ class MjpegParser {
     }
     throw VideoError(
         0,
-        tr("Can't read the video response", '回来的画面看不懂'),
+        tr("Can't read the video response", '无法解析视频数据'),
         tr('No boundary in content-type: ${ct.isEmpty ? '(empty)' : ct}',
             'content-type 里没有 boundary：${ct.isEmpty ? '(空)' : ct}'));
   }
@@ -160,14 +160,13 @@ class MjpegParser {
       _resume = 0; // 缓冲挪过位了，记着的那个位置作废
     }
     if (_buf.length > maxBuffer) {
-      final int n = _buf.length;
       _buf.clear();
       _resume = 0;
       throw VideoError(
           0,
-          tr("This video stream can't continue", '这一路画面接不下去'),
-          tr('Buffered $n bytes without a complete frame. The stream is not MJPEG or was cut off mid-frame',
-              '攒了 $n 字节还没切出一帧，这条流不是 MJPEG 或者已经断在半句话上'));
+          tr("Video stream interrupted", '视频流中断'),
+          tr('Invalid or interrupted video stream',
+              '视频流格式错误或已中断'));
     }
     return out;
   }
@@ -242,7 +241,7 @@ Stream<Uint8List> _mjpegFrames(Uri url,
     } on Object {
       // 读不出原因就只报状态码
     }
-    throw VideoError(resp.statusCode, tr("Can't open this video stream", '这一路画面拉不下来'), why);
+    throw VideoError(resp.statusCode, tr("Can't open this video stream", '无法打开视频流'), why);
   }
   final MjpegParser parser = MjpegParser.fromContentType(
       resp.headers.value(HttpHeaders.contentTypeHeader));
@@ -467,11 +466,11 @@ class _LiveVideoState extends State<LiveVideo> {
     _firstFrame = Timer(widget.firstFrameGrace, () {
       if (!mounted || gen != _gen) return;
       _fail(
-          VideoError(0, tr('No video data received', '一直没收到画面数据'),
-              tr('No frame within 3 s of opening the stream', '开了流之后 3 秒一帧都没切出来')),
+          VideoError(0, tr('No video data received', '未收到画面数据'),
+              tr('No frame within 3 s of opening the stream', '打开视频流 3 秒内未收到画面')),
           say: tr(
               'No video data received. Check on the site that this robot is online and its camera is streaming',
-              '一直没收到画面数据。看看站点上这台机器人在不在线、相机有没有推流'));
+              '未收到画面数据。请在站点上检查机器人是否在线、相机是否推流'));
     });
   }
 
@@ -518,25 +517,23 @@ class _LiveVideoState extends State<LiveVideo> {
   /// 过去看那台狗。原文由 [_fail] 记进 `dart:developer` 的日志，屏幕上不留。
   String _human(Object e) {
     if (e is VideoError && e.status == HttpStatus.unauthorized) {
-      return tr('The site no longer accepts this sign-in. Sign out and sign in again',
-          '站点不认这个登录了。退出去重新登录');
+      return tr('Your sign-in is no longer valid. Sign out and sign in again',
+          '登录已失效，请退出后重新登录');
     }
     if (e is VideoError && e.detail.isNotEmpty && e.status != 0) {
       // 站点说了原因（「狗不在线」「已经 6 个人在看了」这种）：原样给人看，人照着查。
       return tr("Can't open this video: ${e.detail}. It will retry shortly",
-          '这一路的画面拉不下来：${e.detail}。过一会儿会自己再试');
+          '无法打开视频：${e.detail}，稍后自动重试');
     }
     if (e is VideoError && e.status == HttpStatus.serviceUnavailable) {
       return tr(
           "The site can't serve this video right now (viewer limit reached, or the robot is not streaming yet). "
               'It will retry shortly',
-          '站点那头现在接不了这一路（看的人满了，或者机器人还没推上来）。过一会儿会自己再试');
+          '站点暂时无法提供此视频（观看人数已满或机器人未推流），稍后自动重试');
     }
     return tr(
-        'This video dropped. It will retry in a few seconds. '
-            'If this message stays, check on the site that this robot is online',
-        '这一路的画面断了，过几秒会自己再试一次。'
-            '一直是这句就看看站点上这台机器人在不在线');
+        'Video dropped, retrying. If it persists, check that the robot is online',
+        '视频中断，正在重试。如持续出现，请检查机器人是否在线');
   }
 
   /// 掐掉当前这条流。
@@ -622,23 +619,23 @@ class _LiveVideoState extends State<LiveVideo> {
         // 一帧坏 JPEG 不该走 Flutter 的全局错误通道 —— 那条路上屏幕什么
         // 也不说，人只看到画面卡住。
         errorBuilder: (_, _, _) => _panel(
-            tr('${widget.camera}: frame could not be decoded', '${widget.camera} 这一帧解不开'),
-            tr('The next frame usually fixes it. If it keeps happening, this video has a problem',
-                '下一帧一般就好了。一直这样就是这一路出了问题')),
+            tr('${widget.camera}: frame could not be decoded', '${widget.camera}：画面帧解码失败'),
+            tr('Usually recovers on the next frame. If it persists, the video source has a problem',
+                '通常下一帧即恢复。持续出现说明视频源异常')),
       );
     }
     if (_live) {
       return _panel(
-          tr('${widget.camera}: connecting', '${widget.camera} 正在接画面'),
+          tr('${widget.camera}: connecting', '${widget.camera} 正在连接画面'),
           _trouble.isEmpty
-              ? tr('Waiting for the first frame. If this message stays, this video has not started',
-                  '第一帧还没到。要是一直停在这句，这一路就是真的没起来')
+              ? tr('Waiting for the first frame. If it persists, the video has not started',
+                  '等待首帧画面。持续出现说明视频未启动')
               : _trouble);
     }
     return _panel(
         tr('${widget.camera}: no video', '${widget.camera} 没有画面'),
         tr('The site reports this robot is offline. Check its network, or go and look at it',
-            '站点说这台机器人现在不在线。看看它的网络，或者走过去看看'));
+            '站点显示此机器人离线。请检查网络或到现场查看'));
   }
 
   /// 没画面时那块板子。

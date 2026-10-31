@@ -70,7 +70,7 @@ describe("现场概况", () => {
     const todo = c.querySelector(".home-todo")!;
     expect(todo.textContent).toContain("证书");
     expect(todo.textContent).toContain("工程师");
-    fireEvent.click(btn(todo, "处理好了"));
+    fireEvent.click(btn(todo, "已处理"));
     expect(done).toHaveBeenCalledWith(expect.objectContaining({ key: "c1" }));
   });
 
@@ -116,6 +116,6 @@ describe("现场概况", () => {
   it("这周比上周", async () => {
     const { container: c } = page();
     await waitFor(() => expect(c.querySelector(".home-week")!.textContent).toContain("比上周多 2 次"));
-    expect(c.querySelector(".home-week")!.textContent).toContain("跟上周一样");
+    expect(c.querySelector(".home-week")!.textContent).toContain("与上周持平");
   });
 });
