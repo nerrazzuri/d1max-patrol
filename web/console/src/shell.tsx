@@ -1,5 +1,7 @@
-// 值班台外壳(W44 第一期,设计 §4.0):路由、顶栏、用户菜单、按页面挂深色 / 浅色。
-// 顶栏只有:品牌和站点名、页面导航、报警数、布防状态(只显示)、时钟、用户名下拉(语言、外观、改密码、退出)、全部急停。
+// 值班台外壳(W44 第一期,设计 §4.0;W60 改版):路由、左侧导航、顶栏、用户菜单、主题。
+// 左侧导航:品牌、站点名,按角色分「值班 / 管理 / 系统」三组(高级默认收着)。
+// 顶栏只有:页面名、布防状态(只显示)、报警数、时钟、帮助、用户名下拉(语言、外观、改密码、退出)、全部急停。
+// W60:全站默认深色(不再按页面换深浅色),浅色在「外观」里个人选。
 import { useEffect, useRef, useState } from "preact/hooks";
 import { api, ApiError } from "./api";
 import type { Me } from "./app";
@@ -21,20 +23,51 @@ export type Page = GuardPage | AdminPage;
 
 export const GUARD_PAGES: GuardPage[] = ["duty", "live", "map", "recordings", "alarms"];
 
-interface NavGroup { id: "common" | "setup" | "advanced"; key: Key; pages: { id: AdminPage; key: Key }[] }
-export const ADMIN_GROUPS: NavGroup[] = [
-  { id: "common", key: "navCommon", pages: [
-    { id: "admin/home", key: "tabHome" }, { id: "admin/arming", key: "tabArming" }, { id: "admin/access", key: "tabAccess" },
-    { id: "admin/users", key: "tabUsers" }, { id: "admin/robots", key: "tabRobotsAdmin" }, { id: "admin/reports", key: "tabReports" },
+/** 左侧导航的一组(W60)。``fold``:默认收着,在组里的页时展开。``badge``:右边的数(报警、技术提醒)。 */
+export interface NavSection {
+  id: "duty" | "manage" | "system" | "advanced";
+  key: Key;
+  fold?: boolean;
+  items: { id: Page; key: Key; badge?: "alarms" | "notices" }[];
+}
+/** 一级菜单要短(W60 约束):地图管理、定位、诊断、升级、系统这些工程向的收进「高级」。 */
+export const NAV_SECTIONS: NavSection[] = [
+  { id: "duty", key: "navDuty", items: [
+    { id: "duty", key: "tabOverview" }, { id: "live", key: "tabLive" }, { id: "map", key: "tabMap" },
+    { id: "alarms", key: "tabAlarms", badge: "alarms" }, { id: "recordings", key: "tabRecordings" },
   ] },
-  { id: "setup", key: "navSetup", pages: [{ id: "admin/layout", key: "lyTitle" }] },
-  { id: "advanced", key: "navAdvanced", pages: [
+  { id: "manage", key: "navManage", items: [
+    { id: "admin/robots", key: "tabRobotsAdmin" }, { id: "admin/layout", key: "lyTitle" }, { id: "admin/arming", key: "tabArming" },
+    { id: "admin/access", key: "tabAccess" }, { id: "admin/users", key: "tabUsers" },
+  ] },
+  { id: "system", key: "navSystem", items: [
+    { id: "admin/reports", key: "tabReports" }, { id: "admin/home", key: "tabHome", badge: "notices" },
+  ] },
+  { id: "advanced", key: "navAdvanced", fold: true, items: [
     { id: "admin/maps", key: "tabMapMgmt" }, { id: "admin/localization", key: "tabLocalization" }, { id: "admin/diag", key: "tabDiag" },
     { id: "admin/upgrade", key: "tabUpgrade" }, { id: "admin/system", key: "tabSystem" },
   ] },
 ];
 /** 不在导航里、从别的页打开的(地图编辑器从「高级 → 地图」每一版的「编辑…」进)。 */
-const ADMIN_PAGES: AdminPage[] = [...ADMIN_GROUPS.flatMap((g) => g.pages.map((p) => p.id)), "admin/mapedit"];
+const ADMIN_PAGES: AdminPage[] = [
+  ...NAV_SECTIONS.flatMap((g) => g.items.map((p) => p.id)).filter((p): p is AdminPage => p.startsWith("admin/")),
+  "admin/mapedit",
+];
+
+/** 这个角色在左侧导航里看得到哪几组、每组哪几页(没权限的页不列,空的组不列)。 */
+export function navFor(role: string): NavSection[] {
+  return NAV_SECTIONS.map((g) => ({ ...g, items: g.items.filter((x) => pageAllowed(x.id, role)) }))
+    .filter((g) => g.items.length > 0);
+}
+
+/** 页面在导航里的名字(顶栏左边的标题用)和所在组。 */
+export function navLabel(page: Page): { section: Key; page: Key } | null {
+  for (const g of NAV_SECTIONS) {
+    const x = g.items.find((i) => i.id === page);
+    if (x) return { section: g.id === "advanced" ? "navSystem" : g.key, page: x.key };
+  }
+  return page === "admin/mapedit" ? { section: "navSystem", page: "tabMapMgmt" } : null;
+}
 /** 改版前的地址(书签、手机分享的链接)。 */
 const LEGACY: Record<string, Page> = {
   localization: "admin/localization", reports: "admin/reports", "admin/notices": "admin/home", "admin/lists": "admin/access",
@@ -66,12 +99,12 @@ export function roleLabel(role: string): Key {
     : role === "viewer" ? "roleViewer" : "roleFamily";
 }
 
-/** 页面默认的明暗(设计 §2.2):保安页深色,管理页浅色。 */
-export function pageScheme(p: Page): "dark" | "light" {
-  return isAdminPage(p) ? "light" : "dark";
+/** 页面默认的明暗:W60 起全站深色(原来管理页浅色,切页面像进了另一个系统)。 */
+export function pageScheme(_p: Page): "dark" | "light" {
+  return "dark";
 }
 
-/** 个人在「外观」里的选择:按页面(默认)、跟随系统、一直深色、一直浅色。 */
+/** 个人在「外观」里的选择:默认(深色)、跟随系统、一直深色、一直浅色。 */
 export type ThemePref = "auto" | "system" | "dark" | "light";
 const PREF_KEY = "d1max.look";
 
@@ -113,14 +146,6 @@ export function saveThemePref(v: ThemePref): void {
   }
 }
 
-const NAV: { id: GuardPage; key: Key }[] = [
-  { id: "duty", key: "tabDuty" },
-  { id: "live", key: "tabLive" },
-  { id: "map", key: "tabMap" },
-  { id: "recordings", key: "tabRecordings" },
-  { id: "alarms", key: "tabAlarms" },
-];
-
 export function TopBar(props: {
   me: Me;
   page: Page;
@@ -139,29 +164,11 @@ export function TopBar(props: {
   return (
     <header class="topbar">
       <a class="skip" href="#main">Skip to content</a>
-      <span class="wordmark">Nexus Warden</span>
-      <span class="site muted" title={props.me.site_name}>{props.me.site_name}</span>
-      <nav class="tabsnav" aria-label={t("mainNav")}>
-        {NAV.map((x) => (
-          <a key={x.id} href={`#/${x.id}`} aria-current={props.page === x.id ? "page" : undefined}>{t(x.key)}</a>
-        ))}
-        {isOwnerLike(props.me.role) && (
-          <>
-            <span class="navsep" aria-hidden="true" />
-            <a href="#/admin/home" aria-current={isAdminPage(props.page) ? "page" : undefined}>{t("adminGroup")}</a>
-          </>
-        )}
-        {props.me.role === "owner" && (
-          <>
-            <span class="navsep" aria-hidden="true" />
-            <a href="#/admin/arming" aria-current={props.page === "admin/arming" ? "page" : undefined}>{t("tabArming")}</a>
-          </>
-        )}
-      </nav>
-      <span class={props.alarms ? "alarmcount on push" : "alarmcount push"} aria-live="polite">
-        {t("alarmCount", { n: props.alarms == null ? "?" : props.alarms })}
-      </span>
+      <PageTitle page={props.page} />
       {props.mode && <ArmState mode={props.mode} />}
+      <a href="#/alarms" class={props.alarms ? "alarmcount on" : "alarmcount"} aria-live="polite">
+        {t("alarmCount", { n: props.alarms == null ? "?" : props.alarms })}
+      </a>
       <span class="clock mono">{new Date(props.now).toLocaleTimeString("en-GB", { hour12: false })}</span>
       {props.onHelp && (
         <button type="button" class="btn sm help-btn" aria-label={t("helpTitle")} title={t("helpTitle")} onClick={props.onHelp}>?</button>
@@ -171,6 +178,65 @@ export function TopBar(props: {
         <button type="button" class="btn stop" onClick={props.onStop}><Icon name="octagon" />{t("stopAll")}</button>
       )}
     </header>
+  );
+}
+
+/** 顶栏左边:组名(小字)+ 页名。 */
+function PageTitle({ page }: { page: Page }) {
+  const l = navLabel(page);
+  return (
+    <div class="pagetitle">
+      {l && <span class="pagetitle-sec">{t(l.section)}</span>}
+      <span class="pagetitle-name">{l ? t(l.page) : ""}</span>
+    </div>
+  );
+}
+
+/** 品牌标识(W60):外部设计的标志到了以后只换这一个组件。现在是文字。 */
+export function BrandMark() {
+  return (
+    <span class="brandmark" aria-label="Nexus Warden">
+      <span class="brandmark-a">NEXUS</span>
+      <span class="brandmark-b">WARDEN</span>
+    </span>
+  );
+}
+
+/** 左侧导航(W60):品牌、站点名,按角色分组;高级默认收着(在高级的页里就展开)。 */
+export function SideNav(props: { me: Me; page: Page; alarms: number | null; notices: number }) {
+  const groups = navFor(props.me.role);
+  const inAdvanced = NAV_SECTIONS.find((g) => g.id === "advanced")!.items.some((p) => p.id === props.page)
+    || props.page === "admin/mapedit";
+  const [open, setOpen] = useState(inAdvanced);
+  useEffect(() => { if (inAdvanced) setOpen(true); }, [inAdvanced]);
+  const badge = (b: "alarms" | "notices" | undefined) => {
+    const n = b === "alarms" ? props.alarms : b === "notices" ? props.notices : null;
+    return n ? <span class={b === "alarms" ? "badge alarm mono" : "badge mono"}>{n}</span> : null;
+  };
+  return (
+    <aside class="sidenav">
+      <div class="sidenav-brand">
+        <BrandMark />
+        <span class="sidenav-site" title={props.me.site_name}>{props.me.site_name}</span>
+      </div>
+      <nav class="sidenav-nav" aria-label={t("mainNav")}>
+        {groups.map((g) => {
+          const shown = !g.fold || open;
+          return (
+            <div key={g.id} class="navgroup">
+              {g.fold
+                ? <button type="button" class="navgroup-title" aria-expanded={open} onClick={() => setOpen(!open)}>{t(g.key)}</button>
+                : <div class="navgroup-title">{t(g.key)}</div>}
+              {shown && g.items.map((x) => (
+                <a key={x.id} href={`#/${x.id}`} aria-current={props.page === x.id ? "page" : undefined}>
+                  <span>{t(x.key)}</span>{badge(x.badge)}
+                </a>
+              ))}
+            </div>
+          );
+        })}
+      </nav>
+    </aside>
   );
 }
 
@@ -260,32 +326,5 @@ function OwnPassword({ onClose, onDone }: { onClose: () => void; onDone: () => v
         <div class="row end"><button type="submit" class="btn primary" disabled={busy || !old || !neu}>{t("pwSave")}</button></div>
       </form>
     </Modal>
-  );
-}
-
-/** 「管理」左边一列(设计 §5):三组,高级默认收着(在高级的页里就展开)。用户页只给管理员(工程师不能管账号)。 */
-export function AdminNav({ page, notices, role }: { page: Page; notices: number; role: string }) {
-  const inAdvanced = ADMIN_GROUPS[2].pages.some((p) => p.id === page) || page === "admin/mapedit";
-  const [open, setOpen] = useState(inAdvanced);
-  useEffect(() => { if (inAdvanced) setOpen(true); }, [inAdvanced]);
-  return (
-    <nav class="adminnav" aria-label={t("adminGroup")}>
-      {ADMIN_GROUPS.filter((g) => g.pages.some((x) => pageAllowed(x.id, role))).map((g) => {
-        const fold = g.id === "advanced";
-        const shown = !fold || open;
-        return (
-          <div key={g.id} class="navgroup">
-            {fold
-              ? <button type="button" class="navgroup-title" aria-expanded={open} onClick={() => setOpen(!open)}>{t(g.key)}</button>
-              : <div class="navgroup-title">{t(g.key)}</div>}
-            {shown && g.pages.filter((x) => pageAllowed(x.id, role)).map((x) => (
-              <a key={x.id} href={`#/${x.id}`} aria-current={page === x.id ? "page" : undefined}>
-                {t(x.key)}{x.id === "admin/home" && notices > 0 ? <span class="badge">{notices}</span> : null}
-              </a>
-            ))}
-          </div>
-        );
-      })}
-    </nav>
   );
 }

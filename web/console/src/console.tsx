@@ -1,5 +1,5 @@
-// 值班台外框(W44 第一期):外壳(shell.tsx 的顶栏、路由、主题)+ 站点数据 + 各页 + 共用的对话框。
-// 保安五页:值班、实况、地图、录像、报警记录(深色);管理各页(浅色)只有管理员进得去。
+// 值班台外框(W44 第一期;W60 改版):左侧导航 + 顶栏(shell.tsx)+ 站点数据 + 各页 + 共用的对话框。
+// 值班五页:总览、实况、地图、报警记录、录像;管理、系统各页按角色给(没权限的不列)。全站深色。
 import { useEffect, useMemo, useState } from "preact/hooks";
 import { api, ApiError, enc } from "./api";
 import type { Me } from "./app";
@@ -30,7 +30,7 @@ import { editTarget, MapEditPage } from "./mapedit";
 import { AccessPage } from "./accesspage";
 import { LayoutPage } from "./layoutpage";
 import { LAYOUT_TABS } from "./layouttabs";
-import { AdminNav, isAdminPage, loadThemePref, pageAllowed, pinFor, readRoute, saveThemePref, TopBar, type Page, type ThemePref } from "./shell";
+import { isAdminPage, loadThemePref, pageAllowed, pinFor, readRoute, saveThemePref, SideNav, TopBar, type Page, type ThemePref } from "./shell";
 import { pinScheme, systemIsDark } from "./theme";
 
 const TASK: Record<string, Key> = { patrol: "st_patrolling", goto: "st_patrolling", standby: "st_returning" };
@@ -120,6 +120,8 @@ export function Console({ me, onOut }: { me: Me; onOut: () => void }) {
   const fill = route.page === "duty" || route.page === "map" || route.page === "admin/layout" || route.page === "admin/mapedit";
   return (
     <div class={fill ? "console fill" : "console"}>
+      <SideNav me={me} page={route.page} alarms={stale ? null : guardAlarms} notices={admin ? notices : 0} />
+      <div class="workspace">
       <TopBar me={me} page={route.page} mode={data?.mode ?? null} alarms={stale ? null : guardAlarms} now={now}
         pref={pref} onPref={(p) => { saveThemePref(p); setPref(p); }}
         onStop={() => setPending({ kind: "stop" })} onSay={say}
@@ -135,7 +137,7 @@ export function Console({ me, onOut }: { me: Me; onOut: () => void }) {
 
       <main class="page" id="main" data-page={route.page}>
         {route.page === "duty" && (
-          <DutyPage units={units} alerts={alerts} now={now} role={me.role} say={say} refresh={refresh}
+          <DutyPage units={units} alerts={alerts} now={now} role={me.role} say={say} refresh={refresh} mode={data?.mode ?? null}
             onZoom={(id) => setPending({ kind: "cam", robot: id, cam: "front" })} />
         )}
         {route.page === "live" && (
@@ -143,9 +145,8 @@ export function Console({ me, onOut }: { me: Me; onOut: () => void }) {
         )}
         {route.page === "alarms" && <AlarmLogPage now={now} role={me.role} />}
         {!pageAllowed(route.page, me.role) && <p class="empty noaccess" role="alert">{t("noAccess")}</p>}
-        {isAdminPage(route.page) && admin && (
+        {isAdminPage(route.page) && pageAllowed(route.page, me.role) && (
           <div class="adminwrap">
-            <AdminNav page={route.page} notices={notices} role={me.role} />
             <div class="adminbody">
               {route.page === "admin/home" && (
                 <HomePage alerts={alerts} mode={data?.mode ?? null} now={now} onAck={ack} onDone={(a) => resolve(a, "handled")}
@@ -178,6 +179,7 @@ export function Console({ me, onOut }: { me: Me; onOut: () => void }) {
             onArm={() => setPending({ kind: "mode", mode: "armed" })} />
         )}
       </main>
+      </div>
 
       {pending?.kind === "mode" && (
         <Confirm text={t(pending.mode === "armed" ? "modeArmConfirm" : pending.mode === "home" ? "modeHomeConfirm" : "modeVisitorConfirm")}

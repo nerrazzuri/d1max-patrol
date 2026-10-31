@@ -65,13 +65,12 @@ describe("外壳的纯函数", () => {
     expect(roleLabel("owner")).toBe("roleFamily");
     expect(roleLabel("engineer")).toBe("roleEngineer");
   });
-  it("保安页深色,管理页浅色", () => {
-    for (const p of ["duty", "live", "map", "recordings", "alarms"] as const) expect(pageScheme(p)).toBe("dark");
-    expect(pageScheme("admin/users")).toBe("light");
+  it("W60 全站默认深色(管理页不再换浅色)", () => {
+    for (const p of ["duty", "live", "map", "recordings", "alarms", "admin/users", "admin/system"] as const) expect(pageScheme(p)).toBe("dark");
   });
   it("个人选了就按个人的,选「跟随系统」就跟系统", () => {
     expect(schemeFor("duty", "auto", false)).toBe("dark");
-    expect(schemeFor("admin/users", "auto", true)).toBe("light");
+    expect(schemeFor("admin/users", "auto", false)).toBe("dark");
     expect(schemeFor("duty", "light", true)).toBe("light");
     expect(schemeFor("admin/users", "dark", false)).toBe("dark");
     expect(schemeFor("duty", "system", false)).toBe("light");
@@ -94,51 +93,53 @@ describe("新外壳", () => {
     await waitFor(() => expect(c.container.querySelector('main[data-page="duty"]')).not.toBeNull());
   });
 
-  it("保安看不到管理,管理员看得到", () => {
+  const groups = (c: Element) => Array.from(c.querySelectorAll(".sidenav .navgroup-title")).map((x) => x.textContent);
+  const hrefs = (c: Element) => Array.from(c.querySelectorAll(".sidenav a")).map((x) => x.getAttribute("href"));
+
+  it("W60 左侧导航:保安只有值班一组(没有管理功能)", () => {
     const g = render(<Console me={me("guard")} onOut={() => {}} />);
-    expect(g.container.querySelector(".tabsnav")!.textContent).not.toContain("管理");
-    cleanup();
-    const a = render(<Console me={me("admin")} onOut={() => {}} />);
-    expect(a.container.querySelector(".tabsnav")!.textContent).toContain("管理");
+    expect(groups(g.container)).toEqual(["值班"]);
+    expect(hrefs(g.container)).toEqual(["#/duty", "#/live", "#/map", "#/alarms", "#/recordings"]);
+    expect(g.container.querySelector(".topbar .tabsnav")).toBeNull();
   });
 
-  it("管理入口指现场概况", () => {
+  it("W60 管理员:值班、管理、系统三组,高级默认收着、点开才有", () => {
     const a = render(<Console me={me("admin")} onOut={() => {}} />);
-    const link = Array.from(a.container.querySelectorAll(".tabsnav a")).find((x) => x.textContent === "管理")!;
-    expect(link.getAttribute("href")).toBe("#/admin/home");
+    expect(groups(a.container)).toEqual(["值班", "管理", "系统", "高级"]);
+    expect(hrefs(a.container)).toEqual(expect.arrayContaining(["#/admin/robots", "#/admin/layout", "#/admin/arming", "#/admin/access",
+      "#/admin/users", "#/admin/reports", "#/admin/home"]));
+    expect(hrefs(a.container)).not.toContain("#/admin/system");
+    fireEvent.click(Array.from(a.container.querySelectorAll(".sidenav .navgroup-title")).find((x) => x.textContent === "高级")!);
+    expect(hrefs(a.container)).toEqual(expect.arrayContaining(["#/admin/maps", "#/admin/localization", "#/admin/diag", "#/admin/upgrade", "#/admin/system"]));
   });
 
-  it("管理导航分三组,高级默认收着", async () => {
-    location.hash = "#/admin/home";
-    const a = render(<Console me={me("admin")} onOut={() => {}} />);
-    const nav = a.container.querySelector(".adminnav")!;
-    expect(Array.from(nav.querySelectorAll(".navgroup-title")).map((x) => x.textContent)).toEqual(["常用", "布置", "高级"]);
-    const hrefs = () => Array.from(nav.querySelectorAll("a")).map((x) => x.getAttribute("href"));
-    expect(hrefs()).toEqual(expect.arrayContaining(["#/admin/home", "#/admin/arming", "#/admin/access", "#/admin/users", "#/admin/robots", "#/admin/reports", "#/admin/layout"]));
-    expect(hrefs()).not.toContain("#/admin/system");
-    fireEvent.click(Array.from(nav.querySelectorAll(".navgroup-title")).find((x) => x.textContent === "高级")!);
-    expect(hrefs()).toEqual(expect.arrayContaining(["#/admin/maps", "#/admin/localization", "#/admin/system"]));
-  });
-
-  it("在高级的页里,高级是展开的", () => {
+  it("在高级的页里,高级是展开的;顶栏标题写组名和页名", () => {
     location.hash = "#/admin/system";
     const a = render(<Console me={me("admin")} onOut={() => {}} />);
-    expect(a.container.querySelector('.adminnav a[href="#/admin/system"]')).not.toBeNull();
+    expect(a.container.querySelector('.sidenav a[href="#/admin/system"]')!.getAttribute("aria-current")).toBe("page");
+    expect(a.container.querySelector(".topbar .pagetitle")!.textContent).toBe("系统系统");
   });
 
   it("工程师看得到管理、看不到用户", () => {
-    location.hash = "#/admin/home";
     const e = render(<Console me={me("engineer")} onOut={() => {}} />);
-    expect(e.container.querySelector(".tabsnav")!.textContent).toContain("管理");
-    expect(e.container.querySelector('.adminnav a[href="#/admin/users"]')).toBeNull();
-    expect(e.container.querySelector('.adminnav a[href="#/admin/robots"]')).not.toBeNull();
+    expect(hrefs(e.container)).not.toContain("#/admin/users");
+    expect(hrefs(e.container)).toContain("#/admin/robots");
   });
 
-  it("经理看不到管理", () => {
-    location.hash = "#/admin/home";
+  it("经理只多一项布防时间,进得去(原来进去是空白页)", () => {
+    location.hash = "#/admin/arming";
     const f = render(<Console me={me("owner")} onOut={() => {}} />);
-    expect(f.container.querySelector(".tabsnav")!.textContent).not.toContain("管理");
-    expect(f.container.querySelector(".adminnav")).toBeNull();
+    expect(groups(f.container)).toEqual(["值班", "管理"]);
+    expect(hrefs(f.container).filter((h) => h!.startsWith("#/admin/"))).toEqual(["#/admin/arming"]);
+    expect(f.container.querySelector(".adminbody")).not.toBeNull();
+    expect(f.container.querySelector(".noaccess")).toBeNull();
+  });
+
+  it("没权限的管理页写清楚,不渲染页面", () => {
+    location.hash = "#/admin/users";
+    const g = render(<Console me={me("guard")} onOut={() => {}} />);
+    expect(g.container.querySelector(".noaccess")).not.toBeNull();
+    expect(g.container.querySelector(".adminbody")).toBeNull();
   });
 
   it("顶栏没有语言按钮,在用户菜单里", () => {
@@ -173,13 +174,14 @@ describe("新外壳", () => {
     await waitFor(() => expect(c.container.querySelector(".alarmcount")!.textContent).toContain("1"));
   });
 
-  it("保安页深色,管理页浅色(真的挂上)", async () => {
+  it("W60 切到管理页还是深色(真的挂上)", async () => {
     location.hash = "#/map";
     const c = render(<Console me={me("admin")} onOut={() => {}} />);
     await waitFor(() => expect(document.documentElement.dataset.theme).toBe("dark"));
     location.hash = "#/admin/users";
     window.dispatchEvent(new HashChangeEvent("hashchange"));
-    await waitFor(() => expect(document.documentElement.dataset.theme).toBe("light"));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(document.documentElement.dataset.theme).toBe("dark");
     c.unmount();
   });
 
