@@ -251,28 +251,37 @@ mixin _StickerScan<T extends StatefulWidget> on State<T> {
 
   void onSticker(RobotSticker s) {}
 
-  Widget scanButton() => Wrap(spacing: Nw.s16, runSpacing: Nw.s8, children: [
-        if (scanner != null || canScanCodes)
-          NwButton(
-            buttonKey: const Key('bind-scan'),
-            onPressed: scanSticker,
-            icon: Icons.qr_code_scanner_rounded,
-            label: tr('Scan the robot sticker', '扫描机器人贴纸'),
-          ),
-        NwButton(
-          buttonKey: const Key('bind-paste'),
-          onPressed: pasteSticker,
-          icon: Icons.content_paste_rounded,
-          variant: NwButtonVariant.outline,
-          label: tr('Paste sticker code', '粘贴贴纸码'),
-        ),
-        NwButton(
+  /// 扫码、粘贴两个等宽按钮一行，「手动输入」居中在下面。
+  Widget scanButton() => Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        Row(children: [
+          if (scanner != null || canScanCodes) ...[
+            Expanded(
+                child: NwButton(
+              buttonKey: const Key('bind-scan'),
+              onPressed: scanSticker,
+              icon: Icons.qr_code_scanner_rounded,
+              label: tr('Scan sticker', '扫描机器人贴纸'),
+            )),
+            const SizedBox(width: Nw.s8),
+          ],
+          Expanded(
+              child: NwButton(
+            buttonKey: const Key('bind-paste'),
+            onPressed: pasteSticker,
+            icon: Icons.content_paste_rounded,
+            variant: NwButtonVariant.outline,
+            label: tr('Paste code', '粘贴贴纸码'),
+          )),
+        ]),
+        const SizedBox(height: Nw.s8),
+        Center(
+            child: NwButton(
           buttonKey: const Key('bind-manual'),
           onPressed: typeSticker,
           icon: Icons.keyboard_rounded,
           variant: NwButtonVariant.ghost,
           label: tr('Enter serial and code', '手动输入序列号和绑定码'),
-        ),
+        )),
       ]);
 
 }
@@ -810,7 +819,7 @@ class _EngineerUnbindPageState extends State<EngineerUnbindPage> with _StickerSc
           enableSuggestions: false, minLines: 2, maxLines: 4, mono: true, hint: '$unbindPrefix…',
           label: tr('Unbind token', '解绑令')),
       const SizedBox(height: Nw.s8),
-      NwButton(buttonKey: const Key('unbind-scan-token'), label: tr('Scan token', '扫解绑令'),
+      NwButton(buttonKey: const Key('unbind-scan-token'), label: tr('Scan token', '扫描解绑令'),
           variant: NwButtonVariant.outline, icon: Icons.qr_code_scanner_rounded, onPressed: _scanToken),
       _gap,
       if (sticker == null) scanButton() else
@@ -968,22 +977,29 @@ class _BindApprovalsState extends State<BindApprovals> {
             Padding(
               key: Key('bind-req-${r['serial']}'),
               padding: const EdgeInsets.only(top: Nw.s8),
-              child: Wrap(spacing: Nw.s16, runSpacing: Nw.s8, crossAxisAlignment: WrapCrossAlignment.center, children: [
-                Text('${r['serial']}', style: NwText.bodyMedium.copyWith(fontFamily: NwFont.mono, color: c.text)),
-                Text(tr('Check ${r['check']}', '核对码 ${r['check']}'), style: NwText.bodyMedium.copyWith(color: c.text)),
-                NwButton(
-                    buttonKey: Key('bind-approve-${r['serial']}'),
-                    size: NwButtonSize.small,
-                    label: tr('Approve', '批准'),
-                    onPressed: () async {
-                      if (await approveBindDialog(context, widget.api, r)) await _load();
-                    }),
-                NwButton(
-                    buttonKey: Key('bind-reject-${r['serial']}'),
-                    size: NwButtonSize.small,
-                    variant: NwButtonVariant.ghost,
-                    label: tr('Reject', '拒绝'),
-                    onPressed: () => _reject(r)),
+              // 序列号、核对码一行；「拒绝」「批准」靠右一行（跟账号审批一样）。
+              child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                Wrap(spacing: Nw.s16, runSpacing: Nw.s4, children: [
+                  Text('${r['serial']}', style: NwText.bodyMedium.copyWith(fontFamily: NwFont.mono, color: c.text)),
+                  Text(tr('Check ${r['check']}', '核对码 ${r['check']}'), style: NwText.bodyMedium.copyWith(color: c.text)),
+                ]),
+                const SizedBox(height: Nw.s8),
+                Row(mainAxisAlignment: MainAxisAlignment.end, children: [
+                  NwButton(
+                      buttonKey: Key('bind-reject-${r['serial']}'),
+                      size: NwButtonSize.small,
+                      variant: NwButtonVariant.ghost,
+                      label: tr('Reject', '拒绝'),
+                      onPressed: () => _reject(r)),
+                  const SizedBox(width: Nw.s8),
+                  NwButton(
+                      buttonKey: Key('bind-approve-${r['serial']}'),
+                      size: NwButtonSize.small,
+                      label: tr('Approve', '批准'),
+                      onPressed: () async {
+                        if (await approveBindDialog(context, widget.api, r)) await _load();
+                      }),
+                ]),
               ]),
             ),
         ]),
@@ -1089,7 +1105,7 @@ class _WifiPickerState extends State<WifiPicker> {
           ),
         ),
       Wrap(spacing: Nw.s8, children: [
-        NwButton(buttonKey: const Key('wifi-rescan'), label: tr('Scan again', '重新扫'),
+        NwButton(buttonKey: const Key('wifi-rescan'), label: tr('Scan again', '重新扫描'),
             variant: NwButtonVariant.ghost, icon: Icons.refresh_rounded,
             onPressed: _scanning || widget.busy ? null : _rescan),
         NwButton(buttonKey: const Key('wifi-manual'), label: tr('Hidden WiFi: enter the name', '隐藏 WiFi：手动输入名称'),

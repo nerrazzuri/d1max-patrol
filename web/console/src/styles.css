@@ -265,6 +265,8 @@ a { color: var(--c-tertiary); }
 .panel { background: var(--c-surface); border: 1px solid var(--c-outline); border-radius: var(--r-r12); overflow: hidden; }
 .panel-head { min-height: 56px; padding: 8px 16px; display: flex; flex-wrap: wrap; align-items: center; gap: 12px; border-bottom: 1px solid var(--c-outline); }
 .panel-head h1 { font-size: 22px; line-height: 28px; font-weight: 600; }
+/* 页面顶上的标题行(不在卡片里):左右不留内边距,标题跟下面的正文左边对齐 */
+:not(.panel) > .panel-head { padding-left: 0; padding-right: 0; }
 .pad { padding: 8px 16px 16px; margin: 0; }
 .grid { width: 100%; border-collapse: collapse; font-size: 14px; line-height: 20px; }
 .grid th { text-align: left; font-family: var(--font-mono); font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--c-textSecondary); padding: 10px 8px 8px; }

@@ -196,31 +196,33 @@ class _SiteModePageState extends State<SiteModePage> {
                       style: NwText.bodyMedium.copyWith(color: c.textSecondary)),
                 )),
             const SizedBox(height: Nw.s8),
-            Wrap(spacing: Nw.s8, runSpacing: Nw.s8, crossAxisAlignment: WrapCrossAlignment.center, children: [
+            // 三个模式按钮铺满一行（不带图标；「临时撤防」字长，稍宽）。
+            Row(children: [
               if (canArm)
-                NwButton(
+                Expanded(flex: 4, child: NwButton(
                     buttonKey: SiteModePage.armKey,
                     onPressed: m['mode'] == 'armed' ? null : () => _run(() => widget.api.setMode('armed'), tr('Switch to Armed', '切换为布防')),
-                    icon: Icons.shield_rounded,
-                    label: tr('Armed', '布防')),
+                    label: tr('Armed', '布防'))),
               if (canSet) ...[
-                NwButton(
+                if (canArm) const SizedBox(width: Nw.s8),
+                Expanded(flex: 4, child: NwButton(
                     buttonKey: SiteModePage.homeKey,
                     variant: NwButtonVariant.outline,
                     onPressed: m['mode'] == 'home' ? null : () => _run(() => widget.api.setMode('home'), tr('Switch to Stay', '切换为留守')),
-                    icon: Icons.home_rounded,
-                    label: tr('Stay', '留守')),
-                NwButton(
+                    label: tr('Stay', '留守'))),
+                const SizedBox(width: Nw.s8),
+                Expanded(flex: 5, child: NwButton(
                     buttonKey: SiteModePage.visitorKey,
                     variant: NwButtonVariant.outline,
                     onPressed: _visitor,
-                    icon: Icons.people_rounded,
-                    label: tr('Temp disarm…', '临时撤防…')),
+                    label: tr('Temp disarm', '临时撤防'))),
               ],
-              if (!canSet)
-                Text(tr('Disarming (Stay, Temp disarm) needs an administrator or manager', '撤防（留守、临时撤防）需管理员或经理操作'),
-                    style: NwText.bodySmall.copyWith(color: c.textSecondary)),
             ]),
+            if (!canSet)
+              Padding(
+                  padding: const EdgeInsets.only(top: Nw.s8),
+                  child: Text(tr('Disarming (Stay, Temp disarm) needs an administrator or manager', '撤防（留守、临时撤防）需管理员或经理操作'),
+                      style: NwText.bodySmall.copyWith(color: c.textSecondary))),
             const SizedBox(height: Nw.s16),
             Text(tr('Zones (zones that are not configured are always armed)', '防区（未配置的防区一律布防）'),
                 style: NwText.labelMedium.copyWith(color: c.textSecondary)),
@@ -459,7 +461,7 @@ class _SiteModeBarState extends State<SiteModeBar> {
         NwChoice(
             key: SiteModeBar.visitorKey,
             icon: Icons.people_rounded,
-            label: tr('Temp disarm…', '临时撤防…').toUpperCase(),
+            label: tr('Temp disarm', '临时撤防').toUpperCase(),
             selected: now == 'visitor',
             onTap: !canSet || _busy ? null : _visitor),
       ]),

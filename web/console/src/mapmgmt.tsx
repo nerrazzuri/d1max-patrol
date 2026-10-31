@@ -160,7 +160,7 @@ export function MapManagePage({ say, pollMs = 5000 }: { say: Say; pollMs?: numbe
     <div class="admin mm">
       <section class="panel">
         <div class="panel-head">
-          <h1>{tr("Maps", "地图管理")}</h1>
+          <h2>{tr("All versions", "所有版本")}</h2>
           {err && <span class="error" role="alert">{err}</span>}
           <span class="push" />
           {pick.length === 2 && (

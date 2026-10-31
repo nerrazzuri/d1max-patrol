@@ -12,6 +12,7 @@ export function AdvMapsPage({ say }: { say: (s: string) => void }) {
   const [done, setDone] = useState(0);
   return (
     <section class="advmaps">
+      <h1>{t("tabMapMgmt")}</h1>
       <p class="muted lead">{t("mapsWhen")}</p>
       <section class="panel rebuild">
         <button type="button" class="linklike" aria-expanded={open} onClick={() => setOpen(!open)}>{t("rbTitle")} {open ? "▾" : "▸"}</button>

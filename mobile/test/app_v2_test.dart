@@ -135,7 +135,7 @@ void main() {
       await t.pumpAndSettle();
       // 2026-10-14 重做：这一页的标题按设计稿叫 Site Selection（原来是 Sites / 站点）
       expect(find.text('Select site'), findsOneWidget);
-      expect(find.text('No sites yet. Add one with the button at the bottom right.'), findsOneWidget);
+      expect(find.text('No sites yet. Tap "Add site" below.'), findsOneWidget);
       await t.tap(find.byKey(const Key('lang-switch')));
       await t.pumpAndSettle();
       await t.tap(find.text('中文'));

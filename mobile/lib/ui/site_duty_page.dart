@@ -495,14 +495,23 @@ class _SiteDutyPageState extends State<SiteDutyPage> {
     return Padding(
       key: _t.actions,
       padding: const EdgeInsets.only(top: Nw.s8),
-      child: Wrap(spacing: Nw.s8, runSpacing: Nw.s8, crossAxisAlignment: WrapCrossAlignment.center, children: [
-        ...buttons,
-        NwButton(
-            buttonKey: SiteDutyPage.detailKey,
-            variant: NwButtonVariant.ghost,
-            label: tr('Details', '详情'),
-            icon: Icons.chevron_right_rounded,
-            onPressed: () => _go(SiteRobotPage(api: widget.api, robotId: id))),
+      // 操作按钮等宽铺满一行；「详情」靠右单独一行。
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        if (buttons.isNotEmpty)
+          Row(children: [
+            for (var i = 0; i < buttons.length; i++) ...[
+              if (i > 0) const SizedBox(width: Nw.s8),
+              Expanded(child: buttons[i]),
+            ],
+          ]),
+        Align(
+            alignment: Alignment.centerRight,
+            child: NwButton(
+                buttonKey: SiteDutyPage.detailKey,
+                variant: NwButtonVariant.ghost,
+                label: tr('Details', '详情'),
+                icon: Icons.chevron_right_rounded,
+                onPressed: () => _go(SiteRobotPage(api: widget.api, robotId: id)))),
       ]),
     );
   }
