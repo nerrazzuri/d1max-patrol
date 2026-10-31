@@ -31,6 +31,10 @@ class RenewError(Exception):
     pass
 
 
+class RenewRefused(RenewError):
+    """W63:这台没核过设备身份(没在本站点答过题),不给续签;对外只说中性的那句,不告警。"""
+
+
 class RenewBusy(RenewError):
     """机器人正忙,这次没换(不算失败、不告警,一小时后再试)。"""
 
@@ -68,6 +72,8 @@ class CertRenewer:
             row = self.registry.get(rid)
             if row is None or row.revoked or row.expires_at - now > RENEW_WITHIN_DAYS * DAY_MS:
                 continue
+            if not self._attested(rid):
+                continue                # W63:没核过设备身份的不续(到期为止;重新开通时核)
             pend = self.registry.pending(rid)
             if pend is not None and now - pend["created_ms"] < RETRY_MS:
                 continue                # 挂着一张没回执的:等机器人拿它连上来,别再签一张顶掉它
@@ -104,7 +110,7 @@ class CertRenewer:
         self._inflight.add(rid)
         try:
             out = await self._renew(rid, by)
-        except RenewBusy:
+        except (RenewBusy, RenewRefused):
             raise
         except Exception as exc:
             self._alert(rid, str(exc))
@@ -120,6 +126,10 @@ class CertRenewer:
         first = self.registry.get(rid)
         if first is None or first.revoked:
             raise RenewError(f"{rid} 未登记或已解绑")
+        if not self._attested(rid):
+            from d1max_site.attest import NEUTRAL
+            log.warning("%s 没核过设备身份,不续签(用开通码重新开通时会核)", rid)
+            raise RenewRefused(NEUTRAL)
         from d1max_site.dispatcher import SkewUnknown
         try:
             got = await self.dispatcher.map_command(rid, "cert_csr", {}, issued_by=by)
@@ -157,6 +167,10 @@ class CertRenewer:
             raise RenewError(f"{rid} 的登记已变(解绑或重新登记过),新证书未生效")
         log.info("%s 证书已续签,到期 %s", rid, reg.expires_at)
         return {"robot_id": rid, "expires_at": reg.expires_at, "fingerprint": fp}
+
+    def _attested(self, rid: str) -> bool:
+        """W63:这台在本站点核过设备身份(``device_ids`` 有它)。"""
+        return bool(self.registry.db.query("SELECT 1 FROM device_ids WHERE serial=?", (rid,)))
 
     def _alert(self, rid: str, why: str) -> None:
         if self.alerts is None:

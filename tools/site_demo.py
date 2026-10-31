@@ -344,7 +344,7 @@ def main(argv: list[str] | None = None) -> int:
             cfg["intake"] = {**cfg.get("intake", {}), "port": a.intake_port}
             cfg_path.write_text(json.dumps(cfg, indent=1))
         for n in names:
-            _site(home, "enroll", n, "--days", "30")
+            _site(home, "enroll", n, "--days", "365")   # W63:不到续签期(续签要核过设备身份)
     if not reuse:
         fp = _setup_rest(a, home, names)
 
