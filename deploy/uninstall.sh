@@ -52,6 +52,8 @@ set -euo pipefail
 # @删除 /etc/d1max/env                                                   现场值(站点地址、地图、原点、适配器、SN)
 # @删除 /etc/d1max/release-pub.pem                                       发行公钥(W30)
 # @删除 /etc/d1max/release-pub.d                                         另外认的发行公钥(A3)
+# @删除 /etc/d1max/unbind-pub.d                                          随发行新增的解绑公钥(W57;随整个配置目录删)
+# @删除 /etc/d1max/unbind-revoked.txt                                    作废的解绑公钥编号(W57;随整个配置目录删)
 # @删除 /etc/systemd/system/d1max-agent.service                           代理单元
 # @删除 /etc/systemd/system/multi-user.target.wants/d1max-agent.service  代理的开机自启链
 # @删除 /etc/systemd/system/d1max-localizer.service                       定位器单元(W09b)
@@ -532,6 +534,8 @@ wipe_disk() {
     rm_sys "$ETC_DIR/env" "现场值"
     rm_sys "$ETC_DIR/release-pub.pem" "发行公钥"
     rm_sys "$ETC_DIR/release-pub.d" "另外认的发行公钥"
+    rm_sys "$ETC_DIR/unbind-pub.d" "随发行新增的解绑公钥"
+    rm_sys "$ETC_DIR/unbind-revoked.txt" "作废的解绑公钥编号"
     rm_sys "$ETC_DIR" "整个配置目录(连同站点证书包、注册文件)"
   fi
 }

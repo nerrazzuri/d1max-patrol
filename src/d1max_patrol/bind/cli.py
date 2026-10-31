@@ -62,6 +62,11 @@ def add_args(sub: argparse._SubParsersAction) -> None:
     s.add_argument("--private", required=True)
     s.add_argument("--serial", required=True)
     s.add_argument("--hours", type=float, default=24.0)
+    # W57 签发规矩:每签一张记一行台账(公司内部保存,不进仓库)
+    s.add_argument("--ledger", default="", help="台账文件(CSV,追加一行);给了就要写下面三项")
+    s.add_argument("--requester", default="", help="申请人(客户哪位管理员)")
+    s.add_argument("--checker", default="", help="核对人(公司谁核过销售记录、序列号)")
+    s.add_argument("--purpose", default="", help="用途(比如:站点主机损坏无备份)")
 
 
 def _paths(args: argparse.Namespace) -> BindPaths:
@@ -187,11 +192,36 @@ def _unbind_token(args: argparse.Namespace) -> int:
         pub.write_bytes(ed25519.public_pem(ed25519.public_key(seed)))
         print(f"私钥 {priv}(只留在离线签名机上),公钥 {pub}(烧写时装进每台机器人)")
         return 0
+    if args.ledger and not (args.requester and args.checker and args.purpose):
+        print("记台账要写 --requester、--checker、--purpose", file=sys.stderr)
+        return 1
     try:
         seed = ed25519.seed_from_pem(Path(args.private).read_bytes())
         tok = sign_unbind(seed, args.serial, now_ms=_now(), hours=args.hours)
     except (OSError, ValueError, BindingError) as exc:
         print(f"没签成:{exc}", file=sys.stderr)
         return 1
+    if args.ledger:
+        _ledger_row(Path(args.ledger), args, tok, ed25519.public_key(seed))
     print(tok)
     return 0
+
+
+def _ledger_row(path: Path, args: argparse.Namespace, tok: str, pub: bytes) -> None:
+    """台账一行:什么时候、哪台、谁申请、谁核对、为什么、什么时候过期、这张的随机号、哪把钥匙。"""
+    import csv
+    from datetime import datetime, timezone
+
+    from d1max_contract.binding import key_id, verify_unbind
+    t = verify_unbind(tok, pub, serial=args.serial, now_ms=_now())
+    new = not path.exists()
+    with path.open("a", encoding="utf-8", newline="") as f:
+        w = csv.writer(f)
+        if new:
+            w.writerow(["utc", "serial", "requester", "checker", "purpose", "expires_utc",
+                        "nonce", "key_id"])
+        utc = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        exp = datetime.fromtimestamp(t.expires_ms / 1000, timezone.utc).isoformat(
+            timespec="seconds")
+        w.writerow([utc, args.serial, args.requester, args.checker, args.purpose, exp, t.nonce,
+                    key_id(pub)])
