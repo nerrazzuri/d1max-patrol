@@ -1,0 +1,22 @@
+Copyright (c) 2026 Nexus Dynamic. All rights reserved.
+
+This software ("Nexus Warden"), including its source code, documentation,
+designs and build artifacts, is proprietary to Nexus Dynamic. No license is
+granted to use, copy, modify, distribute or sublicense it, in whole or in part,
+except under a separate written agreement with Nexus Dynamic.
+
+Viewing this repository while it is publicly accessible does not grant any of
+the rights above.
+
+Third-party components are licensed under their own terms; see
+web/console/public/assets/third-party-notices.txt.
+
+------------------------------------------------------------------------------
+
+版权所有 (c) 2026 Nexus Dynamic。保留全部权利。
+
+本软件（Nexus Warden）及其源代码、文档、设计和构建产物归 Nexus Dynamic 所有。除非与
+Nexus Dynamic 另行签订书面协议，不授予使用、复制、修改、分发或再许可本软件全部或部分的权利。
+本仓库在公开期间可被查看，不代表授予上述任何权利。
+
+第三方组件按各自的许可证使用，见 web/console/public/assets/third-party-notices.txt。
