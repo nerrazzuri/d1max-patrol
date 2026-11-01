@@ -72,7 +72,8 @@ def _wait(log: Path, text: str, p: subprocess.Popen, timeout: float = 60) -> Non
 
 def _video_args(a: argparse.Namespace) -> list[str]:
     """W64:``--video-dir`` 给了,仿真机器人的画面循环播里面录好的 front.mp4、back.mp4,并且边跑边录
-    (报警缩略图、回放取的是告警那一刻的录像;录像经发件箱传站点,要 ``--nav planned`` 或 ``--w54``)。"""
+    (报警缩略图、回放取的是告警那一刻的录像;录像经发件箱传站点,
+    要 ``--nav planned`` 或 ``--w54``)。"""
     return ["--video-source", "file", "--video-dir", str(a.video_dir.resolve()),
             "--record", "front,back"] if a.video_dir else []
 
