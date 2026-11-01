@@ -70,9 +70,18 @@ def _wait(log: Path, text: str, p: subprocess.Popen, timeout: float = 60) -> Non
     raise SystemExit(f"{timeout:.0f} s 内没等到 {text!r}(看 {log})")
 
 
-def _seed_recordings(home: Path, work: Path, minutes: int) -> None:
+def _video_args(a: argparse.Namespace) -> list[str]:
+    """W64:``--video-dir`` 给了,仿真机器人的画面循环播里面录好的 front.mp4、back.mp4,并且边跑边录
+    (报警缩略图、回放取的是告警那一刻的录像;录像经发件箱传站点,要 ``--nav planned`` 或 ``--w54``)。"""
+    return ["--video-source", "file", "--video-dir", str(a.video_dir.resolve()),
+            "--record", "front,back"] if a.video_dir else []
+
+
+def _seed_recordings(home: Path, work: Path, minutes: int,
+                     video_dir: Path | None = None) -> None:
     """放 ``minutes`` 分钟的假录像(狗 A,前后两路,到现在为止;中间空 5 分钟,看得出空档)。站点还没
-    起来时直接往它的库里登记。画面是 ffmpeg 的测试图,带一个走动的秒表。"""
+    起来时直接往它的库里登记。画面是 ffmpeg 的测试图,带一个走动的秒表;给了 ``video_dir``(W64)
+    就从里面录好的 front.mp4、back.mp4 截。"""
     import time
 
     from d1max_site.db import SiteDB
@@ -80,12 +89,15 @@ def _seed_recordings(home: Path, work: Path, minutes: int) -> None:
     ffmpeg = shutil.which("ffmpeg")
     if ffmpeg is None:
         raise SystemExit("没有 ffmpeg:sudo apt-get install ffmpeg")
-    clip = work / "demo-segment.mp4"
-    subprocess.run([ffmpeg, "-v", "error", "-y", "-f", "lavfi", "-i",
-                    f"testsrc2=size=640x360:rate=10:duration={SEGMENT_S}", "-c:v", "libx264",
-                    "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-g", "20",
-                    "-movflags", "+faststart", str(clip)], check=True)
-    data = clip.read_bytes()
+    clips: dict[str, bytes] = {}
+    for cam in ("front", "back"):
+        clip = work / f"demo-segment-{cam}.mp4"
+        src = (["-i", str(video_dir / f"{cam}.mp4"), "-t", str(SEGMENT_S), "-an"] if video_dir
+               else ["-f", "lavfi", "-i", f"testsrc2=size=640x360:rate=10:duration={SEGMENT_S}"])
+        subprocess.run([ffmpeg, "-v", "error", "-y", *src, "-c:v", "libx264",
+                        "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-g", "20",
+                        "-movflags", "+faststart", str(clip)], check=True)
+        clips[cam] = clip.read_bytes()
     now = int(time.time())
     last = now - now % SEGMENT_S - SEGMENT_S
     db = SiteDB(home / "site.db")
@@ -96,8 +108,8 @@ def _seed_recordings(home: Path, work: Path, minutes: int) -> None:
                 continue                                # 空档
             stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime(last - i * SEGMENT_S))
             for cam in ("front", "back"):
-                store.put("A", f"{cam}/{stamp}", "video.mp4", offset=0, data=data,
-                          total=len(data))
+                store.put("A", f"{cam}/{stamp}", "video.mp4", offset=0, data=clips[cam],
+                          total=len(clips[cam]))
     finally:
         db.close()
 
@@ -159,7 +171,7 @@ def _unbound(a: argparse.Namespace, logs: Path, start) -> list[dict]:
                                  "--hw-source", str(chip)],
               "配网服务起来了")
         out.append({"serial": serial, "base": base, "etc": etc, "sock": sock,
-                    "sticker": sticker})
+                    "sticker": sticker, "video": _video_args(a)})
     return out
 
 
@@ -178,7 +190,7 @@ def _follow_bind(r: dict, agents: dict[str, subprocess.Popen], logs: Path) -> No
              "--tls-key", str(etc / "tls" / "robot.key"), "--hal", "sim",
              "--registration", str(etc / "registration.json"),
              "--store-dir", str(r["base"] / "agent"), "--runs-root", str(r["base"] / "runs"),
-             "--map", "estate-1:7", "--home", "0,0,0"],
+             "--map", "estate-1:7", "--home", "0,0,0", *r.get("video", [])],
             stdout=open(log, "ab"), stderr=subprocess.STDOUT,
             env=ENV | {"D1MAX_BIND_SOCK": str(r["sock"])})
         print(f"{serial} 绑定好了:起了它的代理(日志 {log})", flush=True)
@@ -296,6 +308,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--map-dir", type=Path, default=None, help="建好的图(版本目录);不给用一张假的")
     ap.add_argument("--robots", type=int, default=1, choices=range(1, 9), metavar="N",
                     help="起几台仿真狗(A、B、C……;每台推测试图画面),试多台同时看画面的负载用")
+    ap.add_argument("--video-dir", type=Path, default=None,
+                    help="W64:仿真机器人的画面、预置录像用这里录好的 front.mp4、back.mp4"
+                         "(循环播;宣传截图要真人画面时用)")
     ap.add_argument("--backup", action="store_true",
                     help="开备份(备份目录、口令密钥、备份密钥都放在 --dir 下面,不碰 /etc):"
                          "试备份、解开备份、演练、托管包用")
@@ -395,7 +410,7 @@ def _setup_rest(a, home: Path, names: list[str]) -> str:
         _site(home, "map-import", str(src), "--map-id", "estate-1", "--version", "7")
     fp = _site(home, "fingerprint").strip()
     if a.recordings > 0:
-        _seed_recordings(home, a.dir, a.recordings)
+        _seed_recordings(home, a.dir, a.recordings, a.video_dir)
     return fp
 
 
@@ -415,6 +430,7 @@ def _run(a, home: Path, logs: Path, names: list[str], bport: int, fp: str, procs
                                   "--tls-ca", str(crt / "ca.crt"),
                                   "--tls-cert", str(crt / "robot.crt"),
                                   "--tls-key", str(crt / "robot.key"), "--hal", "sim",
+                                  *_video_args(a),
                                   "--registration", str(crt / "registration.json"),
                                   "--store-dir", str(a.dir / f"agent{sub}"),
                                   *([] if a.nav == "planned" or a.w54

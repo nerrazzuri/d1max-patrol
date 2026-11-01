@@ -237,9 +237,12 @@ def build_parser() -> argparse.ArgumentParser:
     v.add_argument("--links", default=os.environ.get("D1MAX_LINKS", ""),
                    help="设备健康(W40)里要查连不连得上的网络设备:名字=主机:端口,逗号隔开"
                         "(上装 V1.2 的路由器 router=192.168.10.1:80)。cameras.json 里的相机自动查")
-    v.add_argument("--video-source", choices=("auto", "rtsp", "lavfi"), default="auto",
+    v.add_argument("--video-source", choices=("auto", "rtsp", "lavfi", "file"), default="auto",
                    help="画面与录像从哪来:auto(缺省)真机器人拉相机 RTSP、仿真用测试图;"
-                        "rtsp 仿真也拉真相机(不抢控制权验视频、录像);lavfi 测试图")
+                        "rtsp 仿真也拉真相机(不抢控制权验视频、录像);lavfi 测试图;"
+                        "file 循环播 --video-dir 里录好的 <相机>.mp4(演示用真画面)")
+    v.add_argument("--video-dir", type=Path, default=None,
+                   help="--video-source file 用:放 front.mp4、back.mp4 的目录")
     v.add_argument("--video-transcode", action="store_true",
                    help="相机不是 H.264 时转成 H.264 再推(默认原样转封装,不占 CPU)")
     v.add_argument("--ffmpeg", default="ffmpeg", help="ffmpeg 可执行文件")
@@ -532,6 +535,12 @@ def build(args: argparse.Namespace) -> Assembled:
             from d1max_agent.bridges.sim_media import sim_media
             hal: Any = SimRobot(now_ms=wall_ms, payload=args.sim_payload, lateral=True)
             media = sim_media(wall_ms)
+            if args.video_source == "file" and args.video_dir is not None:
+                # W64:演示用真录像时,到点拍照也从录像里截一帧(不是空白图)
+                from d1max_agent.bridges.rtsp_media import rtsp_media
+                from d1max_agent.video_push import file_snapshot_source
+                media = rtsp_media(file_snapshot_source(args.video_dir), now_ms=wall_ms,
+                                   ffmpeg=args.ffmpeg)
         else:
             from d1max_adapter_d1max.hal import D1MaxHal
             host, port = args.sidecar
@@ -561,11 +570,20 @@ def build(args: argparse.Namespace) -> Assembled:
             parts.nav.preview = args.nav_preview == "on"
         transport = _make_transport(args.transport, registration.robot_id, broker,
                                     tls=(args.tls_ca, args.tls_cert, args.tls_key))
-        from d1max_agent.video_push import VideoPusher, lavfi_source, rtsp_source
+        from d1max_agent.video_push import VideoPusher, file_source, lavfi_source, rtsp_source
         kind = args.video_source if args.video_source != "auto" else (
             "lavfi" if args.hal == "sim" else "rtsp")
-        source = lavfi_source if kind == "lavfi" else rtsp_source(args.camera_host,
-                                                                   extra_cameras(args))
+        if kind == "file":
+            from d1max_contract.video import STANDARD_CAMERAS
+            folder = args.video_dir
+            missing = [f"{c}.mp4" for c in STANDARD_CAMERAS
+                       if folder is None or not (folder / f"{c}.mp4").is_file()]
+            if missing:
+                raise SystemExit(f"--video-source file:{folder} 里没有 {'、'.join(missing)}")
+            source = file_source(folder)
+        else:
+            source = lavfi_source if kind == "lavfi" else rtsp_source(args.camera_host,
+                                                                       extra_cameras(args))
         video = VideoPusher(source=source, ffmpeg=args.ffmpeg, transcode=args.video_transcode)
         pump = keeper = mapper = recorder = None
         cams = record_cameras(args)
