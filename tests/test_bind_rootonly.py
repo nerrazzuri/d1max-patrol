@@ -194,3 +194,52 @@ def test_外审W63_1_单子里每个模块导入的d1max模块_连函数里面�
                         continue                 # from x.y import 名字:x/y(.py|/__init__.py) 在就行
                 missing.append(f"{src}: {n}")
     assert not missing, missing
+
+
+def test_外审W63_2_换版本_验签以后装上包里的出厂公钥(tmp_path):
+    """远程升级(不走 install.sh)也要把出厂公钥装到 /etc/d1max:开发样机补装出厂证书时核对要用。"""
+    cfg = _cfg(tmp_path)
+    cfg["lib_dir"] = str(tmp_path / "lib")
+    keys = tmp_path / "keys"
+    relsign.keygen(keys / "priv.pem", keys / "pub.pem")
+    name = "2026-11-01-abcdef12"
+    root = tmp_path / "opt" / "releases" / name
+    (root / "deploy" / "factory-pub.d").mkdir(parents=True)
+    (root / "deploy" / "factory-pub.pem").write_text("FACTORY-PUB")
+    (root / "deploy" / "factory-pub.d" / "2027.pem").write_text("FACTORY-NEW")
+    from d1max_agent.engine.release import _packed
+    man = {"name": name, "version": "1.0", "requires_mission_schema": 1,
+           "content_sha256": tree_sha256(root, skip="release.json", keep=_packed)}
+    man["signature"] = relsign.sign(man, keys / "priv.pem")
+    (root / "release.json").write_text(json.dumps(man))
+    etc = tmp_path / "etc"
+    (etc / "d1max" / "factory-pub.d").mkdir(parents=True)
+    (etc / "d1max" / "factory-pub.d" / "stale.pem").write_text("OLD")
+    sysd = tmp_path / "systemd"
+    sysd.mkdir()
+    got = R.Ops(cfg, run=Rec(), systemd_dir=sysd, etc=etc).do("units_apply", {"release": name})
+    assert got["factory_keys"] == ["2027.pem"]
+    assert (etc / "d1max" / "factory-pub.pem").read_text() == "FACTORY-PUB"
+    assert sorted(p.name for p in (etc / "d1max" / "factory-pub.d").iterdir()) == ["2027.pem"]
+
+
+def test_外审W63_2_旧执行器装的配网代码少了设备身份模块_配网服务照样起来_只是不答题(tmp_path):
+    """执行器只有 install.sh 才换;旧执行器按旧单子装新版配网代码,会少 devid、device_id。
+    配网服务不能因此起不来(只是不答题,新站点会拒;下次 install.sh 补齐)。"""
+    old = {k: v for k, v in R.BIND_FILES.items()
+           if not k.endswith(("bind/devid.py", "d1max_contract/device_id.py"))}
+    files = {rel: (ROOT / rel).read_bytes() for rel in old}
+    bind = tmp_path / "lib" / "bind"
+    for rel, dest in old.items():
+        p = bind / dest
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(files[rel])
+    probe = (
+        "import sys\n"
+        f"sys.path.insert(0, {str(bind / 'lib')!r})\n"
+        "from pathlib import Path\n"
+        "from d1max_patrol.bind import cli\n"
+        "from d1max_patrol.bind.paths import BindPaths\n"
+        f"print(cli._attester(BindPaths(etc=Path({str(tmp_path / 'etc')!r})), None))\n")
+    got = subprocess.run(["/usr/bin/python3", "-I", "-c", probe], capture_output=True, text=True)
+    assert got.returncode == 0 and got.stdout.strip() == "None", got.stderr[-800:]

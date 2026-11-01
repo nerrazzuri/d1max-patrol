@@ -10,6 +10,7 @@ import os
 import sys
 import time
 from pathlib import Path
+from typing import Any
 
 from d1max_patrol.bind.paths import BindPaths
 from d1max_patrol.bind.router import FakeRouter, Router
@@ -62,6 +63,8 @@ def add_args(sub: argparse._SubParsersAction) -> None:
     ic = fs.add_parser("install-cert", help="W63:把签好的出厂证书装到这块板上(核是这块板的)")
     paths_args(ic)
     ic.add_argument("cert", help="出厂证书 <序列号>.json")
+    ic.add_argument("--factory-pub", action="append", default=[],
+                    help="另外认的出厂公钥(PEM;出厂工作站送过来的,机器人上没装发行包里那份也能核)")
     ic.add_argument("--hw-source", action="append", default=None, help=argparse.SUPPRESS)
     di_ = fs.add_parser("device-init", help="W63:没走过烧写的老机器(开发样机)只补设备身份:"
                                              "设备钥匙 + 出厂申请;不动绑定码、热点")
@@ -114,6 +117,18 @@ def serve_main(argv: list[str] | None = None) -> int:
     return run(ap.parse_args(["bind-serve", *(sys.argv[1:] if argv is None else argv)]))
 
 
+def _attester(paths: BindPaths, hw: list[Path] | None) -> Any:
+    """答题器(W63)。旧执行器装的配网代码可能少了设备身份模块(外审 W63-2 第 1 条):那就不答题、
+    照样起服务(新站点会拒,下次 install.sh 补齐),不因为导入失败起不来。"""
+    try:
+        from d1max_patrol.bind import devid
+    except ImportError as exc:
+        logging.getLogger("d1max.bind").warning(
+            "没有设备身份模块,不答题(重装一次 install.sh):%s", exc)
+        return None
+    return devid.attester(paths, hw)
+
+
 def run(args: argparse.Namespace) -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
     if args.command == "bind-serve":
@@ -138,8 +153,7 @@ def _serve(args: argparse.Namespace) -> int:
             return 0
     else:
         sysrun = wp._run
-    from d1max_patrol.bind import devid
-    att = devid.attester(paths, [Path(x) for x in args.hw_source] if args.hw_source else None)
+    att = _attester(paths, [Path(x) for x in args.hw_source] if args.hw_source else None)
     core = BindCore(paths, router=router, site=SiteLink(attest=att),
                     provision=lambda code: pv.provision(code, etc=paths.etc, user=user,
                                                         force=True, attest=att),
@@ -193,6 +207,7 @@ def _sign_devices(args: argparse.Namespace) -> int:
 
 
 def _factory(args: argparse.Namespace) -> int:
+    from d1max_contract import ed25519
     from d1max_contract.binding import pretty_code
     from d1max_patrol.bind import devid
     from d1max_patrol.bind import factory as fa
@@ -208,8 +223,14 @@ def _factory(args: argparse.Namespace) -> int:
             print(f"出厂申请(拿到台式机上用出厂钥匙签):{devid.request_path(paths)}")
             return 0
         if args.factory_command == "install-cert":
+            pubs = devid.factory_pubs(paths)
+            for f in args.factory_pub:
+                try:
+                    pubs.append(ed25519.pub_from_pem(Path(f).read_bytes()))
+                except (OSError, ValueError) as exc:
+                    raise devid.DevIdError(f"读不了出厂公钥 {f}:{exc}") from exc
             devid.install_cert(paths, devid.load_cert_file(Path(args.cert)),
-                               factory_pubs=devid.factory_pubs(paths), **hw_kw)
+                               factory_pubs=pubs, **hw_kw)
             print(f"装好了:出厂证书 → {devid.cert_path(paths)}")
             return 0
         if args.factory_command == "check":

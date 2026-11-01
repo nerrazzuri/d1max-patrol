@@ -356,6 +356,9 @@ BIND_EXEC = "ExecStart=/usr/bin/python3 -I /usr/local/lib/d1max/bind/run.py"
 #: W57:随发行换解绑钥匙 —— 包里新增的解绑公钥、作废名单,验签后装进 /etc/d1max(配网服务认它们)。
 UNBIND_DIR = "deploy/unbind-pub.d"
 UNBIND_REVOKED = "deploy/unbind-revoked.txt"
+#: W63:出厂公钥(出厂装证书时核对用;外审 W63-2 第 2 条:远程升级也要装)。
+FACTORY_PUB = "deploy/factory-pub.pem"
+FACTORY_DIR = "deploy/factory-pub.d"
 _PEM_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}\.pem$")
 
 
@@ -540,8 +543,9 @@ class Ops:
             raise OpError("机器人上没装发行公钥:服务单元不更新")
         manifest = json.loads(read_nofollow(root / "release.json", limit=MAX_REQ))
         want = frozenset(f"deploy/{u}.service" for u in ROBOT_UNITS) | frozenset(BIND_FILES) \
-            | frozenset({UNBIND_REVOKED})
-        got = tree_ok(root, manifest, pubkey, want, capture_prefixes=(UNBIND_DIR + "/",))
+            | frozenset({UNBIND_REVOKED, FACTORY_PUB})
+        got = tree_ok(root, manifest, pubkey, want,
+                      capture_prefixes=(UNBIND_DIR + "/", FACTORY_DIR + "/"))
         units = {k: v for k, v in got.items() if k.endswith(".service")}
         bind_ok = all(k in got for k in BIND_FILES)
         skipped = []
@@ -569,9 +573,32 @@ class Ops:
         keys = self._unbind_keys(got)
         if keys is not None:
             out["unbind_keys"] = keys
+        fkeys = self._factory_keys(got)
+        if fkeys is not None:
+            out["factory_keys"] = fkeys
         if skipped:
             out["skipped"] = skipped
         return out
+
+    def _factory_keys(self, got: dict[str, bytes]) -> list[str] | None:
+        """W63:包里的出厂公钥(``deploy/factory-pub.pem``、``deploy/factory-pub.d/*.pem``)装进 /etc/d1max,
+        目录跟包里的一样。都没带(老包)→ None,什么都不动。"""
+        etc = self.etc / "d1max"
+        pems = {Path(k).name: v for k, v in got.items()
+                if k.startswith(FACTORY_DIR + "/") and _PEM_NAME.match(Path(k).name)
+                and Path(k).parent.as_posix() == FACTORY_DIR}
+        if FACTORY_PUB in got:
+            write_atomic(etc / "factory-pub.pem", got[FACTORY_PUB], mode=0o644)
+        if not pems:
+            return [] if FACTORY_PUB in got else None
+        d = etc / "factory-pub.d"
+        d.mkdir(mode=0o755, parents=True, exist_ok=True)
+        for old in d.iterdir():
+            if old.name not in pems and (old.is_file() or old.is_symlink()):
+                old.unlink()
+        for name, data in pems.items():
+            write_atomic(d / name, data, mode=0o644)
+        return sorted(pems)
 
     def _unbind_keys(self, got: dict[str, bytes]) -> list[str] | None:
         """包里带了解绑公钥(``deploy/unbind-pub.d/*.pem``)就把 /etc/d1max/unbind-pub.d 换成包里那一套;
@@ -694,7 +721,10 @@ class Ops:
         return [self.systemd_dir / "d1max-site.service", self.systemd_dir / "d1max-mosquitto.service",
                 self.systemd_dir / "d1max-ops.path", self.systemd_dir / "d1max-ops.service",
                 lib, self.etc / "d1max-ops.json", etc_site / "release-pub.pem",
-                etc_site / "release-pub.d", self.etc / "chrony" / "conf.d" / "d1max-site.conf"]
+                etc_site / "release-pub.d", self.etc / "chrony" / "conf.d" / "d1max-site.conf",
+                # W63(外审 W63-2 第 4 条):出厂信任文件也是装机脚本改的
+                etc_site / "factory-pub.pem", etc_site / "factory-pub.d",
+                etc_site / "factory-revoked.txt"]
 
     def _save_system(self, keep: Path) -> list[tuple[Path, Path | None]]:
         saved: list[tuple[Path, Path | None]] = []

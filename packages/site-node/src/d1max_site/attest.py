@@ -118,14 +118,24 @@ class AttestDesk:
 
     def remember(self, cert: di.DeviceCert) -> None:
         """**领到证书以后**才记下这台的设备公钥(外审 W63-1 第 4 条:开通码不对、只是挂了申请,都不记
-        —— 不占序列号、不给续签资格)。已经记了另一把的不覆盖(先领到的算)。"""
-        pub, now = di._b64(cert.device_pub), self._now()
+        —— 不占序列号、不给续签资格)。领证书时用 :meth:`remember_in` 放进领证书的事务。"""
         with self.db.tx() as c:
-            c.execute("INSERT OR IGNORE INTO device_ids(serial, device_pub, hw_id, model, "
-                      "first_ms, last_ms) VALUES (?,?,?,?,?,?)",
+            self.remember_in(c, cert)
+
+    def remember_in(self, c: Any, cert: di.DeviceCert) -> None:
+        """在调用方的事务里记(外审 W63-2 第 3 条:跟核开通码、作废开通码一起成或一起不成)。
+        这个序列号已经记着另一把钥匙:抛 :class:`AttestRefused`,整个事务回滚。"""
+        pub, now = di._b64(cert.device_pub), self._now()
+        row = c.execute("SELECT device_pub FROM device_ids WHERE serial=?",
+                        (cert.serial,)).fetchone()
+        if row is not None and row["device_pub"] != pub:
+            raise AttestRefused("这个序列号登记过另一把设备钥匙(领证书时才发现)")
+        if row is None:
+            c.execute("INSERT INTO device_ids(serial, device_pub, hw_id, model, first_ms, "
+                      "last_ms) VALUES (?,?,?,?,?,?)",
                       (cert.serial, pub, cert.hw_id, cert.model, now, now))
-            c.execute("UPDATE device_ids SET last_ms=? WHERE serial=? AND device_pub=?",
-                      (now, cert.serial, pub))
+        else:
+            c.execute("UPDATE device_ids SET last_ms=? WHERE serial=?", (now, cert.serial))
 
     # ------------------------------------------------------------ 给公司的记录
 

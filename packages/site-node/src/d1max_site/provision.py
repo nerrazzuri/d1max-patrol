@@ -118,12 +118,15 @@ def _snapshot(bundle: Path) -> dict[str, bytes] | None:
     return out
 
 
-def claim(db: Any, home: Path, robot_id: str, token: str, *, now_ms: int) -> dict[str, str]:
+def claim(db: Any, home: Path, robot_id: str, token: str, *, now_ms: int,
+          on_claimed: Any = None) -> dict[str, str]:
     """领证书包:回 ``{文件名: base64}``。对不上抛 :class:`ProvisionError`(:data:`DENIED`)。
 
     - **给了就作废**:作废跟核对在同一个事务里,两只狗拿同一个码只有一只领得到。
     - **只给出码的那一代**(A 阶段外审 I1):码记着出码时证书的指纹;登记表里这只狗现在的证书、
-      这一回读到的证书包都得是那一代、没吊销,才给。吊销、重新登记还会直接删掉旧码。"""
+      这一回读到的证书包都得是那一代、没吊销,才给。吊销、重新登记还会直接删掉旧码。
+    - ``on_claimed(c)``(W63,外审 W63-2 第 3 条):在**同一个事务**里记设备公钥;
+      它抛错整体不给、码不作废。"""
     if not isinstance(robot_id, str) or not isinstance(token, str) or not token:
         raise ProvisionError(DENIED)
     snap = _snapshot(Path(home) / "ca" / "issued" / robot_id)
@@ -139,6 +142,8 @@ def claim(db: Any, home: Path, robot_id: str, token: str, *, now_ms: int) -> dic
         if not ok:
             raise ProvisionError(DENIED)
         c.execute("UPDATE enroll_claims SET used_ms=? WHERE robot_id=?", (now_ms, robot_id))
+        if on_claimed is not None:
+            on_claimed(c)
     if snap is None or any(n not in snap for n in REQUIRED):
         raise ProvisionError("站点上此机器人的证书包不全:重新 enroll")
     return {n: base64.b64encode(v).decode("ascii") for n, v in snap.items()}
