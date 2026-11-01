@@ -49,6 +49,7 @@ def test_root目录里那份代码自己就能起来_不从别处导入(tmp_path
         f"sys.path.insert(0, {str(bind / 'lib')!r})\n"
         "import d1max_patrol.bind.cli, d1max_patrol.bind.server, d1max_patrol.bind.core\n"
         "import d1max_patrol.bind.wipe, d1max_patrol.bind.factory, d1max_patrol.bind.sitelink\n"
+        "import d1max_patrol.bind.devid, d1max_contract.device_id\n"
         "mine = [m for m, x in sys.modules.items() if m.startswith(('d1max', 'paho', 'numpy'))]\n"
         "bad = [m for m in mine\n"
         f"       if not (sys.modules[m].__file__ or '').startswith({str(bind)!r})]\n"
@@ -160,3 +161,36 @@ def test_W57_换版本_验签以后装上新的解绑公钥和作废名单(tmp_p
 def test_W57_装机脚本装解绑公钥和作废名单():
     text = (ROOT / "deploy" / "install.sh").read_text(encoding="utf-8")
     assert "/etc/d1max/unbind-pub.d" in text and "/etc/d1max/unbind-revoked.txt" in text
+
+
+def test_外审W63_1_单子里每个模块导入的d1max模块_连函数里面的_都在单子里():
+    """配网服务从 root 目录那份代码跑:函数里面延后导入的模块(比如 W63 的 devid、device_id)
+    漏了,起服务、开通的时候才炸。把单子里每个文件的导入都扫一遍。"""
+    import ast
+    missing = []
+    for src in R.BIND_FILES:
+        if not src.endswith(".py"):
+            continue
+        tree = ast.parse((ROOT / src).read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            names = []
+            if isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
+                names = [node.module] + [f"{node.module}.{a.name}" for a in node.names]
+            elif isinstance(node, ast.Import):
+                names = [a.name for a in node.names]
+            for n in names:
+                if not n.startswith(("d1max_patrol", "d1max_contract")):
+                    continue
+                path = n.replace(".", "/")
+                if f"lib/{path}.py" in R.BIND_FILES.values() or \
+                        f"lib/{path}/__init__.py" in R.BIND_FILES.values():
+                    continue
+                parent = path.rsplit("/", 1)[0]
+                if n != (node.module if isinstance(node, ast.ImportFrom) else n) and (
+                        f"lib/{parent}.py" in R.BIND_FILES.values()
+                        or f"lib/{parent}/__init__.py" in R.BIND_FILES.values()):
+                    if not (ROOT / "src" / f"{path}.py").exists() and \
+                            not (ROOT / "packages/contract/src" / f"{path}.py").exists():
+                        continue                 # from x.y import 名字:x/y(.py|/__init__.py) 在就行
+                missing.append(f"{src}: {n}")
+    assert not missing, missing

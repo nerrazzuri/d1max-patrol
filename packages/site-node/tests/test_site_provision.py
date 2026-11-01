@@ -210,9 +210,15 @@ def test_接口_领证书包不用登录_用过一次403(tmp_path, 站):
         # W63:没答题(不是原厂的)领不到;开通码不作废,原厂的随后照样领得到
         code, d = s.req("POST", "/api/enroll/claim", {"robot_id": "A", "token": c["t"]})
         assert code == 403 and "供应商" in d["error"]
+        # 外审 W63-1 第 4 条:答题对、开通码错 —— 领不到,也不记设备公钥(不占序列号、不给续签资格)
+        code, d = s.req("POST", "/api/enroll/claim", {"robot_id": "A", "token": "猜的",
+                                                     "attest": fac.答(s, "A", "claim")})
+        assert code == 403
+        assert s.db.query("SELECT serial FROM device_ids") == []
         code, d = s.req("POST", "/api/enroll/claim", {"robot_id": "A", "token": c["t"],
                                                      "attest": fac.答(s, "A", "claim")})
         assert code == 200 and "robot.key" in d["files"]
+        assert [r["serial"] for r in s.db.query("SELECT serial FROM device_ids")] == ["A"]
         assert s.req("POST", "/api/enroll/claim", {"robot_id": "A", "token": c["t"],
                                                    "attest": fac.答(s, "A", "claim")})[0] == 403
         assert s.req("POST", "/api/enroll/claim", {"robot_id": "A", "token": "猜的",

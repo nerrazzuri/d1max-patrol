@@ -32,6 +32,6 @@ class 出厂:
         assert code == 200, ch
         dev, cert = self.证书(serial)
         msg = di.attest_message(purpose=purpose, site_id=ch["site_id"], nonce=ch["nonce"],
-                                serial=serial)
+                                serial=serial, hw_id=cert["hw_id"])
         return {"cert": cert, "hw_id": cert["hw_id"], "nonce": ch["nonce"],
                 "sig": di.sign_attest(dev, msg)}
