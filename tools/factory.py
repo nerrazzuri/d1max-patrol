@@ -73,7 +73,7 @@ class _Board:
 
 def _check_keys(keys: Path) -> tuple[Path, Path]:
     key, unbind = keys / "factory.key", keys / "unbind-pub.pem"
-    for f in (key, unbind):
+    for f in (key, unbind, keys / "factory-pub.pem"):
         if not f.is_file():
             raise SystemExit(f"{f} 不在(先 tools/make_keys.py;见 docs/钥匙生成与保管.md)")
     if stat.S_IMODE(key.stat().st_mode) & 0o077:
@@ -136,7 +136,10 @@ def burn_one(host: str, serial: str, *, keys: Path, out: Path, user: str = "robo
             raise SystemExit(f"{host}:板子上的出厂申请序列号是 {got},不是 {serial}:没签")
         cert = _sign(key, req, out / ".work", keys / "出厂台账.csv")
         b.put(f"{d}/cert.json", json.dumps(cert, ensure_ascii=False).encode(), what="送出厂证书")
-        b.cli(["factory", "install-cert", f"{d}/cert.json"], what="装出厂证书")
+        # 出厂公钥一起送(外审 W63-2 第 2 条):板子上没装发行包里那份(远程升级上来的)也能核
+        b.put(f"{d}/factory-pub.pem", (keys / "factory-pub.pem").read_bytes(), what="送出厂公钥")
+        b.cli(["factory", "install-cert", f"{d}/cert.json", "--factory-pub",
+               f"{d}/factory-pub.pem"], what="装出厂证书")
         if identity_only:                # 装的时候已经核过是这块板的;没有贴纸可核
             return {"host": host, "serial": serial, "labels": [], "key_id": cert["key_id"]}
         labels = _untar(b.sh(f"sudo tar -C {d}/label -cf - .", what="取贴纸文件"), out)

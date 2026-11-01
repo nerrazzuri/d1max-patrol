@@ -66,6 +66,7 @@ def 台(tmp_path):
     (keys / "factory.key").write_bytes(ed25519.private_pem(seed))
     (keys / "factory.key").chmod(0o600)
     (keys / "unbind-pub.pem").write_bytes(ed25519.public_pem(ed25519.public_key(seed)))
+    (keys / "factory-pub.pem").write_bytes(ed25519.public_pem(ed25519.public_key(seed)))
     return keys, ed25519.public_key(seed)
 
 
@@ -87,6 +88,10 @@ def test_一条命令烧一台_签在台式机_私钥不出门(台, tmp_path):
     assert all(c[:2] == ["ssh", "robot@10.0.0.7"] for c in board.cmds)
     assert "rm -rf" in lines[-1], "贴纸文件里有绑定码、热点密码:板子上的临时目录最后删掉"
     assert SCAN in next(ln for ln in lines if "factory check" in ln)
+    # 外审 W63-2 第 2 条:出厂公钥跟证书一起送过去,装证书时用它核(不靠机器人上装没装发行包里的那份)
+    ic = next(ln for ln in lines if "install-cert" in ln)
+    assert "--factory-pub" in ic
+    assert any(v == (keys / "factory-pub.pem").read_bytes() for v in board.sent.values())
     assert (out / "D1M-000200.txt").read_text().startswith("序列号 D1M-000200")
     assert (out / "D1M-000200.txt").stat().st_mode & 0o077 == 0
     rows = list(csv.DictReader((keys / "出厂台账.csv").open(encoding="utf-8")))

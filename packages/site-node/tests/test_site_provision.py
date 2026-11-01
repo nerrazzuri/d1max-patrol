@@ -271,3 +271,36 @@ def test_外审I1_读证书包时证书变了_当没读到(tmp_path, monkeypatch
         return real(self)
     monkeypatch.setattr(Path, "read_bytes", flip)
     assert site._snapshot(b) is None
+
+
+def test_外审W63_2_第3条_设备公钥跟领证书在同一个事务里记_冲突就整体不给_码不作废(站):
+    """领证书提交以后、记公钥之前要是解绑了,旧公钥会被写回去。所以记公钥放进领证书的事务:
+    要么一起成,要么一起不成。"""
+    from d1max_contract import device_id as di
+    from d1max_contract import ed25519
+    from d1max_site.attest import AttestDesk, AttestRefused
+    home = 站
+    c = site.decode(_码(home))
+    factory = ed25519.new_seed()
+    req = di.make_request(serial="A", model="d1max",
+                          device_pub=ed25519.public_key(ed25519.new_seed()), hw_id="e" * 64)
+    cert = di.verify_cert(di.sign_device(factory, req, now_ms=1), [ed25519.public_key(factory)])
+    db = SiteDB(home / "site.db")
+    try:
+        desk = AttestDesk(db, site_id="e", now_ms=lambda: NOW, factory_pubs=lambda: [],
+                          revoked=lambda: set())
+        with db.tx() as cur:                              # 这个序列号已经记着另一把钥匙
+            cur.execute("INSERT INTO device_ids(serial, device_pub, hw_id, first_ms, last_ms) "
+                        "VALUES ('A', 'other', ?, 0, 0)", ("e" * 64,))
+        with pytest.raises(AttestRefused):
+            site.claim(db, home, "A", c["t"], now_ms=NOW,
+                       on_claimed=lambda cur: desk.remember_in(cur, cert))
+        assert db.query("SELECT used_ms FROM enroll_claims WHERE robot_id='A'")[0]["used_ms"] \
+            is None, "整体不给:码没作废"
+        with db.tx() as cur:
+            cur.execute("DELETE FROM device_ids")
+        site.claim(db, home, "A", c["t"], now_ms=NOW,
+                   on_claimed=lambda cur: desk.remember_in(cur, cert))
+        assert [r["serial"] for r in db.query("SELECT serial FROM device_ids")] == ["A"]
+    finally:
+        db.close()

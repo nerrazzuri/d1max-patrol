@@ -1831,13 +1831,19 @@ class _Handler(TlsHandlerMixin):
             raise HttpError(404, "此站点未启用开通码")
         # W63:领证书前核设备身份(配网、工程师开通码两条路都过这里);核不过不动开通码
         dev = self._attest_or_refuse(d, purpose="claim", serial=rid)
+        from d1max_site.attest import AttestRefused
+        desk = self._attest_desk()
         try:
-            # 吊销、证书代次在 claim 的事务里跟登记表核(A 阶段外审 I1)
+            # 吊销、证书代次在 claim 的事务里跟登记表核(A 阶段外审 I1);领到了才记设备公钥,
+            # 而且跟领证书在同一个事务里(外审 W63-1 第 4 条、W63-2 第 3 条)
             files = claim(self.site.dispatcher.db, self.site.home, rid,
-                          str(d.get("token") or ""), now_ms=self.site._now())
+                          str(d.get("token") or ""), now_ms=self.site._now(),
+                          on_claimed=lambda c: desk.remember_in(c, dev))
         except ProvisionError as exc:
             raise HttpError(403, str(exc)) from exc
-        self._attest_desk().remember(dev)          # 领到了才记设备公钥(外审 W63-1 第 4 条)
+        except AttestRefused as exc:
+            self._skip_audit = True
+            raise HttpError(403, str(exc)) from exc
         return self._send_json(200, {"robot_id": rid, "files": files})
 
     def _bind_desk(self) -> Any:

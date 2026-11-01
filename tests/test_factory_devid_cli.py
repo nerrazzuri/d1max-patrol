@@ -93,3 +93,19 @@ def test_W63_签名的key文件不对_不签(台, capsys):
     assert _run(["factory", "sign-device", str(devid.request_path(paths)), "--key", str(bad),
                  "--out-dir", str(tmp / "certs")]) == 1
     assert json.loads(devid.request_path(paths).read_text())["serial"] == "D1M-000126"
+
+
+def test_外审W63_2_装证书可以直接给出厂公钥_机器人上没装发行包里那份也行(台, capsys):
+    tmp, common, sn, unbind, factory = 台
+    _run(["factory", "--no-service", "burn", *common, "--serial", "D1M-000127",
+          "--unbind-pub", str(unbind), "--out", str(tmp / "label"), "--hw-source", str(sn)])
+    paths = BindPaths(etc=tmp / "etc", data_root=tmp / "data")
+    _run(["factory", "sign-device", str(devid.request_path(paths)), "--key", str(factory),
+          "--out-dir", str(tmp / "certs")])
+    pub = tmp / "factory-pub-given.pem"
+    pub.write_bytes((tmp / "etc" / "factory-pub.pem").read_bytes())
+    (tmp / "etc" / "factory-pub.pem").unlink()                 # 远程升级上来的,没装
+    cert = next((tmp / "certs").glob("*.json"))
+    assert _run(["factory", "install-cert", str(cert), *common, "--hw-source", str(sn)]) == 1
+    assert _run(["factory", "install-cert", str(cert), *common, "--hw-source", str(sn),
+                 "--factory-pub", str(pub)]) == 0

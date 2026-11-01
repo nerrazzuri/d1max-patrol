@@ -182,13 +182,20 @@ def set_env(env: Path, key: str, value: str) -> None:
 
 def provision(code_text: str, *, etc: Path = ETC, user: str | None = "robot", force: bool = False,
               claimer: Callable[[dict[str, Any]], dict[str, bytes]] | None = None,
-              attest: Any = None) -> str:
-    """开通。回狗的编号。W63:领证书时用这台的设备钥匙答站点的题(``etc`` 下的设备身份)。"""
+              attest: Any = "auto") -> str:
+    """开通。回狗的编号。W63:领证书时用这台的设备钥匙答站点的题(``etc`` 下的设备身份)。
+    ``attest``:``"auto"`` 用 ``etc`` 下的设备身份;``None`` 不答题
+    (配网服务的代码缺设备身份模块时)。"""
     code = decode(code_text)
     if claimer is None:
-        from d1max_patrol.bind import devid
-        from d1max_patrol.bind.paths import BindPaths
-        att = attest or devid.attester(BindPaths(etc=etc))
+        att = attest
+        if att == "auto":
+            try:
+                from d1max_patrol.bind import devid
+                from d1max_patrol.bind.paths import BindPaths
+                att = devid.attester(BindPaths(etc=etc))
+            except ImportError:
+                att = None
         claimer = lambda c: claim(c, attest=att)  # noqa: E731
     reg = etc / "registration.json"
     if reg.is_file() and not force:

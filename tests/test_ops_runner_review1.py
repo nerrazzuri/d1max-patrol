@@ -424,3 +424,29 @@ def test_外审W55_2_I4_全部重启_有服务起不来就说_不重启代理(tm
     with pytest.raises(R.OpError, match="d1max-localizer"):
         R.Ops(_cfg(tmp_path), run=rec).do("restart_all", {})
     assert ["systemctl", "--no-block", "restart", "d1max-agent.service"] not in rec.calls
+
+
+def test_外审W63_2_第4条_站点升级回退_出厂公钥和作废名单也一起换回去(tmp_path, monkeypatch):
+    cfg, sysd = _site_pkg(tmp_path, evil_build=False)
+    etc = tmp_path / "etc"
+    es = etc / "d1max-site"
+    (es / "factory-pub.d").mkdir(parents=True)
+    (es / "factory-pub.pem").write_text("OLD-FACTORY")
+    (es / "factory-pub.d" / "a.pem").write_text("OLD-A")
+    healthy = iter([False, True])
+    monkeypatch.setattr(R.Ops, "_healthy", lambda self, w: next(healthy))
+
+    class Run(SiteRun):
+        def __call__(self, argv, timeout):
+            out = super().__call__(argv, timeout)
+            if argv[:1] == ["bash"]:                    # 装的时候换了出厂公钥、加了作废名单
+                (es / "factory-pub.pem").write_text("NEW-FACTORY")
+                (es / "factory-pub.d" / "b.pem").write_text("NEW-B")
+                (es / "factory-revoked.txt").write_text("deadbeefdeadbeef\n")
+            return out
+    with pytest.raises(R.OpError, match="已退回原版本"):
+        R.Ops(cfg, run=Run(tmp_path), systemd_dir=sysd, etc=etc).do(
+            "update", {"package": "site-1.2.0.tar.gz"})
+    assert (es / "factory-pub.pem").read_text() == "OLD-FACTORY"
+    assert sorted(p.name for p in (es / "factory-pub.d").iterdir()) == ["a.pem"]
+    assert not (es / "factory-revoked.txt").exists()
