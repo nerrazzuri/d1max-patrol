@@ -23,7 +23,7 @@ from d1max_contract.binding import BindingError, check_serial
 
 VERSION = 1
 _CERT_DOMAIN = b"d1max-device-cert-v1\0"
-_ATTEST_DOMAIN = b"d1max-attest-v1\0"
+_ATTEST_DOMAIN = b"d1max-attest-v2\0"     # v2:现场芯片编号也签进去(外审 W63-1 第 3 条)
 _HEX64 = re.compile(r"[0-9a-f]{64}")
 _MODEL = re.compile(r"[A-Za-z0-9._-]{1,32}")
 _PURPOSE = re.compile(r"[a-z_]{1,16}")
@@ -129,14 +129,17 @@ def verify_cert(cert: Any, factory_pubs: Iterable[bytes], *,
     return DeviceCert(s, m, pub, h, issued, kid)
 
 
-def attest_message(*, purpose: str, site_id: str, nonce: str, serial: str) -> bytes:
-    """答题要签的字节:用途(``bind`` 挂申请 / ``claim`` 领证书)、站点编号、站点出的题、序列号。"""
+def attest_message(*, purpose: str, site_id: str, nonce: str, serial: str, hw_id: str) -> bytes:
+    """答题要签的字节:用途(``bind`` 挂申请 / ``claim`` 领证书)、站点编号、站点出的题、序列号、
+    现场读到的芯片编号(签进去,转发途中改不了)。"""
     if _PURPOSE.fullmatch(purpose) is None:
         raise DeviceIdError("用途不对")
     for v in (site_id, nonce, serial):
         if not isinstance(v, str) or not v or "|" in v or len(v) > 200:
             raise DeviceIdError("答题内容不对")
-    return _ATTEST_DOMAIN + f"{purpose}|{site_id}|{nonce}|{serial}".encode()
+    if not isinstance(hw_id, str) or _HEX64.fullmatch(hw_id) is None:
+        raise DeviceIdError("答题内容不对")
+    return _ATTEST_DOMAIN + f"{purpose}|{site_id}|{nonce}|{serial}|{hw_id}".encode()
 
 
 def sign_attest(device_seed: bytes, msg: bytes) -> str:

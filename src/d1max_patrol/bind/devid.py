@@ -194,7 +194,7 @@ def answer(p: BindPaths, *, purpose: str, site_id: str, nonce: str,
     try:
         hw = read_hw_id(hw_sources)
         msg = di.attest_message(purpose=purpose, site_id=site_id, nonce=nonce,
-                                serial=str(cert.get("serial")))
+                                serial=str(cert.get("serial")), hw_id=hw)
     except (DevIdError, di.DeviceIdError):
         return None
     return {"cert": cert, "hw_id": hw, "nonce": nonce, "sig": di.sign_attest(seed, msg)}

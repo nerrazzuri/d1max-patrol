@@ -44,7 +44,8 @@ def _机器人(factory, serial="D1M-0001", hw=HW):
 
 def _答(desk, dev, cert, *, purpose="claim", hw=HW, site="estate-1", nonce=None):
     n = nonce or desk.challenge()["nonce"]
-    msg = di.attest_message(purpose=purpose, site_id=site, nonce=n, serial=cert["serial"])
+    msg = di.attest_message(purpose=purpose, site_id=site, nonce=n, serial=cert["serial"],
+                            hw_id=hw)
     return {"cert": cert, "hw_id": hw, "nonce": n, "sig": di.sign_attest(dev, msg)}
 
 
@@ -57,6 +58,8 @@ def test_原厂机器人_答对了就过_记下设备公钥(台):
     dev, cert = _机器人(factory)
     got = desk.verify(_答(desk, dev, cert), purpose="claim", serial="D1M-0001", source="10.0.0.5")
     assert got.serial == "D1M-0001"
+    assert db.query("SELECT serial FROM device_ids") == [], "核过不等于领到:领到证书以后才记"
+    desk.remember(got)
     assert db.query("SELECT serial FROM device_ids")[0]["serial"] == "D1M-0001"
     assert _记录(db) == []
 
@@ -110,7 +113,7 @@ def test_同一道题只能用一次_过期了也不认(台):
 def test_同一个序列号换了一把设备钥匙_判仿冒(台):
     desk, db, factory, _ = 台
     dev, cert = _机器人(factory)
-    desk.verify(_答(desk, dev, cert), purpose="claim", serial="D1M-0001", source="a")
+    desk.remember(desk.verify(_答(desk, dev, cert), purpose="claim", serial="D1M-0001", source="a"))
     dev2, cert2 = _机器人(factory)                       # 同一序列号、另一块板(另一把钥匙)
     with pytest.raises(AttestRefused):
         desk.verify(_答(desk, dev2, cert2), purpose="claim", serial="D1M-0001", source="b")
@@ -158,8 +161,21 @@ def test_解绑以后_同一序列号换了板子可以重新加入(台):
     reg = Registry(db, site_id="estate-1")
     reg.enroll("D1M-0001", fingerprint="sha256:" + "a" * 64, issued_at=0, expires_at=1)
     dev, cert = _机器人(factory)
-    desk.verify(_答(desk, dev, cert), purpose="claim", serial="D1M-0001", source="a")
+    desk.remember(desk.verify(_答(desk, dev, cert), purpose="claim", serial="D1M-0001", source="a"))
+    assert db.query("SELECT serial FROM device_ids")
     reg.revoke("D1M-0001")                               # 换主板:先在站点上解绑
     dev2, cert2 = _机器人(factory, hw="d" * 64)
     assert desk.verify(_答(desk, dev2, cert2, hw="d" * 64), purpose="claim", serial="D1M-0001",
                        source="b").hw_id == "d" * 64
+
+
+def test_外审W63_3_现场芯片编号签在答题里_中间改了这个字段就不认(台):
+    """整盘拷到另一块板:那块板如实读到自己的芯片编号、签进答题;转发的人把 hw_id 字段改成证书里的,
+    签名就对不上了。"""
+    desk, db, factory, _ = 台
+    dev, cert = _机器人(factory)
+    real = "d" * 64                                       # 这块板真实的芯片编号(跟证书不一样)
+    ans = _答(desk, dev, cert, hw=real)
+    forged = dict(ans, hw_id=cert["hw_id"])               # 中间把字段改成证书里的
+    with pytest.raises(AttestRefused):
+        desk.verify(forged, purpose="claim", serial="D1M-0001", source="10.0.0.9")

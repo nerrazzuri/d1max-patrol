@@ -1830,13 +1830,14 @@ class _Handler(TlsHandlerMixin):
         if self.site.home is None:
             raise HttpError(404, "此站点未启用开通码")
         # W63:领证书前核设备身份(配网、工程师开通码两条路都过这里);核不过不动开通码
-        self._attest_or_refuse(d, purpose="claim", serial=rid)
+        dev = self._attest_or_refuse(d, purpose="claim", serial=rid)
         try:
             # 吊销、证书代次在 claim 的事务里跟登记表核(A 阶段外审 I1)
             files = claim(self.site.dispatcher.db, self.site.home, rid,
                           str(d.get("token") or ""), now_ms=self.site._now())
         except ProvisionError as exc:
             raise HttpError(403, str(exc)) from exc
+        self._attest_desk().remember(dev)          # 领到了才记设备公钥(外审 W63-1 第 4 条)
         return self._send_json(200, {"robot_id": rid, "files": files})
 
     def _bind_desk(self) -> Any:
@@ -1877,15 +1878,17 @@ class _Handler(TlsHandlerMixin):
                                      revoked=lambda: site_main.factory_pubkeys(home)[1])
         return site.attest
 
-    def _attest_or_refuse(self, d: Any, *, purpose: str, serial: str) -> None:
+    def _attest_or_refuse(self, d: Any, *, purpose: str, serial: str) -> Any:
         """W63:核设备身份;核不过一律 403 同一句中性的话(不报警、不进待批准;记给公司)。"""
         from d1max_site.attest import AttestRefused
         ans = d.get("attest") if isinstance(d, dict) else None
         try:
-            self._attest_desk().verify(ans, purpose=purpose, serial=serial,
-                                       source=self.client_address[0])
+            return self._attest_desk().verify(ans, purpose=purpose, serial=serial,
+                                              source=self.client_address[0])
         except AttestRefused as exc:
-            self._audit_detail = {"attest": "refused"}
+            # 外审 W63-1 第 2 条:不进站点的操作日志(管理员看得到,也不受一分钟一条的限);
+            # 只记给公司(company_reports,已限流)
+            self._skip_audit = True
             raise HttpError(403, str(exc)) from exc
 
     def _bind_robot(self, method: str, path: str) -> None:

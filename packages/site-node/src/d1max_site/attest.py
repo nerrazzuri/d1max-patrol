@@ -104,27 +104,28 @@ class AttestDesk:
         nonce = ans.get("nonce")
         try:
             msg = di.attest_message(purpose=purpose, site_id=self.site_id, nonce=str(nonce or "-"),
-                                    serial=serial)
+                                    serial=serial, hw_id=str(ans.get("hw_id") or ""))
             di.verify_attest(ans.get("cert"), msg, ans.get("sig"))
         except di.DeviceIdError as exc:
             raise AttestRefused(f"答题:{exc}") from exc
         self._take_nonce(nonce)
         if ans.get("hw_id") != cert.hw_id:
             raise AttestRefused("现场芯片编号跟出厂证书不一致(板子换过,或者整盘拷过去的)")
-        pub = di._b64(cert.device_pub)
-        now = self._now()
-        with self.db.tx() as c:
-            row = c.execute("SELECT device_pub FROM device_ids WHERE serial=?",
-                            (serial,)).fetchone()
-            if row is not None and row["device_pub"] != pub:
-                raise AttestRefused("这个序列号登记过另一把设备钥匙(同一序列号两块板:仿冒)")
-            if row is None:
-                c.execute("INSERT INTO device_ids(serial, device_pub, hw_id, model, first_ms, "
-                          "last_ms) VALUES (?,?,?,?,?,?)",
-                          (serial, pub, cert.hw_id, cert.model, now, now))
-            else:
-                c.execute("UPDATE device_ids SET last_ms=? WHERE serial=?", (now, serial))
+        rows = self.db.query("SELECT device_pub FROM device_ids WHERE serial=?", (serial,))
+        if rows and rows[0]["device_pub"] != di._b64(cert.device_pub):
+            raise AttestRefused("这个序列号登记过另一把设备钥匙(同一序列号两块板:仿冒)")
         return cert
+
+    def remember(self, cert: di.DeviceCert) -> None:
+        """**领到证书以后**才记下这台的设备公钥(外审 W63-1 第 4 条:开通码不对、只是挂了申请,都不记
+        —— 不占序列号、不给续签资格)。已经记了另一把的不覆盖(先领到的算)。"""
+        pub, now = di._b64(cert.device_pub), self._now()
+        with self.db.tx() as c:
+            c.execute("INSERT OR IGNORE INTO device_ids(serial, device_pub, hw_id, model, "
+                      "first_ms, last_ms) VALUES (?,?,?,?,?,?)",
+                      (cert.serial, pub, cert.hw_id, cert.model, now, now))
+            c.execute("UPDATE device_ids SET last_ms=? WHERE serial=? AND device_pub=?",
+                      (now, cert.serial, pub))
 
     # ------------------------------------------------------------ 给公司的记录
 

@@ -254,13 +254,16 @@ def test_W63_没有出厂证书的_悄悄拒_不进待批准_不报警_记给公
         ch = s.req("GET", "/api/attest/challenge")[1]
         fake = {"cert": cert, "hw_id": "e" * 64, "nonce": ch["nonce"], "sig": di.sign_attest(
             dev, di.attest_message(purpose="bind", site_id=ch["site_id"], nonce=ch["nonce"],
-                                   serial="D1M-8"))}
+                                   serial="D1M-8", hw_id="e" * 64))}
         code, d = s.req("POST", "/api/bind/request", {"serial": "D1M-8", "nonce": NONCE,
                                                       "attest": fake})
         assert code == 403 and d["error"] == NEUTRAL
         assert s.req("GET", "/api/admin/bind", token=tok)[1]["requests"] == []
         assert not any(a.get("kind") == "bind_request"
                        for a in s.req("GET", "/api/alerts", token=tok)[1]["alerts"])
+        # 外审 W63-1 第 2 条:被拒的不进站点的操作日志(管理员在网页上看得到;也不受一分钟一条的限)
+        assert not [r for r in s.db.query("SELECT action, status FROM audit")
+                    if "bind/request" in r["action"] and r["status"] == 403]
         rows = s.db.query("SELECT kind, serial, detail FROM company_reports")
         assert [r["serial"] for r in rows] == ["D1M-7"], "同一来源一分钟只记一条"
         assert rows[0]["kind"] == "device_rejected" and "出厂证书" in rows[0]["detail"]

@@ -92,7 +92,8 @@ def test_答题_站点验得过(板):
     ans = devid.answer(p, purpose="claim", site_id="s1", nonce="n" * 32, hw_sources=hw)
     cert = di.verify_cert(ans["cert"], pubs)
     di.verify_attest(ans["cert"], di.attest_message(purpose="claim", site_id="s1", nonce="n" * 32,
-                                                    serial=cert.serial), ans["sig"])
+                                                    serial=cert.serial, hw_id=ans["hw_id"]),
+                     ans["sig"])
     assert ans["hw_id"] == cert.hw_id
 
 

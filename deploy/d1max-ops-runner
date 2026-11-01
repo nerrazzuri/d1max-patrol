@@ -64,10 +64,10 @@ BIND_FILES = {
     "src/d1max_patrol/__init__.py": "lib/d1max_patrol/__init__.py",
     "src/d1max_patrol/provision.py": "lib/d1max_patrol/provision.py",
     **{f"src/d1max_patrol/bind/{m}.py": f"lib/d1max_patrol/bind/{m}.py"
-       for m in ("__init__", "cli", "core", "factory", "paths", "router", "server", "sitelink",
-                 "wipe")},
+       for m in ("__init__", "cli", "core", "devid", "factory", "paths", "router", "server",
+                 "sitelink", "wipe")},
     **{f"packages/contract/src/d1max_contract/{m}.py": f"lib/d1max_contract/{m}.py"
-       for m in ("__init__", "binding", "ed25519")},
+       for m in ("__init__", "binding", "device_id", "ed25519")},
 }
 SITE_UNITS = ("d1max-site", "d1max-mosquitto")
 ID_RE = re.compile(r"^[0-9a-f]{8,32}$")
