@@ -580,3 +580,41 @@ def test_提前绕_代理参数能关(tmp_path):
             assert a.parts.nav.preview is want
         finally:
             a.stop()
+
+
+def test_W64_仿真画面可以用录好的视频_循环播_演示真人画面(tmp_path):
+    """``--video-source file --video-dir D``:每路相机循环播 ``D/<相机>.mp4``(演示站点、宣传截图用
+    现场录的真画面)。要重新编码(循环播时间戳要连续)。少了哪一路的文件就不起。"""
+    d = tmp_path / "clips"
+    d.mkdir()
+    for cam in ("front", "back"):
+        (d / f"{cam}.mp4").write_bytes(b"x")
+    a = agent_main.build(_args(tmp_path, "--video-source", "file", "--video-dir", str(d)))
+    try:
+        src = a.runtime.video._source
+        assert src("front") == ["-re", "-stream_loop", "-1", "-i", str(d / "front.mp4")]
+        assert getattr(src, "raw", False) is True
+    finally:
+        a.stop()
+    (d / "back.mp4").unlink()
+    with pytest.raises(SystemExit, match="back.mp4"):
+        agent_main.build(_args(tmp_path, "--video-source", "file", "--video-dir", str(d)))
+
+
+def test_W64_用录好的视频时_到点拍照也从录像里截一帧(tmp_path):
+    """仿真拍照原来没有相机(报警缩略图是空的);``--video-source file`` 时从同一段录像
+    按当前时刻截一帧。"""
+    from d1max_agent.video_push import file_snapshot_source
+    d = tmp_path / "clips"
+    d.mkdir()
+    for cam in ("front", "back"):
+        (d / f"{cam}.mp4").write_bytes(b"x")
+    src = file_snapshot_source(d, durations={"front": 100.0, "back": 50.0}, now_s=lambda: 1234.5)
+    assert src("front") == ["-ss", "34.5", "-i", str(d / "front.mp4")]
+    assert src("back") == ["-ss", "34.5", "-i", str(d / "back.mp4")]
+    a = agent_main.build(_args(tmp_path, "--video-source", "file", "--video-dir", str(d)))
+    try:
+        media = a.parts.engine._media
+        assert str(d / "front.mp4") in " ".join(media["front"]._input())
+    finally:
+        a.stop()

@@ -93,6 +93,44 @@ def lavfi_source(camera: str) -> list[str]:
 lavfi_source.raw = True  # type: ignore[attr-defined]
 
 
+def _duration(path: Path, ffprobe: str = "ffprobe") -> float:
+    import subprocess
+    try:
+        out = subprocess.run([ffprobe, "-v", "error", "-show_entries", "format=duration",
+                              "-of", "csv=p=0", str(path)], capture_output=True, text=True,
+                             timeout=20).stdout.strip()
+        return max(float(out), 1.0)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return 1.0
+
+
+def file_snapshot_source(folder: Path, *, durations: dict[str, float] | None = None,
+                         now_s: Callable[[], float] | None = None) -> Source:
+    """W64:到点拍照从同一段录像截一帧(按当前时刻在片长里取一个位置,每次不一样)。"""
+    import time
+    clock = now_s or time.time
+    lens = dict(durations or {})
+
+    def src(camera: str) -> list[str]:
+        path = folder / f"{camera}.mp4"
+        if camera not in lens:
+            lens[camera] = _duration(path)
+        return ["-ss", f"{clock() % lens[camera]:.1f}", "-i", str(path)]
+    from d1max_contract.video import STANDARD_CAMERAS
+    src.cameras = tuple(STANDARD_CAMERAS)  # type: ignore[attr-defined]
+    src.dynamic = True  # type: ignore[attr-defined]
+    return src
+
+
+def file_source(folder: Path) -> Source:
+    """仿真、演示(W64):每路相机循环播 ``<folder>/<相机>.mp4``(现场录的真画面)。按实时速度读;
+    要重新编码,循环接头处时间戳才连续。"""
+    def src(camera: str) -> list[str]:
+        return ["-re", "-stream_loop", "-1", "-i", str(folder / f"{camera}.mp4")]
+    src.raw = True  # type: ignore[attr-defined]
+    return src
+
+
 def source_cameras(source: Source) -> tuple[str, ...]:
     """这个来源有哪几路相机(没说就是自带那两路)。"""
     from d1max_contract.video import STANDARD_CAMERAS

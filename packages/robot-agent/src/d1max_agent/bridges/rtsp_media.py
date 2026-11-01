@@ -18,9 +18,11 @@ GRAB_TIMEOUT_S = 8.0
 
 
 class FfmpegCamera(MediaSource):
-    def __init__(self, input_args: Sequence[str], *, now_ms: Callable[[], int],
-                 ffmpeg: str = "ffmpeg", timeout_s: float = GRAB_TIMEOUT_S) -> None:
-        self._input = list(input_args)
+    def __init__(self, input_args: Sequence[str] | Callable[[], list[str]], *,
+                 now_ms: Callable[[], int], ffmpeg: str = "ffmpeg",
+                 timeout_s: float = GRAB_TIMEOUT_S) -> None:
+        #: 输入参数;给的是函数就每次拍照现取(W64:从录像里截,每次截不同的位置)。
+        self._input = input_args if callable(input_args) else list(input_args)
         self._now = now_ms
         self._ffmpeg = ffmpeg
         self._timeout = timeout_s
@@ -41,7 +43,8 @@ class FfmpegCamera(MediaSource):
         return True
 
     async def grab(self) -> Frame:
-        cmd = [self._ffmpeg, "-hide_banner", "-loglevel", "error", "-nostdin", *self._input,
+        inp = self._input() if callable(self._input) else self._input
+        cmd = [self._ffmpeg, "-hide_banner", "-loglevel", "error", "-nostdin", *inp,
                "-frames:v", "1", "-f", "image2", "-c:v", "mjpeg", "-q:v", "3", "pipe:1"]
         at = self._now()
         closes = self._closes
@@ -85,5 +88,8 @@ async def _reap(proc: asyncio.subprocess.Process) -> None:
 def rtsp_media(source: Callable[[str], list[str]], *, now_ms: Callable[[], int],
                ffmpeg: str = "ffmpeg") -> dict[str, MediaSource]:
     """实时画面的取流(``rtsp_source``)→ 每路相机一个取图源。"""
+    if getattr(source, "dynamic", False):           # W64:每次拍照现取
+        return {cam: FfmpegCamera(lambda cam=cam: source(cam), now_ms=now_ms, ffmpeg=ffmpeg)
+                for cam in getattr(source, "cameras", ())}
     return {cam: FfmpegCamera(source(cam), now_ms=now_ms, ffmpeg=ffmpeg)
             for cam in getattr(source, "cameras", ())}
