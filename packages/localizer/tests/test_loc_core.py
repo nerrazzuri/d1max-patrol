@@ -699,3 +699,17 @@ def test_W68_Super_LIO的分数线_偏1米那种0点5_不信():
     t.out.clear()
     _走一段分数(t, [0.5] * 10, x)
     assert t.poses()[-1].sigma_xy > 0.5
+
+
+def test_W68_Super_LIO没对上之前发的时间戳为负的帧_丢掉_不出错():
+    """2026-11-03 回放 glass-160827:Super-LIO 重定位模式起来、还没对上时先发 6 帧时间戳 −1.0 的位姿,
+    原来照样转成位姿报文,报文校验拒收、抛异常。"""
+    t = 台()
+    t.c.t += 0.1
+    t.core.on_scan()
+    t.core.on_estimate(_est(0.0, 0.0, stamp=-1.0))
+    t.core.on_estimate(_est(0.0, 0.0, stamp=float("nan")))
+    t.core.tick()
+    assert [m for m in t.core.drain() if isinstance(m, Pose)] == []
+    t.walk(20)
+    assert t.poses()

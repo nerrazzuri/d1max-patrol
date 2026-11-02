@@ -325,8 +325,11 @@ class LocalizerCore:
             return                                       # MOLA 退出时 backend_down 也标了要给初值
         vals = (e.stamp, e.quality, *e.p, *e.q)
         if not all(isinstance(v, (int, float)) and math.isfinite(v) for v in vals):
-            log.warning("MOLA 给了一帧不是有限数的估计,丢掉")
+            log.warning("定位程序给了一帧不是有限数的估计,丢掉")
             return                                       # 先查,再改任何状态(W09b 内审)
+        if e.stamp <= 0:
+            # W68:Super-LIO 重定位模式还没对上时先发几帧时间戳 −1 的位姿(回放 glass-160827)
+            return
         if self._stamp is not None and e.stamp <= self._stamp:
             return                                       # 同一帧、乱序
         self._stamp = e.stamp
