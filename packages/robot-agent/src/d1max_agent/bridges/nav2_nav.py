@@ -405,6 +405,18 @@ class Nav2NavBackend(PlannedNavBackend):
         if why:
             await self._fail(why)
             return
+        tgt = self._target
+        if tgt is not None and math.dist((here.x, here.y), (tgt.position.x, tgt.position.y)) \
+                <= TURN_ONLY_M and abs(math.remainder(tgt.yaw - here.yaw, 2 * math.pi)) \
+                > TURN_DONE_RAD:
+            # 工单 11-02-18:到了 xy 容差、只差朝向 —— Nav2 在这儿常常转不起来(三次没进展、卡 50 s),
+            # 代理取消它的目标,自己原地转
+            log.info("Nav2 到了目标附近、只差朝向 %.0f°:代理接过来原地转",
+                     math.degrees(math.remainder(tgt.yaw - here.yaw, 2 * math.pi)))
+            self._cancel_nav2()
+            self._turn_only = tgt.yaw
+            await self._turn_step(here, dt_s)
+            return
         c = link.cmd
         now = link._now()
         if c is None or now - c[0] > CMD_FRESH_S:
