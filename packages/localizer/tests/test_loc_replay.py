@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import math
 
+import pytest
 from d1max_localizer import replay, tools
 from d1max_localizer.frames import Frames, mat_to_quat
 
@@ -211,7 +212,8 @@ def test_回放命令_带里程文件(tmp_path, capsys):
     (prior / "frames.json").write_text(json.dumps(FLAT.to_json()))
     odom = tmp_path / "odom.tum"
     odom.write_text("".join(f"{t} {p[0]} {p[1]} 0 0 0 0 1\n" for t, p in _里程(fr)))
-    assert tools.main(["replay", "--bag", str(tmp_path / "bag"), "--prior", str(prior),
+    assert tools.main(["replay", "--engine", "mola",
+                       "--bag", str(tmp_path / "bag"), "--prior", str(prior),
                        "--init", "0,0,0", "--out", str(run), "--reuse",
                        "--odom-tum", str(odom)]) == 0
     m = json.loads((run / "metrics.json").read_text())
@@ -223,3 +225,28 @@ def test_合并话题回放_机身系用前雷达系():
     合并话题给成 base_link,录包里查不到,一帧都不处理(2026-10-28 台式机回放 glass-160827)。"""
     assert replay._frame_of("/d1max/merged_lidar") == "rslidar_head"
     assert replay._frame_of("/front_lidar") == "rslidar_head"
+
+
+def test_W68_Super_LIO回放_IMU位姿换雷达位姿_点云按时间配位姿打分():
+    import numpy as np
+    from d1max_localizer import slioloc as L
+    g = np.mgrid[-6:6:0.1, -6:6:0.1].reshape(2, -1).T
+    walls = np.vstack([np.c_[g[:, 0], np.full(len(g), 6.0), (g[:, 1] + 6) / 4],
+                       np.c_[np.full(len(g), 6.0), g[:, 0], (g[:, 1] + 6) / 4],
+                       np.c_[g[:, 0], np.full(len(g), -6.0), (g[:, 1] + 6) / 4]])
+    fit = L.MapFit(L.voxel_down(walls, 0.1))
+    ext = ([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]], [0.1, 0.0, 0.0])
+    q0 = (0.0, 0.0, 0.0, 1.0)
+    # IMU 在 (0, 0, 1);雷达在它前面 0.1 m。第 3 秒的位姿斜着偏 2 m(错锁)
+    bad = (1.5, 1.5, 1.0)
+    poses = [(10.0 + 0.1 * i + 0.1, bad if 30 <= i < 40 else (0.0, 0.0, 1.0), q0)
+             for i in range(60)]
+    lidar = np.array([0.1, 0.0, 1.0])
+    clouds = [(10.0 + 0.1 * i, walls[::7] - lidar) for i in range(0, 60, 5)]
+    frames = replay.slio_frames(poses, clouds, fit, ext)
+    assert len(frames) == 60
+    assert frames[0].p == pytest.approx((0.1, 0.0, 1.0))
+    assert frames[0].quality > 0.95
+    assert frames[29].quality > 0.95
+    assert frames[31].quality < 0.6 and frames[39].quality < 0.6
+    assert frames[45].quality > 0.95

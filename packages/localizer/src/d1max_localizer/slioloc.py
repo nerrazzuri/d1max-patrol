@@ -240,8 +240,9 @@ class MapFit:
         return float(hit.any(axis=1).mean())
 
 
-#: 点云配哪帧位姿:Super-LIO 位姿的时间戳是扫描结束时刻,比点云报文头(扫描开始)晚约 0.1 s。
-PAIR_MIN_S, PAIR_MAX_S = 0.0, 0.25
+#: 点云配哪帧位姿:Super-LIO 位姿的时间戳是扫描结束时刻,比点云报文头(扫描开始)晚约 0.1 s。下限给半帧:
+#: 上一帧扫描的结束时刻 ≈ 这一帧的开始时刻,从 0 算起会配到上一帧的位姿上。
+PAIR_MIN_S, PAIR_MAX_S = 0.05, 0.25
 
 
 class ScanScorer:

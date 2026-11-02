@@ -5,7 +5,9 @@
   ``prior.mm`` 一起);
 - ``replay --bag B --prior DIR --init x,y,yaw --out OUT``:只定位回放一个录包,出 ``metrics.json``、
   ``report.md``;``--reference`` 给参考轨迹(TUM)算误差,不在先验的系里就加
-  ``--reference-other-frame``(按时间对齐);``--reuse`` 用 ``OUT`` 里已有的 MOLA 输出,只重算;
+  ``--reference-other-frame``(按时间对齐);``--reuse`` 用 ``OUT`` 里已有的定位程序输出,只重算;
+  ``--engine``:默认 ``superlio``(跟机器人上一样,W68;先验目录要有 ``superlio_map.pcd``),
+  ``mola`` 走老路;
 - ``sweep --bag B --prior DIR --init x,y,yaw --out OUT --only-first-n N``:初值加偏差各跑一遍,出
   「初值要多准」的表(手机「设位置」提示用)。
 - ``calibrate-rear --bag B --traj TRAJ.tum --out lidars.json``(W09i):前雷达建图轨迹当参照,标后雷达
@@ -111,13 +113,19 @@ def main(argv: Sequence[str] | None = None) -> int:
         r.add_argument("--imu-ypr", type=parse_ypr, default=None,
                        help="IMU 安装角 yaw,pitch,roll(度;写成 --imu-ypr=-90,0,180)")
         if name == "replay":
+            r.add_argument("--engine", choices=("superlio", "mola"), default="superlio",
+                           help="定位程序(默认 superlio,跟机器人上一样;W68)")
+            r.add_argument("--superlio-config", type=Path, default=None,
+                           help="Super-LIO 参数文件(默认跟机器人上一样的找法)")
+            r.add_argument("--superlio-root", type=Path, default=None,
+                           help="Super-LIO 装在哪(默认 /opt/d1max/superlio/current)")
             r.add_argument("--reference", type=Path, default=None, help="参考轨迹(TUM)")
             r.add_argument("--odom-tum", type=Path, default=None,
                            help="里程(TUM,时刻跟 MOLA 位姿同一个钟):代理做交叉校验;"
                                 "开头当人给了 --init")
             r.add_argument("--reference-other-frame", action="store_true",
                            help="参考轨迹不在先验的系里(独立建图):按时间配对后平面对齐")
-        r.add_argument("--reuse", action="store_true", help="用 --out 里已有的 MOLA 输出,只重算")
+        r.add_argument("--reuse", action="store_true", help="用 --out 里已有的定位程序输出,只重算")
     ia = sub.add_parser("imu-axes", help="从录包核 IMU 的安装角(工单 27)")
     ia.add_argument("--bag", type=Path, required=True)
     ia.add_argument("--traj", type=Path, required=True,
@@ -260,10 +268,14 @@ def _calibrate(a: argparse.Namespace) -> int:
 
 def _replay(a: argparse.Namespace) -> int:
     frames_cfg = Frames.load(a.prior / FRAMES_FILE)
-    if not a.reuse:
-        replay.run_mola(a.bag, a.prior, a.init, a.out, lidar_topic=a.lidar_topic,
-                        only_first_n=a.only_first_n, skip_first_n=a.skip_first_n, imu=a.imu)
-    frames = replay.read_run(a.out)
+    if a.engine == "superlio":
+        frames = _replay_superlio(a)
+    else:
+        if not a.reuse:
+            replay.run_mola(a.bag, a.prior, a.init, a.out, lidar_topic=a.lidar_topic,
+                            only_first_n=a.only_first_n, skip_first_n=a.skip_first_n,
+                            imu=a.imu)
+        frames = replay.read_run(a.out)
     msgs = replay.simulate(frames, frames_cfg, a.init)
     odom = [(t, (p[0], p[1], math.atan2(2 * (q[3] * q[2] + q[0] * q[1]),
                                        1 - 2 * (q[1] * q[1] + q[2] * q[2]))))
@@ -275,6 +287,18 @@ def _replay(a: argparse.Namespace) -> int:
     replay.write(a.out, a.bag.name, m)
     print(replay.report_md(a.bag.name, m))
     return 0
+
+
+def _replay_superlio(a: argparse.Namespace) -> list[replay.Frame]:
+    from d1max_localizer import slioloc as L
+    from d1max_localizer import superlio as S
+    cfg = a.superlio_config or S.config_path()
+    root = a.superlio_root or S.ROOT
+    if not a.reuse:
+        replay.run_superlio(a.bag, a.prior, a.init, a.out, cfg=cfg, root=root)
+    poses = S.read_odom(a.out / "lio_bag", "/lio/odom")
+    fit = L.MapFit(L.read_pcd(a.prior / L.MAP_FILE))
+    return replay.slio_frames(poses, replay.bag_clouds_every(a.bag), fit, S.extrinsic(cfg))
 
 
 def _sweep(a: argparse.Namespace) -> int:
