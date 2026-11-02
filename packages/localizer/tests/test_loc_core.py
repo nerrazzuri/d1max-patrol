@@ -752,3 +752,24 @@ def test_W68_外审_一直发时间戳不合法的帧_看门狗照样判卡住()
         t.core.on_estimate(_est(0.0, 0.0, stamp=-1.0))
         t.core.tick()
     assert t.core.take_restart()
+
+
+def test_W68_外审r2_转身沿用转身前的分有期限_转久了照实算():
+    """codex r2 #1:沿用转身前的高分没有期限,一直转、分一直 0.5 也一直可信。"""
+    from d1max_localizer.core import SLIO_QUALITY
+    t = 台(quality=SLIO_QUALITY)
+    x = t.walk(150, q=0.95)
+    t.out.clear()
+    _原地转身_外审(t, x, 100, 0.5)                      # 转 10 秒
+    assert t.poses()[-1].sigma_xy > 0.5
+
+
+def test_W68_外审r2_等初值时一直重复同一个时间戳_也判卡住():
+    """codex r2 #8:等初值那段只记了活着、没记时间戳,重复同一帧永远不判卡住。"""
+    t = 台(init=False)
+    for _ in range(int(70 / 0.1)):
+        t.c.t += 0.1
+        t.core.on_scan()
+        t.core.on_estimate(_est(1.0, 1.0, stamp=42.0))
+        t.core.tick()
+    assert t.core.take_restart()

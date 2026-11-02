@@ -553,3 +553,29 @@ def test_W68_外审_远程升级也编Super_LIO_编不成算装失败(tmp_path):
     assert seen[0][1]["D1MAX_SUPERLIO_PREFIX"] == "/opt/x"
     why = build_superlio(pkg, slot, run=lambda a, e: (1, "缺命令: colcon"))
     assert "Super-LIO" in why and "colcon" in why
+
+
+def test_W68_外审r2_远程编Super_LIO_不动全局current_按版本记_目录不归机器人说重跑装机(tmp_path):
+    """codex r2 #6、#7:准备升级时就把全局 current 指到新编的,回滚也不回;老装机脚本 root 建的目录
+    机器人账号写不了。"""
+    import os as _os
+
+    from d1max_agent.release_ops import build_superlio
+    pkg, slot = tmp_path / "pkg", tmp_path / "slot"
+    (pkg / "deploy").mkdir(parents=True)
+    (pkg / "deploy" / "d1max-superlio-build").write_text("x")
+    (slot / "venv").mkdir(parents=True)
+    prefix = tmp_path / "superlio"
+    prefix.mkdir()
+    seen = []
+    assert build_superlio(pkg, slot, prefix=str(prefix),
+                          run=lambda a, e: (seen.append(e), (0, ""))[1]) == ""
+    assert seen[0]["D1MAX_SUPERLIO_LINK"] == "0"
+    assert seen[0]["D1MAX_SUPERLIO_STAMP"] == str(slot / "venv" / "superlio-root")
+    prefix.chmod(0o555)
+    try:
+        if not _os.access(prefix, _os.W_OK):              # root 跑测试时跳过这一段
+            why = build_superlio(pkg, slot, prefix=str(prefix), run=lambda a, e: (0, ""))
+            assert "install.sh" in why
+    finally:
+        prefix.chmod(0o755)

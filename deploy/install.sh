@@ -386,7 +386,7 @@ if [[ -f "$PKG/deploy/d1max-superlio-build" ]]; then
   install -d -o "$RUN_USER" -g "$RUN_USER" /opt/d1max/superlio
   chown -R "$RUN_USER":"$RUN_USER" /opt/d1max/superlio
   if ! sudo -u "$RUN_USER" env D1MAX_SUPERLIO_PREFIX=/opt/d1max/superlio \
-      bash "$PKG/deploy/d1max-superlio-build"; then
+      D1MAX_SUPERLIO_STAMP="$SLOT/venv/superlio-root" bash "$PKG/deploy/d1max-superlio-build"; then
     echo "装机失败:Super-LIO(定位与建图必需)编不成,日志在 /opt/d1max/superlio/<版本>/build.log。" >&2
     echo "         机器人照旧跑原来那一版;补齐缺的系统包后重跑本脚本。" >&2
     exit 1

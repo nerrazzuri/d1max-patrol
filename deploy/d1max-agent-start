@@ -27,6 +27,11 @@
 #   D1MAX_AGENT_ARGS=其余参数(比如 --mapping、--sidecar 127.0.0.1:8090 --mps-per-unit …)
 set -eu
 here=$(cd "$(dirname "$0")/.." && pwd -P)
+# W68:这一版编的 Super-LIO 在哪(远程升级按版本记,外审 r2 #7);没记的老槽用 current
+if [ -z "${D1MAX_SUPERLIO_ROOT:-}" ] && [ -f "$here/venv/superlio-root" ]; then
+  D1MAX_SUPERLIO_ROOT=$(cat "$here/venv/superlio-root")
+  export D1MAX_SUPERLIO_ROOT
+fi
 # D1MAX_AGENT_ARGS 整串交给代理拆(W32):这一版不认识的参数跳过并报站点,退回老版也起得来
 exec "$here/venv/bin/d1max-agent" \
   --transport "${D1MAX_SITE_MQTT:?/etc/d1max/env 里没有 D1MAX_SITE_MQTT(站点地址)}" \

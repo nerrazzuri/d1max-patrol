@@ -17,6 +17,11 @@
 #     --imu-* 只对 --engine mola(工程师手动切回 MOLA)有用。
 set -eu
 here=$(cd "$(dirname "$0")/.." && pwd -P)
+# W68:这一版编的 Super-LIO 在哪(远程升级按版本记,外审 r2 #7);没记的老槽用 current
+if [ -z "${D1MAX_SUPERLIO_ROOT:-}" ] && [ -f "$here/venv/superlio-root" ]; then
+  D1MAX_SUPERLIO_ROOT=$(cat "$here/venv/superlio-root")
+  export D1MAX_SUPERLIO_ROOT
+fi
 # ROS 的 setup 脚本里有未定义变量,关掉 -u 再 source
 set +u
 . /opt/ros/humble/setup.sh

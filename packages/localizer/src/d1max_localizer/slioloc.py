@@ -18,6 +18,7 @@ from __future__ import annotations
 import math
 import os
 import re
+import threading
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
@@ -257,27 +258,38 @@ class ScanScorer:
         self._scan: tuple[float, np.ndarray] | None = None
         self._last = 0.0
         self._last_at: float | None = None              # 最后一次打出分时的位姿时间
+        self._gen = 0                                    # 换图、重启就加一(外审 r2 #2)
+        self._lock = threading.Lock()
 
     def set_fit(self, fit: MapFit | None) -> None:
-        """换图(``None`` = 新图还没载好):旧分作废。"""
-        self._fit = fit
-        self._scan = None
-        self._last, self._last_at = 0.0, None
+        """换图(``None`` = 新图还没载好)、定位程序重启(同一张图再给一次):旧分作废;正在算的那次
+        算完也不写回。"""
+        with self._lock:
+            self._gen += 1
+            self._fit = fit
+            self._scan = None
+            self._last, self._last_at = 0.0, None
 
     def scan(self, stamp: float, xyz: Any) -> None:
         self._scan = (float(stamp), np.asarray(xyz))
 
     def pose(self, stamp: float, p: Sequence[float], q: Sequence[float]) -> float:
-        s, fit = self._scan, self._fit
+        with self._lock:
+            s, fit, gen = self._scan, self._fit, self._gen
+        v = None
         if s is not None and fit is not None:
             dt = stamp - s[0]
             if dt > PAIR_MAX_S:
                 self._scan = None                        # 配不上了
             elif dt >= PAIR_MIN_S:
                 self._scan = None
-                v = fit.score(s[1], p, q)
-                if v is not None:
-                    self._last, self._last_at = v, stamp
-        if fit is None or self._last_at is None or abs(stamp - self._last_at) > SCORE_STALE_S:
-            self._last = 0.0                             # 没图、太久没打出分(或时间跳了):不算证据
-        return self._last
+                v = fit.score(s[1], p, q)                # 慢:不拿着锁算
+        with self._lock:
+            if gen != self._gen:
+                return 0.0                               # 算的时候换了图、重启了:这次的不算
+            if v is not None:
+                self._last, self._last_at = v, stamp
+            if self._fit is None or self._last_at is None \
+                    or abs(stamp - self._last_at) > SCORE_STALE_S:
+                self._last = 0.0                         # 没图、太久没打出分(或时间跳了):不算证据
+            return self._last

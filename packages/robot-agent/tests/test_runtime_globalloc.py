@@ -342,3 +342,36 @@ async def test_W68_外审_机器人在动_不找_不计次不报(台, monkeypatc
     在动[0] = False
     await t.拍(80)
     assert _事件(t.ears, "loc_not_found")
+
+
+async def test_W68_外审r2_找的这会儿定位自己好了_不提交(台, monkeypatch):
+    """codex r2 #3:拿锁时不可信,套图这几秒定位自己恢复了,原来照样提交自动找到的位置、打断它。"""
+    t = 台
+    await _没初值地连上(t)
+    anchor = t.rt.parts.nav.anchor
+    orig = t.rt._global_find
+
+    async def 找完时已经好了():
+        got = await orig()
+        monkeypatch.setattr(anchor, "ok", lambda *_a, **_k: True)
+        return got
+
+    monkeypatch.setattr(t.rt, "_global_find", 找完时已经好了)
+    await t.拍(60)
+    assert t.loc.relocs == []
+
+
+async def test_W68_外审r2_找的这会儿机器人动了_没找到不计次不报(台, monkeypatch):
+    """codex r2 #9:入口查过静止,套图途中动了,「不在地图上」原来照样计次、报 P2。"""
+    t = 台
+    t.view.pts = _乱点()
+    n = [0]
+
+    async def stopped():
+        n[0] += 1
+        return n[0] % 2 == 1                              # 入口问:停着;找完再问:在动
+
+    monkeypatch.setattr(t.rt.hal, "stopped", stopped)
+    await _没初值地连上(t)
+    await t.拍(80)
+    assert not _事件(t.ears, "loc_not_found") and t.rt._find_tries == 0
