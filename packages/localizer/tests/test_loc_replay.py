@@ -252,6 +252,18 @@ def test_W68_Super_LIO回放_IMU位姿换雷达位姿_点云按时间配位姿�
     assert frames[45].quality > 0.95
 
 
+def test_W68_Super_LIO没对上前时间戳为负的帧_回放不算():
+    import numpy as np
+    from d1max_localizer import slioloc as L
+    fit = L.MapFit(np.array([[1.0, 0.0, 1.0]]))
+    ext = ([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]], [0.0, 0.0, 0.0])
+    q0 = (0.0, 0.0, 0.0, 1.0)
+    poses = [(-1.0, (0.0, 0.0, 1.0), q0)] * 3 + [(10.0 + 0.1 * i, (0.0, 0.0, 1.0), q0)
+                                                 for i in range(5)]
+    frames = replay.slio_frames(poses, [], fit, ext)
+    assert [round(f.stamp, 1) for f in frames] == [10.0, 10.1, 10.2, 10.3, 10.4]
+
+
 def test_W68_一直没对上_不信的时段算到录包结束_不只到最后一条报文():
     """W68 验收(偏 3 m):核心三次判没照办之后不再出报文,报告原来只列到 3.1 s,看着像只有开头不信。"""
     fr = [replay.Frame(stamp=100.0 + 0.1 * i, p=(0.05 * i + 3.0, 0.0, 0.0), q=_q(0.0),
