@@ -248,7 +248,7 @@ async def test_速度太旧发零_低于死区的整形(tmp_path):
     assert abs(t.r.speed[0]) < 1e-9, "太旧的速度不执行"
     from d1max_agent.bridges.nav2_nav import MIN_TRAVEL_MPS
     db = max(t.r.deadband_vx, MIN_TRAVEL_MPS)
-    assert t.nav._deband(db * 0.4, 0.0) == (0.0, 0.0)
+    assert t.nav._deband(0.02, 0.0) == (0.0, 0.0)
     assert t.nav._deband(-db * 0.6, 0.0) == (-db, 0.0)
     link.cmd = (10.0, 2, db * 0.7, 0.0, 0.0)
     await t.一拍()
@@ -324,17 +324,40 @@ async def test_原地转会扫到地图上的墙就不转_空地照转(tmp_path)
     assert abs(t.r.yaw) > 0.3, "空地照转"
 
 
-async def test_死区至少按真机实测_0点13米每秒_0点07弧度每秒(tmp_path):
-    """2026-10-29 C40221 实测:前进、后退约 0.13 m/s 以下只踏步不走;转 0.07 rad/s 以下不转。"""
-    from d1max_agent.bridges.nav2_nav import MIN_TRAVEL_MPS, MIN_TURN_RPS
+async def test_死区按命令算_0点13米每秒_原地转0点15弧度每秒_工单11_02_10(tmp_path):
+    """2026-10-29 C40221 实测:前进、后退约 0.13 m/s 以下只踏步不走。原地转:比例 0.10 才实际转
+    0.069 rad/s,比例 0.10 = 命令 0.15 rad/s(1.5 rad/s/比例)—— 原来把实际转速 0.07 当命令门槛,
+    等于不转(11-02 工单 10)。MPPI 在障碍边上、收尾发的小速度不清零(清零 = 一直不动、「没进展」):
+    0.03 以上一律抬到能走起来的最低速度。走着的时候转向不动(走路时小转向照样转)。"""
+    from d1max_agent.bridges.nav2_nav import DEBAND_FLOOR, MIN_TRAVEL_MPS, MIN_TURN_RPS
     link = 假转接()
     t = _台(tmp_path, link)
-    assert (MIN_TRAVEL_MPS, MIN_TURN_RPS) == (0.13, 0.07)
-    assert t.nav._deband(0.05, 0.0) == (0.0, 0.0)
-    assert t.nav._deband(0.08, 0.0) == (0.13, 0.0)
+    assert (MIN_TRAVEL_MPS, MIN_TURN_RPS, DEBAND_FLOOR) == (0.13, 0.15, 0.03)
+    assert t.nav._deband(0.02, 0.0) == (0.0, 0.0)
+    assert t.nav._deband(0.05, 0.0) == (0.13, 0.0)
     assert t.nav._deband(-0.09, 0.0) == (-0.13, 0.0)
-    assert t.nav._deband(0.3, 0.02) == (0.3, 0.0)
-    assert t.nav._deband(0.0, -0.05) == (0.0, -0.07)
+    assert t.nav._deband(0.3, 0.02) == (0.3, 0.02)
+    assert t.nav._deband(0.0, -0.05) == (0.0, -0.15)
+    assert t.nav._deband(0.0, 0.02) == (0.0, 0.0)
+
+
+async def test_限速压前进时转向同比例压_弯不变急_工单11_02_9(tmp_path):
+    """11-02 回程卡住:Nav2 要 0.87 m/s + 0.7 rad/s(弯半径 1.24 m),代理只把前进压到 0.3、转向照
+    旧 → 半径 0.43 m,急拐向方块角,守卫一直拦。压前进就按同一比例压转向,走的还是 Nav2 算的那条弯。"""
+    link = 假转接()
+    t = _台(tmp_path, link)
+    await t.start(1.5, 4.0)
+    await t.nav.set_speed(0.3)
+    await t.nav.goto(Pose.from_xy_yaw(6.0, 4.0))
+    seen = []
+    for _ in range(10):
+        link.now += 0.1
+        link.cmd = (link.now, 1, 0.87, 0.0, 0.7)
+        await t.一拍()
+        seen.append((t.nav._last_vx, t.nav._last_wz))
+    vx, wz = max(seen)
+    assert abs(vx - 0.3) < 1e-6, vx
+    assert abs(wz / vx - 0.7 / 0.87) < 0.01, ("弯半径要跟 Nav2 的一样", vx, wz)
 
 
 async def test_送给Nav2的速度按位置变化算_不信厂家里程报的速度(tmp_path):
@@ -801,3 +824,33 @@ async def test_W48复查M1_很长的路网_加密以后途经点也不超过协�
     await t.nav.goto(Pose.from_xy_yaw(1.5 + 299 * 1.6, 4.0, 0.0))
     g = link.kinds("goal")[-1]
     assert 250 < len(g.get("via", [])) <= MAX_VIA
+
+
+def test_MPPI采样数按机器人上的算力_工单11_02_12():
+    """11-02 C40221 上 controller 几乎每秒「missed its desired rate」:采样 1000 条算不过来。"""
+    import re
+    from pathlib import Path
+    text = (Path(__file__).resolve().parents[3] / "deploy" / "nav2" / "params.yaml").read_text()
+    batch = int(re.search(r"\n\s+batch_size:\s*(\d+)", text).group(1))
+    assert batch <= 500
+
+
+async def test_只差朝向的目标_代理自己原地转_不交给Nav2_工单11_02_11(tmp_path):
+    """11-02:同一位置换朝向 10°,Smac Lattice「no valid path」、60 s 不动。离目标在容差内只差朝向的,
+    代理自己原地转(守卫、地图墙照样管)。"""
+    link = 假转接()
+    t = _台(tmp_path, link)
+    await t.start(1.5, 4.0, 0.0)
+    await t.nav.goto(Pose.from_xy_yaw(1.55, 4.0, math.radians(10)))
+    assert not link.kinds("goal"), "不交给 Nav2"
+    await t.跑(20.0)
+    assert NavStatus.SUCCEED in t.status, (t.status, t.nav.fail_reason)
+    assert abs(math.degrees(t.r.yaw) - 10) < 9, math.degrees(t.r.yaw)
+
+
+async def test_离目标远的照样交给Nav2(tmp_path):
+    link = 假转接()
+    t = _台(tmp_path, link)
+    await t.start(1.5, 4.0, 0.0)
+    await t.nav.goto(Pose.from_xy_yaw(2.0, 4.0, 0.0))
+    assert link.kinds("goal")

@@ -48,6 +48,7 @@ from d1max_agent.engine.removable import (
     scan_or_unknown,
 )
 from d1max_agent.engine.safety import (
+    LOC_RESET_WINDOW_S,
     Decision,
     Ruling,
     SafetyContext,
@@ -372,6 +373,8 @@ class _Live:
     results: list[WaypointResult] = field(default_factory=list)
     battery_pct: float = 100.0
     loc_reset_attempts: int = 0
+    #: 每次丢定位重置的时刻(工单 16):``loc_reset_attempts`` 只数 ``LOC_RESET_WINDOW_S`` 以内的。
+    loc_reset_times: list[float] = field(default_factory=list)
     photos: list[str] = field(default_factory=list)
     blocked_since: float | None = None
     #: 最近一次收到的位姿。挂起时抄一份进 ``SuspendPoint``。
@@ -485,6 +488,7 @@ class MissionEngine(EventEmitter[RunSnapshot]):
             return
         if reset_attempts:
             live.loc_reset_attempts = 0
+            live.loc_reset_times.clear()
         if delta is None:
             if live.trail or live.start_pose is not None:
                 live.trail_invalid = "半路重设过位置,之前记下的来路不在现在的坐标系里"
@@ -1344,6 +1348,7 @@ class MissionEngine(EventEmitter[RunSnapshot]):
         assert live is not None
         blocked_for = (0.0 if live.blocked_since is None
                        else self._clock() - live.blocked_since)
+        self._count_loc_resets()
         return SafetyContext(policy=live.mission.policy,
                              battery_pct=live.battery_pct,
                              blocked_for_s=blocked_for,
@@ -1407,11 +1412,20 @@ class MissionEngine(EventEmitter[RunSnapshot]):
         if ruling.decision is Decision.FAIL_WAYPOINT:
             raise _FailWaypoint(ruling.reason)
 
+    def _count_loc_resets(self) -> None:
+        """丢定位重置的次数只数时间窗以内的(工单 16)。"""
+        live = self._live
+        assert live is not None
+        cut = self._clock() - LOC_RESET_WINDOW_S
+        live.loc_reset_times[:] = [t for t in live.loc_reset_times if t > cut]
+        live.loc_reset_attempts = len(live.loc_reset_times)
+
     async def _recover_localization(self, reason: str) -> None:
         """定位丢了:停下、重置、等收敛,然后重发当前点。"""
         live = self._live
         assert live is not None
-        live.loc_reset_attempts += 1
+        live.loc_reset_times.append(self._clock())
+        self._count_loc_resets()
         before = self._state
         await self._transition(RunState.PAUSED, reason)
         await self._stop_nav_quietly()

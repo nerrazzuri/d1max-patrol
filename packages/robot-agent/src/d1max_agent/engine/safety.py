@@ -34,6 +34,9 @@ from d1max_patrol.protocol.nav_types import (
 
 #: 定位重置试这么多次还不收敛就中止。再试下去只是在原地耗电。
 MAX_LOC_RESET = 3
+#: 只数这么久以内的丢定位重置(秒,11-02 工单 16)。以前整趟累计:定位器每次转身自动重定位一次、各自都
+#: 恢复了,转 3 个弯就中止。来回跳的定位器(W09a 内审应修 4)2 分钟内照样到上限中止。
+LOC_RESET_WINDOW_S = 120.0
 
 #: 被挡住先等这么久。人从狗前面走过去要几秒,叉车挪开要十几秒 —— 等一下
 #: 比直接判这个点失败划算。
@@ -84,7 +87,8 @@ class SafetyContext:
 def _loc_lost(ctx: SafetyContext) -> Ruling:
     if ctx.loc_reset_attempts >= MAX_LOC_RESET or ctx.policy.on_loc_lost == "abort":
         return Ruling(Decision.ABORT,
-                      f"定位丢失,已重置 {ctx.loc_reset_attempts} 次仍未收敛")
+                      f"定位丢失,{LOC_RESET_WINDOW_S / 60:.0f} 分钟内已重置 "
+                      f"{ctx.loc_reset_attempts} 次仍未稳住")
     return Ruling(Decision.PAUSE,
                   f"定位丢失,暂停并尝试重置(第 {ctx.loc_reset_attempts + 1} 次)")
 

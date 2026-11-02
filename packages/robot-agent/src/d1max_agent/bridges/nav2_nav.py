@@ -50,10 +50,14 @@ VIA_STEP_M = 1.0
 GUARD_REPORT_S = 5.0
 #: 引擎按路长估超时:Nav2 不报路长,按直线距离乘这个。
 PATH_FACTOR = 1.5
-#: 真机能走起来的最低速度(2026-10-29 C40221 实测:前进、后退 0.13 m/s 以下只踏步不走;转身
-#: 0.07 rad/s 以下不转)。HAL 报的死区比它小时按它整形。
+#: 真机能走起来的最低**命令**速度(2026-10-29 C40221 实测:前进、后退 0.13 m/s 以下只踏步不走;
+#: 原地转比例 0.10 才实际转 0.069 rad/s,比例 0.10 = 命令 0.15 rad/s —— 11-02 工单 10:原来把实际
+#: 转速 0.07 当命令门槛,等于不转)。HAL 报的死区比它小时按它整形。
 MIN_TRAVEL_MPS = 0.13
-MIN_TURN_RPS = 0.07
+MIN_TURN_RPS = 0.15
+#: Nav2 的速度这么小以下才当 0(米/秒、弧度/秒);以上抬到死区(工单 10:原来死区一半以下清零,MPPI 在
+#: 障碍边、收尾发的小速度全没了,机器人不动、Nav2「没进展」)。
+DEBAND_FLOOR = 0.03
 #: 送给 Nav2 的实测速度按位置变化算,低通的系数(每拍新的占多少)。
 VEL_ALPHA = 0.5
 #: 扫过区里有看不见的格子(两侧盲区)时最快多快(米/秒)。看不见的不当挡(10-28 一串起不了步),
@@ -80,6 +84,13 @@ CLEAR_MARGIN_M = 0.3
 #: MPPI 倒车上限跟前进上限之比(``deploy/nav2/params.yaml`` 的 ``-vx_min / vx_max``,测试核着)。
 #: MPPI 收到限速时按同一比例缩倒车上限(复查 P3):限速 0.2 时它最多倒 0.06,低于死区。
 MPPI_REVERSE_RATIO = 0.3
+#: 离目标这么近(米,= Nav2 的 xy_goal_tolerance)只差朝向的,代理自己原地转,不交给 Nav2(11-02 工单 11:
+#: Smac Lattice 对「原地换朝向」规划不出路,60 s 不动)。
+TURN_ONLY_M = 0.2
+#: 原地转转到差这么多(弧度,≈ Nav2 的 yaw_goal_tolerance)算到。
+TURN_DONE_RAD = 0.15
+#: 原地转最快(弧度/秒):转快了定位器跟不上(11-02 工单 13)。
+TURN_ONLY_MAX_RPS = 0.6
 #: 前进速度不到这个(米/秒)就当「原地转」,按地图上的墙核一道(:meth:`Nav2NavBackend._turn_hits_map`)。
 TURN_VX = 0.05
 
@@ -115,6 +126,8 @@ class Nav2NavBackend(PlannedNavBackend):
         self._goal_id = int(time.time() * 1000) % 1_000_000_000
         #: 这一段交给 Nav2 的目标号;``None`` = 这一段走的是自己的规划(或者没在走)。
         self._nav2_goal: int | None = None
+        #: 这一段只原地转到这个朝向(工单 11-02-11);``None`` = 不是。
+        self._turn_only: float | None = None
         self._map_dir: Path | None = None
         self._map_req = 0
         self._t_ms = 0
@@ -193,6 +206,14 @@ class Nav2NavBackend(PlannedNavBackend):
         if self.nogo_at(pose.position.x, pose.position.y) is not None:
             raise NavRequestError(op, "终点在禁行区里")
         self.fallback_reason = ""
+        self._turn_only = None
+        if here is not None and math.dist((here.x, here.y),
+                                          (pose.position.x, pose.position.y)) <= TURN_ONLY_M:
+            self._nav2_goal = None
+            self._turn_only = pose.yaw
+            log.info("%s:已在目标附近,只原地转到 %.0f°(不交给 Nav2)", op, math.degrees(pose.yaw))
+            await HalNavBackend.goto(self, pose)
+            return
         goal_xy = (pose.position.x, pose.position.y)
         # W48:有路网就先在路网上找路,途经点交给 Nav2(NavigateThroughPoses,只是路过)
         via = route(self.route_net, (here.x, here.y), goal_xy) \
@@ -273,6 +294,7 @@ class Nav2NavBackend(PlannedNavBackend):
         await super().stop()
 
     async def _enter_terminal(self, status: NavStatus) -> None:
+        self._turn_only = None
         if status is not NavStatus.SUCCEED:
             self._cancel_nav2()
         self._nav2_goal = None
@@ -349,6 +371,9 @@ class Nav2NavBackend(PlannedNavBackend):
                                 "known": pack_bits(bytes(f.known), f.size)})
 
     async def _drive(self, here: Any, dt_s: float) -> None:
+        if self._turn_only is not None:
+            await self._turn_step(here, dt_s)
+            return
         if self._nav2_goal is None:
             await super()._drive(here, dt_s)              # 这一段走的是自己的规划
             return
@@ -416,8 +441,14 @@ class Nav2NavBackend(PlannedNavBackend):
         self._vis = self._vis_cap(here, sign)
         self._slow = self._slow_cap(here, sign)
         cap = min(self._vlim(), self._zone_cap_to(here, sign), self._vis, self._slow)
-        vx = max(-cap, min(cap, vx))
-        wz = max(-self._wmax, min(self._wmax, wz))
+        # 工单 11-02-9:压前进、压转向都按同一个比例,走的还是 Nav2 算的那条弯(只压前进弯就变急,
+        # 11-02 回程急拐向方块角、守卫一直拦)
+        k = 1.0
+        if abs(vx) > cap:
+            k = cap / abs(vx)
+        if abs(wz) * k > self._wmax:
+            k = self._wmax / abs(wz)
+        vx, wz = vx * k, wz * k
         vx, wz = self._deband(vx, wz, rev_max=MPPI_REVERSE_RATIO * self._nav2_speed)
         # 外审 R5:整形抬到死区以后又超了上限(限速比死区还低)—— 走不了这么慢,停,不往上抬
         if abs(vx) > cap + 1e-9:
@@ -447,21 +478,45 @@ class Nav2NavBackend(PlannedNavBackend):
         self._guard_since, self._guard_told = None, False
         await self._send(vx, wz, dt_s)
 
+    async def _turn_step(self, here: Any, dt_s: float) -> None:
+        """只差朝向:原地转到 :attr:`_turn_only`(工单 11-02-11)。地图上的墙、守卫照样管。"""
+        assert self._turn_only is not None
+        err = math.remainder(self._turn_only - here.yaw, 2 * math.pi)
+        if abs(err) <= TURN_DONE_RAD:
+            await self._send(0.0, 0.0, dt_s)
+            await self._enter_terminal(NavStatus.SUCCEED)
+            return
+        top = max(MIN_TURN_RPS, min(self._wmax, TURN_ONLY_MAX_RPS))
+        wz = math.copysign(min(top, max(MIN_TURN_RPS, abs(err))), err)
+        if self._turn_hits_map(0.0, wz, here):
+            from d1max_agent.obstacles import Verdict
+            self._guarded(Verdict(False, "原地转会扫到地图上的墙(窄处不转)"), here)
+            await self._send(0.0, 0.0, dt_s)
+            return
+        if self.guard is not None and self.obstacles is not None:
+            v = self._guard_check(0.0, wz)
+            if not v.ok and (v.hits or "障碍数据" in v.reason):
+                self._guarded(v, here)
+                await self._send(0.0, 0.0, dt_s)
+                return
+        await self._send(0.0, wz, dt_s)
+
     def _deband(self, vx: float, wz: float, *,
                 rev_max: float = math.inf) -> tuple[float, float]:
-        """运控有死区(低于它的前进速度 HAL 直接拒、转速发了也不转):Nav2 起步、收尾时会发很小的速度。
-        低于死区一半的当 0,另一半抬到死区。
+        """运控有死区(低于它的前进速度 HAL 直接拒、转速发了也不转):Nav2 起步、收尾、贴着障碍时会发很
+        小的速度。:data:`DEBAND_FLOOR` 以下当 0,以上抬到死区(工单 11-02-10)。转向只在原地转时整形
+        (走着的时候小转向照样转)。
 
         复查 P3:``rev_max`` = MPPI 这会儿最多倒多快(限速 × :data:`MPPI_REVERSE_RATIO`)。
         它被限速压到死区以下时,门槛改成它的一半 —— Nav2 要的倒车照最小能走的倒车执行
         (抬上去以后超了上限的,外面照样停)。"""
         db = max(float(getattr(self._caps, "deadband_vx", 0.0) or 0.0), MIN_TRAVEL_MPS)
         if 0.0 < abs(vx) < db:
-            thr = db / 2 if vx > 0 else min(db / 2, rev_max / 2)
+            thr = DEBAND_FLOOR if vx > 0 else min(DEBAND_FLOOR, rev_max / 2)
             vx = 0.0 if abs(vx) < thr else math.copysign(db, vx)
         dbw = max(float(getattr(self._caps, "deadband_wz", 0.0) or 0.0), MIN_TURN_RPS)
-        if 0.0 < abs(wz) < dbw:
-            wz = 0.0 if abs(wz) < dbw / 2 else math.copysign(dbw, wz)
+        if vx == 0.0 and 0.0 < abs(wz) < dbw:
+            wz = 0.0 if abs(wz) < DEBAND_FLOOR else math.copysign(dbw, wz)
         return vx, wz
 
     def _vis_cap(self, here: Any, travel: int) -> float:
