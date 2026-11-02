@@ -376,6 +376,18 @@ if [[ ! -e "$SENTINEL" ]]; then
   printf 'd1max_patrol %s\n' "$REL_NAME" | sudo -u "$RUN_USER" tee "$SENTINEL" >/dev/null
 fi
 
+# W68:Super-LIO 是必装的核心组件(建图和巡逻定位都用它,用户 2026-11-02 定)。源码随包带,在这台机器上
+# 编(第一次约 7 分钟;这一版编过就直接用)。**编不成整个装机失败**:还没切版本、没动单元,机器人照旧跑
+# 原来那一版,不留半装的机器人。老包没带编译脚本就跳过(那一版也不用它)。
+if [[ -x "$PKG/deploy/d1max-superlio-build" ]]; then
+  echo "  编 Super-LIO(定位与建图必需;第一次约 7 分钟)…"
+  if ! D1MAX_SUPERLIO_PREFIX=/opt/d1max/superlio "$PKG/deploy/d1max-superlio-build"; then
+    echo "装机失败:Super-LIO(定位与建图必需)编不成,日志在 /opt/d1max/superlio/<版本>/build.log。" >&2
+    echo "         机器人照旧跑原来那一版;补齐缺的系统包后重跑本脚本。" >&2
+    exit 1
+  fi
+fi
+
 say "5/7 装代理单元与环境文件;清掉老服务"
 # **狗上只有 d1max-agent.service 一个服务**(W00c5e:老的 HTTP 服务、手机直连、特权助手退役)。
 # 单元优先取包里的 deploy/,老包没带就退回这个脚本自己所在的目录。单元装一次不随版本换:
@@ -827,12 +839,6 @@ for pair in D1MAX_LOCALIZER:d1max-localizer D1MAX_OBSTACLES:d1max-obstacles \
     echo "        代理会一直报没连上。验过了就:sudo systemctl enable --now $unit"
   fi
 done
-
-# Super-LIO 建图前端(工单 21):源码随包带,在这台机器上编(约 7 分钟,不在装机里做)。没编的话建图退回 MOLA。
-if [[ -x "$PKG/deploy/d1max-superlio-build" ]] && [[ ! -L /opt/d1max/superlio/current ]]; then
-  echo "  提示: Super-LIO 建图前端还没编,建图暂用 MOLA。编一次(约 7 分钟):"
-  echo "        sudo /opt/d1max/current/deploy/d1max-superlio-build"
-fi
 
 say "装完了。看一眼:"
 echo "  systemctl status d1max-agent"

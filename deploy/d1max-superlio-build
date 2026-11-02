@@ -5,7 +5,7 @@
 # 装到 ${D1MAX_SUPERLIO_PREFIX:-/opt/d1max/superlio}/<源码版本>/,再把 current 指过去:
 #   current/install/setup.bash       Super-LIO 的 ROS 工作区
 #   current/bin/kf2sm
-# 编不成不影响别的:建图编排找不到 current 就退回 MOLA(代理日志里说一声)。
+# W68 起它是必装的:装机脚本调它,编不成整个装机失败(建图和巡逻定位都用 Super-LIO)。
 # Orin 上第一次约 7 分钟。要的系统包(厂家 Orin、我们的 RK3588 镜像都有):colcon、PCL、pcl_ros、glog、TBB、Eigen、MRPT。
 set -euo pipefail
 here=$(cd "$(dirname "$0")/.." && pwd -P)
@@ -24,7 +24,7 @@ if [ -x "$dest/bin/kf2sm" ] && [ -f "$dest/install/setup.bash" ] && [ -f "$dest/
 fi
 miss=""
 for c in colcon cmake g++; do command -v "$c" >/dev/null 2>&1 || miss="$miss $c"; done
-if [ -n "$miss" ]; then echo "缺命令:$miss —— 不编 Super-LIO,建图用 MOLA" >&2; exit 1; fi
+if [ -n "$miss" ]; then echo "缺命令:$miss —— 编不了 Super-LIO" >&2; exit 1; fi
 # 直接编进最终目录(colcon 的 setup 脚本、库的路径都写死了装到哪,编完再挪会坏);.ok 最后才打,
 # 编到一半断了,下次整个清掉重编
 rm -rf "$dest"
