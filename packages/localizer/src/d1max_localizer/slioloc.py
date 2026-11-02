@@ -237,3 +237,39 @@ class MapFit:
         i = np.searchsorted(self._occ, k)
         hit = (i < len(self._occ)) & (self._occ[np.minimum(i, len(self._occ) - 1)] == k)
         return float(hit.any(axis=1).mean())
+
+
+#: 点云配哪帧位姿:Super-LIO 位姿的时间戳是扫描结束时刻,比点云报文头(扫描开始)晚约 0.1 s。
+PAIR_MIN_S, PAIR_MAX_S = 0.0, 0.25
+
+
+class ScanScorer:
+    """每帧质量:隔几帧留一帧点云(:meth:`scan`),配上它之后那帧位姿时套图打分;别的帧沿用最近一次
+    的分数。还没打过分给 0(核心按「不可信」算)。点云、位姿都在 rclpy 线程里来;:meth:`set_fit`
+    在 asyncio 那边换图时调(换一个引用)。"""
+
+    def __init__(self) -> None:
+        self._fit: MapFit | None = None
+        self._scan: tuple[float, np.ndarray] | None = None
+        self._last = 0.0
+
+    def set_fit(self, fit: MapFit) -> None:
+        self._fit = fit
+        self._scan = None
+        self._last = 0.0
+
+    def scan(self, stamp: float, xyz: Any) -> None:
+        self._scan = (float(stamp), np.asarray(xyz))
+
+    def pose(self, stamp: float, p: Sequence[float], q: Sequence[float]) -> float:
+        s, fit = self._scan, self._fit
+        if s is not None and fit is not None:
+            dt = stamp - s[0]
+            if dt > PAIR_MAX_S:
+                self._scan = None                        # 配不上了
+            elif dt >= PAIR_MIN_S:
+                self._scan = None
+                v = fit.score(s[1], p, q)
+                if v is not None:
+                    self._last = v
+        return self._last

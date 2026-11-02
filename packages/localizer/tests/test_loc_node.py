@@ -89,7 +89,7 @@ async def 台(tmp_path):
     script.write_text("import os, sys, time, pathlib\n"
                       "pathlib.Path(sys.argv[1], str(os.getpid())).write_text(sys.argv[2])\n"
                       "time.sleep(120)\n")
-    args = parse_args(["--socket", str(d / "loc.sock")])
+    args = parse_args(["--socket", str(d / "loc.sock"), "--engine", "mola"])
     node = Node(args, ros_factory=假ROS, reconnect_s=0.1,
                 command_for=lambda p: [sys.executable, str(script), str(pids), str(p)])
     task = asyncio.get_running_loop().create_task(node.run())
@@ -138,3 +138,20 @@ async def test_收尾时_MOLA_一起关掉(台):
     await asyncio.sleep(0.2)
     with pytest.raises(ProcessLookupError):
         os.kill(pid, 0)
+
+
+async def test_默认用Super_LIO_没装就说未装_不退回MOLA(tmp_path):
+    """W68 用户定:Super-LIO 是必装的核心组件,没装不退回 MOLA。"""
+    from d1max_localizer.slioback import SlioBackend
+
+    class 假SlioROS(假ROS):
+        def set_fit(self, fit):
+            self.fit = fit
+
+    args = parse_args(["--socket", str(tmp_path / "loc.sock"), "--superlio-root",
+                       str(tmp_path / "nothing"), "--run-dir", str(tmp_path / "run")])
+    assert args.engine == "superlio"
+    node = Node(args, ros_factory=假SlioROS)
+    assert isinstance(node.backend, SlioBackend)
+    assert "Super-LIO 未装" in await node.backend.load_prior(M, str(tmp_path))
+    assert node.supervisor.prior is None
