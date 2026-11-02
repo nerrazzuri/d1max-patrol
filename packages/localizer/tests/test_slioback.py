@@ -140,8 +140,8 @@ async def test_新图没初值_不起_等人给_地图交给套图打分(tmp_pat
     assert sup.cmds == []
     assert _states(core)[-1] == ("initializing", "等人给初始位置")
     assert core.can_relocalize()
-    [fit] = fits
-    assert isinstance(fit, L.MapFit)
+    assert await _等(lambda: fits and fits[-1] is not None)
+    assert isinstance(fits[-1], L.MapFit)
 
 
 async def test_人给位置_按IMU位姿起_对上了出位姿(tmp_path):
@@ -220,3 +220,75 @@ async def test_同一张图再载_有最后可信的位置就直接起(tmp_path)
     await _settle()
     assert len(sup.cmds) == 2
     assert _init(sup.cmds[1]) == pytest.approx(_init(sup.cmds[0]), abs=0.01)
+
+
+async def _等(cond, s=3.0):
+    for _ in range(int(s / 0.01)):
+        if cond():
+            return True
+        await asyncio.sleep(0.01)
+    return cond()
+
+
+async def test_W68_外审_大地图建打分要1秒_载图马上答应_后台建好再给(tmp_path, monkeypatch):
+    """codex r1 #4:原来等建好打分图才回,超过桥的 0.8 s 应答时限,代理把这张图当拒收、不再试。"""
+    import time as _t
+    real = L.MapFit
+
+    def 慢(pts):
+        _t.sleep(1.0)
+        return real(pts)
+
+    monkeypatch.setattr(L, "MapFit", 慢)
+    _, core, sup, be, fits = _台(tmp_path)
+    t0 = _t.monotonic()
+    assert await be.load_prior(M, str(_图(tmp_path))) == ""
+    assert _t.monotonic() - t0 < 0.5
+    assert core.can_relocalize()
+    assert await _等(lambda: fits and fits[-1] is not None)
+    assert isinstance(fits[-1], real)
+
+
+async def test_W68_外审_正在起的时候来了自动的重定位_起完按它再起_不吞(tmp_path):
+    """codex r1 #5:原来正在起时自动的请求直接回「收下」却不排队,代理一直等不到这个请求号。"""
+    c, core, sup, be, _ = _台(tmp_path)
+    await be.load_prior(M, str(_图(tmp_path)))
+    gate = asyncio.Event()
+
+    async def 慢起(prior):                                # 命令行(初值)已经交出去,进程还没起来
+        sup.prior = prior
+        sup.cmds.append(be.command(prior))
+        await gate.wait()
+        sup.running = True
+        be.on_up()
+
+    sup.start = 慢起
+    assert await be.relocalize(1.0, 2.0, 0.5, 0.5, req=7, human=True) == ""
+    await _settle()
+    assert be._starting and len(sup.cmds) == 1
+    assert await be.relocalize(3.0, 1.0, 0.0, 0.3, req=9, human=False) == ""
+    gate.set()
+    assert await _等(lambda: len(sup.cmds) == 2)
+    p, R = L.imu_pose(FR, EXT, 3.0, 1.0, 0.0)
+    assert _init(sup.cmds[1]) == pytest.approx(L.init_param(p, R), abs=1e-6)
+
+
+async def test_W68_外审_人给的还没交出去_自动的不顶掉_回绝(tmp_path):
+    c, core, sup, be, _ = _台(tmp_path)
+    await be.load_prior(M, str(_图(tmp_path)))
+    gate = asyncio.Event()
+    real = sup.start
+
+    async def 晚起(prior):
+        await gate.wait()
+        await real(prior)
+
+    sup.start = 晚起
+    assert await be.relocalize(1.0, 2.0, 0.5, 0.5, req=7, human=True) == ""
+    await _settle()
+    assert "稍后再试" in await be.relocalize(3.0, 1.0, 0.0, 0.3, req=9, human=False)
+    gate.set()
+    assert await _等(lambda: len(sup.cmds) == 1)
+    await _settle()
+    p, R = L.imu_pose(FR, EXT, 1.0, 2.0, 0.5)
+    assert len(sup.cmds) == 1 and _init(sup.cmds[0]) == pytest.approx(L.init_param(p, R), abs=1e-6)

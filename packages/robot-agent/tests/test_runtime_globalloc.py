@@ -307,3 +307,38 @@ async def test_W68_手动设位置照样能用_自动找的结论作废(台):
     await t.拍(20)
     assert t.loc.relocs[-1].human
     assert _遥测(t.ears).loc["reason"] == ""
+
+
+async def test_W68_外审_自动找在排队时人设了位置_拿到锁后不覆盖人设的(台):
+    """codex r1 #3:自动找位置等着 _cmd_lock 时人设位置成功,拿到锁后原来不复查、
+    立刻提交另一个初值。"""
+    t = 台
+    await _没初值地连上(t)
+    async with t.rt._cmd_lock:
+        await t.拍(40)                                    # 自动找已经起了、在等锁
+        assert t.rt._running(t.rt._find_job)
+        from d1max_contract.messages import Command
+        cmd = Command(command_id="r1", task_id="r1", kind="relocalize", issued_at=t.c.ms,
+                      expires_at=t.c.ms + 60_000, control_epoch=1,
+                      payload={"x": 0.5, "y": 0.5, "yaw": 0.0})
+        assert await t.rt._relocalize(cmd) == ""          # = 站点命令在锁里跑的那一步
+    await t.拍(20)
+    assert len(t.loc.relocs) == 1 and t.loc.relocs[-1].human, t.loc.relocs
+
+
+async def test_W68_外审_机器人在动_不找_不计次不报(台, monkeypatch):
+    """codex r1 #9:找之前原来不查静止,在动时套出「不在地图上」也计次、马上报 P2。"""
+    t = 台
+    t.view.pts = _乱点()
+    在动 = [True]
+
+    async def stopped():
+        return not 在动[0]
+
+    monkeypatch.setattr(t.rt.hal, "stopped", stopped)
+    await _没初值地连上(t)
+    await t.拍(80)
+    assert not _事件(t.ears, "loc_not_found") and t.rt._find_tries == 0
+    在动[0] = False
+    await t.拍(80)
+    assert _事件(t.ears, "loc_not_found")

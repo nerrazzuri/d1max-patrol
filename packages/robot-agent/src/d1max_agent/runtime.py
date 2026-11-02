@@ -1541,7 +1541,16 @@ class AgentRuntime:
                       kind="relocalize", issued_at=now_ms, expires_at=now_ms + 60_000,
                       control_epoch=0, payload={"global": True})
         async with self._cmd_lock:                         # 跟站点来的命令(人设位置)排队
-            if self.loaded_map != m:
+            # 外审 r1 #3:等锁这会儿人可能刚设了位置、定位可能已经好了 —— 拿到锁再看一遍
+            human_fresh = self._find_human and self._find_since is not None \
+                and self._mono() - self._find_since < AUTO_FIND_HUMAN_GRACE_S
+            if self.loaded_map != m or human_fresh \
+                    or self.parts.nav.anchor.ok(bool(getattr(self.parts.nav, "odom_ok", True))):
+                return
+            # 外审 r1 #9:有任务在跑、机器人在动就不找(不计次、不报),过一会儿再看
+            cur = self.processor.current
+            if (cur is not None and not cur.done) or not await self.hal.stopped():
+                self._find_next = self._mono() + AUTO_FIND_RETRY_S
                 return
             got = await self._relocalize(cmd, auto=True)
         why = got if isinstance(got, str) else got[0]

@@ -379,13 +379,21 @@ fi
 # W68:Super-LIO 是必装的核心组件(建图和巡逻定位都用它,用户 2026-11-02 定)。源码随包带,在这台机器上
 # 编(第一次约 7 分钟;这一版编过就直接用)。**编不成整个装机失败**:还没切版本、没动单元,机器人照旧跑
 # 原来那一版,不留半装的机器人。老包没带编译脚本就跳过(那一版也不用它)。
-if [[ -x "$PKG/deploy/d1max-superlio-build" ]]; then
+# 外审 r1 #7:按文件在不在判、用 bash 跑(经 FAT/exFAT 拷过会丢执行位);用机器人账号编、目录归它 ——
+# 远程升级(代理,同一账号)以后也在这里编新版。包里带了 Super-LIO 源码却没编译脚本 = 包不全,也失败。
+if [[ -f "$PKG/deploy/d1max-superlio-build" ]]; then
   echo "  编 Super-LIO(定位与建图必需;第一次约 7 分钟)…"
-  if ! D1MAX_SUPERLIO_PREFIX=/opt/d1max/superlio "$PKG/deploy/d1max-superlio-build"; then
+  install -d -o "$RUN_USER" -g "$RUN_USER" /opt/d1max/superlio
+  chown -R "$RUN_USER":"$RUN_USER" /opt/d1max/superlio
+  if ! sudo -u "$RUN_USER" env D1MAX_SUPERLIO_PREFIX=/opt/d1max/superlio \
+      bash "$PKG/deploy/d1max-superlio-build"; then
     echo "装机失败:Super-LIO(定位与建图必需)编不成,日志在 /opt/d1max/superlio/<版本>/build.log。" >&2
     echo "         机器人照旧跑原来那一版;补齐缺的系统包后重跑本脚本。" >&2
     exit 1
   fi
+elif [[ -d "$PKG/packages/localizer/native/superlio" ]]; then
+  echo "装机失败:包不全 —— 带了 Super-LIO 源码却没有 deploy/d1max-superlio-build。机器人照旧跑原来那一版。" >&2
+  exit 1
 fi
 
 say "5/7 装代理单元与环境文件;清掉老服务"

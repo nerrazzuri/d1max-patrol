@@ -127,6 +127,10 @@ class QualityScale:
     match: float
     lowq: float
     drop: float
+    #: 转身时怎么算(见 :data:`TURN_RPS`):假 = 0.4 以上一律当「好」(MOLA:转身时 ICP 分掉得厉害);
+    #: 真 = 沿用转身前最后一帧的分,不往上抬(Super-LIO 套图分:外审 r1 #1,
+    #: 锁错的 0.5 平稳地转不能变可信)
+    turn_hold: bool = False
 
 
 #: MOLA 的 ICP 质量(上面那几条常量的来历)。
@@ -135,7 +139,7 @@ MOLA_QUALITY = QualityScale(good=Q_GOOD, bad=Q_BAD, match=Q_MATCH, lowq=LOWQ_Q, 
 #: 在 mall3 图上:跟对时中位 0.95,< 0.9 占 17%、< 0.7 占 0.4%、最低约 0.67(两圈之间场景变了
 #: 的地方),没有低于 0.5 的;锁错时偏 1 m 中位 0.50、偏 3 m 0.23、转 10° 0.52。
 #: **一次录包定的线,真机再标。**
-SLIO_QUALITY = QualityScale(good=0.7, bad=0.4, match=0.4, lowq=0.6, drop=0.1)
+SLIO_QUALITY = QualityScale(good=0.7, bad=0.4, match=0.4, lowq=0.6, drop=0.1, turn_hold=True)
 
 
 @dataclass(frozen=True)
@@ -200,6 +204,7 @@ class LocalizerCore:
         self._reloc_at = -1e18
         self._reloc_good = 0                            # 重定位之后连着几帧好(按证据放手)
         self._turn_until = -1e18                        # 估计时间戳:到这一刻还算在转身
+        self._steady_q: float | None = None             # 不在转身时最后一帧的分(turn_hold 用)
         self._want_reloc = False
         self._queued = False
         self._expired = False
@@ -320,9 +325,6 @@ class LocalizerCore:
 
     def on_estimate(self, e: Estimate) -> None:
         now = self._now()
-        self._raw_at = now                               # 吐了就算它活着,收不收另说
-        if self._frames is None or self._loading or self._need_init or self._map is None:
-            return                                       # MOLA 退出时 backend_down 也标了要给初值
         vals = (e.stamp, e.quality, *e.p, *e.q)
         if not all(isinstance(v, (int, float)) and math.isfinite(v) for v in vals):
             log.warning("定位程序给了一帧不是有限数的估计,丢掉")
@@ -332,6 +334,10 @@ class LocalizerCore:
             return
         if self._stamp is not None and e.stamp <= self._stamp:
             return                                       # 同一帧、乱序
+        # 时间戳合法、往前走的才算它活着(外审 r1 #6:原来收到就算,一直发 −1 的永远不判卡住)
+        self._raw_at = now
+        if self._frames is None or self._loading or self._need_init or self._map is None:
+            return                                       # MOLA 退出时 backend_down 也标了要给初值
         self._stamp = e.stamp
         x, y, yaw = self._frames.to_map2d(e.p, e.q)
         if self._reloc_tag is not None and self._target is not None and self._missed(x, y, now):
@@ -345,7 +351,16 @@ class LocalizerCore:
         # 转身时质量在 Q_BAD 以上不当证据(见 TURN_RPS)
         qs = self.qs
         neutral = turning and e.quality > qs.bad
-        quality = max(e.quality, qs.good, qs.lowq) if neutral else e.quality
+        if jump:
+            self._steady_q = None                        # 重定位过:转身前的分不算了
+        if not neutral:
+            quality = e.quality
+            if not turning:
+                self._steady_q = e.quality
+        elif qs.turn_hold:
+            quality = max(e.quality, self._steady_q if self._steady_q is not None else e.quality)
+        else:
+            quality = max(e.quality, qs.good, qs.lowq)
         if not jump and self._last is not None:
             jump = self._jumped(e.stamp - self._last[0], x - self._last[1], y - self._last[2],
                                 yaw - self._last[3])

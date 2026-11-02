@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import time
 from collections.abc import Callable
@@ -25,6 +26,8 @@ from d1max_localizer.backend import MolaBackend
 from d1max_localizer.core import LocalizerCore, RelocWant
 
 CONFIG_NAME = "superlio-reloc.yaml"
+
+log = logging.getLogger("d1max.localizer.superlio")
 
 
 async def _no_service(*_: Any) -> bool:                 # Super-LIO 没有重定位服务
@@ -50,6 +53,8 @@ class SlioBackend(MolaBackend):
         self._next: RelocWant | None = None              # 这次请的(下一次起用它)
         self._cur: RelocWant | None = None               # 这次起用的
         self._starting = False
+        self._starts = 0                                 # 排着、在做的起动有几次
+        self._fit_gen = 0
 
     # ------------------------------------------------------------ 代理请的
 
@@ -62,17 +67,28 @@ class SlioBackend(MolaBackend):
             return str(exc)
         d = Path(dir) if dir else self.default_prior_dir
         pcd = d / self.prior_file if d is not None else None
-        if pcd is not None and pcd.is_file() and not _same(self._fit_for, pcd):
-            try:
-                fit = await asyncio.to_thread(lambda: L.MapFit(L.read_pcd(pcd)))
-            except Exception as exc:  # noqa: BLE001 —— 坏文件、读不了:说出来,不动现在的
-                return f"地图点云读不了({pcd}):{exc}"[:200]
-            self._on_map(fit)
-            self._fit_for = pcd
         why = await super().load_prior(map_ref, dir)
+        if not why and pcd is not None and pcd.is_file() and not _same(self._fit_for, pcd):
+            # 外审 r1 #4:大地图建打分图要好几秒,桥的应答只等 0.8 s —— 先答应、后台建;建好之前
+            # 旧图的打分作废(分数 0 = 不可信)
+            self._fit_for = pcd
+            self._fit_gen += 1
+            self._on_map(None)
+            self._spawn(self._build_fit(pcd, self._fit_gen), "建套图打分")
         if not why:
             self._alive = True                           # 不用等它出过位姿才收重定位
         return why
+
+    async def _build_fit(self, pcd: Path, gen: int) -> None:
+        try:
+            fit = await asyncio.to_thread(lambda: L.MapFit(L.read_pcd(pcd)))
+        except Exception as exc:  # noqa: BLE001 —— 坏文件、读不了:记下来,一直不可信
+            log.error("地图点云读不了(%s):%s —— 套不了图,定位一直不可信", pcd, exc)
+            if gen == self._fit_gen:
+                self._fit_for = None
+            return
+        if gen == self._fit_gen:                         # 这会儿没换别的图
+            self._on_map(fit)
 
     def _missing(self, d: Path) -> str:
         return f"此地图需要重建:{d} 里没有 Super-LIO 用的点云 {self.prior_file}(旧版建的图)"
@@ -90,7 +106,12 @@ class SlioBackend(MolaBackend):
         if self._frames is None or prior is None:
             return "先验尚未载好", False
         if self._starting and not w.human:
-            return "", False                             # 正在起:自动的不再叠一次
+            # 正在起(外审 r1 #5:原来自动的直接回「收下」又丢了)。人给的还没交出去:不顶掉它,回绝
+            # (代理过一会儿再试);否则记下最新的,这次起完按它再起
+            if self._next is not None and self._next.human:
+                return "定位程序正在按人给的位置重启,稍后再试", False
+            self._next = w
+            return "", False
         self._next = w
         if self.core.lidar_blocked:
             self._resume_pending = True                  # 雷达挡着:恢复了按它起
@@ -110,12 +131,16 @@ class SlioBackend(MolaBackend):
 
     def _restart(self, prior: Path) -> None:
         self._starting = True
+        self._starts += 1
 
         async def go() -> None:
             try:
                 await self.supervisor.start(prior)
             finally:
-                self._starting = False
+                self._starts -= 1
+                self._starting = self._starts > 0
+                if not self._starting and self._next is not None and not self.core.lidar_blocked:
+                    self._restart(self._resume_prior or self.supervisor.prior or prior)
         self._spawn(go(), "起 Super-LIO")
 
     def command(self, prior: Path) -> list[str]:

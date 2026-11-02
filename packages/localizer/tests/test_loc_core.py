@@ -713,3 +713,42 @@ def test_W68_Super_LIO没对上之前发的时间戳为负的帧_丢掉_不出�
     assert [m for m in t.core.drain() if isinstance(m, Pose)] == []
     t.walk(20)
     assert t.poses()
+
+
+def _原地转身_外审(t, x, n, q):
+    """原地转 0.5 rad/s(超过 TURN_RPS),n 帧。"""
+    yaw = t.core._last[3] if t.core._last else 0.0
+    for _ in range(n):
+        yaw += 0.05
+        t.step(x, 0.0, yaw, q=q)
+
+
+def test_W68_外审_Super_LIO锁错0点5_原地转身_不因转身升成可信():
+    """codex r1 #1:原来转身时 0.4 以上一律升成「好」,锁错(0.5)平稳地转就被信了。"""
+    from d1max_localizer.core import SLIO_QUALITY
+    t = 台(quality=SLIO_QUALITY)
+    x = t.walk(150, q=0.5)
+    t.out.clear()
+    _原地转身_外审(t, x, 60, 0.5)
+    assert min(p.sigma_xy for p in t.poses()) > 0.5
+
+
+def test_W68_外审_Super_LIO跟对了_转身时分数掉到0点6_照样信():
+    from d1max_localizer.core import SLIO_QUALITY
+    t = 台(quality=SLIO_QUALITY)
+    x = t.walk(150, q=0.93)
+    t.out.clear()
+    _原地转身_外审(t, x, 60, 0.6)
+    assert max(p.sigma_xy for p in t.poses()) < 0.5
+
+
+def test_W68_外审_一直发时间戳不合法的帧_看门狗照样判卡住():
+    """codex r1 #6:原来收到就算活着(校验前就记了),一直发 −1 的永远不重启。"""
+    t = 台()
+    t.walk(20)
+    for _ in range(30):
+        t.c.t += 0.1
+        t.core.on_scan()
+        t.core.on_estimate(_est(0.0, 0.0, stamp=-1.0))
+        t.core.tick()
+    assert t.core.take_restart()

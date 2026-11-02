@@ -99,10 +99,43 @@ def build_venv(pkg: Path, slot: Path, *, pip_args: list[str],
             run(vpy, "-m", "pip", "install", "--quiet", *pip_args,
                 f"{copy / 'packages' / 'contract'}[mqtt]", str(copy / "packages" / "adapter-sim"),
                 str(copy / "packages" / "adapter-d1max"), str(agent))
-    why = build_sidecar(pkg, slot, sdk=os.environ.get("D1MAX_ROBOT_SDK"))
+    why = build_sidecar(pkg, slot, sdk=os.environ.get("D1MAX_ROBOT_SDK")) \
+        or build_superlio(pkg, slot)
     if why:
         raise ReleaseOpError(why)
     (venv / SENTINEL).write_text(f"d1max_patrol {slot.name}\n", encoding="utf-8")
+
+
+SUPERLIO_PREFIX = "/opt/d1max/superlio"
+
+
+def build_superlio(pkg: Path, slot: Path, *, prefix: str | None = None,
+                   run: Callable[[list[str], dict[str, str]], tuple[int, str]] | None = None,
+                   ) -> str:
+    """W68:Super-LIO 是必装的(定位与建图),远程升级跟装机脚本一样编(外审 r1 #8:原来远程升级不编)。
+    编过的版本(按源码指纹)脚本直接用;编不成 = 装失败,不切这一版。老包没源码没脚本:不编(回空串)。
+    ``bash`` 跑:脚本丢了执行位也照样编(#7)。目录是装机脚本建的、归机器人账号。"""
+    del slot
+    script = pkg / "deploy" / "d1max-superlio-build"
+    if not script.is_file():
+        if (pkg / "packages" / "localizer" / "native" / "superlio").is_dir():
+            return "包不全:带了 Super-LIO 源码却没有 deploy/d1max-superlio-build"
+        return ""
+    env = dict(os.environ)
+    env["D1MAX_SUPERLIO_PREFIX"] = prefix or os.environ.get("D1MAX_SUPERLIO_PREFIX",
+                                                            SUPERLIO_PREFIX)
+    argv = ["bash", str(script)]
+    if run is None:
+        try:
+            got = subprocess.run(argv, capture_output=True, text=True, timeout=2400, env=env)
+            rc, txt = got.returncode, got.stdout + got.stderr
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            rc, txt = 127, str(exc)
+    else:
+        rc, txt = run(argv, env)
+    if rc != 0:
+        return f"Super-LIO(定位与建图必需)编不成:{txt.strip()[-300:]}"
+    return ""
 
 
 def build_sidecar(pkg: Path, slot: Path, *, sdk: str | None, arch: str | None = None,

@@ -529,3 +529,27 @@ def test_建图暂停_两个服务都经执行器_出错带回原因_工单21(mo
     assert pause(True, units) == ([], "")
     monkeypatch.setattr(privops, "from_config", lambda: None)
     assert M._mapping_pauser() is None
+
+
+def test_W68_外审_远程升级也编Super_LIO_编不成算装失败(tmp_path):
+    """codex r1 #8:远程升级原来只装 Python 依赖、编旁路程序,不编必装的 Super-LIO 就写哨兵。"""
+    from d1max_agent.release_ops import build_superlio
+    pkg, slot = tmp_path / "pkg", tmp_path / "slot"
+    (pkg / "deploy").mkdir(parents=True)
+    slot.mkdir()
+    assert build_superlio(pkg, slot) == ""                      # 老包:没源码、没脚本
+    (pkg / "packages/localizer/native/superlio").mkdir(parents=True)
+    assert "不全" in build_superlio(pkg, slot)                   # 带了源码没脚本
+    script = pkg / "deploy" / "d1max-superlio-build"
+    script.write_text("x")
+    script.chmod(0o644)                                          # 丢了执行位也照样编(用 bash 跑)
+    seen = []
+
+    def ok(argv, env):
+        seen.append((argv, env))
+        return 0, "Super-LIO 装好了"
+    assert build_superlio(pkg, slot, prefix="/opt/x", run=ok) == ""
+    assert seen[0][0] == ["bash", str(script)]
+    assert seen[0][1]["D1MAX_SUPERLIO_PREFIX"] == "/opt/x"
+    why = build_superlio(pkg, slot, run=lambda a, e: (1, "缺命令: colcon"))
+    assert "Super-LIO" in why and "colcon" in why

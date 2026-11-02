@@ -243,6 +243,8 @@ class MapFit:
 #: 点云配哪帧位姿:Super-LIO 位姿的时间戳是扫描结束时刻,比点云报文头(扫描开始)晚约 0.1 s。下限给半帧:
 #: 上一帧扫描的结束时刻 ≈ 这一帧的开始时刻,从 0 算起会配到上一帧的位姿上。
 PAIR_MIN_S, PAIR_MAX_S = 0.05, 0.25
+#: 最后一次打出分之后过这么久(位姿时间)还没打出新的,分作废归零(外审 r1 #2;平时每 0.5 s 打一次)。
+SCORE_STALE_S = 2.0
 
 
 class ScanScorer:
@@ -254,11 +256,13 @@ class ScanScorer:
         self._fit: MapFit | None = None
         self._scan: tuple[float, np.ndarray] | None = None
         self._last = 0.0
+        self._last_at: float | None = None              # 最后一次打出分时的位姿时间
 
-    def set_fit(self, fit: MapFit) -> None:
+    def set_fit(self, fit: MapFit | None) -> None:
+        """换图(``None`` = 新图还没载好):旧分作废。"""
         self._fit = fit
         self._scan = None
-        self._last = 0.0
+        self._last, self._last_at = 0.0, None
 
     def scan(self, stamp: float, xyz: Any) -> None:
         self._scan = (float(stamp), np.asarray(xyz))
@@ -273,5 +277,7 @@ class ScanScorer:
                 self._scan = None
                 v = fit.score(s[1], p, q)
                 if v is not None:
-                    self._last = v
+                    self._last, self._last_at = v, stamp
+        if fit is None or self._last_at is None or abs(stamp - self._last_at) > SCORE_STALE_S:
+            self._last = 0.0                             # 没图、太久没打出分(或时间跳了):不算证据
         return self._last
