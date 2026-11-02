@@ -34,13 +34,12 @@ ArrivalNote? arrivalNote(Map<String, dynamic> frame) {
       final n = d['total'];
       final name = '${d['name'] ?? ''}';
       final pos = i is int
-          ? (n is int ? '（${i + 1}/$n）' : tr(' (#${i + 1})', '（第 ${i + 1} 个）'))
+          ? (n is int ? tr(' (${i + 1}/$n)', '（${i + 1}/$n）') : tr(' (#${i + 1})', '（第 ${i + 1} 个）'))
           : '';
-      final posEn = i is int ? (n is int ? ' (${i + 1}/$n)' : ' (#${i + 1})') : '';
       if (d['ok'] == true) {
-        return ArrivalNote(tr('$robot reached $name$posEn', '$robot 已到达 $name$pos'));
+        return ArrivalNote(tr('$robot reached $name$pos', '$robot 已到达 $name$pos'));
       }
-      return ArrivalNote(tr('$robot missed $name$posEn${why(d['note'])}', '$robot 未到达 $name$pos${why(d['note'])}'),
+      return ArrivalNote(tr('$robot missed $name$pos${why(d['note'])}', '$robot 未到达 $name$pos${why(d['note'])}'),
           urgent: true);
     case 'task_done':
       return ArrivalNote(tr('$robot task completed', '$robot 任务完成'));
