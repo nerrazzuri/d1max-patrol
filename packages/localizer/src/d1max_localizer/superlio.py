@@ -59,8 +59,11 @@ MAX_GAP_S = 0.5
 OFFLINE_RATE = 0.5
 #: 一帧扫描最少多少点才当关键帧。
 MIN_KF_POINTS = 500
-#: 建完把关:相邻两个位姿(10 Hz)水平跳这么远就是跟丢了(机器人 0.1 s 走不了 1 m),不出图。
-JUMP_M = 1.0
+#: 建完把关:相邻两个位姿水平挪的比「最快速度 × 间隔 + 余量」还多,就是跟丢了,不出图(跟定位器
+#: 判跳一个做法)。不只看距离:录位姿会丢帧(台式机实测 1.8 s 断档里走了 1.58 m,是正常走);
+#: 不只看速度:两个位姿可能只隔 5 ms(差 1.5 cm 算出来 3 m/s)。
+MAX_SPEED_MPS = 3.0
+JUMP_MARGIN_M = 0.3
 
 Pose = tuple[float, tuple[float, float, float], tuple[float, float, float, float]]
 
@@ -81,8 +84,10 @@ def config_path() -> Path:
 
 
 def extrinsic(cfg: Path) -> tuple[list[list[float]], list[float]]:
-    """参数文件里的 ``lio.extrinsic.lidar_imu``:``(R, t)``,雷达系 → IMU 系
-    (t 3 个 + R 按行 9 个)。"""
+    """参数文件里的 ``lio.extrinsic.lidar_imu``:``(R, t)``,雷达系 → IMU 系(t 3 个 + R 9 个)。
+
+    R 的 9 个数**按列**读:Super-LIO 是 ``M3 __R(r_data.data())``,Eigen 默认列优先。按行读差一个
+    转置,算出来的雷达位姿跟 Super-LIO 自己用的不一致,图是镜像的(11-02 商场 v2 包实跑发现)。"""
     txt = Path(cfg).read_text(encoding="utf-8")
     key = "lio.extrinsic.lidar_imu:"
     i = txt.find(key)
@@ -95,7 +100,7 @@ def extrinsic(cfg: Path) -> tuple[list[list[float]], list[float]]:
         raise SuperLioError(f"{cfg} 的 {key} 不是 12 个数") from exc
     if len(v) != 12:
         raise SuperLioError(f"{cfg} 的 {key} 要 12 个数,给了 {len(v)} 个")
-    R = [v[3:6], v[6:9], v[9:12]]
+    R = [[v[3 + r + 3 * c] for c in range(3)] for r in range(3)]
     det = (R[0][0] * (R[1][1] * R[2][2] - R[1][2] * R[2][1])
            - R[0][1] * (R[1][0] * R[2][2] - R[1][2] * R[2][0])
            + R[0][2] * (R[1][0] * R[2][1] - R[1][1] * R[2][0]))
@@ -323,10 +328,21 @@ def quality(poses: Sequence[Pose]) -> dict[str, float]:
         keep.append(poses[-1])
     path = sum(math.dist(a[1][:2], b[1][:2]) for a, b in zip(keep, keep[1:], strict=False))
     steps = [math.dist(a[1][:2], b[1][:2]) for a, b in zip(poses, poses[1:], strict=False)]
+    over = [math.dist(a[1][:2], b[1][:2]) - MAX_SPEED_MPS * (b[0] - a[0])
+            for a, b in zip(poses, poses[1:], strict=False)]
+    gaps = sum(1 for a, b in zip(poses, poses[1:], strict=False) if b[0] - a[0] > MAX_GAP_S)
     return {"duration_s": round(poses[-1][0] - poses[0][0], 1) if poses else 0.0,
             "path_m": round(path, 1),
             "start_end_m": round(math.dist(poses[0][1][:2], poses[-1][1][:2]), 2) if poses else 0.0,
-            "max_step_m": round(max(steps), 2) if steps else 0.0}
+            "max_step_m": round(max(steps), 2) if steps else 0.0,
+            "max_jump_m": round(max(0.0, *over), 2) if over else 0.0, "gaps": gaps}
+
+
+def check(q: dict[str, float]) -> None:
+    """建完把关(:func:`quality` 的结果):跟丢了就抛 :class:`SuperLioError`,这一趟不出图。"""
+    if q["max_jump_m"] > JUMP_MARGIN_M:
+        raise SuperLioError(f"Super-LIO 的轨迹有突跳(比最快走得还远 {q['max_jump_m']} m):"
+                            "跟丢了,这一趟不出图。慢一点重走,开始、结束各静止 10 秒")
 
 
 # ---------------------------------------------------------------- 出中间文件
@@ -352,9 +368,7 @@ def prepare(work: Path, bag: Path, poses: Sequence[Pose], *, cfg: Path, root: Pa
     if len(poses) < 20:
         raise SuperLioError(f"Super-LIO 只给了 {len(poses)} 个位姿(没跑起来?)")
     q = quality(poses)
-    if q["max_step_m"] > JUMP_M:
-        raise SuperLioError(f"Super-LIO 的轨迹有突跳(相邻两帧差 {q['max_step_m']} m):跟丢了,"
-                            "这一趟不出图。慢一点重走,开始、结束各静止 10 秒")
+    check(q)
     if xyz_of is None:
         from d1max_localizer.build import cloud_xyz as xyz_of
     R_il, t_il = extrinsic(cfg)

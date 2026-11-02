@@ -1,7 +1,8 @@
 # Super-LIO 建图前端的参数(D1 Max 前雷达 RoboSense Airy + 它自带的 IMU)。
 # 机器人上 /etc/d1max/superlio.yaml 有就用那份(现场调参),没有用这份。话题由建图编排用 -p 覆盖。
 # lidar_type 2 = 禾赛的点格式(x, y, z, intensity, ring, timestamp 绝对秒),Airy 一样。
-# lio.extrinsic.lidar_imu = 雷达系 → IMU 系(t 3 个 + R 按行 9 个):GLIM 标的 T_lidar_imu 取逆;
+# lio.extrinsic.lidar_imu = 雷达系 → IMU 系:t 3 个 + R 9 个,R **按列**(Super-LIO 用 Eigen 默认的列优先读);
+# 按列读出来雷达 +X 对 IMU 的 -Y(Airy 雷达 +X 朝下、IMU +Y 朝上)。改这几个数要连这条一起核。
 # 2026-11-02 商场两个包离线验过(首尾 0.14 m / 4.2 m)。
 /**:
   ros__parameters:
