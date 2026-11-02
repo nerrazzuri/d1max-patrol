@@ -1,5 +1,5 @@
 [Unit]
-Description=D1 Max 定位器(MOLA 只定位 + 定位质量,经本机定位桥给代理;W09b)
+Description=D1 Max 定位器(Super-LIO 定位 + 定位质量,经本机定位桥给代理;W09b、W68)
 # 装机脚本只装、不 enable:真狗在 W09b 的真机项验过之前不起(代理也还用 --localizer anchor)。
 # 起用:sudo systemctl enable --now d1max-localizer,再在 /etc/d1max/env 里写 D1MAX_LOCALIZER=bridge。
 After=network-online.target d1max-agent.service d1max-zenohd.service
@@ -16,8 +16,12 @@ WorkingDirectory=-/opt/d1max/current
 Environment=PYTHONUNBUFFERED=1
 EnvironmentFile=-/etc/d1max/env
 ExecStart=/opt/d1max/current/deploy/d1max-localizer-start
-# MOLA 是它的子进程(同一个进程组以外的子孙也在这个 cgroup 里):停的时候一起停。
+# 定位程序(Super-LIO)是它的子进程(同一个进程组以外的子孙也在这个 cgroup 里):停的时候一起停。
 KillMode=control-group
+# W68:定位是重中之重(用户 2026-11-02)。Super-LIO 缺 CPU 会直接跑飞(11-02 台式机实测),给它高优先级;
+# 子进程继承。要不要再绑核等 Orin / RK3588 上实测负载再定。
+Nice=-10
+CPUWeight=1000
 Restart=always
 RestartSec=5
 

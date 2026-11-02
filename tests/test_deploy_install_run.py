@@ -375,3 +375,23 @@ def test_W35外审M1_主配置读不读我们的片段_按整个参数认_不按
     assert ("systemctl restart chrony" in _调用(tmp_path)) is 生效
     assert ("向 site.lan 对时" in got.stdout) is 生效
     assert ("不改厂家的文件" in got.stderr) is (not 生效)
+
+
+@pytest.mark.parametrize("ok", [True, False])
+def test_W68_Super_LIO是必装的_装机时编_编不成整个装机失败_不切版本不起代理(tmp_path, ok):
+    """用户 2026-11-02:Super-LIO 做定位,是必装的核心组件;编不成不留半装的机器人。"""
+    script = _准备(tmp_path)
+    build = tmp_path / "pkg" / PKG_NAME / "deploy/d1max-superlio-build"
+    _stub(build, f'echo "superlio-build prefix=$D1MAX_SUPERLIO_PREFIX" >> "{tmp_path / "calls"}"\n'
+                 + ("exit 0\n" if ok else 'echo "缺命令: colcon" >&2\nexit 1\n'))
+    got = _跑(tmp_path, script)
+    calls = _调用(tmp_path)
+    assert f"superlio-build prefix={tmp_path / 'opt/d1max/superlio'}" in calls
+    if ok:
+        assert got.returncode == 0, got.stdout + got.stderr
+        assert "systemctl start d1max-agent.service" in calls
+    else:
+        assert got.returncode != 0
+        assert "Super-LIO" in got.stdout + got.stderr and "装机失败" in got.stdout + got.stderr
+        assert "systemctl start d1max-agent.service" not in calls
+        assert not (tmp_path / "opt/d1max/current").exists(), "不切到这一版"
