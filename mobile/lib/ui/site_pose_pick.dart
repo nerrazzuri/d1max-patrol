@@ -233,8 +233,8 @@ class _PoseBarState extends State<PoseBar> {
         builder: (c) => AlertDialog(
               title: Text(tr('Set the position of $id here?', '将 $id 的位置设在这里？')),
               content: Text(tr(
-                  'Set $id\'s position to x ${at.dx} m, y ${at.dy} m, heading ${yawDegText(yaw)}°. A wrong position makes the robot navigate incorrectly.',
-                  '设置 $id 的当前位置：x ${at.dx} 米、y ${at.dy} 米、朝向 ${yawDegText(yaw)}°。位置错误会导致机器人导航出错。')),
+                  'Set $id\'s position to x ${at.dx} m, y ${at.dy} m, heading ${yawDegText(yaw)}°. A wrong position makes the robot navigate incorrectly. Keep the robot still for about 10 s while it localizes.',
+                  '设置 $id 的当前位置：x ${at.dx} 米、y ${at.dy} 米、朝向 ${yawDegText(yaw)}°。位置错误会导致机器人导航出错。设置后机器人须静止约 10 秒完成定位。')),
               actions: [
                 TextButton(onPressed: () => Navigator.pop(c, false), child: Text(tr('Cancel', '取消'))),
                 FilledButton(
