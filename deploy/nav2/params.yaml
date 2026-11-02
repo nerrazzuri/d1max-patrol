@@ -98,7 +98,7 @@ controller_server:
       plugin: nav2_mppi_controller::MPPIController
       time_steps: 56
       model_dt: 0.05
-      batch_size: 1000
+      batch_size: 400   # 11-02 工单 12:1000 条在 Orin 上算不满 20 Hz
       vx_std: 0.3
       vy_std: 0.2
       wz_std: 0.4

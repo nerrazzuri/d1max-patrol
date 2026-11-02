@@ -499,6 +499,27 @@ async def test_定位重置到上限就中止(make_engine, nav):
     await engine.aclose()
 
 
+async def test_隔得开的几次丢定位不累计到中止_工单16(make_engine, nav, clock):
+    """11-02 现场工单 16:定位器每次转身自动重定位一次,以前整趟累计,转 3 个弯就中止。现在只数
+    :data:`LOC_RESET_WINDOW_S` 内的:隔得开的(各自都恢复了)不算来回跳。"""
+    from d1max_agent.engine.safety import LOC_RESET_WINDOW_S, MAX_LOC_RESET
+
+    real = nav.reset_localization
+
+    async def 隔开(*a, **kw):
+        clock.offset += LOC_RESET_WINDOW_S + 1          # 下一次丢定位在时间窗之外
+        if nav.reset_calls + 1 >= MAX_LOC_RESET + 2:
+            nav.on_goto = list(ARRIVED)                 # 第 5 次之后不再丢
+        await real(*a, **kw)
+    nav.reset_localization = 隔开
+    nav.on_goto = [LocStatusEvent(LocStatus.LOC_LOST)]
+    engine = make_engine()
+    await engine.start(make_mission(), home=_HOME)
+    assert await engine.wait_done(timeout_s=10.0) is RunState.DONE, engine.snapshot.reason
+    assert nav.reset_calls == MAX_LOC_RESET + 2
+    await engine.aclose()
+
+
 async def test_重置之后收不敛就中止而不是干等(make_engine, nav, monkeypatch):
     import d1max_agent.engine.machine as machine
 

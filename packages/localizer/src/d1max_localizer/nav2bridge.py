@@ -133,6 +133,16 @@ def occupancy(map_dir: Path, nogo: list[list[list[float]]]
     return occ, res, origin
 
 
+#: 限速没变也每隔这么久(秒)重发一次(11-02 工单 9):只在变了时发一条,Nav2 控制器那会儿没订上就永远
+#: 收不到 —— 现场限速 0.3,MPPI 一直按 1.0 规划。
+SPEED_REPUB_S = 1.0
+
+
+def speed_due(sp: float | None, last: float | None, last_at: float, now: float) -> bool:
+    """这一拍要不要发限速:有值,而且变了、或者离上次发过了 :data:`SPEED_REPUB_S`。"""
+    return sp is not None and (sp != last or now - last_at >= SPEED_REPUB_S)
+
+
 class Nav2Bridge:
     def __init__(self, sock: Path, *, name: str = "d1max-nav2bridge") -> None:
         import rclpy
@@ -164,9 +174,11 @@ class Nav2Bridge:
         self.p_occ = self.node.create_publisher(PointCloud2, "/d1max/obs_occ", 5)
         self.p_free = self.node.create_publisher(PointCloud2, "/d1max/obs_free", 5)
         #: 代理每拍算的「此刻许跑多快」→ Nav2 控制器的限速(MPPI 按它缩速度上限)。
-        self.p_speed = self.node.create_publisher(SpeedLimit, "/speed_limit", 10)
+        #: 存留(TRANSIENT_LOCAL)发:后订上的控制器也能拿到最近一条(工单 11-02-9)
+        self.p_speed = self.node.create_publisher(SpeedLimit, "/speed_limit", latched)
         self._speed_msg = SpeedLimit
         self._speed: float | None = None
+        self._speed_at = 0.0
         self.tf = TransformBroadcaster(self.node)
         self.nav = ActionClient(self.node, NavigateToPose, "navigate_to_pose")
         #: W48:带路网途经点的目标走这个(行为树 navigate_through_poses_d1max.xml)
@@ -362,8 +374,9 @@ class Nav2Bridge:
         o.twist.twist.angular.z = float(m["vel"][2])
         self.p_odom.publish(o)
         sp = m.get("speed")
-        if sp is not None and sp != self._speed:
-            self._speed = sp
+        now = time.monotonic()
+        if speed_due(sp, self._speed, self._speed_at, now):
+            self._speed, self._speed_at = sp, now
             lim = self._speed_msg()
             lim.header.stamp, lim.percentage, lim.speed_limit = stamp, False, float(sp)
             self.p_speed.publish(lim)

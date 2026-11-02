@@ -594,3 +594,13 @@ def test_W48_经点动作服务不在_带途经点的目标回拒(monkeypatch):
     b.thru = NS(server_is_ready=lambda: False)
     b.on_goal({"goal_id": 5, "x": 1, "y": 2, "yaw": 0, "via": [[0, 1]]})
     assert b.sent[-1]["state"] == "rejected" and 5 not in b.pending
+
+
+def test_限速没变也定时重发_工单11_02_9():
+    """只在变了时发一条,Nav2 控制器那会儿没订上就永远收不到(11-02 限速 0.3,MPPI 按 1.0 规划)。"""
+    from d1max_localizer.nav2bridge import SPEED_REPUB_S, speed_due
+    assert speed_due(0.3, None, 0.0, 0.0)
+    assert not speed_due(0.3, 0.3, 10.0, 10.0 + SPEED_REPUB_S / 2)
+    assert speed_due(0.3, 0.3, 10.0, 10.0 + SPEED_REPUB_S)
+    assert speed_due(0.4, 0.3, 10.0, 10.1)
+    assert not speed_due(None, 0.3, 0.0, 99.0)
