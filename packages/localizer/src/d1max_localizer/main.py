@@ -25,7 +25,7 @@ from typing import Any
 from d1max_localizer import superlio as S
 from d1max_localizer.backend import MolaBackend
 from d1max_localizer.client import BridgeClient
-from d1max_localizer.core import LocalizerCore
+from d1max_localizer.core import MOLA_QUALITY, SLIO_QUALITY, LocalizerCore
 from d1max_localizer.imu import ImuPrior, parse_ypr
 from d1max_localizer.slioback import SlioBackend
 from d1max_localizer.supervisor import MolaSupervisor, mola_command
@@ -82,7 +82,9 @@ class Node:
                  command_for: Callable[[Path], Sequence[str]] | None = None,
                  reconnect_s: float = 1.0) -> None:
         self.args = args
-        self.core = LocalizerCore(monotonic=time.monotonic)
+        self.core = LocalizerCore(
+            monotonic=time.monotonic,
+            quality=SLIO_QUALITY if args.engine == "superlio" else MOLA_QUALITY)
         loop = asyncio.get_running_loop()
         self.ros = ros_factory(loop, lidar_topic=args.lidar_topic, on_scan=self.core.on_scan,
                                on_estimate=self._on_estimate)

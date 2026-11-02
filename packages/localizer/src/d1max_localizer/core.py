@@ -118,6 +118,27 @@ def _wrap(a: float) -> float:
 
 
 @dataclass(frozen=True)
+class QualityScale:
+    """质量分的几条线(各定位程序的分不是一个尺子):``good`` 及以上 σ 最小、``bad`` 及以下
+    σ 不可信;``match`` 以下当它在靠运动模型推;窗口里低于 ``lowq``(且比常态低 ``drop``)的帧
+    占比过线 → 不可信。"""
+    good: float
+    bad: float
+    match: float
+    lowq: float
+    drop: float
+
+
+#: MOLA 的 ICP 质量(上面那几条常量的来历)。
+MOLA_QUALITY = QualityScale(good=Q_GOOD, bad=Q_BAD, match=Q_MATCH, lowq=LOWQ_Q, drop=LOWQ_DROP)
+#: W68 Super-LIO 的套图打分(:class:`~d1max_localizer.slioloc.MapFit`)。2026-11-02 商场 mall4
+#: 在 mall3 图上:跟对时中位 0.95,< 0.9 占 17%、< 0.7 占 0.4%、最低约 0.67(两圈之间场景变了
+#: 的地方),没有低于 0.5 的;锁错时偏 1 m 中位 0.50、偏 3 m 0.23、转 10° 0.52。
+#: **一次录包定的线,真机再标。**
+SLIO_QUALITY = QualityScale(good=0.7, bad=0.4, match=0.4, lowq=0.6, drop=0.1)
+
+
+@dataclass(frozen=True)
 class Estimate:
     """MOLA 的一帧估计。"""
     stamp: float                                     # 那一帧点云的时间(秒,ROS 时间)
@@ -138,8 +159,10 @@ class RelocWant:
 
 
 class LocalizerCore:
-    def __init__(self, *, monotonic: Callable[[], float], source: str = "scan_match") -> None:
+    def __init__(self, *, monotonic: Callable[[], float], source: str = "scan_match",
+                 quality: QualityScale = MOLA_QUALITY) -> None:
         self._now = monotonic
+        self.qs = quality
         self.source = source
         self._seq = 0
         self._out: list[Any] = []
@@ -317,24 +340,25 @@ class LocalizerCore:
                 self._turn_until = e.stamp + TURN_HOLD_S
         turning = e.stamp <= self._turn_until
         # 转身时质量在 Q_BAD 以上不当证据(见 TURN_RPS)
-        neutral = turning and e.quality > Q_BAD
-        quality = max(e.quality, Q_GOOD, LOWQ_Q) if neutral else e.quality
+        qs = self.qs
+        neutral = turning and e.quality > qs.bad
+        quality = max(e.quality, qs.good, qs.lowq) if neutral else e.quality
         if not jump and self._last is not None:
             jump = self._jumped(e.stamp - self._last[0], x - self._last[1], y - self._last[2],
                                 yaw - self._last[3])
             if jump:
                 self._jumps.append(now)
         self._last = (e.stamp, x, y, yaw)
-        self._reloc_good = self._reloc_good + 1 if (e.quality >= Q_GOOD and not jump) else 0
+        self._reloc_good = self._reloc_good + 1 if (e.quality >= qs.good and not jump) else 0
         # 不当证据的转身帧照样进窗口(占比的分母),只是不拿来定「常态」:拿来定会抬高中位数,把转身前
         # 站着的常态帧算成「低」(2026-10-28 turn-144620 合并回放:站着 0.87、转身 0.93 → σ 1.5);
         # 整个不进又让转身时夹着的烂帧凑不够数、或中位数被烂帧拉低(复查 N2)
         self._lowq.append((e.stamp, e.quality, neutral))
         while self._lowq and e.stamp - self._lowq[0][0] > LOWQ_WINDOW_S:
             self._lowq.popleft()
-        if e.quality >= Q_MATCH or self._last_match is None:
+        if e.quality >= qs.match or self._last_match is None:
             self._last_match = e.stamp
-        age_ms = 0 if e.quality >= Q_MATCH else round((e.stamp - self._last_match) * 1000)
+        age_ms = 0 if e.quality >= qs.match else round((e.stamp - self._last_match) * 1000)
         sigma = self._sigma(quality, now)
         self._seq += 1
         self._out.append(Pose(
@@ -501,18 +525,19 @@ class LocalizerCore:
                 or turn > MAX_TURN_RPS * dt + JUMP_MARGIN_RAD)
 
     def _sigma(self, quality: float, now: float) -> float:
-        if quality >= Q_GOOD:
+        qs = self.qs
+        if quality >= qs.good:
             s = SIGMA_MIN_M
-        elif quality <= Q_BAD:
+        elif quality <= qs.bad:
             s = SIGMA_BAD_M
         else:
-            s = SIGMA_MIN_M + (SIGMA_BAD_M - SIGMA_MIN_M) * (Q_GOOD - quality) / (Q_GOOD - Q_BAD)
+            s = SIGMA_MIN_M + (SIGMA_BAD_M - SIGMA_MIN_M) * (qs.good - quality) / (qs.good - qs.bad)
         if self._jumped_lately(now):
             s = max(s, SIGMA_JUMPED_M)
         if len(self._lowq) >= LOWQ_MIN_FRAMES:
             usual = [q for _, q, n in self._lowq if not n]          # 常态只按当证据的帧定
-            line = min(LOWQ_Q, statistics.median(usual) - LOWQ_DROP) if usual else -math.inf
-            low_share = sum(q <= Q_BAD or (not n and q < line)
+            line = min(qs.lowq, statistics.median(usual) - qs.drop) if usual else -math.inf
+            low_share = sum(q <= qs.bad or (not n and q < line)
                             for _, q, n in self._lowq) / len(self._lowq)
         else:
             low_share = 0.0
