@@ -38,11 +38,15 @@ test_take_ack: test_take_ack.cpp take_ack.hpp
 test_cmd_auth: test_cmd_auth.cpp cmd_auth.hpp
 	$(CXX) -std=c++17 -O2 -Wall -Wextra -pthread -o $@ $<
 
-patrol_agent: patrol_agent.cpp vel_gate.hpp take_ack.hpp cmd_auth.hpp
+# 里程、IMU 断流就重订(11-02 工单 1):同上,不链接厂商 SDK。
+test_data_watch: test_data_watch.cpp data_watch.hpp
+	$(CXX) -std=c++17 -O2 -Wall -Wextra -pthread -o $@ $<
+
+patrol_agent: patrol_agent.cpp vel_gate.hpp take_ack.hpp cmd_auth.hpp data_watch.hpp
 	$(CXX) $(CXXFLAGS) -o $@ $< $(LDFLAGS) $(LDLIBS)
 
 %: %.cpp
 	$(CXX) $(CXXFLAGS) -o $@ $< $(LDFLAGS) $(LDLIBS)
 
 clean:
-	rm -f $(BINS) test_vel_gate test_take_ack test_cmd_auth
+	rm -f $(BINS) test_vel_gate test_take_ack test_cmd_auth test_data_watch
