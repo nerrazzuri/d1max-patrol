@@ -54,7 +54,7 @@ def test_地图版本的几何文件_名字合法_不超数():
     """W09c1:MOLA 建出来的一个版本就这几样;狗上收产物、站点查「哪里有图」都按这张表。"""
     from d1max_contract.maps import COVERAGE, GEOMETRY_FILES, MAX_FILES, NAME_RE
     assert GEOMETRY_FILES == ("prior.mm", "frames.json", "floor.pgm", "floor.yaml",
-                              "coverage.json", "build.json")
+                              "coverage.json", "build.json", "superlio_map.pcd")
     assert COVERAGE in GEOMETRY_FILES and MANIFEST not in GEOMETRY_FILES
     assert all(NAME_RE.match(n) for n in GEOMETRY_FILES) and len(GEOMETRY_FILES) < MAX_FILES
 
@@ -105,3 +105,16 @@ def test_名字末尾带换行不认(bad):
     from d1max_contract.maps import check_name
     with pytest.raises(ContractError):
         check_name(bad, "名字")
+
+
+def test_W68_Super_LIO点云是几何文件也是定位先验():
+    from d1max_contract.maps import (
+        GEOMETRY_FILES,
+        MAX_FILES,
+        OPTIONAL_FILES,
+        PRIOR_FILES,
+        SLIO_MAP_FILE,
+    )
+    assert SLIO_MAP_FILE == "superlio_map.pcd"
+    assert SLIO_MAP_FILE in GEOMETRY_FILES and SLIO_MAP_FILE in PRIOR_FILES
+    assert len(GEOMETRY_FILES) + len(OPTIONAL_FILES) + 1 <= MAX_FILES     # + map.json

@@ -13,7 +13,7 @@ from d1max_contract.maps import MapRef, map_digest
 from d1max_contract.messages import Capabilities
 from d1max_contract.zones import ZoneSet, zones_digest
 
-FILES = {"prior.mm": b"p", "frames.json": b"{}"}
+FILES = {"prior.mm": b"p", "frames.json": b"{}", "superlio_map.pcd": b"c"}
 
 
 def _events(t, kind):

@@ -200,7 +200,7 @@ class SimMappingOrchestrator:
         out = self.work / "made" / map_id
         shutil.rmtree(out, ignore_errors=True)
         out.mkdir(parents=True)
-        for n in ("floor.pgm", "floor.yaml", "frames.json", "prior.mm"):
+        for n in ("floor.pgm", "floor.yaml", "frames.json", "prior.mm", "superlio_map.pcd"):
             if (self.src / n).is_file():
                 shutil.copyfile(self.src / n, out / n)
             else:

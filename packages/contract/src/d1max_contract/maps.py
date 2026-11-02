@@ -28,10 +28,14 @@ MAX_FILES = 16
 MAX_FILE_BYTES = 2 * 1024 ** 3
 #: 图的清单文件名(狗建完图最后写它;站点收齐这一份才登记)。
 MANIFEST = "map.json"
-#: 狗上建的地图版本里的几何文件(W08 决定 5、W09c1):定位先验(MOLA 的局部地图)、坐标换算、按同一平面
-#: 画的规划栅格、「哪里有图」(建图时走过的路)、怎么建的。站点、手机的预览照旧用 ``floor.*``。
+#: Super-LIO 定位用的地图点云(W68,2026-11-02 起定位换 Super-LIO):跟 ``frames.json`` 同一个坐标系。
+#: 之前建的图没有它,要重建(用户定)。
+SLIO_MAP_FILE = "superlio_map.pcd"
+#: 狗上建的地图版本里的几何文件(W08 决定 5、W09c1):定位先验(Super-LIO 的点云;MOLA 的局部地图,留给
+#: 工程师手动切回)、坐标换算、按同一平面画的规划栅格、「哪里有图」(建图时走过的路)、怎么建的。站点、
+#: 手机的预览照旧用 ``floor.*``。
 GEOMETRY_FILES = ("prior.mm", "frames.json", "floor.pgm", "floor.yaml", "coverage.json",
-                  "build.json")
+                  "build.json", SLIO_MAP_FILE)
 #: 可选的文件(W09e):有就收进清单、跟着传、照样校验;没有不影响这一版能用。``geo.json`` = 地图与
 #: 经纬度的配准(录包时有 RTK 固定解、配得上才有,见 ``d1max_contract.geo``)。``seen.pbm`` = 见
 #: :data:`SEEN_FILE`。
@@ -50,8 +54,22 @@ OPTIONAL_FILES = ("geo.json", "seen.pbm")
 #: 没有就不写这个文件。
 SEEN_FILE = "seen.pbm"
 COVERAGE = "coverage.json"
-#: 定位器要的那两样(W09b):配了定位器的狗只收带着它们的版本。
-PRIOR_FILES = ("prior.mm", "frames.json")
+#: 定位器要的(W09b;W68 加 Super-LIO 点云):配了定位器的狗只收带着它们的版本。
+PRIOR_FILES = ("prior.mm", "frames.json", SLIO_MAP_FILE)
+
+
+def prior_missing(names: Any) -> str:
+    """配了定位器的机器人收不收这一版:缺定位先验就回原因(空串 = 齐了)。只缺 Super-LIO 点云 = 旧版
+    建的图(W68 之前),说「要重建」。"""
+    have = set(names)
+    missing = [n for n in PRIOR_FILES if n not in have]
+    if not missing:
+        return ""
+    if missing == [SLIO_MAP_FILE]:
+        return f"此地图需要重建:旧版建的图没有 Super-LIO 定位用的点云({SLIO_MAP_FILE})"
+    return f"没有定位先验({', '.join(missing)})"
+
+
 _HEX64 = re.compile(r"^[0-9a-f]{64}$")
 
 
