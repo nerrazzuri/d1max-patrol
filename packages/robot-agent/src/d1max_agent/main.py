@@ -834,7 +834,10 @@ def _outbox(args: argparse.Namespace, registration: Registration, parts: EngineP
         store = Path(args.store_dir)
         work = store / "mapwork"
         orch = MappingOrchestrator(ProcManager(store / "logs"),
-                                   MappingConfig(bags_dir=args.outbox / "bags", maps_dir=work))
+                                   MappingConfig(bags_dir=args.outbox / "bags", maps_dir=work,
+                                                 front=os.environ.get("D1MAX_MAP_FRONT",
+                                                                      "superlio")),
+                                   pause_units=_mapping_pauser())
         mapper = MappingService(orch, bags_root=args.outbox / "bags",
                                 maps_out=args.outbox / "maps")
         mapper.keeper = keeper                            # 建好的图放进本地库(W09c 决定 7)
@@ -923,6 +926,28 @@ def _releases(args: argparse.Namespace, registration: Registration) -> Any:
                                signature_check=lambda pkg: relsign.check_package(
                                    pkg, pub, allow_unsigned=unsigned_ok))
     return holder["ops"]
+
+
+def _mapping_pauser() -> Any:
+    """工单 21:Super-LIO 边走边建时暂停合并雷达、定位器(经特权执行器;没装执行器 = 不暂停)。
+    回 ``(on) -> 出错原因``(空串 = 成了)。"""
+    from d1max_contract import privops
+    priv = privops.from_config()
+    if priv is None:
+        return None
+
+    def pause(on: bool) -> str:
+        errs = []
+        for unit in ("d1max-lidar-merge", "d1max-localizer"):
+            try:
+                got = priv.call("pause" if on else "resume", {"unit": unit}, timeout_s=150)
+            except Exception as exc:  # noqa: BLE001 - 尽力而为,原因带回去
+                errs.append(f"{unit}:{exc}")
+                continue
+            if not got.get("ok"):
+                errs.append(f"{unit}:{got.get('error') or '未知原因'}")
+        return ";".join(errs)[:300]
+    return pause
 
 
 def _ops(args: argparse.Namespace, registration: Registration, runtime: Any) -> Any:

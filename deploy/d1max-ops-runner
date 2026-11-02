@@ -54,6 +54,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 #: 我们自己的服务(机器人上)。重启、读日志、装单元只在这里挑。``d1max-bind`` 以 root 跑,代码在 root
 #: 独占目录里(``install_bind``),重启它不是提权。
+#: 建图时可以暂停的(工单 21:Super-LIO 建图要 CPU;避障不停)。
+MAPPING_PAUSE_UNITS = ("d1max-lidar-merge", "d1max-localizer")
 ROBOT_UNITS = ("d1max-localizer", "d1max-obstacles", "d1max-persons", "d1max-lidar-merge",
                "d1max-nav2", "d1max-sidecar", "d1max-zenohd", "d1max-bind", "d1max-agent")
 
@@ -446,6 +448,24 @@ class Ops:
         else:
             self._sys("systemctl", "restart", f"{unit}.service", timeout=180)
         return {"unit": unit}
+
+    def pause(self, args: dict[str, Any]) -> dict[str, Any]:
+        """建图时让出 CPU(工单 21):只停合并雷达、定位器这两个,建完 :meth:`resume`。"""
+        unit = self._pausable(args)
+        self._sys("systemctl", "stop", f"{unit}.service", timeout=60)
+        return {"unit": unit}
+
+    def resume(self, args: dict[str, Any]) -> dict[str, Any]:
+        unit = self._pausable(args)
+        self._sys("systemctl", "start", f"{unit}.service", timeout=120)
+        return {"unit": unit}
+
+    @staticmethod
+    def _pausable(args: dict[str, Any]) -> str:
+        u = args.get("unit")
+        if u not in MAPPING_PAUSE_UNITS:
+            raise OpError(f"建图时只能暂停 {'、'.join(MAPPING_PAUSE_UNITS)},不认 {u!r}")
+        return str(u)
 
     def restart_all(self, args: dict[str, Any]) -> dict[str, Any]:
         """换版本以后:我们的服务里已启用或正在跑的,全重启;代理最后、不等。"""
@@ -933,6 +953,7 @@ ROBOT_ACTIONS: dict[str, Callable[[Ops, dict[str, Any]], dict[str, Any]]] = {
     "restart": Ops.restart, "restart_all": Ops.restart_all, "reboot": Ops.reboot,
     "timesync": Ops.timesync, "journal_vacuum": Ops.journal_vacuum,
     "cert_install": Ops.cert_install, "units_apply": Ops.units_apply,
+    "pause": Ops.pause, "resume": Ops.resume,
 }
 SITE_ACTIONS: dict[str, Callable[[Ops, dict[str, Any]], dict[str, Any]]] = {
     "restart": Ops.restart, "restart_site": Ops.restart_site, "restore": Ops.restore,

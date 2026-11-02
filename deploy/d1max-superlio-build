@@ -1,0 +1,50 @@
+#!/bin/bash
+# 在这台机器上编 Super-LIO 建图前端(源码随发行包带:packages/localizer/native/superlio/,GPL-3.0,单独进程跑)
+# 和 kf2sm(Super-LIO 的轨迹 + 原始点云 → simplemap,接我们原来的出图流程)。装机脚本调它;编过一次的版本不再编。
+#
+# 装到 ${D1MAX_SUPERLIO_PREFIX:-/opt/d1max/superlio}/<源码版本>/,再把 current 指过去:
+#   current/install/setup.bash       Super-LIO 的 ROS 工作区
+#   current/bin/kf2sm
+# 编不成不影响别的:建图编排找不到 current 就退回 MOLA(代理日志里说一声)。
+# Orin 上第一次约 7 分钟。要的系统包(厂家 Orin、我们的 RK3588 镜像都有):colcon、PCL、pcl_ros、glog、TBB、Eigen、MRPT。
+set -eu
+here=$(cd "$(dirname "$0")/.." && pwd -P)
+src="$here/packages/localizer/native/superlio"
+prefix="${D1MAX_SUPERLIO_PREFIX:-/opt/d1max/superlio}"
+tarball=$(ls "$src"/Super-LIO-*.tar.gz | head -1)
+rev=$(basename "$tarball" .tar.gz | sed 's/^Super-LIO-//')
+# kf2sm、空壳包改了也要重编:版本号带上它们的指纹
+fp=$( (cat "$tarball"; find "$src/kf2sm" "$src/livox_ros_driver2_stub" -type f | sort | xargs cat) | sha256sum | cut -c1-12)
+dest="$prefix/$rev-$fp"
+if [ -x "$dest/bin/kf2sm" ] && [ -f "$dest/install/setup.bash" ] && [ -f "$dest/.ok" ]; then
+  ln -sfn "$dest" "$prefix/current"
+  echo "Super-LIO 已编过:$dest"
+  exit 0
+fi
+miss=""
+for c in colcon cmake g++; do command -v "$c" >/dev/null 2>&1 || miss="$miss $c"; done
+if [ -n "$miss" ]; then echo "缺命令:$miss —— 不编 Super-LIO,建图用 MOLA" >&2; exit 1; fi
+# 直接编进最终目录(colcon 的 setup 脚本、库的路径都写死了装到哪,编完再挪会坏);.ok 最后才打,
+# 编到一半断了,下次整个清掉重编
+rm -rf "$dest"
+mkdir -p "$dest/ws/src" "$dest/bin"
+tar -xzf "$tarball" -C "$dest/ws/src"
+cp -r "$src/livox_ros_driver2_stub" "$dest/ws/src/livox_ros_driver2"
+set +u
+. /opt/ros/humble/setup.bash
+set -u
+jobs=$(nproc); [ "$jobs" -gt 4 ] && jobs=4          # 编的时候别把机器占满
+echo "编 Super-LIO($rev,$jobs 线程)…"
+(cd "$dest/ws" && MAKEFLAGS="-j$jobs" colcon build --install-base "$dest/install" \
+   --cmake-args -DCMAKE_BUILD_TYPE=Release > "$dest/build.log" 2>&1) \
+  || { echo "Super-LIO 编不成,日志 $dest/build.log" >&2; tail -20 "$dest/build.log" >&2; exit 1; }
+echo "编 kf2sm…"
+mkdir -p "$dest/kf2sm-build"
+(cd "$dest/kf2sm-build" && cmake -DCMAKE_PREFIX_PATH=/opt/ros/humble "$src/kf2sm" > cmake.log 2>&1 \
+   && make -j"$jobs" > make.log 2>&1) \
+  || { echo "kf2sm 编不成,日志在 $dest/kf2sm-build/" >&2; exit 1; }
+cp "$dest/kf2sm-build/kf2sm" "$dest/bin/kf2sm"
+rm -rf "$dest/ws/build" "$dest/ws/log" "$dest/kf2sm-build"
+touch "$dest/.ok"
+ln -sfn "$dest" "$prefix/current"
+echo "Super-LIO 装好了:$dest"

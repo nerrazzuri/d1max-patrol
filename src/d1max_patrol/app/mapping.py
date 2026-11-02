@@ -23,6 +23,7 @@ import logging
 import re
 import shutil
 import signal
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -74,6 +75,13 @@ LIVE_SETTLE_S = 3.0
 #: 在线建图的 ROS 命名空间:跟定位器的 MOLA(同一份配置、同一个域)不串 —— 位姿话题、重定位服务、
 #: /initialpose 这几个是绝对名,命名空间管不到,逐个改名(W09c2 内审阻断 1;开发机上核过)。
 LIVE_NS = "/d1max_mapping"
+#: Super-LIO 建图前端(工单 21):装在哪、机器人上起它的脚本、它发的位姿(改到 LIVE_NS 下,录进包里,
+#: 打包时用;跟 ``d1max_localizer.superlio.LIVE_TOPIC`` 一致)。
+SUPERLIO_ROOT = Path("/opt/d1max/superlio/current")
+SUPERLIO_LIVE = Path("/opt/d1max/current/deploy/d1max-superlio-live")
+SUPERLIO_ODOM = f"{LIVE_NS}/lio/odom"
+#: 暂停了合并雷达、定位器的标记(代理中途重启也知道要恢复)。
+_PAUSED = ".paused"
 _LIVE_RENAMES = ("/initialpose", "/relocalize_near_pose", "/lidar_odometry/pose",
                  "/lidar_odometry/pose_quality")
 
@@ -115,6 +123,10 @@ class MappingConfig:
     live_preview: Path = LIVE_PREVIEW
     #: RTK 天线在狗身上的水平位置(朝前、朝左,米;W09e 配经纬度用,真机量了再配)。
     rtk_antenna: tuple[float, float] = (0.0, 0.0)
+    #: 建图前端(工单 21):``superlio``(装了就用,没装退回 MOLA)或 ``mola``。定位器不受影响,照旧 MOLA。
+    front: str = "superlio"
+    superlio_root: Path = SUPERLIO_ROOT
+    superlio_live: Path = SUPERLIO_LIVE
 
 
 class MappingOrchestrator:
@@ -132,9 +144,15 @@ class MappingOrchestrator:
     #: 建图预览(W09f):尽力而为,起不来、停不掉都不碍录包与在线建图。
     PREVIEW = "mapview"
 
-    def __init__(self, procs: ProcManager, cfg: MappingConfig) -> None:
+    def __init__(self, procs: ProcManager, cfg: MappingConfig, *,
+                 pause_units: Callable[[bool], str] | None = None) -> None:
+        """``pause_units``(工单 21):``True`` 暂停合并雷达、定位器(Super-LIO 建图要 CPU),``False``
+        恢复;回出错原因(空串 = 成了)。会阻塞(走特权执行器),在线程里调。"""
         self._procs = procs
         self._cfg = cfg
+        self._pause_units = pause_units
+        #: 这一趟暂停没成的原因(照样建图)。
+        self.pause_error = ""
         self._phase = "idle"
         self._bag: Path | None = None
         self._map_id = ""
@@ -143,11 +161,41 @@ class MappingOrchestrator:
         self._live: str | None = None
         #: 这一趟的预览没起来的原因(W09f);起来了是空串。
         self.preview_error = ""
+        self._paused = False
 
     @property
     def log_dir(self) -> Path:
         """子进程(录包、重建)的日志目录(W00c6g)。"""
         return self._procs.log_dir
+
+    def front(self) -> str:
+        """这会儿用哪个建图前端:配了 Super-LIO 而且装好了(``.ok`` 是编完才打的)才用它。"""
+        r = self._cfg.superlio_root
+        if self._cfg.front == "superlio" and (r / ".ok").is_file() \
+                and (r / "install/setup.bash").is_file():
+            return "superlio"
+        return "mola"
+
+    async def _pause(self, on: bool) -> None:
+        """暂停 / 恢复合并雷达、定位器。尽力而为:不成只记下,不碍建图。"""
+        mark = self._cfg.maps_dir / _PAUSED
+        if self._pause_units is None:
+            return
+        if on:
+            self._cfg.maps_dir.mkdir(parents=True, exist_ok=True)
+            mark.write_text("", encoding="utf-8")
+        err = await asyncio.to_thread(self._pause_units, on)
+        if on:
+            self.pause_error = err
+        if err:
+            log.warning("建图时%s合并雷达、定位器不成:%s", "暂停" if on else "恢复", err)
+        elif not on:
+            mark.unlink(missing_ok=True)
+
+    async def resume_leftover(self) -> None:
+        """代理起来时调:上一个进程暂停了、没来得及恢复的,恢复。"""
+        if (self._cfg.maps_dir / _PAUSED).exists():
+            await self._pause(False)
 
     # ------------------------------------------------------------------ 状态
 
@@ -221,11 +269,21 @@ class MappingOrchestrator:
                 shutil.rmtree(d, ignore_errors=True)
             work.mkdir(parents=True)
             forget_home(self._cfg.maps_dir, live_map_id)   # 坐标系要重建了
-        await self._start(self.spec_for_record(bag))
+        front = self.front() if live_map_id is not None else ""
+        slio = front == "superlio"
+        self.pause_error = ""
+        if slio:
+            await self._pause(True)                        # 先让出 CPU 再起(工单 21)
+        try:
+            await self._start(self.spec_for_record(bag, with_lio=slio))
+        except MappingError:
+            if slio:
+                await self._pause(False)
+            raise
         if live_map_id is not None:
-            spec = self.spec_for_live(live_map_id)
+            spec = self.spec_for_live(live_map_id, front=front)
             (work / "mola.json").write_text(json.dumps(
-                {"mode": "live", "pipeline": spec.argv[-1], "env": dict(spec.env)},
+                {"mode": "live", "front": front, "pipeline": spec.argv[-1], "env": dict(spec.env)},
                 ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
             try:
                 await self._start(spec)
@@ -236,17 +294,20 @@ class MappingOrchestrator:
             except MappingError:
                 await self._procs.stop(self.LIVE)
                 await self._procs.stop(self.RECORD, term_grace_s=_RECORD_GRACE_S)
+                if slio:
+                    await self._pause(False)
                 raise
         self.preview_error = ""
         if live_map_id is not None:
             try:
-                await self._start(self.spec_for_preview(live_map_id, name))
+                await self._start(self.spec_for_preview(live_map_id, name, front=front))
             except MappingError as exc:
                 self.preview_error = str(exc)
                 log.warning("建图预览起不来(录包、在线建图照旧):%s", exc)
         self._phase = "recording"
         self._bag = bag
         self._live = live_map_id
+        self._paused = slio
         self._error = ""
         return bag
 
@@ -264,6 +325,9 @@ class MappingOrchestrator:
         got = await asyncio.gather(*stops, return_exceptions=True)
         self._phase = "idle"
         self._live = None
+        if self._paused:
+            self._paused = False
+            await self._pause(False)
         for g in got:
             if isinstance(g, BaseException):
                 raise g
@@ -317,7 +381,8 @@ class MappingOrchestrator:
             # 打包在线建好的:中间目录就是原料,只清产物。
             for d in (out,) if reuse else (out, work.parent):
                 shutil.rmtree(d, ignore_errors=True)
-            spec = self.spec_for_build(bag, map_id)
+            spec = self.spec_for_build(bag, map_id,
+                                       front=self._live_front(work) if reuse else self.front())
             if reuse:
                 spec = replace(spec, name=name, argv=(*spec.argv, "--reuse"))
             await self._start(spec)
@@ -334,6 +399,15 @@ class MappingOrchestrator:
                 await self._procs.stop(name)
             self._phase = "idle"
         return out
+
+    @staticmethod
+    def _live_front(work: Path) -> str:
+        """边走边建的那一趟开录时用的前端(``mola.json``;升级前开录的没写 = MOLA)。"""
+        try:
+            got = json.loads((work / "mola.json").read_text(encoding="utf-8")).get("front")
+        except (OSError, ValueError, AttributeError):
+            got = None
+        return "superlio" if got == "superlio" else "mola"
 
     async def snapshot(self) -> dict[str, object]:
         """给 HTTP 用的状态。做成协程是为了走线程桥,和别的读法保持一致。"""
@@ -356,13 +430,15 @@ class MappingOrchestrator:
 
     # ------------------------------------------------------------------ 命令
 
-    def spec_for_record(self, bag: Path) -> ProcSpec:
-        """文档 §2 (a)。录包走**实时域**,它要听的是真机现在发的话题。"""
+    def spec_for_record(self, bag: Path, *, with_lio: bool = False) -> ProcSpec:
+        """文档 §2 (a)。录包走**实时域**,它要听的是真机现在发的话题。``with_lio``:Super-LIO 边走边建
+        的位姿一起录(打包用它,不用再算一遍)。"""
+        extra = (SUPERLIO_ODOM,) if with_lio else ()
         return ProcSpec(
             name=self.RECORD,
             argv=(str(self._cfg.ros_wrapper), "ros2", "bag", "record", "-s", "mcap", "-b",
                   str(RECORD_SPLIT_BYTES),
-                  "-o", str(bag), *RECORD_TOPICS),
+                  "-o", str(bag), *RECORD_TOPICS, *extra),
             env=self._live_env(),
             # 假设(待真机验证): rosbag2 humble 起来时会打这一行。接真机时
             # 用 runs/logs/bagrecord.log 核一下,不对就改这个正则。
@@ -370,10 +446,16 @@ class MappingOrchestrator:
             ready_timeout_s=30.0,
         )
 
-    def spec_for_live(self, map_id: str) -> ProcSpec:
-        """在线建图(W09c2):``mola-cli`` + MOLA 自带的 ROS 2 配置,走**实时域**(订的是真机现在的
+    def spec_for_live(self, map_id: str, *, front: str = "mola") -> ProcSpec:
+        """``front="superlio"``(工单 21):起 ``d1max-superlio-live``(Super-LIO 单独一个进程,订前雷达
+        和它的 IMU,位姿发到 :data:`SUPERLIO_ODOM`,录进包里);停的时候不用存盘。
+
+        在线建图(W09c2):``mola-cli`` + MOLA 自带的 ROS 2 配置,走**实时域**(订的是真机现在的
         雷达)。要的开关都给环境变量(``ros2 launch`` 原来就是这么传的);停的时候(SIGTERM)存局部
         地图、轨迹、simplemap 到这张图的中间目录。"""
+        if front == "superlio":
+            return ProcSpec(name=self.LIVE, argv=(str(self._cfg.superlio_live),),
+                            env=self._live_env(), ready_pattern="", stop_signal=signal.SIGINT)
         _, work = self._out(map_id)
         share = MOLA_LO_SHARE
         return ProcSpec(
@@ -412,20 +494,21 @@ class MappingOrchestrator:
         """建图预览的快照写在哪(W09f):这张图的中间目录底下。"""
         return self._out(map_id)[1] / "preview"
 
-    def spec_for_preview(self, map_id: str, run: str) -> ProcSpec:
+    def spec_for_preview(self, map_id: str, run: str, *, front: str = "mola") -> ProcSpec:
         """建图预览(W09f):订实时域的雷达与在线建图的位姿,快照写进 :meth:`preview_dir`。
         ``run`` 是这一趟的号(录包名),手机据此知道换了一趟。"""
         return ProcSpec(
             name=self.PREVIEW,
             argv=(str(self._cfg.live_preview), "--out", str(self.preview_dir(map_id)),
                   "--run", run, "--lidar-topic", self._cfg.lidar_topic,
-                  "--pose-topic", f"{LIVE_NS}/lidar_odometry/pose"),
+                  *(("--pose-topic", SUPERLIO_ODOM, "--superlio") if front == "superlio"
+                    else ("--pose-topic", f"{LIVE_NS}/lidar_odometry/pose"))),
             env=self._live_env(),
             ready_pattern="",
         )
 
-    def spec_for_build(self, bag: Path, map_id: str) -> ProcSpec:
-        """建图脚本:MOLA 在录包上建图 + 打成地图版本的文件(W09c1)。"""
+    def spec_for_build(self, bag: Path, map_id: str, *, front: str = "mola") -> ProcSpec:
+        """建图脚本:MOLA(或 Super-LIO,工单 21)在录包上建图 + 打成地图版本的文件(W09c1)。"""
         out, work = self._out(map_id)
         cfg = self._cfg
         return ProcSpec(
@@ -433,7 +516,8 @@ class MappingOrchestrator:
             argv=(str(cfg.map_builder), "--bag", str(bag), "--out", str(out),
                   "--work", str(work), "--lidar-topic", cfg.lidar_topic,
                   "--prior-pack", cfg.prior_pack,
-                  "--rtk-antenna", f"{cfg.rtk_antenna[0]:g},{cfg.rtk_antenna[1]:g}"),
+                  "--rtk-antenna", f"{cfg.rtk_antenna[0]:g},{cfg.rtk_antenna[1]:g}",
+                  "--front", front),
             env=self._offline_env(),
             ready_pattern="",       # 跑完自己退
         )
