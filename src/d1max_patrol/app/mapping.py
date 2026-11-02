@@ -21,6 +21,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import os
 import re
 import shutil
 import signal
@@ -78,7 +79,7 @@ LIVE_SETTLE_S = 3.0
 LIVE_NS = "/d1max_mapping"
 #: Super-LIO 建图前端(工单 21):装在哪、机器人上起它的脚本、它发的位姿(改到 LIVE_NS 下,录进包里,
 #: 打包时用;跟 ``d1max_localizer.superlio.LIVE_TOPIC`` 一致)。
-SUPERLIO_ROOT = Path("/opt/d1max/superlio/current")
+SUPERLIO_ROOT = Path(os.environ.get("D1MAX_SUPERLIO_ROOT", "/opt/d1max/superlio/current"))
 SUPERLIO_LIVE = Path("/opt/d1max/current/deploy/d1max-superlio-live")
 SUPERLIO_ODOM = f"{LIVE_NS}/lio/odom"
 #: 暂停了合并雷达、定位器的标记(代理中途重启也知道要恢复):JSON,还要恢复的服务。

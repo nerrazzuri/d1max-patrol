@@ -1469,6 +1469,10 @@ class AgentRuntime:
         if auto and found is not None and isinstance(loc, BridgeLocalizer) \
                 and loc.agrees((o.x, o.y, o.yaw), pose):
             return "same: 定位器此刻给的位置跟找到的一致,不打扰它"
+        if auto and isinstance(loc, BridgeLocalizer) and (
+                self.loaded_map != m or loc.ok(bool(getattr(self.parts.nav, "odom_ok", True)))):
+            # 外审 r2 #3:套图这几秒定位自己好了(或换了图):不拿找到的去打断它
+            return "same: 找的这会儿定位已经好了,不打扰它"
         if isinstance(loc, BridgeLocalizer):
             # 配了定位器(W09a):请它按人给的位置(初值)重定位;稳下来的时候修正量经 on_corrected
             # 交给引擎。自动找到的(W41)给大一点的偏差,定位器在附近再找。
@@ -1602,6 +1606,9 @@ class AgentRuntime:
             return "not_found: 找位置的这段时间机器人动了,停稳了再试一次"
         best, why = decide(cands)
         top = [c.to_wire() for c in cands[:3]]
+        if best is None and not await self.hal.stopped():
+            # 外审 r2 #9:套图途中机器人动了(里程缓存可能还没跟上):这次的「没找到」不算数
+            return "not_found: 找位置的这段时间机器人动了,停稳了再试一次"
         if best is None:
             from d1max_agent.globalloc import MIN_FIT
             self._find_kind = "off_map" if not cands or cands[0].fit < MIN_FIT else "ambiguous"

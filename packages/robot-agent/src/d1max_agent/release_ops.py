@@ -115,15 +115,21 @@ def build_superlio(pkg: Path, slot: Path, *, prefix: str | None = None,
     """W68:Super-LIO 是必装的(定位与建图),远程升级跟装机脚本一样编(外审 r1 #8:原来远程升级不编)。
     编过的版本(按源码指纹)脚本直接用;编不成 = 装失败,不切这一版。老包没源码没脚本:不编(回空串)。
     ``bash`` 跑:脚本丢了执行位也照样编(#7)。目录是装机脚本建的、归机器人账号。"""
-    del slot
     script = pkg / "deploy" / "d1max-superlio-build"
     if not script.is_file():
         if (pkg / "packages" / "localizer" / "native" / "superlio").is_dir():
             return "包不全:带了 Super-LIO 源码却没有 deploy/d1max-superlio-build"
         return ""
     env = dict(os.environ)
-    env["D1MAX_SUPERLIO_PREFIX"] = prefix or os.environ.get("D1MAX_SUPERLIO_PREFIX",
-                                                            SUPERLIO_PREFIX)
+    where = prefix or os.environ.get("D1MAX_SUPERLIO_PREFIX", SUPERLIO_PREFIX)
+    if Path(where).exists() and not os.access(where, os.W_OK):
+        # 外审 r2 #6:老装机脚本用 root 编的,机器人账号写不了
+        return (f"Super-LIO 目录 {where} 机器人账号写不了(老版装机脚本建的):"
+                "在机器人上重跑一次 install.sh 再升级")
+    env["D1MAX_SUPERLIO_PREFIX"] = where
+    # 外审 r2 #7:准备升级时不动全局 current,这一份记在这一版的槽里,切版本、回滚跟着走
+    env["D1MAX_SUPERLIO_LINK"] = "0"
+    env["D1MAX_SUPERLIO_STAMP"] = str(slot / "venv" / "superlio-root")
     argv = ["bash", str(script)]
     if run is None:
         try:

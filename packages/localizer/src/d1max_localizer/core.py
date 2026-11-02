@@ -86,6 +86,8 @@ RELOC_CONFIRM_MIN_S = 5.0
 #: 跟里程的核对照旧。
 TURN_RPS = 0.3
 TURN_HOLD_S = 0.5
+#: turn_hold(Super-LIO):转身前的分最多沿用这么久(原地掉头 180° 约 6 s),再久照实算(外审 r2 #1)。
+TURN_HOLD_MAX_S = 8.0
 RELOC_CONFIRM_FRAMES = 20
 #: 自动重定位(MOLA 重启之后按最后可信的位置)的初值 σ:高于代理那条线,稳定期里先不信(W09b 内审:
 #: 给 1.0 压线,重启 0.7 s 代理就信了)。
@@ -205,6 +207,8 @@ class LocalizerCore:
         self._reloc_good = 0                            # 重定位之后连着几帧好(按证据放手)
         self._turn_until = -1e18                        # 估计时间戳:到这一刻还算在转身
         self._steady_q: float | None = None             # 不在转身时最后一帧的分(turn_hold 用)
+        self._steady_at = -1e18                          # 它的时间戳
+        self._raw_stamp: float | None = None             # 最近一帧合法估计的时间戳(看门狗用)
         self._want_reloc = False
         self._queued = False
         self._expired = False
@@ -247,6 +251,8 @@ class LocalizerCore:
         self._need_init = True
         self._started_at = self._now()
         self._raw_at = None
+        self._raw_stamp = None
+        self._steady_q = None
         self._last = None
         self._stamp = None
         self._lowq.clear()
@@ -332,10 +338,10 @@ class LocalizerCore:
         if e.stamp <= 0:
             # W68:Super-LIO 重定位模式还没对上时先发几帧时间戳 −1 的位姿(回放 glass-160827)
             return
-        if self._stamp is not None and e.stamp <= self._stamp:
+        if self._raw_stamp is not None and e.stamp <= self._raw_stamp:
             return                                       # 同一帧、乱序
-        # 时间戳合法、往前走的才算它活着(外审 r1 #6:原来收到就算,一直发 −1 的永远不判卡住)
-        self._raw_at = now
+        # 时间戳合法、往前走的才算它活着(外审 r1 #6、r2 #8:等初值那段也一样核)
+        self._raw_at, self._raw_stamp = now, e.stamp
         if self._frames is None or self._loading or self._need_init or self._map is None:
             return                                       # MOLA 退出时 backend_down 也标了要给初值
         self._stamp = e.stamp
@@ -351,21 +357,24 @@ class LocalizerCore:
         # 转身时质量在 Q_BAD 以上不当证据(见 TURN_RPS)
         qs = self.qs
         neutral = turning and e.quality > qs.bad
-        if jump:
-            self._steady_q = None                        # 重定位过:转身前的分不算了
-        if not neutral:
-            quality = e.quality
-            if not turning:
-                self._steady_q = e.quality
-        elif qs.turn_hold:
-            quality = max(e.quality, self._steady_q if self._steady_q is not None else e.quality)
-        else:
-            quality = max(e.quality, qs.good, qs.lowq)
         if not jump and self._last is not None:
             jump = self._jumped(e.stamp - self._last[0], x - self._last[1], y - self._last[2],
                                 yaw - self._last[3])
             if jump:
                 self._jumps.append(now)
+        if jump:
+            self._steady_q = None                        # 重定位过、跳过:转身前的分不算了
+        if not neutral:
+            quality = e.quality
+            if not turning:
+                self._steady_q, self._steady_at = e.quality, e.stamp
+        elif qs.turn_hold and self._steady_q is not None \
+                and e.stamp - self._steady_at <= TURN_HOLD_MAX_S:
+            quality = max(e.quality, self._steady_q)
+        elif qs.turn_hold:
+            quality = e.quality                          # 转太久(外审 r2 #1):照实算
+        else:
+            quality = max(e.quality, qs.good, qs.lowq)
         self._last = (e.stamp, x, y, yaw)
         self._reloc_good = self._reloc_good + 1 if (e.quality >= qs.good and not jump) else 0
         # 不当证据的转身帧照样进窗口(占比的分母),只是不拿来定「常态」:拿来定会抬高中位数,把转身前

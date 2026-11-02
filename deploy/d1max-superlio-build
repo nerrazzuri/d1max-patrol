@@ -17,8 +17,15 @@ rev=$(basename "$tarball" .tar.gz | sed 's/^Super-LIO-//')
 fp=$( (cat "$tarball"; find "$src/kf2sm" "$src/livox_ros_driver2_stub" -type f -print0 | sort -z \
        | xargs -0 cat) | sha256sum | cut -c1-12)
 dest="$prefix/$rev-$fp"
+# 编好(或早就编过)以后:装机脚本把 current 指过去(D1MAX_SUPERLIO_LINK=0 不动它);D1MAX_SUPERLIO_STAMP
+# 给了就把这一份的路径写进去 —— 远程升级按版本记(<槽>/venv/superlio-root),切版本、回滚跟着走,
+# 准备升级时不动正在跑的那一版用的(外审 r2 #7)
+finish() {
+  [ "${D1MAX_SUPERLIO_LINK:-1}" = 0 ] || ln -sfn "$dest" "$prefix/current"
+  [ -z "${D1MAX_SUPERLIO_STAMP:-}" ] || printf '%s\n' "$dest" > "$D1MAX_SUPERLIO_STAMP"
+}
 if [ -x "$dest/bin/kf2sm" ] && [ -f "$dest/install/setup.bash" ] && [ -f "$dest/.ok" ]; then
-  ln -sfn "$dest" "$prefix/current"
+  finish
   echo "Super-LIO 已编过:$dest"
   exit 0
 fi
@@ -47,5 +54,5 @@ mkdir -p "$dest/kf2sm-build"
 cp "$dest/kf2sm-build/kf2sm" "$dest/bin/kf2sm"
 rm -rf "$dest/ws/build" "$dest/ws/log" "$dest/kf2sm-build"
 touch "$dest/.ok"
-ln -sfn "$dest" "$prefix/current"
+finish
 echo "Super-LIO 装好了:$dest"

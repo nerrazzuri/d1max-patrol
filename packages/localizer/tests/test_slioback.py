@@ -292,3 +292,31 @@ async def test_W68_外审_人给的还没交出去_自动的不顶掉_回绝(tmp
     await _settle()
     p, R = L.imu_pose(FR, EXT, 1.0, 2.0, 0.5)
     assert len(sup.cmds) == 1 and _init(sup.cmds[0]) == pytest.approx(L.init_param(p, R), abs=1e-6)
+
+
+async def test_W68_外审r2_A图起着排了自动请求_换B图_不按A图的位置起B图(tmp_path):
+    """codex r2 #4:换图不清排着的请求,A 图上的 (8,2) 被拿去起 B 图、还登记成 B 图的重定位。"""
+    c, core, sup, be, _ = _台(tmp_path)
+    await be.load_prior(M, str(_图(tmp_path)))
+    gate = asyncio.Event()
+
+    async def 慢起(prior):
+        sup.prior = prior
+        sup.cmds.append(be.command(prior))
+        await gate.wait()
+        sup.running = True
+        be.on_up()
+
+    sup.start = 慢起
+    assert await be.relocalize(1.0, 2.0, 0.5, 0.5, req=7, human=True) == ""
+    await _settle()
+    assert await be.relocalize(8.0, 2.0, 0.0, 0.3, req=9, human=False) == ""
+    B = ("m8", "1")
+    assert await be.load_prior(B, str(_图(tmp_path, "m8"))) == ""
+    gate.set()
+    for _ in range(50):
+        await _settle()
+    p, R = L.imu_pose(FR, EXT, 8.0, 2.0, 0.0)
+    assert all(_init(cmd) != pytest.approx(L.init_param(p, R), abs=1e-6) for cmd in sup.cmds)
+    core.tick()
+    assert core._target is None or core._map != B or core._target[:2] != (8.0, 2.0)

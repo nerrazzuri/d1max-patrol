@@ -189,3 +189,18 @@ def test_W68_外审_套图分过期_一直配不上就归零_换图清零():
     assert sc.pose(t + 0.1, p, q) > 0.95                  # 又配上了
     sc.set_fit(None)
     assert sc.pose(t + 0.2, p, q) == 0.0                  # 换图(新图还没载好):旧分作废
+
+
+def test_W68_外审r2_打分途中换了图_旧图的分不写回():
+    """codex r2 #2:rclpy 线程在算旧图的分,这时换图清零;算完原来照样写回 0.99。"""
+    sc = L.ScanScorer()
+
+    class 旧图:
+        def score(self, *_a):
+            sc.set_fit(None)                              # 打分途中 asyncio 那边换了图
+            return 0.99
+
+    sc.set_fit(旧图())
+    sc.scan(10.0, np.zeros((10, 3)))
+    assert sc.pose(10.1, (0.0, 0.0, 0.0), (0.0, 0.0, 0.0, 1.0)) == 0.0
+    assert sc.pose(10.2, (0.0, 0.0, 0.0), (0.0, 0.0, 0.0, 1.0)) == 0.0

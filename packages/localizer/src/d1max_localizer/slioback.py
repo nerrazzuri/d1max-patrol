@@ -55,6 +55,8 @@ class SlioBackend(MolaBackend):
         self._starting = False
         self._starts = 0                                 # 排着、在做的起动有几次
         self._fit_gen = 0
+        self._fit: L.MapFit | None = None                # 当前这张图的打分图(建好了的话)
+        self._cur_map: tuple[str, str] | None = None     # 这次起用的位置是哪张图上的
 
     # ------------------------------------------------------------ 代理请的
 
@@ -67,11 +69,14 @@ class SlioBackend(MolaBackend):
             return str(exc)
         d = Path(dir) if dir else self.default_prior_dir
         pcd = d / self.prior_file if d is not None else None
+        old_map = self._map
         why = await super().load_prior(map_ref, dir)
+        if not why and self._map != old_map:
+            self._next = self._cur = None                # 外审 r2 #4:旧图上排着、在起的位置作废
         if not why and pcd is not None and pcd.is_file() and not _same(self._fit_for, pcd):
             # 外审 r1 #4:大地图建打分图要好几秒,桥的应答只等 0.8 s —— 先答应、后台建;建好之前
             # 旧图的打分作废(分数 0 = 不可信)
-            self._fit_for = pcd
+            self._fit_for, self._fit = pcd, None
             self._fit_gen += 1
             self._on_map(None)
             self._spawn(self._build_fit(pcd, self._fit_gen), "建套图打分")
@@ -88,6 +93,7 @@ class SlioBackend(MolaBackend):
                 self._fit_for = None
             return
         if gen == self._fit_gen:                         # 这会儿没换别的图
+            self._fit = fit
             self._on_map(fit)
 
     def _missing(self, d: Path) -> str:
@@ -148,7 +154,7 @@ class SlioBackend(MolaBackend):
         w = self._next or self.core.restart_want()
         if w is None or self._frames is None:
             raise L.SlioLocError("没有初始位置,不起 Super-LIO")
-        self._next, self._cur = None, w
+        self._next, self._cur, self._cur_map = None, w, self._map
         p, R = L.imu_pose(self._frames, self.ext, w.x, w.y, w.yaw)
         text = L.reloc_config(self._base, map_dir=Path(prior).parent,
                               src_dir=L.source_dir(self.root), init=L.init_param(p, R))
@@ -164,8 +170,10 @@ class SlioBackend(MolaBackend):
     def on_up(self) -> None:
         super().on_up()
         self._alive = True
+        if self._fit is not None:
+            self._on_map(self._fit)                      # 外审 r2 #2:重启前那个进程的分作废
         w = self._cur
-        if w is not None:
+        if w is not None and self._cur_map == self._map:  # 起的时候是这张图(r2 #4)
             self.core.relocalized(req=w.req, x=w.x, y=w.y, yaw=w.yaw, sigma=w.sigma,
                                   human=w.human)
 
