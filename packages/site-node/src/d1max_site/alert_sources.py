@@ -440,6 +440,18 @@ class SiteAlertSources:
                                          f"{d.get('map_id', '?')}:{d.get('map_version', '?')};"
                                          "人到场把它挪出来(遥控),或者核对区域、定位;"
                                          "机器人离开禁行区、或者区域删了生效以后,此条自动解除")
+        elif e.kind == "loc_not_found":
+            # W68(用户 11-02):机器人开机自己找位置没找到(不在图上 / 几处像)—— 马上报,不等
+            # 空闲丢定位的两分钟、开机宽限;同一条(定位好了照样自己解决),同一回不重复报。
+            m = self._m(rid)
+            if not self.desk.has_open(rid, "loc_lost_idle"):
+                what = ("位置偏差过大,可能不在地图上" if d.get("cause") == "off_map"
+                        else "几处相似,无法确定位置")
+                self.desk.raise_alert(
+                    kind="loc_lost_idle", robot=rid, title=f"机器人未找到自身位置:{what}",
+                    detail=f"{str(d.get('reason', ''))[:200]}。到场设位置(手机单机器人页"
+                           "「设位置」);定位恢复后此条自动解除")
+            m.loc_idle_p2 = m.loc_bad = True
         elif e.kind == "map_integrity_failed":
             # W09g:狗起来时正在用的图校验不过 —— 没载、不宣告能自主(不退回命令行的图)。
             which = f"{d.get('map_id', '?')}:{d.get('version', '?')}"

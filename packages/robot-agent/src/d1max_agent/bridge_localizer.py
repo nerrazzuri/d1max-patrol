@@ -79,7 +79,7 @@ from d1max_agent.localization import (
     compose,
     inverse,
 )
-from d1max_contract.locbridge import WAIT_INIT_REASON, Pose, Relocalize, SetPrior, State
+from d1max_contract.locbridge import Pose, Relocalize, SetPrior, State
 
 log = logging.getLogger(__name__)
 
@@ -491,9 +491,16 @@ class BridgeLocalizer:
             return f"{self.find_note}({why})"
         return why
 
-    def waiting_for_init(self) -> bool:
-        """定位器明说没有初值、在等人给(W68:代理见到就马上自动找位置,不等)。"""
-        return self._state == "initializing" and self._state_reason == WAIT_INIT_REASON
+    def agrees(self, odom: tuple[float, float, float], pose: tuple[float, float, float], *,
+               near_m: float = 1.0, near_rad: float = math.radians(25.0)) -> bool:
+        """定位器此刻在出位置(信不信都算,:data:`FRESH_S` 内收到过)、按里程推到现在跟 ``pose`` 差不到
+        ``near_m``、``near_rad``(W68:自动找到的跟它一致就不打扰它重启)。"""
+        f = self._fix
+        if f is None or self._now() - f.at > FRESH_S:
+            return False
+        est = self.estimate(odom)
+        return (est is not None and math.hypot(est.x - pose[0], est.y - pose[1]) <= near_m
+                and abs(math.remainder(est.yaw - pose[2], 2 * math.pi)) <= near_rad)
 
     def _why_not(self, odom_ok: bool) -> str:
         if not self._connected:

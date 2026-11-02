@@ -212,7 +212,7 @@ async def test_W68_开机自己找_不在地图上_报位置偏差过大_导航�
     await t.拍(60)
     assert t.loc.relocs == []
     nf = _事件(t.ears, "loc_not_found")
-    assert nf and nf[-1]["kind"] == "off_map", nf
+    assert nf and nf[-1]["cause"] == "off_map", nf
     reason = _遥测(t.ears).loc["reason"]
     assert "位置偏差过大" in reason and "可能不在地图上" in reason, reason
     await t.rt._on_cmd(_goto(4.0, 3.0, "g1", t.c))
@@ -237,7 +237,7 @@ async def test_W68_开机自己找_几处差不多像_说无法确定_不请定�
     await t.拍(60)
     assert t.loc.relocs == []
     nf = _事件(t.ears, "loc_not_found")
-    assert nf and nf[-1]["kind"] == "ambiguous", nf
+    assert nf and nf[-1]["cause"] == "ambiguous", nf
     assert "无法确定" in _遥测(t.ears).loc["reason"]
 
 
@@ -252,20 +252,40 @@ async def test_W68_找位置时还没有点云_不算一次_有了再找(台):
     assert len(t.loc.relocs) == 1
 
 
-async def test_W68_有初值但一直对不上_30秒后自己找(台):
+async def test_W68_有初值但对不上_不等30秒_几秒内就自己找(台):
     t = 台
     await t.连()
     await t.拍(120)                                       # 稳下来后那次点云核对先核完
     t.loc.paused = 10 ** 6                                # 定位器不出位姿了(按旧初值对不上)
     await t.loc.lose("初值附近不匹配")
-    t.dog.teleport(8.0, 2.0, 0.0)                         # 被搬走了
+    t.dog.teleport(8.0, 2.0, 0.0)                         # 关机时被搬走了
     t.view.pts = _扫(t.occ, 8.0, 2.0, 0.0, noise=0.02)
-    await t.拍(250)
-    # 30 秒以内不抢(代理自己按最后可信的位置请的那几次照旧,都在旧位置附近)
-    assert all(math.hypot(r.x - 8.0, r.y - 2.0) > 2.0 for r in t.loc.relocs), t.loc.relocs
     await t.拍(80)
+    assert any(math.hypot(r.x - 8.0, r.y - 2.0) < 0.15 for r in t.loc.relocs), t.loc.relocs
+
+
+async def test_W68_定位器在出位置_跟找到的一致_不打扰它(台):
+    t = 台
+    await t.连()
+    await t.拍(120)
+    t.loc.sigma_xy = 2.0                                  # 位置对、自己说偏差大:代理不信
+    await t.拍(100)
+    assert t.loc.relocs == [] and not _事件(t.ears, "loc_not_found")
+
+
+async def test_W68_人刚设过位置_给它30秒对上_过了还不行再自己找(台):
+    t = 台
+    await _没初值地连上(t)
+    t.view.pts, pts = None, t.view.pts                    # 先别让它自己找到
+    await t.rt._on_cmd(_cmd("relocalize", {"x": 0.5, "y": 0.5, "yaw": 0.0}, "r1", t.c))
+    await t.拍(5)
+    assert t.loc.relocs[-1].human                         # 人给错了 3.5 m:定位器对不上
+    t.view.pts = pts
+    await t.拍(200)
+    assert len(t.loc.relocs) == 1, "30 秒以内不抢人设的"
+    await t.拍(150)
     r = t.loc.relocs[-1]
-    assert math.hypot(r.x - 8.0, r.y - 2.0) < 0.15
+    assert not r.human and math.hypot(r.x - TRUE[0], r.y - TRUE[1]) < 0.15
 
 
 async def test_W68_定位一直可信_不自动找(台):
