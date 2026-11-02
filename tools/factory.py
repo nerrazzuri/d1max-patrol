@@ -39,8 +39,8 @@ for _p in ("packages/contract/src", "src"):
 
 #: 板子上的临时目录(root 独占;最后删掉)。
 REMOTE_DIR = "/tmp/nw-factory"
-#: 板子上跑我们代码的解释器(``deploy/install.sh`` 装的)。
-REMOTE_PY = "/opt/d1max/bin/python"
+#: 板子上跑我们代码的解释器:当前这一版自己的(工单 11-02-3:守卫退回旧版时根下那个不跟着退)。
+REMOTE_PY = "/opt/d1max/current/venv/bin/python"
 REMOTE_REQUEST = "/etc/d1max/device/device-request.json"
 
 Run = Callable[..., subprocess.CompletedProcess]

@@ -23,10 +23,25 @@ from d1max_contract import device_id as di
 from d1max_contract import ed25519
 from d1max_patrol.bind.paths import BindPaths, read_json, write_json
 
-#: 芯片序号从哪儿读(按先后):RK3588 / Orin 的设备树,再是 cpuinfo 的 Serial。
+#: 芯片序号从哪儿读(按先后):设备树(RK3588),Tegra 熔丝里的芯片 UID(Orin:设备树那个是厂家占位
+#: ``DummySN``,11-02 工单 2),通用的 soc0,再是 cpuinfo 的 Serial。
 HW_SOURCES: tuple[Path, ...] = (Path("/proc/device-tree/serial-number"),
                                 Path("/sys/firmware/devicetree/base/serial-number"),
+                                Path("/sys/module/tegra_fuse/parameters/tegra_chip_uid"),
+                                Path("/sys/devices/soc0/serial_number"),
                                 Path("/proc/cpuinfo"))
+#: 厂家占位值(小写比):这些板子个个一样,不能当芯片编号。
+_PLACEHOLDERS = frozenset({"dummysn", "dummy", "default", "default string", "none", "null",
+                           "unknown", "n/a", "na", "serial", "to be filled by o.e.m.",
+                           "not specified", "not applicable", "0123456789", "123456789",
+                           "1234567890", "12345678", "0123456789abcdef"})
+
+
+def _placeholder(value: str) -> bool:
+    """全 0、全同一个字符、厂家占位值(工单 11-02-2)。"""
+    v = value.strip().lower()
+    return not v or len(set(v.removeprefix("0x"))) <= 1 or v in _PLACEHOLDERS \
+        or v.startswith("dummy")
 _SERIAL_LINE = re.compile(r"^Serial\s*:\s*(\S+)\s*$", re.M)
 
 
@@ -51,7 +66,7 @@ def cert_path(p: BindPaths) -> Path:
 
 
 def read_hw_id(sources: Iterable[Path] = HW_SOURCES) -> str:
-    """芯片编号:第一个读得到、不是全 0 的序号的 SHA-256(64 位十六进制)。"""
+    """芯片编号:第一个读得到、不是占位值(全 0、``DummySN`` 之类)的序号的 SHA-256(64 位十六进制)。"""
     for src in sources:
         try:
             raw = Path(src).read_bytes()
@@ -62,7 +77,7 @@ def read_hw_id(sources: Iterable[Path] = HW_SOURCES) -> str:
         value = (m.group(1) if m else text).strip()
         if m is None and "\n" in value:                # 别的多行文件(cpuinfo 没 Serial 那一行)
             continue
-        if value and value.strip("0") and len(value) <= 128:
+        if not _placeholder(value) and len(value) <= 128:
             return hashlib.sha256(b"d1max-hw|" + value.encode("ascii", "replace")).hexdigest()
     raise DevIdError("读不到芯片编号(设备树 serial-number、cpuinfo 的 Serial 都没有):"
                      "这块板不能出厂")
