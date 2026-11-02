@@ -370,7 +370,8 @@ async def test_配了定位器的真狗_换图不经HAL_定位器换先验_重�
         await t.连()
         caps = Capabilities.from_wire(t.ears.by["capabilities"][-1])
         assert "map_activate" in caps.tasks
-        wire = site.add("m", "2", {"prior.mm": b"p", "frames.json": b"{}"})
+        wire = site.add("m", "2", {"prior.mm": b"p", "frames.json": b"{}",
+                                 "superlio_map.pcd": b"c"})
         await t.rt._on_cmd(_cmd("map_activate", wire, "a1", t.c))
         await _跑(t.rt, t.broker)
         await t.拍(3)
@@ -455,7 +456,8 @@ async def test_配了定位器_仿真狗有载入这一步也不调(tmp_path):
     try:
         await t.连()
         await t.rt._on_cmd(_cmd("map_activate", site.add(
-            "m", "2", {"prior.mm": b"p", "frames.json": b"{}"}), "a1", t.c))
+            "m", "2", {"prior.mm": b"p", "frames.json": b"{}",
+                                 "superlio_map.pcd": b"c"}), "a1", t.c))
         await _跑(t.rt, t.broker)
         assert t.rt.loaded_map == ("m", "2") and called == []
     finally:
@@ -481,6 +483,27 @@ async def test_配了定位器_不收没有先验的版本(tmp_path):
         assert failed and "prior.mm" in failed[-1]["data"]["reason"]
         assert t.rt.loaded_map == ("m", "1")
         assert not (tmp_path / "keep" / "m" / "0").exists(), "下载之前就拒"
+    finally:
+        await t.收()
+
+
+async def test_配了定位器_旧版没有Super_LIO点云的图_说要重建(tmp_path):
+    """W68 用户定:定位换 Super-LIO,之前建的图要重建。"""
+    from test_runtime_maps import _跑, 站点
+
+    from d1max_agent.maps import MapKeeper
+    site = 站点()
+    t = 台子()
+    keeper = MapKeeper(tmp_path / "keep", fetch=site.fetch)
+    await t.起(tmp_path / "agent", maps=keeper)
+    try:
+        await t.连()
+        old = site.add("m", "0", {"prior.mm": b"p", "frames.json": b"{}"})
+        await t.rt._on_cmd(_cmd("map_activate", old, "a1", t.c))
+        await _跑(t.rt, t.broker)
+        failed = [e for e in t.ears.by["event"] if e["kind"] == "map_activate_failed"]
+        assert failed and "需要重建" in failed[-1]["data"]["reason"]
+        assert "地图" in failed[-1]["data"]["reason"]
     finally:
         await t.收()
 

@@ -14,6 +14,8 @@
   ``build.json`` 的 ``grid.rays`` 写着用的哪种;
 - ``seen.pbm``(可选,M9):只透过玻璃、门口看到过、被定成「不知道」的格子,站点画成淡淡的地面
   (只管显示,规划不读;``d1max_contract.maps.SEEN_FILE``);一格都没有就不写;
+- ``superlio_map.pcd``(W68):Super-LIO 定位用的地图点云 —— 回环之后的建图点云按
+  :data:`~d1max_localizer.slioloc.MAP_VOXEL_M` 降采样,跟 ``frames.json`` 同一个坐标系;
 - ``coverage.json``:「哪里有图」—— 建图时走过的路(地图平面上每 :data:`COVERAGE_STEP_M` 一点);
 - ``build.json``:怎么建的(来源、参数、各步耗时、标定说明)。
 
@@ -227,6 +229,9 @@ def package(work: Path, out: Path, *, prior_pack: PriorPack | None = None,
     timings["grid_s"] = round(time.monotonic() - t0, 1)
     t0 = time.monotonic()
     _pack_prior(src / "raw_prior.mm", out / "prior.mm", prior_pack, run, src)
+    from d1max_localizer import slioloc
+    slio = slioloc.voxel_down(points, slioloc.MAP_VOXEL_M)
+    slioloc.write_pcd(out / slioloc.MAP_FILE, slio)
     timings["prior_s"] = round(time.monotonic() - t0, 1)
     cov = coverage(traj, frames)
     (out / "coverage.json").write_text(json.dumps({"version": 1, "step_m": COVERAGE_STEP_M,
@@ -244,7 +249,9 @@ def package(work: Path, out: Path, *, prior_pack: PriorPack | None = None,
         prior_pack.label(), "frames": why, "frames_count": len(traj),
         "grid": {"res": g.res, "size": list(g.image.shape[::-1]), "origin": list(g.origin),
                  "rays": rays},
-        "mola": _mola_info(work), "loop_closure": lc_info, "geo": geo_info, "handedness": hand,
+        "mola": _mola_info(work), "loop_closure": lc_info,
+        "superlio_map": {"points": len(slio), "voxel_m": slioloc.MAP_VOXEL_M},
+        "geo": geo_info, "handedness": hand,
         "timings_s": timings}, ensure_ascii=False, indent=2) + "\n")
     return files
 

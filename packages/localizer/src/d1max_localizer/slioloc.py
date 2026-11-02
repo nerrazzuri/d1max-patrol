@@ -24,6 +24,7 @@ from typing import Any
 
 import numpy as np
 
+from d1max_contract.maps import SLIO_MAP_FILE
 from d1max_localizer import superlio as S
 from d1max_localizer.frames import Frames, mat_to_quat, quat_to_mat
 
@@ -31,7 +32,7 @@ from d1max_localizer.frames import Frames, mat_to_quat, quat_to_mat
 NS = "/d1max_loc"
 POSE_TOPIC = f"{NS}/lio/odom"
 #: 地图包里给 Super-LIO 的点云(建图打包时从回环后的先验导出,跟 ``frames.json`` 同一个坐标系)。
-MAP_FILE = "superlio_map.pcd"
+MAP_FILE = SLIO_MAP_FILE
 #: 导出时的降采样(Super-LIO 自己载图后还会按 ``submap_resolution`` 再降)。
 MAP_VOXEL_M = 0.25
 #: 重定位模式要改的参数:取自上游 ``config/relocation.yaml``(局部图分辨率、容量),``update_map`` 关掉

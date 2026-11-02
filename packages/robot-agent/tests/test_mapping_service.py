@@ -148,7 +148,7 @@ async def test_重建期间这个包算没安定(svc):
 async def test_产物缺一样就算没建成_不登记(svc):
     await svc.start("yard")
     await svc.stop()
-    svc.orch.made = GEOMETRY_FILES[:-1]
+    svc.orch.made = tuple(n for n in GEOMETRY_FILES if n != "build.json")
     with pytest.raises(MappingError, match="build.json"):
         await svc.build(svc.last_bag, "estate-1", "9")
     assert not (svc.maps_out / "estate-1" / "9").exists() and not svc.held

@@ -58,7 +58,7 @@ from d1max_contract.hal import (
     VelocityCommand,
     VelocityResult,
 )
-from d1max_contract.maps import PRIOR_FILES
+from d1max_contract.maps import prior_missing
 from d1max_contract.messages import Command, MapPose, Reconcile, fault_event_data
 from d1max_contract.policy import policy_for
 from d1max_contract.registration import Registration
@@ -719,11 +719,10 @@ class AgentRuntime:
         if ref is None:
             return
         if self._locsrv is not None:
-            missing = [n for n in PRIOR_FILES if n not in {f.name for f in ref.files}]
-            if missing:                   # 定位器要读的先验不在清单里:没校验过(内审小 1)
+            why = prior_missing(f.name for f in ref.files)
+            if why:                       # 定位器要读的先验不在清单里:没校验过(内审小 1)
                 self._map_integrity_failed(MapIntegrityError(
-                    f"正在用的图 {ref.map_id}:{ref.version} 没有定位先验({', '.join(missing)}),"
-                    "配了定位器的机器人不可用"))
+                    f"正在用的图 {ref.map_id}:{ref.version}:{why},配了定位器的机器人不可用"))
                 return
         if self._locsrv is not None:                  # 配了定位器:换图不经 HAL(W09c 决定 6)
             self._switch_map(ref)
@@ -1862,10 +1861,9 @@ class AgentRuntime:
             if self._locsrv is not None:
                 # 配了定位器:这一版要带定位先验(站点上 slam_toolbox 时期的老版本没有;激活了定位器
                 # 拒先验,狗之后一直定不了位 —— 内审应修 3)。下载之前就拒。
-                missing = [n for n in PRIOR_FILES if n not in {f.name for f in ref.files}]
-                if missing:
-                    raise MapInstallError(f"此版本没有定位先验({', '.join(missing)}),"
-                                          "配了定位器的机器人不可用:换一版机器人上建的图")
+                why = prior_missing(f.name for f in ref.files)
+                if why:
+                    raise MapInstallError(f"{why},配了定位器的机器人不可用:换一版机器人上建的图")
             dst = await asyncio.to_thread(self.maps.install, ref)
             waited = 0.0
             while not self._tasks_idle():

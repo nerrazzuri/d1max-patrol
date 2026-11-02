@@ -214,7 +214,8 @@ async def test_配了定位器_图坏了不给定位器先验(tmp_path):
     await t.起(tmp_path / "agent", dog=真狗样, maps=keeper)
     try:
         await t.连()
-        wire = site.add("m", "2", {"prior.mm": bytes(range(100)), "frames.json": b"{}"})
+        wire = site.add("m", "2", {"prior.mm": bytes(range(100)), "frames.json": b"{}",
+                                 "superlio_map.pcd": b"c"})
         await t.rt._on_cmd(_cmd("map_activate", wire, "a1", t.c))
         await _跑(t.rt, t.broker)
         await t.拍(3)
@@ -291,7 +292,8 @@ async def test_配了定位器_校验的时候定位桥还没开_定位器拿不
     await t.起(tmp_path / "agent", dog=真狗样, maps=keeper)
     try:
         await t.连()
-        wire = site.add("m", "2", {"prior.mm": bytes(range(100)), "frames.json": b"{}"})
+        wire = site.add("m", "2", {"prior.mm": bytes(range(100)), "frames.json": b"{}",
+                                 "superlio_map.pcd": b"c"})
         await t.rt._on_cmd(_cmd("map_activate", wire, "a1", t.c))
         await _跑(t.rt, t.broker)
         await t.rt.close()

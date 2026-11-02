@@ -139,11 +139,13 @@ async def test_换图_读新图的geo_json(tmp_path):
     try:
         await t.连()
         geo = json.dumps(GeoRef(5.4, 100.3, 1.0, 12.0, 3.0, 4.0).to_wire()).encode()
-        wire = site.add("m", "2", {"prior.mm": b"p", "frames.json": b"{}", "geo.json": geo})
+        wire = site.add("m", "2", {"prior.mm": b"p", "frames.json": b"{}", "superlio_map.pcd": b"c",
+                                 "geo.json": geo})
         await t.rt._on_cmd(_cmd("map_activate", wire, "a1", t.c))
         await _跑(t.rt, t.broker)
         assert t.rt._rtk_check.geo == GeoRef(5.4, 100.3, 1.0, 12.0, 3.0, 4.0)
-        wire = site.add("m", "3", {"prior.mm": b"q", "frames.json": b"{}"})
+        wire = site.add("m", "3", {"prior.mm": b"q", "frames.json": b"{}",
+                                 "superlio_map.pcd": b"c"})
         await t.rt._on_cmd(_cmd("map_activate", wire, "a2", t.c))
         await _跑(t.rt, t.broker)
         assert t.rt._rtk_check.geo is None, "新图没有 geo.json:不核"
