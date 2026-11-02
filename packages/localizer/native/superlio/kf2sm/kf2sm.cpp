@@ -1,7 +1,7 @@
-// 临时工具(Super-LIO 建图):关键帧位姿 + 点云 → MRPT simplemap,接我们现有的出图流程(sm2mm、build.package)。
+// Super-LIO 建图前端(工单 21):关键帧位姿 + 点云 → MRPT simplemap,接我们现有的出图流程(sm2mm、回环、build.package)。
 // 输入目录里 index.txt 每行:t x y z qx qy qz qw vx vy vz wx wy wz 文件名(float32 xyz,雷达系)。
 #include <mrpt/maps/CSimpleMap.h>
-#include <mrpt/maps/CSimplePointsMap.h>
+#include <mrpt/maps/CPointsMapXYZIRT.h>
 #include <mrpt/obs/CObservationPointCloud.h>
 #include <mrpt/obs/CSensoryFrame.h>
 #include <mrpt/poses/CPose3DPDFGaussian.h>
@@ -45,9 +45,15 @@ int main(int argc, char** argv) {
     f.seekg(0);
     std::vector<float> buf(bytes / sizeof(float));
     f.read(reinterpret_cast<char*>(buf.data()), static_cast<std::streamsize>(buf.size() * sizeof(float)));
-    auto pts = mrpt::maps::CSimplePointsMap::Create();
-    pts->reserve(buf.size() / 3);
-    for (size_t i = 0; i + 2 < buf.size(); i += 3) pts->insertPointFast(buf[i], buf[i + 1], buf[i + 2]);
+    // 跟 MOLA 建图存的同一种点云(带每点时间):回环流程里的 FilterAdjustTimestamps 要时间字段,
+    // 没有就整个失败。关键帧点云不去畸变,时间全填 0。
+    auto pts = mrpt::maps::CPointsMapXYZIRT::Create();
+    const size_t np = buf.size() / 3;
+    pts->resize_XYZIRT(np, false, false, true);
+    for (size_t i = 0; i < np; ++i) {
+      pts->setPointFast(i, buf[3 * i], buf[3 * i + 1], buf[3 * i + 2]);
+      pts->setPointTime(i, 0.0f);
+    }
     pts->mark_as_modified();
     pts_total += pts->size();
 

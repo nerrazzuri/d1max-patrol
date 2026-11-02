@@ -236,3 +236,34 @@ def test_建图命令_没装Super_LIO_说先编(tmp_path, monkeypatch):
     monkeypatch.setattr(S, "ROOT", tmp_path)
     with pytest.raises(S.SuperLioError, match="d1max-superlio-build"):
         tools._superlio_front(tmp_path / "b", tmp_path / "w", reuse=False)
+
+
+def test_外参的9个数按列读_跟Super_LIO一样(tmp_path):
+    """Super-LIO 用 ``M3 __R(r_data.data())`` 读(Eigen 默认列优先)。按行读差一个转置,前雷达
+    朝下的 +X 会被当成朝上,出来的图是镜像的(11-02 商场 v2 包实跑,打包时手性检查拦下)。"""
+    f = tmp_path / "x.yaml"
+    f.write_text("lio.extrinsic.lidar_imu: [0, 0, 0,  0, 1, 0,  -1, 0, 0,  0, 0, 1]\n")
+    R, _ = S.extrinsic(f)
+    assert np.allclose(R, [[0, -1, 0], [1, 0, 0], [0, 0, 1]])
+
+
+def test_随版本带的外参_雷达X朝下_对应IMU的负Y():
+    """Airy 装法:雷达 +X 朝下(单帧里地面在 +X 0.5 m);IMU 的 +Y 朝上(Super-LIO 按重力摆正)。"""
+    R, _ = S.extrinsic(S.DEFAULT_CONFIG)
+    assert R[1][0] < -0.99
+
+
+def test_位姿断档里走的路_挨得很近的位姿_都不算突跳():
+    """台式机录位姿丢帧:1.8 s 没位姿、走了 1.58 m(0.87 m/s)不是跟丢。"""
+    poses = _line(100)
+    gap = poses[:50] + [(r[0] + 1.7, (r[1][0] + 0.85, 0.0, 0.0), r[2]) for r in poses[50:]]
+    q = S.quality(gap)
+    assert q["max_jump_m"] == 0 and q["gaps"] == 1
+    S.check(q)
+    # 两个位姿只隔 5 ms、差 1.5 cm(v2 包里真有):算速度 3 m/s,不是跳
+    close = poses[:50] + [(poses[49][0] + 0.005, (poses[49][1][0] + 0.015, 0.0, 0.0),
+                           poses[49][2])] + [(r[0] + 0.05, r[1], r[2]) for r in poses[50:]]
+    S.check(S.quality(close))
+    poses[50] = (poses[50][0], (9.0, 0.0, 0.0), poses[50][2])
+    with pytest.raises(S.SuperLioError, match="突跳"):
+        S.check(S.quality(poses))
