@@ -63,6 +63,9 @@ def _same_file(a: Path | None, b: Path) -> bool:
         return a == b
 
 class MolaBackend:
+    #: 先验目录里要的文件(W68 Super-LIO 换成它自己的点云)。
+    prior_file = PRIOR_FILE
+
     def __init__(self, core: LocalizerCore, *, supervisor: Any, reloc_service: RelocService,
                  default_prior_dir: Path | None = None,
                  monotonic: Callable[[], float] = time.monotonic) -> None:
@@ -90,9 +93,9 @@ class MolaBackend:
         d = Path(dir) if dir else self.default_prior_dir
         if d is None:
             return "代理没有给先验目录,本机也未配置默认的"
-        mm, fj = d / PRIOR_FILE, d / FRAMES_FILE
+        mm, fj = d / self.prior_file, d / FRAMES_FILE
         if not mm.is_file():
-            return f"{d} 里没有 {PRIOR_FILE}"
+            return self._missing(d)
         try:
             frames = Frames.load(fj)
         except ContractError as exc:
@@ -111,8 +114,15 @@ class MolaBackend:
         self._resume_pending = False                     # 已经直接起了:恢复时不再起一遍
         # 不取消上一次还没做完的起动:看管器一把锁串着做,后来的这次最后生效(W09b 内审:取消会把正在
         # 关的旧进程丢成孤儿)
-        self._spawn(self.supervisor.start(mm), "起 MOLA")
+        self._start(mm)
         return ""
+
+    def _missing(self, d: Path) -> str:
+        return f"{d} 里没有 {self.prior_file}"
+
+    def _start(self, prior: Path) -> None:
+        """(重)起定位程序(后台做)。"""
+        self._spawn(self.supervisor.start(prior), "起 MOLA")
 
     async def relocalize(self, x: float, y: float, yaw: float, sigma: float, *,
                          req: int | None = None, human: bool = True) -> str:
@@ -182,7 +192,7 @@ class MolaBackend:
         if ch is False and self._resume_pending and prior is not None:
             # 恢复了:马上重起(不等退避)最新想要的那份先验,起来按最后可信的位置自己重定位
             self._resume_pending = False
-            self._spawn(self.supervisor.start(prior), "起 MOLA")
+            self._start(prior)
             return
         if self.core.lidar_blocked:
             return

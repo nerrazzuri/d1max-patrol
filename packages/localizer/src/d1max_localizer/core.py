@@ -393,6 +393,17 @@ class LocalizerCore:
             return None
         return RelocWant(*self._good, AUTO_RELOC_SIGMA_M, None, False)
 
+    def restart_want(self) -> RelocWant | None:
+        """(重)起只认一次初值的定位程序(W68 Super-LIO)该拿哪个位置起:在重试的那次 > 人给了还没
+        确认的那次 > 最后可信的位置;都没有回 ``None``(等人给)。"""
+        if self._retry is not None:
+            return self._retry
+        if self._reloc_tag is not None and self._target is not None:
+            return self._target
+        if self._good is None:
+            return None
+        return RelocWant(*self._good, AUTO_RELOC_SIGMA_M, None, False)
+
     # ------------------------------------------------------------ 内部
 
     def _watch(self, now: float) -> None:
