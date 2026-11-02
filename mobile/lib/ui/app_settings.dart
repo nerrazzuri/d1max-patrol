@@ -12,6 +12,7 @@ import '../net/background_watch.dart';
 import '../net/push.dart';
 import '../net/site_client.dart';
 import 'app_update_ui.dart';
+import 'arrival_alert.dart';
 import 'nw/nw_p4_admin.dart' show NwListView, NwListCard, nwGap8, nwGap16;
 import 'nw/nw_theme.dart';
 import 'nw/nw_widgets.dart';
@@ -60,6 +61,7 @@ class AppSettingsPage extends StatefulWidget {
   static const Key checkUpdateKey = Key('app-check-update');
   static const Key licensesKey = Key('app-licenses');
   static const Key unbindKey = Key('engineer-unbind');
+  static const Key arrivalKey = Key('arrival-alerts');
 
   @override
   State<AppSettingsPage> createState() => _AppSettingsPageState();
@@ -151,7 +153,7 @@ class _AppSettingsPageState extends State<AppSettingsPage> {
             subtitle: Text(tr('Light and dark follow the system setting', '浅色、深色跟随系统设置'), style: sub()),
           ),
         ]),
-        if (api != null && ((watch?.available ?? false) || (push != null && push.state.value != PushState.off))) ...[
+        if (api != null) ...[
           nwGap16,
           NwSectionLabel(tr('Notifications and watch', '通知与值守')),
           nwGap8,
@@ -185,6 +187,20 @@ class _AppSettingsPageState extends State<AppSettingsPage> {
                                 : tr('Not ready (${push.reason})', '未就绪（${push.reason}）'),
                             style: sub()),
                       )),
+            ValueListenableBuilder<bool>(
+                valueListenable: arrivalAlerts,
+                builder: (_, on, _) => SwitchListTile(
+                      key: AppSettingsPage.arrivalKey,
+                      secondary: Icon(on ? Icons.where_to_vote : Icons.where_to_vote_outlined,
+                          color: on ? c.success : c.textSecondary),
+                      title: Text(tr('Waypoint arrival alerts', '巡检到点提醒')),
+                      subtitle: Text(
+                          tr('Sound and vibrate at each patrol point (for on-site tests; off after the app restarts)',
+                              '每到一个巡检点就响铃、震动（现场测试用，App 重启后自动关闭）'),
+                          style: sub()),
+                      value: on,
+                      onChanged: (v) => arrivalAlerts.value = v,
+                    )),
           ]),
         ],
         nwGap16,

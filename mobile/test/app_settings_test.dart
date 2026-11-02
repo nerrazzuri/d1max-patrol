@@ -5,6 +5,7 @@ import 'package:d1max_patrol/net/app_update.dart';
 import 'package:d1max_patrol/net/background_watch.dart';
 import 'package:d1max_patrol/net/site_client.dart';
 import 'package:d1max_patrol/ui/app_settings.dart';
+import 'package:d1max_patrol/ui/arrival_alert.dart';
 import 'package:d1max_patrol/ui/nw/nw_shell.dart';
 import 'package:d1max_patrol/ui/site_tabs.dart';
 import 'package:flutter/material.dart';
@@ -31,6 +32,19 @@ void main() {
     expect(find.byKey(AppSettingsPage.unbindKey), findsOneWidget);
     expect(find.byKey(AppSettingsPage.watchKey), findsNothing);
     expect(find.byKey(AppSettingsPage.checkUpdateKey), findsNothing);
+  });
+
+  testWidgets('W69 站点里有「巡检到点提醒」开关，默认关；站点列表进来没有', (t) async {
+    addTearDown(() => arrivalAlerts.value = false);
+    await _show(t, AppSettingsPage(api: FakeApi('guard')));
+    final sw = find.byKey(AppSettingsPage.arrivalKey);
+    expect(t.widget<SwitchListTile>(sw).value, isFalse);
+    await t.tap(sw);
+    await t.pumpAndSettle();
+    expect(arrivalAlerts.value, isTrue);
+    expect(t.widget<SwitchListTile>(sw).value, isTrue);
+    await _show(t, const AppSettingsPage());
+    expect(find.byKey(AppSettingsPage.arrivalKey), findsNothing);
   });
 
   testWidgets('站点里：后台值守开关点的是机器人栏那个开关；没有工程师工具', (t) async {

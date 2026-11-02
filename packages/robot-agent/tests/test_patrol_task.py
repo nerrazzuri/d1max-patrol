@@ -77,6 +77,7 @@ async def test_三个点走完_每点一条事件_done(台子):
     got = _点事件(book)
     assert [(g["index"], g["name"], g["ok"]) for g in got] == [
         (0, "p0", True), (1, "p1", True), (2, "p2", True)]
+    assert {g["total"] for g in got} == {3}            # W69:手机到点提醒说「第几个 / 共几个」
     o = await r.odometry()
     assert abs(o.x) < 0.2 and abs(o.y - 1.0) < 0.2
 
