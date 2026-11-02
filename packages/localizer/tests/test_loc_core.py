@@ -45,9 +45,9 @@ def _est(x, y, yaw=0.0, *, stamp, q=0.95):
 class 台:
     """核心 + 手拨的钟;``walk`` 按 10 Hz 喂点云与估计,钟跟着走。"""
 
-    def __init__(self, *, init=True):
+    def __init__(self, *, init=True, **kw):
         self.c = 钟()
-        self.core = LocalizerCore(monotonic=self.c)
+        self.core = LocalizerCore(monotonic=self.c, **kw)
         self.stamp = 5000.0
         self.core.prior_loaded(M, FLAT)
         self.core.backend_started()
@@ -660,3 +660,42 @@ def test_重启要的初值_没给过就没有_人给的未确认优先_确认�
     w = t.core.restart_want()
     assert w.req is None and not w.human and w.x == pytest.approx(t.poses()[-1].x)
     assert w.sigma == AUTO_RELOC_SIGMA_M
+
+
+# 2026-11-02 商场 mall4 在 mall3 图上、Super-LIO 跟对了(误差最大 0.13 m)的 199–206 s:套图打分掉到
+# 0.67–0.9(两圈之间场景变了)。按 MOLA 的线(< 0.9 的帧占 20% 就不信)整段不信。
+_对着但掉分 = [0.92, 0.89, 0.81, 0.77, 0.86, 0.79, 0.67, 0.7, 0.79, 0.81, 0.85, 0.81, 0.81, 0.89]
+
+
+def _走一段分数(t, qs, x):
+    for q in qs:
+        for _ in range(5):                                # 每 5 帧打一次分,中间沿用
+            x += 0.05
+            t.step(x, 0.0, q=q)
+    return x
+
+
+def test_W68_Super_LIO的分数线_跟对了掉到0点67也信():
+    from d1max_localizer.core import SLIO_QUALITY
+    t = 台(quality=SLIO_QUALITY)
+    x = t.walk(150, q=0.93)
+    t.out.clear()
+    _走一段分数(t, _对着但掉分, x)
+    assert max(p.sigma_xy for p in t.poses()) < 0.5        # 代理那条线 0.5:不过线
+
+
+def test_W68_同样的分数按MOLA的线_不信():
+    t = 台()
+    x = t.walk(150, q=0.93)
+    t.out.clear()
+    _走一段分数(t, _对着但掉分, x)
+    assert max(p.sigma_xy for p in t.poses()) >= 1.0
+
+
+def test_W68_Super_LIO的分数线_偏1米那种0点5_不信():
+    from d1max_localizer.core import SLIO_QUALITY
+    t = 台(quality=SLIO_QUALITY)
+    x = t.walk(150, q=0.93)
+    t.out.clear()
+    _走一段分数(t, [0.5] * 10, x)
+    assert t.poses()[-1].sigma_xy > 0.5

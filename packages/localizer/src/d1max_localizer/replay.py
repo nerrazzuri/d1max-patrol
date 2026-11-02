@@ -198,14 +198,17 @@ class _Clock:
 
 
 def simulate(frames: Sequence[Frame], frames_cfg: Frames, init: tuple[float, float, float], *,
-             sigma0: float = 0.5, latency_s: float = 0.0) -> list[tuple[float, Any]]:
+             sigma0: float = 0.5, latency_s: float = 0.0,
+             quality: Any = None) -> list[tuple[float, Any]]:
     """按到达时刻把每帧喂给定位核心;回 ``[(到达时刻, 报文)]``。MOLA 一帧一帧按顺序处理:这一帧
     ``max(上一帧处理完, 它的时间戳) + 处理耗时`` 出来(再加 ``latency_s``)—— 处理慢的那帧会把后面的
-    都拖晚,不会被后面的超过(W09b 内审)。开头当人在这里给了初值(``init``,σ ``sigma0``)。"""
+    都拖晚,不会被后面的超过(W09b 内审)。开头当人在这里给了初值(``init``,σ ``sigma0``)。
+    ``quality``:质量分的线(:class:`~d1max_localizer.core.QualityScale`),不给按 MOLA 的。"""
     if not frames:
         return []
     clock = _Clock()
-    core = LocalizerCore(monotonic=clock)
+    core = (LocalizerCore(monotonic=clock) if quality is None
+            else LocalizerCore(monotonic=clock, quality=quality))
     t0 = frames[0].stamp
     clock.t = t0
     core.prior_loaded(MAP_REF, frames_cfg)

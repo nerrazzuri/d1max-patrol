@@ -276,7 +276,9 @@ def _replay(a: argparse.Namespace) -> int:
                             only_first_n=a.only_first_n, skip_first_n=a.skip_first_n,
                             imu=a.imu)
         frames = replay.read_run(a.out)
-    msgs = replay.simulate(frames, frames_cfg, a.init)
+    from d1max_localizer.core import MOLA_QUALITY, SLIO_QUALITY
+    msgs = replay.simulate(frames, frames_cfg, a.init,
+                           quality=SLIO_QUALITY if a.engine == "superlio" else MOLA_QUALITY)
     odom = [(t, (p[0], p[1], math.atan2(2 * (q[3] * q[2] + q[0] * q[1]),
                                        1 - 2 * (q[1] * q[1] + q[2] * q[2]))))
             for t, p, q in replay.read_tum(a.odom_tum)] if a.odom_tum else []
