@@ -125,7 +125,8 @@ def slio_frames(poses: Sequence[tuple[float, Sequence[float], Sequence[float]]],
     scorer = L.ScanScorer()
     scorer.set_fit(fit)
     events: list[tuple[float, int, Any]] = [(float(t), 0, xyz) for t, xyz in clouds]
-    events += [(float(t), 1, (p, q)) for t, p, q in poses]
+    # 没对上之前它先发几帧时间戳 −1 的(核心同样丢掉)
+    events += [(float(t), 1, (p, q)) for t, p, q in poses if t > 0]
     events.sort(key=lambda e: (e[0], e[1]))
     out = []
     for t, kind, v in events:
