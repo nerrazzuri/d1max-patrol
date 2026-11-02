@@ -282,3 +282,17 @@ def test_模拟版_记下调用():
     assert s.call("restart", {"unit": "d1max-agent"})["ok"]
     assert s.call("reboot")["ok"] is False
     assert s.calls == [("restart", {"unit": "d1max-agent"}), ("reboot", {})]
+
+
+def test_建图时暂停_只许停合并雷达和定位器_恢复是启动_工单21(tmp_path):
+    cfg = _cfg(tmp_path)
+    rec = Rec()
+    ops = R.Ops(cfg, run=rec)
+    assert ops.do("pause", {"unit": "d1max-lidar-merge"}) == {"unit": "d1max-lidar-merge"}
+    assert ops.do("resume", {"unit": "d1max-localizer"}) == {"unit": "d1max-localizer"}
+    assert rec.calls == [["systemctl", "stop", "d1max-lidar-merge.service"],
+                         ["systemctl", "start", "d1max-localizer.service"]]
+    for u in ("d1max-agent", "d1max-obstacles", "ssh", "../x"):
+        with pytest.raises(R.OpError):
+            ops.do("pause", {"unit": u})
+    assert len(rec.calls) == 2

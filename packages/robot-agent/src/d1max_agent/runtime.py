@@ -421,6 +421,7 @@ class AgentRuntime:
         self._restarting = False
         #: W55:结果未知的特权请求的那条查结果任务。
         self._ops_watch: asyncio.Task | None = None
+        self._paused_task: asyncio.Task | None = None
         #: 录包时的轨迹(W00c6h);``_trail_on``:上一拍在不在录(录包开始那一拍清空)。
         self.trail = MappingTrail()
         self._trail_on = False
@@ -2205,8 +2206,20 @@ class AgentRuntime:
         self._ops_watch = asyncio.get_running_loop().create_task(
             self._watch_priv(rid, release_on_ok=release_on_ok))
 
+    async def _resume_paused(self) -> None:
+        """上一个代理进程建图时暂停了合并雷达、定位器,没来得及恢复(工单 21):恢复。尽力而为。"""
+        orch = getattr(self.mapper, "orch", None) if self.mapper is not None else None
+        leftover = getattr(orch, "resume_leftover", None)
+        if leftover is None:
+            return
+        try:
+            await leftover()
+        except Exception:
+            log.exception("恢复建图时暂停的服务出错")
+
     async def _start(self) -> None:
         await self._resume_ops_hold()
+        self._paused_task = asyncio.get_running_loop().create_task(self._resume_paused())
         # 录像(W18)不靠 HAL 也不靠站点:先起,连不上站点期间照录、攒着。起不来(目录建不了)不许
         # 连累代理:报一条、照常起(每拍还会重试起 ffmpeg)
         if self.recorder is not None:

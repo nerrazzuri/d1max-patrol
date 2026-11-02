@@ -459,3 +459,16 @@ def test_定号时附近一个点都没有_先不定():
     for _ in range(L.UP_FRAMES + 2):
         g.add(_world(0.0, 0.0, H), I3, far)
     assert g.up is None and g.frames == 0
+
+
+def test_Super_LIO的位姿_IMU换成雷达_时刻是帧末_晚100ms也配得上_工单21():
+    """Super-LIO 发的是 IMU 位姿、时刻是这一帧最后一个点(报文头 + 约 0.1 s)。"""
+    g = _Grid()
+    R_il = [[0, -1, 0], [1, 0, 0], [0, 0, 1]]
+    f = L.Feeder(g, extrinsic=(R_il, (0.1, 0.0, 0.0)), window=L.SUPERLIO_PAIR_WINDOW_S)
+    f.on_scan(10.0, np.ones((3, 3)))
+    f.on_pose(10.0, (0.0, 0.0, 0.0), (0.0, 0.0, 0.0, 1.0))   # 早于帧末:不是这一帧的
+    assert not g.added
+    f.on_pose(10.1, (1.0, 0.0, 0.0), (0.0, 0.0, 0.0, 1.0))
+    o, R, _ = g.added[0]
+    assert np.allclose(o, [1.1, 0, 0]) and np.allclose(R, R_il)

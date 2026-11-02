@@ -828,6 +828,12 @@ for pair in D1MAX_LOCALIZER:d1max-localizer D1MAX_OBSTACLES:d1max-obstacles \
   fi
 done
 
+# Super-LIO 建图前端(工单 21):源码随包带,在这台机器上编(约 7 分钟,不在装机里做)。没编的话建图退回 MOLA。
+if [[ -x "$PKG/deploy/d1max-superlio-build" ]] && [[ ! -L /opt/d1max/superlio/current ]]; then
+  echo "  提示: Super-LIO 建图前端还没编,建图暂用 MOLA。编一次(约 7 分钟):"
+  echo "        sudo /opt/d1max/current/deploy/d1max-superlio-build"
+fi
+
 say "装完了。看一眼:"
 echo "  systemctl status d1max-agent"
 echo "  journalctl -u d1max-agent -f"

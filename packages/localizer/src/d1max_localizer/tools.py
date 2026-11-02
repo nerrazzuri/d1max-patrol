@@ -64,7 +64,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     b.add_argument("--work", type=Path, default=None, help="中间文件(默认 <out>.work)")
     b.add_argument("--lidar-topic", default="/front_lidar")
     b.add_argument("--prior-pack", default="none", help="none 或 regroup:<体素米>:<范围倍数>")
-    b.add_argument("--reuse", action="store_true", help="用 --work 里已有的 MOLA 输出,只打包")
+    b.add_argument("--reuse", action="store_true",
+                   help="边走边建的:MOLA 用 --work 里已有的输出;Super-LIO 用录包里它录下的位姿")
+    b.add_argument("--front", choices=("mola", "superlio"), default="mola",
+                   help="建图前端(工单 21):superlio = Super-LIO 的轨迹 + 原始点云;mola = 原来的")
     b.add_argument("--rtk-antenna", type=lambda s: _floats(s, 2), default=(0.0, 0.0),
                    help="RTK 天线在机器人身上的水平位置(朝前,朝左,米;W09e 配经纬度用,真机量)")
     b.add_argument("--loop-closure", default="auto",
@@ -200,7 +203,10 @@ def _merge_bag(a: argparse.Namespace) -> int:
 def _build(a: argparse.Namespace) -> int:
     from d1max_localizer import build
     work = a.work or a.out.with_name(a.out.name + ".work")
-    timings = {} if a.reuse else build.run_mapping(a.bag, work, lidar_topic=a.lidar_topic)
+    if a.front == "superlio":
+        timings = _superlio_front(a.bag, work, reuse=a.reuse)
+    else:
+        timings = {} if a.reuse else build.run_mapping(a.bag, work, lidar_topic=a.lidar_topic)
     lc = build.find_loop_closure(a.loop_closure)
     print(f"回环工具:{lc or '没有(不回环)'}")
     files = build.package(work, a.out, prior_pack=build.PriorPack.parse(a.prior_pack),
@@ -211,6 +217,35 @@ def _build(a: argparse.Namespace) -> int:
                      indent=2))
     print("文件:", ", ".join(files))
     return 0
+
+
+def _superlio_front(bag: Path, work: Path, *, reuse: bool) -> dict[str, float]:
+    """Super-LIO 前端(工单 21):录包里有边走边建录下的位姿就用;没有(老的包、只录了原始数据)
+    在隔离域里回放给 Super-LIO 重算。出 ``work`` 里的三样,之后照原来的打包(回环、栅格、先验)。"""
+    import shutil
+    import time
+
+    from d1max_localizer import build
+    from d1max_localizer import superlio as S
+    cfg = S.config_path()
+    if not S.installed():
+        raise S.SuperLioError(f"Super-LIO 未装({S.ROOT}):先跑 deploy/d1max-superlio-build")
+    shutil.rmtree(work, ignore_errors=True)
+    t0 = time.monotonic()
+    try:
+        poses, source = S.read_odom(bag, S.LIVE_TOPIC), "live"
+    except S.SuperLioError:
+        if reuse:
+            raise
+        lio = S.run_offline(bag, work, cfg=cfg)
+        poses, source = S.read_odom(lio, "/lio/odom"), "replay"
+    t1 = time.monotonic()
+    info = S.prepare(work, bag, poses, cfg=cfg, prior_pipeline=build.PRIOR_PIPELINE,
+                     plugin=build._plugin(), source=source)
+    q = info["quality"]
+    print(f"Super-LIO({source}):{q['duration_s']} s、路程 {q['path_m']} m、首尾相距 "
+          f"{q['start_end_m']} m(回到起点的话这就是误差)、关键帧 {info['keyframes']}")
+    return {"superlio_s": round(t1 - t0, 1), "prepare_s": info["prepare_s"]}
 
 
 def _calibrate(a: argparse.Namespace) -> int:

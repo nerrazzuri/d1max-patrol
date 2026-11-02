@@ -491,3 +491,33 @@ def test_外审W55_4_N3_退回本身出错_不卡住_交回去让代理退出(mo
             raise OSError("上一版的启动文件坏了")
     monkeypatch.setattr(rel, "read_pending", lambda layout: object())
     assert M.after_switch(执行器(), 版本()) is False, "回假:调用方照常退出,不悄悄卡住"
+
+
+async def test_代理起来_上一趟建图暂停的服务恢复_出错不碍起来_工单21():
+    import types
+
+    from d1max_agent.runtime import AgentRuntime
+    calls = []
+
+    async def leftover():
+        calls.append(1)
+        raise RuntimeError("执行器没回")
+    rt = types.SimpleNamespace(mapper=types.SimpleNamespace(orch=types.SimpleNamespace(
+        resume_leftover=leftover)))
+    await AgentRuntime._resume_paused(rt)
+    assert calls == [1]
+    await AgentRuntime._resume_paused(types.SimpleNamespace(mapper=None))
+
+
+def test_建图暂停_两个服务都经执行器_出错带回原因_工单21(monkeypatch):
+    from d1max_agent import main as M
+    from d1max_contract import privops
+    sim = privops.SimOps(fail={"resume": "起不来"})
+    monkeypatch.setattr(privops, "from_config", lambda: sim)
+    pause = M._mapping_pauser()
+    assert pause(True) == ""
+    assert sim.calls == [("pause", {"unit": "d1max-lidar-merge"}),
+                         ("pause", {"unit": "d1max-localizer"})]
+    assert "d1max-localizer:起不来" in pause(False)
+    monkeypatch.setattr(privops, "from_config", lambda: None)
+    assert M._mapping_pauser() is None

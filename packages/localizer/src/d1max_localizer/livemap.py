@@ -52,6 +52,8 @@ MAX_RATE_HZ = 2.0               # 每秒最多累加几帧
 #: (离线轨迹比报文头晚 50 ms,10 Hz 下正好半帧),所以只往晚的一边放宽;窗口比一帧(100 ms)窄,
 #: 配上的只会有一帧 —— 有两帧取不晚于位姿的最近那帧。
 PAIR_WINDOW_S = (-0.01, 0.08)
+#: Super-LIO(工单 21)的位姿时刻是这一帧最后一个点:比报文头晚约 0.1 s。
+SUPERLIO_PAIR_WINDOW_S = (0.05, 0.16)
 KEEP_SCANS = 10                 # 等位姿的点云最多留几帧
 KEEP_POSES = 50
 PERIOD_S = 3.0                  # 多久写一张快照(有新帧才写)
@@ -304,8 +306,15 @@ class Feeder:
     """点云配位姿:按时间戳配(见 :data:`PAIR_WINDOW_S`;谁先到都行)。每秒最多 ``rate_hz`` 帧,
     多的在反序列化之前就丢(:meth:`want`)。"""
 
-    def __init__(self, grid: Any, *, rate_hz: float = MAX_RATE_HZ) -> None:
+    def __init__(self, grid: Any, *, rate_hz: float = MAX_RATE_HZ,
+                 window: tuple[float, float] = PAIR_WINDOW_S,
+                 extrinsic: tuple[Sequence[Sequence[float]], Sequence[float]] | None = None
+                 ) -> None:
+        """``extrinsic``:位姿是 IMU 的(Super-LIO),给雷达 → IMU 外参 ``(R, t)``,换成雷达的。"""
         self.grid = grid
+        self._window = window
+        self._ext = None if extrinsic is None else (np.asarray(extrinsic[0], float),
+                                                   np.asarray(extrinsic[1], float))
         self._gap = 1.0 / rate_hz
         self._last: float | None = None
         self.dropped = 0
@@ -324,14 +333,14 @@ class Feeder:
     def on_scan(self, stamp: float, xyz: Any) -> None:
         xyz = np.asarray(xyz, float)[::POINT_STRIDE]
         for k, (t, p, q) in enumerate(self._poses):
-            if _paired(stamp, t):
+            if _paired(stamp, t, self._window):
                 del self._poses[k]
                 self._use(p, q, xyz)
                 return
         self._scans.append((stamp, xyz))
 
     def on_pose(self, stamp: float, p: Sequence[float], q: Sequence[float]) -> None:
-        hit = [k for k, (t, _) in enumerate(self._scans) if _paired(t, stamp)]
+        hit = [k for k, (t, _) in enumerate(self._scans) if _paired(t, stamp, self._window)]
         if hit:
             k = max(hit, key=lambda i: self._scans[i][0])
             xyz = self._scans[k][1]
@@ -344,6 +353,9 @@ class Feeder:
     def _use(self, p: Sequence[float], q: Sequence[float], xyz: Any) -> None:
         R = np.array(quat_to_mat(q))
         o = np.asarray(p, float)
+        if self._ext is not None:
+            o = R @ self._ext[1] + o
+            R = R @ self._ext[0]
         self.grid.add(o, R, xyz @ R.T + o)
 
 
@@ -382,8 +394,8 @@ class Handlers:
             self._bad("位姿", exc)
 
 
-def _paired(scan_t: float, pose_t: float) -> bool:
-    return PAIR_WINDOW_S[0] - 1e-9 <= pose_t - scan_t <= PAIR_WINDOW_S[1] + 1e-9
+def _paired(scan_t: float, pose_t: float, window: tuple[float, float] = PAIR_WINDOW_S) -> bool:
+    return window[0] - 1e-9 <= pose_t - scan_t <= window[1] + 1e-9
 
 
 def cdr_stamp(raw: bytes) -> float:
@@ -401,6 +413,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     ap.add_argument("--lidar-topic", default="/front_lidar")
     ap.add_argument("--pose-topic", default="/d1max_mapping/lidar_odometry/pose")
     ap.add_argument("--period", type=float, default=PERIOD_S)
+    ap.add_argument("--superlio", action="store_true",
+                    help="位姿是 Super-LIO 的(IMU 位姿、帧末时刻;工单 21)")
     a = ap.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
@@ -414,7 +428,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     from d1max_localizer.build import cloud_xyz
 
     grid = LiveGrid()
-    feeder = Feeder(grid)
+    if a.superlio:
+        from d1max_localizer import superlio
+        feeder = Feeder(grid, window=SUPERLIO_PAIR_WINDOW_S,
+                        extrinsic=superlio.extrinsic(superlio.config_path()))
+    else:
+        feeder = Feeder(grid)
     snaps = Snapshots(a.out, run=a.run)
     stop = False
 

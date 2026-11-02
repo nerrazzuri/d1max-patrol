@@ -1,0 +1,46 @@
+# Super-LIO 建图前端的参数(D1 Max 前雷达 RoboSense Airy + 它自带的 IMU)。
+# 机器人上 /etc/d1max/superlio.yaml 有就用那份(现场调参),没有用这份。话题由建图编排用 -p 覆盖。
+# lidar_type 2 = 禾赛的点格式(x, y, z, intensity, ring, timestamp 绝对秒),Airy 一样。
+# lio.extrinsic.lidar_imu = 雷达系 → IMU 系(t 3 个 + R 按行 9 个):GLIM 标的 T_lidar_imu 取逆;
+# 2026-11-02 商场两个包离线验过(首尾 0.14 m / 4.2 m)。
+/**:
+  ros__parameters:
+    lio.map.save_map: false
+    lio.map.if_filter: false
+    lio.map.save_map_dir: "map"
+    lio.map.map_name: "map.pcd"
+    lio.map.ds_size: 0.1
+    lio.map.save_interval: 100000
+    lio.ros.lidar_topic: "/front_lidar"
+    lio.ros.imu_topic: "/front_lidar/imu"
+    lio.sensor.lidar_type: 2
+    lio.sensor.blind: 0.6
+    lio.sensor.maxrange: 100.0
+    lio.sensor.filter_rate: 2
+    lio.sensor.enable_downsample: true
+    lio.sensor.voxel_fliter_size: 0.3
+    lio.sensor.gravity_norm: 9.7946
+    lio.sensor.imu_type: 1
+    lio.sensor.imu_na: 0.1
+    lio.sensor.imu_ng: 0.1
+    lio.sensor.imu_nba: 0.0001
+    lio.sensor.imu_nbg: 0.0001
+    lio.extrinsic.lidar_imu: [0.015183, 0.013217, -0.057787,
+                              0.016772, -0.999805, -0.0104,
+                              0.999496, 0.016485, 0.027127,
+                              -0.02695, -0.01085, 0.999578]
+    lio.extrinsic.odom_robo: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    lio.hash_map.hash_capacity: 100000000
+    lio.hash_map.vox_resolution: 0.5
+    lio.kf.kf_type: 0
+    lio.kf.kf_max_iterations: 4
+    lio.kf.kf_align_gravity: true
+    lio.kf.kf_quit_eps: 0.001
+    lio.output.robot: false
+    lio.output.plan_env_world: false
+    lio.output.plan_env_body: false
+    lio.output.planner: false
+    lio.output.map: true
+    lio.output.dense: false
+    lio.output.pub_step: 10
+    lio.eva.timer: false

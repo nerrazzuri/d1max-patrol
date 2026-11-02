@@ -112,12 +112,12 @@ def test_建图起的是建图脚本_录包_输出_中间目录_雷达话题_先
                          "--out", str(cfg.maps_dir / "m1"),
                          "--work", str(cfg.maps_dir / ".work" / "m1"),
                          "--lidar-topic", "/front_lidar",
-                         "--prior-pack", "none", "--rtk-antenna", "0,0")
+                         "--prior-pack", "none", "--rtk-antenna", "0,0", "--front", "mola")
     assert spec.ready_pattern == "", "跑完自己退,没有「起来了」这回事"
     from dataclasses import replace
     spec = MappingOrchestrator(orch._procs, replace(cfg, rtk_antenna=(0.3, -0.05))
                                ).spec_for_build(tmp_path / "b", "m1")
-    assert spec.argv[-2:] == ("--rtk-antenna", "0.3,-0.05"), "W09e:天线杆臂给建图脚本配经纬度"
+    assert spec.argv[-4:-2] == ("--rtk-antenna", "0.3,-0.05"), "W09e:天线杆臂给建图脚本配经纬度"
 
 
 def test_先验打包和雷达话题是可配的(procs, cfg, tmp_path):
@@ -699,3 +699,114 @@ async def test_编排说没在录_服务层也不在录(orch, cfg, tmp_path):
         await svc.stop()
     assert not svc.recording
     await svc.start("yard2")
+
+
+# ---------------------------------------------------------------- 工单 21:Super-LIO 建图前端
+def _slio(tmp_path, procs, cfg, *, installed=True, pauser=None):
+    from dataclasses import replace
+    root = tmp_path / "superlio"
+    if installed:
+        for f in (".ok", "install/setup.bash", "bin/kf2sm"):
+            (root / f).parent.mkdir(parents=True, exist_ok=True)
+            (root / f).write_text("")
+    c = replace(cfg, front="superlio", superlio_root=root,
+                superlio_live=tmp_path / "d1max-superlio-live")
+    return MappingOrchestrator(procs, c, pause_units=pauser)
+
+
+class _Pauser:
+    def __init__(self, err: str = "") -> None:
+        self.calls: list[bool] = []
+        self.err = err
+
+    def __call__(self, on: bool) -> str:
+        self.calls.append(on)
+        return self.err
+
+
+def test_前端_装了Super_LIO用它_没装退回MOLA_配成mola就用MOLA(tmp_path, procs, cfg):
+    from dataclasses import replace
+    assert _slio(tmp_path, procs, cfg).front() == "superlio"
+    assert _slio(tmp_path / "x", procs, cfg, installed=False).front() == "mola"
+    assert MappingOrchestrator(procs, replace(cfg, front="mola", superlio_root=tmp_path / "superlio"
+                                              )).front() == "mola"
+
+
+async def test_Super_LIO边走边建_起它的进程_录包带上它的位姿_预览订它_暂停合并雷达和定位器(
+        tmp_path, procs, cfg):
+    p = _Pauser()
+    orch = _slio(tmp_path, procs, cfg, pauser=p)
+    await orch.start_record("run1", live_map_id="mall")
+    by = {s.name: s for s in procs.started}
+    assert by["molamap"].argv == (str(tmp_path / "d1max-superlio-live"),)
+    assert by["molamap"].env["ROS_DOMAIN_ID"] == "24"
+    assert "/d1max_mapping/lio/odom" in by["bagrecord"].argv
+    prev = by["mapview"].argv
+    assert prev[prev.index("--pose-topic") + 1] == "/d1max_mapping/lio/odom"
+    assert "--superlio" in prev
+    assert p.calls == [True]
+    work = cfg.maps_dir / ".work" / "mall"
+    import json
+    assert json.loads((work / "mola.json").read_text())["front"] == "superlio"
+    await orch.stop_record()
+    assert p.calls == [True, False]
+    assert not (cfg.maps_dir / ".paused").exists()
+    await orch.package(cfg.bags_dir / "run1", "mall")
+    pack = [s for s in procs.started if s.name == "mappack"][0].argv
+    assert pack[pack.index("--front") + 1] == "superlio" and "--reuse" in pack
+
+
+async def test_只录包不暂停_MOLA边走边建也不暂停_录包不带位姿(tmp_path, procs, cfg):
+    p = _Pauser()
+    orch = _slio(tmp_path, procs, cfg, pauser=p)
+    await orch.start_record("run1")
+    await orch.stop_record()
+    assert p.calls == []
+    assert "/d1max_mapping/lio/odom" not in procs.started[0].argv
+    from dataclasses import replace
+    procs2 = type(procs)(tmp_path / "l2")
+    o2 = MappingOrchestrator(procs2, replace(cfg, front="mola"), pause_units=p)
+    await o2.start_record("run2", live_map_id="m")
+    assert p.calls == []
+    assert "/d1max_mapping/lio/odom" not in procs2.started[0].argv
+
+
+async def test_暂停不成_照样建图_记下原因(tmp_path, procs, cfg):
+    p = _Pauser("执行器未装")
+    orch = _slio(tmp_path, procs, cfg, pauser=p)
+    await orch.start_record("run1", live_map_id="mall")
+    assert "molamap" in procs.running()
+    assert "执行器未装" in orch.pause_error
+
+
+async def test_Super_LIO起不来_录包收掉_两个服务恢复(tmp_path, procs, cfg):
+    p = _Pauser()
+    orch = _slio(tmp_path, procs, cfg, pauser=p)
+    procs.start_fails.add("molamap")
+    with pytest.raises(MappingError):
+        await orch.start_record("run1", live_map_id="mall")
+    assert p.calls == [True, False]
+
+
+async def test_代理重启时上一趟暂停的还没恢复_恢复(tmp_path, procs, cfg):
+    p = _Pauser()
+    (cfg.maps_dir).mkdir(parents=True, exist_ok=True)
+    (cfg.maps_dir / ".paused").write_text("")
+    orch = _slio(tmp_path, procs, cfg, pauser=p)
+    await orch.resume_leftover()
+    assert p.calls == [False] and not (cfg.maps_dir / ".paused").exists()
+    await orch.resume_leftover()
+    assert p.calls == [False]
+
+
+async def test_从录包重建_用当前前端_老的边走边建按它开录时的前端打包(tmp_path, procs, cfg, bag):
+    orch = _slio(tmp_path, procs, cfg)
+    await orch.rebuild(bag, "m1")
+    b = [s for s in procs.started if s.name == "mapbuild"][0].argv
+    assert b[b.index("--front") + 1] == "superlio" and "--reuse" not in b
+    work = cfg.maps_dir / ".work" / "m2"
+    work.mkdir(parents=True)
+    (work / "mola.json").write_text('{"mode": "live"}')              # 升级前开录的:MOLA
+    await orch.package(bag, "m2")
+    pk = [s for s in procs.started if s.name == "mappack"][0].argv
+    assert pk[pk.index("--front") + 1] == "mola"
