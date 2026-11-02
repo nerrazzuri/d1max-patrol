@@ -854,3 +854,23 @@ async def test_离目标远的照样交给Nav2(tmp_path):
     await t.start(1.5, 4.0, 0.0)
     await t.nav.goto(Pose.from_xy_yaw(2.0, 4.0, 0.0))
     assert link.kinds("goal")
+
+
+async def test_Nav2走到目标附近只差朝向_代理接过来自己转_工单11_02_18(tmp_path):
+    """11-02 复测:从 (0,0) 派到 C1 起点,位置到了、差 66°,Nav2 三次没进展、原地卡约 50 s。到了
+    xy 容差、只差朝向时代理取消 Nav2 的目标,自己原地转。"""
+    link = 假转接()
+    t = _台(tmp_path, link)
+    await t.start(1.5, 4.0, 0.0)
+    await t.nav.goto(Pose.from_xy_yaw(2.5, 4.0, math.radians(66)))
+    gid = link.kinds("goal")[-1]["goal_id"]
+    for _ in range(60):                                  # Nav2 把它开到目标点,朝向不管
+        link.now += 0.1
+        dx = 2.5 - t.r.x
+        link.cmd = (link.now, 1, 0.3 if dx > 0.05 else 0.0, 0.0, 0.0)
+        await t.一拍()
+    assert abs(t.r.x - 2.5) < 0.2
+    await t.跑(15.0)
+    assert link.kinds("cancel") and link.kinds("cancel")[-1]["goal_id"] == gid, "取消 Nav2 的目标"
+    assert NavStatus.SUCCEED in t.status, (t.status, t.nav.fail_reason)
+    assert abs(math.degrees(t.r.yaw) - 66) < 9, math.degrees(t.r.yaw)

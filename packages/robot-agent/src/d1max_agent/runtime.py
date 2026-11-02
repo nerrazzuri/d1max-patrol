@@ -156,6 +156,19 @@ def _ack_bytes(ack: Any) -> bytes:
     return _dumps(w)
 
 
+
+#: 自动重定位稳下来时修正量在这以内(米、弧度)算「定位器本来是对的、只是晚」(11-02 工单 18:转弯自动
+#: 重定位约 20 s 一次、修正 1–16 cm,照样凑满 3 次中止)。
+SMALL_FIX_M = 0.3
+SMALL_FIX_RAD = 0.15
+
+
+def small_correction(delta: tuple[float, float, float] | None) -> bool:
+    """重定位前后的修正量够不够小(给不出修正量的不算小)。"""
+    if delta is None:
+        return False
+    return math.hypot(delta[0], delta[1]) <= SMALL_FIX_M and abs(delta[2]) <= SMALL_FIX_RAD
+
 class AgentRuntime:
     def __init__(self, *, transport: Transport, registration: Registration, hal: RobotHAL,
                  store_dir: Path, now_ms: Callable[[], int], loaded_map: tuple[str, str] | None,
@@ -1545,12 +1558,13 @@ class AgentRuntime:
 
     def _loc_corrected(self, delta: tuple[float, float, float] | None, human: bool) -> None:
         """定位器跳过之后稳下来、重定位完(W09a):同人工重设(W00c6e),来路、出发点按修正量挪;给不出
-        就来路作废。只有人给的位置才把丢定位的次数从头算(内审应修 4)。
+        就来路作废。人给的位置、或者修正量很小(:func:`small_correction`,定位器本来是对的、只是晚;
+        11-02 工单 18)才把丢定位的次数从头算;大的修正(来回跳、锁错)照算(内审应修 4)。
 
         W41:稳下来之后拿点云套图核一遍(:meth:`_scan_check`,后台):现场 MOLA 两次锁到 5 m 外的
         错解,自己还说可信。"""
         if self.parts is not None:
-            self.parts.engine.relocalized(delta, reset_attempts=human)
+            self.parts.engine.relocalized(delta, reset_attempts=human or small_correction(delta))
         if self._global_ok() and not self._running(self._scan_job):
             try:
                 loop = asyncio.get_running_loop()

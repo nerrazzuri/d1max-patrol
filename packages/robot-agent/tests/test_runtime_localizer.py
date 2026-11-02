@@ -145,8 +145,8 @@ async def test_定位器自信地跳错_抓住停下_请它在推算的位置附
     [r] = t.loc.relocs
     assert r.sigma_xy == 1.0 and abs(r.x - t.dog.x) < 0.2, (r, t.dog.x)
     [(d, kw)] = got
-    assert kw == {"reset_attempts": False} and d is not None and abs(d[0]) < 0.15, got
-    assert t.rt.parts.engine._live.loc_reset_attempts == 1
+    assert kw == {"reset_attempts": True} and d is not None and abs(d[0]) < 0.15, got
+    assert t.rt.parts.engine._live.loc_reset_attempts == 0, "修正量很小:定位器本来是对的,不计数"
     await t.拍(80)
     assert _事件(t.ears, "task_done"), t.ears.by.get("event")
     assert abs(t.dog.x - 4.0) < 0.3
@@ -483,3 +483,13 @@ async def test_配了定位器_不收没有先验的版本(tmp_path):
         assert not (tmp_path / "keep" / "m" / "0").exists(), "下载之前就拒"
     finally:
         await t.收()
+
+
+def test_自动重定位修正量小的不计数_大的照算_工单11_02_18():
+    """11-02 复测:转弯自动重定位约 20 s 一次、修正 1–16 cm(定位器是对的,只是晚),2 分钟窗里照样凑满
+    3 次中止。修正量在 0.3 m、0.15 rad 以内的不算丢定位重置;大的(来回跳、锁错)照算。"""
+    from d1max_agent.runtime import small_correction
+    assert small_correction((0.16, -0.05, 0.05))
+    assert not small_correction((0.5, 0.0, 0.0))
+    assert not small_correction((0.0, 0.0, 0.3))
+    assert not small_correction(None)
