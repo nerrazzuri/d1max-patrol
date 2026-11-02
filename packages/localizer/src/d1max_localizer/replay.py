@@ -305,8 +305,9 @@ def _pct(v: Sequence[float], p: float) -> float:
     return s[min(len(s) - 1, int(p / 100 * (len(s) - 1) + 0.5))]
 
 
-def _intervals(view: View) -> list[dict[str, Any]]:
-    """代理不信的时段:[{from, to, why}](why 取这一段里最常见的原因)。"""
+def _intervals(view: View, end: float | None = None) -> list[dict[str, Any]]:
+    """代理不信的时段:[{from, to, why}](why 取这一段里最常见的原因)。``end``:录包结束时刻 ——
+    最后一条报文之后还不信,就一直不信到结束(核心判没照办之后不再出报文)。"""
     out: list[dict[str, Any]] = []
     cur: dict[str, Any] | None = None
     for t, ok, why, _ in view:
@@ -320,6 +321,8 @@ def _intervals(view: View) -> list[dict[str, Any]]:
             out.append(cur)
             cur = None
     if cur is not None:
+        if end is not None:
+            cur["to"] = max(cur["to"], end)
         out.append(cur)
     return [{"from": i["from"], "to": i["to"], "why": max(i["whys"], key=i["whys"].get)}
             for i in out]
@@ -351,7 +354,7 @@ def metrics(frames: Sequence[Frame], msgs: Sequence[tuple[float, Any]],
         "agent_trusted_share": round(t_ok, 3),
         "agent_untrusted": [{"from_s": round(i["from"] - frames[0].stamp, 1),
                              "to_s": round(i["to"] - frames[0].stamp, 1), "why": i["why"]}
-                            for i in _intervals(view)],
+                            for i in _intervals(view, frames[-1].stamp if frames else None)],
     }
     if reference:
         out["error_m"] = _errors(poses, view, frames_cfg, reference, reference_same_frame)
@@ -415,9 +418,10 @@ def _errors(poses: Sequence[Pose], view: View, frames_cfg: Frames,
 def report_md(name: str, m: dict[str, Any]) -> str:
     lines = [f"# 定位回放:{name}", "",
              f"- 帧数 {m['frames']},时长 {m['duration_s']} s,帧率 {m['rate_hz']} Hz",
-             f"- MOLA 每帧耗时 p50 {m['proc_ms']['p50']} ms、p95 {m['proc_ms']['p95']} ms、"
-             f"最大 {m['proc_ms']['max']} ms(10 Hz 的预算是 100 ms)",
-             f"- ICP 质量 p5 {m['quality']['p5']}、中位 {m['quality']['p50']};σ 中位 "
+             (f"- 每帧耗时 p50 {m['proc_ms']['p50']} ms、p95 {m['proc_ms']['p95']} ms、"
+              f"最大 {m['proc_ms']['max']} ms(10 Hz 的预算是 100 ms)" if m['proc_ms']['max']
+              else "- 每帧耗时:未记录(Super-LIO 不报)"),
+             f"- 质量 p5 {m['quality']['p5']}、中位 {m['quality']['p50']};σ 中位 "
              f"{m['sigma_m']['p50']} m、p95 {m['sigma_m']['p95']} m",
              f"- 定位器报的跳变 {m['jumps']} 次;定位器状态占比 {m['localizer_states']}",
              f"- **代理判可信的时间占比 {m['agent_trusted_share']:.0%}**"]
