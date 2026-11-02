@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import stat
+from pathlib import Path
 
 import pytest
 
@@ -38,6 +39,23 @@ def test_芯片编号_读设备树或cpuinfo_全零和读不到都不行(tmp_pat
     zero.write_text("Serial\t\t: 0000000000000000\n")
     with pytest.raises(devid.DevIdError, match="芯片编号"):
         devid.read_hw_id([zero, tmp_path / "none"])
+
+
+def test_芯片编号_厂家占位值不算_往下读真编号_工单11_02_2(tmp_path):
+    """11-02:C40221 的 Orin 设备树 serial-number 是厂家占位 ``DummySN``,所有这种板算出来一样。占位值
+    (DummySN、全同字符、顺序数字之类)跳过,往下读(Orin 是 tegra_chip_uid);都没有就报读不到。"""
+    dummy = tmp_path / "dt"
+    dummy.write_bytes(b"DummySN\x00\x00")
+    uid = tmp_path / "uid"
+    uid.write_text("0x4b7d0f2a1c0310\n")
+    assert devid.read_hw_id([dummy, uid]) == devid.read_hw_id([uid])
+    for bad in ("DummySN", "dummy", "FFFFFFFF", "0123456789", "123456789", "N/A", "unknown",
+                "Default string", "To be filled by O.E.M."):
+        f = tmp_path / "bad"
+        f.write_text(bad + "\n")
+        with pytest.raises(devid.DevIdError, match="芯片编号"):
+            devid.read_hw_id([f])
+    assert Path("/sys/module/tegra_fuse/parameters/tegra_chip_uid") in devid.HW_SOURCES
 
 
 def test_出厂申请_生成设备钥匙只给root读_不覆盖(板):

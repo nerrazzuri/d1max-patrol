@@ -75,6 +75,22 @@ def test_命令行_enroll带code打出开通码_没登记的狗不给码(站, ca
     assert site_main.main(["--home", str(home), "enroll-code", "Z"]) != 0
 
 
+def test_命令行出的开通码_用站点实际听的端口_工单11_02_5(站, capsys):
+    """站点不在 8443 上听(现场笔记本上 8493 之类)时,命令行出的码以前照写 8443、机器人连错。
+    站点起来时记下实际端口;命令行也能用 --api-port 指定。"""
+    home = 站
+    assert site_main.main(["--home", str(home), "enroll-code", "A"]) == 0
+    line = next(x for x in capsys.readouterr().out.splitlines() if x.startswith("D1MAX1."))
+    assert site.decode(line)["api"].endswith(":8443"), "没记过端口:照旧 8443"
+    site_main.record_api_port(home, 8493)
+    assert site_main.main(["--home", str(home), "enroll-code", "A"]) == 0
+    line = next(x for x in capsys.readouterr().out.splitlines() if x.startswith("D1MAX1."))
+    assert site.decode(line)["api"].endswith(":8493")
+    assert site_main.main(["--home", str(home), "enroll-code", "A", "--api-port", "9443"]) == 0
+    line = next(x for x in capsys.readouterr().out.splitlines() if x.startswith("D1MAX1."))
+    assert site.decode(line)["api"].endswith(":9443")
+
+
 class _站点:
     """真的站点服务证书起的 HTTPS 服务,只有领证书包这一个口。"""
 

@@ -148,9 +148,29 @@ def _code_text(code: str) -> str:
             "'<上面那一行>'")
 
 
+#: 站点起来时把接口实际听的端口记在站点目录下这个文件里(工单 11-02-5:命令行出的开通码要用它)。
+API_PORT_FILE = "api-port"
+
+
+def record_api_port(home: Path, port: int) -> None:
+    (Path(home) / API_PORT_FILE).write_text(f"{int(port)}\n")
+
+
+def recorded_api_port(home: Path) -> int:
+    """站点上次起来时记下的接口端口;没记过、读不懂就 8443。"""
+    try:
+        port = int((Path(home) / API_PORT_FILE).read_text().strip())
+    except (OSError, ValueError):
+        return 8443
+    return port if 0 < port < 65536 else 8443
+
+
 def cmd_enroll_code(home: Path, robot_id: str, host: str | None, hours: float, *,
-                    expect_fp: str | None = None, api_port: int = 8443) -> str:
-    """给已登记的狗出一个开通码(商业化 A4):一次性、``hours`` 小时有效,旧码作废。"""
+                    expect_fp: str | None = None, api_port: int | None = None) -> str:
+    """给已登记的机器人出一个开通码(商业化 A4):一次性、``hours`` 小时有效,旧码作废。``api_port``
+    没给就用站点记下的实际端口(工单 11-02-5)。"""
+    if api_port is None:
+        api_port = recorded_api_port(home)
     from d1max_site.provision import ProvisionError, issue_code
     cfg = _load(home)
     ca = SiteCA(home / "ca")
@@ -1400,6 +1420,11 @@ def cmd_serve(home: Path, api_host: str, api_port: int, broker_url: str | None,
         srv.stop()
         return 1
     signal.signal(signal.SIGTERM, lambda *_: srv._stop.set())
+    try:
+        from urllib.parse import urlsplit
+        record_api_port(home, urlsplit(srv.api.url).port or api_port)
+    except (OSError, ValueError) as exc:
+        print(f"记不下接口端口(命令行出开通码会按 8443):{exc}", file=sys.stderr, flush=True)
     print(f"d1max-site 起来了:site={cfg['site_id']} api={srv.api.url} broker={url}",
           flush=True)
     try:
@@ -1443,6 +1468,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="顺带出一个开通码(A4):机器人上 d1max-patrol provision --code 一条命令开通")
     e.add_argument("--host", default=None, help="开通码里机器人连站点用的主机名(缺省第一个 "
                                                 "--hostname)")
+    e.add_argument("--api-port", type=int, default=None,
+                   help="开通码里站点接口的端口(缺省站点上次起来时实际听的,没有就 8443)")
     rn = sub.add_parser("renew", help="续签机器人的证书(工单 9):旧证书不吊销,"
                                       "机器人换上新的就切过去")
     rn.add_argument("robot_id")
@@ -1467,6 +1494,8 @@ def build_parser() -> argparse.ArgumentParser:
     ec.add_argument("robot_id")
     ec.add_argument("--host", default=None, help="机器人连站点用的主机名(缺省第一个 --hostname)")
     ec.add_argument("--hours", type=float, default=24.0, help="多少小时内有效")
+    ec.add_argument("--api-port", type=int, default=None,
+                    help="开通码里站点接口的端口(缺省站点上次起来时实际听的,没有就 8443)")
     ra_ = sub.add_parser("robot-auto", help="让机器人接自动派遣(排程、入侵、回充、自动回待命点)"
                                             "(W33)")
     ra_.add_argument("robot_id")
@@ -1615,7 +1644,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 print("注意:站点没配证据私钥,证书包里没有证据公钥 —— 机器人上的照片、录像会明文存"
                       "(装机脚本会生成 /etc/d1max-site/evidence.key)")
             if args.code:
-                print(_code_text(cmd_enroll_code(home, args.robot_id, args.host, 24.0)))
+                print(_code_text(cmd_enroll_code(home, args.robot_id, args.host, 24.0,
+                                                 api_port=args.api_port)))
         elif args.cmd == "renew":
             d = cmd_renew(home, args.robot_id, args.days)
             print(f"新证书包: {d}\n"
@@ -1623,7 +1653,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                   f"registration.json → /etc/d1max/;然后重启代理(sudo systemctl restart "
                   f"d1max-agent)。\n旧证书没吊销,到期之前照样连得上:换证书不断线。")
         elif args.cmd == "enroll-code":
-            print(_code_text(cmd_enroll_code(home, args.robot_id, args.host, args.hours)))
+            print(_code_text(cmd_enroll_code(home, args.robot_id, args.host, args.hours,
+                                             api_port=args.api_port)))
         elif args.cmd == "vpn":
             cmd_vpn(home, args)
         elif args.cmd in ("robot-auto", "robot-manual"):

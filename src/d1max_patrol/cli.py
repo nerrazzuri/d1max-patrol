@@ -76,7 +76,7 @@ VENDOR_NAV_HELP = ("我知道这是厂家导航:不守禁行区、限速区,不�
                    "(只用于核对厂家导航的现场项)")
 VENDOR_NAV_REFUSAL = (
     "{cmd} 走的是厂家导航:不守禁行区、限速区,不过我们的避障守卫,也绕过站点(W08、S11),默认不跑。\n"
-    "  让狗去一个点:手机单狗页「去这里」,或站点接口 POST /api/robots/<狗>/goto(按区域、"
+    "  让机器人去一个点:手机单机器人页「去这里」,或站点接口 POST /api/robots/<机器人>/goto(按区域、"
     "避障、监护规则派);巡检用任务包。\n"
     "  只有核对厂家导航本身的现场项(真机验证 §6 7.x、联调手册 E2/E3)才加 --allow-vendor-nav,"
     "人守着急停。")
@@ -144,7 +144,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--full", action="store_true",
                    help="导航之外再起一台仿真旁路进程(给 d1max-agent --hal d1max 联调用)")
 
-    pv = sub.add_parser("provision", help="用站点给的开通码开通这台狗(商业化 A4,以 root 跑)")
+    pv = sub.add_parser("provision", help="用站点给的开通码开通这台机器人(商业化 A4,以 root 跑)")
     pv.add_argument("--code", required=True, help="站点 d1max-site enroll --code 给的那一行")
     pv.add_argument("--etc", default="/etc/d1max", help=argparse.SUPPRESS)
     pv.add_argument("--user", default=os.environ.get("D1MAX_USER", "robot"),
@@ -175,14 +175,14 @@ def build_parser() -> argparse.ArgumentParser:
     _root_arg(rel_sub.add_parser("list", help="装了哪几版,现在跑哪版"))
     p_pack = rel_sub.add_parser(
         "pack",
-        help="把一棵源码树打成能装机的包(**在笔记本上跑,不在狗上跑**)",
+        help="把一棵源码树打成能装机的包(**在笔记本上跑,不在机器人上跑**)",
         description=(
             "把一棵源码树打成 deploy/install.sh 收得下的包目录。\n"
             "\n"
-            "**这条命令跑在笔记本(开发机)上,不跑在狗上。** 它的输入是这个\n"
-            "仓库,输出是一个拷到 U 盘、再拿去 install.sh 的目录。狗上跑的是\n"
+            "**这条命令跑在笔记本(开发机)上,不跑在机器人上。** 它的输入是这个\n"
+            "仓库,输出是一个拷到 U 盘、再拿去 install.sh 的目录。机器人上跑的是\n"
             "release install / activate / rollback / boot-guard,不是这一条 ——\n"
-            "狗上连仓库都没有。\n"
+            "机器人上连仓库都没有。\n"
             "\n"
             "打完屏幕上会打出包目录和 content_sha256,**这两个值抄进现场记录栏**。"),
         formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -194,8 +194,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_pack.add_argument("--force", action="store_true",
                         help="输出目录已经存在且非空也照打(会先把它删掉)")
     p_pack.add_argument("--wheels", default=None,
-                        help="离线轮子目录(*.whl):拷进包里,站点下发的版本在狗上"
-                             "建 venv 时只从它装(现场的狗上不了网)")
+                        help="离线轮子目录(*.whl):拷进包里,站点下发的版本在机器人上"
+                             "建 venv 时只从它装(现场的机器人上不了网)")
     p_ins = rel_sub.add_parser("install", help="把一个包落进槽里,不切换")
     p_ins.add_argument("package", help="包目录")
     p_ins.add_argument("--pubkey", default=None,
@@ -206,8 +206,8 @@ def build_parser() -> argparse.ArgumentParser:
     _root_arg(p_ins)
     p_kg = rel_sub.add_parser(
         "keygen", help="生成发行签名密钥(W30;**在发行方的电脑上跑,私钥离线保管**)")
-    p_kg.add_argument("private", help="私钥放哪(0600;不进仓库、不上狗、不上站点)")
-    p_kg.add_argument("public", help="公钥放哪(提交到仓库 deploy/release-pub.pem,装机时装到狗上)")
+    p_kg.add_argument("private", help="私钥放哪(0600;不进仓库、不上机器人、不上站点)")
+    p_kg.add_argument("public", help="公钥放哪(提交 deploy/release-pub.pem;装机时装到机器人)")
     p_sg = rel_sub.add_parser("sign", help="给打好的包签名(写进 release.json 的 signature)")
     p_sg.add_argument("package", help="包目录(release pack 打出来的)")
     p_sg.add_argument("--key", required=True, help="私钥")
@@ -237,7 +237,7 @@ def build_parser() -> argparse.ArgumentParser:
         "pack", help="把一个源目录(schedule.yaml、missions/、地图)打成任务包",
         description=("把一个源目录打成任务包:四道纯数据闸、每个任务过一遍解析并盖 schema、"
                      "算整包指纹、写 bundle.yaml。造好之后在站点主机上 "
-                     "d1max-site import-bundle <包目录>(W00c5e:狗上不再改任务、不再落包)。"))
+                     "d1max-site import-bundle <包目录>(W00c5e:机器人上不再改任务、不再落包)。"))
     p_bp.add_argument("src", help="源目录")
     p_bp.add_argument("outdir", help="放包的父目录(包目录名是 <bundle_id>-<版本>)")
     p_bp.add_argument("--id", dest="bundle_id", required=True, help="任务包 id,例如 site-kl")
@@ -296,7 +296,7 @@ def _cmd_provision(args: argparse.Namespace) -> int:
         except pv.ProvisionError as exc:
             print(f"开通没成:{exc}", file=sys.stderr)
             return 1
-        print(f"开通好了:这台狗是 {rid}。证书包、站点地址都放好了。下面是出厂自检:")
+        print(f"开通好了:这台机器人是 {rid}。证书包、站点地址都放好了。下面是出厂自检:")
     rows = pv.selfcheck(etc=etc, user=args.user or None)
     for c in rows:
         print(f"  {c.level:4}  {c.name}:{c.detail}")
@@ -736,7 +736,7 @@ def _cmd_release_sign(args: argparse.Namespace) -> int:
         if args.release_command == "keygen":
             relsign.keygen(Path(args.private), Path(args.public))
             print(f"私钥 {args.private}(离线保管,丢了就再也签不了;"
-                  "泄露了要换钥匙、重装所有狗的公钥)")
+                  "泄露了要换钥匙、重装所有机器人的公钥)")
             print(f"公钥 {args.public}(提交到仓库 deploy/release-pub.pem)")
             return 0
         if args.release_command == "sign-app":
@@ -823,7 +823,7 @@ def _cmd_release_pack(args: argparse.Namespace, now_ms: int) -> int:
     print(f"版本           : {manifest.version}"
           f"(任务包 schema {manifest.requires_mission_schema},"
           f"打包时刻 {manifest.built_at})")
-    print("下一步: 把这个目录整个拷到狗上,然后在狗上跑")
+    print("下一步: 把这个目录整个拷到机器人上,然后在机器人上跑")
     print(f"  sudo bash deploy/install.sh <拷过去的路径>/{dest.name}")
     return 0
 
