@@ -43,6 +43,9 @@ PROTO = 1
 MAX_LINE = 16 * 1024
 SOURCES = ("scan_match", "rtk", "fused")
 STATES = ("initializing", "tracking", "lost")
+#: 定位器载好图、没有初值(新图、没人给过位置)时 ``initializing`` 的原因:代理见到它就不等,
+#: 马上自动找位置(W68,用户 11-02:开机自己找位置)。
+WAIT_INIT_REASON = "等人给初始位置"
 
 
 def _pos_int(v: Any, what: str, *, zero: bool = False) -> None:

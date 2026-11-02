@@ -79,7 +79,7 @@ from d1max_agent.localization import (
     compose,
     inverse,
 )
-from d1max_contract.locbridge import Pose, Relocalize, SetPrior, State
+from d1max_contract.locbridge import WAIT_INIT_REASON, Pose, Relocalize, SetPrior, State
 
 log = logging.getLogger(__name__)
 
@@ -276,6 +276,9 @@ class BridgeLocalizer:
         #: 点云套图说定位器锁错了(W41,``globalloc.judge``;代理写):非空就不可信。下一次请重定位、
         #: 换图时清掉。
         self.scan_disagree = ""
+        #: 开机自动找位置(W68)没找到的结论(写给人看,代理写):不可信的时候放在原因前面;下一次请
+        #: 重定位、换图时清掉,可信了代理清掉。不单独决定信不信。
+        self.find_note = ""
         #: 最近一次「变差了」(对账 S6):(时刻, 原因)。
         self._degraded: tuple[float, str] | None = None
         self._settle = 0
@@ -403,6 +406,7 @@ class BridgeLocalizer:
             self._unverified = False
             self.rtk_disagree = ""
             self.scan_disagree = ""
+            self.find_note = ""
             kept, self._kept = self._kept, None
             if kept is not None and map_ref is not None and kept[0] == map_ref:
                 # 代理重启前记下的锚(同一次开机、同一张图):只拿来核(对账 S1)
@@ -482,6 +486,16 @@ class BridgeLocalizer:
                            source=self.source)
 
     def why_not(self, odom_ok: bool) -> str:
+        why = self._why_not(odom_ok)
+        if why and self.find_note:
+            return f"{self.find_note}({why})"
+        return why
+
+    def waiting_for_init(self) -> bool:
+        """定位器明说没有初值、在等人给(W68:代理见到就马上自动找位置,不等)。"""
+        return self._state == "initializing" and self._state_reason == WAIT_INIT_REASON
+
+    def _why_not(self, odom_ok: bool) -> str:
         if not self._connected:
             return "定位器未连接"
         if self._map is None:
@@ -597,6 +611,7 @@ class BridgeLocalizer:
             self._anchor_hold = req
             self._off_why = ""
             self.scan_disagree = ""                  # 新请了一次:点云套图的结论等它稳下来再核
+            self.find_note = ""
             self._save_keep()
             return Relocalize(req=req, map_id=map_ref[0], map_version=map_ref[1], x=pose[0],
                               y=pose[1], yaw=pose[2], sigma_xy=sigma_xy, human=human)

@@ -122,6 +122,16 @@ SCAN_CHECK_WAIT_S = 10.0
 #: 工单 10:对不上的两处点云核对,最多这么久核一次(秒)。
 CONFLICT_EVERY_S = 10.0
 SCAN_RELOC_MAX = 2
+#: W68 开机自己找位置(用户 2026-11-02):定位不可信连着这么久(秒)、机器人停着、没在跑任务,就自动跑一次
+#: 全图找位置(跟人点「自动找位置」同一条路)。Super-LIO 初值对的话几秒就对上,偏 1 m 约 18 s(台式机)。
+AUTO_FIND_AFTER_S = 30.0
+#: 定位器明说没有初值(「等人给初始位置」:新图、没人给过位置):它不会自己好,不用等。
+AUTO_FIND_NO_INIT_S = 3.0
+#: 找过一次之后隔这么久再找;一段不可信里最多找这么多次(找到了、定位器又对不上,也算一次),
+#: 之后等人到场设位置。还没有点云(感知没起来)不算一次,隔 :data:`AUTO_FIND_RETRY_S` 再看。
+AUTO_FIND_EVERY_S = 60.0
+AUTO_FIND_MAX = 3
+AUTO_FIND_RETRY_S = 5.0
 
 #: 一条回执编码之后最多这么大(字节)。站点 broker 单包上限 262144(``max_packet_size``,超了狗被断开),
 #: 留出主题与包头。带数据的回执各自有上限(日志尾巴、轨迹),这里是出口的兜底(外审 Qwen 第六节 2)。
@@ -264,6 +274,15 @@ class AgentRuntime:
         self._conflict_next = -math.inf
         #: 点云套图连着自动请了几次重定位(定位器又锁回错处就不再请,等人)。
         self._scan_relocs = 0
+        #: W68 开机自己找位置:后台活、这一段不可信从什么时候起、找了几次、下一次能找的时刻、
+        #: 上次找时什么图,找不到时原因的种类(off_map / ambiguous / no_scan)。
+        self._find_job: asyncio.Task | None = None
+        self._find_since: float | None = None
+        self._find_tries = 0
+        self._find_next = -math.inf
+        self._find_map: tuple[str, str] | None = None
+        self._find_kind = ""
+        self._find_seq = 0
         #: 人员检测(W24,决策 39):检测节点经本机人员桥报帧,这里判有没有人、记事件。
         if persons not in ("none", "bridge"):
             raise ValueError(f"persons 要是 none 或 bridge,给的是 {persons!r}")
@@ -1384,7 +1403,7 @@ class AgentRuntime:
             self._release_switch("rollback", "", cmd.task_id))
         return ""
 
-    async def _relocalize(self, cmd: Command) -> str:
+    async def _relocalize(self, cmd: Command, *, auto: bool = False) -> Any:
         """设位置(W00c6e):人给一个地图位姿(或者「狗在原点」),同时记下此刻的里程,锁定锚定。**狗要停着**
         (丢定位暂停时狗停着,可以给;正在走的时候不行)。坐标按狗当前加载的那张图;命令里带了图号就核。"""
         p = cmd.payload
@@ -1408,7 +1427,7 @@ class AgentRuntime:
             if isinstance(got, str):
                 return got
             pose, found, scan_ref = got
-            source = "global"
+            source = "auto_global" if auto else "global"
         elif "at_home" in p:
             if p.get("at_home") is not True:
                 return "payload: at_home 只能是 true"
@@ -1449,14 +1468,17 @@ class AgentRuntime:
             # 配了定位器(W09a):请它按人给的位置(初值)重定位;稳下来的时候修正量经 on_corrected
             # 交给引擎。自动找到的(W41)给大一点的偏差,定位器在附近再找。
             from d1max_agent.globalloc import GLOBAL_SIGMA_M
-            why = await (loc.relocalize(m, pose, GLOBAL_SIGMA_M) if found is not None
-                         else loc.relocalize(m, pose))
+            why = await (loc.relocalize(m, pose, GLOBAL_SIGMA_M, human=not auto)
+                         if found is not None else loc.relocalize(m, pose))
             if why:
                 return why
             self._scan_relocs = 0
-            # 人给的位置:RTK 核对之前的结论作废、一阵子不按 RTK 自动请(W09e 内审应修 4)
-            self._rtk_check.human_override(self._mono())
-            loc.rtk_disagree = ""
+            if not auto:
+                # 人给的位置:RTK 核对之前的结论作废、一阵子不按 RTK 自动请(W09e 内审应修 4)
+                self._rtk_check.human_override(self._mono())
+                loc.rtk_disagree = ""
+                # 人设过了(W68):自动找位置从头算,给这次设的位置留出对上的时间
+                self._find_since, self._find_tries = self._mono(), 0
         else:
             delta = loc.anchor(m, pose, (o.x, o.y, o.yaw))
             # 引擎记的出发点与来路按修正量挪过去(修正量给不出就来路作废);丢定位的次数从头算。
@@ -1473,14 +1495,88 @@ class AgentRuntime:
         return (self.globalloc is not None and self.globalloc.ready and self.parts is not None
                 and isinstance(self.parts.nav.anchor, BridgeLocalizer))
 
+    def _maybe_auto_find(self) -> None:
+        """W68 开机自己找位置(用户 2026-11-02):定位不可信连着 :data:`AUTO_FIND_AFTER_S` 秒
+        (定位器明说没有初值就 :data:`AUTO_FIND_NO_INIT_S` 秒)就后台跑一次全图找位置;找到了请
+        定位器按它重定位,找不到把原因写进定位的「为什么不可信」(遥测、站点「定位不可信:无法派单」
+        告警都带它)并报事件。一段不可信里最多 :data:`AUTO_FIND_MAX` 次;人设位置照常收,设了
+        从头算。可信之前导航本来就起不来。"""
+        if not self._global_ok() or self.loaded_map is None or self._running(self._find_job):
+            return
+        anchor = self.parts.nav.anchor
+        now = self._mono()
+        if self._find_map != self.loaded_map:
+            self._find_map, self._find_since, self._find_tries = self.loaded_map, None, 0
+            self._find_next = -math.inf
+        if anchor.ok(bool(getattr(self.parts.nav, "odom_ok", True))):
+            self._find_since, self._find_tries, anchor.find_note = None, 0, ""
+            return
+        if self._find_since is None:
+            self._find_since = now
+        wait = AUTO_FIND_NO_INIT_S if anchor.waiting_for_init() else AUTO_FIND_AFTER_S
+        if (now - self._find_since < wait or now < self._find_next
+                or self._find_tries >= AUTO_FIND_MAX
+                or self._running(self._map_job) or self._switching):
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        self._find_next = now + AUTO_FIND_RETRY_S          # 跑完按结果再定
+        self._find_job = loop.create_task(self._auto_find())
+
+    async def _auto_find(self) -> None:
+        m = self.loaded_map
+        if m is None:
+            return
+        now_ms = self._now()
+        self._find_seq += 1
+        cmd = Command(command_id=f"auto-find-{self._find_seq}", task_id="auto-find",
+                      kind="relocalize", issued_at=now_ms, expires_at=now_ms + 60_000,
+                      control_epoch=0, payload={"global": True})
+        async with self._cmd_lock:                         # 跟站点来的命令(人设位置)排队
+            if self.loaded_map != m:
+                return
+            got = await self._relocalize(cmd, auto=True)
+        why = got if isinstance(got, str) else got[0]
+        anchor = self.parts.nav.anchor
+        now = self._mono()
+        if not why:
+            self._find_tries += 1
+            self._find_next = now + AUTO_FIND_EVERY_S
+            log.warning("开机自己找位置:找到了(第 %d 次),请定位器按它重定位", self._find_tries)
+            return
+        kind = self._find_kind if why.startswith("not_found") else ""
+        if kind not in ("off_map", "ambiguous"):
+            # 还没有点云、机器人在动、在忙……:不算一次,过一会儿再看
+            log.info("开机自己找位置这次没找:%s", why)
+            self._find_next = now + AUTO_FIND_RETRY_S
+            return
+        self._find_tries += 1
+        self._find_next = now + AUTO_FIND_EVERY_S
+        detail = why.removeprefix("not_found: ")
+        note = ("位置偏差过大:机器人可能不在地图上(或周围变化太大)" if kind == "off_map"
+                else "有几处差不多像,无法确定机器人在哪")
+        if self._find_tries >= AUTO_FIND_MAX:
+            note += f";自动找位置 {AUTO_FIND_MAX} 次未成功,请到场设位置"
+        else:
+            note += ",请到场设位置"
+        anchor.find_note = note
+        log.warning("开机自己找位置没找到(第 %d 次):%s —— %s", self._find_tries, note, detail)
+        self.events.emit("loc_not_found", {"map_id": m[0], "map_version": m[1], "kind": kind,
+                                           "reason": note, "detail": detail[:200],
+                                           "try": self._find_tries})
+
     async def _global_find(self) -> str | tuple[tuple[float, float, float], dict[str, Any], Any]:
         """自动找位置(W41):→ 拒收原因,或者 (位姿, 回执里带的东西)。"""
         from d1max_agent.globalloc import GlobalLocError, decide
+        self._find_kind = ""
         try:
             ref = self.globalloc.scan_ref()
             pts = self.globalloc.scan()
             cands = await self.globalloc.locate(pts)
         except GlobalLocError as exc:
+            self._find_kind = "no_scan"
             return f"not_found: {exc}"[:200]
         if not self.globalloc.still_valid(ref):
             # 外审 R3、复查 N1:算的这段时间狗动了 —— 结果对不上此刻(来了新点云、狗没动不算,N4)
@@ -1488,6 +1584,8 @@ class AgentRuntime:
         best, why = decide(cands)
         top = [c.to_wire() for c in cands[:3]]
         if best is None:
+            from d1max_agent.globalloc import MIN_FIT
+            self._find_kind = "off_map" if not cands or cands[0].fit < MIN_FIT else "ambiguous"
             return f"not_found: {why}"[:200]
         return (best.x, best.y, best.yaw), {"fit": round(best.fit, 3), "candidates": top}, ref
 
@@ -2329,6 +2427,8 @@ class AgentRuntime:
             self._devices_task.cancel()
         if self._scan_job is not None and not self._scan_job.done():
             self._scan_job.cancel()
+        if self._find_job is not None and not self._find_job.done():
+            self._find_job.cancel()
 
         async def _step(what: str, fn) -> None:
             try:
@@ -2704,6 +2804,7 @@ class AgentRuntime:
             await self._apply_offline_policy()
         await self._enforce_supervision()
         self._maybe_conflict_check()
+        self._maybe_auto_find()
         if self._locsrv is not None:
             await self._locsrv.tick()            # 本机定位桥:心跳、定位器没声就当它断了
         if self._obs_srv is not None:
