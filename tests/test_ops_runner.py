@@ -288,11 +288,20 @@ def test_建图时暂停_只许停合并雷达和定位器_恢复是启动_工�
     cfg = _cfg(tmp_path)
     rec = Rec()
     ops = R.Ops(cfg, run=rec)
-    assert ops.do("pause", {"unit": "d1max-lidar-merge"}) == {"unit": "d1max-lidar-merge"}
+    assert ops.do("pause", {"unit": "d1max-lidar-merge"}) == {"unit": "d1max-lidar-merge",
+                                                              "stopped": True}
     assert ops.do("resume", {"unit": "d1max-localizer"}) == {"unit": "d1max-localizer"}
-    assert rec.calls == [["systemctl", "stop", "d1max-lidar-merge.service"],
+    assert rec.calls == [["systemctl", "is-active", "--quiet", "d1max-lidar-merge.service"],
+                         ["systemctl", "stop", "d1max-lidar-merge.service"],
                          ["systemctl", "start", "d1max-localizer.service"]]
     for u in ("d1max-agent", "d1max-obstacles", "ssh", "../x"):
         with pytest.raises(R.OpError):
             ops.do("pause", {"unit": u})
-    assert len(rec.calls) == 2
+    assert len(rec.calls) == 3
+
+
+def test_外审_建图前没在跑的不停_回告诉代理没停(tmp_path):
+    rec = Rec({"systemctl is-active --quiet": 3})
+    out = R.Ops(_cfg(tmp_path), run=rec).do("pause", {"unit": "d1max-localizer"})
+    assert out == {"unit": "d1max-localizer", "stopped": False}
+    assert rec.calls == [["systemctl", "is-active", "--quiet", "d1max-localizer.service"]]

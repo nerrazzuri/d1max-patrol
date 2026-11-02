@@ -24,6 +24,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import shlex
 import shutil
 import signal
 import subprocess
@@ -59,6 +60,12 @@ MAX_GAP_S = 0.5
 OFFLINE_RATE = 0.5
 #: 一帧扫描最少多少点才当关键帧。
 MIN_KF_POINTS = 500
+#: 离线回放默认的隔离域(调用方环境里没设 ROS_DOMAIN_ID 时用)。
+OFFLINE_ENV = {"ROS_DOMAIN_ID": "93", "RMW_IMPLEMENTATION": "rmw_fastrtps_cpp",
+               "ROS_LOCALHOST_ONLY": "1"}
+#: 位姿要盖住几成的扫描、两头最多差几秒(Super-LIO 中途退了、录位姿断了,不出残缺的图;外审 W67-1)。
+MIN_POSE_COVERAGE = 0.8
+MAX_EDGE_GAP_S = 5.0
 #: 建完把关:相邻两个位姿水平挪的比「最快速度 × 间隔 + 余量」还多,就是跟丢了,不出图(跟定位器
 #: 判跳一个做法)。不只看距离:录位姿会丢帧(台式机实测 1.8 s 断档里走了 1.58 m,是正常走);
 #: 不只看速度:两个位姿可能只隔 5 ms(差 1.5 cm 算出来 3 m/s)。
@@ -100,7 +107,12 @@ def extrinsic(cfg: Path) -> tuple[list[list[float]], list[float]]:
         raise SuperLioError(f"{cfg} 的 {key} 不是 12 个数") from exc
     if len(v) != 12:
         raise SuperLioError(f"{cfg} 的 {key} 要 12 个数,给了 {len(v)} 个")
+    if not all(math.isfinite(x) for x in v):
+        raise SuperLioError(f"{cfg} 的 {key} 有非有限值")
     R = [[v[3 + r + 3 * c] for c in range(3)] for r in range(3)]
+    RtR = _mul(_T(R), R)
+    if any(abs(RtR[i][j] - (i == j)) > 0.02 for i in range(3) for j in range(3)):
+        raise SuperLioError(f"{cfg} 的 {key} 旋转部分不是旋转矩阵(不正交,带缩放或剪切)")
     det = (R[0][0] * (R[1][1] * R[2][2] - R[1][2] * R[2][1])
            - R[0][1] * (R[1][0] * R[2][2] - R[1][2] * R[2][0])
            + R[0][2] * (R[1][0] * R[2][1] - R[1][1] * R[2][0]))
@@ -284,8 +296,12 @@ def make_keyframes(poses: Sequence[Pose], clouds: Iterable[tuple[float, Any]], w
     last_kf: tuple[list[float], list[list[float]]] | None = None
     prev: tuple[float, list[float], list[list[float]]] | None = None
     scans = 0
+    first: float | None = None
+    last: float | None = None
     for t, msg in clouds:
         scans += 1
+        first = t if first is None else first
+        last = t
         got = pose_at(poses, t + SCAN_MID_S, times)
         if got is None:
             continue
@@ -315,7 +331,8 @@ def make_keyframes(poses: Sequence[Pose], clouds: Iterable[tuple[float, Any]], w
         last_kf = (p, R)
     (kf / "index.txt").write_text("\n".join(index) + "\n", encoding="utf-8")
     (work / "traj.tum").write_text("".join(traj), encoding="utf-8")
-    return {"scans": scans, "traj": len(traj), "keyframes": len(index)}
+    return {"scans": scans, "traj": len(traj), "keyframes": len(index), "first_scan": first,
+            "last_scan": last}
 
 
 def quality(poses: Sequence[Pose]) -> dict[str, float]:
@@ -328,14 +345,15 @@ def quality(poses: Sequence[Pose]) -> dict[str, float]:
         keep.append(poses[-1])
     path = sum(math.dist(a[1][:2], b[1][:2]) for a, b in zip(keep, keep[1:], strict=False))
     steps = [math.dist(a[1][:2], b[1][:2]) for a, b in zip(poses, poses[1:], strict=False)]
-    over = [math.dist(a[1][:2], b[1][:2]) - MAX_SPEED_MPS * (b[0] - a[0])
+    # 判跳用三维位移(竖直方向跳了一样是跟丢,坏位姿会进三维先验;外审 W67-1)
+    over = [math.dist(a[1], b[1]) - MAX_SPEED_MPS * (b[0] - a[0])
             for a, b in zip(poses, poses[1:], strict=False)]
     gaps = sum(1 for a, b in zip(poses, poses[1:], strict=False) if b[0] - a[0] > MAX_GAP_S)
     return {"duration_s": round(poses[-1][0] - poses[0][0], 1) if poses else 0.0,
             "path_m": round(path, 1),
             "start_end_m": round(math.dist(poses[0][1][:2], poses[-1][1][:2]), 2) if poses else 0.0,
             "max_step_m": round(max(steps), 2) if steps else 0.0,
-            "max_jump_m": round(max(0.0, *over), 2) if over else 0.0, "gaps": gaps}
+            "max_jump_m": round(max(0.0, *over), 3) if over else 0.0, "gaps": gaps}
 
 
 def check(q: dict[str, float]) -> None:
@@ -376,6 +394,14 @@ def prepare(work: Path, bag: Path, poses: Sequence[Pose], *, cfg: Path, root: Pa
     t0 = time.monotonic()
     n = make_keyframes(poses, bag_clouds(bag) if clouds is None else clouds, work, R_il, t_il,
                        xyz_of)
+    if n["scans"] and n["traj"] < MIN_POSE_COVERAGE * n["scans"]:
+        raise SuperLioError(f"位姿只覆盖了 {n['traj']}/{n['scans']} 帧扫描"
+                            "(Super-LIO 中途停了?录位姿断了?),不出残缺的图")
+    first, last = n.get("first_scan"), n.get("last_scan")
+    if first is not None and (poses[0][0] - first > MAX_EDGE_GAP_S
+                              or last - poses[-1][0] > MAX_EDGE_GAP_S):
+        raise SuperLioError(f"位姿只覆盖了录包中间一段({poses[0][0] - first:.0f} s 后开始、"
+                            f"{last - poses[-1][0]:.0f} s 前结束),不出残缺的图")
     if n["keyframes"] < 3:
         raise SuperLioError(f"关键帧只有 {n['keyframes']} 个(走得太短,或位姿跟点云时间对不上)")
     _run(run, [str(root / "bin/kf2sm"), str(work / "kf"), str(work / "map.simplemap")],
@@ -405,58 +431,88 @@ def run_offline(bag: Path, work: Path, *, cfg: Path, root: Path = ROOT, rate: fl
                 env: dict[str, str] | None = None) -> Path:
     """在本机隔离域里起 Super-LIO、回放录包的前雷达 + IMU、把它的位姿录成一个小包。回那个包的目录。
 
-    ``env`` 是隔离域三件套(建图编排给的;不给用 93 域、fastrtps、只本机)。"""
+    ``env``:额外的环境变量。隔离域由调用方给(建图编排起建图脚本时已经设好,这里不覆盖;外审
+    W67-1);环境里没有 ROS_DOMAIN_ID 才用 :data:`OFFLINE_ENV`。
+    收到 SIGTERM(建图被停)也照样把起的进程组收掉。"""
     out = work / "lio_bag"
     shutil.rmtree(out, ignore_errors=True)
     work.mkdir(parents=True, exist_ok=True)
-    e = {**os.environ, **(env or {"ROS_DOMAIN_ID": "93", "RMW_IMPLEMENTATION": "rmw_fastrtps_cpp",
-                                   "ROS_LOCALHOST_ONLY": "1"})}
-    src = f"set +u; . /opt/ros/humble/setup.bash; . {root}/install/setup.bash; set -u; exec "
+    e = dict(os.environ)
+    if "ROS_DOMAIN_ID" not in e:           # 手动跑、没给域:用隔离域,别把点云放进机器人那个域
+        e.update(OFFLINE_ENV)
+    e.update(env or {})
+    q = shlex.quote
+    src = (f"set +u; . /opt/ros/humble/setup.bash; . {q(str(root))}/install/setup.bash; "
+           "set -u; exec ")
     qos = work / "qos.yaml"
     # 回放要显式给 QoS:这些包里存的 QoS 在别的机器上读不出来时,ros2 bag play 一个话题都不发(11-02)
     qos.write_text("".join(f"{t}:\n  reliability: reliable\n  durability: volatile\n"
                            f"  history: keep_last\n  depth: {d}\n"
                            for t, d in ((LIDAR_TOPIC, 50), (IMU_TOPIC, 500))), encoding="utf-8")
-    node_cmd = "ros2 run super_lio super_lio_node " + " ".join(node_args(cfg, ns_remap=False))
-    procs: list[subprocess.Popen[bytes]] = []
+    node_cmd = "ros2 run super_lio super_lio_node " + shlex.join(node_args(cfg, ns_remap=False))
+    rec_cmd = f"ros2 bag record -s mcap -o {q(str(out))} /lio/odom"
+    play_cmd = (f"ros2 bag play {q(str(bag))} --rate {rate} --topics {LIDAR_TOPIC} {IMU_TOPIC} "
+                f"--qos-profile-overrides-path {q(str(qos))}")
+    logs = {k: work / f"{k}.log" for k in ("superlio", "record", "play")}
+    procs: list[tuple[str, subprocess.Popen[bytes], Path]] = []
+
+    def _term(*_: Any) -> None:
+        raise SystemExit(143)              # 让 finally 跑:按进程组收掉起的进程
+
+    old = signal.signal(signal.SIGTERM, _term)
     try:
-        procs.append(subprocess.Popen(["bash", "-c", src + node_cmd], env=e,
-                                      stdout=open(work / "superlio.log", "wb"),
-                                      stderr=subprocess.STDOUT, start_new_session=True))
+        for name, cmd, log in (("Super-LIO", node_cmd, logs["superlio"]),
+                               ("录位姿", rec_cmd, logs["record"])):
+            procs.append((name, subprocess.Popen(["bash", "-c", src + cmd], env=e,
+                                                 stdout=open(log, "wb"),
+                                                 stderr=subprocess.STDOUT,
+                                                 start_new_session=True), log))
+            time.sleep(3)
+            _check_alive(procs)
+        play = subprocess.Popen(["bash", "-c", src + play_cmd], env=e,
+                                stdout=open(logs["play"], "wb"), stderr=subprocess.STDOUT,
+                                start_new_session=True)
+        procs.append(("回放", play, logs["play"]))
+        while play.poll() is None:
+            time.sleep(1)
+            _check_alive(procs[:-1])       # 回放途中 Super-LIO、录位姿退了:不等放完,直接报
         time.sleep(3)
-        procs.append(subprocess.Popen(["bash", "-c", src + f"ros2 bag record -s mcap -o {out} "
-                                       "/lio/odom"], env=e,
-                                      stdout=open(work / "record.log", "wb"),
-                                      stderr=subprocess.STDOUT, start_new_session=True))
-        time.sleep(3)
-        play = subprocess.run(["bash", "-c", src + f"ros2 bag play {bag} --rate {rate} --topics "
-                               f"{LIDAR_TOPIC} {IMU_TOPIC} --qos-profile-overrides-path {qos}"],
-                              env=e, stdout=open(work / "play.log", "wb"),
-                              stderr=subprocess.STDOUT)
-        time.sleep(3)
+        _check_alive(procs[:-1])
         if play.returncode != 0:
-            raise SuperLioError(f"回放录包失败,日志见 {work / 'play.log'}")
+            raise SuperLioError(f"回放录包失败,日志见 {logs['play']}")
     finally:
-        for p in reversed(procs):         # 先停录(把位姿写完),再停 Super-LIO;按记下的进程组停
+        for _, p, _ in reversed(procs):    # 先停录(把位姿写完),再停 Super-LIO;按进程组停
             _stop(p)
+        signal.signal(signal.SIGTERM, old)
     if not out.is_dir():
-        raise SuperLioError(f"Super-LIO 的位姿没录下来,日志见 {work / 'record.log'}")
+        raise SuperLioError(f"Super-LIO 的位姿没录下来,日志见 {logs['record']}")
     return out
 
 
-def _stop(p: subprocess.Popen[bytes], grace_s: float = 60.0) -> None:
-    for sig, wait in ((signal.SIGINT, grace_s), (signal.SIGKILL, 10.0)):
+def _check_alive(procs: Sequence[tuple[str, subprocess.Popen[bytes], Path]]) -> None:
+    for name, p, log in procs:
         if p.poll() is not None:
-            return
+            raise SuperLioError(f"{name} 提前退出(退出码 {p.returncode}),日志见 {log}")
+
+
+def _stop(p: subprocess.Popen[bytes], grace_s: float = 60.0) -> None:
+    """按进程组停:先 SIGINT 等组长退,再把组里剩下的(组长退了、子进程还在)SIGKILL 掉。"""
+    if p.poll() is None:
         try:
-            os.killpg(p.pid, sig)
+            os.killpg(p.pid, signal.SIGINT)
+            p.wait(timeout=grace_s)
         except ProcessLookupError:
-            return
-        try:
-            p.wait(timeout=wait)
-            return
+            pass
         except subprocess.TimeoutExpired:
-            continue
+            pass
+    try:
+        os.killpg(p.pid, signal.SIGKILL)   # 组里还有谁(或组长没退)一并收掉;组空了会抛
+    except ProcessLookupError:
+        pass
+    try:
+        p.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        pass
 
 
 # ---------------------------------------------------------------- 机器人上边走边建

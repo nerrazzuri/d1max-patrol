@@ -715,13 +715,25 @@ def _slio(tmp_path, procs, cfg, *, installed=True, pauser=None):
 
 
 class _Pauser:
-    def __init__(self, err: str = "") -> None:
-        self.calls: list[bool] = []
-        self.err = err
+    """暂停:回真停了哪几个(建图前在跑的);恢复:回还没恢复成的。``fail_resume`` 次恢复失败。"""
 
-    def __call__(self, on: bool) -> str:
+    def __init__(self, err: str = "", *, active=("d1max-lidar-merge", "d1max-localizer"),
+                 fail_resume: int = 0) -> None:
+        self.calls: list[bool] = []
+        self.units: list[tuple[bool, list[str]]] = []
+        self.err = err
+        self.active = list(active)
+        self.fail_resume = fail_resume
+
+    def __call__(self, on: bool, units):
         self.calls.append(on)
-        return self.err
+        self.units.append((on, list(units)))
+        if on:
+            return ([u for u in units if u in self.active] if not self.err else []), self.err
+        if self.fail_resume:
+            self.fail_resume -= 1
+            return list(units), "执行器没回"
+        return [], ""
 
 
 def test_前端_装了Super_LIO用它_没装退回MOLA_配成mola就用MOLA(tmp_path, procs, cfg):
@@ -795,6 +807,8 @@ async def test_代理重启时上一趟暂停的还没恢复_恢复(tmp_path, pr
     orch = _slio(tmp_path, procs, cfg, pauser=p)
     await orch.resume_leftover()
     assert p.calls == [False] and not (cfg.maps_dir / ".paused").exists()
+    # 老标记没写哪几个:都恢复
+    assert p.units == [(False, ["d1max-lidar-merge", "d1max-localizer"])]
     await orch.resume_leftover()
     assert p.calls == [False]
 
@@ -810,3 +824,59 @@ async def test_从录包重建_用当前前端_老的边走边建按它开录时
     await orch.package(bag, "m2")
     pk = [s for s in procs.started if s.name == "mappack"][0].argv
     assert pk[pk.index("--front") + 1] == "mola"
+
+
+async def test_外审_只恢复建图前在跑的服务(tmp_path, procs, cfg):
+    p = _Pauser(active=("d1max-localizer",))
+    orch = _slio(tmp_path, procs, cfg, pauser=p)
+    await orch.start_record("run1", live_map_id="mall")
+    assert p.units[0] == (True, ["d1max-lidar-merge", "d1max-localizer"])
+    await orch.stop_record()
+    assert p.units[-1] == (False, ["d1max-localizer"])
+
+
+async def test_外审_开录途中出什么错都恢复_录包收掉(tmp_path, procs, cfg, monkeypatch):
+    p = _Pauser()
+    orch = _slio(tmp_path, procs, cfg, pauser=p)
+
+    def boom(*a, **k):
+        raise OSError("盘满")
+    monkeypatch.setattr(orch, "spec_for_live", boom)
+    with pytest.raises(OSError):
+        await orch.start_record("run1", live_map_id="mall")
+    assert p.calls == [True, False]
+    assert "bagrecord" in procs.stopped and orch.phase == "idle"
+    assert not (cfg.maps_dir / ".paused").exists()
+
+
+async def test_外审_恢复不成_后台一直重试到成(tmp_path, procs, cfg, monkeypatch):
+    import asyncio
+
+    import d1max_patrol.app.mapping as M
+    monkeypatch.setattr(M, "RESUME_RETRY_S", (0.01, 0.02))
+    p = _Pauser(fail_resume=2)
+    orch = _slio(tmp_path, procs, cfg, pauser=p)
+    await orch.start_record("run1", live_map_id="mall")
+    await orch.stop_record()
+    assert (cfg.maps_dir / ".paused").exists()
+    for _ in range(100):
+        if not (cfg.maps_dir / ".paused").exists():
+            break
+        await asyncio.sleep(0.01)
+    assert p.calls == [True, False, False, False]
+    assert not (cfg.maps_dir / ".paused").exists()
+
+
+async def test_外审_打包失败后再打包_仍按开录时的前端(tmp_path, procs, cfg):
+    orch = _slio(tmp_path, procs, cfg)
+    await orch.start_record("run1", live_map_id="mall")
+    await orch.stop_record()
+    work = cfg.maps_dir / ".work" / "mall"
+    (work / "mola.json").unlink()                   # 打包时 Super-LIO 前端会清掉整个中间目录
+    procs.exit_codes["mappack"] = 1
+    with pytest.raises(MappingError):
+        await orch.package(cfg.bags_dir / "run1", "mall")
+    procs.exit_codes["mappack"] = 0
+    await orch.package(cfg.bags_dir / "run1", "mall")
+    packs = [s.argv for s in procs.started if s.name == "mappack"]
+    assert all(a[a.index("--front") + 1] == "superlio" for a in packs)

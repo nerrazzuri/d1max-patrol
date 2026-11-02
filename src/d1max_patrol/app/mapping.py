@@ -18,12 +18,13 @@ W09c2)。
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import re
 import shutil
 import signal
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -80,8 +81,12 @@ LIVE_NS = "/d1max_mapping"
 SUPERLIO_ROOT = Path("/opt/d1max/superlio/current")
 SUPERLIO_LIVE = Path("/opt/d1max/current/deploy/d1max-superlio-live")
 SUPERLIO_ODOM = f"{LIVE_NS}/lio/odom"
-#: 暂停了合并雷达、定位器的标记(代理中途重启也知道要恢复)。
+#: 暂停了合并雷达、定位器的标记(代理中途重启也知道要恢复):JSON,还要恢复的服务。
 _PAUSED = ".paused"
+#: 建图时暂停哪几个(工单 21;避障不停)。只停建图前在跑的,也只恢复这些(外审 W67-1)。
+PAUSE_UNITS: tuple[str, ...] = ("d1max-lidar-merge", "d1max-localizer")
+#: 恢复不成就在后台重试:第一次等多久、最多等多久(每次翻倍)。
+RESUME_RETRY_S = (10.0, 300.0)
 _LIVE_RENAMES = ("/initialpose", "/relocalize_near_pose", "/lidar_odometry/pose",
                  "/lidar_odometry/pose_quality")
 
@@ -145,9 +150,11 @@ class MappingOrchestrator:
     PREVIEW = "mapview"
 
     def __init__(self, procs: ProcManager, cfg: MappingConfig, *,
-                 pause_units: Callable[[bool], str] | None = None) -> None:
-        """``pause_units``(工单 21):``True`` 暂停合并雷达、定位器(Super-LIO 建图要 CPU),``False``
-        恢复;回出错原因(空串 = 成了)。会阻塞(走特权执行器),在线程里调。"""
+                 pause_units: Callable[[bool, Sequence[str]], tuple[list[str], str]] | None = None
+                 ) -> None:
+        """``pause_units(on, 服务)``(工单 21):``on`` 暂停其中在跑的(Super-LIO 建图要 CPU),回
+        ``(真停了的, 出错原因)``;否则恢复,回 ``(没恢复成的, 出错原因)``。会阻塞(走特权执行器),
+        在线程里调。"""
         self._procs = procs
         self._cfg = cfg
         self._pause_units = pause_units
@@ -161,7 +168,7 @@ class MappingOrchestrator:
         self._live: str | None = None
         #: 这一趟的预览没起来的原因(W09f);起来了是空串。
         self.preview_error = ""
-        self._paused = False
+        self._retry: asyncio.Task[None] | None = None
 
     @property
     def log_dir(self) -> Path:
@@ -176,26 +183,75 @@ class MappingOrchestrator:
             return "superlio"
         return "mola"
 
-    async def _pause(self, on: bool) -> None:
-        """暂停 / 恢复合并雷达、定位器。尽力而为:不成只记下,不碍建图。"""
+    def _mark_read(self) -> list[str] | None:
+        """还要恢复的服务;没有标记是 None。老标记(空文件)= 都恢复。"""
         mark = self._cfg.maps_dir / _PAUSED
+        try:
+            raw = mark.read_text(encoding="utf-8")
+        except OSError:
+            return None
+        try:
+            got = json.loads(raw).get("units")
+            return [u for u in got if u in PAUSE_UNITS] if isinstance(got, list) \
+                else list(PAUSE_UNITS)
+        except (ValueError, AttributeError):
+            return list(PAUSE_UNITS)
+
+    def _mark_write(self, units: Sequence[str]) -> None:
+        mark = self._cfg.maps_dir / _PAUSED
+        if not units:
+            mark.unlink(missing_ok=True)
+            return
+        self._cfg.maps_dir.mkdir(parents=True, exist_ok=True)
+        tmp = mark.with_name(mark.name + ".tmp")
+        tmp.write_text(json.dumps({"units": sorted(set(units))}), encoding="utf-8")
+        tmp.replace(mark)
+
+    async def _pause_on(self) -> None:
+        """暂停合并雷达、定位器里在跑的。尽力而为:不成只记下,不碍建图。"""
         if self._pause_units is None:
             return
-        if on:
-            self._cfg.maps_dir.mkdir(parents=True, exist_ok=True)
-            mark.write_text("", encoding="utf-8")
-        err = await asyncio.to_thread(self._pause_units, on)
-        if on:
-            self.pause_error = err
+        if self._retry is not None:                       # 上一趟没恢复成的:这趟接着停着
+            self._retry.cancel()
+            self._retry = None
+        pending = self._mark_read() or []
+        self._mark_write([*pending, *PAUSE_UNITS])         # 先记全:停到一半代理没了也能恢复
+        stopped, err = await asyncio.to_thread(self._pause_units, True, list(PAUSE_UNITS))
+        self._mark_write([*pending, *stopped])
+        self.pause_error = err
         if err:
-            log.warning("建图时%s合并雷达、定位器不成:%s", "暂停" if on else "恢复", err)
-        elif not on:
-            mark.unlink(missing_ok=True)
+            log.warning("建图时暂停合并雷达、定位器不成:%s", err)
+
+    async def _resume(self) -> None:
+        """恢复标记里记着的;没恢复成的留在标记里,后台退避重试到成。"""
+        units = self._mark_read()
+        if not units or self._pause_units is None:
+            return
+        left, err = await asyncio.to_thread(self._pause_units, False, units)
+        self._mark_write(left)
+        if left:
+            log.warning("恢复 %s 不成(%s):后台重试", "、".join(left), err)
+            if self._retry is None or self._retry.done():
+                self._retry = asyncio.get_running_loop().create_task(self._retry_loop())
+
+    async def _retry_loop(self) -> None:
+        delay = RESUME_RETRY_S[0]
+        while True:
+            await asyncio.sleep(delay)
+            units = self._mark_read()
+            if not units or self._pause_units is None:
+                return
+            left, err = await asyncio.to_thread(self._pause_units, False, units)
+            self._mark_write(left)
+            if not left:
+                log.info("建图时暂停的服务恢复了:%s", "、".join(units))
+                return
+            log.warning("恢复 %s 还是不成(%s)", "、".join(left), err)
+            delay = min(delay * 2, RESUME_RETRY_S[1])
 
     async def resume_leftover(self) -> None:
-        """代理起来时调:上一个进程暂停了、没来得及恢复的,恢复。"""
-        if (self._cfg.maps_dir / _PAUSED).exists():
-            await self._pause(False)
+        """代理起来时调:上一个进程暂停了、没来得及恢复的,恢复(不成就后台重试)。"""
+        await self._resume()
 
     # ------------------------------------------------------------------ 状态
 
@@ -273,30 +329,33 @@ class MappingOrchestrator:
         slio = front == "superlio"
         self.pause_error = ""
         if slio:
-            await self._pause(True)                        # 先让出 CPU 再起(工单 21)
+            await self._pause_on()                         # 先让出 CPU 再起(工单 21)
         try:
             await self._start(self.spec_for_record(bag, with_lio=slio))
-        except MappingError:
-            if slio:
-                await self._pause(False)
-            raise
-        if live_map_id is not None:
-            spec = self.spec_for_live(live_map_id, front=front)
-            (work / "mola.json").write_text(json.dumps(
-                {"mode": "live", "front": front, "pipeline": spec.argv[-1], "env": dict(spec.env)},
-                ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-            try:
+            if live_map_id is not None:
+                spec = self.spec_for_live(live_map_id, front=front)
+                (work / "mola.json").write_text(json.dumps(
+                    {"mode": "live", "front": front, "pipeline": spec.argv[-1],
+                     "env": dict(spec.env)}, ensure_ascii=False, indent=2) + "\n",
+                    encoding="utf-8")
+                # 前端单独记一份:打包(Super-LIO 前端)会清掉整个中间目录,打不成再打要靠它
+                _front_mark(work).write_text(front, encoding="utf-8")
                 await self._start(spec)
                 await asyncio.sleep(LIVE_SETTLE_S)
                 if self.LIVE not in self._procs.running():
                     raise MappingError("在线建图起来就退了,日志见 "
                                        f"{self._procs.log_path(self.LIVE)}")
-            except MappingError:
-                await self._procs.stop(self.LIVE)
-                await self._procs.stop(self.RECORD, term_grace_s=_RECORD_GRACE_S)
-                if slio:
-                    await self._pause(False)
-                raise
+        except BaseException:
+            # 什么错(盘满、取消、起不来)都收干净:进程停掉,暂停的服务恢复(外审 W67-1)
+            for name, grace in ((self.LIVE, 3.0), (self.RECORD, _RECORD_GRACE_S)):
+                try:
+                    await self._procs.stop(name, term_grace_s=grace)
+                except Exception:
+                    log.exception("开录失败后停 %s 也不成", name)
+            if slio:
+                with contextlib.suppress(Exception):
+                    await self._resume()
+            raise
         self.preview_error = ""
         if live_map_id is not None:
             try:
@@ -307,7 +366,6 @@ class MappingOrchestrator:
         self._phase = "recording"
         self._bag = bag
         self._live = live_map_id
-        self._paused = slio
         self._error = ""
         return bag
 
@@ -325,9 +383,10 @@ class MappingOrchestrator:
         got = await asyncio.gather(*stops, return_exceptions=True)
         self._phase = "idle"
         self._live = None
-        if self._paused:
-            self._paused = False
-            await self._pause(False)
+        try:
+            await self._resume()                           # 没暂停过(没有标记)就什么也不做
+        except Exception:
+            log.exception("停录后恢复暂停的服务出错")
         for g in got:
             if isinstance(g, BaseException):
                 raise g
@@ -402,11 +461,14 @@ class MappingOrchestrator:
 
     @staticmethod
     def _live_front(work: Path) -> str:
-        """边走边建的那一趟开录时用的前端(``mola.json``;升级前开录的没写 = MOLA)。"""
+        """边走边建的那一趟开录时用的前端(单独的标记;没有看 ``mola.json``;升级前开录的 = MOLA)。"""
         try:
-            got = json.loads((work / "mola.json").read_text(encoding="utf-8")).get("front")
-        except (OSError, ValueError, AttributeError):
-            got = None
+            got: object = _front_mark(work).read_text(encoding="utf-8").strip()
+        except OSError:
+            try:
+                got = json.loads((work / "mola.json").read_text(encoding="utf-8")).get("front")
+            except (OSError, ValueError, AttributeError):
+                got = None
         return "superlio" if got == "superlio" else "mola"
 
     async def snapshot(self) -> dict[str, object]:
@@ -558,6 +620,11 @@ class MappingOrchestrator:
 
 
 _CN = {"idle": "闲着", "recording": "录包", "rebuilding": "重建"}
+
+
+def _front_mark(work: Path) -> Path:
+    """开录时用的前端,记在中间目录旁边(打包清中间目录也不丢;建成了跟 ``.work`` 一起删)。"""
+    return work.parent / f"{work.name}.front"
 
 
 def _check_name(name: str, what: str) -> None:

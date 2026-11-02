@@ -930,23 +930,27 @@ def _releases(args: argparse.Namespace, registration: Registration) -> Any:
 
 def _mapping_pauser() -> Any:
     """工单 21:Super-LIO 边走边建时暂停合并雷达、定位器(经特权执行器;没装执行器 = 不暂停)。
-    回 ``(on) -> 出错原因``(空串 = 成了)。"""
+    回 ``(on, 服务) -> (列表, 出错原因)``:暂停回真停了的(建图前没在跑的不算),恢复回没恢复成的。"""
     from d1max_contract import privops
     priv = privops.from_config()
     if priv is None:
         return None
 
-    def pause(on: bool) -> str:
-        errs = []
-        for unit in ("d1max-lidar-merge", "d1max-localizer"):
+    def pause(on: bool, units: Any) -> tuple[list[str], str]:
+        errs: list[str] = []
+        listed: list[str] = []
+        for unit in units:
             try:
                 got = priv.call("pause" if on else "resume", {"unit": unit}, timeout_s=150)
             except Exception as exc:  # noqa: BLE001 - 尽力而为,原因带回去
-                errs.append(f"{unit}:{exc}")
-                continue
-            if not got.get("ok"):
+                got = {"ok": False, "error": str(exc)}
+            ok = bool(got.get("ok"))
+            if not ok:
                 errs.append(f"{unit}:{got.get('error') or '未知原因'}")
-        return ";".join(errs)[:300]
+            # 暂停出错的可能已经停了(停到一半超时):保守记成停了,之后恢复;恢复出错的留着重试
+            if (on and (not ok or got.get("stopped", True))) or (not on and not ok):
+                listed.append(unit)
+        return listed, ";".join(errs)[:300]
     return pause
 
 
