@@ -17,6 +17,7 @@ String? _title(String kind) => switch (kind) {
       'patrol_waypoint' => tr('Patrol point', '巡检点'),
       'relocalized' => tr('Position re-set', '重新定位'),
       'loc_wrong_solution' => tr('Position looked wrong', '定位结果异常'),
+      'loc_not_found' => tr('Position not found', '未找到位置'),
       'loc_conflict_resolved' => tr('Position conflict resolved', '定位冲突已解决'),
       'map_activated' => tr('Map switched', '换了地图'),
       'map_built' => tr('Map built', '建图完成'),

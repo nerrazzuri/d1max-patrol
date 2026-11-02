@@ -40,7 +40,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
-from d1max_contract.locbridge import Pose, State
+from d1max_contract.locbridge import WAIT_INIT_REASON, Pose, State
 from d1max_localizer.frames import Frames
 
 log = logging.getLogger(__name__)
@@ -468,7 +468,7 @@ class LocalizerCore:
             elif self._want_reloc:
                 why = "在按最后的位置重定位"
             else:
-                why = "等人给初始位置"
+                why = WAIT_INIT_REASON
             return "initializing", why
         if self._last_scan is None or now - self._last_scan > NO_SCAN_S:
             return "lost", "雷达未数据"

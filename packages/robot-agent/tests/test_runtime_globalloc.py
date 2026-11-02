@@ -9,7 +9,7 @@ import math
 import numpy as np
 import pytest
 from test_globalloc import RES, _房间, _扫, 不对称
-from test_relocalize import _ack, _事件
+from test_relocalize import _ack, _goto, _事件, _遥测
 from test_runtime_localizer import 台子
 from test_runtime_maps import _cmd
 
@@ -173,3 +173,117 @@ async def test_工单10_人给错了4米_定位器自己回对了_点云核出�
     ev = _事件(t.ears, "loc_conflict_resolved")
     assert ev and ev[-1]["trust"] == "localizer" and ev[-1]["fit_localizer"] > ev[-1]["fit_given"]
     assert t.loc.relocs[-1].human, "没替人另请重定位:信的是定位器现在的位置"
+
+
+# ------------------------------------------------------------ W68 开机自己找位置(用户 11-02)
+
+
+def _乱点(n=400, seed=3):
+    """跟图上哪儿都对不上的点云(机器人不在这张图上)。"""
+    rs = np.random.default_rng(seed)
+    a, d = rs.uniform(0, 2 * math.pi, n), rs.uniform(1.0, 6.0, n)
+    return list(zip((d * np.cos(a)).tolist(), (d * np.sin(a)).tolist(), strict=True))
+
+
+async def _没初值地连上(t):
+    t.loc.need_init = True
+    assert await t.loc.connect(), t.loc.error
+    await t.拍(3)
+
+
+async def test_W68_开机没有初值_自己找位置_请定位器按它重定位_之后可信(台):
+    t = 台
+    await _没初值地连上(t)
+    assert "等人给初始位置" in _遥测(t.ears).loc["reason"]
+    await t.拍(60)
+    assert len(t.loc.relocs) == 1, t.loc.relocs
+    r = t.loc.relocs[-1]
+    assert math.hypot(r.x - TRUE[0], r.y - TRUE[1]) < 0.15 and not r.human
+    ev = _事件(t.ears, "relocalized")[-1]
+    assert ev["source"] == "auto_global" and ev["fit"] > 0.7
+    await t.拍(20)
+    assert _遥测(t.ears).loc["reason"] == ""
+
+
+async def test_W68_开机自己找_不在地图上_报位置偏差过大_导航不许起飞_三次后不再找(台):
+    t = 台
+    t.view.pts = _乱点()
+    await _没初值地连上(t)
+    await t.拍(60)
+    assert t.loc.relocs == []
+    nf = _事件(t.ears, "loc_not_found")
+    assert nf and nf[-1]["kind"] == "off_map", nf
+    reason = _遥测(t.ears).loc["reason"]
+    assert "位置偏差过大" in reason and "可能不在地图上" in reason, reason
+    await t.rt._on_cmd(_goto(4.0, 3.0, "g1", t.c))
+    await t.拍(40)
+    failed = _事件(t.ears, "task_failed")
+    assert failed and "定位" in failed[-1]["reason"], t.ears.by.get("event")
+    assert math.hypot(t.dog.x - TRUE[0], t.dog.y - TRUE[1]) < 0.01, "没动"
+    await t.拍(10 * 200)                                  # 200 秒:最多再找两次
+    assert len(_事件(t.ears, "loc_not_found")) == 3
+    assert "请到场设位置" in _遥测(t.ears).loc["reason"]
+    assert t.loc.relocs == []
+
+
+async def test_W68_开机自己找_几处差不多像_说无法确定_不请定位器(台):
+    t = 台
+    occ, _ = _房间(w=10.0, h=10.0)                        # 对称的空房间
+    _写图(t.tmp / "sym", occ)
+    t.rt.globalloc.set_map(("m", "1"), t.tmp / "sym")
+    t.dog.teleport(5.0, 5.0, 0.3)
+    t.view.pts = _扫(occ, 5.0, 5.0, 0.3)
+    await _没初值地连上(t)
+    await t.拍(60)
+    assert t.loc.relocs == []
+    nf = _事件(t.ears, "loc_not_found")
+    assert nf and nf[-1]["kind"] == "ambiguous", nf
+    assert "无法确定" in _遥测(t.ears).loc["reason"]
+
+
+async def test_W68_找位置时还没有点云_不算一次_有了再找(台):
+    t = 台
+    pts, t.view.pts = t.view.pts, None
+    await _没初值地连上(t)
+    await t.拍(60)
+    assert t.loc.relocs == [] and not _事件(t.ears, "loc_not_found")
+    t.view.pts = pts
+    await t.拍(80)
+    assert len(t.loc.relocs) == 1
+
+
+async def test_W68_有初值但一直对不上_30秒后自己找(台):
+    t = 台
+    await t.连()
+    await t.拍(120)                                       # 稳下来后那次点云核对先核完
+    t.loc.paused = 10 ** 6                                # 定位器不出位姿了(按旧初值对不上)
+    await t.loc.lose("初值附近不匹配")
+    t.dog.teleport(8.0, 2.0, 0.0)                         # 被搬走了
+    t.view.pts = _扫(t.occ, 8.0, 2.0, 0.0, noise=0.02)
+    await t.拍(250)
+    # 30 秒以内不抢(代理自己按最后可信的位置请的那几次照旧,都在旧位置附近)
+    assert all(math.hypot(r.x - 8.0, r.y - 2.0) > 2.0 for r in t.loc.relocs), t.loc.relocs
+    await t.拍(80)
+    r = t.loc.relocs[-1]
+    assert math.hypot(r.x - 8.0, r.y - 2.0) < 0.15
+
+
+async def test_W68_定位一直可信_不自动找(台):
+    t = 台
+    await t.连()
+    await t.拍(500)
+    assert t.loc.relocs == [] and not _事件(t.ears, "loc_not_found")
+
+
+async def test_W68_手动设位置照样能用_自动找的结论作废(台):
+    t = 台
+    t.view.pts = _乱点()
+    await _没初值地连上(t)
+    await t.拍(60)
+    assert "可能不在地图上" in _遥测(t.ears).loc["reason"]
+    t.view.pts = _扫(t.occ, *TRUE, noise=0.02)
+    await t.rt._on_cmd(_cmd("relocalize", {"x": TRUE[0], "y": TRUE[1], "yaw": TRUE[2]},
+                            "r1", t.c))
+    await t.拍(20)
+    assert t.loc.relocs[-1].human
+    assert _遥测(t.ears).loc["reason"] == ""

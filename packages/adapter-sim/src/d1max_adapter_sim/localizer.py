@@ -23,6 +23,7 @@ from d1max_contract.errors import ContractError
 from d1max_contract.locbridge import (
     MAX_LINE,
     PROTO,
+    WAIT_INIT_REASON,
     Error,
     Heartbeat,
     Hello,
@@ -82,6 +83,9 @@ class SimLocalizer:
         self.coast_from_ms: int | None = None
         #: 人给的初值离真实位置超过这么远,重定位不上(收下之后报 lost)。
         self.reloc_basin_m = 1.0
+        #: 没有初值(W68:新图、没人给过位置):换好先验报「等人给初始位置」、不出位姿,收下一次
+        #: 对得上的重定位才开始出。
+        self.need_init = False
         self.error: str = ""
         self._jump_next = False
         self._reloc_id: int | None = None
@@ -136,7 +140,7 @@ class SimLocalizer:
         await self._say(Heartbeat(seq=self._seq))
         if self.map is not None and self.paused > 0:
             self.paused -= 1
-        elif self.map is not None:
+        elif self.map is not None and not self.need_init:
             self._queue.append((self._steps + self.latency_steps, self._make()))
         if self.held > 0:
             self.held -= 1
@@ -227,6 +231,10 @@ class SimLocalizer:
                 if ok:
                     self.map = (msg.map_id, msg.map_version)
                 await self._say(Reply(req=msg.req, ok=ok, reason=why))
+                if ok and self.need_init:
+                    self._seq += 1
+                    await self._say(State(seq=self._seq, state="initializing",
+                                          reason=WAIT_INIT_REASON))
             elif isinstance(msg, Relocalize):
                 self.relocs.append(msg)
                 if self.refuse_reloc:
@@ -239,6 +247,10 @@ class SimLocalizer:
                     await self._say(State(seq=self._seq, state="lost",
                                           reason="人给的初值附近不匹配"))
                     continue
+                if self.need_init:
+                    self.need_init = False
+                    self._seq += 1
+                    await self._say(State(seq=self._seq, state="tracking"))
                 self.offset = [0.0, 0.0, 0.0]          # 仿真:在初值附近按真实位置对上了
                 self.frozen = None
                 self._jump_next, self._reloc_id = True, msg.req
