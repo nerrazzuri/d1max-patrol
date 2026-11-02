@@ -646,3 +646,17 @@ def test_工单11_位姿里带_MOLA_原始的ICP质量():
     t.step(0.0, 0.0, q=0.94)
     [p] = t.poses()[-1:]
     assert p.icp_quality == 0.94
+
+
+def test_重启要的初值_没给过就没有_人给的未确认优先_确认后按最后可信的():
+    """W68:Super-LIO 只认一次初值,重启(换位置、崩了、雷达挡过)都要拿一个位置起。"""
+    t = 台(init=False)
+    assert t.core.restart_want() is None
+    assert t.core.relocalized(req=4, x=1.0, y=2.0, yaw=0.3, sigma=0.5, human=True)
+    w = t.core.restart_want()
+    assert (w.x, w.y, w.yaw, w.req, w.human) == (1.0, 2.0, 0.3, 4, True), "人给的、还没确认"
+    for i in range(30):
+        t.step(1.0 + 0.05 * i, 2.0, 0.3)
+    w = t.core.restart_want()
+    assert w.req is None and not w.human and w.x == pytest.approx(t.poses()[-1].x)
+    assert w.sigma == AUTO_RELOC_SIGMA_M
