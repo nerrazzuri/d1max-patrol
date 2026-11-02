@@ -2,7 +2,8 @@
 契约的 ``parse_mission`` 读出来,在 MissionEngine 上跑。
 
 契约上看到的:``task_progress`` 不发距离(多个航点,距离没有意义),改为每个航点一条
-``patrol_waypoint``(``index``、``name``、``ok``、``note``);终态同 goto —— 全部航点到了
+``patrol_waypoint``(``index``、``total``(W69:共几个点)、``name``、``ok``、``note``);
+终态同 goto —— 全部航点到了
 ``done``,有被跳过的 ``failed``(理由列出没到的航点),我们发的 abort ``aborted/preempted``,
 引擎自己收尾(急停、电量、丢定位超时……)``failed``。
 """
@@ -31,6 +32,7 @@ class PatrolTask(EngineMissionTask):
         for i in range(self._reported_results, len(results)):
             r = results[i]
             self._events.emit("patrol_waypoint", {"task_id": self.task_id, "index": i,
+                                                  "total": len(self.mission.waypoints),
                                                   "name": r.name, "ok": r.ok, "note": r.note})
         self._reported_results = len(results)
 

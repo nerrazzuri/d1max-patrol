@@ -16,6 +16,7 @@ import '../net/background_watch.dart';
 import '../net/push.dart';
 import '../net/site_client.dart';
 import '../store/site_store.dart';
+import 'arrival_alert.dart';
 import 'nw/nw_p3_robots.dart';
 import 'nw/nw_theme.dart';
 import 'nw/nw_widgets.dart';
@@ -107,6 +108,7 @@ class _SiteRobotsPageState extends State<SiteRobotsPage> {
           }
         });
       }
+      if (arrivalAlerts.value) _arrival(f);
       if (alertWantsSound(f)) {
         widget.ring();
         final a = f['alert'] as Map;
@@ -120,6 +122,23 @@ class _SiteRobotsPageState extends State<SiteRobotsPage> {
       }
       _soon();
     }, onError: (Object _) => _lost(), onDone: _lost, cancelOnError: true);
+  }
+
+  /// W69 到点提醒：响一声（没到的响两声）、弹一行字。
+  void _arrival(Map<String, dynamic> f) {
+    final n = arrivalNote(f);
+    if (n == null) return;
+    widget.ring();
+    if (n.urgent) {
+      Timer(const Duration(milliseconds: 600), () {
+        if (!_disposed) widget.ring();
+      });
+    }
+    if (mounted) {
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(SnackBar(content: Text(n.text), duration: const Duration(seconds: 4)));
+    }
   }
 
   /// 连上（或重连上）时补一次：升档那一帧可能正好落在断线期间，错过了就永远不响。
