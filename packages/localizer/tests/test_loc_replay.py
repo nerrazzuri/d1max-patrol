@@ -250,3 +250,17 @@ def test_W68_Super_LIO回放_IMU位姿换雷达位姿_点云按时间配位姿�
     assert frames[29].quality > 0.95
     assert frames[31].quality < 0.6 and frames[39].quality < 0.6
     assert frames[45].quality > 0.95
+
+
+def test_W68_一直没对上_不信的时段算到录包结束_不只到最后一条报文():
+    """W68 验收(偏 3 m):核心三次判没照办之后不再出报文,报告原来只列到 3.1 s,看着像只有开头不信。"""
+    fr = [replay.Frame(stamp=100.0 + 0.1 * i, p=(0.05 * i + 3.0, 0.0, 0.0), q=_q(0.0),
+                       quality=0.97, proc_s=0.0) for i in range(300)]
+    msgs = replay.simulate(fr, FLAT, (0.0, 0.0, 0.0))
+    view = replay.agent_view(msgs)
+    m = replay.metrics(fr, msgs, view, FLAT)
+    assert m["agent_trusted_share"] < 0.05
+    assert m["agent_untrusted"][-1]["to_s"] == pytest.approx(29.9, abs=0.05)
+    md = replay.report_md("合成", m)
+    assert "MOLA 每帧耗时" not in md                        # Super-LIO 不报每帧耗时:不写 0 ms
+    assert "未记录" in md

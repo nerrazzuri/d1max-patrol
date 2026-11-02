@@ -474,7 +474,7 @@ class LocalizerCore:
         self._misses += 1
         self._need_init = True
         self._reloc_tag = None
-        log.warning("重定位之后第一帧离给的位置 %.1f m:MOLA 没照办(第 %d 次)", d, self._misses)
+        log.warning("重定位之后第一帧离给的位置 %.1f m:定位程序没照办(第 %d 次)", d, self._misses)
         if self._misses >= RELOC_MAX_TRIES:
             self._reloc_failed = f"定位程序未按给的位置重定位(差 {d:.1f} m),请重新设位置"
             self._retry = None
