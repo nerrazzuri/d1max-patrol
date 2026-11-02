@@ -482,3 +482,25 @@ async def test_H1复查三_接管是整条连接退役_另一头在途的旧报�
         sim._clear_until[0] = -1.0                                   # 头端许可过期了
         await sim._run("clear", {"end": "head", "ms": 300, "vmax": 1.2, "seq": 2, "_conn": 1}, g)
         assert sim._clear_until[0] == -1.0 and sim._permit_conn == 2, "旧连接哪一头的都不认"
+
+
+def test_CPP里程IMU断流就重订_行为测试编译并通过_两路回调都记(tmp_path):
+    """11-02 工单 1:整机上电后旁路进程订里程、IMU 那会儿运控板还没好,订失败不重试 → 代理起不来、
+    开机守卫把好包退回。``motion/data_watch.hpp``:3 s 没收到算断,每 5 s 重订一次。"""
+    import shutil
+    import subprocess
+
+    src = (ROOT / "motion" / "patrol_agent.cpp").read_text(encoding="utf-8")
+    assert "g_odom_watch.Seen(now)" in src and "g_imu_watch.Seen(NowMs())" in src
+    assert src.count("SetMcConfig(true, 2000)") == 2, "开机订一次 + 断流重订"
+    cxx = shutil.which("g++")
+    if cxx is None:
+        import pytest
+        pytest.skip("没有 g++")
+    exe = tmp_path / "test_data_watch"
+    subprocess.run([cxx, "-std=c++17", "-O2", "-Wall", "-Wextra", "-Werror", "-pthread",
+                    "-o", str(exe), str(ROOT / "motion" / "test_data_watch.cpp")],
+                   check=True, capture_output=True, timeout=180)
+    got = subprocess.run([str(exe)], capture_output=True, text=True, timeout=60)
+    assert got.returncode == 0, got.stdout + got.stderr
+    assert "data_watch: ok" in got.stdout

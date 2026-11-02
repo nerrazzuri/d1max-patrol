@@ -70,6 +70,7 @@
 
 #include "cmd_auth.hpp"
 #include "robot_sdk/sdk_client.hpp"
+#include "data_watch.hpp"
 #include "take_ack.hpp"
 #include "vel_gate.hpp"
 
@@ -287,6 +288,9 @@ static SDKClient* g_client = nullptr;
 static std::mutex g_sdk_mtx;   // 所有 SDK 调用串行化
 static std::atomic<bool> g_running{true};
 static std::atomic<int64_t> g_last_odom_ms{0};
+// 11-02 工单 1:里程、IMU 断流就重订(开机时运控板还没准备好,订失败不重试)。3 s 没收到算断,5 s 重订一次。
+static DataWatch g_odom_watch(3000, 5000, NowMs());
+static DataWatch g_imu_watch(3000, 5000, NowMs());
 // W26 受力:IMU 回调攒、20 Hz 发一帧。重力参考是加速度模长的慢均值(单位随 SDK,m/s² 还是 g 都行)。
 static std::mutex g_imu_mtx;
 static double g_imu_roll = 0.0, g_imu_pitch = 0.0, g_imu_shock = 0.0, g_imu_gref = 0.0;
@@ -377,6 +381,7 @@ class DataCb : public IDataCallback {
 
   void OnMcData(const MotionData& d) override {
     int64_t now = NowMs();
+    g_odom_watch.Seen(now);
     if (now - g_last_odom_ms.load() < kOdomMinIntervalMs) return;
     g_last_odom_ms = now;
     // quat 是 [w, x, y, z]（头文件明写的顺序，别照抄 ImuData 那套 xyzw）。
@@ -396,6 +401,7 @@ class DataCb : public IDataCallback {
   }
 
   void OnImuData(const ImuData& d) override {
+    g_imu_watch.Seen(NowMs());
     // ImuData 的四元数是 x, y, z, w(跟 MotionData 的 w, x, y, z 不一样)。
     const double x = d.quat_x, y = d.quat_y, z = d.quat_z, w = d.quat_w;
     const double roll = std::atan2(2.0 * (w * x + y * z), 1.0 - 2.0 * (x * x + y * y));
@@ -1204,6 +1210,27 @@ int main(int argc, char** argv) {
   }
 
   std::thread(VelLoop).detach();
+
+  // 里程、IMU 断流就重订(11-02 工单 1)。日志说清楚是哪路、断了多久、第几次。
+  std::thread([]() {
+    while (g_running.load()) {
+      std::this_thread::sleep_for(std::chrono::seconds(1));
+      const int64_t now = NowMs();
+      const bool odom = g_odom_watch.Due(now);
+      const bool imu = g_imu_watch.Due(now);
+      if (!odom && !imu) continue;
+      std::cout << "[DATA] " << (odom ? "里程" : "") << (odom && imu ? "、" : "")
+                << (imu ? "IMU" : "") << " "
+                << (odom ? g_odom_watch.StaleFor(now) : g_imu_watch.StaleFor(now)) / 1000
+                << " 秒没收到,重新订阅(第 "
+                << (odom ? g_odom_watch.Tries() : g_imu_watch.Tries()) << " 次)\n";
+      std::lock_guard<std::mutex> lk(g_sdk_mtx);
+      g_client->SetMcConfig(true, 2000);
+      g_client->SetSpeedReportConfig(true, 20, 2000);
+      g_client->SetJointStateConfig(true, 2000);
+      g_client->SetImuConfig(100, 2000);
+    }
+  }).detach();
 
   // 速度档位(W12):被换掉了(厂家 App)就每秒再设一次;换回来之前运动安全门不放行。
   std::thread([]() {
