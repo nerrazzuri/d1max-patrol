@@ -160,6 +160,7 @@ def test_质量配对_点云配上后面那帧位姿_其余帧沿用_配不上�
     sc.set_fit(L.MapFit(L.voxel_down(room, 0.1)))
     sc.scan(10.0, scan)
     assert sc.pose(9.95, p, q) == 0.0                    # 比点云早的位姿:不是这帧的
+    assert sc.pose(10.0, p, q) == 0.0                    # 上一帧扫描的结束 = 这一帧的开始:也不是
     good = sc.pose(10.1, p, q)                            # 扫描结束时刻的位姿
     assert good > 0.95
     assert sc.pose(10.2, (5.0, 5.0, 0.5), q) == good      # 没新点云:沿用

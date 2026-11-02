@@ -10,6 +10,10 @@
    另一个系里的独立建图轨迹 —— 按时间配对、平面刚体对齐)就算位置误差。
 
 MOLA 命令行在开发机上;``run_mola`` 之外都是纯 Python,测试用合成数据。
+
+**Super-LIO(W68,狗上默认的定位程序)**::func:`run_superlio` 在本机隔离域里起它的重定位模式
+(初值按 ``frames.json`` + 外参换成 IMU 位姿,跟狗上一样)、1 倍速回放录包、录它的位姿;
+:func:`slio_frames` 把 IMU 位姿换成雷达位姿,按狗上同一份套图打分配上质量;后面 2–4 步不变。
 """
 
 from __future__ import annotations
@@ -95,6 +99,50 @@ def _ypr_deg(q: Sequence[float]) -> tuple[float, float, float]:
     yaw = math.atan2(m[1][0], m[0][0])
     roll = math.atan2(m[2][1], m[2][2])
     return math.degrees(yaw), math.degrees(pitch), math.degrees(roll)
+
+
+def run_superlio(bag: Path, prior_dir: Path, init: tuple[float, float, float], out: Path, *,
+                 cfg: Path, root: Path, rate: float = 1.0) -> Path:
+    """Super-LIO 重定位模式在录包上跑一遍(1 倍速:它缺 CPU 会跑飞,别跟别的重活一起跑)。回它的位姿
+    小包目录。"""
+    from d1max_localizer import slioloc as L
+    from d1max_localizer import superlio as S
+    frames = Frames.load(prior_dir / FRAMES_FILE)
+    p, R = L.imu_pose(frames, S.extrinsic(cfg), *init)
+    text = L.reloc_config(cfg.read_text(encoding="utf-8"), map_dir=prior_dir,
+                          src_dir=L.source_dir(root), init=L.init_param(p, R))
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "reloc.yaml").write_text(text, encoding="utf-8")
+    return S.run_offline(bag, out, cfg=out / "reloc.yaml", root=root, rate=rate,
+                         node="relocation_node")
+
+
+def slio_frames(poses: Sequence[tuple[float, Sequence[float], Sequence[float]]],
+                clouds: Any, fit: Any, ext: Any) -> list[Frame]:
+    """Super-LIO 的 IMU 位姿 → 雷达位姿;点云(``(时刻, 雷达系的点)``,隔几帧一帧)按时间跟位姿穿插着
+    喂给狗上同一份 :class:`~d1max_localizer.slioloc.ScanScorer`,配上每帧质量。处理耗时没有,按 0。"""
+    from d1max_localizer import slioloc as L
+    scorer = L.ScanScorer()
+    scorer.set_fit(fit)
+    events: list[tuple[float, int, Any]] = [(float(t), 0, xyz) for t, xyz in clouds]
+    events += [(float(t), 1, (p, q)) for t, p, q in poses]
+    events.sort(key=lambda e: (e[0], e[1]))
+    out = []
+    for t, kind, v in events:
+        if kind == 0:
+            scorer.scan(t, v)
+            continue
+        lp, lq = L.lidar_pose(v[0], v[1], ext)
+        out.append(Frame(stamp=t, p=lp, q=lq, quality=scorer.pose(t, lp, lq), proc_s=0.0))
+    return out
+
+
+def bag_clouds_every(bag: Path, every: int = 5) -> list[tuple[float, Any]]:
+    """录包里前雷达每 ``every`` 帧取一帧(跟狗上适配层一样)。"""
+    from d1max_localizer import superlio as S
+    from d1max_localizer.backend import cloud_xyz
+    return [(t, cloud_xyz(msg)) for i, (t, msg) in enumerate(S.bag_clouds(bag))
+            if (i + 1) % every == 0]
 
 
 # ------------------------------------------------------------ 读

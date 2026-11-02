@@ -230,7 +230,8 @@ def test_回放子命令收_IMU_参数(tmp_path, monkeypatch):
     Frames(up=(0.0, 0.0, 1.0), sensor_up=(0.0, 0.0, 1.0), sensor_forward=(1.0, 0.0, 0.0),
            sensor_height=0.0).save(tmp_path / "frames.json")
     with pytest.raises(SystemExit):
-        tools.main(["replay", "--bag", str(tmp_path / "b"), "--prior", str(tmp_path), "--init",
+        tools.main(["replay", "--engine", "mola",
+                       "--bag", str(tmp_path / "b"), "--prior", str(tmp_path), "--init",
                     "0,0,0", "--out", str(tmp_path / "o"), "--imu-topic", "/front_lidar/imu",
                     "--imu-ypr=-90,0,180"])
     assert seen["imu"] == imu.ImuPrior("/front_lidar/imu", (-90.0, 0.0, 180.0))

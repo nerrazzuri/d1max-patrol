@@ -428,11 +428,12 @@ def _version(root: Path) -> str:
 
 # ---------------------------------------------------------------- 从录包重算
 def run_offline(bag: Path, work: Path, *, cfg: Path, root: Path = ROOT, rate: float = OFFLINE_RATE,
-                env: dict[str, str] | None = None) -> Path:
+                env: dict[str, str] | None = None, node: str = "super_lio_node") -> Path:
     """在本机隔离域里起 Super-LIO、回放录包的前雷达 + IMU、把它的位姿录成一个小包。回那个包的目录。
 
     ``env``:额外的环境变量。隔离域由调用方给(建图编排起建图脚本时已经设好,这里不覆盖;外审
-    W67-1);环境里没有 ROS_DOMAIN_ID 才用 :data:`OFFLINE_ENV`。
+    W67-1);环境里没有 ROS_DOMAIN_ID 才用 :data:`OFFLINE_ENV`。``node``:建图 ``super_lio_node``,
+    定位回放 ``relocation_node``(W68)。
     收到 SIGTERM(建图被停)也照样把起的进程组收掉。"""
     out = work / "lio_bag"
     shutil.rmtree(out, ignore_errors=True)
@@ -449,7 +450,7 @@ def run_offline(bag: Path, work: Path, *, cfg: Path, root: Path = ROOT, rate: fl
     qos.write_text("".join(f"{t}:\n  reliability: reliable\n  durability: volatile\n"
                            f"  history: keep_last\n  depth: {d}\n"
                            for t, d in ((LIDAR_TOPIC, 50), (IMU_TOPIC, 500))), encoding="utf-8")
-    node_cmd = "ros2 run super_lio super_lio_node " + shlex.join(node_args(cfg, ns_remap=False))
+    node_cmd = f"ros2 run super_lio {node} " + shlex.join(node_args(cfg, ns_remap=False))
     rec_cmd = f"ros2 bag record -s mcap -o {q(str(out))} /lio/odom"
     play_cmd = (f"ros2 bag play {q(str(bag))} --rate {rate} --topics {LIDAR_TOPIC} {IMU_TOPIC} "
                 f"--qos-profile-overrides-path {q(str(qos))}")
