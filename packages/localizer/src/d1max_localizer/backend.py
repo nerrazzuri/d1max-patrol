@@ -39,19 +39,25 @@ RelocService = Callable[[tuple[float, float, float], tuple[float, float, float, 
 
 
 
-def valid_points(msg: Any, min_range_m: float = 0.5) -> int:
-    """一帧点云(``sensor_msgs/PointCloud2``,前 12 字节是 float32 的 x、y、z)里有效的点:有限、离雷达
-    ``min_range_m`` 外。雷达被罩住时几乎没有(W34)。"""
+def cloud_xyz(msg: Any) -> Any:
+    """一帧点云(``sensor_msgs/PointCloud2``,前 12 字节是 float32 的 x、y、z)→ ``(N, 3)``。"""
     import numpy as np
     step = int(msg.point_step)
     if step < 12 or not msg.data:
-        return 0
+        return np.zeros((0, 3), dtype=np.float32)
     buf = np.frombuffer(bytes(msg.data), dtype=np.uint8)
     buf = buf[: len(buf) // step * step].reshape(-1, step)
-    xyz = np.ascontiguousarray(buf[:, :12]).view("<f4").reshape(-1, 3)
+    return np.ascontiguousarray(buf[:, :12]).view("<f4").reshape(-1, 3)
+
+
+def valid_points(msg: Any, min_range_m: float = 0.5, xyz: Any = None) -> int:
+    """一帧点云里有效的点:有限、离雷达 ``min_range_m`` 外。雷达被罩住时几乎没有(W34)。"""
+    import numpy as np
+    xyz = cloud_xyz(msg) if xyz is None else xyz
     ok = np.isfinite(xyz).all(axis=1)
     r2 = (xyz[ok].astype(np.float64) ** 2).sum(axis=1)
     return int((r2 >= min_range_m * min_range_m).sum())
+
 
 def _same_file(a: Path | None, b: Path) -> bool:
     """同一个文件(W34:代理重启后给的路径可能经过 ``active`` 链接,字面不同、文件相同)。"""

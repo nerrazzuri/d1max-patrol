@@ -149,3 +149,21 @@ def test_套图打分_近处机身的点和太远的点不算():
     fit = L.MapFit(L.voxel_down(_room(), 0.25))
     body = np.full((500, 3), 0.1)                      # 机身上的点(离雷达 0.17 m)
     assert fit.score(body, (0.0, 0.0, 0.2), (0.0, 0.0, 0.0, 1.0)) is None   # 没有能算的点
+
+
+def test_质量配对_点云配上后面那帧位姿_其余帧沿用_配不上的扔掉():
+    room = _room()
+    sc = L.ScanScorer()
+    p, q = (1.0, 0.5, 0.5), (0.0, 0.0, 0.0, 1.0)
+    scan = room[::13] - np.array(p)
+    assert sc.pose(10.0, p, q) == 0.0                   # 还没地图、没打过分
+    sc.set_fit(L.MapFit(L.voxel_down(room, 0.1)))
+    sc.scan(10.0, scan)
+    assert sc.pose(9.95, p, q) == 0.0                    # 比点云早的位姿:不是这帧的
+    good = sc.pose(10.1, p, q)                            # 扫描结束时刻的位姿
+    assert good > 0.95
+    assert sc.pose(10.2, (5.0, 5.0, 0.5), q) == good      # 没新点云:沿用
+    sc.scan(11.0, scan)
+    assert sc.pose(11.4, (3.0, 2.5, 0.5), q) == good     # 隔太久:配不上,扔掉
+    sc.scan(12.0, scan)
+    assert sc.pose(12.1, (3.0, 2.5, 0.5), q) < 0.3
