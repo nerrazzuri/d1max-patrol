@@ -452,8 +452,12 @@ class Ops:
     def pause(self, args: dict[str, Any]) -> dict[str, Any]:
         """建图时让出 CPU(工单 21):只停合并雷达、定位器这两个,建完 :meth:`resume`。"""
         unit = self._pausable(args)
+        # 建图前没在跑的不停,回告诉代理没停,之后也就不恢复它(外审 W67-1)
+        rc, _ = self.run(["systemctl", "is-active", "--quiet", f"{unit}.service"], 30)
+        if rc != 0:
+            return {"unit": unit, "stopped": False}
         self._sys("systemctl", "stop", f"{unit}.service", timeout=60)
-        return {"unit": unit}
+        return {"unit": unit, "stopped": True}
 
     def resume(self, args: dict[str, Any]) -> dict[str, Any]:
         unit = self._pausable(args)

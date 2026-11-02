@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import math
 import subprocess
+import time
 from pathlib import Path
 
 import numpy as np
@@ -35,7 +36,7 @@ def test_外参不是12个数_说清楚哪不对(tmp_path):
     with pytest.raises(S.SuperLioError, match="12 个数"):
         S.extrinsic(f)
     f.write_text("lio.extrinsic.lidar_imu: [0,0,0, 2,0,0, 0,1,0, 0,0,1]\n")
-    with pytest.raises(S.SuperLioError, match="行列式"):
+    with pytest.raises(S.SuperLioError, match="旋转矩阵"):
         S.extrinsic(f)
 
 
@@ -267,3 +268,55 @@ def test_位姿断档里走的路_挨得很近的位姿_都不算突跳():
     poses[50] = (poses[50][0], (9.0, 0.0, 0.0), poses[50][2])
     with pytest.raises(S.SuperLioError, match="突跳"):
         S.check(S.quality(poses))
+
+
+# ---------------------------------------------------------------- 外审 W67-1
+def test_外审_停进程组_组长退了组里剩下的也收掉(tmp_path):
+    """组长(exec 的 sleep)收到 SIGINT 退了,忽略 SIGINT 的子进程还在:要一起收掉。"""
+    import os
+    p = subprocess.Popen(["bash", "-c", "(trap '' INT; sleep 300) & exec sleep 300"],
+                         start_new_session=True)
+    time.sleep(0.5)
+    S._stop(p, grace_s=5)
+    time.sleep(0.2)
+    with pytest.raises(ProcessLookupError):
+        os.killpg(p.pid, 0)
+
+
+def test_外审_回放时节点或录包提前退了_说哪个和日志(tmp_path):
+    dead = subprocess.Popen(["true"])
+    dead.wait()
+    alive = subprocess.Popen(["sleep", "30"])
+    try:
+        with pytest.raises(S.SuperLioError, match="Super-LIO.*提前退出.*n.log"):
+            S._check_alive([("Super-LIO", dead, tmp_path / "n.log"),
+                            ("录位姿", alive, tmp_path / "r.log")])
+        S._check_alive([("录位姿", alive, tmp_path / "r.log")])
+    finally:
+        alive.kill()
+
+
+def test_外审_位姿只盖住开头一段_不出残缺的图(tmp_path):
+    clouds = [(1000.0 + k * 0.1, None) for k in range(1000)]          # 100 s 点云
+    with pytest.raises(S.SuperLioError, match="位姿只覆盖"):
+        S.prepare(tmp_path, Path("b"), _line(100), cfg=S.DEFAULT_CONFIG,  # 位姿只有前 10 s
+                  prior_pipeline=Path("p"), run=_Run(), clouds=clouds,
+                  xyz_of=lambda _: np.ones((900, 3)) * 4)
+
+
+def test_外审_竖直方向一帧跳10米也算突跳():
+    poses = _line(100)
+    t, p, q = poses[50]
+    poses[50] = (t, (p[0], p[1], 10.0), q)
+    with pytest.raises(S.SuperLioError, match="突跳"):
+        S.check(S.quality(poses))
+
+
+def test_外审_外参旋转部分要正交_不能带缩放(tmp_path):
+    f = tmp_path / "x.yaml"
+    f.write_text("lio.extrinsic.lidar_imu: [0,0,0, 2,0,0, 0,0.5,0, 0,0,1]\n")
+    with pytest.raises(S.SuperLioError, match="旋转矩阵"):
+        S.extrinsic(f)
+    f.write_text("lio.extrinsic.lidar_imu: [0,0,nan, 1,0,0, 0,1,0, 0,0,1]\n")
+    with pytest.raises(S.SuperLioError):
+        S.extrinsic(f)

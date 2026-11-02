@@ -512,12 +512,20 @@ async def test_代理起来_上一趟建图暂停的服务恢复_出错不碍起
 def test_建图暂停_两个服务都经执行器_出错带回原因_工单21(monkeypatch):
     from d1max_agent import main as M
     from d1max_contract import privops
-    sim = privops.SimOps(fail={"resume": "起不来"})
+    sim = privops.SimOps(fail={"resume": "起不来"},
+                         results={"pause": {"stopped": True}})
     monkeypatch.setattr(privops, "from_config", lambda: sim)
     pause = M._mapping_pauser()
-    assert pause(True) == ""
+    units = ["d1max-lidar-merge", "d1max-localizer"]
+    assert pause(True, units) == (units, "")
     assert sim.calls == [("pause", {"unit": "d1max-lidar-merge"}),
                          ("pause", {"unit": "d1max-localizer"})]
-    assert "d1max-localizer:起不来" in pause(False)
+    left, err = pause(False, ["d1max-localizer"])
+    assert left == ["d1max-localizer"] and "d1max-localizer:起不来" in err
+    sim.fail["pause"] = "超时"                                  # 停到一半出错:当停了,之后恢复
+    assert pause(True, ["d1max-localizer"]) == (["d1max-localizer"], "d1max-localizer:超时")
+    del sim.fail["pause"]
+    sim.results["pause"] = {"stopped": False}                 # 建图前没在跑:没停,之后也不恢复
+    assert pause(True, units) == ([], "")
     monkeypatch.setattr(privops, "from_config", lambda: None)
     assert M._mapping_pauser() is None
