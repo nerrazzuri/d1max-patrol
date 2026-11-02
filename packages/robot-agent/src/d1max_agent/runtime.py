@@ -123,10 +123,11 @@ SCAN_CHECK_WAIT_S = 10.0
 CONFLICT_EVERY_S = 10.0
 SCAN_RELOC_MAX = 2
 #: W68 开机自己找位置(用户 2026-11-02):定位不可信连着这么久(秒)、机器人停着、没在跑任务,就自动跑一次
-#: 全图找位置(跟人点「自动找位置」同一条路)。Super-LIO 初值对的话几秒就对上,偏 1 m 约 18 s(台式机)。
-AUTO_FIND_AFTER_S = 30.0
-#: 定位器明说没有初值(「等人给初始位置」:新图、没人给过位置):它不会自己好,不用等。
-AUTO_FIND_NO_INIT_S = 3.0
+#: 全图找位置(跟人点「自动找位置」同一条路)。不等定位器自己先对:找位置只读点云,跟定位器不抢;找到的
+#: 跟定位器此刻给的一致就不打扰它。这几秒只为不让一下的波动(晚到一帧)就去找。
+AUTO_FIND_WAIT_S = 3.0
+#: 人刚设过位置:给它这么久(秒)对上(Super-LIO 偏 1 m 约 18 s,台式机),过了还不行再自己找。
+AUTO_FIND_HUMAN_GRACE_S = 30.0
 #: 找过一次之后隔这么久再找;一段不可信里最多找这么多次(找到了、定位器又对不上,也算一次),
 #: 之后等人到场设位置。还没有点云(感知没起来)不算一次,隔 :data:`AUTO_FIND_RETRY_S` 再看。
 AUTO_FIND_EVERY_S = 60.0
@@ -283,6 +284,7 @@ class AgentRuntime:
         self._find_map: tuple[str, str] | None = None
         self._find_kind = ""
         self._find_seq = 0
+        self._find_human = False
         #: 人员检测(W24,决策 39):检测节点经本机人员桥报帧,这里判有没有人、记事件。
         if persons not in ("none", "bridge"):
             raise ValueError(f"persons 要是 none 或 bridge,给的是 {persons!r}")
@@ -1464,6 +1466,9 @@ class AgentRuntime:
                     and self.globalloc.still_valid(scan_ref, (o2.x, o2.y, o2.yaw))):
                 return "not_found: 找位置的这段时间机器人动了,停稳了再试一次"
         loc = self.parts.nav.anchor
+        if auto and found is not None and isinstance(loc, BridgeLocalizer) \
+                and loc.agrees((o.x, o.y, o.yaw), pose):
+            return "same: 定位器此刻给的位置跟找到的一致,不打扰它"
         if isinstance(loc, BridgeLocalizer):
             # 配了定位器(W09a):请它按人给的位置(初值)重定位;稳下来的时候修正量经 on_corrected
             # 交给引擎。自动找到的(W41)给大一点的偏差,定位器在附近再找。
@@ -1478,7 +1483,7 @@ class AgentRuntime:
                 self._rtk_check.human_override(self._mono())
                 loc.rtk_disagree = ""
                 # 人设过了(W68):自动找位置从头算,给这次设的位置留出对上的时间
-                self._find_since, self._find_tries = self._mono(), 0
+                self._find_since, self._find_tries, self._find_human = self._mono(), 0, True
         else:
             delta = loc.anchor(m, pose, (o.x, o.y, o.yaw))
             # 引擎记的出发点与来路按修正量挪过去(修正量给不出就来路作废);丢定位的次数从头算。
@@ -1496,9 +1501,9 @@ class AgentRuntime:
                 and isinstance(self.parts.nav.anchor, BridgeLocalizer))
 
     def _maybe_auto_find(self) -> None:
-        """W68 开机自己找位置(用户 2026-11-02):定位不可信连着 :data:`AUTO_FIND_AFTER_S` 秒
-        (定位器明说没有初值就 :data:`AUTO_FIND_NO_INIT_S` 秒)就后台跑一次全图找位置;找到了请
-        定位器按它重定位,找不到把原因写进定位的「为什么不可信」(遥测、站点「定位不可信:无法派单」
+        """W68 开机自己找位置(用户 2026-11-02):定位不可信连着 :data:`AUTO_FIND_WAIT_S` 秒(人刚设过
+        位置 :data:`AUTO_FIND_HUMAN_GRACE_S` 秒)就后台跑一次全图找位置;找到了(跟定位器此刻给的
+        不一致)请定位器按它重定位,找不到把原因写进定位的「为什么不可信」(遥测、站点「定位不可信:无法派单」
         告警都带它)并报事件。一段不可信里最多 :data:`AUTO_FIND_MAX` 次;人设位置照常收,设了
         从头算。可信之前导航本来就起不来。"""
         if not self._global_ok() or self.loaded_map is None or self._running(self._find_job):
@@ -1510,10 +1515,11 @@ class AgentRuntime:
             self._find_next = -math.inf
         if anchor.ok(bool(getattr(self.parts.nav, "odom_ok", True))):
             self._find_since, self._find_tries, anchor.find_note = None, 0, ""
+            self._find_human = False
             return
         if self._find_since is None:
             self._find_since = now
-        wait = AUTO_FIND_NO_INIT_S if anchor.waiting_for_init() else AUTO_FIND_AFTER_S
+        wait = AUTO_FIND_HUMAN_GRACE_S if self._find_human else AUTO_FIND_WAIT_S
         if (now - self._find_since < wait or now < self._find_next
                 or self._find_tries >= AUTO_FIND_MAX
                 or self._running(self._map_job) or self._switching):
@@ -1546,6 +1552,10 @@ class AgentRuntime:
             self._find_next = now + AUTO_FIND_EVERY_S
             log.warning("开机自己找位置:找到了(第 %d 次),请定位器按它重定位", self._find_tries)
             return
+        if why.startswith("same"):
+            log.info("开机自己找位置:%s", why)
+            self._find_next = now + AUTO_FIND_EVERY_S
+            return
         kind = self._find_kind if why.startswith("not_found") else ""
         if kind not in ("off_map", "ambiguous"):
             # 还没有点云、机器人在动、在忙……:不算一次,过一会儿再看
@@ -1563,7 +1573,7 @@ class AgentRuntime:
             note += ",请到场设位置"
         anchor.find_note = note
         log.warning("开机自己找位置没找到(第 %d 次):%s —— %s", self._find_tries, note, detail)
-        self.events.emit("loc_not_found", {"map_id": m[0], "map_version": m[1], "kind": kind,
+        self.events.emit("loc_not_found", {"map_id": m[0], "map_version": m[1], "cause": kind,
                                            "reason": note, "detail": detail[:200],
                                            "try": self._find_tries})
 

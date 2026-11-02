@@ -666,3 +666,28 @@ def test_对账S6_站点重启前报过_重启后不重复报_好了照样解决
     assert len([x for x in _空闲丢定位(desk) if x.resolved_ms is None]) == 0
     src.tick()
     assert len([x for x in _空闲丢定位(desk) if x.resolved_ms is None]) == 1
+
+
+def test_W68_机器人开机找不到自己的位置_马上报_不等宽限_定位好了自己解决(台):
+    c, db, desk, src, *_ = 台
+    src.on_status("A", _status(loc_ok=False))             # 刚起来:宽限期里
+    src.on_event("A", _ev("loc_not_found", cause="off_map",
+                          reason="位置偏差过大:机器人可能不在地图上(或周围变化太大),请到场设位置"))
+    [a] = _空闲丢定位(desk)
+    assert a.level.value == "P2" and "可能不在地图上" in a.title and "设位置" in a.detail
+    src.on_event("A", _ev("loc_not_found", cause="off_map", reason="……3 次未成功,请到场设位置"))
+    c.ms += 600_000
+    src.tick()
+    assert [x.count for x in _空闲丢定位(desk)] == [1], "同一回不重复报"
+    src.on_status("A", _status())                         # 人设了位置、定位好了:自己解决
+    [a] = _空闲丢定位(desk)
+    assert a.resolved_ms is not None and a.resolved_by == "site:loc_ok"
+
+
+def test_W68_几处差不多像_标题说无法确定(台):
+    c, db, desk, src, *_ = 台
+    src.on_status("A", _status(loc_ok=False))
+    src.on_event("A", _ev("loc_not_found", cause="ambiguous",
+                          reason="有几处差不多像,无法确定机器人在哪,请到场设位置"))
+    [a] = _空闲丢定位(desk)
+    assert "无法确定" in a.title
