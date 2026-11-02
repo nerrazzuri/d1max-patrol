@@ -168,3 +168,24 @@ def test_质量配对_点云配上后面那帧位姿_其余帧沿用_配不上�
     assert sc.pose(11.4, (3.0, 2.5, 0.5), q) == good     # 隔太久:配不上,扔掉
     sc.scan(12.0, scan)
     assert sc.pose(12.1, (3.0, 2.5, 0.5), q) < 0.3
+
+
+def test_W68_外审_套图分过期_一直配不上就归零_换图清零():
+    """codex r1 #2:原来最后一次的分没有有效期,一直配不上(或打不出分)也照用旧的高分。"""
+    room = _room()
+    sc = L.ScanScorer()
+    p, q = (1.0, 0.5, 0.5), (0.0, 0.0, 0.0, 1.0)
+    scan = room[::13] - np.array(p)
+    sc.set_fit(L.MapFit(L.voxel_down(room, 0.1)))
+    sc.scan(10.0, scan)
+    assert sc.pose(10.1, p, q) > 0.95
+    t = 10.1
+    for _ in range(40):                                   # 点云一直来、一直配不上
+        t += 0.1
+        sc.scan(t - 0.5, scan)
+        last = sc.pose(t, p, q)
+    assert last == 0.0
+    sc.scan(t, scan)
+    assert sc.pose(t + 0.1, p, q) > 0.95                  # 又配上了
+    sc.set_fit(None)
+    assert sc.pose(t + 0.2, p, q) == 0.0                  # 换图(新图还没载好):旧分作废

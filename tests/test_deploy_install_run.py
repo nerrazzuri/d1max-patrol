@@ -395,3 +395,27 @@ def test_W68_Super_LIO是必装的_装机时编_编不成整个装机失败_不�
         assert "Super-LIO" in got.stdout + got.stderr and "装机失败" in got.stdout + got.stderr
         assert "systemctl start d1max-agent.service" not in calls
         assert not (tmp_path / "opt/d1max/current").exists(), "不切到这一版"
+
+
+def test_W68_外审_编译脚本丢了执行位_照样编_用机器人账号编(tmp_path):
+    """codex r1 #7:原来按 -x 判,经 FAT/exFAT 拷过变成 0644 就当没有、跳过必装的编译。"""
+    script = _准备(tmp_path)
+    build = tmp_path / "pkg" / PKG_NAME / "deploy/d1max-superlio-build"
+    _stub(build, f'echo "superlio-build prefix=$D1MAX_SUPERLIO_PREFIX" >> "{tmp_path / "calls"}"\n')
+    build.chmod(0o644)
+    got = _跑(tmp_path, script)
+    assert got.returncode == 0, got.stdout + got.stderr
+    calls = _调用(tmp_path)
+    assert f"superlio-build prefix={tmp_path / 'opt/d1max/superlio'}" in calls
+    assert any(c.startswith("sudo -u robot") and "d1max-superlio-build" in c for c in calls)
+
+
+def test_W68_外审_包里带了Super_LIO源码却没编译脚本_装机失败(tmp_path):
+    script = _准备(tmp_path)
+    pkg = tmp_path / "pkg" / PKG_NAME
+    (pkg / "deploy/d1max-superlio-build").unlink(missing_ok=True)
+    (pkg / "packages/localizer/native/superlio").mkdir(parents=True, exist_ok=True)
+    got = _跑(tmp_path, script)
+    assert got.returncode != 0
+    assert "装机失败" in got.stdout + got.stderr
+    assert "systemctl start d1max-agent.service" not in _调用(tmp_path)
