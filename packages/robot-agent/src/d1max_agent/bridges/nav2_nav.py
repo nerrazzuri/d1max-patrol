@@ -286,6 +286,7 @@ class Nav2NavBackend(PlannedNavBackend):
             log.info("%s:已在目标附近,只原地转到 %.0f°(不交给 Nav2)", op, math.degrees(pose.yaw))
             await HalNavBackend.goto(self, pose)
             return
+        pose = await self._snap_for_nav2(here, pose, op)
         goal_xy = (pose.position.x, pose.position.y)
         # W48:有路网就先在路网上找路,途经点交给 Nav2(NavigateThroughPoses,只是路过)
         via = route(self.route_net, (here.x, here.y), goal_xy) \
@@ -318,6 +319,23 @@ class Nav2NavBackend(PlannedNavBackend):
         log.info("%s:交给 Nav2(目标 %d)→ (%.2f, %.2f)", op, self._goal_id, pose.position.x,
                  pose.position.y)
         await HalNavBackend.goto(self, pose)
+
+    async def _snap_for_nav2(self, here: Any, pose: Pose, op: str) -> Pose:
+        """W71(11-03 商场):终点只是落在地图墙的膨胀圈里 → 挪到最近能站的点再交给 Nav2(跟自己的规划、
+        站点查可达同一条规矩)。站点说到得了,Nav2 却判终点在致命带里规划失败。查不了就原样。"""
+        if self._base is None or here is None:
+            return pose
+        try:
+            cm = await self._costmap_async(self._margin(here, pose))
+            snapped = self._snap_goal(cm, pose)
+        except Exception:                                 # 只是改善,查不了照原样
+            log.exception("%s:查终点贴不贴墙没成,照原样交给 Nav2", op)
+            return pose
+        if snapped is None:
+            return pose
+        log.info("%s:终点 (%.2f, %.2f) 贴着墙(膨胀圈里),改去最近能站的 (%.2f, %.2f)", op,
+                 pose.position.x, pose.position.y, snapped.position.x, snapped.position.y)
+        return snapped
 
     def _cancel_nav2(self) -> None:
         g, self._nav2_goal = self._nav2_goal, None
