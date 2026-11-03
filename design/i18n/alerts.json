@@ -319,5 +319,13 @@
   "cert_renew_failed": {
     "en": "Automatic certificate renewal failed",
     "zh": "证书自动续签失败"
+  },
+  "zone_unwatched": {
+    "en": "Zone not checked for too long",
+    "zh": "防区太久没巡到"
+  },
+  "guard_stuck": {
+    "en": "Zone route keeps failing",
+    "zh": "防区路线连着跑不成"
   }
 }

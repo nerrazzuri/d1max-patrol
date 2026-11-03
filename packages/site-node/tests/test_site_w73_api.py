@@ -111,3 +111,60 @@ def test_历史版本退回删掉的防区路线_还是防区路线(站点):
     code, d = _restore(s, alice, rows[1]["id"])                    # 删之前那一版
     assert code == 200, d
     assert s.req("GET", "/api/routes/east", token=alice)[1]["kind"] == "guard"
+
+
+# ---------------------------------------------------------------- 第二期:值守方案、状态、值守记录
+
+def _接值守(s):
+    from d1max_site.api import zone_posts
+    from d1max_site.guard_duty import GuardDuty
+    from d1max_site.modes import ArmingDesk
+    if getattr(s.api, "arming", None) is None:
+        s.api.arming = ArmingDesk(s.db, now_ms=lambda: 1000)
+    s.api.guard = GuardDuty(s.db, s.disp, routes=s.api.routes, areas=s.api.areas,
+                            arming=s.api.arming,
+                            posts=lambda m, v: {p["zone"]: p for p in zone_posts(s.api).view(m, v)},
+                            now_ms=lambda: 1000)
+    s.api.guard.reach = getattr(s.api.routes, "reach", None)
+    return s.api.guard
+
+
+def test_值守方案_看_改_带预报_保安不能改_版本冲突(站点):
+    s = 站点
+    _接值守(s)
+    alice, gina = _登(s, "alice"), _登(s, "gina")
+    assert s.req("POST", "/api/routes/east", _路线(kind="guard"), token=alice)[0] == 200
+    code, d = s.req("GET", "/api/guard/plan", token=gina)
+    assert code == 200 and d["revision"] == 0 and d["entries"] == []
+    body = {"entries": [{"route": "east", "robot": "A", "gap_min": 30}], "base_revision": 0}
+    assert s.req("POST", "/api/guard/plan", body, token=gina)[0] == 403
+    code, d = s.req("POST", "/api/guard/plan", body, token=alice)
+    assert code == 200, d
+    assert d["revision"] == 1 and d["entries"][0]["gap_min"] == 30
+    fc = d["forecast"]
+    assert fc["entries"][0]["cycle_s"] == 1800 and [z["zone"] for z in fc["zones"]] == ["东区"]
+    assert any("西区" in w for w in fc["warnings"]), "两个点都在东区:西区没人看要提示"
+    assert s.req("POST", "/api/guard/plan", body, token=alice)[0] == 409, "base_revision 旧了"
+    bad = {"entries": [{"route": "nope"}], "base_revision": 1}
+    code, d = s.req("POST", "/api/guard/plan", bad, token=alice)
+    assert code == 400 and "没有路线" in d["error"]
+    code, d = s.req("POST", "/api/routes/east/delete", {"base_revision": 1}, token=alice)
+    assert code in (400, 409) and "值守方案" in d["error"], d
+
+
+def test_值守状态和记录_保安能看(站点):
+    s = 站点
+    g = _接值守(s)
+    gina = _登(s, "gina")
+    code, d = s.req("GET", "/api/guard/status", token=gina)
+    assert code == 200 and d["duty"] is None and d["runs"] == []
+    with s.db.tx() as c:
+        c.execute("INSERT INTO guard_duties(started_ms, ended_ms) VALUES (100, 900)")
+        c.execute("INSERT INTO guard_log(duty_id, at_ms, kind, zone, point) "
+                  "VALUES (1, 200, 'point', '东区', 'A')")
+    code, d = s.req("GET", "/api/guard/duties", token=gina)
+    assert code == 200 and d["duties"][0]["zones"][0]["looks"] == 1
+    code, d = s.req("GET", "/api/guard/duties/1", token=gina)
+    assert code == 200 and d["log"][0]["point"] == "A"
+    assert s.req("GET", "/api/guard/duties/99", token=gina)[0] == 404
+    assert g is s.api.guard

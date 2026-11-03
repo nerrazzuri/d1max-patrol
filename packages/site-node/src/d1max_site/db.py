@@ -19,7 +19,9 @@ from typing import Any
 #: 61 W44:告警结论 alerts.verdict、交班留言 shift_notes、位置轨迹 pose_track(只加列、加表)。
 #: 71 W73 第一期:路线分类 routes.kind(patrol 巡逻 / guard 防区路线)、
 #:    防区的查看点与值守位 zone_posts。
-SCHEMA_VERSION = 71
+#: 72 W73 第二期:布防值守 —— 值守方案 guard_plan、各防区超时线 guard_zone_limits、每条方案的进度
+#:    guard_runs、每一段布防 guard_duties、防区最后看过 zone_seen、值守记录 guard_log(只加表)。
+SCHEMA_VERSION = 72
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -773,7 +775,7 @@ CREATE TABLE IF NOT EXISTS cert_pending (
     created_ms  INTEGER NOT NULL
 );
 -- W73 第一期(库 71):防区的查看点(出事去哪看)和值守位(空档站哪儿盯,带朝向)。没有这一行 = 站点
--- 自动算(zone_posts.py);有 = 人挪过,按人的。
+-- 自动算(guard_plan.py);有 = 人挪过,按人的。
 CREATE TABLE IF NOT EXISTS zone_posts (
     map_id      TEXT NOT NULL,
     map_version TEXT NOT NULL,
@@ -787,6 +789,65 @@ CREATE TABLE IF NOT EXISTS zone_posts (
     updated_ms  INTEGER NOT NULL,
     PRIMARY KEY (map_id, map_version, zone)
 );
+-- W73 第二期(库 72):布防值守(guard_duty.py)。值守方案:布防时哪条防区路线给哪台机器人
+-- (robot='' = 任意一台)、每圈之间隔多久(gap_min=0:跑完马上下一圈)、要不要打乱起点和方向。
+CREATE TABLE IF NOT EXISTS guard_plan (
+    id          INTEGER PRIMARY KEY,
+    route       TEXT NOT NULL,
+    robot       TEXT NOT NULL DEFAULT '',
+    gap_min     INTEGER NOT NULL DEFAULT 0,
+    shuffle     INTEGER NOT NULL DEFAULT 0
+);
+-- 防区多久没看就报警(分钟);没有这一行按预报算(间隔 × 1.5,最少 15 分钟)。
+CREATE TABLE IF NOT EXISTS guard_zone_limits (
+    zone        TEXT PRIMARY KEY,
+    max_gap_min INTEGER NOT NULL
+);
+-- 每条值守方案此刻的进度(站点重启接着办):哪台机器人、在跑圈 / 去值守位 / 站着盯 / 等着接着跑。
+-- plan:这一圈的点 [{name, zone}](把到点事件对到防区上);watch_zone:值守位是哪个防区的。
+CREATE TABLE IF NOT EXISTS guard_runs (
+    entry       INTEGER PRIMARY KEY,
+    robot_id    TEXT NOT NULL,
+    state       TEXT NOT NULL,
+    task_id     TEXT NOT NULL DEFAULT '',
+    sent_ms     INTEGER NOT NULL DEFAULT 0,
+    lap         INTEGER NOT NULL DEFAULT 0,
+    lap_started_ms INTEGER NOT NULL DEFAULT 0,
+    next_lap_ms INTEGER NOT NULL DEFAULT 0,
+    until_ms    INTEGER NOT NULL DEFAULT 0,
+    plan        TEXT NOT NULL DEFAULT '[]',
+    watch_zone  TEXT NOT NULL DEFAULT '',
+    fails       INTEGER NOT NULL DEFAULT 0
+);
+-- 一段布防(有方案的防区布防着的这一段):值守记录按段翻。
+CREATE TABLE IF NOT EXISTS guard_duties (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    started_ms  INTEGER NOT NULL,
+    ended_ms    INTEGER
+);
+-- 防区最后一次被看(值守的机器人走过防区里的点、或站在这个防区的值守位上)。
+CREATE TABLE IF NOT EXISTS zone_seen (
+    map_id      TEXT NOT NULL,
+    map_version TEXT NOT NULL,
+    zone        TEXT NOT NULL,
+    last_ms     INTEGER NOT NULL,
+    robot_id    TEXT NOT NULL DEFAULT '',
+    how         TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (map_id, map_version, zone)
+);
+-- 值守记录:每一段布防里的每一件事(一圈开始 / 跑完、到了哪个点、没到、被打断、接着跑、去值守位……)。
+CREATE TABLE IF NOT EXISTS guard_log (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    duty_id     INTEGER NOT NULL,
+    at_ms       INTEGER NOT NULL,
+    robot_id    TEXT NOT NULL DEFAULT '',
+    entry       INTEGER,
+    kind        TEXT NOT NULL,
+    zone        TEXT NOT NULL DEFAULT '',
+    point       TEXT NOT NULL DEFAULT '',
+    detail      TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS guard_log_duty ON guard_log(duty_id, at_ms);
 -- W63(库 70):设备身份。每个序列号第一次核过时的设备公钥(以后换了钥匙 = 仿冒,拒)。attest.py。
 CREATE TABLE IF NOT EXISTS device_ids (
     serial      TEXT PRIMARY KEY,

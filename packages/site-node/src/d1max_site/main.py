@@ -1058,6 +1058,26 @@ class Server:
         self.sightings.areas = self.areas
         self.force.armed_for = self.sightings.armed_now          # W44 外审 R2
         self.api.deterrence = self.deterrence
+        # W73 第二期:布防值守。布防着自己一圈圈跑防区路线、两圈之间站值守位;值守中的任务
+        # 不自动回待命点,排程不往值守中的机器人上派,站在值守位上看见人按它盯着的防区判。
+        from d1max_site.api import zone_posts
+        from d1max_site.guard_duty import GuardDuty
+        self.guard = GuardDuty(
+            self.db, self.dispatcher, routes=self.api.routes, areas=self.areas, arming=self.arming,
+            posts=lambda m, v: {p["zone"]: p for p in zone_posts(self.api).view(m, v)},
+            now_ms=wall_ms)
+        self.guard.alerts = self.alerts
+        self.guard.busy = self.deterrence.busy
+        self.guard.charging = lambda rid: bool(self.db.query(
+            "SELECT 1 FROM charge_cycles WHERE robot_id=?", (rid,)))
+        self.guard.standby = self.standby
+        self.guard.reach = getattr(self.api.routes, "reach", None)
+        self.api.guard = self.guard
+        self.sightings.watching = self.guard.watching
+        _hold = self.standby.hold
+        self.standby.hold = lambda rid, tid: _hold(rid, tid) or self.guard.holds(rid, tid)
+        _busy = self.scheduler.site_busy
+        self.scheduler.site_busy = lambda: set(_busy() if _busy else ()) | self.guard.robots()
         self.api.weather = self.weather
         self.api.adhoc = self.adhoc
         from d1max_site.push import PushDesk, load_senders
@@ -1305,6 +1325,7 @@ class Server:
                     log.exception("%s这一拍没办成", what)
             for what, part, meth in (("驱离", "deterrence", "tick"),      # W22:到点收、续声光
                                      ("回充", "charge", "tick"),          # W13
+                                     ("布防值守", "guard", "tick"),       # W73 第二期
                                      ("受力警笛", "force", "sound"),      # W26:布防时被抱起来
                                      ("天气", "weather", "tick"),         # W29:雷暴撤排程、对账限速
                                      ("推送", "push", "tick"),            # A6:P1 推到手机

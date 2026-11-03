@@ -246,3 +246,25 @@ def test_外审复查R2_具名都撤防_定位说不清宁可报_全站都撤防
     t2 = _具名都撤防台(台, default_on=False)
     assert t2.arming.view()["state"] == "disarmed"
     assert t2.w.armed_now("A") is False, "全站都撤防:说不清也不报"
+
+
+def test_W73_站在值守位上_按它盯着的那个防区判(台):
+    """设计 §5.4:值守位常在防区边上、甚至在防区外;站在那儿看见人,按它盯着的防区布不布防判。"""
+    t = _分区台(台, default_on=False)
+    _站在(t, 15, 4)                                    # 两个防区中间:按「全部防区一样」那份,撤防
+    t.d.persons("A", present=True, count=1)
+    t.w.tick()
+    assert t.w.alerts.raised == []
+    t.w.watching = lambda rid: "gate" if rid == "A" else None
+    t.w.tick()
+    assert [a["kind"] for a in t.w.alerts.raised] == ["dog_sees_person"]
+
+
+def test_W73_值守位上定位说不清_不按盯着的防区算(台):
+    t = _分区台(台, default_on=False)
+    t.w.watching = lambda rid: "house"
+    t.d.clients["A"].status.ready = SimpleNamespace(loc_ok=False)
+    _站在(t, 15, 4)
+    t.d.persons("A", present=True, count=1)
+    t.w.tick()
+    assert [a["kind"] for a in t.w.alerts.raised] == ["dog_sees_person"], "说不清宁可报(同外审 R2)"
