@@ -646,3 +646,48 @@ def test_G1_分档许可带来源和帧序号():
     assert cmds[0]["src"] == per.permit_src > 0 and cmds[0]["seq"] == per.seq
     _, old = _分档(9, ((3.6, 3.8), (-0.2, 0.2), 0.5))
     assert "src" not in old[0] and "seq" not in old[0], "老旁路照旧"
+
+
+def _歪(pts, pitch_deg=0.0, roll_deg=0.0):
+    """机身歪了:同一块平地在机身系里看起来是斜的(低头 → 前方地面「抬高」)。"""
+    q = pts.copy()
+    q[:, 2] += (q[:, 0] * math.tan(math.radians(pitch_deg))
+                + q[:, 1] * math.tan(math.radians(roll_deg)))
+    return q
+
+
+def _自检过的感知(m):
+    per = Perception(m, cfg=Config())
+    per.check = SelfCheck(frames=2)
+    flat = 到雷达系(m, 场景())
+    per.on_front(flat, 10)
+    per.on_front(flat, 20)
+    assert per.check.check == "ok"
+    return per
+
+
+def test_W71_机身歪了4度_平地不当挡_箱子照样挡():
+    """11-03 商场 P2→P3:左前腿下了 5 cm 的台阶,机身歪着,前方 2 m 外的平地被判成凸起,四面都是挡,
+    机器人出不去。地面每帧按眼前的点重新拟合,不再拿开机时那一个平面硬套。"""
+    m = Mount.from_frames(AIRY)
+    per = _自检过的感知(m)
+    cfg = Config()
+    base = _歪(场景(box=((2.0, 2.4), (-0.2, 0.2), 0.5)), pitch_deg=4.0, roll_deg=3.0)
+    g = per.on_front(到雷达系(m, base), 30)
+    occ = unpack_bits(g["occ"], cfg.size)
+    assert occ[_cell(cfg, 2.2, 0.0)], "箱子照样挡"
+    for x, y in [(2.5, 1.0), (3.0, -1.0), (3.5, 2.0), (1.5, 2.5)]:
+        assert not occ[_cell(cfg, x, y)], (x, y)
+
+
+def test_W71_眼前被大平台占满_地面不跟着平台走():
+    """每帧拟合的地面离开机标的离地高度差太多(台子、货架底板),不认,照旧用上一个。"""
+    m = Mount.from_frames(AIRY)
+    per = _自检过的感知(m)
+    cfg = Config()
+    pts = 场景()
+    top = (pts[:, 0] > 0.8) & (pts[:, 0] < 4.0) & (np.abs(pts[:, 1]) < 4.0)
+    pts[top, 2] += 0.25
+    g = per.on_front(到雷达系(m, pts), 30)
+    occ = unpack_bits(g["occ"], cfg.size)
+    assert occ[_cell(cfg, 2.0, 0.0)], "25 cm 高的平台是挡"
