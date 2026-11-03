@@ -242,10 +242,13 @@ def test_审计详情_放得下原样_放不下先缩_再放不下只留键名_�
     assert rows[0]["detail"]["unreadable"] is True
 
 
-def test_临时撤防一次最多撤64个防区(台):
+def test_临时撤防一次能撤的防区有个护栏(台):
+    # W73:防区个数不设上下限(用户 11-04),护栏从 64 放到 MAX_VISITOR_ZONES(1000)只防乱传
+    from d1max_site.modes import MAX_VISITOR_ZONES
     with pytest.raises(ModeError):
-        台.set_mode("visitor", by="olga", zones=[f"z{i}" for i in range(65)], minutes=60)
-    台.set_mode("visitor", by="olga", zones=[f"z{i}" for i in range(64)], minutes=60)
+        台.set_mode("visitor", by="olga", zones=[f"z{i}" for i in range(MAX_VISITOR_ZONES + 1)],
+                    minutes=60)
+    台.set_mode("visitor", by="olga", zones=[f"z{i}" for i in range(MAX_VISITOR_ZONES)], minutes=60)
 
 
 # ------------------------------------------------------------ 接口与角色
