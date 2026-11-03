@@ -338,3 +338,18 @@ async def test_在跑事件派遣_值守等它跑完(站):
     await _跑(t, 3)
     assert _patrols(t) == []
     assert any("incident-x" in r["detail"] for r in _log(t, "waiting"))
+
+
+async def test_一圈跑完下一圈派不出去_只记一次跑完_等着(站):
+    t = 站
+    _方案(t)
+    await _跑(t, 5)
+    t.duty.busy = lambda: {"A"}                         # 跑着的这一圈不受影响;跑完以后派不出下一圈
+    await _跑(t, 40)
+    assert len(_log(t, "lap_done")) == 1, "跑完那一圈只记一次,不每拍重记"
+    assert len(_patrols(t)) == 1
+    assert t.duty.status()["runs"][0]["state"] == "wait"
+    assert any("驱离" in r["detail"] for r in _log(t, "waiting"))
+    t.duty.busy = lambda: set()
+    await _跑(t, 3)
+    assert len(_patrols(t)) == 2 and _log(t, "lap_start")[-1]["detail"].startswith("第 2 圈")

@@ -489,9 +489,11 @@ class GuardDuty:
                              f"{(now - run['lap_started_ms']) // 1000} 秒")
             if run["fails"] and self.alerts is not None:
                 self.alerts.resolve_all(rid, "guard_stuck", who="site:guard_lap_done")
-            self._set_run(eid, fails=0)
             gap = int(e["gap_min"]) * 60_000
             nxt = max(run["lap_started_ms"] + gap, now) if gap else now
+            # 先记成「等下一圈」:下一圈这一拍派不出去(机器人忙、电量低…)就在 wait 里接着等,
+            # 不会每拍把这一圈的「跑完」再记一遍
+            self._set_run(eid, state="wait", fails=0, next_lap_ms=nxt)
             if nxt - now >= WATCH_MIN_S * 1000:
                 await self._go_watch(e, info, {**run, "fails": 0}, nxt)
             else:
@@ -591,26 +593,31 @@ class GuardDuty:
             r = await self.dispatcher.patrol(rid, mission, issued_by="guard", priority=GUARD_LAP,
                                              task_id=tid)
         except DispatchRefused as exc:
-            self._refused(e, rid, run, str(exc))
+            self._refused(e, rid, run, str(exc), resume)
             return
         except Exception as exc:  # noqa: BLE001 - 说不清狗收没收:留着,按终态 / 丢了对账
             log.warning("%s 值守一圈没派成(回执没到?):%s", rid, exc)
             return
         if not _accepted(r):
             ack = (r or {}).get("ack", {}) if isinstance(r, dict) else {}
-            self._refused(e, rid, run, str(ack.get("reason") or ack.get("result") or "被拒"))
+            self._refused(e, rid, run, str(ack.get("reason") or ack.get("result") or "被拒"),
+                          resume)
             return
         self._retry_at.pop(eid, None)
 
-    def _refused(self, e: dict[str, Any], rid: str, run: dict[str, Any] | None, why: str) -> None:
-        """派不出去:退回上一步(刚起的作废;接着跑的过一阵再试)。"""
+    def _refused(self, e: dict[str, Any], rid: str, run: dict[str, Any] | None, why: str,
+                 resume: bool) -> None:
+        """派不出去:退回上一步(刚起的作废;接着跑的、下一圈的过一阵再试)。"""
         self._wait(e, rid, f"{rid} 没接:{why}")
         if run is None:
             self._drop_run(e["id"])
+            return
+        back = {"task_id": run["task_id"], "lap": run["lap"],
+                "lap_started_ms": run["lap_started_ms"], "plan": run["plan"]}
+        if resume:
+            self._set_run(e["id"], state="resume", until_ms=self._now() + RETRY_MS, **back)
         else:
-            self._set_run(e["id"], state="resume", until_ms=self._now() + RETRY_MS,
-                          task_id=run["task_id"], lap=run["lap"],
-                          lap_started_ms=run["lap_started_ms"])
+            self._set_run(e["id"], state="wait", next_lap_ms=self._now() + RETRY_MS, **back)
 
     async def _go_watch(self, e: dict[str, Any], info: dict[str, Any], run: dict[str, Any],
                         next_ms: int) -> None:

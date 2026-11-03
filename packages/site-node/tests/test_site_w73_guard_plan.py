@@ -253,3 +253,20 @@ def test_没有待命点_按最大的一片连通区域放点_不放进封死的
                  speed=np.full(lethal.shape, np.inf, dtype=np.float32))
     g = _Ground(cm, [])
     assert g.ok[2, 2] and not g.ok[2, 6] and not g.ok[3, 6]
+
+
+def test_生成的点和查看点_按机器人自己的膨胀圈也站得下(台):
+    """演示站点 11-04:站点按 0.40 m 挑点,机器人规划按自己的外接圆 0.52 m + 0.05 m 膨胀,贴墙的点到了
+    机器人那边就是「终点贴得太近」(goal_blocked)。有宽敞的地方就挑宽敞的。"""
+    from d1max_contract.planning import costmap as cmod
+    d = 台.cat.file_path("shop", "1", "floor.pgm").parent
+    cm = cmod.from_map_dir(d, robot_radius_m=cmod.ROBOT_RADIUS_M + cmod.INFLATE_MARGIN_M)
+    wall_to_wall = [[0.1, 0.1], [9.9, 0.1], [9.9, 9.9], [0.1, 9.9]]     # 防区一直画到墙根
+    台.areas.set("shop", "1", "东区", wall_to_wall, by="a")
+    wps = generate(台.cat, 台.reach, 台.areas, 台.posts, "shop", "1", [{"zone": "东区"}],
+                   spacing_m=1.0, store=台.store)["waypoints"]
+    assert len(wps) > 20
+    bad = [w["name"] for w in wps if cm.lethal[cm.cell_of(w["x"], w["y"])]]
+    assert bad == [], f"贴墙太近的点:{bad}"
+    for p in 台.posts.view("shop", "1"):
+        assert not cm.lethal[cm.cell_of(p["view"]["x"], p["view"]["y"])], p["zone"]
