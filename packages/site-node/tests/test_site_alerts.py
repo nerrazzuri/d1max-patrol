@@ -280,6 +280,26 @@ def test_狗的钟差_按一段遥测估_超过2秒报一次_回到1秒以内再
     assert sum(a.count for a in desk.book.all() if a.robot == "A") == 2, "回正过再偏:再报"
 
 
+def test_W70_对时以后钟差估出来一直慢1到2秒_稳住30秒也解决(台):
+    """11-03 C40221 走热点 + 隧道:对时成功后 clock_skew 一直没解除(慢的那边估计里含在途)。"""
+    c, db, desk, src, *_ = 台
+    pose = MapPose(map_id="m", map_version="1", frame_id="map", x=0, y=0, yaw=0)
+
+    def tele(skew_s, transit_s=0.05):
+        c.ms += 1000
+        return Telemetry(stamp=c.ms + int((skew_s - transit_s) * 1000), pose=pose, battery_pct=80,
+                         task_state=None, loc_quality=1.0)
+    for _ in range(12):
+        src.on_telemetry("A", tele(-25.0))
+    assert _open(desk, "A") != []
+    for _ in range(70):                                  # 窗口滑过去,再稳住半分钟
+        src.on_telemetry("A", tele(-0.9, transit_s=0.6))
+    assert _open(desk, "A") == []
+    for _ in range(12):
+        src.on_telemetry("B", tele(-1.5))
+    assert _open(desk, "B") == [], "没报过的不用解决,也不报"
+
+
 def test_排程这一拍没办成报一次_好了再坏再报(台):
     c, db, desk, src, *_ = 台
     src.on_site_error("schedule", "")

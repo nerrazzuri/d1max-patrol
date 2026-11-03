@@ -121,6 +121,7 @@ class _Mem:
     loc_reason: str = ""
     fallen: bool = False
     skew: bool = False
+    skew_ok_since: int | None = None    # 钟差落回「慢一点也算对上」那一段的起点(W70)
     #: W42:上次报过的 WiFi 改动(编号;空 = 没有挂着的)。
     wifi_change: str = ""
     disk80: bool = False
@@ -147,6 +148,8 @@ class _Mem:
 #: 遥测没有位姿,不解决。
 NOGO_CLEAR_M = 0.5
 NOGO_CLEAR_S = 5
+#: 机器人的钟慢、但在报警线以内,稳住这么久(秒)也算对上了(W70:慢的那边估计里含在途)。
+SKEW_SLOW_OK_S = 30
 
 
 class SiteAlertSources:
@@ -656,9 +659,21 @@ class SiteAlertSources:
             self.desk.raise_alert(kind="clock_skew", robot=rid, title="机器人的钟不准",
                                   detail=f"跟站点差 {skew:+.1f} 秒(机器人该向站点主机对时,见 W09d)")
         elif abs(skew) <= SKEW_CLEAR_S:
-            m.skew = False
+            m.skew, m.skew_ok_since = False, None
             if self.desk.has_open(rid, "clock_skew"):         # W70:钟对回来了,那条自己解决
                 self.desk.resolve_all(rid, "clock_skew", who="site:clock_ok")
+        elif -SKEW_ALARM_S <= skew < 0 and m.skew:
+            # W70(11-03 C40221,热点 + 隧道):对时以后估出来一直慢 1–2 s —— 狗慢的估计里含着在途
+            # (对时命令路上那段 + 遥测路上那段),到不了 1 s 以内。在报警线以内稳住
+            # :data:`SKEW_SLOW_OK_S` 也算对上了。
+            now = self._now()
+            if m.skew_ok_since is None:
+                m.skew_ok_since = now
+            elif now - m.skew_ok_since >= SKEW_SLOW_OK_S * 1000:
+                m.skew, m.skew_ok_since = False, None
+                self.desk.resolve_all(rid, "clock_skew", who="site:clock_ok")
+        else:
+            m.skew_ok_since = None
         if t.storage is not None:
             self._storage(rid, m, t.storage)
         self._wifi_change(rid, m, t)
