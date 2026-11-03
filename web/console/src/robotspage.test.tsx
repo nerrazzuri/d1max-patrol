@@ -93,6 +93,31 @@ describe("机器人页", () => {
     expect(c.querySelector(".robot-detail")!.textContent).toContain("未到达点位");
   });
 
+  it("W72 详情里的告警分三组放在最下面:要处理(P1)、待跟进、记录(自动恢复的标出来、收起来)", async () => {
+    robots = [card({ robot_id: "B", recent_problems: [
+      { key: "B/robot_offline#2", kind: "robot_offline", level: "P1", first_ms: NOW - 50_000, resolved_ms: NOW - 40_000, resolved_by: "site:back_soon" },
+      { key: "B/loc_degraded#1", kind: "loc_degraded", level: "P2", first_ms: NOW - 60_000, resolved_ms: null, resolved_by: "" },
+      { key: "B/stuck#1", kind: "stuck", level: "P1", first_ms: NOW - 70_000, resolved_ms: null, resolved_by: "" },
+      { key: "B/fallen#1", kind: "fallen", level: "P1", first_ms: NOW - 80_000, resolved_ms: NOW - 1000, resolved_by: "gina" },
+    ] })];
+    const { container: c } = page();
+    await waitFor(() => expect(cardOf(c, "B")).not.toBeNull());
+    fireEvent.click(cardOf(c, "B"));
+    const d = c.querySelector(".robot-detail")!;
+    const sec = d.querySelector(".robot-alerts")!;
+    expect(sec).not.toBeNull();
+    expect(d.lastElementChild).toBe(sec);
+    const groups = Array.from(sec.querySelectorAll("[data-group]")).map((g) => g.getAttribute("data-group"));
+    expect(groups).toEqual(["act", "later", "log"]);
+    expect(sec.querySelector('[data-group="act"]')!.textContent).toContain("未到达点位");
+    expect(sec.querySelector('[data-group="later"]')!.textContent).not.toContain("未到达点位");
+    const log = sec.querySelector('[data-group="log"]') as HTMLDetailsElement;
+    expect(log.tagName).toBe("DETAILS");
+    expect(log.open).toBe(false);
+    expect(log.textContent).toContain("自动恢复");
+    expect(log.textContent).toContain("已处理");
+  });
+
   it("解绑要确认再输密码", async () => {
     const { container: c } = page();
     await waitFor(() => expect(cardOf(c, "A")).not.toBeNull());

@@ -19,7 +19,7 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from d1max_contract.binding import wifi_view
@@ -85,6 +85,14 @@ DISK_CLEAR_RATIO = 0.75
 #: 掉线告警的迟滞:回来之后要连着在线这么久(毫秒),再掉线才另起一条。4G 抖一下就一条新 P1,
 #: 人很快就不看 P1 了;这段时间里又掉的,算同一次。
 OFFLINE_REARM_MS = 60_000
+#: W72(用户 11-03):遗言报的掉线(WiFi 闪断)等这么久(秒)还没回来才报;这之前回来了只记一笔已解决的
+#: 记录、不推送。状态过期才发现的掉线(已经静默了一分半)不等,马上报。
+OFFLINE_ALERT_S = 30
+#: W72:点位没到只记录;同一个点连着这么多趟没到,才报 P1 要人处理(路多半被堵死了)。
+WAYPOINT_MISS_RUNS = 3
+
+
+_OFFLINE_KINDS = ("robot_offline", "robot_offline_idle")
 
 
 def _hit(text: str, words: tuple[str, ...]) -> bool:
@@ -141,6 +149,18 @@ class _Mem:
     #: 报过「狗在禁行区里」的 P1、还没自己解决(W41);狗离开禁行区够远从哪一刻起(站点的钟)。
     nogo: bool = False
     nogo_clear_since: int | None = None
+    #: W72:这一次掉线从哪一刻起(站点的钟;遗言或过期)、掉的时候在不在跑任务、报过没有。
+    offline_since: int | None = None
+    offline_running: bool = False
+    offline_told: bool = False
+    #: W72:掉过线、急停要按回来第一份状态重新认(还按着再报一次,松开了解决)。
+    estop_recheck: bool = False
+    #: W72:报过定位变差 / 定位丢失暂停、还没解决(定位好了一起解决)。
+    loc_alerted: bool = False
+    #: W72:录像断着的那几路相机(都录回来了才解决「录像中断」)。
+    rec_failed: set = field(default_factory=set)
+    #: W72:点位名 → 连着没到的那几趟(任务号);到过一次清掉。
+    wp_miss: dict = field(default_factory=dict)
 
 
 #: W41(2026-10-26 现场:禁行区删了、狗也不在里面了,P1 还挂着、也不提示能关):狗报的位置离每一个
@@ -251,6 +271,9 @@ class SiteAlertSources:
         # 新位置重新数)
         try:
             m.nogo = bool(self.desk.has_open(rid, "nogo"))
+            # W72:库里挂着的定位告警(站点重启前报的),定位好了照样解决
+            m.loc_alerted = any(self.desk.has_open(rid, k)
+                                for k in ("loc_degraded", "loc_lost_paused"))
         except Exception:
             log.exception("%s 查有没有挂着的禁行区 P1 没成", rid)
         m.nogo_clear_since = None
@@ -272,16 +295,20 @@ class SiteAlertSources:
         if m.offline:
             m.online_since = self._now()
             m.nogo_clear_since = None                  # 复查 N2:刚回来,从新的可信位置数
+            self._blip_back(rid, m)
         if m.up_since is None:
             m.up_since = self._now()
         m.offline = False
         running = s.task is not None and s.task.state is TaskState.RUNNING
         m.running = running
         estop = not s.ready.estop_clear
-        if estop and not m.estop:
+        if estop and (not m.estop or m.estop_recheck):
+            # 掉线回来还按着:站点这一刻才知道的事,再报一次(合进挂着的那条)
             self.desk.raise_alert(kind="estop_pressed", robot=rid, title="急停被按下",
-                                  detail="机器人报急停未解除")
-        m.estop = estop
+                                  detail="机器人报急停未解除;松开后自动解除")
+        elif m.estop and not estop:
+            self.desk.resolve_all(rid, "estop_pressed", who="site:estop_released")   # W72
+        m.estop, m.estop_recheck = estop, False
         # 代理的引擎丢定位就暂停(W29,决策 41):「跑着任务 + 定位不行」= 定位变差或打滑(跟里程对不上),
         # 狗原地停、等恢复。先报 P2;**30 秒还没好**再报 P1「定位丢失后暂停」叫人(``tick`` 里看)。
         loc = running and not s.ready.loc_ok
@@ -290,7 +317,13 @@ class SiteAlertSources:
             self.desk.raise_alert(kind="loc_degraded", robot=rid,
                                   title="定位变差或打滑:原地停下等恢复",
                                   detail=f"任务 {s.task.task_id} 正在运行,机器人报定位不行;"
-                                         f"{LOC_P1_S} 秒内恢复就继续执行")
+                                         f"{LOC_P1_S} 秒内恢复就继续执行;恢复后自动解除")
+            m.loc_alerted = True
+        if s.ready.loc_ok and m.loc_alerted:
+            # W72:定位好了,「定位变差」「定位丢失暂停」一起解决(只留记录)
+            for k in ("loc_degraded", "loc_lost_paused"):
+                self.desk.resolve_all(rid, k, who="site:loc_ok")
+            m.loc_alerted = False
         if not loc:
             m.loc_since = None
         elif m.loc_since is None:
@@ -354,12 +387,16 @@ class SiteAlertSources:
             return
         for rid, m in list(self._mem.items()):
             if not m.offline and self._is_stale(rid):
-                self._offline(rid, m)
+                self._offline(rid, m, silent_long=True)
+            elif m.offline and not m.offline_told and m.offline_since is not None \
+                    and self._now() - m.offline_since >= OFFLINE_ALERT_S * 1000:
+                self._offline_alert(rid, m)               # W72:闪断 30 秒还没回来,报
             elif not m.offline and m.up_since is not None \
                     and self._now() - m.up_since >= OFFLINE_REARM_MS \
-                    and self.desk.has_open(rid, "robot_offline_idle"):
-                try:                                      # W70:回来连着在线过了迟滞,离线那条解决
-                    self.desk.resolve_all(rid, "robot_offline_idle", who="site:online")
+                    and any(self.desk.has_open(rid, k) for k in _OFFLINE_KINDS):
+                try:                                      # W70/W72:连着在线过了迟滞,离线那条解决
+                    for k in _OFFLINE_KINDS:
+                        self.desk.resolve_all(rid, k, who="site:online")
                 except Exception:
                     log.exception("%s 回来了,离线那条解决不了,下一拍再来", rid)
             elif m.loc_since is not None and not m.loc_p1 \
@@ -368,30 +405,96 @@ class SiteAlertSources:
                     self.desk.raise_alert(kind="loc_lost_paused", robot=rid,
                                           title="定位丢失后暂停,30 秒未恢复:要人到场",
                                           detail="机器人原地停着,不靠不准的定位自己走;到场重新给位置,"
-                                                 "或者遥控挪到看得清的地方")
+                                                 "或者遥控挪到看得清的地方;定位恢复后自动解除")
+                    m.loc_alerted = True
                 except Exception:                         # 写不进去:不标报过,下一拍再报(外审 3)
                     log.exception("%s 定位丢失 P1 报不出去,下一拍再报", rid)
                     continue
                 m.loc_p1 = True
             self._loc_idle_due(rid, m)
 
-    def _offline(self, rid: str, m: _Mem) -> None:
+    def _offline(self, rid: str, m: _Mem, *, silent_long: bool = False) -> None:
+        """掉线了。遗言报的(``silent_long`` 假)先不报,等 :data:`OFFLINE_ALERT_S` 秒(W72:WiFi 闪断
+        不叫人);状态过期才发现的已经静默很久了,马上报。"""
         if m.offline:
             return
         m.offline = True
         m.up_since = None
+        m.offline_since, m.offline_running, m.offline_told = self._now(), m.running, False
         # 掉线期间的事看不见:回来之后重新从它报的状态认起。跌倒的记忆也清掉(狗可能被扶起、重启)。
-        m.estop = m.loc_lost_running = m.fallen = False
+        # 急停的记忆留着(W72):回来那一份松开了,挂着的那条在那一份上解决;还按着再报一次。
+        m.estop_recheck = m.estop
+        m.loc_lost_running = m.fallen = False
         m.loc_since = m.loc_idle_since = None              # 掉线不计(loc_bad 留着:回来好了照样解决)
         m.nogo_clear_since = None                          # 外审 R5:掉线那段不算「连着离开」
-        if m.online_since is not None and self._now() - m.online_since < OFFLINE_REARM_MS:
-            log.info("%s 回来不到 %d s 又掉线:算同一次,不另起告警", rid, OFFLINE_REARM_MS // 1000)
+        if silent_long:
+            self._offline_alert(rid, m)
+
+    def _offline_alert(self, rid: str, m: _Mem) -> None:
+        kind = "robot_offline" if m.offline_running else "robot_offline_idle"
+        since = m.offline_since if m.offline_since is not None else self._now()
+        try:
+            if m.online_since is not None and since - m.online_since < OFFLINE_REARM_MS \
+                    and self.desk.has_open(rid, kind):
+                log.info("%s 回来不到 %d s 又掉线:算同一次,不另起告警", rid,
+                         OFFLINE_REARM_MS // 1000)
+            elif kind == "robot_offline":
+                self.desk.raise_alert(kind=kind, robot=rid, title="机器人已离线(跑着任务)",
+                                      detail=f"最后正在运行 {m.started};连回来稳定在线后自动解除")
+            else:
+                self.desk.raise_alert(kind=kind, robot=rid, title="机器人已离线",
+                                      detail="连回来稳定在线后自动解除")
+        except Exception:
+            log.exception("%s 掉线报不出去,下一拍再报", rid)
             return
-        if m.running:
-            self.desk.raise_alert(kind="robot_offline", robot=rid, title="机器人已离线(跑着任务)",
-                                  detail=f"最后正在运行 {m.started}")
+        m.offline_told = True
+
+    def _blip_back(self, rid: str, m: _Mem) -> None:
+        """W72:掉线没到报警的时候就回来了 —— 只记一笔已解决的记录(不推送、不要人处理)。已经挂着
+        一条离线告警(闪来闪去)就不另记,那条照常等稳定在线后解决。"""
+        if m.offline_told or m.offline_since is None:
+            m.offline_since = None
+            return
+        kind = "robot_offline" if m.offline_running else "robot_offline_idle"
+        secs = max(0, (self._now() - m.offline_since) // 1000)
+        m.offline_since = None
+        try:
+            if self.desk.has_open(rid, kind):
+                return
+            self.desk.raise_alert(kind=kind, robot=rid,
+                                  title=f"断联 {secs} 秒后恢复"
+                                        + ("(跑着任务)" if m.offline_running else ""),
+                                  detail="短暂断联,已自动恢复,只做记录", record="site:back_soon")
+        except Exception:
+            log.exception("%s 短暂断联记不下来", rid)
+
+    # ------------------------------------------------------------ 点位没到(W72)
+
+    def _waypoint_missed(self, rid: str, d: dict) -> None:
+        """点位没到:机器人跳过它接着巡,只记一笔;同一个点连着 :data:`WAYPOINT_MISS_RUNS` 趟没到
+        才报 P1
+        (用户 11-03:恢复了的不要人处理;一直到不了多半是路被堵死了)。同一趟里重复报只算一趟。
+        站点重启从头数。"""
+        name = str(d.get("name", "?"))
+        note = str(d.get("note", ""))
+        runs = self._m(rid).wp_miss.setdefault(name, set())
+        runs.add(str(d.get("task_id") or f"?{self._now()}"))
+        if len(runs) >= WAYPOINT_MISS_RUNS:
+            self.desk.raise_alert(kind="stuck", robot=rid,
+                                  title=f"点位 {name} 连续 {len(runs)} 趟未到达:路可能被堵住了",
+                                  detail=(note + ";" if note else "")
+                                         + "到场看看,或者改路线;到达一次后自动解除")
         else:
-            self.desk.raise_alert(kind="robot_offline_idle", robot=rid, title="机器人已离线")
+            self.desk.raise_alert(kind="stuck", robot=rid, title=f"点位 {name} 未到达,已跳过",
+                                  detail=(note + ";" if note else "") + "巡逻继续,只做记录",
+                                  record="site:skipped")
+
+    def _waypoint_reached(self, rid: str, name: str) -> None:
+        m = self._m(rid)
+        if m.wp_miss.pop(name, None) is None:
+            return
+        if not any(len(r) >= WAYPOINT_MISS_RUNS for r in m.wp_miss.values()):
+            self.desk.resolve_all(rid, "stuck", who="site:reached")
 
     # ------------------------------------------------------------ 事件
 
@@ -529,6 +632,18 @@ class SiteAlertSources:
                     title="机器人上装过热,已降负载(停热像录像、暂停上传)" if lvl == "shed"
                     else "机器人上装温度偏高",
                     detail=detail + ";巡逻照常进行,今天之内检查风扇、进风口")
+        elif e.kind == "board_thermal" and d.get("level") == "ok":
+            # W72:凉下来了,「温度偏高 / 降负载」只留记录;「严重过热」(机器人结束了任务回去)
+            # 多半是风扇坏了、进风口堵了,人去看过再关
+            self.desk.resolve_all(rid, "board_hot", who="site:board_ok")
+        elif e.kind == "thermal_lens_clear":
+            self.desk.resolve_all(rid, "lens_blocked", who="site:lens_clear")      # W72
+        elif e.kind == "recording_ok":
+            # W72:这一路录回来了;几路都录回来了「录像中断」才解决
+            m = self._m(rid)
+            m.rec_failed.discard(str(d.get("camera", "?")))
+            if not m.rec_failed:
+                self.desk.resolve_all(rid, "recording_failed", who="site:recording_ok")
         elif e.kind == "thermal_lens_blocked":
             # W46:热像镜头被雨水、脏东西挡住,夜里找人、看起火就瞎了一半
             self.desk.raise_alert(kind="lens_blocked", robot=rid,
@@ -538,6 +653,7 @@ class SiteAlertSources:
                                          f"平时 {d.get('baseline', '?')})")
         elif e.kind == "recording_failed":
             # W18:这一路录像断了(相机不通、盘写不进),狗每 10 s 重试;录回来报 recording_ok
+            self._m(rid).rec_failed.add(str(d.get("camera", "?")))
             self.desk.raise_alert(kind="recording_failed", robot=rid,
                                   title=f"{d.get('camera', '?')} 录像中断",
                                   detail=str(d.get("reason", ""))[:300])
@@ -561,9 +677,9 @@ class SiteAlertSources:
                                   title=f"点位 {d.get('name', '?')} 的照片无法保存",
                                   detail=str(d.get("note", "")))
         elif e.kind == "patrol_waypoint" and d.get("ok") is False:
-            self.desk.raise_alert(kind="stuck", robot=rid, title=(f"点位 "
-                                                                  f"{d.get('name', '?')} 未到达"),
-                                  detail=str(d.get("note", "")))
+            self._waypoint_missed(rid, d)
+        elif e.kind == "patrol_waypoint" and d.get("ok") is True:
+            self._waypoint_reached(rid, str(d.get("name", "?")))
         elif e.kind == "robot_fault":
             try:
                 faults = parse_fault_event_data(d)

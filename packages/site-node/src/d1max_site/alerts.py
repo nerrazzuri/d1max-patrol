@@ -400,8 +400,12 @@ class AlertBook:
         level: Level | None = None,
         context: dict[str, Any] | None = None,
         merge: bool = True,
+        record: str = "",
     ) -> Alert:
         """记一条告警。
+
+        ``record`` 非空(W72):只记一笔、当场算已解决(``resolved_by`` = 它)—— 很短、已经好了的
+        中断(断联几秒、点位没到),历史和报表里看得到,不吸收、不升级、不推送。
 
         同一只狗同一个 ``kind`` 已经有未解决的告警时,合成同一条:
         ``count`` 加一、``last_ms`` 前移到 ``now_ms``,``first_ms`` 不动。
@@ -421,7 +425,7 @@ class AlertBook:
 
         group = f"{robot}/{kind}"
         # merge=False:一次一条、不合并(W53 外审 #3:临时巡逻的通知各是各的事、各推给各的人)
-        existing = self.absorbing(robot, kind, now_ms=now_ms) if merge else None
+        existing = self.absorbing(robot, kind, now_ms=now_ms) if merge and not record else None
         seq = None
         if existing is not None:
             alert = replace(
@@ -446,15 +450,16 @@ class AlertBook:
                 count=1,
                 acked_by="",
                 acked_ms=None,
-                resolved_by="",
-                resolved_ms=None,
+                resolved_by=record,
+                resolved_ms=now_ms if record else None,
                 escalated=START_TIER.get(kind, 0),
                 context=dict(context or {}),
             )
         self._spill(alert)
         if seq is not None:
             self._seq[group] = seq
-            self._active[group] = alert.key
+            if not record:
+                self._active[group] = alert.key
         self._by_key[alert.key] = alert
         return alert
 

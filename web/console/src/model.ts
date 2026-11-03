@@ -122,6 +122,12 @@ export interface Mode {
 /** 给保安看的四类(W44,设计 §7)。 */
 export const GUARD_AUDIENCES = new Set(["intrusion", "fire", "help", "offline"]);
 
+/** W72:这条是站点自己解决的(情况恢复了、短暂中断只记录),不是人处理的。 */
+export function autoResolved(a: Pick<Alert, "resolved_ms" | "resolved_by" | "verdict">): boolean {
+  const by = a.resolved_by ?? "";
+  return a.resolved_ms != null && !a.verdict && (by.startsWith("site:") || by === "system");
+}
+
 /** 这条告警给不给保安看。老站点不报 audience 的一律算给保安(宁可多看)。 */
 export function forGuard(a: Alert): boolean {
   return a.audience == null || GUARD_AUDIENCES.has(a.audience);

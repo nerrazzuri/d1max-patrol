@@ -102,6 +102,9 @@ def test_概览_毛病(台):
     assert [p["kind"] for p in r["problems"] if "kind" in p] == ["stuck"]
     assert {"device": "front_camera", "state": "offline"} in r["problems"]
     assert [p["kind"] for p in r["recent_problems"]] == ["stuck", "fallen"]
+    # W72:详情页按级别、是不是自己恢复的分组
+    got = [(p["level"], p["resolved_by"]) for p in r["recent_problems"]]
+    assert got == [("P1", ""), ("P1", "")]
 
 
 def test_概览_技术告警不算毛病(台):

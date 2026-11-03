@@ -37,7 +37,8 @@ def test_过热三级出告警_回到正常不出(tmp_path):
     assert got["board_overheat"]["level"] == "P1" and "回" in got["board_overheat"]["title"]
     assert audience("board_hot") == "owner" and audience("board_overheat") == "help"
     src.on_event("A", _ev("board_thermal", {"level": "ok", "reason": "SoC 60 °C"}))
-    assert {a["kind"] for a in desk.open()} == {"board_hot", "board_overheat"}, "人去看过再关"
+    # W72:温度偏高 / 降负载凉下来自动解除;严重过热人去看过风扇再关
+    assert {a["kind"] for a in desk.open()} == {"board_overheat"}, "严重过热人去看过再关"
 
 
 def test_热像镜头被挡_出P2给管理员(tmp_path):

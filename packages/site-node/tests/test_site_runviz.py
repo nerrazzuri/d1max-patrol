@@ -359,3 +359,22 @@ def test_W41_轨迹_遥控器拿走控制权那段不记_拿回来另起一段(�
     v = rv.view()["robots"]["A"]
     assert v["trail"] == [[0.0, 0.0], [1.0, 0.0], [2.6, 0.0], [3.0, 0.0]]
     assert v["trail_cuts"] == [2]
+
+
+def test_W72_被挡几十秒没到一分钟_自己走了_只记一笔已解决的_太短的不记(台):
+    """用户 11-03:导航卡住恢复了只记录,不要人处理。"""
+    from d1max_site.runviz import BLOCK_RECORD_S
+    c, rv, desk = 台
+    rv.on_status("A", _status(True))
+    rv.on_event("A", _ev("nav_blocked", reason="30 秒没向目标靠近", x=1.0, y=1.0, waited_s=30.0))
+    c.ms += 10_000
+    rv.tick()
+    rv.on_event("A", _ev("nav_unblocked", waited_s=40.0, detour=True))
+    assert desk.open() == []
+    [a] = desk.book.all()
+    assert a.kind == "nav_blocked" and a.resolved_ms is not None and "40 秒" in a.title
+    assert a.context.get("pose", {}).get("x") == 1.0 or a.context.get("pose") is None
+    rv.on_event("A", _ev("nav_blocked", reason="r", x=1.0, y=1.0, waited_s=5.0))
+    c.ms += (BLOCK_RECORD_S - 10) * 1000
+    rv.on_event("A", _ev("nav_unblocked", waited_s=5.0, detour=True))
+    assert len(desk.book.all()) == 1, "等人让路这种十几秒的不记"

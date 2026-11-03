@@ -10,12 +10,12 @@ import { siteHm } from "./todaypatrols";
 import { Modal } from "./dialogs";
 import { alertTitle, lang, refusalText, t, type Key } from "./i18n";
 import type { UnitInfo } from "./live";
-import { ENGINEERING_LAYERS, etaNext, LAYERS, layersFor, loadLayers, saveLayers, shiftStart, staleAfter, staleCells, tonightEvents, zoneDecor,
+import { ENGINEERING_LAYERS, etaNext, LAYERS, layersFor, loadLayers, saveLayers, mapPins, mapTodo, shiftStart, staleAfter, staleCells, tonightEvents, zoneDecor,
   type AuthzRow, type Cell, type Layer, type ModeView } from "./maplayers";
 import { fanPath } from "./layoutpage";
 import { MapCanvas, type CanvasArea, type LegendKey, type Screen } from "./mapcanvas";
 import { heading, namedAreas, onMap, toPx, type PreviewMeta, type Pt } from "./mapview";
-import { abnormal, alarmState, canArm, canDispatch, canFindPose, canPatrol, robotMap, type Alert } from "./model";
+import { abnormal, alarmState, autoResolved, canArm, canDispatch, canFindPose, canPatrol, robotMap, type Alert } from "./model";
 import { notAccepted, usePosePick, type CommandReply } from "./posepick";
 import { pxToMap, yawToward } from "./routes";
 import { RunLegendItems, VizWorld, vizAvoid, vizHas, vizMarks, vizOnMap } from "./runlayers";
@@ -292,6 +292,8 @@ export function MapPage(props: {
 
   const since = shiftStart(props.now, duty.shift_hours);
   const events = tonightEvents(recent, since);
+  const pins = mapPins(recent, since);
+  const todo = mapTodo(recent, since);
   const stale = cells ? staleCells(cells.cells, props.now, staleAfter(duty.stale_hours)) : [];
   const onThisMap = (u: UnitInfo) => { const m = robotMap(u.robot); return !!(m && shown.map && m.map_id === shown.map.map_id && m.version === shown.map.version); };
   const robotsHere = props.units.filter((u) => u.state !== "offline" && onThisMap(u)).map((u) => u.robot.robot_id);
@@ -335,7 +337,7 @@ export function MapPage(props: {
               const [x, y] = s.map(p.x, p.y);
               return <g key={`sb:${p.name}`} class="standby-mark"><rect x={x - 3} y={y - 3} width="6" height="6" /><text x={x + 6} y={y + 4}>{p.name}</text></g>;
             })}
-            {on("events") && shown.map && events.flatMap((a) => {
+            {on("events") && shown.map && pins.flatMap((a) => {
               const p = a.context?.pose;
               if (!p || p.map_id !== shown.map!.map_id || p.map_version !== shown.map!.version) return [];
               const [x, y] = s.map(p.x, p.y);
@@ -372,18 +374,22 @@ export function MapPage(props: {
         {props.mode && props.mode.mode !== "armed" && canArm(props.role ?? "") && (
           <button type="button" class="btn primary arm-all" onClick={props.onArm}>{t("armAll")}</button>
         )}
-        <h3>{t("tonightN", { n: events.length })}</h3>
-        <ul class="evlist">
-          {events.map((a) => (
-            <li key={a.key}>
-              <button type="button" class="evrow" onClick={() => toRec(a)}>
-                <time class="mono">{hm(a.first_ms)}</time>
-                <span class={`ev-what ${a.audience ?? ""}`}>{alertTitle(lang.value, a.kind, a.title)}</span>
-                <small class="muted">{a.resolved_ms == null ? t("evOpen") : verdictText(a)} · {t("evToRec")}</small>
-              </button>
-            </li>
-          ))}
-        </ul>
+        {/* W72(用户 11-03):侧栏只列还要人处理的,最多几条;已解决、自动恢复的去报警记录看 */}
+        <h3>{t("mapTodoN", { n: todo.length })}</h3>
+        {todo.length === 0 ? <p class="muted small">{t("mapTodoNone")}</p> : (
+          <ul class="evlist">
+            {todo.map((a) => (
+              <li key={a.key}>
+                <button type="button" class="evrow" onClick={() => toRec(a)}>
+                  <time class="mono">{hm(a.first_ms)}</time>
+                  <span class={`ev-what ${a.audience ?? ""}`}>{alertTitle(lang.value, a.kind, a.title)}</span>
+                  <small class="muted">{t("evOpen")} · {t("evToRec")}</small>
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+        {events.length > 0 && <a class="small" href="#/alarms">{t("mapAllShift", { n: events.length })}</a>}
         {route ? (
           shown.map && <TempRoutePanel map={shown.map} points={route} robots={robotsHere} say={say}
             onUndo={() => setRoute(route.slice(0, -1))} onCancel={() => setRoute(null)} onSent={() => setRoute(null)} />
@@ -406,6 +412,7 @@ export function MapPage(props: {
 
 /** 结论说成人话(报警记录页也用)。 */
 export function verdictText(a: Alert): string {
+  if (autoResolved(a)) return t("vAuto");
   return a.verdict === "intruder" ? t("vIntruder") : a.verdict === "false_alarm" ? t("vFalse") : a.verdict === "handled" ? t("vHandled") : t("vDone");
 }
 
