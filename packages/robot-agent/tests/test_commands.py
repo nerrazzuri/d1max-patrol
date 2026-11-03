@@ -46,6 +46,10 @@ class 假任务(Task):
     async def abort(self, reason):
         self.aborted_with = reason
 
+    @property
+    def aborting(self):
+        return self.aborted_with is not None and not self.done
+
 
 def _cmd(kind="goto", *, cid="c1", tid="t1", epoch=1, issued=NOW, ttl=60_000, priority=0,
          payload=None, pre=None):
@@ -233,6 +237,26 @@ async def test_abort让当前任务停并释放资源(cp):
     assert cp.current is None
     assert cp.ledger.holder("motion") is None
     assert [e.kind for e in cp.events.pending()][-1] == "task_aborted"
+
+
+async def test_W70_中止了还没停稳_马上发回原点_不回忙_排在后面等它停(cp):
+    """11-03 C40221:abort 之后约 6 s 内 goto 一直回 busy(老任务还在等 Nav2 取消、狗刹停),人得自己掐时间
+    重发。正在中止的任务不再挡同级的新任务:新任务排进去,等它停了再起;老任务照旧记成 aborted。"""
+    await cp.handle(_cmd().to_wire(), TOPIC)
+    await cp.step(0.1)
+    old = cp.current
+    await cp.handle(_cmd("abort", cid="c2", tid="t1", payload={"reason": "op"}).to_wire(), TOPIC)
+    await cp.step(0.1)
+    ack = await cp.handle(_cmd(cid="c3", tid="t2").to_wire(), TOPIC)
+    assert ack.result is AckResult.ACCEPTED, ack
+    assert old.aborted_with == "op", "不改成 preempted"
+    await cp.step(0.1)
+    assert cp.ledger.holder("motion") == "t1" and not cp.pending[0].started, "没停稳不许起"
+    old.stop_confirmed = True
+    await cp.step(0.1)
+    await cp.step(0.1)
+    assert cp.current.task_id == "t2" and cp.current.started
+    assert "task_aborted" in [e.kind for e in cp.events.pending()]
 
 
 async def test_注册过期一律auth拒(tmp_path):
