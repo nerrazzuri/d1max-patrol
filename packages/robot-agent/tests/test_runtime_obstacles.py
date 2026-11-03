@@ -198,3 +198,41 @@ async def test_W41_墙层(tmp_path):
         w.close()
     finally:
         await srv.close()
+
+
+async def test_W71_运行时_能力里报Nav2就绪没有_变了重发(tmp_path, monkeypatch):
+    """11-03 现场:Nav2 起没起来站点看不到,只能上机器人翻日志。"""
+    from d1max_agent.navbridge import NavBridgeServer
+    broker = MemoryBroker()
+    ears = 耳朵()
+    st = MemoryTransport(broker, "site")
+    await st.connect()
+    await st.subscribe(f"{T.prefix}/#", ears)
+    r = SimRobot(now_ms=lambda: 1_000_000)
+    rt = AgentRuntime(transport=MemoryTransport(broker, "dog"), registration=REG, hal=r,
+                      store_dir=tmp_path / "agent", now_ms=lambda: 1_000_000,
+                      loaded_map=("m", "1"), boot_id="b", home=Pose.from_xy_yaw(0, 0, 0),
+                      nav="nav2", nav2_socket=tmp_path / "n.sock")
+    await rt.start()
+    try:
+        await broker.drain()
+        n = Capabilities.from_wire(ears.caps[-1]).tasks["nav2"]
+        assert n == {"ready": False, "reason": "Nav2 转接节点未连接"}
+        link = rt.parts.nav.link
+        monkeypatch.setattr(NavBridgeServer, "connected", property(lambda self: True))
+        link.ready, link.reason = False, "未在送时钟"            # 停着没送时钟:一派活就好,算就绪
+        await rt.step(0.1)
+        await broker.drain()
+        assert Capabilities.from_wire(ears.caps[-1]).tasks["nav2"] == {"ready": True}
+        told = len(ears.caps)
+        link.ready, link.reason = True, ""
+        await rt.step(0.1)
+        await broker.drain()
+        assert len(ears.caps) == told, "就绪没变不重发"
+        link.ready, link.reason = False, "bt_navigator 没起来"
+        await rt.step(0.1)
+        await broker.drain()
+        assert Capabilities.from_wire(ears.caps[-1]).tasks["nav2"] == {
+            "ready": False, "reason": "Nav2 未就绪(bt_navigator 没起来)"}
+    finally:
+        await rt.close()

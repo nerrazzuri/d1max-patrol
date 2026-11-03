@@ -46,10 +46,14 @@ def overview(dispatcher: Any, db: Any, *, now_ms: int, tz: tzinfo) -> list[dict[
         if dv and not dv.get("stale"):
             problems += [{"device": x.get("id"), "state": x.get("state")}
                          for x in dv.get("items", []) if x.get("state") != "online"]
+        caps = getattr(c, "capabilities", None) if c is not None else None
+        n2 = (getattr(caps, "tasks", None) or {}).get("nav2") if fresh else None
+        if isinstance(n2, dict) and n2.get("ready") is False:
+            # W71:Nav2 没起来(机器人退回自己的规划,照样能走,但现场要知道)
+            problems.append({"nav2": str(n2.get("reason") or "")[:200]})
         recent = [{"key": r["key"], "kind": r["kind"], "first_ms": r["first_ms"],
                    "resolved_ms": r["resolved_ms"]}
                   for r in mine if r["first_ms"] >= since][:RECENT_MAX]
-        caps = getattr(c, "capabilities", None) if c is not None else None
         out.append({"robot_id": rid, "name": names.get(rid, ""), "revoked": rec.revoked,
                     "expires_at": rec.expires_at, "online": fresh,
                     "battery_pct": battery_pct(c, fresh=fresh),

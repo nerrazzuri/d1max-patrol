@@ -273,6 +273,8 @@ class AgentRuntime:
             self._nav2_srv = NavBridgeServer(nav2_socket or store_dir / "nav2.sock",
                                              monotonic=monotonic or time.monotonic)
             parts.nav.link = self._nav2_srv
+        #: W71:上次报给站点的 Nav2 就绪没有(变了重发能力)。
+        self._nav2_told: dict[str, Any] | None = None
         #: W41 全局重定位:拿感知的墙那一层在整张图上套位置(配了避障、定位器才有)。
         from d1max_agent.globalloc import GlobalLoc
         self.globalloc: GlobalLoc | None = GlobalLoc(self.obs_view) \
@@ -931,6 +933,9 @@ class AgentRuntime:
             if self.obs_view.reason:
                 o["reason"] = self.obs_view.reason[:200]
             out["obstacles"] = o
+        n2 = self._nav2_caps()
+        if n2 is not None:
+            out["nav2"] = n2        # W71:Nav2 起没起来(不就绪时机器人退回自己的规划,照样能走)
         if self._storage is not None:
             out["outbox_retry"] = {}
         if self.bind is not None:
@@ -2859,6 +2864,18 @@ class AgentRuntime:
             except Exception:
                 log.exception("头尾调过来时停车失败(任务照样中止)")
 
+    def _nav2_caps(self) -> dict[str, Any] | None:
+        """W71:``{"ready": True}`` 或 ``{"ready": False, "reason": …}``;不是 Nav2 后端 None。
+        停着没送时钟这种一派活就好的(``NAV2_TRANSIENT``)算就绪。"""
+        nav = self.parts.nav if self.parts is not None else None
+        if nav is None or not hasattr(nav, "nav2_ready"):
+            return None
+        from d1max_agent.bridges.nav2_nav import NAV2_TRANSIENT
+        why = nav.nav2_ready()
+        if not why or any(k in why for k in NAV2_TRANSIENT):
+            return {"ready": True}
+        return {"ready": False, "reason": why[:200]}
+
     async def _stop_motion(self) -> None:
         """叫停(W00c6a):**先撤导航桥的目标**(桥进 Cancelled、从这一拍起不再发速度),再停 HAL。
 
@@ -2900,6 +2917,12 @@ class AgentRuntime:
                 self._obs_state_told = st
                 if self.transport.connected:
                     await self._publish_caps()   # 避障能不能用变了:站点、手机要知道
+        if self._nav2_srv is not None:
+            n2 = self._nav2_caps()
+            if n2 != self._nav2_told:            # W71:Nav2 就绪没有、原因变了:站点要知道
+                self._nav2_told = n2
+                if self.transport.connected:
+                    await self._publish_caps()
         if self._pers_srv is not None:
             self._pers_srv.tick()                # 本机人员桥:检测节点没声就当它断了
             self.person_view.tick()              # 人走了没有
