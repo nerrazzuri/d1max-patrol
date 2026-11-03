@@ -7,12 +7,16 @@
   ``first``(先换低的那块)→ ``first_out``(拔了:不要动另一块)→ ``first_low``(插上的不满)→
   ``second``(现在换另一块)→ ``second_out`` → 两块都 ≥ ``SWAP_OK_PCT``(80%)= 换好。
   不分块报的老机器人只说「换电池」(``any``),电量上来算换好。
-- 保安一直不来::data:`REPUSH_MIN` 分钟再推一次,:data:`MANAGER_MIN` 分钟推给经理
-  (``swap_overdue``)。
-- 换了一块就走了:一直提示「2 号还没换」;电量线照常按低的那块判(值守那头)。
-- 正在拔着的那一步,报警派遣不打断(:meth:`refuse`,§7.5)。
+- 保安一直不来、换到一半走了、插回的不满:每一步没进展 :data:`REPUSH_MIN` 分钟再推一次(说清哪块
+  还没好),:data:`MANAGER_MIN` 分钟推给经理(``swap_overdue``)—— 按最后一次进展计时(外审 r1 #9)。
+- 低电判出来时不在换电位:站点派它回待命点(= 换电位),没走成 :data:`RESEND_S` 秒后再派(外审 r1 #3)。
+- 正在拔着的那一步,报警派遣不打断(:meth:`refuse`,§7.5);**有一块拔着**(不管站点记没记着
+  换电)值守、排程都不派它(:meth:`busy`,外审 r1 #1)。
+- 拔着一块的时候判进度,**先让装回拔着的那块**,绝不引导去拔剩下那块(外审 r1 #2:站点重启后
+  ``[None, 20]`` 曾提示「先换 2 号」= 断电)。拔错了(先换的那块还没好,另一块被拔了)→ ``wrong_out``。
 
-状态只在内存里(站点重启按电池重新判进度:哪块低、哪块拔了都读得出来)。
+状态只在内存里(站点重启按电池重新判进度:哪块低、哪块拔了都读得出来;拔着一块的重启后
+直接接上引导)。
 """
 
 from __future__ import annotations
@@ -30,6 +34,8 @@ log = logging.getLogger(__name__)
 SOON_MIN = 15
 REPUSH_MIN = 10
 MANAGER_MIN = 20
+#: 派它回换电位没走成(没接、半路停了),过这么久再派。
+RESEND_S = 60
 #: 离换电位这么近、手上没任务 = 到了。
 AT_HOME_M = 1.5
 
@@ -43,6 +49,8 @@ class SwapDesk:
         self._now = now_ms
         self._need, self._eta, self._has_charger, self._home = need, eta_min, has_charger, home
         self.alerts: Any = None
+        #: 派回换电位用(``StandbyManager``,站点接上)。
+        self.standby: Any = None
         self.s: dict[str, dict[str, Any]] = {}
         self._soon_told: set[str] = set()
         #: 进度变化(给值守记录、测试):``{"robot_id", "step", "at_ms"}``,只留最近 200 条。
@@ -64,6 +72,27 @@ class SwapDesk:
         t = c.telemetry if c is not None else None
         return float(t.battery_pct) if t is not None and t.battery_pct is not None else None
 
+    def missing(self, rid: str) -> int | None:
+        """拔着的那块是几号(1 / 2);两块都在、不分块报 → ``None``。"""
+        packs = self._packs(rid)
+        if not packs or len(packs) < 2:
+            return None
+        return next((i + 1 for i, v in enumerate(packs[:2]) if v is None), None)
+
+    def busy(self, rid: str) -> str:
+        """值守、排程问:能不能派它出去。有一块拔着、在等换电池 → 不派的理由;不然空串。"""
+        n = self.missing(rid)
+        if n is not None:
+            return f"{rid} 的 {n} 号电池拔着,装回去之前不派"
+        if rid in self.s:
+            return f"{rid} 在等换电池"
+        return ""
+
+    def _idle(self, rid: str) -> bool:
+        c = self._client(rid)
+        return c is not None and c.status is not None and bool(c.status.online) \
+            and c.status.task is None
+
     def _arrived(self, rid: str) -> bool:
         c = self._client(rid)
         if c is None or c.status is None or not c.status.online or c.status.task is not None:
@@ -84,34 +113,34 @@ class SwapDesk:
             pct = self._pct(rid)
             return "done" if pct is not None and pct >= SWAP_OK_PCT else "any"
         if st.get("first") is None:
-            present = [(v, i) for i, v in enumerate(packs[:2]) if v is not None]
-            st["first"] = min(present)[1] + 1 if present else 1
+            gone = [i for i in (0, 1) if packs[i] is None]
+            if gone:                                     # 拔着一块:先装回它(另一块是唯一的电)
+                st["first"] = gone[0] + 1
+            else:
+                st["first"] = min((packs[0], 0), (packs[1], 1))[1] + 1
         a, b = st["first"] - 1, 2 - st["first"]
         pa, pb = packs[a], packs[b]
         if pa is None:
             return "first_out"
+        if pb is None:
+            return "second_out" if pa >= SWAP_OK_PCT else "wrong_out"
         if pa < SWAP_OK_PCT:
             return "first_low" if st.get("pulled_first") else "first"
-        if pb is None:
-            return "second_out"
         if pb < SWAP_OK_PCT:
             return "second"
         return "done"
 
     def refuse(self, rid: str) -> str:
-        """报警派遣问:正在拔着的那一步 → 不派的理由(这一块装上再说);不然空串。"""
-        st = self.s.get(rid)
-        if st is None or st.get("step") not in ("first_out", "second_out"):
-            return ""
-        n = st["first"] if st["step"] == "first_out" else 3 - st["first"]
-        return f"{rid} 正在换电池({n} 号拔了,这一步不打断)"
+        """报警派遣问:有一块拔着 → 不派的理由(这一块装上再说);不然空串。"""
+        n = self.missing(rid)
+        return f"{rid} 正在换电池({n} 号拔了,这一步不打断)" if n is not None else ""
 
     # ------------------------------------------------------------ 每拍
 
-    def tick(self) -> None:
+    async def tick(self) -> None:
         for rid in sorted(self.dispatcher.clients):
             try:
-                self._one(rid)
+                await self._one(rid)
             except Exception:                            # 一台出错不影响别的台
                 log.exception("%s 换电进度判不出来", rid)
 
@@ -119,7 +148,7 @@ class SwapDesk:
         self.events.append({"robot_id": rid, "step": step, "at_ms": self._now()})
         del self.events[:-200]
 
-    def _one(self, rid: str) -> None:
+    async def _one(self, rid: str) -> None:
         now = self._now()
         st = self.s.get(rid)
         if st is None:
@@ -127,22 +156,28 @@ class SwapDesk:
                 self._soon_told.discard(rid)
                 return
             need = self._need(rid)
+            if need is None and self.missing(rid) is not None:
+                need = 0.0                               # 拔着一块(站点重启了?):直接接上引导
             if need is None:
                 eta = self._eta(rid)
                 if eta is not None and eta <= SOON_MIN and rid not in self._soon_told:
                     self._soon_told.add(rid)
                     at = datetime.fromtimestamp((now + eta * 60_000) / 1000).strftime("%H:%M")
-                    self._raise("swap_soon", rid, f"{rid} 快要换电池了",
+                    self._raise("swap_soon", rid, f"{rid} 即将换电",
                                 f"约 {at} {rid} 需要换电池,请准备两块满电电池")
                 elif eta is None or eta > SOON_MIN + 5:
                     self._soon_told.discard(rid)
                 return
             st = self.s[rid] = {"step": "going", "since_ms": now, "told_ms": None,
-                                "pushes": 0, "manager": False, "first": None, "line": need}
+                                "first": None, "line": need, "sent_ms": None}
             self._note(rid, "going")
+            if self.missing(rid) is not None:
+                st["arrived_ms"] = now                   # 已经在换了:不用回换电位
+                st["step"] = "resumed"
         step = st["step"]
         if step == "going":
             if not self._arrived(rid):
+                await self._send_back(rid, st, now)
                 return
             st["arrived_ms"] = now
         new = self._step(rid, st)
@@ -150,23 +185,38 @@ class SwapDesk:
             st["pulled_first"] = True
         if new != step:
             st["step"] = new
+            st["progress_ms"] = now                      # 有进展:提醒、升级从这里重新计时
+            st["repushed"] = st["managed"] = False
             self._note(rid, new)
         if new == "done":
             self._finish(rid)
             return
         if st["told_ms"] is None:
             st["told_ms"] = now
-            st["pushes"] = 1
             self._raise("swap_needed", rid, f"{rid} 已到换电位,请来换电池", self._text(st))
-        elif st["pushes"] == 1 and now - st["told_ms"] >= REPUSH_MIN * 60_000 \
-                and new in ("first", "any"):
-            st["pushes"] = 2
-            self._raise("swap_needed", rid, f"{rid} 还在等换电池(第 2 次提醒)", self._text(st))
-        if not st["manager"] and now - st["told_ms"] >= MANAGER_MIN * 60_000 \
-                and new in ("first", "any"):
-            st["manager"] = True
-            self._raise("swap_overdue", rid, f"{rid} 等换电池 {MANAGER_MIN} 分钟没人来",
-                        f"{rid} 在换电位等了 {MANAGER_MIN} 分钟还没人换电池,请安排人去")
+            return
+        idle = now - st["progress_ms"]
+        if not st["repushed"] and idle >= REPUSH_MIN * 60_000:
+            st["repushed"] = True
+            self._raise("swap_needed", rid, f"{rid} 还在等换电池({REPUSH_MIN} 分钟没进展)",
+                        self._text(st))
+        if not st["managed"] and idle >= MANAGER_MIN * 60_000:
+            st["managed"] = True
+            self._raise("swap_overdue", rid, f"{rid} 换电池 {MANAGER_MIN} 分钟没进展",
+                        f"{rid} 在换电位等了 {MANAGER_MIN} 分钟,电池还没换好(现在:"
+                        f"{self._text(st)}),请安排人去")
+
+    async def _send_back(self, rid: str, st: dict[str, Any], now: int) -> None:
+        """低电判出来时不在换电位、手上没任务:派它回待命点(= 换电位);没走成过一阵再派。"""
+        if self.standby is None or not self._idle(rid):
+            return
+        if st["sent_ms"] is not None and now - st["sent_ms"] < RESEND_S * 1000:
+            return
+        st["sent_ms"] = now
+        try:
+            await self.standby.return_to(rid, issued_by="site:swap")
+        except Exception as exc:  # noqa: BLE001 - 没标待命点、派不出去:原地换,到时候按原地判
+            log.warning("%s 回换电位没派成:%s", rid, exc)
 
     def _finish(self, rid: str) -> None:
         self.s.pop(rid, None)
@@ -185,11 +235,18 @@ class SwapDesk:
 
     @staticmethod
     def _text(st: dict[str, Any]) -> str:
-        f = st.get("first")
-        if f is None or st["step"] == "any":
+        f, step, ok = st.get("first"), st["step"], f"{SWAP_OK_PCT:.0f}%"
+        if f is None or step == "any":
             return "请换上满电电池(热插拔,机器人站着不断电)"
-        return (f"先换 {f} 号(电量低的那块),换好、电量读到 {SWAP_OK_PCT:.0f}% 以上再换 {3 - f} 号;"
-                f"不要两块一起拔")
+        o = 3 - f
+        return {
+            "first_out": f"{f} 号已拔下:装上一块满电的 {f} 号;{o} 号先别动(它是机器人现在唯一的电)",
+            "first_low": f"装上的 {f} 号电量不到 {ok}:换一块满电的(先别动 {o} 号)",
+            "second": f"{f} 号好了,现在换 {o} 号(读到 {ok} 以上算换好)",
+            "second_out": f"{o} 号已拔下:装上一块满电的 {o} 号",
+            "wrong_out": f"{o} 号被拔了:先把它装回去;{f} 号还没换好,两块不要同时拔",
+        }.get(step, f"先换 {f} 号(电量低的那块),换好、电量读到 {ok} 以上再换 {o} 号;"
+                    f"不要两块一起拔")
 
     def view(self) -> dict[str, Any]:
         out = []

@@ -60,6 +60,12 @@ FAIL_RETRY_MS = 60_000
 WATCH_MIN_S = 30
 #: 离值守位这么近(米)才算站在值守位上。
 POST_NEAR_M = 1.5
+#: 看见人(P1 ``dog_sees_person``)以后原地盯着等保安下结论,最多这么久(设计 §5.4:10 分钟推给经理),
+#: 之后接着值守(外审 r1 #5)。
+PERSON_HOLD_MS = 10 * 60_000
+PERSON_KIND = "dog_sees_person"
+#: 撤防时停下这一圈以后,过这么久按还布防着的接着跑(等狗上停稳)。
+SETTLE_MS = 3_000
 #: 连着这么多圈跑不成报 P2。
 FAIL_ALERT = 3
 #: 电量不过这条线(%)不开新的一圈。第四期换成按任务算的出站线。
@@ -120,9 +126,12 @@ class GuardDuty:
         #: 估一圈多久用的可达(``InterceptReach``;没有按直线估)。
         self.reach: Any = None
         self._retry_at: dict[int, int] = {}
+        self._reserved: set[str] = set()
         self._waiting: dict[int, str] = {}
         self._route_cache: dict[tuple, dict[str, Any]] = {}
         self._lap_cache: dict[tuple, float | None] = {}
+        #: 看见人盯满 :data:`PERSON_HOLD_MS` 还没人管、接着值守了的:这一条告警不再拦它。
+        self._person_done: set[str] = set()
         dispatcher.on_event(self._on_event)
 
     # ------------------------------------------------------------ 方案
@@ -300,7 +309,8 @@ class GuardDuty:
     def watching(self, robot_id: str) -> str | None:
         """这台此刻站在哪个防区的值守位上盯着(看见人按这个防区判,设计 §5.4);不在值守位上 ``None``。
         """
-        rows = self.db.query("SELECT watch_zone FROM guard_runs WHERE robot_id=? AND state='post'",
+        rows = self.db.query("SELECT watch_zone FROM guard_runs WHERE robot_id=? "
+                             "AND state IN ('post', 'held')",
                              (robot_id,))
         return rows[0]["watch_zone"] or None if rows else None
 
@@ -442,6 +452,10 @@ class GuardDuty:
             self.low[rid] = (line, lap_s, self._now())
             return f"{rid} 电量 {pct:.0f}%,不够跑一圈(要 ≥ {line:.0f}%),先补能"
         self.low.pop(rid, None)
+        if self.swap is not None:                        # 外审 r1 #1:有一块拔着、在等换电池不派
+            w = self.swap.busy(rid)
+            if w:
+                return w
         running = self._blocking(rid)
         if running:
             return f"{rid} 在跑别的任务 {running}"
@@ -450,11 +464,13 @@ class GuardDuty:
     def _pick(self, e: dict[str, Any], info: dict[str, Any], taken: set[str]) -> tuple[str, str]:
         """→ (挑中的机器人, 为什么一台都挑不出)。指定了机器人的就是它(能不能派由派之前查)。"""
         if e["robot"]:
+            if e["robot"] in taken:                      # 外审 r1 #6:别的方案占着
+                return "", f"{e['robot']} 在跑另一条值守方案"
             return e["robot"], ""
         why = []
         cands = []
         for rid in sorted(self.dispatcher.clients):
-            if rid in taken:
+            if rid in taken or rid in self._reserved:
                 continue
             w = self._why_not(rid, info)
             if w:
@@ -497,6 +513,13 @@ class GuardDuty:
                 c.execute("INSERT INTO guard_duties(started_ms) VALUES (?)", (self._now(),))
             duty = self._duty()
             self._log("duty_start", detail="布防开始值守")
+        # 外审 r1 #6:布防着的固定方案先把自己的机器人留住;「任意一台」占着它的,跑完这一圈让出来
+        self._reserved = {e["robot"] for e, _, _ in active if e["robot"]}
+        for e, _, _ in active:
+            r = runs.get(e["id"])
+            if not e["robot"] and r is not None and r["robot_id"] in self._reserved \
+                    and r["state"] not in ("lap", "held"):
+                await self._stand_down(r, f"{r['robot_id']} 让给指定它的值守方案")
         runs = self._runs()
         for e, info, armed in active:
             try:
@@ -534,6 +557,8 @@ class GuardDuty:
             return
         rid, state = run["robot_id"], run["state"]
         running = self._running(rid)
+        if await self._person_hold(e, run, running):
+            return
         foreign = bool(self._blocking(rid))
         if state in ("post", "wait") and foreign:
             self._log("interrupted", robot=rid, entry=e["id"], zone=run["watch_zone"],
@@ -570,10 +595,63 @@ class GuardDuty:
             if now >= run["until_ms"]:
                 self._set_run(e["id"], state="resume", until_ms=now)
 
+    def _person_open(self, rid: str) -> bool:
+        if self.alerts is None:
+            return False
+        if not self.alerts.has_open(rid, PERSON_KIND):
+            self._person_done.discard(rid)               # 那一条处理掉了:下一回看见人照样盯
+            return False
+        return rid not in self._person_done
+
+    async def _person_hold(self, e: dict[str, Any], run: dict[str, Any], running: str) -> bool:
+        """看见人(设计 §5.4):停在原地盯着,等保安下结论;处理了、或盯满 :data:`PERSON_HOLD_MS`
+        没人管 → 接着值守。在盯 → ``True``(这一拍别的不办)。"""
+        eid, rid, now = e["id"], run["robot_id"], self._now()
+        if run["state"] == "held":
+            if self._person_open(rid) and now < run["until_ms"]:
+                return True
+            if now >= run["until_ms"]:
+                self._person_done.add(rid)
+            self._log("person_resume", robot=rid, entry=eid,
+                      detail="保安处理了,接着值守" if now < run["until_ms"]
+                      else f"盯了 {PERSON_HOLD_MS // 60_000} 分钟没人管,接着值守")
+            self._set_run(eid, state="resume", until_ms=now)
+            return True
+        if not self._person_open(rid):
+            return False
+        self._log("person_hold", robot=rid, entry=eid, zone=run["watch_zone"],
+                  detail="看见人:原地停下盯着,等保安处理")
+        self._set_run(eid, state="held", until_ms=now + PERSON_HOLD_MS)
+        if running and running == run["task_id"]:        # 一圈 / 去值守位的路上:停在原地
+            try:
+                await self.dispatcher.abort(rid, running, issued_by="guard")
+            except Exception as exc:  # noqa: BLE001 - 停不下来:记下,值守不派新的
+                log.warning("%s 看见人没停下:%s", rid, exc)
+        return True
+
+    def _off_zones(self, info: dict[str, Any], armed: list[str], run: dict[str, Any]) -> list[str]:
+        """这一圈还没走到的点里,所在防区已经撤防的(外审 r1 #4)。"""
+        seen = self._seen(info["map_id"], info["map_version"])
+        done = {z for z, t in seen.items() if t >= run["lap_started_ms"]}
+        plan = json.loads(run["plan"] or "[]")
+        return list(dict.fromkeys(p["zone"] for p in plan if p.get("zone")
+                                  and p["zone"] not in armed and p["zone"] not in done))
+
     async def _lap_state(self, e: dict[str, Any], info: dict[str, Any], armed: list[str],
                          run: dict[str, Any], running: str) -> None:
         now, rid, eid = self._now(), run["robot_id"], e["id"]
         term = self._terminal(rid, run["task_id"])
+        if term is None and running == run["task_id"]:
+            off = self._off_zones(info, armed, run)
+            if off:                                      # 外审 r1 #4:别把这一圈跑进撤防的防区
+                self._log("zone_disarmed", robot=rid, entry=eid,
+                          detail=f"{'、'.join(off)} 撤防了:这一圈停下,按还布防着的接着跑")
+                self._set_run(eid, state="resume", until_ms=now + SETTLE_MS)
+                try:
+                    await self.dispatcher.abort(rid, running, issued_by="guard")
+                except Exception as exc:  # noqa: BLE001 - 停不下来:记下,下一拍再看
+                    log.warning("%s 撤防后停这一圈没办成:%s", rid, exc)
+                return
         if term is None:
             if running != run["task_id"] and now - run["sent_ms"] >= LOST_S * 1000:
                 self._log("interrupted", robot=rid, entry=eid,
@@ -802,7 +880,15 @@ class GuardDuty:
             if r is None or r["state"] != "post" or not r["watch_zone"]:
                 continue
             c = self._client(r["robot_id"])
-            pose = c.telemetry.pose if c is not None and c.telemetry is not None else None
+            fresh = getattr(self.dispatcher, "_fresh", None)
+            if c is None or c.status is None or not c.status.online \
+                    or (callable(fresh) and not fresh(c)):
+                continue                                 # 外审 r1 #7:掉线、状态旧了不算看着
+            pose = c.telemetry.pose if c.telemetry is not None else None
+            if pose is not None and (getattr(pose, "map_id", info["map_id"]) != info["map_id"]
+                                     or str(getattr(pose, "map_version", info["map_version"]))
+                                     != str(info["map_version"])):
+                continue
             try:
                 book = self.posts(info["map_id"], info["map_version"])
                 post = (book.get(r["watch_zone"]) or {}).get("watch")
