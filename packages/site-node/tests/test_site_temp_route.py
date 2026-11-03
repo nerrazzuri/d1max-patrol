@@ -27,9 +27,17 @@ def _登(s, name):
 
 def _图(s, tmp_path, tok):
     """导入一个任务包,拿它那条路线的图号、版本和点(这些点在模拟机器人的图上走得通)。"""
-    from test_site_schedule import 打包
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    from test_site_schedule import 打包, 排程
     _等(lambda: s.req("GET", "/api/robots/A", token=tok)[1].get("fresh"))
-    code, d = s.req("POST", "/api/bundles", {"path": str(打包(tmp_path, 1))}, token=tok)
+    # 任务包自带 22:00 的日程:CI 正好在 22:00 前后跑,临时巡逻会排到日程后面(W72 CI 撞上)。
+    # 日程挪到离现在 12 小时,什么时候跑都不撞
+    h = (datetime.now(ZoneInfo("Asia/Kuala_Lumpur")).hour + 12) % 24
+    sched = 排程.replace('at: "22:00"', f'at: "{h:02d}:00"')
+    code, d = s.req("POST", "/api/bundles", {"path": str(打包(tmp_path, 1, schedule=sched))},
+                    token=tok)
     assert code == 200, d
     r = s.req("GET", "/api/routes", token=tok)[1]["routes"]
     loop = next(x for x in r if x["id"] == "loop")
