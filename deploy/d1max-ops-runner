@@ -59,6 +59,8 @@ MAPPING_PAUSE_UNITS = ("d1max-lidar-merge", "d1max-localizer")
 #: W70:按站点的钟拨钟 —— 差不到这么多(毫秒)不拨;最多拨这么多(一年,出厂 1970 年的钟另走对时)。
 CLOCK_STEP_MIN_MS = 1000
 MAX_CLOCK_STEP_MS = 366 * 24 * 3600 * 1000
+#: NTP 说对上了、可跟站点差超过这么多(毫秒):两个时间源打架(W70),不拨,回报 ``conflict``。
+SITE_DISAGREE_MS = 5_000
 CLOCK_FLOOR_S = 1_735_689_600                    # 2025-01-01:比它早的钟一定是错的
 ROBOT_UNITS = ("d1max-localizer", "d1max-obstacles", "d1max-persons", "d1max-lidar-merge",
                "d1max-nav2", "d1max-sidecar", "d1max-zenohd", "d1max-bind", "d1max-agent")
@@ -504,7 +506,10 @@ class Ops:
     def timesync(self, args: dict[str, Any]) -> dict[str, Any]:
         """立即对时。``offset_ms``(W70,可选):站点的钟减机器人的钟(代理收到站点时刻时算的)——
         NTP 没对上(站点在笔记本上、经隧道接入、上不了外网,chrony 没源)且差过 1 s,就按它拨钟;
-        NTP 对上了不拨(不跟 NTP 抢)。"""
+        NTP 对上了不拨(不跟 NTP 抢)。
+
+        带 ``offset_ms`` 的**不先** ``chronyc makestep``(W70,11-03 C40221:机器人上的 chrony 跟厂家板对时,
+        那块板慢 28 s;每次站点来对时都先 makestep 把钟拽回厂家板,再按站点拨回来,一分钟拉锯一次)。"""
         off = args.get("offset_ms")
         if off is not None and (not isinstance(off, int) or isinstance(off, bool)):
             raise OpError("offset_ms 要是整数")
@@ -513,6 +518,8 @@ class Ops:
             now = time.time()
             if not (now < CLOCK_FLOOR_S and off > 0 and now + off / 1000.0 >= CLOCK_FLOOR_S):
                 raise OpError(f"offset_ms 绝对值不超过 {MAX_CLOCK_STEP_MS}")
+        if off is not None:
+            return self._site_step(off)
         try:
             if shutil.which("chronyc"):
                 out = self._sys("chronyc", "-a", "makestep")
@@ -520,17 +527,21 @@ class Ops:
             else:
                 self._sys("systemctl", "restart", "systemd-timesyncd.service")
                 got = {"how": "timesyncd"}
-        except OpError as exc:
-            if off is None:
-                raise
-            got = {"how": "none", "out": str(exc)[-200:]}   # chrony 停着(现场手工推过钟):照样按站点拨
-        if off is None:
-            return got
-        got["stepped"] = False
+        except OpError:
+            raise
+        return got
+
+    def _site_step(self, off: int) -> dict[str, Any]:
+        got: dict[str, Any] = {"how": "none", "stepped": False}
         if abs(off) < CLOCK_STEP_MIN_MS:
             return got
         if self._ntp_synced():
+            got["how"] = "chrony"
             got["why"] = "NTP 已对上,不按站点的钟拨"
+            if abs(off) > SITE_DISAGREE_MS:
+                got["conflict"] = True
+                got["why"] = (f"NTP 说对上了,可跟站点差 {off / 1000:+.1f} 秒:机器人上的时间源可能不准"
+                              "(比如跟厂家板对时),没拨;要定谁说了算")
             return got
         target = time.time() + off / 1000.0
         self._sys("date", "-u", "-s", f"@{target:.3f}")

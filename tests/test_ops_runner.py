@@ -372,3 +372,23 @@ def test_W70_chrony停着_makestep失败_照样按站点的钟拨(tmp_path, monk
     rec = 停着("")
     got = R.Ops(_cfg(tmp_path), run=rec).timesync({"offset_ms": -28_000})
     assert got["stepped"] is True and [c for c in rec.calls if c[0] == "date"]
+
+
+def test_W70_站点来对时_不先makestep把钟拽回厂家板(tmp_path, monkeypatch):
+    """11-03 C40221:chrony 跟厂家板(慢 28 s)对时,每次站点对时先 makestep 拽回去、再拨回来,
+    一分钟拉锯一次。"""
+    monkeypatch.setattr(R.shutil, "which", lambda n: "/usr/bin/" + n if n == "chronyc" else None)
+    rec = _钟Rec("Not synchronised")
+    got = R.Ops(_cfg(tmp_path), run=rec).timesync({"offset_ms": 28_000})
+    assert got["stepped"] is True
+    assert not [c for c in rec.calls if c[:3] == ["chronyc", "-a", "makestep"]]
+
+
+def test_W70_NTP说对上了可跟站点差很多_不拨_回报打架(tmp_path, monkeypatch):
+    monkeypatch.setattr(R.shutil, "which", lambda n: "/usr/bin/" + n if n == "chronyc" else None)
+    rec = _钟Rec("Normal")
+    ops = R.Ops(_cfg(tmp_path), run=rec)
+    got = ops.timesync({"offset_ms": 28_000})
+    assert got["stepped"] is False and got.get("conflict") is True and "厂家板" in got["why"]
+    got = ops.timesync({"offset_ms": 3_000})
+    assert got["stepped"] is False and "conflict" not in got

@@ -38,6 +38,8 @@ set -euo pipefail
 # @写盘 /etc/systemd/system/d1max-bind.service                            配网服务(W42;只装,factory burn 才 enable;没烧写不起)
 # @写盘 /etc/systemd/timesyncd.conf.d/d1max.conf                          对时配置:向站点主机对时(W09d)
 # @写盘 /etc/chrony/conf.d/d1max.conf                                     对时归 chrony 管的狗:向站点主机对时(决策 61)
+# (另:厂家 /etc/chrony/chrony.conf 里指向厂家板的 server/pool/peer 行注释掉,第一次改之前原文件留在
+#  /etc/d1max/chrony.conf.orig;用户 2026-11-03 同意,W70)
 # @写盘 /usr/local/lib/d1max                                             特权执行器和它验签用的模块(W55;root 属主,不从版本目录跑代码)
 # @写盘 /etc/d1max/unbind-pub.d                                          随发行新增的解绑公钥(W57;换钥匙用)
 # @写盘 /etc/d1max/unbind-revoked.txt                                    作废的解绑公钥编号(W57)
@@ -668,6 +670,21 @@ if [[ "$(systemctl show -p LoadState --value systemd-timesyncd 2>/dev/null)" != 
   # 装的是 chrony / ntp 的话 timedatectl 管的是它们,这份配置不生效(W09d 内审):说清楚,不假装配上了。
   rm -f "$TIMESYNC_CONF"
   if [[ -f "$CHRONY_MAIN" ]]; then
+    # W70(用户 2026-11-03 同意「有站点时站点说了算」):厂家板(上装电脑)的钟不准 —— C40221 上慢 28 s,
+    # chrony 跟它对、站点往回拨,一分钟拉锯一次。主配置里指向它的 server/pool/peer 行注释掉;第一次改之前
+    # 原文件留一份,卸载时放回去。厂家板地址按 env 的 D1MAX_VENDOR_TIME_HOSTS(逗号分隔),默认 .19。
+    chrony_changed=0
+    vendor_hosts=$(sed -n 's/^D1MAX_VENDOR_TIME_HOSTS=//p' /etc/d1max/env 2>/dev/null | tail -1)
+    vendor_hosts=${vendor_hosts:-192.168.168.19}
+    for vh in ${vendor_hosts//,/ }; do
+      vre=${vh//./\\.}
+      if grep -Eq "^[[:space:]]*(server|pool|peer)[[:space:]]+${vre}([[:space:]]|\$)" "$CHRONY_MAIN"; then
+        [[ -e /etc/d1max/chrony.conf.orig ]] || cp -p "$CHRONY_MAIN" /etc/d1max/chrony.conf.orig
+        sed -i -E "s/^([[:space:]]*(server|pool|peer)[[:space:]]+${vre}([[:space:]]|\$))/# d1max W70 厂家板的钟不准,不跟它对时: \1/" "$CHRONY_MAIN"
+        chrony_changed=1
+        echo "  对时:机器人的 chrony 不再跟厂家板 $vh 对时(原文件在 /etc/d1max/chrony.conf.orig)"
+      fi
+    done
     # 对时归厂家的 chrony 管(决策 61,2026-10-13,改掉决策 47 的「不动」):厂家配的源是 RTK 秒脉冲(没天线
     # 就没信号)和上装电脑(C40221 上慢 15 s;裸机上没有这台),狗的钟一直不准,站点按钟差拒发命令;整机
     # 断电再开是 1970 年。加**一个单独的片段**把站点主机设成首选、可信的源;厂家那份 chrony.conf 不改,
@@ -713,8 +730,9 @@ if [[ "$(systemctl show -p LoadState --value systemd-timesyncd 2>/dev/null)" != 
           echo "  !! chrony 重启不了,对时没配上" >&2
         fi
       else
+        [[ $chrony_changed == 1 ]] && { systemctl try-restart chrony >/dev/null 2>&1 || true; }
         echo "  !! 对时片段写好了($CHRONY_CONF),但厂家的 $CHRONY_MAIN 不读 conf.d:" >&2
-        echo "     我们不改厂家的文件。要生效,在它末尾加一行再 sudo systemctl restart chrony:" >&2
+        echo "     我们不替它加这一行。要生效,在它末尾加一行再 sudo systemctl restart chrony:" >&2
         echo "       chrony 4 及以上(chronyd --version 看):  confdir $CHRONY_DROPIN_DIR" >&2
         echo "       chrony 3.x(没有 confdir):              include $CHRONY_CONF" >&2
         echo "     这两行没在这只狗上验过(真机项 3f.20):加完看 chronyc sources 里有没有站点那一行。" >&2
@@ -722,7 +740,7 @@ if [[ "$(systemctl show -p LoadState --value systemd-timesyncd 2>/dev/null)" != 
     else
       rm -f "$CHRONY_CONF"
       systemctl try-restart chrony >/dev/null 2>&1 || true
-      echo "  对时:先不配(原因见上一行)"
+      echo "  对时:先不配站点(原因见上一行)"
     fi
   else
     echo "  !! 这台机器的对时不归 systemd-timesyncd 管(没装或 masked),也没有 $CHRONY_MAIN," >&2

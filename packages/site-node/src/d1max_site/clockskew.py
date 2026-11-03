@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from collections import deque
 from collections.abc import Callable
+from typing import Any
 
 #: 估计用最近几条遥测(1 Hz:半分钟)。
 WINDOW = 30
@@ -60,6 +61,8 @@ __all__ = ["ALARM_S", "CLEAR_S", "DISPATCH_MAX_S", "MAX_AGE_MS", "MIN_SAMPLES_BE
 
 #: 同一台机器人最多这么久(毫秒)发一次带站点时刻的对时(W70)。
 NUDGE_EVERY_MS = 60_000
+#: 量往返(W70 probe):往返超过它(毫秒)就不拨 —— 按往返中点估,误差最多半个往返。
+PROBE_MAX_RTT_MS = 1500
 
 
 class ClockNudger:
@@ -89,9 +92,37 @@ class ClockNudger:
             if now - self._sent.get(rid, -NUDGE_EVERY_MS) < NUDGE_EVERY_MS:
                 continue
             self._sent[rid] = now
-            log.info("%s 的钟跟站点差 %+.1f 秒:发站点时刻让它对时", rid, skew)
             try:
-                await self.d.map_command(rid, "ops_timesync", {"site_ms": now},
-                                         issued_by="site:clock")
+                if spec.get("probe") is True:
+                    await self._probe_then_step(rid, skew, log)
+                else:
+                    log.info("%s 的钟跟站点差 %+.1f 秒:发站点时刻让它对时", rid, skew)
+                    await self.d.map_command(rid, "ops_timesync", {"site_ms": now},
+                                             issued_by="site:clock")
             except Exception as exc:                     # noqa: BLE001
                 log.warning("%s 对时没发出去:%s", rid, exc)
+
+    async def _probe_then_step(self, rid: str, skew: float, log: Any) -> None:
+        """W70(11-03 热点被地图下载占满:往返 3–7 s,遥测积压把钟差估成 −28 s):先量一次往返,
+        按往返中点算机器人该拨多少;往返太长不拨,量出来其实对得上也不拨。"""
+        t0 = self._now()
+        r = await self.d.map_command(rid, "ops_timesync", {"probe": True, "site_ms": t0},
+                                     issued_by="site:clock")
+        t2 = self._now()
+        data = (r.get("ack") or {}).get("data") or {}
+        robot_ms = data.get("robot_ms")
+        if isinstance(robot_ms, bool) or not isinstance(robot_ms, int):
+            log.warning("%s 对时量往返没回机器人的钟(%s),这次不拨", rid, r.get("ack"))
+            return
+        rtt = t2 - t0
+        if rtt > PROBE_MAX_RTT_MS:
+            log.info("%s 的钟差估 %+.1f 秒,量往返 %.1f 秒(链路堵):不按它拨,过一会儿再量",
+                     rid, skew, rtt / 1000)
+            return
+        step = int(t0 + rtt / 2 - robot_ms)
+        if abs(step) <= ALARM_S * 1000:
+            log.info("%s 的钟差估 %+.1f 秒,量出来只差 %+.2f 秒(往返 %.2f 秒):估计是遥测积压,不拨",
+                     rid, skew, -step / 1000, rtt / 1000)
+            return
+        log.info("%s 的钟慢 %+.2f 秒(往返 %.2f 秒量的):让它拨", rid, step / 1000, rtt / 1000)
+        await self.d.map_command(rid, "ops_timesync", {"step_ms": step}, issued_by="site:clock")

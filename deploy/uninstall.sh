@@ -456,6 +456,15 @@ stop_service() {
     systemctl try-restart systemd-timesyncd >/dev/null 2>&1 || true
   fi
   rm_sys "/etc/chrony/conf.d/d1max.conf" "chrony 的对时片段(决策 61),对时不归 chrony 管的机器上没有"
+  # W70:装机时注释掉了厂家主配置里指向厂家板的行,原文件留在 /etc/d1max/chrony.conf.orig —— 放回去
+  if [ -f /etc/d1max/chrony.conf.orig ] && [ -f /etc/chrony/chrony.conf ]; then
+    if [ "$DO_IT" = 1 ]; then
+      cp -p /etc/d1max/chrony.conf.orig /etc/chrony/chrony.conf
+      say "  放回厂家的 /etc/chrony/chrony.conf(装机时注释掉了指向厂家板的对时行)"
+    else
+      say "  会放回厂家的 /etc/chrony/chrony.conf(装机时注释掉了指向厂家板的对时行)"
+    fi
+  fi
   if [ "$DO_IT" = 1 ]; then
     systemctl try-restart chrony >/dev/null 2>&1 || true
   fi

@@ -163,7 +163,8 @@ class OpsDesk:
             for k in ("ops_restart", "ops_reboot", "ops_timesync", "cert_csr", "cert_install"):
                 out[k] = {}
             out["ops_restart"] = {"units": list(OUR_UNITS)}
-            out["ops_timesync"] = {"site_time": True}     # W70:认站点时刻,NTP 没对上按它拨
+            # W70:认站点时刻,NTP 没对上按它拨;probe = 先量一次往返(链路堵的时候不按它拨)
+            out["ops_timesync"] = {"site_time": True, "probe": True}
         return out
 
     def handle(self, kind: str, payload: dict[str, Any]) -> str | tuple[str, dict[str, Any]]:
@@ -344,7 +345,16 @@ class OpsDesk:
         """立即对时。``site_ms``(W70,站点自己发的):站点此刻的墙钟;按收到时的钟差交给执行器,
         NTP 没对上(站点经隧道、上不了外网)就按它拨。在途只会让估的钟差偏小几十毫秒。"""
         args: dict[str, Any] = {}
-        if "site_ms" in p:
+        if p.get("probe") is True:
+            # W70(11-03 热点被 145 MB 地图下载占满,往返 3–7 s):只回此刻自己的钟,站点按往返中点
+            # 算该拨多少、往返太长就不拨,再发 ``step_ms``
+            return "", {"robot_ms": self.now_ms()}
+        if "step_ms" in p:
+            st = p["step_ms"]
+            if isinstance(st, bool) or not isinstance(st, int):
+                return "payload: step_ms 要是整数(毫秒)"
+            args["offset_ms"] = st                        # 相对量:这条命令路上走多久都不影响
+        elif "site_ms" in p:
             sm = p["site_ms"]
             if isinstance(sm, bool) or not isinstance(sm, int):
                 return "payload: site_ms 要是整数(毫秒)"

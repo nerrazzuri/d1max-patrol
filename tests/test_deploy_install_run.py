@@ -309,7 +309,7 @@ def _chrony狗(root: Path, *, 主配置: str | None, env: str) -> Path:
     return script
 
 
-def test_决策61_对时归chrony管的狗_写一个单独的片段向站点对时_厂家的配置不动(tmp_path):
+def test_决策61_对时归chrony管的狗_写一个单独的片段向站点对时_厂家板那行注释掉(tmp_path):
     """2026-10-13 C40221:厂家的 chrony 跟上装电脑(慢 15 s)和没信号的秒脉冲,狗的钟一直不准,站点按
     钟差拒发命令;整机断电再开是 1970 年。假 systemctl 不认 ``show``,等于 timesyncd 不在(masked)。"""
     vendor = "refclock PPS /dev/pps0\nserver 192.168.168.19 iburst\nconfdir /etc/chrony/conf.d\n"
@@ -319,7 +319,16 @@ def test_决策61_对时归chrony管的狗_写一个单独的片段向站点对�
     assert got.returncode == 0, got.stdout + got.stderr
     frag = (tmp_path / "etc/chrony/conf.d/d1max.conf").read_text(encoding="utf-8")
     assert "\nserver 10.0.0.5 iburst prefer trust\n" in frag and "\nmakestep 1.0 3\n" in frag
-    assert (tmp_path / "etc/chrony/chrony.conf").read_text(encoding="utf-8") == vendor, "厂家的不动"
+    main = (tmp_path / "etc/chrony/chrony.conf").read_text(encoding="utf-8")
+    # W70(用户 11-03 同意):厂家板慢 28 s,chrony 跟它对、站点往回拨,拉锯 —— 那一行注释掉,别的不动
+    assert "\n# d1max W70 厂家板的钟不准,不跟它对时: server 192.168.168.19 iburst\n" in main
+    assert main.replace("# d1max W70 厂家板的钟不准,不跟它对时: ", "") == vendor
+    assert (tmp_path / "etc/d1max/chrony.conf.orig").read_text(encoding="utf-8") == vendor
+    assert "不再跟厂家板 192.168.168.19 对时" in got.stdout
+    got = _跑(tmp_path, script)                        # 再装一遍:不再改、原文件那份不被覆盖
+    assert got.returncode == 0 and "不再跟厂家板" not in got.stdout
+    assert (tmp_path / "etc/chrony/chrony.conf").read_text(encoding="utf-8") == main
+    assert (tmp_path / "etc/d1max/chrony.conf.orig").read_text(encoding="utf-8") == vendor
     assert "systemctl restart chrony" in _调用(tmp_path)
     assert "向 10.0.0.5 对时" in got.stdout
     assert not (tmp_path / "etc/systemd/timesyncd.conf.d/d1max.conf").exists()
@@ -333,8 +342,9 @@ def test_决策61_厂家的主配置不读片段目录_不改它_说清楚要加
     assert "server site.lan iburst prefer trust" in (
         tmp_path / "etc/chrony/conf.d/d1max.conf").read_text(encoding="utf-8")
     assert "systemctl restart chrony" not in _调用(tmp_path), "没生效就不说对上了"
-    assert "confdir" in got.stderr and "不改厂家的文件" in got.stderr
-    assert "对时" not in got.stdout.replace("对时片段", "")
+    assert "confdir" in got.stderr and "不替它加这一行" in got.stderr
+    out = "\n".join(x for x in got.stdout.splitlines() if "不再跟厂家板" not in x)
+    assert "对时" not in out.replace("对时片段", ""), "没生效就不说向站点对时"
 
 
 def test_决策61_站点地址没填_不留片段_没有chrony的机器照旧只提示(tmp_path):
@@ -376,7 +386,7 @@ def test_W35外审M1_主配置读不读我们的片段_按整个参数认_不按
     assert got.returncode == 0, got.stdout + got.stderr
     assert ("systemctl restart chrony" in _调用(tmp_path)) is 生效
     assert ("向 site.lan 对时" in got.stdout) is 生效
-    assert ("不改厂家的文件" in got.stderr) is (not 生效)
+    assert ("不替它加这一行" in got.stderr) is (not 生效)
 
 
 @pytest.mark.parametrize("ok", [True, False])
@@ -458,3 +468,24 @@ def test_W70_Super_LIO下定位参数里留着合并话题_没人用_照关(tmp_
     got = _跑(tmp_path, script)
     assert got.returncode == 0, got.stdout + got.stderr
     assert "systemctl disable --now d1max-lidar-merge.service" in _调用(tmp_path)
+
+
+def test_W70_厂家板地址按env配_没指向它的主配置不动(tmp_path):
+    a = tmp_path / "a"
+    a.mkdir()
+    vendor = "server 10.9.9.9 iburst\nserver 192.168.168.190 iburst\nconfdir /etc/chrony/conf.d\n"
+    vendor = vendor.replace("/etc/chrony", str(a / "etc/chrony"))
+    script = _chrony狗(a, 主配置=vendor, env="D1MAX_SITE_NTP=site.lan\n"
+                                             "D1MAX_VENDOR_TIME_HOSTS=10.9.9.9\n")
+    got = _跑(a, script)
+    assert got.returncode == 0, got.stdout + got.stderr
+    main = (a / "etc/chrony/chrony.conf").read_text(encoding="utf-8")
+    assert main.startswith("# d1max W70") and "\nserver 192.168.168.190 iburst\n" in main
+    b = tmp_path / "b"
+    b.mkdir()
+    vendor = "server 192.168.168.190 iburst\nconfdir /etc/chrony/conf.d\n"
+    vendor = vendor.replace("/etc/chrony", str(b / "etc/chrony"))
+    script = _chrony狗(b, 主配置=vendor, env="D1MAX_SITE_NTP=site.lan\n")
+    got = _跑(b, script)
+    assert (b / "etc/chrony/chrony.conf").read_text(encoding="utf-8") == vendor, "前缀相同不算"
+    assert not (b / "etc/d1max/chrony.conf.orig").exists()
