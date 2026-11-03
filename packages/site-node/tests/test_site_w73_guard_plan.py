@@ -169,10 +169,14 @@ def test_生成_每个防区撒点_都在防区里_相隔大约间距_整条存�
 def test_生成_点名不重复_多转几圈_每圈来回换方向(台):
     one = _gen(台, [{"zone": "东区"}])["waypoints"]
     two = _gen(台, [{"zone": "东区", "laps": 2}])["waypoints"]
-    assert len(two) == 2 * len(one)
+    assert len(one) > 1
+    # 掉头那个点刚到过,第二圈不再连着去一遍(演示站点实测 11-04:「东区-7」后面紧跟「东区-7·2」)
+    assert len(two) == 2 * len(one) - 1
     names = [w["name"] for w in two]
     assert len(set(names)) == len(names)
-    assert [(w["x"], w["y"]) for w in two[len(one):]] == [(w["x"], w["y"]) for w in one][::-1]
+    xy = [(w["x"], w["y"]) for w in two]
+    assert all(a != b for a, b in zip(xy, xy[1:], strict=False))
+    assert xy[len(one):] == [(w["x"], w["y"]) for w in one][::-1][1:]
 
 
 def test_生成_停几秒拍几张_朝防区里面拍(台):
@@ -209,3 +213,43 @@ def test_生成_参数不对的报错(台):
         _gen(台, [{"zone": "东区"}], spacing_m=0.5)
     with pytest.raises(GuardPlanError, match="500"):
         _gen(台, [{"zone": "东区", "laps": 10}], spacing_m=1.0)
+
+
+def test_只在斜角碰着的两块不算连通_跟规划一样不切墙角():
+    """演示站点商场图实测(11-04):生成的点之间站点又说「走不通」—— 规划不许斜着擦过墙角,
+    放点用的连通区域也得这么算。"""
+    import numpy as np
+
+    from d1max_contract.planning.astar import plan
+    from d1max_contract.planning.costmap import LETHAL, Costmap
+    from d1max_site.guard_plan import _Ground
+    lethal = np.array([[0, 0, 1, 1],
+                       [0, 0, 1, 1],
+                       [1, 1, 0, 0],
+                       [1, 1, 0, 0]], dtype=bool)
+    hard = np.zeros_like(lethal)
+    cm = Costmap(res=1.0, origin=(0.0, 0.0), hard=hard, lethal=lethal,
+                 cost=np.where(lethal, np.uint8(LETHAL), np.uint8(0)).astype(np.uint8),
+                 speed=np.full(lethal.shape, np.inf, dtype=np.float32))
+    from d1max_contract.planning.astar import PlanError
+    with pytest.raises(PlanError):
+        plan(cm.cost.tobytes(), hard.astype("uint8").tobytes(), 4, 4, (0, 0), (3, 3))
+    g = _Ground(cm, [(0.5, 0.5)])
+    assert g.ok[1, 1] and not g.ok[2, 2] and not g.ok[3, 3]
+
+
+def test_没有待命点_按最大的一片连通区域放点_不放进封死的小间():
+    """演示站点商场图实测(11-04):没设待命点时把点放进了门关着的铺面里,点和点之间走不通。"""
+    import numpy as np
+
+    from d1max_contract.planning.costmap import LETHAL, Costmap
+    from d1max_site.guard_plan import _Ground
+    lethal = np.ones((6, 8), dtype=bool)
+    lethal[1:5, 1:5] = False                     # 大厅 4×4
+    lethal[2:4, 6:7] = False                     # 封死的小间(中间隔一列墙)
+    hard = np.zeros_like(lethal)
+    cm = Costmap(res=1.0, origin=(0.0, 0.0), hard=hard, lethal=lethal,
+                 cost=np.where(lethal, np.uint8(LETHAL), np.uint8(0)).astype(np.uint8),
+                 speed=np.full(lethal.shape, np.inf, dtype=np.float32))
+    g = _Ground(cm, [])
+    assert g.ok[2, 2] and not g.ok[2, 6] and not g.ok[3, 6]
