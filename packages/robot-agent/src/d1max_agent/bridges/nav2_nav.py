@@ -72,10 +72,13 @@ V_FAST = 1.0
 V_BASE = 0.6
 #: 看到地图之外的东西(人、箱子)时最慢降到多少。
 VIS_SLOW_MPS = 0.3
-#: 前方这么远、机身两边各外扩这么宽的范围里找地图之外的东西;离这么近就降到最慢。
+#: 前方这么远、机身两边各外扩这么宽的范围里找地图之外的东西。
 VIS_LOOK_M = 3.0
-VIS_SIDE_M = 1.2
-VIS_SLOW_AT_M = 0.6
+VIS_SIDE_M = 2.0
+#: 地图之外的东西(人、箱子;感知分不出是不是人,一律当人)离机身多近降到多快(米, 米/秒),
+#: 从近往远查,都不够近就 :data:`V_FAST`(用户 2026-11-03:「速度提高到 1.0,周围 2 m 有人降到 0.6,
+#: 1 m 以下 0.3」;原来是 0.6 m 处 0.3 到 3 m 处 1.0 的斜线)。
+VIS_TIERS = ((1.0, VIS_SLOW_MPS), (2.0, 0.6))
 #: 看到的挡离地图上的墙这么近,当成墙(墙不会动,窄门、走廊不拖慢)。
 STATIC_NEAR_M = 0.2
 #: 机头前这一段真雷达本来就看不见(2026-10-08 实测约 0.47 m):前方看得清多远从这之外算「看不见」。
@@ -706,7 +709,8 @@ class Nav2NavBackend(PlannedNavBackend):
            第一处挡或看不见的格子有多远;按「延迟 + 刹车距离 + :data:`CLEAR_MARGIN_M`」
            反推最快多快(刹车用守卫那份减速度)。
         2. 地图之外的东西有多近:前方 :data:`VIS_LOOK_M`、两边各外扩 :data:`VIS_SIDE_M` 里看到的挡,
-           离地图上的墙 :data:`STATIC_NEAR_M` 以内的当墙不算;剩下的(人、箱子)最近那个越近越慢。
+           离地图上的墙 :data:`STATIC_NEAR_M` 以内的当墙不算;剩下的(人、箱子)最近那个按
+           :data:`VIS_TIERS` 分档降。
 
         感知不新鲜、没配避障::data:`V_BASE`。"""
         view, g = self.obstacles, self.guard
@@ -741,8 +745,7 @@ class Nav2NavBackend(PlannedNavBackend):
             dyn = ~self._near_static(xs, ys, f.pose, here)
             if dyn.any():
                 d = float(dist[dyn].min())
-                k = min(max((d - VIS_SLOW_AT_M) / (VIS_LOOK_M - VIS_SLOW_AT_M), 0.0), 1.0)
-                v_dyn = VIS_SLOW_MPS + (V_FAST - VIS_SLOW_MPS) * k
+                v_dyn = next((v for near, v in VIS_TIERS if d < near), V_FAST)
         return max(min(V_FAST, v_clear, v_dyn), VIS_SLOW_MPS)
 
     def _near_static(self, xs: Any, ys: Any, frame_pose: tuple[float, float, float],
