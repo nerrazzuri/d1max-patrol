@@ -122,6 +122,21 @@ NO_PROGRESS_M = 0.3
 #: 脱困里的 Wait 是 5 s,规划失败两三次在 10 s 内。
 NAV2_STALL_S = 20.0
 NAV2_RESENDS = 2
+#: W71 台阶脱困(11-03 商场 P2→P3,用户:「轮胎和阶梯角度不够大,轮胎一直卡在阶梯边缘出不来…要把角度
+#: 调大才能出来」):Nav2 一直让往前、:data:`EDGE_STALL_S` 秒没走出 :data:`EDGE_PROGRESS_M`、
+#: 机身横滚超过 :data:`EDGE_ROLL_RAD`(一边的腿在台阶下面) —— 先退 :data:`EDGE_BACK_M`,往目标那边
+#: (目标就在正前方时往低的那边)转 :data:`EDGE_TURN_RAD`,斜着往前 :data:`EDGE_FWD_M`,
+#: 再把目标交回 Nav2。每一步守卫、
+#: 地图墙照样管,被挡就跳过这一步。一个目标最多 :data:`EDGE_TRIES` 次。
+EDGE_STALL_S = 4.0
+EDGE_PROGRESS_M = 0.05
+EDGE_ROLL_RAD = math.radians(2.5)
+EDGE_BACK_M = 0.25
+EDGE_TURN_RAD = math.radians(45.0)
+EDGE_FWD_M = 0.6
+EDGE_MPS = 0.25
+EDGE_STEP_S = 6.0
+EDGE_TRIES = 2
 #: 原地转最快(弧度/秒):转快了定位器跟不上(11-02 工单 13)。
 TURN_ONLY_MAX_RPS = 0.6
 #: 前进速度不到这个(米/秒)就当「原地转」,按地图上的墙核一道(:meth:`Nav2NavBackend._turn_hits_map`)。
@@ -294,6 +309,7 @@ class Nav2NavBackend(PlannedNavBackend):
             msg["via"] = [[round(x, 3), round(y, 3)] for x, y in dense]
         self.link.send(msg)
         self._goal_msg, self._resends, self._quiet_since = dict(msg), 0, None
+        self._edge, self._edge_tries, self._fwd_ref = None, 0, None
         if here is not None:
             pts = [(here.x, here.y), *via, goal_xy]
             self.planned_length_m = PATH_FACTOR * sum(math.dist(a, b)
@@ -354,6 +370,7 @@ class Nav2NavBackend(PlannedNavBackend):
 
     async def _enter_terminal(self, status: NavStatus) -> None:
         self._turn_only = None
+        self._edge, self._fwd_ref = None, None
         self._turn_blocked_at = None
         self._goal_msg, self._quiet_since = None, None
         self._near_best = None
@@ -435,6 +452,9 @@ class Nav2NavBackend(PlannedNavBackend):
     async def _drive(self, here: Any, dt_s: float) -> None:
         if self._turn_only is not None:
             await self._turn_step(here, dt_s)
+            return
+        if getattr(self, "_edge", None) is not None:
+            await self._edge_step(here, dt_s)
             return
         if self._nav2_goal is None:
             await super()._drive(here, dt_s)              # 这一段走的是自己的规划
@@ -554,7 +574,89 @@ class Nav2NavBackend(PlannedNavBackend):
                                                               - (self._guard_since or 0), 1),
                                             "detour": True})
         self._guard_since, self._guard_told = None, False
+        if await self._edge_stuck(here, vx):
+            await self._send(0.0, 0.0, dt_s)
+            return
         await self._send(vx, wz, dt_s)
+
+    async def _edge_stuck(self, here: Any, vx: float) -> bool:
+        """Nav2 让往前、走不动、机身横滚着:开始台阶脱困(:data:`EDGE_STALL_S`)。"""
+        now = self._secs()
+        ref = getattr(self, "_fwd_ref", None)
+        if vx <= TURN_VX or ref is None or math.dist(ref[0], (here.x, here.y)) > EDGE_PROGRESS_M:
+            self._fwd_ref = ((here.x, here.y), now) if vx > TURN_VX else None
+            return False
+        if now - ref[1] < EDGE_STALL_S or getattr(self, "_edge_tries", 0) >= EDGE_TRIES:
+            return False
+        try:
+            imu = await self._hal.imu()
+        except Exception:                                  # noqa: BLE001 - 读不到姿态就不判
+            return False
+        if not getattr(imu, "valid", False) or abs(imu.roll) < EDGE_ROLL_RAD:
+            return False
+        tgt = self._target
+        side = 1.0 if imu.roll < 0 else -1.0               # 左边低(roll < 0)往左
+        if tgt is not None:
+            g = math.remainder(math.atan2(tgt.position.y - here.y, tgt.position.x - here.x)
+                               - here.yaw, 2 * math.pi)
+            if abs(g) > math.radians(10):
+                side = math.copysign(1.0, g)
+        self._edge_tries = getattr(self, "_edge_tries", 0) + 1
+        self._fwd_ref = None
+        log.warning("Nav2 让往前、%.0f 秒没走出 %.0f cm,机身横滚 %.1f°:多半是贴着台阶边打滑 —— "
+                    "退 %.2f m、往%s转 %.0f°、斜着上(第 %d 次)", now - ref[1],
+                    EDGE_PROGRESS_M * 100, math.degrees(imu.roll), EDGE_BACK_M,
+                    "左" if side > 0 else "右", math.degrees(EDGE_TURN_RAD), self._edge_tries)
+        self._cancel_nav2()
+        self._edge = {"phase": "back", "from": (here.x, here.y), "t": now,
+                      "yaw": here.yaw + side * EDGE_TURN_RAD}
+        return True
+
+    async def _edge_step(self, here: Any, dt_s: float) -> None:
+        """台阶脱困的一拍:退 → 转 → 斜着往前 → 交回 Nav2。"""
+        e, now = self._edge, self._secs()
+        moved = math.dist(e["from"], (here.x, here.y))
+        if e["phase"] in ("back", "fwd"):
+            done = moved >= (EDGE_BACK_M if e["phase"] == "back" else EDGE_FWD_M)
+            vx = -EDGE_MPS if e["phase"] == "back" else EDGE_MPS
+            vx, _ = self._deband(vx, 0.0)
+            blocked = False
+            if not done and self.guard is not None and self.obstacles is not None:
+                v = self._guard_check(vx, 0.0)
+                blocked = not v.ok and bool(v.hits or "障碍数据" in v.reason)
+            if not (done or blocked or now - e["t"] > EDGE_STEP_S):
+                await self._send(vx, 0.0, dt_s)
+                return
+            await self._send(0.0, 0.0, dt_s)
+            if e["phase"] == "back":
+                self._edge = {**e, "phase": "turn", "t": now}
+            else:
+                self._edge = None
+                self._resend_goal()
+            return
+        err = math.remainder(e["yaw"] - here.yaw, 2 * math.pi)
+        wz = math.copysign(max(MIN_TURN_RPS, min(TURN_ONLY_MAX_RPS, abs(err))), err)
+        blocked = self._turn_hits_map(0.0, wz, here)
+        if not blocked and self.guard is not None and self.obstacles is not None:
+            v = self._guard_check(0.0, wz)
+            blocked = not v.ok and bool(v.hits or "障碍数据" in v.reason)
+        if abs(err) > TURN_DONE_RAD * 2 and not blocked and now - e["t"] <= EDGE_STEP_S:
+            await self._send(0.0, wz, dt_s)
+            return
+        await self._send(0.0, 0.0, dt_s)
+        self._edge = {**e, "phase": "fwd", "t": now, "from": (here.x, here.y)}
+
+    def _resend_goal(self) -> None:
+        """把这次 goto 的目标重新交给 Nav2(新目标号)。"""
+        msg = getattr(self, "_goal_msg", None)
+        if msg is None or self.link is None:
+            return
+        self._cancel_nav2()
+        self._goal_id += 1
+        self._nav2_goal = self._goal_id
+        self.link.goal_states.clear()
+        self.link.cmd = None
+        self.link.send({**msg, "goal_id": self._goal_id})
 
     async def _near_stalled(self, here: Any, tgt: Any, dt_s: float) -> bool:
         """离终点 :data:`NEAR_GOAL_M` 以内、:data:`NEAR_STALL_S` 秒没再靠近(W70):停在这儿算到。"""
@@ -591,12 +693,7 @@ class Nav2NavBackend(PlannedNavBackend):
         if msg is None or now - self._quiet_since < NAV2_STALL_S \
                 or self._resends >= NAV2_RESENDS or self.link is None:
             return
-        self._cancel_nav2()
-        self._goal_id += 1
-        self._nav2_goal = self._goal_id
-        self.link.goal_states.clear()
-        self.link.cmd = None
-        self.link.send({**msg, "goal_id": self._goal_id})
+        self._resend_goal()
         self._resends += 1
         self._quiet_since = now
         log.warning("Nav2 %.0f 秒没给速度也没回结果:当它卡住了,取消、重发同一个目标"

@@ -1068,3 +1068,58 @@ async def test_W70_离终点不到半米_15秒没再靠近_停在这儿算到(tm
         await t.一拍()
     assert NavStatus.SUCCEED in t.status
     assert link.kinds("cancel")[-1]["goal_id"] == gid
+
+
+def _卡在台阶边(t, roll):
+    """仿真狗:朝向跟台阶边差不到 25° 时腿在边上打滑,往前走不动;机身按 ``roll`` 歪着。"""
+    from d1max_contract.hal import ImuSample
+    real = t.r.tick
+
+    def tick(dt):
+        x, y = t.r.x, t.r.y
+        real(dt)
+        if abs(math.remainder(t.r.yaw, 2 * math.pi)) < math.radians(25) and t.r.x > x:
+            t.r.x, t.r.y = x, y
+
+    async def imu():
+        return ImuSample(stamp_ms=t.c(), roll=roll, pitch=0.06, shock_g=0.0, load=None,
+                         valid=True)
+    t.r.tick = tick
+    t.r.imu = imu
+
+
+async def test_W71_沿着台阶边打滑走不动_机身歪着_退一点转大角度再上_再交回Nav2(tmp_path):
+    """11-03 商场 P2→P3 用户:「轮胎和阶梯角度不够大,轮胎一直卡在阶梯边缘出不来…
+    要把角度调大才能出来」。"""
+    from d1max_agent.bridges.nav2_nav import EDGE_TURN_RAD
+    link = 假转接()
+    t = _台(tmp_path, link)
+    await t.start(1.5, 4.0)
+    _卡在台阶边(t, roll=math.radians(-4.8))
+    await t.nav.goto(Pose.from_xy_yaw(9.0, 4.0, 0.0))
+    first = link.kinds("goal")[-1]
+    yaws = []
+    for _ in range(250):
+        link.now += 0.1
+        gid = link.kinds("goal")[-1]["goal_id"]
+        link.cmd = (link.now, gid, 0.4, 0.0, 0.0)
+        await t.一拍()
+        yaws.append(t.r.yaw)
+    assert link.kinds("cancel") and link.kinds("cancel")[0]["goal_id"] == first["goal_id"]
+    assert max(yaws) > EDGE_TURN_RAD * 0.8, "左边低(roll < 0):往左转大角度"
+    goals = link.kinds("goal")
+    assert len(goals) >= 2 and (goals[-1]["x"], goals[-1]["y"]) == (9.0, 4.0), "脱完交回 Nav2"
+    assert t.r.x > 2.0, "转过来就上去了"
+
+
+async def test_W71_走不动但机身是平的_不做台阶脱困(tmp_path):
+    link = 假转接()
+    t = _台(tmp_path, link)
+    await t.start(1.5, 4.0)
+    _卡在台阶边(t, roll=0.0)
+    await t.nav.goto(Pose.from_xy_yaw(9.0, 4.0, 0.0))
+    for _ in range(100):
+        link.now += 0.1
+        link.cmd = (link.now, link.kinds("goal")[-1]["goal_id"], 0.4, 0.0, 0.0)
+        await t.一拍()
+    assert not link.kinds("cancel") and abs(t.r.yaw) < 0.05
