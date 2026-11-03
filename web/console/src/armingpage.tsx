@@ -7,6 +7,7 @@ import { api, ApiError, enc } from "./api";
 import { addBlock, copyDay, fromWire, minutesText, moveEdge, removeBlock, toWire, type Slot, type WireSlot } from "./armgrid";
 import { hm, type DutySettings } from "./data";
 import { t, type Key } from "./i18n";
+import { Confirm } from "./dialogs";
 
 type Say = (s: string) => void;
 interface Exception { id: number; first_day: string; last_day: string; state: "armed" | "disarmed"; note: string }
@@ -53,6 +54,7 @@ export function ArmingPage({ say, now, role = "admin" }: { say: Say; now: number
   const [sel, setSel] = useState<{ day: number; start: number } | null>(null);
   const [copyFrom, setCopyFrom] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
+  const [switching, setSwitching] = useState<"armed" | "home" | null>(null);
   void now;
 
   const loadMode = () => api<ModeView>("GET", "/api/mode").then(setMode).catch(() => setMode(null));
@@ -108,7 +110,33 @@ export function ArmingPage({ say, now, role = "admin" }: { say: Say; now: number
       </div>
       <p class="muted lead">{t("armLead")}</p>
       {dirty && <p class="arm-dirty" role="status">{t("armDirty")}</p>}
-      <p class="arm-who">{whoText(mode, loaded?.enabled ?? enabled)}</p>
+      {/* W72(用户 11-03):在网页上要能直接布防 / 撤防,不用翻到「系统状态」页去找 */}
+      <section class="panel arm-now">
+        <div class="arm-now-text">
+          <h2>{t("armNow")}</h2>
+          <p class="arm-who">{whoText(mode, loaded?.enabled ?? enabled)}</p>
+        </div>
+        {mode && (
+          <div class="arm-now-btns">
+            <div class="seg" role="group" aria-label={t("homeSwitch")}>
+              {(["armed", "home"] as const).map((m) => (
+                <button key={m} type="button" aria-pressed={mode.source !== "schedule" && mode.mode === m}
+                  onClick={() => setSwitching(m)}>{t(m === "armed" ? "modeArmed" : "modeHome")}</button>
+              ))}
+            </div>
+            <a class="btn sm" href="#/admin/access">{t("armNowVisitor")}</a>
+          </div>
+        )}
+      </section>
+      {switching && (
+        <Confirm text={t(switching === "armed" ? "modeArmConfirm" : "modeHomeConfirm")}
+          yes={t(switching === "armed" ? "modeArmed" : "modeHome")} onNo={() => setSwitching(null)}
+          onYes={() => {
+            const m = switching;
+            setSwitching(null);
+            api("POST", "/api/mode", { mode: m }).then(() => say(t("saved"))).catch((e) => say(errText(e))).finally(() => void loadMode());
+          }} />
+      )}
 
       <label class="switch">
         <input id="arm-enabled" type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.currentTarget.checked)} />

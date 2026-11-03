@@ -160,4 +160,19 @@ describe("布防时间页", () => {
     expect(c.querySelector(".arm-who")!.textContent).toContain("留守");
     expect(c.querySelector(".arm-who")!.textContent).toContain("恢复按时间表");
   });
+
+  it("W72 页顶「现在」:直接切布防、留守(要确认),临时撤防指到授权页", async () => {
+    const { container: c } = page();
+    const now = () => c.querySelector(".arm-now")!;
+    await waitFor(() => expect(now().textContent).toContain("按时间表"));
+    fireEvent.click(btn(now(), "留守"));
+    expect(posted.some((p) => p.url === "/api/mode")).toBe(false);
+    fireEvent.click(btn(document.querySelector(".modal")!, "留守"));
+    await waitFor(() => expect(posted.find((p) => p.url === "/api/mode")?.body).toEqual({ mode: "home" }));
+    fireEvent.click(btn(now(), "布防"));
+    fireEvent.click(btn(document.querySelector(".modal")!, "布防"));
+    await waitFor(() => expect(posted.filter((p) => p.url === "/api/mode").map((p) => p.body.mode)).toEqual(["home", "armed"]));
+    expect(now().querySelector('a[href="#/admin/access"]')!.textContent).toContain("临时撤防");
+  });
 });
+
