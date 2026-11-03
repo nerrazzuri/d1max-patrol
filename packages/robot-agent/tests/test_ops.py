@@ -585,10 +585,22 @@ def test_W70_站点带了站点时刻_按收到时的钟差交给特权执行器
     """用户 11-03 现场选「代理向站点对时」:站点在笔记本上、经隧道接入,机器人慢 28 s。"""
     s = SimOps(results={"timesync": {"how": "site", "stepped": True, "offset_ms": 28_000}})
     d = _desk(tmp_path, priv=s, now_ms=lambda: 1_000_000)
-    assert d.kinds()["ops_timesync"] == {"site_time": True}
+    assert d.kinds()["ops_timesync"] == {"site_time": True, "probe": True}
     reason, data = d.handle("ops_timesync", {"site_ms": 1_028_000})
     assert reason == "" and s.calls[-1] == ("timesync", {"offset_ms": 28_000})
     assert data["stepped"] is True and data["offset_ms"] == 28_000
     assert d.handle("ops_timesync", {"site_ms": "x"}).startswith("payload")
     d.handle("ops_timesync", {})
     assert s.calls[-1] == ("timesync", {})
+
+
+def test_W70_对时先量往返_probe只回自己的钟不拨_step按相对量拨(tmp_path):
+    """11-03 热点被地图下载占满,往返 3–7 s:站点估的钟差 −28 s 是积压出来的,按站点时刻拨会拨错。"""
+    s = SimOps(results={"timesync": {"how": "site", "stepped": True, "offset_ms": 1500}})
+    d = _desk(tmp_path, priv=s, now_ms=lambda: 1_000_000)
+    n = len(s.calls)
+    reason, data = d.handle("ops_timesync", {"probe": True, "site_ms": 5})
+    assert reason == "" and data == {"robot_ms": 1_000_000} and len(s.calls) == n, "不拨"
+    reason, data = d.handle("ops_timesync", {"step_ms": 1500})
+    assert reason == "" and s.calls[-1] == ("timesync", {"offset_ms": 1500})
+    assert d.handle("ops_timesync", {"step_ms": 1.5}).startswith("payload")
