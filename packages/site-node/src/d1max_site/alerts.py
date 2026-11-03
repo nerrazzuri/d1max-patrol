@@ -95,6 +95,11 @@ LEVEL_OF: dict[str, Level] = {
     "charge_overlap": Level.P2,
     # W73 布防值守:防区超时没看(状态类,看到了自动解决);值守路线连着几圈跑不成
     "zone_unwatched": Level.P2,
+    # W73 第四期(§7.4):没桩的换电 —— 快到了先准备、到换电位了请来换、等了 20 分钟没人来推给经理。
+    "swap_soon": Level.P2,
+    "guard_prep": Level.P2,
+    "swap_needed": Level.P1,
+    "swap_overdue": Level.P1,
     "guard_stuck": Level.P2,
     # 布防中狗没在驱离时自己看见人(W33,决策 48):保安看现场、决定要不要就地驱离。
     "dog_sees_person": Level.P1,

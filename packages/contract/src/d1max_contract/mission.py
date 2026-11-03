@@ -119,11 +119,12 @@ class Policy:
     waypoint_timeout_s: float = 120.0
     on_waypoint_failed: str = "retry_then_skip"
     waypoint_retry: int = 1
+    #: 回撤线的静态下限(W73 决策 78 §7.2:回撤线 = max(25%,停止线 + 回补能位耗电 × 1.5))。
     battery_return_pct: float = 25.0
-    #: 中止线。**25 不是 15。** 厂商的强制趴窝线是单块电池 10%(硬件手册
-    #: 2.3.3「内部异常保护」),15 离它只剩 5 个点,而这 5 个点要覆盖:发现、
-    #: 告警、人走过去、把狗弄回来。不够。
-    battery_abort_pct: float = 25.0
+    #: 停止线(W73 决策 78 §7.2,原来 25):低于它原地站住不动、报 P1。厂商的强制趴窝线是单块电池
+    #: 10%(硬件手册 2.3.3),留 5 个点给人赶过来(满载约 10 分钟,站着更久,待真机实测 §11);
+    #: 不让它走到这儿靠的是回撤线按路程算、提前走。
+    battery_abort_pct: float = 15.0
     on_loc_lost: str = "pause_then_abort"
     on_control_lost: str = "pause"
     loops: int = 1

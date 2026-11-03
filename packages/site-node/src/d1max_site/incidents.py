@@ -34,6 +34,7 @@ from typing import Any
 from d1max_contract.charging import LOW_PCT
 from d1max_contract.dispatch import DispatchTimeout
 from d1max_contract.messages import Event, MapPose
+from d1max_site import energy
 from d1max_site.ca import SAFE_ID
 from d1max_site.db import SiteDB
 from d1max_site.dispatcher import Dispatcher, DispatchRefused
@@ -99,6 +100,13 @@ class IncidentDesk:
         self.busy: Callable[[], set[str]] | None = None
         #: 回充(W13,``ChargeDesk.refuse``):正在回充、电量不够的不派 → 理由;能派 → 空串。
         self.charging: Callable[[str], str] | None = None
+        #: W73 §7.5:正在换电池、换到一半的那一步 → 不派的理由(``SwapDesk.refuse``);不然空串。
+        self.swapping: Callable[[str], str] | None = None
+        #: W73 第五期:登记在图上的外部设备(``devices.DeviceBook``):它的事件源报来不用带防区名。
+        self.devices: Any = None
+        #: W73 第五期:老接口按防区名报 → 先按圈好的防区找查看点(``{"name": "zone:<防区>", map_id,
+        #: map_version, x, y, yaw, reach}``),找不到(None)再按老的「防区名 → 拦截点」映射。
+        self.zone_point: Callable[[str], dict[str, Any] | None] | None = None
         #: 拦截点走不走得到(W23,``intercept_reach.InterceptReach``)。没接(命令行、老测试)就不查。
         self.reach: Any = None
         #: 每个事件源最近一分钟收过的时刻。接口是多线程的:「清掉一分钟前的、判断、
@@ -271,8 +279,20 @@ class IncidentDesk:
                 raise IncidentError(f"没有防区 {zone}")
 
     def intercept(self, name: str) -> dict[str, Any] | None:
+        if name.startswith("zone:") and self.zone_point is not None:
+            return self.zone_point(name[5:])
+        if name.startswith("cam:") and self.devices is not None:
+            return self.devices.point(name)              # W73 第五期:放到图上的摄像头
         rows = self.db.query("SELECT * FROM intercepts WHERE name=?", (name,))
         return dict(rows[0]) if rows else None
+
+    def prepare(self, source: str, body: Any) -> Any:
+        """W73 第五期:登记过的设备报来的事件不用带防区名 —— 按设备所在防区补上(不在防区里按
+        ``dev-<id>``,布不布防按全站)。别的源原样返回。"""
+        dev = self.devices.by_source(source) if self.devices is not None else None
+        if dev is None or not isinstance(body, dict):
+            return body
+        return {**body, "zone": dev["zone"] or body.get("zone") or dev["source"]}
 
     # ------------------------------------------------------------ 验签
 
@@ -330,7 +350,9 @@ class IncidentDesk:
             if not reason and self.busy is not None and rid in self.busy():
                 reason = f"{rid} 正在驱离(W22)"
             if not reason and self.charging is not None:
-                reason = self.charging(rid)              # W13:在充电、电量不到 50% 不派(决策 45)
+                reason = self.charging(rid)              # W13 / W73:在充电、过不了报警出动线不派
+            if not reason and self.swapping is not None:
+                reason = self.swapping(rid)              # W73 §7.5:正在换的那一步不打断
             if not reason:
                 caps = c.capabilities.tasks.get("patrol", {}) if c.capabilities else {}
                 loaded = (caps.get("map_id"), caps.get("map_version"))
@@ -341,9 +363,18 @@ class IncidentDesk:
                 why.append(reason)
                 continue
             pose = c.telemetry.pose if c.telemetry is not None else None
-            low = c.telemetry is not None and c.telemetry.battery_pct <= LOW_PCT
-            if pose is not None and pose.map_id == point["map_id"]:
-                best.append((low, 0, math.hypot(pose.x - point["x"], pose.y - point["y"]), rid))
+            pct = c.telemetry.battery_pct if c.telemetry is not None else None
+            low = pct is not None and pct <= LOW_PCT
+            dist = (math.hypot(pose.x - point["x"], pose.y - point["y"])
+                    if pose is not None and pose.map_id == point["map_id"] else None)
+            if pct is not None:              # W73 §7.2:去、停着看 5 分钟、回来后还在停止线上
+                go = energy.walk_s(dist or 0.0)
+                line = energy.alarm_line(go)
+                if pct < line:
+                    why.append(f"{rid} 电量 {pct:.0f}%,不够去了再回来(要 ≥ {line:.0f}%)")
+                    continue
+            if dist is not None:
+                best.append((low, 0, dist, rid))
             else:
                 best.append((low, 1, 0.0, rid))
         if not best:
@@ -390,7 +421,11 @@ class IncidentDesk:
         return row
 
     async def _handle(self, source: str, body: Any) -> dict[str, Any]:
+        body = self.prepare(source, body)
         ev = self.parse(body)
+        dev = self.devices.by_source(source) if self.devices is not None else None
+        if dev is not None:
+            ev["_intercept"] = dev["intercept"]
         got = self._claim(source, ev)
         if isinstance(got, dict):
             return got
@@ -424,10 +459,16 @@ class IncidentDesk:
                 if who is not None:
                     return self._set(c, iid, outcome="authorized",
                                      note=f"授权在场:{who}(此防区、此时段),只记录")
-            z = c.execute("SELECT intercept FROM zones WHERE zone=?", (ev["zone"],)).fetchone()
-            if z is None:
-                return self._set(c, iid, outcome="unmapped", note="防区未映射到拦截点")
-            point = self.intercept(z["intercept"])
+            point = None
+            if ev.get("_intercept"):                     # W73 第五期:设备自己的查看点
+                point = self.intercept(ev["_intercept"])
+            elif self.zone_point is not None:            # 圈好的防区先
+                point = self.zone_point(ev["zone"])
+            if point is None:
+                z = c.execute("SELECT intercept FROM zones WHERE zone=?", (ev["zone"],)).fetchone()
+                if z is None:
+                    return self._set(c, iid, outcome="unmapped", note="防区未映射到拦截点")
+                point = self.intercept(z["intercept"])
             if point.get("reach"):
                 # W23:查好的结果说走不到(地图、禁行区改过之后):不派,照样报「没狗去」
                 return self._set(c, iid, outcome="unreachable", intercept=point["name"],

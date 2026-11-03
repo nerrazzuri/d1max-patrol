@@ -183,7 +183,7 @@ def test_中止线优先于返航线(ctx):
 def test_返航线是中止线加上回原点的成本():
     ctx = SafetyContext(policy=Policy(battery_return_pct=25.0, battery_abort_pct=25.0),
                         battery_pct=80.0, return_cost_pct=8.0)
-    assert return_line_pct(ctx) == pytest.approx(33.0)
+    assert return_line_pct(ctx) == pytest.approx(37.0), "W73:25 + 8 × 1.5"
 
 
 def test_返航线永远高于中止线否则返航轮不到():
@@ -221,7 +221,7 @@ def test_返航的理由里要说清楚是按多远算的():
     ctx = SafetyContext(policy=Policy(battery_return_pct=25.0, battery_abort_pct=25.0),
                         battery_pct=30.0, return_cost_pct=8.0)
     reason = battery_ruling(ctx).reason
-    assert "33" in reason, "人要能从这句话里看出返航线当时是多少"
+    assert "37" in reason, "人要能从这句话里看出返航线当时是多少"
 
 
 def test_动态那一支赢的时候理由里报的是中止线加回原点():
@@ -257,11 +257,14 @@ def test_默认策略下返航线必须严格高于中止线():
     # 10 个点,回原点成本兜不兜底都看不出来。默认 Policy 才是出厂那一份:
     # 两条线都是 25。回原点成本按 0 用的话返航线就等于中止线,24.9% 判 ABORT、
     # 25.0% 判 CONTINUE,中间一格 RETURN_HOME 都没有 —— 那个分支是死代码。
-    ctx = SafetyContext(policy=Policy(), battery_pct=26.0)
-    assert Policy().battery_return_pct == Policy().battery_abort_pct, (
-        "出厂两条线本来就是同一个数,这条测试才有意义")
+    # W73 起出厂是停止线 15 / 回撤线下限 25:静态那一支自己就高出 10 个点。两条线配成同一个数时
+    # 回原点成本的兜底照样要把返航线撑到中止线上面。
+    ctx = SafetyContext(policy=Policy(), battery_pct=20.0)
     assert return_line_pct(ctx) > Policy().battery_abort_pct
-    assert return_line_pct(ctx) == pytest.approx(28.0), "25 + 兜底的 3"
+    assert battery_ruling(ctx).decision is Decision.RETURN_HOME
+    same = Policy(battery_return_pct=25.0, battery_abort_pct=25.0)
+    ctx = SafetyContext(policy=same, battery_pct=26.0)
+    assert return_line_pct(ctx) == pytest.approx(29.5), "25 + 兜底的 3 × 1.5"
     assert battery_ruling(ctx).decision is Decision.RETURN_HOME
 
 
@@ -269,9 +272,10 @@ def test_默认策略下返航那一格的理由报的是中止线加回原点()
     # 这一格是靠兜底的回原点成本撑出来的,理由里就该说是中止线加回原点,
     # 不能报成静态下限 —— 静态下限是 25,人读到"低于返航线 28%(静态下限
     # 25%)"会以为程序算错了。
-    ctx = SafetyContext(policy=Policy(), battery_pct=26.0)
+    ctx = SafetyContext(policy=Policy(battery_return_pct=25.0, battery_abort_pct=25.0),
+                        battery_pct=26.0)
     reason = battery_ruling(ctx).reason
-    assert "中止线 25% + 回原点 3%" in reason
+    assert "中止线 25% + 回原点 3% × 1.5" in reason
 
 
 # ----------------------------------------------------------------------- 断连
@@ -331,8 +335,8 @@ def test_回原点成本的地板跟着引擎那份系数走():
     policy = Policy(battery_return_pct=25.0, battery_abort_pct=25.0)
     low = SafetyContext(policy=policy, battery_pct=80.0, floor_pct=1.0)
     high = SafetyContext(policy=policy, battery_pct=80.0, floor_pct=8.0)
-    assert return_line_pct(low) == pytest.approx(26.0)
-    assert return_line_pct(high) == pytest.approx(33.0)
+    assert return_line_pct(low) == pytest.approx(26.5)
+    assert return_line_pct(high) == pytest.approx(37.0)
 
 
 def test_返航理由里的回原点成本印的是引擎那份地板():

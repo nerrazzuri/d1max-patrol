@@ -424,6 +424,23 @@ class Reconcile:
                    unacked_to_seq=as_int(d, "unacked_to_seq", "Reconcile"))
 
 
+
+def _packs(v: Any) -> list[float | None] | None:
+    """W73 第四期:``battery_packs``(每块 0–100 或 null,最多 4 块);没带回 None。"""
+    if v is None:
+        return None
+    if not isinstance(v, list) or len(v) > 4:
+        raise ContractError("Telemetry.battery_packs 要是最多 4 项的列表")
+    out: list[float | None] = []
+    for x in v:
+        if x is None:
+            out.append(None)
+        elif isinstance(x, (int, float)) and not isinstance(x, bool) and 0.0 <= float(x) <= 100.0:
+            out.append(float(x))
+        else:
+            raise ContractError(f"Telemetry.battery_packs 每项要是 0–100 或 null:{x!r}")
+    return out
+
 @dataclass(frozen=True)
 class Telemetry:
     """1 Hz,QoS 0。W00 最小字段。"""
@@ -447,6 +464,8 @@ class Telemetry:
     #: W40:设备健康 ``[{"id", "state", "detail"}]``(``d1max_contract.devices``;每 10 s 带一次,
     #: 没有就不发这个键,老狗也不带)。
     devices: list[dict[str, Any]] | None = None
+    #: W73 第四期:每块电池各剩多少(``None`` = 这块没插;换电引导用)。不分块报的狗不发这个键。
+    battery_packs: list[float | None] | None = None
 
     def to_wire(self) -> dict[str, Any]:
         d = {"stamp": self.stamp, "pose": self.pose.to_wire() if self.pose else None,
@@ -463,6 +482,8 @@ class Telemetry:
             d["nav"] = dict(self.nav)
         if self.devices is not None:
             d["devices"] = [dict(x) for x in self.devices]
+        if self.battery_packs is not None:
+            d["battery_packs"] = list(self.battery_packs)
         return _stamped(d)
 
     @classmethod
@@ -482,4 +503,5 @@ class Telemetry:
                    loc=d["loc"] if isinstance(d.get("loc"), dict) else None,
                    rtk=d["rtk"] if isinstance(d.get("rtk"), dict) else None,
                    nav=d["nav"] if isinstance(d.get("nav"), dict) else None,
-                   devices=parse_devices(d.get("devices")))
+                   devices=parse_devices(d.get("devices")),
+                   battery_packs=_packs(d.get("battery_packs")))

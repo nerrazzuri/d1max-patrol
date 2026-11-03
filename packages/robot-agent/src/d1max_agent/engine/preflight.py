@@ -150,11 +150,15 @@ def departure_line_pct(mission: Mission, home: HomePoint, *,
 
     ``start``、``back`` 见 ``route_length_m``(W00c6b 内审):从狗现在在哪算起;直线后端回来是沿来路
     倒着走;这一趟本身就是回原点的路(``on_battery_low: continue``)就不算回来那段。
+
+    W73(决策 78 §7.2):中止线(停止线)从 25 降到 15 以后,出发线的底改成**回撤线下限**
+    (``max(battery_return_pct, 中止线)``)再加全程耗电 —— 「跑完回到家还在回撤线上」,不因为停止线
+    降了就放更低的电出门。
     """
     poses = [w.pose for w in mission.waypoints]
     cost = estimate_cost_pct(route_length_m(home.pose, poses, start=start, back=back), params)
     return max(mission.policy.battery_return_pct,
-               mission.policy.battery_abort_pct + cost * slack)
+               mission.policy.battery_abort_pct) + cost * slack
 
 
 async def _where(nav: NavBackend) -> Pose | None:
@@ -196,13 +200,13 @@ async def _check_battery(device: DeviceBackend, mission: Mission,
     start = await _where(nav) if nav is not None else None
     back = back_mode(nav, mission) if nav is not None else "home"
     line = departure_line_pct(mission, home, slack=slack, params=params, start=start, back=back)
+    base = max(mission.policy.battery_return_pct, mission.policy.battery_abort_pct)
     ok = pct > line
     return CheckResult("battery", ok,
                        f"电量 {pct:.1f}%,出发线 {line:.1f}%" if ok
                        else f"电量 {pct:.1f}%,不到出发线 {line:.1f}%"
-                            f"(中止线 {mission.policy.battery_abort_pct:.0f}% + "
-                            f"全程预计 × {slack:g},且不低于返航线的静态下限 "
-                            f"{mission.policy.battery_return_pct:.0f}%)")
+                            f"(回撤线下限 {base:.0f}% + "
+                            f"全程预计 × {slack:g})")
 
 
 async def _check_storage(runs_root: Path, min_free_mb: float, form: Form,

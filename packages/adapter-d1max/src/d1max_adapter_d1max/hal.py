@@ -400,11 +400,14 @@ class D1MaxHal:
     # ------------------------------------------------------------ 电池与故障
 
     async def battery(self) -> Battery:
-        """两块电池里低的那块。充没充电旁路进程不报,按没充。"""
+        """两块电池里低的那块;``packs`` 两块各自(没插的旁路发 0 → ``None``,W73 第四期)。
+        充没充电旁路进程不报,按没充。"""
         st = self._b.last_state
         if st is None:
             raise DeviceBackendError("尚未收到过状态帧,无法读取电量")
-        return Battery(percent=float(st.battery), charging=False)
+        packs = tuple(float(v) if v > 0.0 else None
+                      for v in (getattr(st, "battery1", 0.0), getattr(st, "battery2", 0.0)))
+        return Battery(percent=float(st.battery), charging=False, packs=packs)
 
     async def faults(self) -> tuple[Fault, ...]:
         """**当前**故障:最近 ``FAULT_FRESH_S`` 秒内旁路进程还报过的(见旁路客户端

@@ -230,7 +230,9 @@ async def test_出发线不会低于返航线的静态下限():
     """
     m = make_mission(policy=Policy(battery_abort_pct=25.0,
                                    battery_return_pct=60.0))
-    assert departure_line_pct(m, _HOME) == pytest.approx(60.0)
+    # W73(决策 78 §7.2):出发线 = 回撤线下限 + 全程预计 × 1.5,跑完回到家还在返航线上
+    assert departure_line_pct(m, _HOME) == pytest.approx(64.5)
+    assert departure_line_pct(m, _HOME) > 60.0
 
 
 async def test_静态下限低的时候还是动态那一支说了算():

@@ -4,6 +4,7 @@
 import { useEffect, useRef, useState } from "preact/hooks";
 import { canSchedule, isOwnerLike } from "./model";
 import { GuardPanel } from "./armguard";
+import { DevicesPanel } from "./devicespanel";
 import { api, ApiError, enc } from "./api";
 import { addBlock, copyDay, fromWire, minutesText, moveEdge, removeBlock, toWire, type Slot, type WireSlot } from "./armgrid";
 import { hm, type DutySettings } from "./data";
@@ -187,6 +188,7 @@ export function ArmingPage({ say, now, role = "admin" }: { say: Say; now: number
 
       {/* W73 第二期:布防时谁去巡、每圈隔多久、预报、此刻、值守记录(方案单独保存) */}
       <GuardPanel say={say} now={now} canEdit={canSchedule(role)} />
+      <DevicesPanel say={say} canEdit={isOwnerLike(role)} />
 
       {canDuty && <section class="panel arm-duty">
         <h2>{t("armDutyTitle")}</h2>

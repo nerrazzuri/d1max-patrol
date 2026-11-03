@@ -21,8 +21,11 @@ from typing import Any
 
 from d1max_contract.errors import ContractError
 
-LOW_PCT = 30.0
+#: W73 决策 78 §7.2:空闲时去充的线 = 回撤线的下限(原来 30)。
+LOW_PCT = 25.0
 RESUME_PCT = 90.0
+#: 老的「回充中不到 50% 不派」(决策 45)。W73 起站点改按报警出动线判(``d1max_site.energy``),
+#: 这个数只留给老代码读。
 INTRUSION_MIN_PCT = 50.0
 #: 别的狗在充时,守到这条线还轮不到就也去充(W28,决策 46)。
 FLOOR_PCT = 20.0

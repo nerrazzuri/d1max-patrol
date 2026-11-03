@@ -166,7 +166,7 @@ async def test_半路电量返航的goto_也报失败(台子, tmp_path):
         await _一拍(c, r, parts)
         o = await r.odometry()
         if not injected and o.x > 1.5:
-            r.inject_battery(27.0)                     # goto 的默认:中止线 25,返航线 ≥ 25 + 3
+            r.inject_battery(22.0)                     # goto 的默认:停止线 15,返航线 ≥ 25(W73)
             injected = True
         if t.done:
             break

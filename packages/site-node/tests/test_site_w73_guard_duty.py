@@ -416,3 +416,57 @@ def test_老数据本来就撞_不挡别的改动(站):
     _方案(t)                                             # 绕开检查造出一个老冲突
     t.duty.clash = t.store.clash
     _排(t, "s2", "10:00")                                # 跟布防不沾边的改动照存
+
+
+# ---------------------------------------------------------------- 第四期:电量线(设计 §7.2–7.3)
+
+async def test_电量过不了一圈的出站线_不开_要补能_回充按这条线起(站):
+    """30% 以前能开(老 MIN_PCT),现在要「回撤线 + 一圈耗电 × 1.2」;到了这条线回充也该起,
+    充到够撑到布防结束(最多 95%)。"""
+    from d1max_site import energy
+    t = 站
+    _方案(t)
+    info = t.duty._route("night-guard")
+    line = energy.lap_line(t.duty._lap_s(info) or 0.0)
+    assert 25.0 < line < 40.0
+    t.dog.inject_battery(line - 0.5)
+    await _跑(t, 5)
+    assert _patrols(t) == []
+    assert any("先补能" in r["detail"] for r in _log(t, "waiting"))
+    assert t.duty.topup_line("A") == pytest.approx(line)
+    assert 25.0 < t.duty.resume_pct("A") <= 95.0
+    t.dog.inject_battery(line + 3)
+    await _跑(t, 5)
+    assert _patrols(t), "电够了照常开"
+    assert t.duty.topup_line("A") is None
+
+
+async def test_值守中_还有多少分钟要补能_按一圈出站线和耗电算(站):
+    from d1max_site import energy
+    t = 站
+    _方案(t)
+    assert t.duty.topup_eta_min("A") is None, "没在值守"
+    t.dog.inject_battery(60.0)
+    await _跑(t, 3)
+    line = energy.lap_line(t.duty._lap_s(t.duty._route("night-guard")) or 0.0)
+    got = t.duty.topup_eta_min("A")
+    assert got is not None
+    assert abs(got - (60.0 - line) / (energy.DRAIN_PCT_PER_H / 60)) < 3
+
+
+async def test_布防前30分钟_电量撑不到第一次补能_提醒先充电换电池(站):
+    """设计 §7.1:开始前 30 分钟查一次;够了不吵;一段布防只提醒一次。"""
+    t = 站
+    t.store.set_timezone("UTC", by="alice")              # 钟在 2027-01-15(周五)08:00 UTC
+    _方案(t)
+    t.arming.schedule.put({"enabled": True, "slots": [{"zone": "", "day": 4, "start": "08:40",
+                                                       "end": "10:00"}]}, by="olga")
+    t.dog.inject_battery(24.0)
+    await _跑(t, 3)
+    assert not t.duty.alerts.has_open("A", "guard_prep"), "还有 40 分钟,不急"
+    t.clock.ms += 15 * 60_000
+    await _跑(t, 3)
+    [a] = [x for x in t.duty.alerts.open if x["kind"] == "guard_prep"]
+    assert "布防前请先充电" in a["detail"] and "08:40" in a["detail"]
+    await _跑(t, 3)
+    assert len([x for x in t.duty.alerts.open if x["kind"] == "guard_prep"]) == 1

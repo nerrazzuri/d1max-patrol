@@ -210,10 +210,11 @@ def test_认识的丢失处置读得进来(tmp_path, key, value):
     assert getattr(load_mission(_write(tmp_path, text)).policy, key) == value
 
 
-def test_中止线默认二十五不是十五():
-    # 厂商的强制趴窝线是单块电池 10%(硬件手册 2.3.3)。默认 15 离它只剩 5 个点,
-    # 而这 5 个点要覆盖:发现、告警、人走过去、把狗弄回来。不够。
-    assert Policy().battery_abort_pct == 25.0
+def test_停止线默认十五_回撤线下限二十五():
+    # W73 决策 78 §7.2:停止线 15(厂家硬线单块 10%,留 5 个点给人赶过来);不让它走到停止线靠的是
+    # 回撤线 = max(25,15 + 回原点 × 1.5)按路程提前走(原来停止线 25 是为了补这一块)。
+    assert Policy().battery_abort_pct == 15.0
+    assert Policy().battery_return_pct == 25.0
 
 
 # ------------------------------------------------------------- 保留天数
