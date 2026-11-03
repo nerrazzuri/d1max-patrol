@@ -283,7 +283,9 @@ class CommandProcessor:
 
         conflicts = self.ledger.conflicts(cmd.kind)
         blockers = [self._find_task(t) for t in conflicts]
-        if any(b is not None and b.priority >= cmd.priority for b in blockers):
+        # W70(11-03 C40221):已经在中止的不挡 —— 原来 abort 之后约 6 s(等 Nav2 取消、狗刹停)发什么都回忙
+        if any(b is not None and b.priority >= cmd.priority and not getattr(b, "aborting", False)
+               for b in blockers):
             return self._finish(self._rej(cmd, "busy"))
 
         task = self._factory(cmd)
@@ -291,7 +293,8 @@ class CommandProcessor:
         waited = False
         for b in blockers:
             if b is not None and not b.done:
-                await b.abort("preempted")
+                if not getattr(b, "aborting", False):     # 在中止的照它自己的原因停,不改成被抢占
+                    await b.abort("preempted")
                 waited = True
         if waited:
             # 抢占要等(W00c5d 内部评审):等的时候可能开始换图、甚至换完了。醒来再查一遍地图版本
