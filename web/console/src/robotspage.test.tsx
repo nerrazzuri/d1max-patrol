@@ -19,12 +19,14 @@ let robots: Record<string, unknown>[];
 let posted: { url: string; body: Record<string, unknown> }[];
 let pending: Record<string, unknown>[];
 let said: string[];
+let task: string | null;
 
 beforeEach(() => {
   lang.value = "zh";
   posted = [];
   said = [];
   pending = [];
+  task = null;
   robotNames.value = {};
   robots = [card({}), card({ robot_id: "B", online: false, battery_pct: null, patrols_today: 0,
     problems: [{ key: "B/stuck#1", kind: "stuck", first_ms: NOW - 60_000 }, { device: "front_camera", state: "offline" }],
@@ -33,6 +35,7 @@ beforeEach(() => {
     if (init?.method === "POST") {
       const body = JSON.parse(String(init.body ?? "{}"));
       posted.push({ url, body });
+      if (/\/(patrol|standby\/return|abort|relocalize)$/.test(url)) return Promise.resolve(json({ command_id: "c1", ack: { command_id: "c1", result: "accepted" } }));
       if (url.endsWith("/name")) robots = robots.map((r) => (url.includes(`/${r.robot_id}/`) ? { ...r, name: body.name } : r));
       if (url.endsWith("/revoke")) return Promise.resolve(json({ robot_id: "A", summary: "CRL", robot_wipe: "offline", broker_restart: "systemctl restart x" }));
       if (url.startsWith("/api/admin/bind/")) {
@@ -43,6 +46,8 @@ beforeEach(() => {
       return Promise.resolve(json({ robots }));
     }
     if (url.startsWith("/api/robots/overview")) return Promise.resolve(json({ robots }));
+    if (url === "/api/schedule") return Promise.resolve(json({ missions: ["east-loop", "west-loop"] }));
+    if (url === "/api/robots/A") return Promise.resolve(json({ robot_id: "A", status: { online: true, task: task ? { task_id: task, kind: "patrol", state: "running" } : null } }));
     if (url === "/api/admin/bind") return Promise.resolve(json({ requests: pending }));
     return Promise.resolve(json({}, 404));
   }) as typeof fetch);
@@ -200,14 +205,14 @@ describe("机器人页", () => {
     expect(c.querySelector(".lw-card .slot-name")!.textContent).toBe("南区");
   });
 
-  it("W60 经理只看:没有添加、批准、改名、解绑", async () => {
-    const c = render(<RobotsPage say={() => {}} now={0} readOnly />).container;
+  it("W60 经理只看:没有添加、批准、改名、解绑(W72:跟手机一样能派巡逻、停止当前任务)", async () => {
+    const c = render(<RobotsPage say={() => {}} now={0} readOnly role="owner" />).container;
     await waitFor(() => expect(cardOf(c, "A")).not.toBeNull());
     expect(btn(c, "添加机器人")).toBeUndefined();
     fireEvent.click(cardOf(c, "A"));
     const d = c.querySelector(".robot-detail")!;
     expect(d.querySelector("form")).toBeNull();
-    expect(Array.from(d.querySelectorAll("button")).map((b) => b.textContent?.trim())).toEqual(["关闭"]);
+    expect(Array.from(d.querySelectorAll("button")).map((b) => b.textContent?.trim())).toEqual(["关闭", "开始巡逻", "停止当前任务"]);
   });
 });
 
@@ -217,5 +222,62 @@ describe("W71 Nav2 没起来", () => {
     const { container: c } = page();
     await waitFor(() => expect(cardOf(c, "A")?.querySelector(".fleet-warn")).toBeTruthy());
     expect(cardOf(c, "A").querySelector(".fleet-warn")!.textContent).toContain("Nav2 不可用(退回自带规划):Nav2 转接节点未连接");
+  });
+
+  it("W72 详情:现在、巡逻统计、地图、设备、登记、手动原因", async () => {
+    robots[0] = card({ patrols_7d: 12, aborts_7d: 1, last_patrol_ms: NOW - 3_600_000, last_seen_ms: NOW - 3_000,
+      storage: { used_ratio: 0.42, backlog_files: 3, oldest_backlog_s: 90 }, map: { id: "estate-1", version: "7", match: false },
+      devices: [{ id: "lidar", state: "online" }, { id: "camera:thermal", state: "error" }], enrolled_at: NOW - 86_400_000 * 10,
+      manual_only: true, manual_note: "先试跑", wifi: { ssid: "Estate", link: "wifi", change: null } });
+    const { container: c } = render(<RobotsPage say={(s) => said.push(s)} now={NOW} />);
+    await waitFor(() => expect(cardOf(c, "A")).not.toBeNull());
+    fireEvent.click(cardOf(c, "A"));
+    const d = c.querySelector(".robot-detail")!.textContent!;
+    for (const s of ["现在", "最后联系", "已用 42%", "待传 3 个", "近 7 天", "12 趟", "1 次", "estate-1 v7", "与站点不一致",
+      "lidar", "camera:thermal", "故障", "先试跑", "Estate"]) expect(d).toContain(s);
+  });
+
+  it("W72 控制:选路线开始巡逻、回待命点、停止当前任务(现问站点在跑哪一趟)", async () => {
+    task = "t9";
+    const { container: c } = render(<RobotsPage say={(s) => said.push(s)} now={NOW} role="admin" />);
+    await waitFor(() => expect(cardOf(c, "A")).not.toBeNull());
+    fireEvent.click(cardOf(c, "A"));
+    const d = c.querySelector(".robot-detail")!;
+    await waitFor(() => expect(d.querySelectorAll('select[name="route"] option').length).toBe(3));
+    expect(btn(d, "开始巡逻").disabled).toBe(true);
+    fireEvent.change(d.querySelector('select[name="route"]')!, { target: { value: "west-loop" } });
+    fireEvent.click(btn(d, "开始巡逻"));
+    await waitFor(() => expect(posted.find((p) => p.url === "/api/robots/A/patrol")?.body).toEqual({ mission_id: "west-loop" }));
+    await waitFor(() => expect(said.join()).toContain("west-loop"));
+    fireEvent.click(btn(d, "回待命点"));
+    await waitFor(() => expect(posted.some((p) => p.url === "/api/robots/A/standby/return")).toBe(true));
+    await waitFor(() => expect(btn(d, "停止当前任务").disabled).toBe(false));
+    fireEvent.click(btn(d, "停止当前任务"));
+    await waitFor(() => expect(posted.find((p) => p.url === "/api/robots/A/abort")?.body).toEqual({ task_id: "t9" }));
+  });
+
+  it("W72 控制:被叫停的给恢复;离线不能派;经理只能派巡逻和停", async () => {
+    robots[0] = card({ held: { by: "bob", at_ms: NOW - 60_000 } });
+    robots[1] = { ...robots[1], problems: [], recent_problems: [] };
+    const { container: c } = render(<RobotsPage say={(s) => said.push(s)} now={NOW} role="admin" />);
+    await waitFor(() => expect(cardOf(c, "A")).not.toBeNull());
+    fireEvent.click(cardOf(c, "A"));
+    let d = c.querySelector(".robot-detail")!;
+    expect(d.textContent).toContain("bob");
+    fireEvent.click(btn(d, "恢复"));
+    await waitFor(() => expect(posted.some((p) => p.url === "/api/robots/A/resume")).toBe(true));
+    fireEvent.click(cardOf(c, "B"));
+    d = c.querySelector(".robot-detail")!;
+    expect(btn(d, "回待命点").disabled).toBe(true);
+    expect(d.textContent).toContain("离线");
+    cleanup();
+    const o = render(<RobotsPage say={(s) => said.push(s)} now={NOW} role="owner" readOnly />).container;
+    await waitFor(() => expect(cardOf(o, "A")).not.toBeNull());
+    fireEvent.click(cardOf(o, "A"));
+    d = o.querySelector(".robot-detail")!;
+    expect(btn(d, "开始巡逻")).toBeTruthy();
+    expect(btn(d, "停止当前任务")).toBeTruthy();
+    expect(btn(d, "回待命点")).toBeUndefined();
+    expect(btn(d, "恢复")).toBeUndefined();
   });
 });

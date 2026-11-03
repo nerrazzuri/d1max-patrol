@@ -11,8 +11,10 @@ import { api, ApiError, enc } from "./api";
 import { ConfirmPassword } from "./confirmpw";
 import { hm, robotNames } from "./data";
 import { Confirm, Modal } from "./dialogs";
-import { alertTitle, lang, t, type Key } from "./i18n";
-import { autoResolved } from "./model";
+import { alertTitle, lang, refusalText, t, type Key } from "./i18n";
+import { autoResolved, canDispatch, canPatrol, isOwnerLike } from "./model";
+import { notAccepted, type CommandReply } from "./posepick";
+import { siteHm } from "./todaypatrols";
 import { Shape } from "./icons";
 import { locText, StateText, type UnitInfo } from "./live";
 
@@ -25,6 +27,12 @@ export interface RobotCard {
   recent_problems: RecentProblem[];
   agent: string | null; compat: string; manual_only: boolean;
   wifi?: Wifi | null;
+  /** W72 详情:老站点没有这些。 */
+  patrols_7d?: number; aborts_7d?: number; last_patrol_ms?: number | null; last_seen_ms?: number | null;
+  storage?: { used_ratio: number; backlog_files: number; oldest_backlog_s: number | null } | null;
+  map?: { id: string; version: string | null; match: boolean | null } | null;
+  devices?: { id: string; state: string }[];
+  enrolled_at?: number | null; manual_note?: string; held?: { by: string; at_ms: number } | null;
 }
 export interface Wifi {
   ssid: string; link: "wifi" | "4g" | "none";
@@ -53,7 +61,9 @@ function problemText(p: RobotCard["problems"][number]): string {
 }
 
 /** ``readOnly``(W60):经理只看 —— 没有添加、批准加入、改名、改派单方式、开通码、解绑、确认换 WiFi。 */
-export function RobotsPage({ say, now, units = [], readOnly = false }: { say: Say; now: number; units?: UnitInfo[]; readOnly?: boolean }) {
+export function RobotsPage({ say, now, units = [], readOnly = false, role = "admin" }: {
+  say: Say; now: number; units?: UnitInfo[]; readOnly?: boolean; role?: string;
+}) {
   const [rows, setRows] = useState<RobotCard[] | null>(null);
   const [open, setOpen] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
@@ -147,7 +157,8 @@ export function RobotsPage({ say, now, units = [], readOnly = false }: { say: Sa
             );
           })}
         </div>
-        {cur && <RobotDetail readOnly={readOnly} r={cur} say={say} onChanged={load} onCode={setCode} onClose={() => setOpen(null)} />}
+        {cur && <RobotDetail readOnly={readOnly} r={cur} u={units.find((x) => x.robot.robot_id === cur.robot_id)} now={now} role={role}
+          say={say} onChanged={load} onCode={setCode} onClose={() => setOpen(null)} />}
       </div>
       {adding && (
         <AddRobot onClose={() => setAdding(false)} say={say}
@@ -224,14 +235,110 @@ function RecentAlerts({ items }: { items: RecentProblem[] }) {
   );
 }
 
-function RobotDetail({ r, say, onChanged, onCode, onClose, readOnly = false }: {
-  readOnly?: boolean;
+/** 多久前(最后联系):一分钟内按秒,一小时内按分钟,再久写钟点。 */
+function ago(ms: number, now: number): string {
+  const s = Math.max(0, Math.round((now - ms) / 1000));
+  if (s < 5) return t("rdJustNow");
+  if (s < 60) return t("rdSecAgo", { n: s });
+  if (s < 3600) return t("rdMinAgo", { n: Math.floor(s / 60) });
+  return when(ms, now);
+}
+
+type Act = (fn: () => Promise<unknown>, msg?: string) => Promise<void>;
+
+/** W72(用户 11-03):手机上有的操作网页也要 —— 选路线开始巡逻、回待命点、停止当前任务、自动定位、叫停后恢复。
+ * 权限跟手机一样:派巡逻、停止 = 能派单的 + 经理;回待命点、自动定位、恢复 = 能派单的(经理不能让它再动)。 */
+function Controls({ r, role, say, onChanged }: { r: RobotCard; role: string; say: Say; onChanged: () => void }) {
+  const [routes, setRoutes] = useState<string[] | null>(null);
+  const [pick, setPick] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const patrol = canPatrol(role);
+  const dispatch = canDispatch(role);
+  useEffect(() => {
+    if (!patrol) return;
+    api<{ missions?: string[] }>("GET", "/api/schedule")
+      .then((d) => { const m = d.missions ?? []; setRoutes(m); setPick(m.length === 1 ? m[0] : ""); })
+      .catch(() => setRoutes([]));
+  }, [r.robot_id, patrol]);
+  useEffect(() => setErr(null), [r.robot_id]);
+  const id = r.name || r.robot_id;
+  const send = async (fn: () => Promise<(CommandReply & { queued?: boolean; start_after_ms?: number; because?: string; utc_offset_min?: number }) | null>,
+    ok: string) => {
+    setBusy(true);
+    setErr(null);
+    try {
+      const res = await fn();
+      if (res === null) return;
+      if (res.queued) say(t("trQueued", { id, at: siteHm(res.start_after_ms ?? 0, res.utc_offset_min), why: res.because ?? "" }));
+      else {
+        const no = res.ack ? notAccepted(res) : null;
+        if (no) setErr(t("rdNotAccepted", { why: no }));
+        else say(ok);
+      }
+    } catch (e) {
+      setErr(e instanceof ApiError ? refusalText(e.message, e.data) : String(e));
+    } finally {
+      setBusy(false);
+      onChanged();
+    }
+  };
+  const path = (a: string) => `/api/robots/${enc(r.robot_id)}/${a}`;
+  const abort = () => send(async () => {
+    const v = await api<{ status?: { task?: { task_id?: string } | null } | null }>("GET", `/api/robots/${enc(r.robot_id)}`);
+    const tid = v.status?.task?.task_id;
+    if (!tid) { say(t("rdNoTask", { id })); return null; }
+    return api("POST", path("abort"), { task_id: tid });
+  }, t("rdSent", { id, what: t("rdAbort") }));
+  const off = !r.online;
+  return (
+    <section class="rd-sec rd-control">
+      <h3 class="rd-h">{t("rdControl")}</h3>
+      {r.held && (
+        <div class="note warn rd-held">
+          <span>{t("rdHeld", { by: r.held.by, t: when(r.held.at_ms) })}</span>
+          {dispatch && <button type="button" class="btn sm" disabled={busy}
+            onClick={() => void send(() => api("POST", path("resume"), {}), t("rdSent", { id, what: t("rdResume") }))}>{t("rdResume")}</button>}
+        </div>
+      )}
+      {off && <p class="muted small">{t("rdOfflineNoCtl")}</p>}
+      {patrol && (
+        <div class="rd-name">
+          <label class="rd-label" for={`rd-route-${r.robot_id}`}>{t("rdRoute")}</label>
+          {routes !== null && routes.length === 0 ? <p class="muted small">{t("rdNoRoutes")}</p> : (
+            <div class="rd-inline">
+              <select id={`rd-route-${r.robot_id}`} name="route" value={pick} onChange={(e) => setPick(e.currentTarget.value)}>
+                <option value="">{t("rdPickRoute")}</option>
+                {(routes ?? []).map((m) => <option key={m} value={m}>{m}</option>)}
+              </select>
+              <button type="button" class="btn sm primary" disabled={busy || off || !pick}
+                onClick={() => void send(() => api("POST", path("patrol"), { mission_id: pick }), t("rdPatrolSent", { id, route: pick }))}>
+                {t("rdStartPatrol")}
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+      <div class="rd-actions">
+        {dispatch && <button type="button" class="btn sm" disabled={busy || off}
+          onClick={() => void send(() => api("POST", path("standby/return"), {}), t("rdSent", { id, what: t("rdReturn") }))}>{t("rdReturn")}</button>}
+        {dispatch && <button type="button" class="btn sm" disabled={busy || off}
+          onClick={() => void send(() => api("POST", path("relocalize"), { global: true }), t("rdSent", { id, what: t("rdAutoLoc") }))}>{t("rdAutoLoc")}</button>}
+        {patrol && <button type="button" class="btn sm rd-danger" disabled={busy} onClick={() => void abort()}>{t("rdAbort")}</button>}
+      </div>
+      {err && <p class="error small" role="alert">{err}</p>}
+    </section>
+  );
+}
+
+function RobotDetail({ r, u, now, role, say, onChanged, onCode, onClose, readOnly = false }: {
+  readOnly?: boolean; u?: UnitInfo; now: number; role: string;
   r: RobotCard; say: Say; onChanged: () => void; onCode: (c: { id: string; code: string; hours: number }) => void; onClose: () => void;
 }) {
   const [name, setName] = useState(r.name);
   const [unbind, setUnbind] = useState<"ask" | "pw" | null>(null);
   useEffect(() => setName(r.name), [r.robot_id, r.name]);
-  const act = async (fn: () => Promise<unknown>, msg?: string) => {
+  const act: Act = async (fn, msg) => {
     try {
       await fn();
       if (msg) say(msg);
@@ -242,6 +349,7 @@ function RobotDetail({ r, say, onChanged, onCode, onClose, readOnly = false }: {
   };
   const compat: Key = r.compat === "ok" ? "compat_ok" : (`compat_${r.compat}` as Key);
   const devices = r.problems.filter((p) => "device" in p);
+  const loc = locText(u);
   const fact = (k: Key, v: string, mono = false) => <div><dt>{t(k)}</dt><dd class={mono ? "mono" : undefined}>{v}</dd></div>;
   return (
     <aside class="panel robot-detail" aria-label={label(r)}>
@@ -252,18 +360,56 @@ function RobotDetail({ r, say, onChanged, onCode, onClose, readOnly = false }: {
         <button type="button" class="btn sm push" onClick={onClose}>{t("close")}</button>
       </div>
       <section class="rd-sec">
+        <h3 class="rd-h">{t("rdNow")}</h3>
+        <dl class="rd-facts">
+          <div><dt>{t("rdState")}</dt><dd>{u && r.online ? <><StateText s={u.state} stale={u.stale} />{u.task && <small class="muted"> {u.task}</small>}</>
+            : r.online ? t("online") : t("st_offline")}</dd></div>
+          {fact("fleetBattery", r.battery_pct == null ? "—" : `${r.battery_pct}%`, true)}
+          {fact("fleetLoc", `${loc ? t(loc) : "—"}${u?.robot.loc?.localizer ? ` · ${u.robot.loc.localizer}` : ""}`)}
+          {fact("wifiLabel", r.wifi ? `${r.wifi.ssid || "—"} · ${t(`link_${r.wifi.link}` as Key)}` : "—")}
+          {fact("rdLastSeen", r.last_seen_ms ? ago(r.last_seen_ms, now) : "—")}
+          {r.storage && fact("rdStorage", t("rdStorageVal", { p: Math.round(r.storage.used_ratio * 100), n: r.storage.backlog_files }))}
+        </dl>
+        {devices.length > 0 && <p class="note small">{devices.map(problemText).join(" · ")}</p>}
+      </section>
+      {(canPatrol(role) || isOwnerLike(role)) && !r.revoked && <Controls r={r} role={role} say={say} onChanged={onChanged} />}
+      <section class="rd-sec">
+        <h3 class="rd-h">{t("rdPatrol")}</h3>
+        <dl class="rd-facts">
+          {fact("rdToday", t("fleetPatrols", { n: r.patrols_today }))}
+          {r.patrols_7d != null && fact("rd7d", t("fleetPatrols", { n: r.patrols_7d }))}
+          {r.aborts_7d != null && fact("rdAborts", t("rdAbortsN", { n: r.aborts_7d }))}
+          {r.last_patrol_ms != null && fact("rdLastPatrol", when(r.last_patrol_ms, now), true)}
+        </dl>
+      </section>
+      {(r.devices?.length ?? 0) > 0 && (
+        <section class="rd-sec">
+          <h3 class="rd-h">{t("rdDevices")}</h3>
+          <ul class="rd-devs">
+            {r.devices!.map((x) => (
+              <li key={x.id} class={`dev-${x.state}`}><span class="mono">{x.id}</span><span>{t(`dev_${x.state}` as Key)}</span></li>
+            ))}
+          </ul>
+        </section>
+      )}
+      <section class="rd-sec">
+        <h3 class="rd-h">{t("rdBasics")}</h3>
         <dl class="rd-facts">
           {fact("robotId", r.robot_id, true)}
           {fact("colVersion", `${r.agent ?? "—"} · ${t(compat)}`)}
+          {r.map && <div><dt>{t("rdMap")}</dt><dd><span class="mono">{r.map.id} v{r.map.version ?? "?"}</span>
+            {r.map.match === false && <small class="rd-bad"> {t("rdMapBad")}</small>}
+            {r.map.match === true && <small class="muted"> {t("rdMapOk")}</small>}</dd></div>}
           {fact("certExpires", r.expires_at ? day(r.expires_at) : "—", true)}
-          {fact("dispatchMode", r.manual_only ? t("manualOnly") : t("autoDispatch"))}
-          {r.wifi && fact("wifiLabel", `${r.wifi.ssid || "—"} · ${t(`link_${r.wifi.link}` as Key)}`)}
+          {r.enrolled_at != null && fact("rdEnrolled", day(r.enrolled_at), true)}
+          <div><dt>{t("dispatchMode")}</dt><dd>{r.manual_only ? t("manualOnly") : t("autoDispatch")}
+            {r.manual_only && r.manual_note && <small class="muted"> · {r.manual_note}</small>}</dd></div>
         </dl>
-        {devices.length > 0 && <p class="note small">{devices.map(problemText).join(" · ")}</p>}
       </section>
       {!readOnly && r.wifi?.change && <section class="rd-sec"><WifiChange id={r.robot_id} ch={r.wifi.change} act={act} /></section>}
       {!readOnly && (
         <section class="rd-sec">
+          <h3 class="rd-h">{t("rdManage")}</h3>
           <form class="rd-name" onSubmit={(e) => { e.preventDefault(); void act(() => api("POST", `/api/admin/robots/${enc(r.robot_id)}/name`, { name }), t("saved")); }}>
             <label class="rd-label" for={`rd-name-${r.robot_id}`}>{t("robotName")}</label>
             <div class="rd-inline">

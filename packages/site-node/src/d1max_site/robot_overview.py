@@ -19,6 +19,7 @@ from d1max_site.sitetime import local_day_start
 PROBLEM_AUDIENCES = ("help", "offline")
 RECENT_DAYS = 30
 RECENT_MAX = 50
+WEEK_MS = 7 * 86_400_000
 
 
 def overview(dispatcher: Any, db: Any, *, now_ms: int, tz: tzinfo) -> list[dict[str, Any]]:
@@ -35,6 +36,7 @@ def overview(dispatcher: Any, db: Any, *, now_ms: int, tz: tzinfo) -> list[dict[
         [n] = db.query("SELECT COUNT(*) AS n FROM commands WHERE robot_id=? AND kind='patrol' "
                        "AND issued_at>=? AND (ack_result IS NULL OR ack_result NOT IN "
                        "('rejected', 'expired', 'timeout'))", (rid, day0))
+        week = _week(db, rid, now_ms)
         rows = db.query("SELECT key, kind, level, title, first_ms, resolved_ms, resolved_by "
                         "FROM alerts WHERE robot=? AND "
                         "(resolved_ms IS NULL OR first_ms>=?) ORDER BY first_ms DESC LIMIT 1000",
@@ -64,5 +66,50 @@ def overview(dispatcher: Any, db: Any, *, now_ms: int, tz: tzinfo) -> list[dict[
                     "agent": getattr(caps, "agent", None),
                     "compat": _robot(rid, c)["verdict"] if c is not None else "unknown",
                     # W42:连的哪个 WiFi、走哪条线、有没有等确认的 WiFi 改动(老机器人是 None)
-                    "wifi": wifi_view(getattr(getattr(c, "telemetry", None), "net", None))})
+                    "wifi": wifi_view(getattr(getattr(c, "telemetry", None), "net", None)),
+                    # W72(用户 11-03):详情面板要的 —— 近 7 天、上次联系、存储、地图、设备、登记
+                    **week,
+                    "last_seen_ms": getattr(c, "status_live_at", None) if c is not None else None,
+                    "storage": _storage(c), "map": _map(dispatcher, c),
+                    "devices": [{"id": x.get("id"), "state": x.get("state")}
+                                for x in (dv or {}).get("items", [])] if dv and not dv.get("stale")
+                    else [],
+                    "enrolled_at": reg.enrolled_at(rid), "held": _held(dispatcher, rid),
+                    "manual_note": (reg.manual_only(rid) or {}).get("note", "")})
     return out
+
+
+def _week(db: Any, rid: str, now_ms: int) -> dict[str, Any]:
+    """近 7 天巡了几趟(派出去、狗接了的)、中止几次、最近一趟什么时候派的。"""
+    since = now_ms - WEEK_MS
+    [p] = db.query("SELECT COUNT(*) AS n, MAX(issued_at) AS last FROM commands "
+                   "WHERE robot_id=? AND kind='patrol' AND issued_at>=? AND (ack_result IS NULL "
+                   "OR ack_result NOT IN ('rejected', 'expired', 'timeout'))", (rid, since))
+    [a] = db.query("SELECT COUNT(*) AS n FROM alerts WHERE robot=? AND kind='run_abort' "
+                   "AND first_ms>=?", (rid, since))
+    return {"patrols_7d": p["n"], "aborts_7d": a["n"], "last_patrol_ms": p["last"]}
+
+
+def _held(dispatcher: Any, rid: str) -> dict[str, Any] | None:
+    """被叫停了、还没人点恢复:谁、什么时候(详情里给「恢复」按钮)。"""
+    fn = getattr(dispatcher, "held", None)
+    h = fn(rid) if fn is not None else None
+    return {"by": h["by"], "at_ms": h["at_ms"]} if h else None
+
+
+def _storage(c: Any) -> dict[str, Any] | None:
+    st = getattr(getattr(c, "telemetry", None), "storage", None)
+    if st is None:
+        return None
+    return {"used_ratio": st.disk_used_ratio, "backlog_files": st.backlog_files,
+            "oldest_backlog_s": st.oldest_backlog_s}
+
+
+def _map(dispatcher: Any, c: Any) -> dict[str, Any] | None:
+    """狗正在用哪张图、跟站点登记的那一版对不对得上(``match`` None = 查不了)。"""
+    view = getattr(dispatcher, "running_view", None)
+    rv = view(c) if view is not None and c is not None else None
+    if not rv or rv.get("legacy") or not rv.get("map_id"):
+        return None
+    return {"id": rv["map_id"], "version": rv.get("map_version"),
+            "match": (rv.get("map") or {}).get("match")}
