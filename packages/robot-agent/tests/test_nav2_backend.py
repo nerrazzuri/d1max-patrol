@@ -1098,13 +1098,17 @@ async def test_W71_沿着台阶边打滑走不动_机身歪着_退一点转大�
     _卡在台阶边(t, roll=math.radians(-4.8))
     await t.nav.goto(Pose.from_xy_yaw(9.0, 4.0, 0.0))
     first = link.kinds("goal")[-1]
-    yaws = []
+    yaws, track = [], []
     for _ in range(250):
         link.now += 0.1
         gid = link.kinds("goal")[-1]["goal_id"]
         link.cmd = (link.now, gid, 0.4, 0.0, 0.0)
         await t.一拍()
         yaws.append(t.r.yaw)
+        track.append((t.r.x, t.r.yaw))
+    turned = next(i for i, (_, y) in enumerate(track) if y > EDGE_TURN_RAD * 0.8)
+    backed = next(i for i, (x, _) in enumerate(track) if x < 1.4)
+    assert turned < backed, "用户:「困着的时候应该先转角度 再后退」"
     assert link.kinds("cancel") and link.kinds("cancel")[0]["goal_id"] == first["goal_id"]
     assert max(yaws) > EDGE_TURN_RAD * 0.8, "左边低(roll < 0):往左转大角度"
     goals = link.kinds("goal")

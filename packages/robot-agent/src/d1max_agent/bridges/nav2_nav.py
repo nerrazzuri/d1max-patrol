@@ -124,9 +124,9 @@ NAV2_STALL_S = 20.0
 NAV2_RESENDS = 2
 #: W71 台阶脱困(11-03 商场 P2→P3,用户:「轮胎和阶梯角度不够大,轮胎一直卡在阶梯边缘出不来…要把角度
 #: 调大才能出来」):Nav2 一直让往前、:data:`EDGE_STALL_S` 秒没走出 :data:`EDGE_PROGRESS_M`、
-#: 机身横滚超过 :data:`EDGE_ROLL_RAD`(一边的腿在台阶下面) —— 先退 :data:`EDGE_BACK_M`,往目标那边
-#: (目标就在正前方时往低的那边)转 :data:`EDGE_TURN_RAD`,斜着往前 :data:`EDGE_FWD_M`,
-#: 再把目标交回 Nav2。每一步守卫、
+#: 机身横滚超过 :data:`EDGE_ROLL_RAD`(一边的腿在台阶下面) —— 先往目标那边(目标就在正前方时往低的
+#: 那边)转 :data:`EDGE_TURN_RAD`,再退 :data:`EDGE_BACK_M`(用户:「困着的时候应该先转角度 再后退」),
+#: 斜着往前 :data:`EDGE_FWD_M`,再把目标交回 Nav2。每一步守卫、
 #: 地图墙照样管,被挡就跳过这一步。一个目标最多 :data:`EDGE_TRIES` 次。
 EDGE_STALL_S = 4.0
 EDGE_PROGRESS_M = 0.05
@@ -604,16 +604,16 @@ class Nav2NavBackend(PlannedNavBackend):
         self._edge_tries = getattr(self, "_edge_tries", 0) + 1
         self._fwd_ref = None
         log.warning("Nav2 让往前、%.0f 秒没走出 %.0f cm,机身横滚 %.1f°:多半是贴着台阶边打滑 —— "
-                    "退 %.2f m、往%s转 %.0f°、斜着上(第 %d 次)", now - ref[1],
-                    EDGE_PROGRESS_M * 100, math.degrees(imu.roll), EDGE_BACK_M,
-                    "左" if side > 0 else "右", math.degrees(EDGE_TURN_RAD), self._edge_tries)
+                    "往%s转 %.0f°、退 %.2f m、斜着上(第 %d 次)", now - ref[1],
+                    EDGE_PROGRESS_M * 100, math.degrees(imu.roll), "左" if side > 0 else "右",
+                    math.degrees(EDGE_TURN_RAD), EDGE_BACK_M, self._edge_tries)
         self._cancel_nav2()
-        self._edge = {"phase": "back", "from": (here.x, here.y), "t": now,
+        self._edge = {"phase": "turn", "from": (here.x, here.y), "t": now,
                       "yaw": here.yaw + side * EDGE_TURN_RAD}
         return True
 
     async def _edge_step(self, here: Any, dt_s: float) -> None:
-        """台阶脱困的一拍:退 → 转 → 斜着往前 → 交回 Nav2。"""
+        """台阶脱困的一拍:转 → 退 → 斜着往前 → 交回 Nav2。"""
         e, now = self._edge, self._secs()
         moved = math.dist(e["from"], (here.x, here.y))
         if e["phase"] in ("back", "fwd"):
@@ -629,7 +629,7 @@ class Nav2NavBackend(PlannedNavBackend):
                 return
             await self._send(0.0, 0.0, dt_s)
             if e["phase"] == "back":
-                self._edge = {**e, "phase": "turn", "t": now}
+                self._edge = {**e, "phase": "fwd", "t": now, "from": (here.x, here.y)}
             else:
                 self._edge = None
                 self._resend_goal()
@@ -644,7 +644,7 @@ class Nav2NavBackend(PlannedNavBackend):
             await self._send(0.0, wz, dt_s)
             return
         await self._send(0.0, 0.0, dt_s)
-        self._edge = {**e, "phase": "fwd", "t": now, "from": (here.x, here.y)}
+        self._edge = {**e, "phase": "back", "t": now, "from": (here.x, here.y)}
 
     def _resend_goal(self) -> None:
         """把这次 goto 的目标重新交给 Nav2(新目标号)。"""
