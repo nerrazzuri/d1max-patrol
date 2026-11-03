@@ -62,6 +62,8 @@ class ArmingSchedule:
         self.db = db
         self._now = now_ms
         self._tz = tz
+        #: W73 第三期:改时间表 / 加全天布防的例外前查跟巡逻排程撞没撞(``guard_clash.ClashCheck``)。
+        self.clash: Any = None
 
     # ------------------------------------------------------------ 读
 
@@ -210,6 +212,13 @@ class ArmingSchedule:
                 where = a[0] or "全部防区"
                 raise ScheduleError(f"{where} 星期{'一二三四五六日'[a[1]]}的两段重叠了:"
                                     f"{_hhmm(a[2])}–{_hhmm(a[3])} 和 {_hhmm(b[2])}–{_hhmm(b[3])}")
+        if self.clash is not None:                       # W73 第三期:跟巡逻排程撞了不让存
+            got = self.clash.new(arming={
+                "enabled": enabled, "exceptions": self.exceptions(),
+                "slots": [{"zone": z, "day": dd, "start": _hhmm(a), "end": _hhmm(b)}
+                          for z, dd, a, b in rows]})
+            if got:
+                raise ScheduleError("跟巡逻排程撞了:" + ";".join(got))
         # 开没开存在站点设置里(那张表的 SQL 只在 site_settings.py,数据访问层边界),跟时间段同一个事务
         from d1max_site.site_settings import SiteSettings
         with self.db.tx() as c:
@@ -231,6 +240,13 @@ class ArmingSchedule:
         if state not in STATES:
             raise ScheduleError("例外要么全天布防(armed)、要么全天撤防(disarmed)")
         note = str(d.get("note") or "")[:200]
+        if self.clash is not None and state == "armed":
+            v = self.view()
+            got = self.clash.new(arming={**v, "exceptions": [
+                *v["exceptions"], {"first_day": first.isoformat(), "last_day": last.isoformat(),
+                                   "state": state}]})
+            if got:
+                raise ScheduleError("跟巡逻排程撞了:" + ";".join(got))
         with self.db.tx() as c:
             if c.execute("SELECT COUNT(*) FROM arming_exceptions").fetchone()[0] >= MAX_EXCEPTIONS:
                 raise ScheduleError(f"例外最多 {MAX_EXCEPTIONS} 条,先删掉过去的")

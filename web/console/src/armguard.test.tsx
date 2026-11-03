@@ -63,6 +63,13 @@ describe("值守方案面板", () => {
     expect(c.textContent).toContain("约每 9:35 看一次");
     expect(c.textContent).toContain("超过 15 分钟没看报警");
     expect(c.textContent).toContain("中区 布防了但没有机器人去看");
+    expect(c.querySelector(".guard-clash")).toBeNull();
+  });
+
+  it("现在就撞着的巡逻排程列出来", async () => {
+    plan = { ...plan, clashes: ["A 在周一 21:55–22:03有巡逻(排程 s1),跟周一 22:00 开始的布防值守(防区路线 night-guard)撞了"] };
+    const { container: c } = panel();
+    await waitFor(() => expect(c.querySelector(".guard-clash")?.textContent).toContain("排程 s1"));
   });
 
   it("改每圈间隔、加一条、设超时线 → 保存带 base_revision", async () => {

@@ -1076,8 +1076,16 @@ class Server:
         self.sightings.watching = self.guard.watching
         _hold = self.standby.hold
         self.standby.hold = lambda rid, tid: _hold(rid, tid) or self.guard.holds(rid, tid)
-        _busy = self.scheduler.site_busy
-        self.scheduler.site_busy = lambda: set(_busy() if _busy else ()) | self.guard.robots()
+        self.scheduler.guard_busy = self.guard.robots
+        # W73 第三期:巡逻排程、布防时间表、值守方案保存时互相查撞没撞(按机器人、对称拦)
+        from d1max_site.guard_clash import ClashCheck
+        self.clash = ClashCheck(self.db, schedule=self.arming.schedule, guard=self.guard,
+                                routes=self.api.routes, now_ms=wall_ms)
+        self.guard.clash = self.clash
+        if self.arming.schedule is not None:
+            self.arming.schedule.clash = self.clash
+        if self.api.routes is not None:
+            self.api.routes.clash = self.clash
         self.api.weather = self.weather
         self.api.adhoc = self.adhoc
         from d1max_site.push import PushDesk, load_senders
