@@ -272,6 +272,7 @@ def test_狗的钟差_按一段遥测估_超过2秒报一次_回到1秒以内再
     assert _kinds(desk) == ["clock_skew"] and "3" in desk.book.all()[0].detail
     for _ in range(40):                                  # 对上了(窗口滑过去)
         src.on_telemetry("A", tele(0.1))
+    assert _open(desk, "A") == [], "W70:钟对回来了,那条自己解决"
     for _ in range(10):
         src.on_telemetry("B", tele(-3.0))                # 狗慢 3 s 也报(狗慢的方向要攒够 10 条)
     assert sorted(a.robot for a in desk.book.all()) == ["A", "B"]

@@ -142,6 +142,8 @@ class GuardAction(str, Enum):
     OK = "ok"
     #: 有在途的升级,数了一次,让它起。
     COUNTED = "counted"
+    #: 有在途的升级,上一次是连不上站点才退出的(W70):外面的事,不数,接着让新版起。
+    WAITING_NET = "waiting_net"
     #: 数够了还没等到「自检过了」,已经指回上一版。
     ROLLED_BACK = "rolled_back"
     #: 链丢了或者断了,已经按盘上最新的一版修好。
@@ -261,8 +263,16 @@ def verify_package(where: Path | str) -> ReleaseManifest:
                            f"目录名却是 {where.name}")
     got = tree_sha256(where)
     if got != manifest.content_sha256:
+        # W70(11-03 现场:在包目录里跑过一次 python,多出 __pycache__,只报「哈希不匹配」没说是谁):
+        # 打包时不收的那些文件多出来了就点名。**不跳过它们算** —— .pyc 会被 Python 直接载入。
+        extra = sorted(p.relative_to(where).as_posix() for p in where.rglob("*")
+                       if p.is_file() and not _packed(p.relative_to(where).as_posix()))
+        hint = ""
+        if extra:
+            hint = (f";包里多了打包时不会有的 {len(extra)} 个文件(删掉再装):"
+                    + "、".join(extra[:5]) + (" 等" if len(extra) > 5 else ""))
         raise ReleaseError(f"包的哈希不匹配: 自述写 {manifest.content_sha256},"
-                           f"算出来是 {got}")
+                           f"算出来是 {got}{hint}")
     return manifest
 
 
@@ -547,10 +557,13 @@ class Pending:
     #: **必须在这儿记下来**:自检那会儿唯一能问的是"现在是谁",没有别的地方
     #: 存着"升级前是谁"。空串 = 没记(命令行装机可以不记),这一项就自动通过。
     sn: str = ""
+    #: 因为连不上站点退出、守卫没数的次数(W70)。到 :data:`MAX_NET_WAITS` 就照常数。
+    net_waits: int = 0
 
     def to_wire(self) -> dict[str, Any]:
         return {"to": self.to, "from": self.src, "attempts": self.attempts,
-                "at_ms": self.at_ms, "auto": self.auto, "sn": self.sn}
+                "at_ms": self.at_ms, "auto": self.auto, "sn": self.sn,
+                "net_waits": self.net_waits}
 
     @classmethod
     def from_wire(cls, raw: dict[str, Any]) -> Pending:
@@ -558,7 +571,8 @@ class Pending:
                    attempts=int(raw.get("attempts", 0)),
                    at_ms=int(raw.get("at_ms", 0)),
                    auto=bool(raw.get("auto", False)),
-                   sn=str(raw.get("sn", "")))
+                   sn=str(raw.get("sn", "")),
+                   net_waits=int(raw.get("net_waits", 0)))
 
 
 def read_pending(layout: Layout) -> Pending | None:
@@ -589,6 +603,34 @@ def write_pending(layout: Layout, pending: Pending) -> None:
         fh.flush()
         os.fsync(fh.fileno())
     os.replace(tmp, layout.pending)
+
+
+#: 代理因为首次连不上站点而退出时留的条子(W70):守卫下一次跑时看见就不数这一次,读完就删。
+CONNECT_FAIL_FILE = "exit_connect_failed.json"
+#: 连不上站点最多这么多次不数(代理每次先在进程里等 2 分钟,合计约一小时);再多就照常数 ——
+#: 新版自己把连接弄坏了(证书路径改错)也是「连不上」,不能永远等下去。
+MAX_NET_WAITS = 30
+
+
+def note_connect_failure(layout: Layout, *, now_ms: int) -> None:
+    """代理首次连站点等够了还连不上、要退出了:留条子给守卫(W70)。写不了就算了。"""
+    try:
+        tmp = layout.root / (CONNECT_FAIL_FILE + ".tmp")
+        tmp.write_text(json.dumps({"at_ms": now_ms}), encoding="utf-8")
+        os.replace(tmp, layout.root / CONNECT_FAIL_FILE)
+    except OSError:
+        pass
+
+
+def _take_connect_failure(layout: Layout) -> bool:
+    path = layout.root / CONNECT_FAIL_FILE
+    if not path.exists():
+        return False
+    try:
+        path.unlink()
+    except OSError:
+        pass
+    return True
 
 
 #: 开机守卫退回上一版时留的条子(W00c5d 第三部分):代理起来报给站点、删掉。
@@ -925,6 +967,7 @@ def _boot_guard(layout: Layout, *, now_ms: int) -> GuardAction:
     """``boot_guard`` 的实际逻辑。可能抛 ``OSError``/``ReleaseError``,
     由 ``boot_guard`` 兜底。"""
     pending = read_pending(layout)
+    net_fail = _take_connect_failure(layout)      # 上一次怎么退出的:每趟都读掉,不留给下一趟
     if pending is None:
         if _healthy(layout):
             return GuardAction.OK
@@ -937,6 +980,12 @@ def _boot_guard(layout: Layout, *, now_ms: int) -> GuardAction:
         good = [n for n in names if agent_start_ok(layout, n)]
         _point_current(layout, (good or names)[-1])
         return GuardAction.REPAIRED
+
+    if net_fail and pending.attempts > 0 and pending.net_waits < MAX_NET_WAITS:
+        # W70(11-03 C40221):上一次起来了、只是连不上站点 —— 隧道断了、站点关着。退回上一版也一样
+        # 连不上,还会让网络好了之后一直停在旧版。不数这一次,接着让新版起。
+        write_pending(layout, replace(pending, net_waits=pending.net_waits + 1))
+        return GuardAction.WAITING_NET
 
     if pending.attempts >= MAX_BOOT_ATTEMPTS:
         if not pending.src:

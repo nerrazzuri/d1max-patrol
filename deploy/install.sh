@@ -851,6 +851,14 @@ for pair in D1MAX_LOCALIZER=bridge:d1max-localizer D1MAX_OBSTACLES=bridge:d1max-
   fi
 done
 
+# 前后雷达合并(W09i)只给 MOLA 用;W68 起定位器是 Super-LIO,没人订 /d1max/merged_lidar。以前手工
+# enable 过的,装机时关掉(W70,用户 11-03 现场:白占两核多)。env 里还有人订它就不动。
+if systemctl is-enabled --quiet d1max-lidar-merge.service 2>/dev/null \
+    && ! grep -qE '^[^#]*merged_lidar' /etc/d1max/env 2>/dev/null; then
+  systemctl disable --now d1max-lidar-merge.service || true
+  echo "  没人用前后雷达合并(定位器是 Super-LIO):d1max-lidar-merge 关了,不再开机自启"
+fi
+
 say "装完了。看一眼:"
 echo "  systemctl status d1max-agent"
 echo "  journalctl -u d1max-agent -f"

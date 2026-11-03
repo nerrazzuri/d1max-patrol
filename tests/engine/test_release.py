@@ -63,6 +63,16 @@ def test_包的哈希对不上就拒收(tmp_path):
         verify_package(where)
 
 
+def test_W70_包里多了pycache_照样拒收_但点出是哪些文件(tmp_path):
+    """11-03 现场:在包目录里跑过一次 python,多出 __pycache__,只报「哈希不匹配」。
+    照拒(.pyc 会被载入),但说清楚多了谁、删掉再装。"""
+    where = _pkg(tmp_path, "2026-09-20-77b2de")
+    (where / "bin/__pycache__").mkdir()
+    (where / "bin/__pycache__/run.cpython-310.pyc").write_bytes(b"x")
+    with pytest.raises(ReleaseError, match=r"哈希不匹配.*bin/__pycache__/run.cpython-310.pyc"):
+        verify_package(where)
+
+
 def test_包里少了release_json就拒收(tmp_path):
     where = tmp_path / "光秃秃"
     where.mkdir()

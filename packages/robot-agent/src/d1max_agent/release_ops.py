@@ -359,6 +359,10 @@ class ReleaseOps:
         rel.commit(self.layout)
         return p.to
 
+    def note_connect_failure(self) -> None:
+        """首次连站点等够了还连不上、要退出了:告诉守卫这次不算新版坏(W70)。"""
+        rel.note_connect_failure(self.layout, now_ms=self._now())
+
     def take_guard_note(self) -> dict | None:
         """开机守卫上次退回了上一版的话,它留的条子(读一次就删)。"""
         return rel.take_guard_note(self.layout)

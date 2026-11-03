@@ -87,6 +87,9 @@ PRIOR_ACK_WAIT_S = 120.0
 PRIOR_ACK_POLL_S = 0.2
 #: 换图等定位器确认时,定位器一直连不上这么久就不再等(W70:没在运行,白等 120 s)。
 LOC_DOWN_WAIT_S = 15.0
+#: 起来时首次连站点:连不上每这么久再试,最多等这么久(秒)才退出(W70)。
+FIRST_CONNECT_RETRY_S = 5.0
+FIRST_CONNECT_WAIT_S = 120.0
 
 
 def _parse_home(v: Any) -> tuple[float, float, float] | None:
@@ -2310,6 +2313,30 @@ class AgentRuntime:
 
     # ------------------------------------------------------------ 生命周期
 
+    async def _first_connect(self) -> None:
+        """首次连站点。连不上不马上退出(W70,2026-11-03 C40221:装完新版那一刻隧道断着,退出 → systemd
+        5 s 后再起 → 开机守卫 8 s 内数满 2 次,把好好的新版退回上一版):在进程里每
+        :data:`FIRST_CONNECT_RETRY_S` 秒再试,等够 :data:`FIRST_CONNECT_WAIT_S` 还连不上才照旧退出、
+        让守卫数。"""
+        deadline = time.monotonic() + FIRST_CONNECT_WAIT_S
+        while True:
+            try:
+                await self.transport.connect()
+                return
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                if time.monotonic() >= deadline:
+                    if self.releases is not None:
+                        try:
+                            self.releases.note_connect_failure()   # 守卫:这次不算新版坏
+                        except Exception:
+                            log.exception("给守卫留「连不上站点」的条子没留成")
+                    raise
+                log.warning("连不上站点(%s):%g 秒后再试(首次连接最多等 %g 秒)", exc,
+                            FIRST_CONNECT_RETRY_S, FIRST_CONNECT_WAIT_S)
+                await asyncio.sleep(FIRST_CONNECT_RETRY_S)
+
     async def start(self) -> None:
         """起不来就回滚:``close()`` 把已经拿到的控制权放掉、链路关掉,再把异常抛给调用方。"""
         try:
@@ -2413,7 +2440,7 @@ class AgentRuntime:
             await self._nav2_srv.start()         # Nav2 转接节点(W47)
         if self._pers_srv is not None:
             await self._pers_srv.start()         # 人员检测节点(W24)
-        await self.transport.connect()          # 首次连接:after_connect 会走 _flush_reconnect
+        await self._first_connect()             # 首次连接:after_connect 会走 _flush_reconnect
         await self._publish_caps()
         if self.releases is not None:
             # 起来、连上站点了:在途的那一次升级算成(W00c5d 第三部分)。起不来的那种,
