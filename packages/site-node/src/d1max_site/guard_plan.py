@@ -69,31 +69,51 @@ def _face(x: float, y: float, poly: list[list[float]]) -> float:
 
 
 class _Ground:
-    """一张图一版上「机器人站得下、走得到」的格子(连通区域)。"""
+    """一张图一版上「机器人站得下、走得到」的格子(连通区域)。
+
+    有待命点 / 起点:从它们连得到的那几片。没有(演示站点商场图实测 11-04):取最大的一片 ——
+    不然点会放进门关着的铺面里,点和点之间走不通。连通跟规划 astar 一样算:斜着走两边都得能走。"""
 
     def __init__(self, cm: Any, starts: list[tuple[float, float]]) -> None:
         import numpy as np
         self.cm = cm
         free = ~cm.lethal & ~cm.hard
         self.free = free
-        if not starts:
-            self.ok = free                       # 没有待命点 / 原点:只要站得下
-            self.no_starts = True
-            return
-        self.no_starts = False
-        from d1max_site.intercept_reach import snap
         h, w = free.shape
-        seen = np.zeros((h, w), dtype=bool)
-        q: deque[tuple[int, int]] = deque()
-        for x, y in starts:
-            s = snap(cm, cm.cell_of(x, y))
-            if s is not None and not seen[s]:
-                seen[s] = True
-                q.append(s)
-        flat = free.tobytes()                    # 逐格访问 bytes 比 numpy 下标快得多
-        mark = bytearray(seen.tobytes())
+        self._h, self._w = h, w
+        self._flat = free.tobytes()              # 逐格访问 bytes 比 numpy 下标快得多
+        self.no_starts = not starts
+        mark = bytearray(h * w)
+        if starts:
+            from d1max_site.intercept_reach import snap
+            seeds = []
+            for x, y in starts:
+                sc = snap(cm, cm.cell_of(x, y))
+                if sc is not None:
+                    seeds.append(sc[0] * w + sc[1])
+            self._fill(seeds, mark, 1)
+        else:
+            best, best_n, label = 0, 0, 1
+            for i in range(h * w):
+                if self._flat[i] and not mark[i]:
+                    label += 1
+                    n = self._fill([i], mark, label)
+                    if n > best_n:
+                        best, best_n = label, n
+            mark = bytearray(1 if m == best and best else 0 for m in mark)
+        self.ok = np.frombuffer(bytes(mark), dtype=bool).reshape(h, w)
+
+    def _fill(self, seeds: list[int], mark: bytearray, label: int) -> int:
+        """从 ``seeds`` 往外涂 ``label``,回涂了几格。"""
+        h, w, flat = self._h, self._w, self._flat
+        q: deque[int] = deque()
+        for i in seeds:
+            if flat[i] and not mark[i]:
+                mark[i] = label
+                q.append(i)
+        n = len(q)
         while q:
-            r, c = q.popleft()
+            r, c = divmod(q.popleft(), w)
             for dr in (-1, 0, 1):
                 rr = r + dr
                 if rr < 0 or rr >= h:
@@ -104,10 +124,15 @@ class _Ground:
                     if cc < 0 or cc >= w:
                         continue
                     i = base + cc
-                    if flat[i] and not mark[i]:
-                        mark[i] = 1
-                        q.append((rr, cc))
-        self.ok = np.frombuffer(bytes(mark), dtype=bool).reshape(h, w)
+                    if not flat[i] or mark[i]:
+                        continue
+                    # 斜着走两边都得能走(跟规划 astar 一样不切墙角),不然生成的点之间又说走不通
+                    if dr and dc and not (flat[base + c] and flat[r * w + cc]):
+                        continue
+                    mark[i] = label
+                    n += 1
+                    q.append(i)
+        return n
 
 
 class ZonePosts:
@@ -159,7 +184,8 @@ class ZonePosts:
         if not g.free[rc]:
             return "这个点在墙、障碍、禁行区里,或离它们太近(机器人站不下)"
         if not g.ok[rc]:
-            return "这个点从待命点、原点走不到"
+            return ("这个点不在地图上最大的那片可走区域里(还没设待命点)" if g.no_starts
+                    else "这个点从待命点、原点走不到")
         return ""
 
     def pick(self, map_id: str, version: str, poly: list[list[float]],
@@ -183,6 +209,9 @@ class ZonePosts:
             if not (costmap.polygon_mask(tuple((p[0], p[1]) for p in poly), cm.shape,
                                          float(cm.res), cm.origin) & g.free).any():
                 return None, "防区里没有机器人站得下的地方"
+            if g.no_starts:
+                return None, ("防区跟地图上最大的那片可走区域不连着(还没设待命点):"
+                              "设一个待命点,或者把防区圈到连得上的地方")
             return None, "防区里站得下的地方从待命点、原点都走不到"
         res = float(cm.res)
         xs = cm.origin[0] + (cc + 0.5) * res
@@ -388,13 +417,15 @@ def generate(maps: Any, reach: Any, areas: Any, posts: ZonePosts, map_id: str, v
         s = todo.pop(k)
         seq = _order(found[s["zone"]], here)
         ordered.append((s, seq))
-        here = seq[-1]
+        here = seq[-1] if s["laps"] % 2 == 1 else seq[0]       # 双数圈最后回到第一个点
 
     waypoints: list[dict[str, Any]] = []
     for s, seq in ordered:
         poly = polys[s["zone"]]
         for lap in range(1, s["laps"] + 1):
             pts = seq if lap % 2 == 1 else seq[::-1]
+            if lap > 1 and len(pts) > 1:
+                pts = pts[1:]                    # 掉头的那个点刚到过,不连着再去一遍
             for i, (x, y) in enumerate(pts):
                 n = seq.index((x, y)) + 1
                 acts: list[dict[str, Any]] = []
