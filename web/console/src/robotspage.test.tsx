@@ -185,3 +185,12 @@ describe("机器人页", () => {
     expect(Array.from(d.querySelectorAll("button")).map((b) => b.textContent?.trim())).toEqual(["关闭"]);
   });
 });
+
+describe("W71 Nav2 没起来", () => {
+  it("卡片提示条写 Nav2 不可用和原因", async () => {
+    robots = [card({ problems: [{ nav2: "Nav2 转接节点未连接" }] })];
+    const { container: c } = page();
+    await waitFor(() => expect(cardOf(c, "A")?.querySelector(".fleet-warn")).toBeTruthy());
+    expect(cardOf(c, "A").querySelector(".fleet-warn")!.textContent).toContain("Nav2 不可用(退回自带规划):Nav2 转接节点未连接");
+  });
+});

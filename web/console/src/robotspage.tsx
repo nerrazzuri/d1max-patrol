@@ -18,7 +18,8 @@ import { locText, StateText, type UnitInfo } from "./live";
 type Say = (s: string) => void;
 export interface RobotCard {
   robot_id: string; name: string; revoked: boolean; expires_at: number; online: boolean; battery_pct: number | null; patrols_today: number;
-  problems: ({ key: string; kind: string; first_ms: number } | { device: string; state: string })[];
+  /** W71 ``nav2``:Nav2 没起来(机器人退回自带规划)。 */
+  problems: ({ key: string; kind: string; first_ms: number } | { device: string; state: string } | { nav2: string })[];
   recent_problems: { key: string; kind: string; first_ms: number; resolved_ms: number | null }[];
   agent: string | null; compat: string; manual_only: boolean;
   wifi?: Wifi | null;
@@ -45,6 +46,7 @@ function day(ms: number): string {
 const label = (r: RobotCard) => r.name || r.robot_id;
 
 function problemText(p: RobotCard["problems"][number]): string {
+  if ("nav2" in p) return t("robotNav2Down", { why: p.nav2 });
   return "kind" in p ? alertTitle(lang.value, p.kind, p.kind) : t("robotDeviceBad", { d: p.device });
 }
 

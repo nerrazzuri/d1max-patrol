@@ -204,3 +204,14 @@ def test_W60_经理看得到机器人概况_只看(站点):
     assert s.req("GET", "/api/robots/overview", token=_登(s, "mona"))[0] == 200
     assert s.req("GET", "/api/robots/overview", token=_登(s, "vic"))[0] == 403
     assert s.req("POST", "/api/admin/robots/A/name", {"name": "x"}, token=_登(s, "mona"))[0] == 403
+
+
+def test_W71_概览_Nav2没起来算毛病_就绪不算_离线不算(台):
+    d, db = 台
+    d.clients["A"].capabilities.tasks["nav2"] = {"ready": False, "reason": "Nav2 转接节点未连接"}
+    assert {"nav2": "Nav2 转接节点未连接"} in _one(d, db)["problems"]
+    d.fresh.discard("A")
+    assert _one(d, db)["problems"] == [], "离线了说离线就够,不再说 Nav2"
+    d.fresh.add("A")
+    d.clients["A"].capabilities.tasks["nav2"] = {"ready": True}
+    assert _one(d, db)["problems"] == []
