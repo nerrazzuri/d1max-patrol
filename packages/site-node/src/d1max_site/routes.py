@@ -298,6 +298,8 @@ class RouteStore:
         m = self._validate_route(route_id, body)
         definition = _json(m.to_wire())
         now = self._now()
+        clash = getattr(self, "clash", None)            # 外审 r1 #11:改路线也会跟布防值守撞
+        before = clash.snapshot() if clash is not None else []
         with self.db.tx() as tx:
             row = tx.execute("SELECT revision, kind FROM routes WHERE route_id=?",
                              (route_id,)).fetchone()
@@ -329,6 +331,10 @@ class RouteStore:
                            "kind=? WHERE route_id=?",
                            (m.map_id, m.map_version, definition, now, by, kind, route_id))
             self._touch(tx, by, now)
+            if clash is not None:                        # 同一个事务里查:撞了就整个回滚
+                got = clash.since(before, routes=[route_id])
+                if got:
+                    raise RouteError("改了以后跟布防值守撞了:" + ";".join(got))
         return self.get(route_id)
 
     def delete_route(self, route_id: str, *, base_revision: Any, by: str) -> None:

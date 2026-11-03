@@ -2273,7 +2273,8 @@ class _Handler(TlsHandlerMixin):
             raise HttpError(400, "要 path(站点主机上任务包目录的路径)")
         try:
             got = import_bundle(self.site.dispatcher.db, Path(path), imported_by=user,
-                                now_ms=self.site._now())
+                                now_ms=self.site._now(),
+                                clash=getattr(self.site.routes, "clash", None))
         except CatalogError as exc:
             raise HttpError(409, str(exc)) from exc
         self._audit_target = f"{got['bundle_id']} v{got['version']}"

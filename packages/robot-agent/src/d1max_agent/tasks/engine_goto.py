@@ -23,7 +23,7 @@ from d1max_agent.engine.machine import EngineBusy, RunState
 from d1max_agent.engine.mission import Action, Mission, MissionWaypoint, Policy
 from d1max_agent.events import EventBook
 from d1max_agent.tasks.base import Task
-from d1max_contract.charging import TRIP_ABORT_PCT
+from d1max_contract.charging import ALARM_FLOOR_PCT, ALARM_PRIORITY, TRIP_ABORT_PCT
 from d1max_contract.messages import MapPose, TaskState
 from d1max_patrol.protocol.nav_types import NavStatus, Pose
 
@@ -239,6 +239,8 @@ class EngineGotoTask(EngineMissionTask):
         self._last_reported_m: float | None = None
 
     def _mission(self) -> Mission:
+        # W73 外审 r1 #8:报警出动按停止线做底(出发线 = 停止线 + 全程 × 余量),跟站点派的时候对得上
+        alarm = not self.charge and getattr(self, "priority", 0) >= ALARM_PRIORITY
         return Mission(
             mission=self.task_id, map_id=self.target.map_id,
             waypoints=(MissionWaypoint(
@@ -248,7 +250,9 @@ class EngineGotoTask(EngineMissionTask):
             policy=Policy(photo_optional=True, charging_trip=self.charge,
                           on_battery_low="continue" if self.charge else "return_home",
                           # W28:别的狗在充时这台守到 20% 才去,中止线得在那下面
-                          **({"battery_abort_pct": TRIP_ABORT_PCT} if self.charge else {})))
+                          **({"battery_abort_pct": TRIP_ABORT_PCT} if self.charge else {}),
+                          **({"battery_return_pct": ALARM_FLOOR_PCT,
+                              "battery_abort_pct": ALARM_FLOOR_PCT} if alarm else {})))
 
     async def _progress(self) -> dict:
         # 按地图位姿算(W00c6e 内审:以前按原始里程,锚在 (10, 5) 时报 12 m、真距离 2 m)。

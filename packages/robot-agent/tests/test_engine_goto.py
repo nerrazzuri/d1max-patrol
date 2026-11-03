@@ -310,3 +310,25 @@ async def test_工单20_导航一派就拒_goal_blocked_任务记失败不记完
     await _跑(c, r, parts, t, 300)
     assert t.state is TaskState.FAILED, (t.state, t.detail)
     assert "goal_blocked" in t.detail.get("reason", ""), t.detail
+
+
+def test_W73外审_报警出动的goto_出发线回撤线按停止线做底_普通goto照旧():
+    """站点按「停止线 + 去回 × 1.5 + 看 5 分钟」派报警;狗上普通 goto 的底是 25%,不改会把它拒掉。"""
+    from types import SimpleNamespace
+
+    from d1max_agent.engine.homing import HomePoint
+    from d1max_agent.engine.preflight import departure_line_pct
+    from d1max_contract.charging import ALARM_PRIORITY
+
+    def 任务(priority, charge=False):
+        return EngineGotoTask(task_id="t", target=_target(3.0, 0.0), max_speed_mps=None,
+                              parts=SimpleNamespace(), events=SimpleNamespace(),
+                              now_ms=lambda: 0, priority=priority, charge=charge)._mission()
+
+    home = HomePoint(map_id="m", pose=Pose.from_xy_yaw(0.0, 0.0, 0.0), marked_at_ms=0)
+    alarm, plain = 任务(ALARM_PRIORITY), 任务(60)
+    assert (alarm.policy.battery_return_pct, alarm.policy.battery_abort_pct) == (15.0, 15.0)
+    assert plain.policy.battery_return_pct == 25.0
+    assert departure_line_pct(alarm, home) < 20.0 < departure_line_pct(plain, home), \
+        "近处报警 20% 能去;普通任务照旧不放"
+    assert 任务(ALARM_PRIORITY, charge=True).policy.charging_trip, "去桩那一趟不受影响"

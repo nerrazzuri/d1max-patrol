@@ -87,13 +87,18 @@ class DeviceBook:
                 log.warning("摄像头 %s 的查看点算不出来:%s(照老的防区映射派)", name, exc)
                 self._cams[name] = (key, None)
                 return None
-            got = (key, {"id": name, "zone": zone or r["zone"], "source": CCTV + name,
+            got = (key, {"id": name, "zone": zone, "source": CCTV + name,
                          "intercept": CAM + name,
                          "point": {"name": CAM + name, "map_id": r["map_id"],
                                    "map_version": r["map_version"], "x": vx, "y": vy,
                                    "yaw": round(face, 3), "reach": ""}})
             self._cams[name] = got
-        return got[1]
+        if got[1] is None:
+            return None
+        # 外审 r1 #10:防区按现在圈的算(圈改了、删了跟着变);查看点只跟摄像头位置、地图版本走
+        p = got[1]["point"]
+        zone = self._zone(p["map_id"], p["map_version"], p["x"], p["y"])
+        return {**got[1], "zone": zone or (r["zone"] or "")}
 
     def point(self, name: str) -> dict[str, Any] | None:
         """``cam:<名字>`` → 那台摄像头的查看点(拦截点的样子)。"""
@@ -102,10 +107,18 @@ class DeviceBook:
         d = self._camera(name[len(CAM):])
         return dict(d["point"]) if d is not None else None
 
-    @staticmethod
-    def _wire(r: Any) -> dict[str, Any]:
+    def _zone(self, map_id: str, ver: str, x: float, y: float) -> str | None:
+        """这一点现在落在哪个防区(``""`` = 不在任何防区);没接防区簿 → ``None``。"""
+        if self.areas is None:
+            return None
+        return self.areas.zone_at(map_id, ver, x, y) or ""
+
+    def _wire(self, r: Any) -> dict[str, Any]:
         d = dict(r)
         d["source"] = d["intercept"] = PREFIX + d["id"]
+        zone = self._zone(d["map_id"], d["map_version"], d["view_x"], d["view_y"])
+        if zone is not None:                             # 外审 r1 #10:按现在圈的防区判
+            d["zone"] = zone
         return d
 
     def put(self, dev_id: Any, d: Any, *, by: str) -> dict[str, Any]:
@@ -167,8 +180,7 @@ class DeviceBook:
         face = math.atan2(target[1] - vy, target[0] - vx) if (vx, vy) != target else yaw
         if kind != "camera" and (vx, vy) != (x, y):
             face = math.atan2(y - vy, x - vx)
-        zone = (self.areas.zone_at(map_id, ver, vx, vy) or "") if self.areas is not None else ""
-        return vx, vy, face, zone
+        return vx, vy, face, self._zone(map_id, ver, vx, vy) or ""
 
     def rotate(self, dev_id: str) -> str:
         if self.get(dev_id) is None:

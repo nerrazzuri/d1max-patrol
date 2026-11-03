@@ -49,9 +49,12 @@ def lap_line(lap_s: float, back_s: float = 0.0) -> float:
 
 
 def alarm_line(go_s: float, back_s: float | None = None, watch_s: float = WATCH_S) -> float:
-    """报警出动要的电:去、停着看、回来以后还在停止线以上(比布防放宽一档)。"""
+    """报警出动要的电:去、停着看、回来以后还在停止线以上(比布防放宽一档)。
+
+    外审 r1 #8:去、回那两段跟狗上出发线一样乘 :data:`RETURN_FACTOR`(狗上报警 ``goto`` 的出发线 =
+    停止线 + 全程 × 1.5,见 ``ALARM_PRIORITY``)—— 站点放行的,狗上也接。"""
     back = go_s if back_s is None else back_s
-    return STOP_PCT + drain_pct(go_s + watch_s + back)
+    return STOP_PCT + drain_pct(go_s + back) * RETURN_FACTOR + drain_pct(watch_s)
 
 
 def topup_target(remaining_s: float, lap_s: float) -> float:
