@@ -24,6 +24,8 @@
   事件账、拦截点、防区(W00c2c)
 - ``GET/POST /api/arming/schedule``、``POST /api/arming/exceptions``、``…/{id}/remove``:布防时间表
   (W44 第二期);``GET/POST /api/duty-settings``:交班时间、多久没巡过
+- ``GET/POST /api/guard/plan``、``GET /api/guard/status``、``GET /api/guard/duties[/{id}]``:
+  布防值守(W73 第二期):值守方案(带预报)、此刻谁在跑哪个防区、每个防区多久没看、值守记录
 - ``GET/POST /api/accounts``、``POST /api/accounts/<name>``、``POST /api/me/password``、
   ``GET /api/audit``:账号、角色、审计(W00c3)
 - ``GET  /api/schedule``:路线库的排程,每条下一轮何时、最近一次去向与结果(W00c2a)
@@ -95,6 +97,8 @@ _ACCOUNT_RM = re.compile(r"^/api/accounts/([A-Za-z0-9._-]{1,64})/remove$")
 #: 路线库:路线 ``/api/routes/<名>[/delete]``、排程 ``/api/route-schedules/<id>[/delete]``。
 _ADHOC = re.compile(r"^/api/adhoc/([^/]{1,32})/cancel$")
 _ROUTE = re.compile(r"^/api/routes/([^/]{1,64})(/delete|/eta)?$")
+#: W73 第二期:值守记录 ``/api/guard/duties/<id>``。
+_GUARD_DUTY = re.compile(r"^/api/guard/duties/(\d{1,9})$")
 _ROUTE_SCHED = re.compile(r"^/api/route-schedules(?:/([^/]{1,64})(/delete)?)?$")
 _AREAS = re.compile(r"^/api/maps/([^/]{1,64})/([^/]{1,32})/areas$")
 _HIST = re.compile(r"^/api/layout/history(?:/(\d{1,12})/restore)?$")
@@ -296,6 +300,8 @@ class SiteApi:
         self.authz: Any = None
         #: W73:防区的查看点、值守位(``guard_plan.ZonePosts``;第一次用时按防区、路线库的规划现建)。
         self._zone_posts: Any = None
+        #: W73 第二期:布防值守(``guard_duty.GuardDuty``,站点主程序接上)。
+        self.guard: Any = None
         #: W44:位置轨迹(录像页那一刻在哪、地图页多久没巡过;站点主程序接上)。
         self.pose_track: Any = None
         #: W44:按时刻从录像抓一帧(报警记录的抓拍);第一次用时按录像库现建。
@@ -719,6 +725,8 @@ class _Handler(TlsHandlerMixin):
                 return self._mode(method, path, user)
             if path in ("/api/arming/schedule", "/api/arming/exceptions") or _ARM_EX.match(path):
                 return self._arming_schedule(method, path, user)
+            if path.startswith("/api/guard/"):
+                return self._guard(method, path, user)
             if path == "/api/weather":
                 return self._weather(method, user)
             if method == "GET" and path == "/api/versions":
@@ -1815,6 +1823,44 @@ class _Handler(TlsHandlerMixin):
             raise HttpError(400, str(exc)) from exc
         desk._changed()
         return self._send_json(200, sch.view())
+
+    def _guard(self, method: str, path: str, user) -> None:
+        """布防值守(W73 第二期)。看(``view``):``GET /api/guard/plan``(方案 + 预报 + 提示)、
+        ``/api/guard/status``、``/api/guard/duties[/{id}]``;改方案 ``POST /api/guard/plan``
+        (``schedule``,跟布防时间表一样经理也能配)。"""
+        from d1max_site.guard_duty import PlanConflict, PlanError
+        g = self.site.guard
+        if g is None:
+            raise HttpError(404, "此站点未启用布防值守")
+        m = _GUARD_DUTY.match(path)
+        if path not in ("/api/guard/plan", "/api/guard/status", "/api/guard/duties") and not m:
+            raise HttpError(404, "没有这个接口")
+        if method == "GET":
+            self._need(user, VIEW)
+            if path == "/api/guard/plan":
+                plan = g.plan()
+                return self._send_json(200, {**plan, "forecast": g.forecast(plan)})
+            if path == "/api/guard/status":
+                return self._send_json(200, g.status())
+            if path == "/api/guard/duties":
+                return self._send_json(200, {"duties": g.duties()})
+            got = g.duty(int(m.group(1)))
+            if got is None:
+                raise HttpError(404, "没有这一段值守记录")
+            return self._send_json(200, got)
+        if method != "POST" or path != "/api/guard/plan":
+            raise HttpError(405, "只支持 GET" if path != "/api/guard/plan" else "只支持 GET/POST")
+        self._need(user, SCHEDULE)
+        d = self._body()
+        entries = d.get("entries") if isinstance(d, dict) else None
+        self._audit_detail = {"entries": len(entries) if isinstance(entries, list) else None}
+        try:
+            plan = g.put_plan(d, by=str(user))
+        except PlanConflict as exc:
+            raise HttpError(409, str(exc)) from exc
+        except PlanError as exc:
+            raise HttpError(400, str(exc)) from exc
+        return self._send_json(200, {**plan, "forecast": g.forecast(plan)})
 
     def _chargers(self, method: str, path: str, user) -> None:
         """充电桩(W13)。看:``view``(带每台狗这一轮回充走到哪一步);登记、改桩前对准点

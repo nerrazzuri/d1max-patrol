@@ -93,6 +93,9 @@ LEVEL_OF: dict[str, Level] = {
     "dock_stuck": Level.P1,
     # 别的狗在充、这台守到 20% 也去充了(W28,决策 46):这段时间它的区域没狗守。
     "charge_overlap": Level.P2,
+    # W73 布防值守:防区超时没看(状态类,看到了自动解决);值守路线连着几圈跑不成
+    "zone_unwatched": Level.P2,
+    "guard_stuck": Level.P2,
     # 布防中狗没在驱离时自己看见人(W33,决策 48):保安看现场、决定要不要就地驱离。
     "dog_sees_person": Level.P1,
     # W30b(决策 51):狗上的照片、录像没加密(没装站点公钥);狗封好的证据站点解不开(私钥不对、没配)。

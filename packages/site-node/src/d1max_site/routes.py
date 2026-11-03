@@ -313,6 +313,10 @@ class RouteStore:
                 if used:
                     raise RouteError(f"路线 {route_id} 还有排程 {', '.join(used)} 在用:防区路线不能"
                                      "按排程跑,先删掉这些排程再改成防区路线")
+            if kind != "guard" and row is not None and row["kind"] == "guard" \
+                    and _guard_plan_uses(tx, route_id):
+                raise RouteError(f"路线 {route_id} 在布防的值守方案里:巡逻路线不能拿来值守,"
+                                 "先从值守方案里去掉再改成巡逻路线")
             if row is None:
                 tx.execute("INSERT INTO routes(route_id, map_id, map_version, definition, "
                            "revision, updated_ms, updated_by, source, kind) "
@@ -344,6 +348,8 @@ class RouteStore:
             if users:
                 raise RouteError(f"排程 {', '.join(sorted(users))} 还在用路线 {route_id}:"
                                  "先改排程或删排程")
+            if _guard_plan_uses(tx, route_id):
+                raise RouteError(f"布防的值守方案还在用路线 {route_id}:先从值守方案里去掉")
             tx.execute("DELETE FROM routes WHERE route_id=?", (route_id,))
             self._touch(tx, by, now)
 
@@ -476,6 +482,12 @@ def _schedules_of(tx: Any, route_id: str) -> list[str]:
     return sorted(r["entry_id"] for r in tx.execute(
         "SELECT entry_id, definition FROM route_schedules").fetchall()
         if json.loads(r["definition"]).get("mission") == route_id)
+
+
+def _guard_plan_uses(tx: Any, route_id: str) -> bool:
+    """W73 第二期:布防的值守方案(``guard_plan``)里有没有这条路线。"""
+    return tx.execute("SELECT 1 FROM guard_plan WHERE route=? LIMIT 1",
+                      (route_id,)).fetchone() is not None
 
 
 def import_into_store(tx: Any, missions: dict[str, Mission], schedule: Schedule | None, *,

@@ -82,4 +82,6 @@ const Map<String, (String, String)> alertTitles = <String, (String, String)>{
   'battery_swap': ('Battery swap needed', '需要更换电池'),
   'authorized_person': ('Authorized person present', '授权人员在场'),
   'cert_renew_failed': ('Automatic certificate renewal failed', '证书自动续签失败'),
+  'zone_unwatched': ('Zone not checked for too long', '防区太久没巡到'),
+  'guard_stuck': ('Zone route keeps failing', '防区路线连着跑不成'),
 };

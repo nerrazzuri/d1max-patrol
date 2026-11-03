@@ -37,6 +37,9 @@ class PersonWatch:
         self.deterrence = deterrence
         #: 防区多边形(B1c,:class:`d1max_site.areas.AreaBook`):按狗的位置算防区。站点主程序接上。
         self.areas: Any = None
+        #: W73 第二期(设计 §5.4):这台此刻站在哪个防区的值守位上盯着(``GuardDuty.watching``);
+        #: 站在值守位上看见人按它盯着的防区判,不按脚下那块地。
+        self.watching: Callable[[str], str | None] | None = None
         #: 告警台。站点主程序接上;没接就只落库(下一拍有了再报)。
         self.alerts: Any = None
 
@@ -119,6 +122,14 @@ class PersonWatch:
         pose = c.telemetry.pose
         if pose is None:
             return False, None
+        if self.watching is not None:
+            try:
+                z = self.watching(rid)
+            except Exception:
+                log.exception("%s 在不在值守位上问不出来", rid)
+                z = None
+            if z:
+                return True, z
         try:
             return True, self.areas.zone_at(pose.map_id, pose.map_version, pose.x, pose.y)
         except Exception:
