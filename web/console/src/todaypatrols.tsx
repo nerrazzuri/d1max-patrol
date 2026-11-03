@@ -14,6 +14,8 @@ export interface TodayItem {
   reason: string;
   end_ms: number | null;
   adhoc_id: string;
+  /** W71:跑完了、跳过了几个点(到了一部分算完成)。老站点没有。 */
+  skipped?: number;
 }
 
 const STATE: Record<string, [Key, string]> = {
@@ -29,7 +31,8 @@ export function siteHm(ms: number, offsetMin: number | null | undefined): string
   return `${String(d.getUTCHours()).padStart(2, "0")}:${String(d.getUTCMinutes()).padStart(2, "0")}`;
 }
 
-export function stateOf(s: string): [string, string] {
+export function stateOf(s: string, skipped = 0): [string, string] {
+  if (s === "done" && skipped > 0) return [t("tdDoneSkipped", { n: skipped }), "warn"];
   const x = STATE[s];
   return x ? [t(x[0]), x[1]] : [s, ""];
 }
@@ -52,7 +55,7 @@ export function TodayPatrols() {
       {items != null && items.length === 0 && <p class="muted small">{t("tdNone")}</p>}
       <ul class="today-list">
         {(items ?? []).map((x, i) => {
-          const [label, tone] = stateOf(x.state);
+          const [label, tone] = stateOf(x.state, x.skipped ?? 0);
           return (
             <li key={i} class="today-row" title={x.reason || undefined}>
               <span class="mono">{siteHm(x.at_ms, off)}</span>

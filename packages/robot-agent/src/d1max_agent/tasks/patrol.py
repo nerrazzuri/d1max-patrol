@@ -4,8 +4,9 @@
 契约上看到的:``task_progress`` 不发距离(多个航点,距离没有意义),改为每个航点一条
 ``patrol_waypoint``(``index``、``total``(W69:共几个点)、``name``、``ok``、``note``);
 终态同 goto —— 全部航点到了
-``done``,有被跳过的 ``failed``(理由列出没到的航点),我们发的 abort ``aborted/preempted``,
-引擎自己收尾(急停、电量、丢定位超时……)``failed``。
+``done``;有被跳过的、但到了至少一个也是 ``done``,带 ``skipped``(几个)、``skipped_names``,
+理由写「跳过 N 个点(…)」(W71);一个都没到 ``failed``(理由列出没到的航点),
+我们发的 abort ``aborted/preempted``,引擎自己收尾(急停、电量、丢定位超时……)``failed``。
 """
 
 from __future__ import annotations
@@ -35,6 +36,15 @@ class PatrolTask(EngineMissionTask):
                                                   "total": len(self.mission.waypoints),
                                                   "name": r.name, "ok": r.ok, "note": r.note})
         self._reported_results = len(results)
+
+    def _partial_ok(self, results, bad) -> bool:
+        """到了至少一个点(W71):一个都没到还是 failed。"""
+        return len(bad) < len(results)
+
+    def _skipped_reason(self, bad) -> str:
+        names = ", ".join(r.name for r in bad)
+        first = bad[0].note or "waypoint failed"
+        return f"跳过 {len(bad)} 个点({names}):{first}"
 
     def _failed_reason(self, bad) -> str:
         names = ", ".join(r.name for r in bad)

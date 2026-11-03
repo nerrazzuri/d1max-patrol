@@ -259,7 +259,10 @@ class _PatrolSheetState extends State<_PatrolSheet> {
 // ------------------------------------------------------------ 今天的巡逻
 
 /// 一行的状态说人话 + 颜色。
-(String, NwTone) patrolStateText(String state) => switch (state) {
+/// W71：跑完了、跳过了几个点（到了一部分算完成）→「完成（跳过 N 点）」。
+(String, NwTone) patrolStateText(String state, [int skipped = 0]) => state == 'done' && skipped > 0
+    ? (tr('Done ($skipped skipped)', '完成（跳过 $skipped 点）'), NwTone.warning)
+    : switch (state) {
       'done' => (tr('Done', '完成'), NwTone.success),
       'failed' => (tr('Not finished', '未完成'), NwTone.error),
       'aborted' => (tr('Stopped', '已叫停'), NwTone.neutral),
@@ -273,6 +276,8 @@ class _PatrolSheetState extends State<_PatrolSheet> {
       'expired' => (tr('Expired', '已作废'), NwTone.neutral),
       _ => (state, NwTone.neutral),
     };
+
+int _skippedOf(Map<String, dynamic> it) => it['skipped'] is int ? it['skipped'] as int : 0;
 
 /// 这台机器人正在走的那一趟（今天的巡逻里 `running`、`task_id` 对得上的）。
 Map<String, dynamic>? runningItem(List<Map<String, dynamic>> items, String robotId, String? taskId) {
@@ -304,7 +309,7 @@ class TodayPatrolList extends StatelessWidget {
     final adhoc = it['kind'] == 'adhoc';
     final canCancel = adhoc && it['state'] == 'queued' && (s?.canPatrol ?? false) &&
         (it['by'] == s?.name || (s?.canSchedule ?? false));
-    final (st, _) = patrolStateText('${it['state']}');
+    final (st, _) = patrolStateText('${it['state']}', _skippedOf(it));
     final lines = <String>[
       '${hhmm((it['at_ms'] as num).toInt(), offsetMin)} · ${it['label']}${'${it['robot'] ?? ''}'.isEmpty ? '' : ' · ${it['robot']}'}',
       st,
@@ -373,7 +378,7 @@ class TodayPatrolList extends StatelessWidget {
                         style: NwText.bodyMedium.copyWith(color: c.text))),
                 const SizedBox(width: Nw.s8),
                 Builder(builder: (_) {
-                  final (label, tone) = patrolStateText('${items[i]['state']}');
+                  final (label, tone) = patrolStateText('${items[i]['state']}', _skippedOf(items[i]));
                   return NwStatusPill(label: label, tone: tone);
                 }),
               ]),

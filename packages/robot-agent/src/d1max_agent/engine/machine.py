@@ -1046,11 +1046,14 @@ class MissionEngine(EventEmitter[RunSnapshot]):
                 total = len(live.mission.waypoints) * live.mission.policy.loops
                 # ``result``:站点登记运行记录读的就是它(工单 20,2026-10-28:原来没写,只有引擎的
                 # ``state: done`` =「这趟跑到头了」,点全没到的回待命点看着像回去了)。点都到了才
-                # ``done``;中止 ``aborted``;有没到的(跳过的)``failed``
+                # ``done``;中止 ``aborted``;跑到头、跳过了几个、到了至少一个 ``partial``(W71,跟任务
+                # 终态「完成(跳过 N 点)」对上);别的(一个都没到、没跑完)``failed``
                 if self._state is RunState.ABORTED:
                     result = "aborted"
                 elif succeeded == total and len(live.results) == total:
                     result = "done"
+                elif succeeded > 0 and len(live.results) == total:
+                    result = "partial"
                 else:
                     result = "failed"
                 summary = {

@@ -6,6 +6,7 @@ import 'package:d1max_patrol/net/site_client.dart';
 import 'package:d1max_patrol/store/site_store.dart';
 import 'package:d1max_patrol/ui/guide.dart';
 import 'package:d1max_patrol/ui/nw/nw_shell.dart';
+import 'package:d1max_patrol/ui/nw/nw_widgets.dart';
 import 'package:d1max_patrol/ui/patrol_dispatch.dart';
 import 'package:d1max_patrol/ui/refusal.dart';
 import 'package:d1max_patrol/ui/site_duty_page.dart';
@@ -407,5 +408,12 @@ void main() {
       await t.pumpWidget(const MaterialApp(home: HelpPage(role: 'admin')));
       expect(find.text('如何添加账号'), findsOneWidget);
     });
+  });
+
+  test('W71 今天的巡逻：跳过几个点也算完成，显示「完成（跳过 N 点）」', () {
+    final (label, tone) = patrolStateText('done', 2);
+    expect(label, anyOf('Done (2 skipped)', '完成（跳过 2 点）'));
+    expect(tone, NwTone.warning);
+    expect(patrolStateText('done').$2, NwTone.success);
   });
 }

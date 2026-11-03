@@ -93,7 +93,7 @@ async def test_中途abort_aborted_停下(台子):
     assert t.state is TaskState.ABORTED and await r.stopped()
 
 
-async def test_到不了的点被跳过_failed并列出点名(台子, monkeypatch):
+async def test_到不了的点被跳过_完成_带跳过几个点并列出点名(台子, monkeypatch, tmp_path):
     """引擎的航点超时按真实时间算,测试的假钟推不动它;改让 HAL 对去 p1 的速度命令一律
     拒收(导航 Failed),引擎按 retry_then_skip 跳过 p1、接着走 p2。"""
     from d1max_contract.hal import VelocityResult
@@ -112,9 +112,30 @@ async def test_到不了的点被跳过_failed并列出点名(台子, monkeypatc
                    parts=parts, events=book, now_ms=c)
     await t.start()
     await _跑(c, r, parts, t, 2000)
-    assert t.state is TaskState.FAILED, (t.state, t.detail)
-    assert "p1" in t.detail["reason"] and "1 个航点未到达" in t.detail["reason"]
+    # W71(11-03 商场 Patrol1 15/16 站点报「未完成」):到了一部分的算完成、带上跳过几个点
+    assert t.state is TaskState.DONE, (t.state, t.detail)
+    assert t.detail["skipped"] == 1 and t.detail["skipped_names"] == ["p1"]
+    assert "p1" in t.detail["reason"] and "跳过 1 个点" in t.detail["reason"]
     assert [g["ok"] for g in _点事件(book)] == [True, False, True]
+    import json
+    [m] = list((tmp_path / "runs").rglob("manifest.json"))
+    assert json.loads(m.read_text())["summary"]["result"] == "partial"
+
+
+async def test_W71_一个点都没到_还是failed(台子, monkeypatch):
+    from d1max_contract.hal import VelocityResult
+    c, r, parts, book = 台子
+
+    async def 全拒(cmd):
+        return VelocityResult(0.0, 0.0, clamped=False, rejected=True, reason="blocked")
+    monkeypatch.setattr(r, "set_velocity", 全拒)
+    t = PatrolTask(task_id="t1", mission=_任务((20.0, 0.0), (40.0, 0.0),
+                                               policy=Policy(waypoint_retry=0)),
+                   parts=parts, events=book, now_ms=c)
+    await t.start()
+    await _跑(c, r, parts, t, 2000)
+    assert t.state is TaskState.FAILED, (t.state, t.detail)
+    assert "2 个航点未到达" in t.detail["reason"]
 
 
 async def test_sim相机_带拍照动作的任务走得完_照片进归档(tmp_path):

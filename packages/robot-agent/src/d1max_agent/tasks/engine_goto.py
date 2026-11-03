@@ -171,6 +171,12 @@ class EngineMissionTask(Task):
             elif len(snap.results) < expected:
                 self.state = TaskState.FAILED
                 self.detail = {"reason": f"只跑了 {len(snap.results)}/{expected} 个点"}
+            elif bad and self._partial_ok(snap.results, bad):
+                # W71(11-03 商场 Patrol1 15/16,站点报「未完成」):巡逻跑到头、到了一部分 —— 算完成,
+                # 带上跳过了几个点、哪几个(站点、手机显示「完成(跳过 N 点)」)
+                self.state = TaskState.DONE
+                self.detail = {**(extra or {}), "reason": self._skipped_reason(bad),
+                               "skipped": len(bad), "skipped_names": [r.name for r in bad]}
             elif bad:
                 self.state = TaskState.FAILED
                 self.detail = {"reason": self._failed_reason(bad)}
@@ -183,6 +189,13 @@ class EngineMissionTask(Task):
 
     def _failed_reason(self, bad) -> str:
         return bad[0].note or "waypoint failed"
+
+    def _partial_ok(self, results, bad) -> bool:
+        """跳过了几个点还算不算完成:goto(一个点)没到就是没成;巡逻见 :class:`PatrolTask`。"""
+        return False
+
+    def _skipped_reason(self, bad) -> str:
+        return self._failed_reason(bad)
 
     def _report_waypoints(self, results) -> None:
         """引擎每走完(或跳过)一个航点,结果里多一条;子类决定要不要发事件。"""
