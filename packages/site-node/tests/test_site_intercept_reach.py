@@ -237,3 +237,13 @@ def test_外审3_命令行设拦截点也查_墙里不收_走得到的收(tmp_pa
     names = [r["name"] for r in db.query("SELECT name FROM intercepts")]
     db.close()
     assert names == ["backyard"]
+
+
+def test_W70_靠墙的点_机身站得下就算走得到_贴着墙的照拦(台):
+    """11-03 C40221:用户在靠墙处点的两个点,站点按外接圆 0.52 m + 余量判「走不通」,Nav2 实际走得到。
+    离墙够机身半宽(0.29 m + 余量)的,往外挪一点再查;贴着墙(0.15 m)的照拦。"""
+    t = 台
+    assert t.reach.check("靠墙", "house", "wide", 6.0, 0.55).problem == ""
+    assert t.reach.reachable("house", "wide", (1.5, 0.55), (6.0, 0.55)) is True
+    assert "站不下" in t.reach.check("贴墙", "house", "wide", 6.0, 0.22).problem
+    assert t.reach.reachable("house", "wide", (1.5, 2.0), (6.0, 0.22)) is False

@@ -100,6 +100,10 @@ TURN_DONE_RAD = 0.05
 TURN_OVERSHOOT_RAD = 0.1
 #: Nav2 到了 xy 容差、朝向差过这么多才由代理接过来原地转(≈ Nav2 的 yaw_goal_tolerance)。
 TURN_TAKEOVER_RAD = 0.15
+#: 到了目标、只差朝向时原地转被挡(守卫、地图墙)这么久(秒):就停在这儿算到,留话说朝向差多少
+#: (W70,11-03 C40221:原点旁边有椅子、桌子,要转 170°,守卫一直拦,停了一分多钟)。换个方向转没用 ——
+#: 机身是对称的长方形,绕远那一边扫过的朝向(按 180° 折一下)包含了近的那一边。
+TURN_BLOCKED_S = 10.0
 #: 原地转最快(弧度/秒):转快了定位器跟不上(11-02 工单 13)。
 TURN_ONLY_MAX_RPS = 0.6
 #: 前进速度不到这个(米/秒)就当「原地转」,按地图上的墙核一道(:meth:`Nav2NavBackend._turn_hits_map`)。
@@ -140,6 +144,7 @@ class Nav2NavBackend(PlannedNavBackend):
         #: 这一段只原地转到这个朝向(工单 11-02-11);``None`` = 不是。
         self._turn_only: float | None = None
         self._turn_err: float | None = None                # 上一拍原地转的误差(看转没转过头)
+        self._turn_blocked_at: float | None = None         # 只差朝向的原地转从什么时候起被挡(W70)
         self._settling = False                             # 在等 Nav2 一会儿就好的未就绪
         self._map_dir: Path | None = None
         self._map_req = 0
@@ -324,6 +329,7 @@ class Nav2NavBackend(PlannedNavBackend):
 
     async def _enter_terminal(self, status: NavStatus) -> None:
         self._turn_only = None
+        self._turn_blocked_at = None
         if status is not NavStatus.SUCCEED:
             self._cancel_nav2()
         self._nav2_goal = None
@@ -520,7 +526,8 @@ class Nav2NavBackend(PlannedNavBackend):
         await self._send(vx, wz, dt_s)
 
     async def _turn_step(self, here: Any, dt_s: float) -> None:
-        """只差朝向:原地转到 :attr:`_turn_only`(工单 11-02-11)。地图上的墙、守卫照样管。"""
+        """只差朝向:原地转到 :attr:`_turn_only`(工单 11-02-11)。地图上的墙、守卫照样管;被挡
+        :data:`TURN_BLOCKED_S` 秒就停在这儿算到(W70)。"""
         assert self._turn_only is not None
         err = math.remainder(self._turn_only - here.yaw, 2 * math.pi)
         over = self._turn_err is not None and err * self._turn_err < 0
@@ -532,18 +539,28 @@ class Nav2NavBackend(PlannedNavBackend):
             return
         top = max(MIN_TURN_RPS, min(self._wmax, TURN_ONLY_MAX_RPS))
         wz = math.copysign(min(top, max(MIN_TURN_RPS, abs(err))), err)
+        blocked = None
         if self._turn_hits_map(0.0, wz, here):
             from d1max_agent.obstacles import Verdict
-            self._guarded(Verdict(False, "原地转会扫到地图上的墙(窄处不转)"), here)
-            await self._send(0.0, 0.0, dt_s)
-            return
-        if self.guard is not None and self.obstacles is not None:
+            blocked = Verdict(False, "原地转会扫到地图上的墙(窄处不转)")
+        elif self.guard is not None and self.obstacles is not None:
             v = self._guard_check(0.0, wz)
             if not v.ok and (v.hits or "障碍数据" in v.reason):
-                self._guarded(v, here)
-                await self._send(0.0, 0.0, dt_s)
-                return
-        await self._send(0.0, wz, dt_s)
+                blocked = v
+        if blocked is None:
+            self._turn_blocked_at = None
+            await self._send(0.0, wz, dt_s)
+            return
+        self._guarded(blocked, here)
+        await self._send(0.0, 0.0, dt_s)
+        now = self._secs()
+        if self._turn_blocked_at is None:
+            self._turn_blocked_at = now
+        elif now - self._turn_blocked_at >= TURN_BLOCKED_S:
+            log.warning("到了目标、只差朝向 %.0f°,原地转被挡 %.0f 秒(%s):就停在这儿算到",
+                        math.degrees(err), now - self._turn_blocked_at, blocked.reason)
+            self._turn_blocked_at, self._turn_err = None, None
+            await self._enter_terminal(NavStatus.SUCCEED)
 
     def _deband(self, vx: float, wz: float, *,
                 rev_max: float = math.inf) -> tuple[float, float]:
