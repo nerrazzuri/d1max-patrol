@@ -862,6 +862,16 @@ p.warn { color: var(--c-text); background: var(--c-warningSoft); padding: 8px 12
 .rd-tag { font-size: 12px; line-height: 18px; padding: 0 6px; border-radius: 4px; white-space: nowrap; background: var(--c-surfaceVariant); color: var(--c-textSecondary); }
 .rd-tag.open { background: var(--c-errorSoft); color: var(--c-error); }
 .rd-tag.auto { background: var(--c-successSoft); color: var(--c-success); }
+.rd-inline select { flex: 1; min-width: 0; height: 36px; padding: 0 10px; border-radius: var(--r-r8); border: 1px solid var(--c-outline);
+  background: var(--c-bg, var(--c-surface)); color: var(--c-text); font: inherit; }
+.rd-held { display: flex; align-items: center; gap: 12px; justify-content: space-between; }
+.rd-bad { color: var(--c-error); font-weight: 600; }
+.rd-devs { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px; }
+.rd-devs li { display: inline-flex; gap: 6px; align-items: center; padding: 2px 8px; border-radius: 4px; font-size: 12px; line-height: 20px;
+  background: var(--c-surfaceVariant); color: var(--c-textSecondary); }
+.rd-devs li.dev-online { background: var(--c-successSoft); color: var(--c-success); }
+.rd-devs li.dev-error, .rd-devs li.dev-offline { background: var(--c-errorSoft); color: var(--c-error); }
+.rd-devs li.dev-degraded { background: var(--c-warningSoft); color: var(--c-warning); }
 .rd-log summary { cursor: pointer; font-size: 13px; line-height: 18px; font-weight: 600; color: var(--c-textSecondary); }
 .rd-log[open] summary { margin-bottom: 6px; }
 .state.tone-muted { color: var(--c-textMuted); }

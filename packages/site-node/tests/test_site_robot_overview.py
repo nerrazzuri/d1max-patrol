@@ -218,3 +218,40 @@ def test_W71_概览_Nav2没起来算毛病_就绪不算_离线不算(台):
     d.fresh.add("A")
     d.clients["A"].capabilities.tasks["nav2"] = {"ready": True}
     assert _one(d, db)["problems"] == []
+
+
+def test_W72_概览_详情要的东西_近7天_上次联系_存储_地图_设备_登记_手动原因(台):
+    d, db = 台
+    _cmd(db, 1, kl(2026, 10, 19, 9))                   # 8 天前:不算
+    _cmd(db, 2, kl(2026, 10, 22, 9))
+    _cmd(db, 3, kl(2026, 10, 27, 8))
+    _cmd(db, 4, kl(2026, 10, 27, 9), ack="rejected")    # 没接的不算
+    _alert(db, "k1", "run_abort", kl(2026, 10, 25, 3), resolved=kl(2026, 10, 25, 4))
+    _alert(db, "k2", "run_abort", kl(2026, 10, 10, 3), resolved=kl(2026, 10, 10, 4))  # 太早
+    c = d.clients["A"]
+    c.status_live_at = NOW - 4_000
+    c.telemetry.storage = SimpleNamespace(disk_used_ratio=0.42, backlog_files=3,
+                                          oldest_backlog_s=90)
+    d.running_view = lambda cl: {"legacy": False, "map_id": "estate-1", "map_version": "7",
+                                 "map": {"match": True}}
+    d.devices["A"] = {"items": [{"id": "lidar", "state": "online", "detail": ""},
+                                {"id": "camera:thermal", "state": "error", "detail": "不通"}],
+                      "at_ms": NOW, "stale": False}
+    d.registry.set_manual_only("A", True, by="alice", now_ms=NOW - 1000, note="先试跑")
+    d.held = lambda rid: {"by": "bob", "at_ms": NOW - 5000, "reason": ""}
+    r = _one(d, db)
+    assert r["held"] == {"by": "bob", "at_ms": NOW - 5000}
+    assert (r["patrols_7d"], r["aborts_7d"], r["last_patrol_ms"]) == (2, 1, kl(2026, 10, 27, 8))
+    assert r["last_seen_ms"] == NOW - 4_000
+    assert r["storage"] == {"used_ratio": 0.42, "backlog_files": 3, "oldest_backlog_s": 90}
+    assert r["map"] == {"id": "estate-1", "version": "7", "match": True}
+    assert [x["id"] for x in r["devices"]] == ["lidar", "camera:thermal"]
+    assert r["enrolled_at"] is not None and r["manual_note"] == "先试跑"
+
+
+def test_W72_概览_老狗老站点缺的都是空的(台):
+    d, db = 台
+    r = _one(d, db)
+    assert (r["patrols_7d"], r["aborts_7d"], r["last_patrol_ms"]) == (0, 0, None)
+    assert r["storage"] is None and r["map"] is None and r["devices"] == []
+    assert r["last_seen_ms"] is None and r["held"] is None
