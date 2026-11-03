@@ -2,7 +2,8 @@
 // 全部防区一样,或者每个防区单独设;例外日期(节假日、出远门);交班时间、多久没巡过;一个「保存」存整份。
 // 星期、日子、时区都由站点算(站点时区),网页只画站点回来的。
 import { useEffect, useRef, useState } from "preact/hooks";
-import { isOwnerLike } from "./model";
+import { canSchedule, isOwnerLike } from "./model";
+import { GuardPanel } from "./armguard";
 import { api, ApiError, enc } from "./api";
 import { addBlock, copyDay, fromWire, minutesText, moveEdge, removeBlock, toWire, type Slot, type WireSlot } from "./armgrid";
 import { hm, type DutySettings } from "./data";
@@ -55,7 +56,6 @@ export function ArmingPage({ say, now, role = "admin" }: { say: Say; now: number
   const [copyFrom, setCopyFrom] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
   const [switching, setSwitching] = useState<"armed" | "home" | null>(null);
-  void now;
 
   const loadMode = () => api<ModeView>("GET", "/api/mode").then(setMode).catch(() => setMode(null));
   useEffect(() => {
@@ -184,6 +184,9 @@ export function ArmingPage({ say, now, role = "admin" }: { say: Say; now: number
       )}
 
       <Exceptions list={exceptions} say={say} onChange={setExceptions} />
+
+      {/* W73 第二期:布防时谁去巡、每圈隔多久、预报、此刻、值守记录(方案单独保存) */}
+      <GuardPanel say={say} now={now} canEdit={canSchedule(role)} />
 
       {canDuty && <section class="panel arm-duty">
         <h2>{t("armDutyTitle")}</h2>

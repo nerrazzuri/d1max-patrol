@@ -764,6 +764,24 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--c-primary); }
 .arm-copyto { padding: 12px; }
 .arm-ex ul.plain { list-style: none; padding: 0; margin: 0 0 8px; display: flex; flex-direction: column; gap: 6px; }
 .arm-ex li.row { gap: 12px; }
+/* W73 第二期:值守方案 */
+.arm-guard h3 { font-size: 14px; margin: 16px 0 6px; }
+.arm-guard ul.plain { list-style: none; padding: 0; margin: 0 0 8px; display: flex; flex-direction: column; gap: 6px; }
+.guard-entry { gap: 12px; align-items: flex-end; }
+.guard-shuffle { display: flex; align-items: center; gap: 6px; }
+.guard-zones { border-collapse: collapse; margin: 8px 0; }
+.guard-zones th, .guard-zones td { text-align: left; padding: 4px 12px 4px 0; font-weight: normal; }
+.guard-zones th { font-weight: 600; }
+.guard-limit { display: flex; align-items: center; gap: 6px; font-size: 12px; }
+.guard-limit input { width: 72px; }
+.guard-warn ul { margin: 0; padding-left: 18px; }
+.guard-seen li.overdue b, .guard-zones tr.overdue th { color: var(--c-error); }
+.tag.bad { background: var(--c-error); color: #fff; }
+.guard-log { max-height: 320px; overflow: auto; }
+@media (max-width: 600px) {
+  .guard-zones, .guard-zones tbody, .guard-zones tr, .guard-zones th, .guard-zones td { display: block; }
+  .guard-zones tr { padding: 6px 0; }
+}
 @media (max-width: 600px) {
   .armrow { grid-template-columns: 32px minmax(0, 1fr); }
   .armrow .arm-copy { grid-column: 2; justify-self: start; }
