@@ -160,7 +160,7 @@ def test_同一版本再装_内容坏了就重新下_修好(k):
     site.calls.clear()
     assert keeper.install(ref) == d
     assert (d / "prior.mm").read_bytes() == FILES["prior.mm"]
-    assert {c[0] for c in site.calls} == set(FILES), "重新下了"
+    assert {c[0] for c in site.calls} == {"prior.mm"}, "坏的那个重新下了(W71:好的核过再用,不下)"
     assert keeper.verify_active() == ref
 
 
@@ -209,7 +209,8 @@ def test_读不了_算校验不过_重新下能修(k, monkeypatch):
     monkeypatch.setattr(M, "_sha256", eio)
     site.calls.clear()
     assert keeper.install(ref) == d
-    assert {c[0] for c in site.calls} == set(FILES), "无法读取:重新下了"
+    # W71:装的时候逐个再核一遍,那一下读不了的这回读得了、核得上:都不用下
+    assert site.calls == []
     assert keeper.verify_active() == ref
 
 

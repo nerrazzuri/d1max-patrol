@@ -266,6 +266,8 @@ class MapKeeper:
         deadline = time.monotonic() + limit
         try:
             for f in ref.files:
+                if self._reuse(f, tmp / f.name):
+                    continue
                 h, n = hashlib.sha256(), 0
                 with open(tmp / f.name, "wb") as fh:
                     fails = 0
@@ -315,6 +317,35 @@ class MapKeeper:
             return dst
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
+
+    def _reuse(self, f: Any, dst: Path) -> bool:
+        """本地库里别的版本已经有这个文件(大小、sha256 跟清单一样,**内容再核一遍**):链接(链不了就拷)
+        到 ``dst``,不下(W71,11-03 商场:清噪点每版只改 floor.pgm,机器人每次从热点上
+        整张重下 145 MB)。"""
+        for map_id, version in self.kept():
+            d = self.root / map_id / version
+            try:
+                have = MapRef.from_wire(json.loads((d / MANIFEST).read_text("utf-8")))
+            except (OSError, ValueError, RecursionError, ContractError):
+                continue
+            for g in have.files:
+                if g.size != f.size or g.sha256 != f.sha256:
+                    continue
+                p = d / g.name
+                try:
+                    if p.is_symlink() or not p.is_file() or p.stat().st_size != f.size \
+                            or _sha256(p) != f.sha256:
+                        continue
+                    try:
+                        os.link(p, dst)
+                    except OSError:
+                        shutil.copy2(p, dst)
+                except OSError:
+                    continue
+                log.info("地图 %s:机器人上 %s:%s 已有同样的一份,不再下载(%d 字节)",
+                         f.name, map_id, version, f.size)
+                return True
+        return False
 
     def commit(self, ref: MapRef, *, home: tuple[float, float, float] | None = None,
                previous: Any = _AUTO) -> None:
