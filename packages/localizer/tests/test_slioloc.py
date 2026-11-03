@@ -204,3 +204,45 @@ def test_W68_外审r2_打分途中换了图_旧图的分不写回():
     sc.scan(10.0, np.zeros((10, 3)))
     assert sc.pose(10.1, (0.0, 0.0, 0.0), (0.0, 0.0, 0.0, 1.0)) == 0.0
     assert sc.pose(10.2, (0.0, 0.0, 0.0), (0.0, 0.0, 0.0, 1.0)) == 0.0
+
+
+def _旧的打分(fit, scan, p, q):
+    """W71 之前的做法(整帧先乘旋转再筛、再抽):拿来比对,改快以后分数一分不差。"""
+    from d1max_localizer import superlio as S
+    a = np.asarray(scan, dtype=np.float64).reshape(-1, 3)
+    a = a[np.isfinite(a).all(axis=1)]
+    r2 = (a * a).sum(axis=1)
+    a = a[(r2 >= S.RANGE_MIN_M ** 2) & (r2 <= S.RANGE_MAX_M ** 2)]
+    w = a @ np.array(quat_to_mat(q)).T + np.asarray(p, dtype=np.float64)
+    w = w[w[:, 2] > float(p[2]) - L.FIT_FLOOR_BELOW_M]
+    if len(w) < L.FIT_MIN_POINTS:
+        return None
+    if len(w) > L.FIT_POINTS:
+        w = w[np.linspace(0, len(w) - 1, L.FIT_POINTS).astype(np.int64)]
+    v = np.floor(w / fit.res).astype(np.int64)
+    k = L._keys((v[:, None, :] + L._NEIGH[None, :, :]).reshape(-1, 3)).reshape(len(v), -1)
+    i = np.searchsorted(fit._occ, k)
+    hit = (i < len(fit._occ)) & (fit._occ[np.minimum(i, len(fit._occ) - 1)] == k)
+    return float(hit.any(axis=1).mean())
+
+
+def test_W71_套图打分只转抽出来的点_分数跟整帧先转一样_整帧不过矩阵乘(monkeypatch):
+    """11-03 商场:定位器主进程 8 个线程各 10–14%(OpenBLAS 线程池)。打分先把整帧 8.6 万个点乘旋转、
+    再抽 2000 个;改成先只算高度筛地面、抽好再转。"""
+    rng = np.random.default_rng(7)
+    room = _room()
+    fit = L.MapFit(L.voxel_down(room, 0.1))
+    scan = rng.uniform(-9, 9, size=(30000, 3)) * np.array([1.0, 0.6, 0.2]) + np.array([0, 0, 0.5])
+    scan[::97] = np.nan
+    for yaw, p in ((0.0, (0.0, 0.0, 0.4)), (0.7, (1.5, -2.0, 0.3)), (-2.4, (-4.0, 1.0, 0.5))):
+        q = (0.0, 0.0, math.sin(yaw / 2), math.cos(yaw / 2))
+        assert fit.score(scan, p, q) == _旧的打分(fit, scan, p, q)
+    calls = []
+    real = L._to_map
+
+    def 记(pts, rot, p):
+        calls.append(len(pts))
+        return real(pts, rot, p)
+    monkeypatch.setattr(L, "_to_map", 记)
+    fit.score(scan, (0.0, 0.0, 0.4), (0.0, 0.0, 0.0, 1.0))
+    assert calls and max(calls) <= L.FIT_POINTS, calls

@@ -33,6 +33,9 @@ fi
 set -u
 export ROS_DOMAIN_ID="${D1MAX_LOC_ROS_DOMAIN:-24}"
 export RMW_IMPLEMENTATION="${D1MAX_LOC_RMW:-rmw_zenoh_cpp}"
+# numpy 的线性代数库(OpenBLAS)缺省开跟核数一样多的线程,一帧里的小矩阵运算用不着(同感知、人员检测)。
+# W71:11-03 商场定位器主进程 8 个线程各 10–14%、峰值 256%。Super-LIO 子进程并行用 TBB,不受影响。
+export OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1
 export PYTHONPATH="$here/packages/localizer/src:$here/packages/contract/src${PYTHONPATH:+:$PYTHONPATH}"
 # shellcheck disable=SC2086  # D1MAX_LOC_ARGS 要按空白拆成几个参数
 exec /usr/bin/python3 -m d1max_localizer.main \

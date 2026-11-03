@@ -17,6 +17,8 @@ set +u
 set -u
 export ROS_DOMAIN_ID="${D1MAX_LOC_ROS_DOMAIN:-24}"
 export RMW_IMPLEMENTATION="${D1MAX_LOC_RMW:-rmw_zenoh_cpp}"
+# numpy 的线性代数库(OpenBLAS)缺省开满核的线程;每帧整片点云乘变换用不着(W71,同定位器)。
+export OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1
 export PYTHONPATH="$here/packages/localizer/src:$here/packages/contract/src${PYTHONPATH:+:$PYTHONPATH}"
 # shellcheck disable=SC2086  # D1MAX_MERGE_ARGS 要按空白拆成几个参数
 exec /usr/bin/python3 -m d1max_localizer.merge \
