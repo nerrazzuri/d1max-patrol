@@ -445,7 +445,16 @@ def test_W70_没人用合并雷达_开着自启的合并服务装机时关掉(tm
 
 
 def test_W70_env里有人订合并雷达_合并服务不动(tmp_path):
-    script = _合并狗(tmp_path, 'D1MAX_LOC_ARGS="--lidar-topic /d1max/merged_lidar"\n')
+    script = _合并狗(tmp_path, 'D1MAX_LOC_ARGS="--engine mola --lidar-topic /d1max/merged_lidar"\n')
     got = _跑(tmp_path, script)
     assert got.returncode == 0, got.stdout + got.stderr
     assert "systemctl disable --now d1max-lidar-merge.service" not in _调用(tmp_path)
+
+
+def test_W70_Super_LIO下定位参数里留着合并话题_没人用_照关(tmp_path):
+    """C40221 的 env 里 D1MAX_LOC_ARGS 还写着 --lidar-topic /d1max/merged_lidar(MOLA 时代留下的),
+    Super-LIO 不认这个参数。"""
+    script = _合并狗(tmp_path, 'D1MAX_LOC_ARGS="--lidar-topic /d1max/merged_lidar"\n')
+    got = _跑(tmp_path, script)
+    assert got.returncode == 0, got.stdout + got.stderr
+    assert "systemctl disable --now d1max-lidar-merge.service" in _调用(tmp_path)
