@@ -34,7 +34,7 @@ beforeEach(() => {
 });
 afterEach(cleanup);
 
-const data: LayerData = { areas: [], nav: null, routes: [], cameras: [], robots: ["A"], standby: [] };
+const data: LayerData = { areas: [], nav: null, routes: [], guardRoutes: [], posts: [], cameras: [], robots: ["A"], standby: [] };
 // 假地图:两个「点地图」按钮(不同位置),再把标签画的点、线渲染出来好点
 const FakeMap = (o: OwnLayer) => (
   <div class="fakemap">

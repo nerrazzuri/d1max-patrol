@@ -38,7 +38,7 @@ STATE_LABEL = {"armed": "布防", "partial": "部分布防", "disarmed": "撤防
 DEFAULT_VISITOR_MIN = 4 * 60
 MAX_VISITOR_MIN = 24 * 60
 #: 临时撤防一次最多撤这么多个防区(一个现场远到不了;防一个请求塞几千个名字进库)。
-MAX_VISITOR_ZONES = 64
+MAX_VISITOR_ZONES = 1000      # W73:防区个数不设上下限,这里只防误操作
 #: 防区名跟事件派遣收的一样:1–128 个字符(摄像头、NVR 报什么就是什么)。
 _ZONE = re.compile(r"[^\x00-\x1f]{1,128}")
 

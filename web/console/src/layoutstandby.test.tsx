@@ -24,7 +24,7 @@ beforeEach(() => {
 });
 afterEach(cleanup);
 
-const data: LayerData = { areas: [], nav: null, routes: [], cameras: [], robots: ["A", "B"],
+const data: LayerData = { areas: [], nav: null, routes: [], guardRoutes: [], posts: [], cameras: [], robots: ["A", "B"],
   standby: [{ robot_id: "A", name: "dock", x: 2, y: 2, yaw: 0, map_id: "home", map_version: "3", default: true }] };
 const FakeMap = (o: OwnLayer) => <div class="fakemap"><button type="button" class="pick" onClick={() => o.onPick?.(40, 30)}>pick</button></div>;
 const props = (): TabProps => ({

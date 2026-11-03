@@ -116,6 +116,11 @@ class InterceptReach:
                 self._costmaps.pop(next(iter(self._costmaps)))
         return cm
 
+    def costmap(self, map_id: str, version: str) -> Any:
+        """W73:这一版的代价图(跟查走不走得到同一份);不认识的图抛错,没有规划栅格是 None。"""
+        self.maps.get(map_id, version)
+        return self._costmap(map_id, version)
+
     def reachable(self, map_id: str, version: str, start: tuple[float, float],
                   goal: tuple[float, float]) -> bool | None:
         """W44 第三期(路线逐段查):走得通 True、走不通 False(被墙或禁行区隔开、点在图外)、

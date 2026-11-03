@@ -45,10 +45,14 @@ NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 #: 同派遣器的上限(``dispatcher.MAX_PATROL_*``;这里复制一份是为了不倒着依赖派遣器,有测试对着)。
 MAX_WAYPOINTS = 500
 MAX_BYTES = 200_000
-#: 逐段查走不走得通最多查这么多段(每段一次规划;再多的不查,派单时狗自己会报)。
-MAX_SEGMENT_CHECKS = 100
+#: 逐段查走不走得通:每一段都查(W73:自动生成的防区路线常常上百段;原来只查前 100 段)。
+MAX_SEGMENT_CHECKS = MAX_WAYPOINTS - 1
+#: W73 第一期:路线的类别。``patrol`` 巡逻路线(巡逻排程、手动巡逻用);
+#: ``guard`` 防区路线(只给布防值守用,
+#: 不进 :func:`d1max_site.catalog.active_bundle`,排程不许挂)。
+KINDS = ("patrol", "guard")
 #: 编辑器能写的键;别的(``route`` 的 vendor_path 之类)不收。
-_EDITABLE = frozenset({"map_id", "map_version", "waypoints", "policy", "base_revision"})
+_EDITABLE = frozenset({"map_id", "map_version", "waypoints", "policy", "base_revision", "kind"})
 EXPORT_BUNDLE_ID = "site-routes"
 
 
@@ -128,7 +132,8 @@ class RouteStore:
     @staticmethod
     def _route_view(r: Any) -> dict[str, Any]:
         m = parse_mission(json.loads(r["definition"]))
-        return {"id": r["route_id"], "map_id": r["map_id"], "map_version": r["map_version"],
+        return {"id": r["route_id"], "kind": r["kind"],
+                "map_id": r["map_id"], "map_version": r["map_version"],
                 "revision": r["revision"], "updated_ms": r["updated_ms"],
                 "updated_by": r["updated_by"], "source": r["source"],
                 "bound": bool(r["map_version"]),
@@ -141,9 +146,13 @@ class RouteStore:
                 "active_from_ms": r["active_from_ms"], "updated_ms": r["updated_ms"],
                 "updated_by": r["updated_by"], "source": r["source"]}
 
-    def view(self, map_id: str | None = None, map_version: str | None = None) -> dict[str, Any]:
-        """整个库(可按地图号、版本筛路线)。排程不筛:它们按路线名跟着。"""
+    def view(self, map_id: str | None = None, map_version: str | None = None, *,
+             kind: str | None = None) -> dict[str, Any]:
+        """整个库(可按地图号、版本、类别筛路线)。排程不筛:它们按路线名跟着。"""
         where, args = [], []
+        if kind:
+            where.append("kind=?")
+            args.append(kind)
         if map_id:
             where.append("map_id=?")
             args.append(map_id)
@@ -204,6 +213,17 @@ class RouteStore:
         errors += self._segments(map_id, version, waypoints, {e["index"] for e in errors})
         return errors
 
+    def check_flat(self, map_id: str, version: str, waypoints: Any) -> list[dict[str, Any]]:
+        """W73:接口里平的点(还没存)按存路线的同一套规矩查一遍,问题列表跟 :meth:`problems` 一样。"""
+        try:
+            m = parse_mission({"mission": "draft", "map_id": map_id, "map_version": version,
+                               "waypoints": _wire_waypoints(waypoints)})
+        except RouteError as exc:
+            return exc.errors or [{"index": None, "name": "", "problem": str(exc)}]
+        except (MissionError, ValueError) as exc:
+            return [{"index": None, "name": "", "problem": str(exc)}]
+        return self.problems(map_id, version, m.waypoints)
+
     def _segments(self, map_id: str, version: str, waypoints: Any,
                   bad: set[int]) -> list[dict[str, Any]]:
         """相邻两点之间走不走得通(被墙、禁行区隔开):``{"index": None, "segment": [i, i+1]}``。
@@ -244,6 +264,9 @@ class RouteStore:
             m = parse_mission(raw)
         except (MissionError, ValueError) as exc:
             raise RouteError(str(exc)) from exc
+        kind = body.get("kind")
+        if kind is not None and kind not in KINDS:
+            raise RouteError(f"kind 只能是 {' / '.join(KINDS)}:{kind!r}")
         if len(m.waypoints) > MAX_WAYPOINTS:
             raise RouteError(f"一条路线最多 {MAX_WAYPOINTS} 个点,此条 {len(m.waypoints)} 个")
         if len(_json(m.to_wire()).encode()) > MAX_BYTES:
@@ -276,22 +299,31 @@ class RouteStore:
         definition = _json(m.to_wire())
         now = self._now()
         with self.db.tx() as tx:
-            row = tx.execute("SELECT revision FROM routes WHERE route_id=?",
+            row = tx.execute("SELECT revision, kind FROM routes WHERE route_id=?",
                              (route_id,)).fetchone()
             cur = row["revision"] if row is not None else 0
             if base != cur:
                 raise RouteConflict(
                     f"路线 {route_id} 已被修改(现在是第 {cur} 版,你看到的是第 {base} 版)"
                     if cur else f"路线 {route_id} 已被删除:请刷新后再改")
+            # 不带 kind:新建是巡逻路线,改的时候保留原来的
+            kind = body.get("kind") or (row["kind"] if row is not None else "patrol")
+            if kind == "guard" and row is not None and row["kind"] != "guard":
+                used = _schedules_of(tx, route_id)
+                if used:
+                    raise RouteError(f"路线 {route_id} 还有排程 {', '.join(used)} 在用:防区路线不能"
+                                     "按排程跑,先删掉这些排程再改成防区路线")
             if row is None:
                 tx.execute("INSERT INTO routes(route_id, map_id, map_version, definition, "
-                           "revision, updated_ms, updated_by, source) VALUES (?,?,?,?,1,?,?,?)",
-                           (route_id, m.map_id, m.map_version, definition, now, by, "editor"))
+                           "revision, updated_ms, updated_by, source, kind) "
+                           "VALUES (?,?,?,?,1,?,?,?,?)",
+                           (route_id, m.map_id, m.map_version, definition, now, by, "editor",
+                            kind))
             else:
                 tx.execute("UPDATE routes SET map_id=?, map_version=?, definition=?, "
-                           "revision=revision+1, updated_ms=?, updated_by=?, source='editor' "
-                           "WHERE route_id=?",
-                           (m.map_id, m.map_version, definition, now, by, route_id))
+                           "revision=revision+1, updated_ms=?, updated_by=?, source='editor', "
+                           "kind=? WHERE route_id=?",
+                           (m.map_id, m.map_version, definition, now, by, kind, route_id))
             self._touch(tx, by, now)
         return self.get(route_id)
 
@@ -351,9 +383,12 @@ class RouteStore:
         definition = _json(entry.to_wire())
         now = self._now()
         with self.db.tx() as tx:
-            if tx.execute("SELECT 1 FROM routes WHERE route_id=?",
-                          (entry.mission,)).fetchone() is None:
+            got = tx.execute("SELECT kind FROM routes WHERE route_id=?",
+                             (entry.mission,)).fetchone()
+            if got is None:
                 raise RouteError(f"排程要跑的路线 {entry.mission!r} 不存在")
+            if got["kind"] == "guard":
+                raise RouteError(f"{entry.mission} 是防区路线:只在布防值守时跑,不能排进巡逻排程")
             row = tx.execute("SELECT * FROM route_schedules WHERE entry_id=?",
                              (entry_id,)).fetchone()
             cur = row["revision"] if row is not None else 0
@@ -394,7 +429,7 @@ class RouteStore:
                       version: int | None = None) -> dict[str, Any]:
         """把库打成一个 ``import-bundle`` 收得下的任务包(备份、搬到别的站点)。版本号默认取
         「库修订号、这个包号已导入过的最大版本号」里大的再加一:包版本只许往上走。"""
-        v = self.view()
+        v = self.view(kind="patrol")
         unbound = [r["id"] for r in v["routes"] if not r["bound"]]
         if unbound:
             raise RouteError(f"路线 {', '.join(unbound)} 未绑地图版本,无法打包:先在路线页里选版本、"
@@ -409,7 +444,8 @@ class RouteStore:
         try:
             mdir = tmp / MISSIONS_DIR
             mdir.mkdir()
-            for r in self.db.query("SELECT route_id, definition FROM routes"):
+            # 任务包是巡逻任务的包:防区路线不进(它们跟着站点库备份走)
+            for r in self.db.query("SELECT route_id, definition FROM routes WHERE kind='patrol'"):
                 (mdir / f"{r['route_id']}.json").write_text(
                     json.dumps(json.loads(r["definition"]), ensure_ascii=False, indent=2) + "\n",
                     encoding="utf-8")
@@ -434,6 +470,12 @@ class RouteStore:
 
 
 # ---------------------------------------------------------------- 任务包导进库
+
+
+def _schedules_of(tx: Any, route_id: str) -> list[str]:
+    return sorted(r["entry_id"] for r in tx.execute(
+        "SELECT entry_id, definition FROM route_schedules").fetchall()
+        if json.loads(r["definition"]).get("mission") == route_id)
 
 
 def import_into_store(tx: Any, missions: dict[str, Mission], schedule: Schedule | None, *,
@@ -463,6 +505,15 @@ def import_into_store(tx: Any, missions: dict[str, Mission], schedule: Schedule 
         if not NAME_RE.match(e.id):
             raise CatalogError(f"排程 id {e.id!r} 不合规矩(只许 ASCII 字母、数字、. _ -,"
                                "1–64 个字符)")
+    guards = {rid for rid, r in stored_routes.items() if r["kind"] == "guard"}
+    hit = sorted(set(missions) & guards)
+    if hit:
+        raise CatalogError(f"任务包里的 {', '.join(hit)} 跟站点上的防区路线同名:任务包只装巡逻路线,"
+                           "不能盖掉防区路线。改个名字再打包")
+    hit = sorted({e.mission for e in entries} & guards - set(missions))
+    if hit:
+        raise CatalogError(f"排程里的 {', '.join(hit)} 是站点上的防区路线:防区路线只在布防值守时跑,"
+                           "不能排进巡逻排程")
     missing = sorted({e.mission for e in entries} - set(missions) - set(stored_routes))
     if missing:
         raise CatalogError(f"排程里提到的任务包里没有、站点里也没有: {', '.join(missing)}")

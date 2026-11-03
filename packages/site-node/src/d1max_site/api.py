@@ -94,7 +94,7 @@ _ACCOUNT_RM = re.compile(r"^/api/accounts/([A-Za-z0-9._-]{1,64})/remove$")
 #: 防区多边形(商业化 B1c)、名单(时段 / 人员授权)。
 #: 路线库:路线 ``/api/routes/<名>[/delete]``、排程 ``/api/route-schedules/<id>[/delete]``。
 _ADHOC = re.compile(r"^/api/adhoc/([^/]{1,32})/cancel$")
-_ROUTE = re.compile(r"^/api/routes/([^/]{1,64})(/delete)?$")
+_ROUTE = re.compile(r"^/api/routes/([^/]{1,64})(/delete|/eta)?$")
 _ROUTE_SCHED = re.compile(r"^/api/route-schedules(?:/([^/]{1,64})(/delete)?)?$")
 _AREAS = re.compile(r"^/api/maps/([^/]{1,64})/([^/]{1,32})/areas$")
 _HIST = re.compile(r"^/api/layout/history(?:/(\d{1,12})/restore)?$")
@@ -294,6 +294,8 @@ class SiteApi:
         #: 防区多边形、名单(商业化 B1c;站点主程序接上)。
         self.areas: Any = None
         self.authz: Any = None
+        #: W73:防区的查看点、值守位(``guard_plan.ZonePosts``;第一次用时按防区、路线库的规划现建)。
+        self._zone_posts: Any = None
         #: W44:位置轨迹(录像页那一刻在哪、地图页多久没巡过;站点主程序接上)。
         self.pose_track: Any = None
         #: W44:按时刻从录像抓一帧(报警记录的抓拍);第一次用时按录像库现建。
@@ -440,6 +442,17 @@ class SiteApi:
             raise HttpError(409, str(exc), extra=extra_for(str(exc))) from exc   # W53:带代号
         except (DispatchTimeout, TimeoutError) as exc:
             raise HttpError(504, f"等机器人的回执超时: {exc}") from exc
+
+
+def zone_posts(site: SiteApi) -> Any:
+    """W73:站点的防区查看点、值守位台(第一次用时现建);没接防区的站点是 None。"""
+    if site._zone_posts is None and site.areas is not None:
+        from d1max_site.guard_plan import ZonePosts
+        db = site.routes.db if site.routes is not None else site.areas.db
+        site._zone_posts = ZonePosts(db, site.maps,
+                                     getattr(site.routes, "reach", None), site.areas,
+                                     now_ms=site._now)
+    return site._zone_posts
 
 
 class _Handler(TlsHandlerMixin):
@@ -696,7 +709,8 @@ class _Handler(TlsHandlerMixin):
             if method == "POST" and path == "/api/bundles":
                 self._need(user, MANAGE)
                 return self._import_bundle(user)
-            if path in ("/api/routes", "/api/route-timezone", "/api/route-export") \
+            if path in ("/api/routes", "/api/route-timezone", "/api/route-export",
+                        "/api/guard-routes/generate") \
                     or _ROUTE.match(path) or _ROUTE_SCHED.match(path):
                 return self._routes(method, path, user)
             if path == "/api/deterrence" or _DETER.match(path):
@@ -944,7 +958,9 @@ class _Handler(TlsHandlerMixin):
             return [z.to_wire() for z in self.site.zones.current(map_id, version).zones]
         if kind == "route":
             r = self.site.routes.get(item)
-            return {k: r[k] for k in ("map_id", "map_version", "waypoints", "policy")}
+            # W73:带上类别 —— 删掉的防区路线退回来还是防区路线(老快照没有,按巡逻路线)
+            return {k: r[k] for k in ("map_id", "map_version", "waypoints", "policy", "kind")
+                    if k in r}
         if kind == "standby":
             return [{k: p[k] for k in ("name", "x", "y", "yaw", "default")}
                     for p in self.site.standby.list(item)
@@ -1478,15 +1494,40 @@ class _Handler(TlsHandlerMixin):
         book = self.site.areas
         if book is None:
             raise HttpError(404, "此站点未启用防区")
+        from d1max_site.guard_plan import GuardPlanError
+        posts = zone_posts(self.site)
+
+        def view() -> dict:
+            out: dict = {"areas": book.list(map_id, version)}
+            if posts is not None:
+                out["posts"] = posts.view(map_id, version)     # W73:查看点、值守位
+            return out
         if method == "GET":
             self._need(user, VIEW)
-            return self._send_json(200, {"areas": book.list(map_id, version)})
+            return self._send_json(200, view())
         if method != "POST":
             raise HttpError(405, "只支持 GET/POST")
         self._need(user, MANAGE)
         d = self._body()
         zone = d.get("zone")
         self._audit_target = f"{map_id}:{version}/{str(zone)[:64]}"
+        if "posts" in d:
+            # W73:挪查看点、值守位(``posts: {view, watch}``);``posts: null`` 回到站点自动算的
+            if posts is None:
+                raise HttpError(404, "此站点未启用防区")
+            try:
+                if d["posts"] is None:
+                    posts.reset(map_id, version, str(zone))
+                    self._audit_detail = {"posts": "auto"}
+                else:
+                    p = d["posts"] if isinstance(d["posts"], dict) else {}
+                    posts.set(map_id, version, str(zone), view=p.get("view"),
+                              watch=p.get("watch"), by=str(user))
+                    self._audit_detail = {"posts": p}
+            except GuardPlanError as exc:
+                raise HttpError(400, str(exc)) from exc
+            self._hist("zones", map_id, version, "", user)
+            return self._send_json(200, view())
         try:
             if d.get("remove") is True:
                 if not book.remove(map_id, version, str(zone)):
@@ -1496,7 +1537,7 @@ class _Handler(TlsHandlerMixin):
         except AreaError as exc:
             raise HttpError(400, str(exc)) from exc
         self._hist("zones", map_id, version, "", user)
-        return self._send_json(200, {"areas": book.list(map_id, version)})
+        return self._send_json(200, view())
 
     def _authz(self, method: str, entry_id: str | None, user, action: str | None = None) -> None:
         """名单(B1c,时段 / 人员授权):``GET`` 看(``view``);``POST`` 加一条、``POST …/{id}/remove``
@@ -2160,10 +2201,20 @@ class _Handler(TlsHandlerMixin):
             if read:
                 if path == "/api/routes":
                     q = parse_qs(self.path.split("?", 1)[1] if "?" in self.path else "")
+                    # W73:不说就只给巡逻路线(老手机、老网页看不见防区路线,不会拿它去巡逻)
+                    kind = (q.get("kind") or ["patrol"])[0]
+                    if kind not in ("patrol", "guard", "all"):
+                        raise HttpError(400, "kind 只能是 patrol / guard / all")
                     return self._send_json(200, store.view(
-                        (q.get("map_id") or [None])[0], (q.get("map_version") or [None])[0]))
+                        (q.get("map_id") or [None])[0], (q.get("map_version") or [None])[0],
+                        kind=None if kind == "all" else kind))
                 if mr is not None and not mr.group(2):
                     return self._send_json(200, store.get(unquote(mr.group(1))))
+                if mr is not None and mr.group(2) == "/eta":
+                    from d1max_site.route_eta import estimate
+                    r = store.get(unquote(mr.group(1)))
+                    return self._send_json(200, {"id": r["id"], **estimate(
+                        store.db, store.reach, r)})
                 if ms is not None and ms.group(1) is None:
                     v = store.view()
                     return self._send_json(200, {"timezone": v["timezone"],
@@ -2173,6 +2224,10 @@ class _Handler(TlsHandlerMixin):
             if method != "POST":
                 raise HttpError(405, "只支持 GET/POST")
             d = self._body()
+            if path == "/api/guard-routes/generate":
+                return self._guard_generate(d, user)
+            if mr is not None and mr.group(2) == "/eta":
+                raise HttpError(405, "此接口只能 GET")
             if path == "/api/route-timezone":
                 self._audit_detail = {"timezone": str(d.get("timezone"))[:64]}
                 return self._send_json(200, store.set_timezone(d.get("timezone"),
@@ -2215,6 +2270,30 @@ class _Handler(TlsHandlerMixin):
         except RouteError as exc:
             raise HttpError(400, str(exc), extra={"errors": exc.errors}) from exc
         raise HttpError(404, f"没有 {method} {path}")
+
+    def _guard_generate(self, d: dict, user) -> None:
+        """W73:按防区生成防区路线的草稿(不存;交给路线编辑器改、存)。"""
+        from d1max_site.guard_plan import GuardPlanError, generate
+        posts = zone_posts(self.site)
+        if posts is None:
+            raise HttpError(404, "此站点未启用防区")
+        map_id, version = d.get("map_id"), d.get("map_version")
+        if not isinstance(map_id, str) or not isinstance(version, str) or not version:
+            raise HttpError(400, "map_id、map_version 必填")
+        try:
+            self.site.maps.get(map_id, version)
+        except Exception as exc:
+            raise HttpError(404, f"站点没有地图 {map_id}:{version}") from exc
+        self._audit_target = f"{map_id}:{version}"
+        try:
+            got = generate(self.site.maps, self.site.routes.reach, self.site.areas, posts,
+                           map_id, version, d.get("zones"), spacing_m=d.get("spacing_m"),
+                           start=d.get("start"), store=self.site.routes)
+        except GuardPlanError as exc:
+            raise HttpError(400, str(exc)) from exc
+        self._audit_detail = {"zones": [z["zone"] for z in got["zones"]],
+                              "points": len(got["waypoints"])}
+        return self._send_json(200, got)
 
     def _halt(self, robot_id: str, user) -> None:
         """停车(W00c5c):走 cmd,不走遥控连接。``abort`` 权限 —— 经理也能按。"""

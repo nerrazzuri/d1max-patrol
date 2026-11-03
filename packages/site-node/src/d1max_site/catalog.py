@@ -148,8 +148,12 @@ def active_bundle_schema(db: SiteDB) -> tuple[str, int] | None:
 
 
 def active_bundle(db: SiteDB) -> ActiveBundle | None:
-    """路线库此刻的任务与排程;库里什么都没有是 ``None``。"""
-    routes = db.query("SELECT route_id, definition FROM routes")
+    """路线库此刻的巡逻任务与排程;库里什么都没有是 ``None``。
+
+    W73:**只有巡逻路线**(``kind='patrol'``)—— 派遣器、排程执行器、手动巡逻、今日巡逻都读这里,
+    防区路线
+    只给布防值守用,不出现在这些地方。"""
+    routes = db.query("SELECT route_id, definition FROM routes WHERE kind='patrol'")
     entries = db.query("SELECT entry_id, definition, active_from_ms FROM route_schedules "
                        "ORDER BY entry_id")
     s = db.query("SELECT revision, timezone FROM route_store WHERE id=1")

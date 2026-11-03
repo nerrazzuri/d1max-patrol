@@ -1096,3 +1096,18 @@ details.ops > summary { cursor: pointer; font-weight: 600; padding: 6px 0; }
 .arm-now-text h2 { margin: 0 0 4px; font-size: 15px; line-height: 20px; font-weight: 600; }
 .arm-now-text .arm-who { margin: 0; }
 .arm-now-btns { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+/* W73 防区路线 / 查看点、值守位 / 每点预计时间 */
+.ly-route.guard { stroke: var(--c-warning); stroke-dasharray: 4 3; }
+.zone-view { fill: var(--c-surface); stroke: var(--c-warning); stroke-width: 2; }
+.zone-watch .pm-body { fill: var(--c-warning); }
+.zone-posts:not(.on) { opacity: .7; }
+.zone-posts-box { display: flex; flex-direction: column; gap: 6px; border: 1px solid var(--c-outline); border-radius: 8px; padding: 8px 10px; }
+.zone-posts-box p { margin: 0; }
+.guard-gen { display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; }
+.guard-gen h3 { margin: 0; }
+.guard-gen-zones { width: 100%; border-collapse: collapse; }
+.guard-gen-zones caption { text-align: left; padding-bottom: 4px; }
+.guard-gen-zones td, .guard-gen-zones th { padding: 3px 4px; text-align: left; }
+.guard-gen-zones input[type="number"] { width: 4.5em; }
+.pointlist .eta { color: var(--c-textSecondary); }
+.route-eta { margin: 0; }

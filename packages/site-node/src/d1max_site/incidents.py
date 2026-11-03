@@ -46,6 +46,7 @@ MAX_SKEW_MS = 5 * 60_000
 OPEN_INCIDENT_MS = 30 * 60_000
 MAX_DETAIL_BYTES = 4000
 _HEX64 = re.compile(r"[0-9a-fA-F]{64}")
+_ZONE_NAME = re.compile(r"[^\x00-\x1f]{1,128}")
 _DIGITS = re.compile(r"[1-9][0-9]{0,15}")
 MERGE_WINDOW_MS = 60_000
 TYPES = frozenset({"intrusion"})
@@ -225,8 +226,9 @@ class IncidentDesk:
         return n
 
     def map_zone(self, zone: str, intercept: str) -> None:
-        if not isinstance(zone, str) or not SAFE_ID.match(zone):
-            raise IncidentError(f"防区名只许 ASCII 字母、数字、. _ -: {zone!r}")
+        # W73:防区名跟地图上圈的防区同一个规矩(1–128 个可见字符,可以是中文)
+        if not isinstance(zone, str) or not _ZONE_NAME.fullmatch(zone):
+            raise IncidentError(f"防区名要是 1–128 个可见字符: {zone!r}")
         if not isinstance(intercept, str) or not SAFE_ID.match(intercept):
             raise IncidentError(f"拦截点名不合规矩: {intercept!r}")
         if self.intercept(intercept) is None:

@@ -41,7 +41,7 @@ const FakeMap = (o: OwnLayer) => (
 );
 const props = (): TabProps => ({
   map: { map_id: "home", version: "3", note: "" }, base: "/api/maps/home/3", meta: META,
-  data: { areas: [], nav: null, routes: [], standby: [], cameras: [], robots: [] } as LayerData, say: () => {},
+  data: { areas: [], nav: null, routes: [], guardRoutes: [], posts: [], standby: [], cameras: [], robots: [] } as LayerData, say: () => {},
   reload: () => Promise.resolve(), setDirty: () => {}, registerSave: (fn) => { save = fn; }, Map: FakeMap,
 });
 const btn = (root: Element, text: string) => Array.from(root.querySelectorAll("button")).find((b) => b.textContent?.trim() === text) as HTMLButtonElement;

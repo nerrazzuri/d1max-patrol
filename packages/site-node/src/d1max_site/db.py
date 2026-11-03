@@ -17,7 +17,9 @@ from typing import Any
 #: 58 路线库(站点存的路线、排程是唯一真理源);59 运营可视化:定位历史 loc_episodes(只加表);
 #: 60 区域「在生效的那一份」nav_zones.effective_body(外审 R1,2026-10-15);
 #: 61 W44:告警结论 alerts.verdict、交班留言 shift_notes、位置轨迹 pose_track(只加列、加表)。
-SCHEMA_VERSION = 70
+#: 71 W73 第一期:路线分类 routes.kind(patrol 巡逻 / guard 防区路线)、
+#:    防区的查看点与值守位 zone_posts。
+SCHEMA_VERSION = 71
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -770,6 +772,21 @@ CREATE TABLE IF NOT EXISTS cert_pending (
     expires_at  INTEGER NOT NULL,
     created_ms  INTEGER NOT NULL
 );
+-- W73 第一期(库 71):防区的查看点(出事去哪看)和值守位(空档站哪儿盯,带朝向)。没有这一行 = 站点
+-- 自动算(zone_posts.py);有 = 人挪过,按人的。
+CREATE TABLE IF NOT EXISTS zone_posts (
+    map_id      TEXT NOT NULL,
+    map_version TEXT NOT NULL,
+    zone        TEXT NOT NULL,
+    view_x      REAL NOT NULL,
+    view_y      REAL NOT NULL,
+    watch_x     REAL NOT NULL,
+    watch_y     REAL NOT NULL,
+    watch_yaw   REAL NOT NULL,
+    updated_by  TEXT NOT NULL DEFAULT '',
+    updated_ms  INTEGER NOT NULL,
+    PRIMARY KEY (map_id, map_version, zone)
+);
 -- W63(库 70):设备身份。每个序列号第一次核过时的设备公钥(以后换了钥匙 = 仿冒,拒)。attest.py。
 CREATE TABLE IF NOT EXISTS device_ids (
     serial      TEXT PRIMARY KEY,
@@ -881,6 +898,8 @@ _ADDED_COLUMNS = (
     # W53:上手向导看过哪一版、开站清单收没收起来(JSON);老账号空着 = 没看过
     ("accounts", "guide", "TEXT NOT NULL DEFAULT '{}'"),
     ("cert_pending", "old_fingerprint", "TEXT NOT NULL DEFAULT ''"),  # W55 外审 3 N2
+    # W73 第一期(库 71):patrol 巡逻路线 / guard 防区路线(只给布防值守用,巡逻、排程看不见)
+    ("routes", "kind", "TEXT NOT NULL DEFAULT 'patrol'"),
 )
 
 

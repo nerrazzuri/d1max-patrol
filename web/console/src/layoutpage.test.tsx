@@ -29,6 +29,7 @@ beforeEach(() => {
     if (url.endsWith("/preview")) return Promise.resolve(json(META));
     if (url.endsWith("/areas")) return Promise.resolve(json({ areas: [{ zone: "北区", points: [[1, 1], [5, 1], [5, 5]] }] }));
     if (url.endsWith("/zones")) return Promise.resolve(json({ revision: 2, zones: [] }));
+    if (url.startsWith("/api/routes") && url.includes("kind=guard")) return Promise.resolve(json({ routes: [] }));
     if (url.startsWith("/api/routes")) return Promise.resolve(json({ routes: [{ id: "night", revision: 1, waypoints: [{ name: "a", x: 1, y: 1, yaw: 0 }, { name: "b", x: 4, y: 4, yaw: 0 }] }] }));
     if (url.startsWith("/api/admin/cameras")) return Promise.resolve(json({ cameras: [] }));
     if (url.includes("/standby")) return Promise.resolve(json({ points: [{ name: "dock", x: 2, y: 2, yaw: 0, map_id: "home", map_version: "3" }] }));
@@ -56,12 +57,13 @@ const btn = (root: Element, text: string) => Array.from(root.querySelectorAll("b
 const tabBtn = (c: Element, text: string) => Array.from(c.querySelectorAll(".ly-tabs button")).find((b) => b.textContent === text) as HTMLButtonElement;
 
 describe("布置外框", () => {
-  it("六个标签(W48 加了路网)、地址带tab", async () => {
+  it("七个标签(W48 加了路网,W73 加了防区路线)、地址带tab", async () => {
     const { container: c } = page();
     await waitFor(() => expect(c.querySelector(".fake")).not.toBeNull());
-    expect(Array.from(c.querySelectorAll(".ly-tabs button")).map((b) => b.textContent)).toEqual(["防区", "禁行区", "巡逻路线", "路网", "待命点", "摄像头"]);
+    expect(Array.from(c.querySelectorAll(".ly-tabs button")).map((b) => b.textContent)).toEqual(["防区", "禁行区", "防区路线", "巡逻路线", "路网", "待命点", "摄像头"]);
     expect(tabFromHash("#/admin/layout?tab=roadnet")).toBe("roadnet");
     expect(tabFromHash("#/admin/layout?tab=routes")).toBe("routes");
+    expect(tabFromHash("#/admin/layout?tab=guard")).toBe("guard");
     expect(tabFromHash("#/admin/layout?tab=nope")).toBe("zones");
   });
 

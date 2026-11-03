@@ -20,6 +20,8 @@ export interface RoutePoint {
 
 export interface Route {
   id: string;
+  /** W73:patrol 巡逻路线 / guard 防区路线(只给布防值守用)。老站点没有这一项 = 巡逻。 */
+  kind?: "patrol" | "guard";
   map_id: string;
   map_version: string;
   revision: number;
@@ -170,4 +172,17 @@ export function handleAt(meta: PreviewMeta, s: Screen, x: number, y: number, yaw
   const [ex, ey] = s.px(e.hx, e.hy);
   const n = Math.hypot(ex - sx, ey - sy) || 1;
   return { x: sx, y: sy, hx: sx + ((ex - sx) / n) * len, hy: sy + ((ey - sy) / n) * len };
+}
+
+/** W73:每个点的预计时间(站点 ``GET /api/routes/<id>/eta``)。 */
+export interface EtaPoint { name: string; travel_m: number; planned_s: number; actual_s: number | null; samples: number; use_s: number; arrive_s: number }
+export interface RouteEta { id: string; waypoints: EtaPoint[]; total_s: number; speed_mps: number; basis: "planned" | "straight" }
+
+/** 秒 → 「1:02:05」/「2:05」(精确到秒;用户 11-03:每个点的预计时间精确到秒)。 */
+export function clock(sec: number): string {
+  const s = Math.max(0, Math.round(sec));
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const ss = String(s % 60).padStart(2, "0");
+  return h > 0 ? `${h}:${String(m).padStart(2, "0")}:${ss}` : `${m}:${ss}`;
 }
