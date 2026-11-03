@@ -160,6 +160,7 @@ class OpsDesk:
             for k in ("ops_restart", "ops_reboot", "ops_timesync", "cert_csr", "cert_install"):
                 out[k] = {}
             out["ops_restart"] = {"units": list(OUR_UNITS)}
+            out["ops_timesync"] = {"site_time": True}     # W70:认站点时刻,NTP 没对上按它拨
         return out
 
     def handle(self, kind: str, payload: dict[str, Any]) -> str | tuple[str, dict[str, Any]]:
@@ -337,10 +338,22 @@ class OpsDesk:
         return got if isinstance(got, str) else ("", {"delay_s": 5, **_no_restart(got)})
 
     def _ops_timesync(self, p: dict[str, Any]) -> str | tuple[str, dict[str, Any]]:
-        got = self._priv("timesync")
+        """立即对时。``site_ms``(W70,站点自己发的):站点此刻的墙钟;按收到时的钟差交给执行器,
+        NTP 没对上(站点经隧道、上不了外网)就按它拨。在途只会让估的钟差偏小几十毫秒。"""
+        args: dict[str, Any] = {}
+        if "site_ms" in p:
+            sm = p["site_ms"]
+            if isinstance(sm, bool) or not isinstance(sm, int):
+                return "payload: site_ms 要是整数(毫秒)"
+            args["offset_ms"] = sm - self.now_ms()
+        got = self._priv("timesync", args)
         if isinstance(got, str):
             return got
-        return "", {"how": got.get("how", ""), "out": got.get("out", "")}
+        out = {"how": got.get("how", ""), "out": got.get("out", "")}
+        for k in ("stepped", "offset_ms", "why"):
+            if k in got:
+                out[k] = got[k]
+        return "", out
 
     def _ops_debug(self, p: dict[str, Any]) -> str | tuple[str, dict[str, Any]]:
         m = p.get("minutes")

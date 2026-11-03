@@ -305,3 +305,70 @@ def test_外审_建图前没在跑的不停_回告诉代理没停(tmp_path):
     out = R.Ops(_cfg(tmp_path), run=rec).do("pause", {"unit": "d1max-localizer"})
     assert out == {"unit": "d1max-localizer", "stopped": False}
     assert rec.calls == [["systemctl", "is-active", "--quiet", "d1max-localizer.service"]]
+
+
+class _钟Rec(Rec):
+    """``chronyc tracking`` 按 ``leap`` 回;别的照 Rec。"""
+
+    def __init__(self, leap: str) -> None:
+        super().__init__()
+        self.leap = leap
+
+    def __call__(self, argv, timeout):
+        self.calls.append(argv)
+        if argv[:3] == ["chronyc", "-n", "tracking"]:
+            return 0, f"Reference ID    : 00000000 ()\nLeap status     : {self.leap}\n"
+        return 0, ""
+
+
+def test_W70_对时带站点钟差_NTP没对上_按站点的钟拨(tmp_path, monkeypatch):
+    """2026-11-03 C40221:站点在笔记本上、经隧道接入,机器人上不了外网,chrony 没源,钟慢 28 s。"""
+    import time as _t
+    monkeypatch.setattr(R.shutil, "which", lambda n: "/usr/bin/" + n if n == "chronyc" else None)
+    rec = _钟Rec("Not synchronised")
+    got = R.Ops(_cfg(tmp_path), run=rec).timesync({"offset_ms": 28_000})
+    assert got["stepped"] is True and got["offset_ms"] == 28_000
+    date = [c for c in rec.calls if c[0] == "date"]
+    assert len(date) == 1 and date[0][:3] == ["date", "-u", "-s"]
+    assert abs(float(date[0][3].lstrip("@")) - (_t.time() + 28.0)) < 5
+
+
+def test_W70_NTP对上了_不按站点的钟拨(tmp_path, monkeypatch):
+    monkeypatch.setattr(R.shutil, "which", lambda n: "/usr/bin/" + n if n == "chronyc" else None)
+    rec = _钟Rec("Normal")
+    got = R.Ops(_cfg(tmp_path), run=rec).timesync({"offset_ms": 28_000})
+    assert got["stepped"] is False and not [c for c in rec.calls if c[0] == "date"]
+
+
+def test_W70_差得少不拨_参数不对拒(tmp_path, monkeypatch):
+    monkeypatch.setattr(R.shutil, "which", lambda n: "/usr/bin/" + n if n == "chronyc" else None)
+    rec = _钟Rec("Not synchronised")
+    ops = R.Ops(_cfg(tmp_path), run=rec)
+    assert ops.timesync({"offset_ms": 300})["stepped"] is False
+    for bad in ("28000", True, 10**13, 1.5):
+        with pytest.raises(R.OpError):
+            ops.timesync({"offset_ms": bad})
+    assert not [c for c in rec.calls if c[0] == "date"]
+
+
+def test_W70_断电再开是1970年_往前拨几十年照拨(tmp_path, monkeypatch):
+    monkeypatch.setattr(R.shutil, "which", lambda n: "/usr/bin/" + n if n == "chronyc" else None)
+    monkeypatch.setattr(R.time, "time", lambda: 86_400.0)          # 1970-01-02
+    rec = _钟Rec("Not synchronised")
+    off = (1_793_000_000 - 86_400) * 1000
+    ops = R.Ops(_cfg(tmp_path), run=rec)
+    assert ops.timesync({"offset_ms": off})["stepped"] is True
+    with pytest.raises(R.OpError):
+        ops.timesync({"offset_ms": -off})
+
+
+def test_W70_chrony停着_makestep失败_照样按站点的钟拨(tmp_path, monkeypatch):
+    monkeypatch.setattr(R.shutil, "which", lambda n: "/usr/bin/" + n if n == "chronyc" else None)
+
+    class 停着(_钟Rec):
+        def __call__(self, argv, timeout):
+            self.calls.append(argv)
+            return (1, "506 Cannot talk to daemon") if argv[0] == "chronyc" else (0, "")
+    rec = 停着("")
+    got = R.Ops(_cfg(tmp_path), run=rec).timesync({"offset_ms": -28_000})
+    assert got["stepped"] is True and [c for c in rec.calls if c[0] == "date"]

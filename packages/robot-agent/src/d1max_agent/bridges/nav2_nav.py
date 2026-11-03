@@ -92,7 +92,8 @@ TURN_ONLY_M = 0.2
 #: 退回自己的规划导航(W70,2026-11-03 C40221:中止后马上回原点,退回去倒退 1.3 m、停 20 s)。
 NAV2_SETTLE_S = 10.0
 NAV2_SETTLE_POLL_S = 0.2
-NAV2_TRANSIENT = ("取消上一次", "动作状态同步")
+#: 「代理未在送时钟」(2026-11-03 11:58:01:处理中止那一拍卡了 2 s 多):等的时候自己先送上时钟。
+NAV2_TRANSIENT = ("取消上一次", "动作状态同步", "未在送时钟")
 #: 原地转转到差这么多(弧度,约 3°)算到(W70,2026-11-03 C40221:原来 0.15,原点朝向每次差 8–10°)。
 TURN_DONE_RAD = 0.05
 #: 转过头了(误差变号)、差得不到这么多也算到:运控有死区、有延迟,不来回摆。
@@ -211,6 +212,8 @@ class Nav2NavBackend(PlannedNavBackend):
             self._settling = True
             try:
                 for _ in range(max(1, round(NAV2_SETTLE_S / NAV2_SETTLE_POLL_S))):
+                    if "未在送时钟" in why:
+                        self._feed()                       # 机器人这时停着:送上时钟、里程就行
                     await asyncio.sleep(NAV2_SETTLE_POLL_S)
                     why = self.nav2_ready()
                     if not why or not any(k in why for k in NAV2_TRANSIENT):

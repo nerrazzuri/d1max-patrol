@@ -56,6 +56,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 #: 独占目录里(``install_bind``),重启它不是提权。
 #: 建图时可以暂停的(工单 21:Super-LIO 建图要 CPU;避障不停)。
 MAPPING_PAUSE_UNITS = ("d1max-lidar-merge", "d1max-localizer")
+#: W70:按站点的钟拨钟 —— 差不到这么多(毫秒)不拨;最多拨这么多(一年,出厂 1970 年的钟另走对时)。
+CLOCK_STEP_MIN_MS = 1000
+MAX_CLOCK_STEP_MS = 366 * 24 * 3600 * 1000
+CLOCK_FLOOR_S = 1_735_689_600                    # 2025-01-01:比它早的钟一定是错的
 ROBOT_UNITS = ("d1max-localizer", "d1max-obstacles", "d1max-persons", "d1max-lidar-merge",
                "d1max-nav2", "d1max-sidecar", "d1max-zenohd", "d1max-bind", "d1max-agent")
 
@@ -498,11 +502,47 @@ class Ops:
         return {"delay_s": delay}
 
     def timesync(self, args: dict[str, Any]) -> dict[str, Any]:
+        """立即对时。``offset_ms``(W70,可选):站点的钟减机器人的钟(代理收到站点时刻时算的)——
+        NTP 没对上(站点在笔记本上、经隧道接入、上不了外网,chrony 没源)且差过 1 s,就按它拨钟;
+        NTP 对上了不拨(不跟 NTP 抢)。"""
+        off = args.get("offset_ms")
+        if off is not None and (not isinstance(off, int) or isinstance(off, bool)):
+            raise OpError("offset_ms 要是整数")
+        if off is not None and abs(off) > MAX_CLOCK_STEP_MS:
+            # 整机断电再开是 1970 年(决策 61):钟早于 CLOCK_FLOOR_S 的,往前拨到 CLOCK_FLOOR_S 以后照拨
+            now = time.time()
+            if not (now < CLOCK_FLOOR_S and off > 0 and now + off / 1000.0 >= CLOCK_FLOOR_S):
+                raise OpError(f"offset_ms 绝对值不超过 {MAX_CLOCK_STEP_MS}")
+        try:
+            if shutil.which("chronyc"):
+                out = self._sys("chronyc", "-a", "makestep")
+                got: dict[str, Any] = {"how": "chrony", "out": out.strip()[-200:]}
+            else:
+                self._sys("systemctl", "restart", "systemd-timesyncd.service")
+                got = {"how": "timesyncd"}
+        except OpError as exc:
+            if off is None:
+                raise
+            got = {"how": "none", "out": str(exc)[-200:]}   # chrony 停着(现场手工推过钟):照样按站点拨
+        if off is None:
+            return got
+        got["stepped"] = False
+        if abs(off) < CLOCK_STEP_MIN_MS:
+            return got
+        if self._ntp_synced():
+            got["why"] = "NTP 已对上,不按站点的钟拨"
+            return got
+        target = time.time() + off / 1000.0
+        self._sys("date", "-u", "-s", f"@{target:.3f}")
+        got.update(how="site", stepped=True, offset_ms=off)
+        return got
+
+    def _ntp_synced(self) -> bool:
         if shutil.which("chronyc"):
-            out = self._sys("chronyc", "-a", "makestep")
-            return {"how": "chrony", "out": out.strip()[-200:]}
-        self._sys("systemctl", "restart", "systemd-timesyncd.service")
-        return {"how": "timesyncd"}
+            rc, out = self.run(["chronyc", "-n", "tracking"], 10)
+            return rc == 0 and bool(re.search(r"Leap status\s*:\s*Normal", out))
+        rc, out = self.run(["timedatectl", "show", "-p", "NTPSynchronized", "--value"], 10)
+        return rc == 0 and out.strip() == "yes"
 
     def journal_vacuum(self, args: dict[str, Any]) -> dict[str, Any]:
         mb = args.get("max_mb", 200)

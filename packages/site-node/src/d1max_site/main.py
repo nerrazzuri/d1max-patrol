@@ -858,6 +858,8 @@ class Server:
         self.alert_sources = SiteAlertSources(self.alerts, now_ms=wall_ms,
                                               skew_of=self.dispatcher.clock_skew_s)   # W09d:同一份
         self.alert_sources.attach(self.dispatcher)
+        from d1max_site.clockskew import ClockNudger
+        self.clock_nudge = ClockNudger(self.dispatcher, now_ms=wall_ms)   # W70:钟偏了站点帮它对
         # W53:临时巡逻(手动派的巡逻;撞日程排在后面,排队的跟排程同一拍派)
         from d1max_site.adhoc import AdhocDesk
         self.adhoc = AdhocDesk(self.db, self.dispatcher, now_ms=wall_ms, alerts=self.alerts,
@@ -1306,7 +1308,8 @@ class Server:
                                      ("受力警笛", "force", "sound"),      # W26:布防时被抱起来
                                      ("天气", "weather", "tick"),         # W29:雷暴撤排程、对账限速
                                      ("推送", "push", "tick"),            # A6:P1 推到手机
-                                     ("升级排队", "release_queue", "tick")):  # W44:充完电空闲再换
+                                     ("升级排队", "release_queue", "tick"),   # W44:充完电空闲再换
+                                     ("对时", "clock_nudge", "tick")):        # W70:钟偏了发站点时刻
                 try:
                     # 推送是同步的、要等网络:放线程里;别的本来就是协程
                     self._lane(what, getattr(getattr(self, part), meth), thread=part == "push")
