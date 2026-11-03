@@ -118,6 +118,9 @@ class MapCatalog:
         #: 平面图(地图显示改进):(地图号, 版本) → ((PNG, 倍数), 文件, 文件戳),同上。
         self._plans: dict[tuple[str, str], tuple[Any, tuple[Path, ...], tuple]] = {}
         self._preview_lock = threading.Lock()
+        #: W71 下发进度(用户 11-03:「下发到机器人的时候需要有个提示」):(机器人, 地图号, 版本) →
+        #: ({文件名: 发到第几个字节}, 最近一次发的时刻)。只在内存里,站点重启就没了(只是提示)。
+        self._served: dict[tuple[str, str, str], tuple[dict[str, int], int]] = {}
         #: 「哪里有图」(W09c 决定 5):(地图号, 版本) → (走过的路, 可通行判定)或 None(老版本不查)。
         self._reaches: dict[tuple[str, str], Any] = {}
         #: 渲染一次只做一张(纯 Python,吃 CPU 和内存);同一版几个人一起点,后来的等着拿缓存。
@@ -217,6 +220,35 @@ class MapCatalog:
             raise MapError(f"地图不存在:{map_id}:{version}")
         return MapRef.from_wire({"map_id": map_id, "version": version,
                                  "files": json.loads(rows[0]["files"])})
+
+    def note_served(self, robot_id: str, map_id: str, version: str, name: str, upto: int) -> None:
+        """给机器人发这个文件发到了第 ``upto`` 个字节(下载器每发一块调一次)。"""
+        key = (robot_id, map_id, version)
+        with self._lock:
+            files, _ = self._served.get(key, ({}, 0))
+            files[name] = max(files.get(name, 0), int(upto))
+            self._served[key] = (files, self._now())
+            if len(self._served) > 256:                  # 老的扔掉
+                for k in sorted(self._served, key=lambda k: self._served[k][1])[:64]:
+                    del self._served[k]
+
+    def download_progress(self, robot_id: str, map_id: str, version: str
+                          ) -> dict[str, int] | None:
+        """→ ``{"bytes", "total", "at_ms"}``(发了多少、这一版一共多大、最近一次发的时刻);
+        没发过 None。机器人上已有的文件(W71 代理不再重下)不会发,``bytes`` 到不了 ``total``
+        也可能已经下完。"""
+        with self._lock:
+            got = self._served.get((robot_id, map_id, version))
+            if got is None:
+                return None
+            files, at = dict(got[0]), got[1]
+        try:
+            ref = self.get(map_id, version)
+        except MapError:
+            return None
+        sizes = {f.name: f.size for f in ref.files}
+        return {"bytes": sum(min(n, sizes.get(k, 0)) for k, n in files.items()),
+                "total": sum(sizes.values()), "at_ms": at}
 
     def file_path(self, map_id: str, version: str, name: str) -> Path:
         """狗下载用。名字按契约查过,而且必须在登记的清单里。"""

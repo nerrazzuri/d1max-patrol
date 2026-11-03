@@ -301,7 +301,12 @@ describe("对比", () => {
 
 describe("换图状态和运行配置的文字", () => {
   it("各个状态的说法;老代理的成功标出没等定位器", () => {
-    expect(activationText(act("pending"))).toBe("Waiting for the robot");
+    expect(activationText(act("pending"))).toBe("Sent — waiting for the robot to start downloading");
+    // W71:等机器人换的时候带下载进度
+    expect(activationText(act("pending", { download: { bytes: 61e6, total: 145e6, at_ms: 1000 } }), 3000))
+      .toBe("Downloading 61 MB / 145 MB");
+    expect(activationText(act("pending", { download: { bytes: 145e6, total: 145e6, at_ms: 1000 } }), 31000))
+      .toMatch(/nothing sent for 30 s/);
     expect(activationText(act("confirmed", { confirmed: "localizer" }))).toBe("Confirmed by the localizer");
     expect(activationText(act("confirmed", { confirmed: "load" }))).toContain("no localizer");
     expect(activationText(act("confirmed", { confirmed: "legacy" }))).toContain("did not wait for the localizer");

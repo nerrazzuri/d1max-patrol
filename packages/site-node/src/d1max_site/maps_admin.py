@@ -167,6 +167,10 @@ class MapAdmin:
             run = d.running_view(c)
             cur = self._loaded(rid)
             acts = self.activations(rid, 5)
+            if acts and acts[0]["state"] == "pending":
+                # W71:等机器人换的时候带上下载进度(站点发了多少字节)
+                acts[0] = {**acts[0], "download": cat.download_progress(
+                    rid, acts[0]["map_id"], acts[0]["version"])}
             target = self.rollback_target(rid)
             if target is not None:
                 previous_on.setdefault((target["map_id"], target["version"]), []).append(rid)
