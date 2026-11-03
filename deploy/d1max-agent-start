@@ -32,6 +32,8 @@ if [ -z "${D1MAX_SUPERLIO_ROOT:-}" ] && [ -f "$here/venv/superlio-root" ]; then
   D1MAX_SUPERLIO_ROOT=$(cat "$here/venv/superlio-root")
   export D1MAX_SUPERLIO_ROOT
 fi
+# numpy 的线性代数库(OpenBLAS)缺省开满核的线程;代理里的障碍记忆、全局重定位都是小矩阵(W71,同定位器)
+export OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1
 # D1MAX_AGENT_ARGS 整串交给代理拆(W32):这一版不认识的参数跳过并报站点,退回老版也起得来
 exec "$here/venv/bin/d1max-agent" \
   --transport "${D1MAX_SITE_MQTT:?/etc/d1max/env 里没有 D1MAX_SITE_MQTT(站点地址)}" \

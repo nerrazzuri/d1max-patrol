@@ -206,6 +206,11 @@ def _keys(v: np.ndarray) -> np.ndarray:
     return (v[:, 0] << 42) | (v[:, 1] << 21) | v[:, 2]
 
 
+def _to_map(pts: np.ndarray, rot: np.ndarray, p: Sequence[float]) -> np.ndarray:
+    """雷达系的点 → 地图系(打分只对抽出来的点调)。"""
+    return pts @ rot.T + np.asarray(p, dtype=np.float64)
+
+
 _NEIGH = np.array([(a, b, c) for a in (-1, 0, 1) for b in (-1, 0, 1) for c in (-1, 0, 1)],
                   dtype=np.int64)
 
@@ -228,12 +233,16 @@ class MapFit:
         a = a[(r2 >= S.RANGE_MIN_M ** 2) & (r2 <= S.RANGE_MAX_M ** 2)]
         if len(a) == 0:
             return None
-        w = a @ np.array(quat_to_mat(q)).T + np.asarray(p, dtype=np.float64)
-        w = w[w[:, 2] > float(p[2]) - FIT_FLOOR_BELOW_M]
-        if len(w) < FIT_MIN_POINTS:
+        rot = np.array(quat_to_mat(q), dtype=np.float64)
+        # W71:先只算高度(逐列乘加,不过矩阵乘)筛掉地面、抽好点,再只转抽出来的那些 —— 整帧 8.6 万个点
+        # 乘旋转在 Orin 上惊动 OpenBLAS 的整个线程池(11-03 商场 8 个线程各 10–14%)。分数跟原来一样。
+        z = a[:, 0] * rot[2, 0] + a[:, 1] * rot[2, 1] + a[:, 2] * rot[2, 2]
+        a = a[z > -FIT_FLOOR_BELOW_M]
+        if len(a) < FIT_MIN_POINTS:
             return None
-        if len(w) > FIT_POINTS:
-            w = w[np.linspace(0, len(w) - 1, FIT_POINTS).astype(np.int64)]
+        if len(a) > FIT_POINTS:
+            a = a[np.linspace(0, len(a) - 1, FIT_POINTS).astype(np.int64)]
+        w = _to_map(a, rot, p)
         v = np.floor(w / self.res).astype(np.int64)
         k = _keys((v[:, None, :] + _NEIGH[None, :, :]).reshape(-1, 3)).reshape(len(v), -1)
         i = np.searchsorted(self._occ, k)
