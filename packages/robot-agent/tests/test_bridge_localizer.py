@@ -1308,7 +1308,10 @@ async def test_S6_σ偏大_在推算_算变差_好了过一阵才算回来_不�
         loc.update((0.0, 0.0, 0.0), True)
         loc.on_pose(_位姿(0.0, 0.0, sigma=0.1))
     assert loc.degraded(True) == "" and "degraded" not in loc.to_wire(True)
-    c.t += FRESH_S + 0.2                                  # 定位器这一阵没来:拿里程推
+    c.t += FRESH_S + 0.2                                  # 晚到 0.7 s:拿里程推,还不算变差(W70)
+    loc.update((0.1, 0.0, 0.0), True)
+    assert loc.ok(True) and loc.source == "dead_reckoning" and loc.degraded(True) == ""
+    c.t += 0.4                                            # 推了 1.1 s:算变差
     loc.update((0.1, 0.0, 0.0), True)
     assert loc.ok(True) and loc.source == "dead_reckoning" and "推算" in loc.degraded(True)
     loc.on_pose(_位姿(0.1, 0.0, sigma=SIGMA_LOST_M + 0.1))
