@@ -1127,3 +1127,23 @@ async def test_W71_走不动但机身是平的_不做台阶脱困(tmp_path):
         link.cmd = (link.now, link.kinds("goal")[-1]["goal_id"], 0.4, 0.0, 0.0)
         await t.一拍()
     assert not link.kinds("cancel") and abs(t.r.yaw) < 0.05
+
+
+async def test_W71_机器人自己四周都被判成挡_Nav2失败_说机器人被困_不说目标点被占(tmp_path):
+    """11-03 17:28 商场 P2→P3:机身歪着,身边一圈都被判成凸起,Nav2「Starting point in lethal space」,
+    代理却报「目标点被占」。"""
+    link = 假转接()
+    t = _台(tmp_path, link)
+    await t.start(1.5, 4.0)
+    for k, box in {"前": (2.25, 3.5, 2.45, 4.5), "后": (0.55, 3.5, 0.75, 4.5),
+                   "左": (1.0, 4.5, 2.0, 4.7), "右": (1.0, 3.3, 2.0, 3.5)}.items():
+        t.world.dyn[k] = box
+    await _看清(t)
+    await t.nav.goto(Pose.from_xy_yaw(8.0, 4.0, 0.0))
+    gid = link.kinds("goal")[-1]["goal_id"]
+    await t.跑(0.5)
+    link.goal_states.append({"type": "goal_state", "goal_id": gid, "state": "aborted",
+                             "reason": "no valid path"})
+    await t.跑(1.0)
+    assert NavStatus.FAILED in t.status and "被困" in t.nav.fail_reason, t.nav.fail_reason
+    assert "目标点被占" not in t.nav.fail_reason and not t.nav.fail_final

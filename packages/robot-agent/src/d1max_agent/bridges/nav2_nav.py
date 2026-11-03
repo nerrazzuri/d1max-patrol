@@ -705,10 +705,16 @@ class Nav2NavBackend(PlannedNavBackend):
         35 s 就到了)。"""
         raw = f"Nav2 {m['state']}:{m.get('reason', '') or '没说原因'}"
         tgt = self._target
-        occupied = tgt is not None and self._target_occupied(here, tgt)
+        # W71(11-03 17:28 商场:机身歪着,身边一圈被判成挡,Nav2「Starting point in lethal space」,
+        # 原来报「目标点被占」):机器人自己被围住先说被困 —— 不是终局,挪开一点再试能好
+        trapped = "lethal" in str(m.get("reason", "")).lower() or self._trapped(here)
+        occupied = not trapped and tgt is not None and self._target_occupied(here, tgt)
         start = getattr(self, "_goal_from", None)
         stuck = start is not None and math.dist(start, (here.x, here.y)) < NO_PROGRESS_M
-        if occupied:
+        if trapped:
+            why = ("机器人被困:身边一圈都被判成障碍(台阶、地面高差,或者贴着东西),规划不出路;"
+                   "把它挪开一点或遥控出来再派")
+        elif occupied:
             why = "目标点被占(那里有东西,机器人站不下),去不了:把东西挪开后再派一次"
         elif stuck:
             why = ("规划不出到目标的路线,机器人没动(路被堵死,或者目标附近有东西;"
@@ -719,6 +725,29 @@ class Nav2NavBackend(PlannedNavBackend):
         log.warning("%s(%s)", why, raw)
         self.fail_final = occupied                        # 先标上:引擎收到 Failed 时就读它
         await self._fail(f"{why}({raw})"[:200])
+
+    def _trapped(self, here: Any) -> bool:
+        """机身外面 0.15–0.35 m 那一圈,前、后都有挡(障碍记忆,看得见才算):前进后退都不行。
+        机身两侧贴身那一条雷达本来看不见,不看;机器人也不横着走。"""
+        view = self.obstacles
+        if view is None or not getattr(view, "frames", None):
+            return False
+        g = self.guard
+        hl = getattr(g, "body_len", 0.93) / 2
+        hw = getattr(g, "body_wid", 0.48) / 2
+        ends: list[list[tuple[float, float]]] = [[], []]
+        for d in (0.15, 0.25, 0.35):
+            for k in range(-4, 5):
+                ends[0].append((hl + d, k / 4 * hw))
+                ends[1].append((-hl - d, k / 4 * hw))
+        for pts in ends:
+            try:
+                hits, _ = view.lookup(pts, self._odom_pose)
+            except Exception:                             # noqa: BLE001 - 判不了就当没困
+                return False
+            if len(hits) < 2:
+                return False
+        return True
 
     def _target_occupied(self, here: Any, tgt: Any) -> bool:
         """目标位姿上的机身矩形里,障碍记忆说有挡的格子(看得见才算;看不见的不算占)。"""
