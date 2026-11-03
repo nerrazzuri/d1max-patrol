@@ -17,6 +17,7 @@ import logging
 import re
 import ssl
 import threading
+import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -161,14 +162,16 @@ class _Handler(TlsHandlerMixin):
             return self._stream(path)
         if len(parts) != 5 or parts[1] != "maps" or self.site.maps is None:
             return self._refuse(404, "没有此")
+        map_id, version, name = unquote(parts[2]), unquote(parts[3]), unquote(parts[4])
         try:
-            path = self.site.maps.file_path(unquote(parts[2]), unquote(parts[3]),
-                                            unquote(parts[4]))
+            path = self.site.maps.file_path(map_id, version, name)
         except MapError as exc:
             return self._refuse(404, str(exc))
-        return self._stream(path)
+        note = getattr(self.site.maps, "note_served", None)
+        return self._stream(path, None if note is None else
+                            (lambda upto: note(robot, map_id, version, name, upto)))
 
-    def _stream(self, path) -> None:
+    def _stream(self, path, on_sent: Callable[[int], None] | None = None) -> None:
         """整个文件,或 ``Range: bytes=起-[止]`` 那一段(W09c 决定 8:狗断了从断点接着下)。"""
         size = path.stat().st_size
         start, end = 0, size - 1
@@ -193,11 +196,19 @@ class _Handler(TlsHandlerMixin):
         self.send_header("Accept-Ranges", "bytes")
         self.end_headers()
         left = end - start + 1
+        pos, told = start, 0.0
         with open(path, "rb") as fh:
             fh.seek(start)
             while left > 0 and (chunk := fh.read(min(1 << 16, left))):
                 self.wfile.write(chunk)
                 left -= len(chunk)
+                pos += len(chunk)
+                if on_sent is not None and (left == 0 or time.monotonic() - told >= 1.0):
+                    told = time.monotonic()               # W71 下发进度:一秒记一次
+                    try:
+                        on_sent(pos)
+                    except Exception:                    # 只是提示,不拦下载
+                        log.exception("记下发进度没成")
 
     def do_POST(self) -> None:
         kinds = {WIRE_PATH: "runs", "/maps" + WIRE_PATH: "maps", "/bags" + WIRE_PATH: "bags",

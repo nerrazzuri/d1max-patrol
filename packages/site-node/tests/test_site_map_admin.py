@@ -345,3 +345,23 @@ def test_W41_清噪点_找候选_清掉另存新版_原点照抄_图换了拒_�
     row = s.db.query("SELECT detail FROM audit WHERE action LIKE '%/denoise' "
                      "ORDER BY id DESC LIMIT 1")[0]
     assert '"version": "10"' in row["detail"]
+
+
+def test_W71_换图等机器人时_总览带下载进度(站点):
+    """用户 11-03:「下发到机器人的时候需要有个提示,网页不应该点了下载但是没提示」—— 145 MB 在热点上
+    下好几分钟,网页一直只写「等机器人换」。站点给机器人发文件时记下发到第几个字节。"""
+    s = 站点
+    adm = __import__("d1max_site.maps_admin", fromlist=["x"]).MapAdmin(s.api)
+    now = int(time.time() * 1000)
+    with s.db.tx() as c:
+        c.execute("INSERT INTO commands(command_id, task_id, robot_id, kind, payload, "
+                  "issued_by, issued_at, ack_result) VALUES ('c9','t9','A','map_activate',?,"
+                  "'alice',?,'accepted')", (json.dumps({"map_id": MAP[0], "version": "9"}), now))
+    ref = s.maps.get(MAP[0], "9")
+    total = sum(f.size for f in ref.files)
+    f0 = ref.files[0]
+    s.maps.note_served("A", MAP[0], "9", f0.name, f0.size // 2)
+    a = next(r for r in adm.overview()["robots"] if r["robot_id"] == "A")["activation"]
+    assert a["state"] == "pending" and a["version"] == "9"
+    assert a["download"]["bytes"] == f0.size // 2 and a["download"]["total"] == total
+    assert a["download"]["at_ms"] >= now

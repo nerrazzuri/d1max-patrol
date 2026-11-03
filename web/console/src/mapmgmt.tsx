@@ -32,7 +32,11 @@ export interface Version {
   thumbnail: string;
   has_raster: boolean;
 }
-export interface Activation { map_id: string; version: string; state: "pending" | "confirmed" | "failed" | "timeout"; at_ms: number; by: string; reason: string; confirmed: string | null }
+export interface Activation {
+  map_id: string; version: string; state: "pending" | "confirmed" | "failed" | "timeout"; at_ms: number; by: string; reason: string; confirmed: string | null;
+  /** W71:等机器人换的时候站点发了多少(机器人上已有的文件不重下,所以到不了 total 也可能已下完)。 */
+  download?: { bytes: number; total: number; at_ms: number } | null;
+}
 export interface Running {
   legacy: boolean;
   problems: string[];
@@ -73,10 +77,17 @@ function mb(bytes: number): string {
   return bytes >= 1e9 ? `${(bytes / 1e9).toFixed(1)} GB` : `${(bytes / 1e6).toFixed(bytes >= 1e7 ? 0 : 1)} MB`;
 }
 
-export function activationText(a: Activation): string {
+export function activationText(a: Activation, nowMs: number = Date.now()): string {
   switch (a.state) {
-    case "pending":
-      return tr("Waiting for the robot", "等机器人换");
+    case "pending": {
+      // W71(用户 11-03:「下发到机器人的时候需要有个提示」):站点发了多少就写多少
+      const d = a.download;
+      if (!d) return tr("Sent — waiting for the robot to start downloading", "已发出,等机器人开始下载");
+      const idle = Math.round((nowMs - d.at_ms) / 1000);
+      const got = `${mb(d.bytes)} / ${mb(d.total)}`;
+      if (idle > 15) return tr(`Downloaded ${got}; nothing sent for ${idle} s — loading, or the link is down`, `已下载 ${got};${idle} 秒没再下 —— 在载入,或者网断了`);
+      return tr(`Downloading ${got}`, `正在下载 ${got}`);
+    }
     case "confirmed":
       return a.confirmed === "localizer"
         ? tr("Confirmed by the localizer", "定位器已确认")
