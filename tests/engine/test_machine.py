@@ -222,6 +222,20 @@ async def test_重试次数用完才算这个点失败(make_engine, nav):
     assert len(nav.goto_calls) == 6, "两个点,每个点 1 次加 2 次重试"
 
 
+async def test_W70_导航说再试也一样_不按重试次数再来(make_engine, nav):
+    """11-03 C40221:原点被椅子占了,Nav2 规划不出、狗没动;失败了代理 1 s 后原样再发一遍。导航后端
+    标了 ``fail_final``(目标点被占、规划不出而狗没动)的,这个点直接算失败。"""
+    nav.on_goto = [NavStatusEvent(NavStatus.FAILED)]
+    nav.fail_final = True
+    nav.fail_reason = "目标点被占"
+    engine = make_engine()
+    mission = make_mission(policy=policy(on_waypoint_failed="retry_then_skip",
+                                         waypoint_retry=2))
+    await run_to_end(engine, mission)
+    assert len(nav.goto_calls) == 2, "两个点各一次,不重试"
+    assert "目标点被占" in engine.snapshot.results[0].note
+
+
 async def test_不重试的策略只下发一次(make_engine, nav):
     nav.on_goto = [NavStatusEvent(NavStatus.FAILED)]
     engine = make_engine()

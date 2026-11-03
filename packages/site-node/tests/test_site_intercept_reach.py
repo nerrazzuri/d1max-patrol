@@ -247,3 +247,13 @@ def test_W70_靠墙的点_机身站得下就算走得到_贴着墙的照拦(台)
     assert t.reach.reachable("house", "wide", (1.5, 0.55), (6.0, 0.55)) is True
     assert "站不下" in t.reach.check("贴墙", "house", "wide", 6.0, 0.22).problem
     assert t.reach.reachable("house", "wide", (1.5, 2.0), (6.0, 0.22)) is False
+
+
+def test_W70_通道宽1米_跟Nav2一样算走得通_0点8米照样不通(台, tmp_path):
+    """11-03 C40221:接上 Nav2 以后 1 m 的口子来回都过了,站点按外接圆还要 1.14 m。"""
+    t = 台
+    src = _files(tmp_path / "src-1m")
+    _屋子(src, 1.0)
+    t.cat.import_dir(src, map_id="house", version="m1")
+    assert t.reach.reachable("house", "m1", (1.5, 2.0), (6.0, 2.0)) is True
+    assert t.reach.reachable("house", "narrow", (1.5, 2.0), (6.0, 2.0)) is False

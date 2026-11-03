@@ -332,9 +332,11 @@ class _ReturnHome(Exception):
 class _FailWaypoint(Exception):
     """当前这个点没成。按 ``on_waypoint_failed`` 处置。"""
 
-    def __init__(self, reason: str) -> None:
+    def __init__(self, reason: str, *, retry: bool = True) -> None:
         super().__init__(reason)
         self.reason = reason
+        #: W70:导航后端判定再试也一样(目标点被占、规划不出路线而狗没动):不按 waypoint_retry 再来
+        self.retry = retry
 
 
 class _RetryWaypoint(Exception):
@@ -1187,7 +1189,7 @@ class MissionEngine(EventEmitter[RunSnapshot]):
                 continue                     # 暂停后继续,不算一次重试
             except _FailWaypoint as exc:
                 note = exc.reason
-                tried += 1
+                tried = tried + 1 if exc.retry else attempts
                 # 狗停在哪记进来路(W00c6b 内审):失败了的点没到过,不在回路里;接着往下一个点走的那段
                 # 是从这儿出发的。
                 where = await self._where()
@@ -1246,7 +1248,8 @@ class MissionEngine(EventEmitter[RunSnapshot]):
                 # W34:导航后端说得出原因(急停、被挡/看不见、定位不行……)就写上
                 why = getattr(self._nav, "fail_reason", "")
                 raise _FailWaypoint(f"无法到达下一个点:{why}" if why
-                                    else f"无法到达下一个点(导航回了 {item.status.value})")
+                                    else f"无法到达下一个点(导航回了 {item.status.value})",
+                                    retry=not getattr(self._nav, "fail_final", False))
 
     async def _do_actions(self, wp: MissionWaypoint) -> None:
         for action in wp.actions:

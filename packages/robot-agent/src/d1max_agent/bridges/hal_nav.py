@@ -84,6 +84,8 @@ class HalNavBackend(NavBackend):
         self._loc = LocStatus.CONTINUOUS_LOC
         #: 这一段为什么 Failed(W34:任务失败原因写清楚 —— 急停、看不见、定位不行……);新的一段清空。
         self.fail_reason = ""
+        #: W70:这次失败再试也一样(目标点被占、规划不出路线而狗没动),引擎不按点位重试再来
+        self.fail_final = False
         #: 到了点、正在原地转到目标朝向(W33)。新的一段清空。
         self._yawing = False
         self._target: Pose | None = None
@@ -402,6 +404,7 @@ class HalNavBackend(NavBackend):
         if status is NavStatus.INITIALIZING:
             self._dir = 0                                # 新的一趟:起跑时再定行进方向
             self.fail_reason = ""
+            self.fail_final = False
             self._yawing = False
         if status is not prev:
             self.emit(NavStatusEvent(status, prev))

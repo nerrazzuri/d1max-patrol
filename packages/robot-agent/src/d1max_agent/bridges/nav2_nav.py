@@ -104,6 +104,15 @@ TURN_TAKEOVER_RAD = 0.15
 #: (W70,11-03 C40221:原点旁边有椅子、桌子,要转 170°,守卫一直拦,停了一分多钟)。换个方向转没用 ——
 #: 机身是对称的长方形,绕远那一边扫过的朝向(按 180° 折一下)包含了近的那一边。
 TURN_BLOCKED_S = 10.0
+#: Nav2 回了失败、这一段狗挪了不到这么远(米):再试也一样,不重试(W70,11-03 C40221:原点被椅子占了,
+#: Nav2 每 23 s 一句 no valid path,失败了代理 1 s 后原样再发一遍,站点手机上一直是 running)。
+NO_PROGRESS_M = 0.3
+#: Nav2 这么久(秒)一条速度都没给、也没回结果:当它卡住了,取消、把同一个目标重发一遍,
+#: 一次 goto 最多重发 :data:`NAV2_RESENDS` 次(W70,11-03 15:00 C40221:Nav2 的 action server、
+#: 清图服务都确认超时,规划掉到 1.5 Hz,原地空等到引擎 120 s 超时;重发一次 35 s 就到了)。
+#: 脱困里的 Wait 是 5 s,规划失败两三次在 10 s 内。
+NAV2_STALL_S = 20.0
+NAV2_RESENDS = 2
 #: 原地转最快(弧度/秒):转快了定位器跟不上(11-02 工单 13)。
 TURN_ONLY_MAX_RPS = 0.6
 #: 前进速度不到这个(米/秒)就当「原地转」,按地图上的墙核一道(:meth:`Nav2NavBackend._turn_hits_map`)。
@@ -145,6 +154,9 @@ class Nav2NavBackend(PlannedNavBackend):
         self._turn_only: float | None = None
         self._turn_err: float | None = None                # 上一拍原地转的误差(看转没转过头)
         self._turn_blocked_at: float | None = None         # 只差朝向的原地转从什么时候起被挡(W70)
+        self._goal_msg: dict[str, Any] | None = None       # 这一段发给 Nav2 的目标(卡住了重发,W70)
+        self._resends = 0
+        self._quiet_since: float | None = None             # Nav2 从什么时候起没给速度
         self._settling = False                             # 在等 Nav2 一会儿就好的未就绪
         self._map_dir: Path | None = None
         self._map_req = 0
@@ -254,6 +266,7 @@ class Nav2NavBackend(PlannedNavBackend):
             if self.route_net is not None and here is not None else []
         self._goal_id += 1
         self._nav2_goal = self._goal_id
+        self._goal_from = (here.x, here.y) if here is not None else None
         self.link.goal_states.clear()
         self.link.cmd = None                 # 外审 R7:上一个目标晚到的速度不许驱动这一个
         msg: dict[str, Any] = {"type": "goal", "goal_id": self._goal_id, "x": pose.position.x,
@@ -269,6 +282,7 @@ class Nav2NavBackend(PlannedNavBackend):
             dense = dense[-MAX_VIA:]
             msg["via"] = [[round(x, 3), round(y, 3)] for x, y in dense]
         self.link.send(msg)
+        self._goal_msg, self._resends, self._quiet_since = dict(msg), 0, None
         if here is not None:
             pts = [(here.x, here.y), *via, goal_xy]
             self.planned_length_m = PATH_FACTOR * sum(math.dist(a, b)
@@ -330,6 +344,7 @@ class Nav2NavBackend(PlannedNavBackend):
     async def _enter_terminal(self, status: NavStatus) -> None:
         self._turn_only = None
         self._turn_blocked_at = None
+        self._goal_msg, self._quiet_since = None, None
         if status is not NavStatus.SUCCEED:
             self._cancel_nav2()
         self._nav2_goal = None
@@ -434,7 +449,7 @@ class Nav2NavBackend(PlannedNavBackend):
             if m["state"] == "succeeded":
                 await self._enter_terminal(NavStatus.SUCCEED)
                 return
-            await self._fail(f"Nav2 {m['state']}:{m.get('reason', '') or '没说原因'}"[:200])
+            await self._nav2_failed(m, here)
             return
         why = self.nav2_ready()
         if why:
@@ -456,7 +471,9 @@ class Nav2NavBackend(PlannedNavBackend):
         now = link._now()
         if c is None or now - c[0] > CMD_FRESH_S:
             await self._send(0.0, 0.0, dt_s)
+            self._watch_stall(self._secs())
             return
+        self._quiet_since = None
         if len(c) > 5 and c[5] != self._nav2_goal:
             # 外审 R7、复查 N3:别的目标的、转接节点那会儿没在走目标(没标号)的速度都不认
             await self._send(0.0, 0.0, dt_s)
@@ -524,6 +541,70 @@ class Nav2NavBackend(PlannedNavBackend):
                                             "detour": True})
         self._guard_since, self._guard_told = None, False
         await self._send(vx, wz, dt_s)
+
+    def _watch_stall(self, now: float) -> None:
+        """Nav2 一直不给速度、也不回结果(W70):过 :data:`NAV2_STALL_S` 取消、重发同一个目标。"""
+        if getattr(self, "_quiet_since", None) is None:
+            self._quiet_since = now
+            return
+        msg = getattr(self, "_goal_msg", None)
+        if msg is None or now - self._quiet_since < NAV2_STALL_S \
+                or self._resends >= NAV2_RESENDS or self.link is None:
+            return
+        self._cancel_nav2()
+        self._goal_id += 1
+        self._nav2_goal = self._goal_id
+        self.link.goal_states.clear()
+        self.link.cmd = None
+        self.link.send({**msg, "goal_id": self._goal_id})
+        self._resends += 1
+        self._quiet_since = now
+        log.warning("Nav2 %.0f 秒没给速度也没回结果:当它卡住了,取消、重发同一个目标"
+                    "(第 %d 次,目标 %d)", NAV2_STALL_S, self._resends, self._goal_id)
+
+    async def _nav2_failed(self, m: dict, here: Any) -> None:
+        """Nav2 回了失败(W70):目标点被实时障碍占了 —— 再试也一样,说清楚、不重试;规划不出路线而
+        狗没挪窝的说清楚原因,照旧让引擎再试一次(11-03 15:00 现场:第一次空等 2 分钟,再发一次
+        35 s 就到了)。"""
+        raw = f"Nav2 {m['state']}:{m.get('reason', '') or '没说原因'}"
+        tgt = self._target
+        occupied = tgt is not None and self._target_occupied(here, tgt)
+        start = getattr(self, "_goal_from", None)
+        stuck = start is not None and math.dist(start, (here.x, here.y)) < NO_PROGRESS_M
+        if occupied:
+            why = "目标点被占(那里有东西,机器人站不下),去不了:把东西挪开后再派一次"
+        elif stuck:
+            why = ("规划不出到目标的路线,机器人没动(路被堵死,或者目标附近有东西;"
+                   "再试一次还不行就清开后再派)")
+        else:
+            await self._fail(raw[:200])
+            return
+        log.warning("%s(%s)", why, raw)
+        self.fail_final = occupied                        # 先标上:引擎收到 Failed 时就读它
+        await self._fail(f"{why}({raw})"[:200])
+
+    def _target_occupied(self, here: Any, tgt: Any) -> bool:
+        """目标位姿上的机身矩形里,障碍记忆说有挡的格子(看得见才算;看不见的不算占)。"""
+        view = self.obstacles
+        if view is None or not getattr(view, "frames", None):
+            return False
+        g = self.guard
+        hl = getattr(g, "body_len", 0.93) / 2
+        hw = getattr(g, "body_wid", 0.48) / 2
+        c, s = math.cos(tgt.yaw), math.sin(tgt.yaw)
+        ch, sh = math.cos(here.yaw), math.sin(here.yaw)
+        pts = []
+        for i in range(-int(hl / 0.1), int(hl / 0.1) + 1):
+            for j in range(-int(hw / 0.1), int(hw / 0.1) + 1):
+                wx = tgt.position.x + c * i * 0.1 - s * j * 0.1
+                wy = tgt.position.y + s * i * 0.1 + c * j * 0.1
+                dx, dy = wx - here.x, wy - here.y            # 地图 → 此刻机身系
+                pts.append((ch * dx + sh * dy, -sh * dx + ch * dy))
+        try:
+            hits, _ = view.lookup(pts, self._odom_pose)
+        except Exception:                                 # noqa: BLE001 - 判不了就当没占
+            return False
+        return len(hits) >= 2
 
     async def _turn_step(self, here: Any, dt_s: float) -> None:
         """只差朝向:原地转到 :attr:`_turn_only`(工单 11-02-11)。地图上的墙、守卫照样管;被挡

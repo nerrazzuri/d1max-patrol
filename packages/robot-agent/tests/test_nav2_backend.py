@@ -949,3 +949,86 @@ async def test_W70_只差朝向_转身会扫到墙_被挡10秒就停在这儿算
     assert NavStatus.SUCCEED in t.status, (t.status, t.nav.fail_reason)
     assert abs(math.degrees(t.r.yaw)) < 120, "确实被挡住、没转过去"
     assert not t.crashed
+
+
+async def test_W70_Nav2失败而狗没挪窝_说规划不出_照旧再试一次(tmp_path):
+    """11-03 C40221:原点被椅子占了,Nav2 一直 no valid path,站点上看不到原因。15:00 又一例:第一次
+    空等 2 分钟,再发一次 35 s 就到了 —— 没挪窝的说清楚原因,但照旧让引擎再试一次。"""
+    link = 假转接()
+    t = _台(tmp_path, link)
+    await t.start(1.5, 4.0)
+    await t.nav.goto(Pose.from_xy_yaw(6.0, 4.0))
+    gid = link.kinds("goal")[-1]["goal_id"]
+    await t.跑(0.5)
+    link.goal_states.append({"type": "goal_state", "goal_id": gid, "state": "aborted",
+                             "reason": "no valid path"})
+    await t.跑(1.0)
+    assert NavStatus.FAILED in t.status and "规划不出到目标的路线" in t.nav.fail_reason
+    assert not t.nav.fail_final
+
+
+async def test_W70_Nav2失败但走了一大段_照旧让引擎重试(tmp_path):
+    link = 假转接()
+    t = _台(tmp_path, link)
+    await t.start(1.5, 4.0)
+    await t.nav.goto(Pose.from_xy_yaw(6.0, 4.0, 0.0))
+    gid = link.kinds("goal")[-1]["goal_id"]
+    for _ in range(30):
+        link.now += 0.1
+        link.cmd = (link.now, 1, 0.4, 0.0, 0.0)
+        await t.一拍()
+    assert t.r.x > 2.0
+    link.goal_states.append({"type": "goal_state", "goal_id": gid, "state": "aborted",
+                             "reason": "x"})
+    await t.跑(1.0)
+    assert NavStatus.FAILED in t.status and not t.nav.fail_final
+
+
+async def test_W70_目标点上有箱子_Nav2失败_说目标点被占_不再重试(tmp_path):
+    """11-03 C40221:椅子放得离原点太近,原点本身被占了;Nav2 只说 no valid path。"""
+    link = 假转接()
+    t = _台(tmp_path, link)
+    await t.start(1.5, 4.0)
+    t.world.dyn["box"] = (2.8, 3.8, 3.2, 4.2)               # 正好压在目标 (3.0, 4.0) 上
+    await _看清(t)
+    await t.nav.goto(Pose.from_xy_yaw(3.0, 4.0, 0.0))
+    gid = link.kinds("goal")[-1]["goal_id"]
+    await t.跑(0.5)
+    link.goal_states.append({"type": "goal_state", "goal_id": gid, "state": "aborted",
+                             "reason": "no valid path"})
+    await t.跑(1.0)
+    assert NavStatus.FAILED in t.status and "目标点被占" in t.nav.fail_reason
+    assert t.nav.fail_final
+
+
+async def test_W70_Nav2卡住不给速度也不回结果_过20秒重发同一个目标_最多两次(tmp_path):
+    """11-03 15:00 C40221:Nav2 的 action server、清图服务都确认超时,原地空等到 120 s;
+    重发一次就好了。"""
+    from d1max_agent.bridges.nav2_nav import NAV2_RESENDS, NAV2_STALL_S
+    link = 假转接()
+    t = _台(tmp_path, link)
+    await t.start(1.5, 4.0)
+    await t.nav.goto(Pose.from_xy_yaw(6.0, 4.0, 0.0))
+    first = link.kinds("goal")[-1]
+    await t.跑(NAV2_STALL_S - 3)
+    assert len(link.kinds("goal")) == 1, "没到时候不重发"
+    await t.跑(5.0)
+    goals = link.kinds("goal")
+    assert len(goals) == 2 and goals[-1]["goal_id"] != first["goal_id"]
+    assert (goals[-1]["x"], goals[-1]["y"]) == (first["x"], first["y"])
+    assert link.kinds("cancel")[-1]["goal_id"] == first["goal_id"]
+    await t.跑((NAV2_STALL_S + 1) * (NAV2_RESENDS + 1))
+    assert len(link.kinds("goal")) == 1 + NAV2_RESENDS, "最多重发两次"
+
+
+async def test_W70_Nav2一直在给速度_不重发(tmp_path):
+    link = 假转接()
+    t = _台(tmp_path, link)
+    await t.start(1.5, 4.0)
+    await t.nav.goto(Pose.from_xy_yaw(9.0, 4.0, 0.0))
+    gid = link.kinds("goal")[-1]["goal_id"]
+    for _ in range(250):                                    # 25 s 一直有速度
+        link.now += 0.1
+        link.cmd = (link.now, gid, 0.2, 0.0, 0.0)
+        await t.一拍()
+    assert len(link.kinds("goal")) == 1
