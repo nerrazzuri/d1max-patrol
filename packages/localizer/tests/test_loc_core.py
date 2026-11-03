@@ -773,3 +773,58 @@ def test_W68_外审r2_等初值时一直重复同一个时间戳_也判卡住():
         t.core.on_estimate(_est(1.0, 1.0, stamp=42.0))
         t.core.tick()
     assert t.core.take_restart()
+
+
+def test_W70_Super_LIO转完停下_打分晚到的转身低分_不让σ过线():
+    """2026-11-03 C40221 反 U 型:代理接过来原地转 -48°,停下后才出来转身那帧的套图分(每 0.5 s
+    打一次、配后面 0.25 s 内的位姿,停下的几帧还沿用它)0.61 → σ 过 0.5 → 代理判丢定位、
+    重启 Super-LIO。"""
+    from d1max_localizer.core import SLIO_QUALITY
+    t = 台(quality=SLIO_QUALITY)
+    x = t.walk(150, q=0.95)
+    _原地转身_外审(t, x, 10, 0.95)
+    yaw = t.core._last[3]
+    t.out.clear()
+    for _ in range(10):                                   # 停下 1 s:分是转身时那帧的
+        t.step(x, 0.0, yaw, q=0.61)
+    assert max(p.sigma_xy for p in t.poses()) < 0.5
+    for i in range(60):                                   # 分一直低、走出 3 m:照实算
+        t.step(x + 0.05 * i, 0.0, yaw, q=0.45)
+    assert t.poses()[-1].sigma_xy > 0.5
+
+
+def test_W70_Super_LIO刚对得很好_走近新摆的箱子分掉到0点57_连续没跳_照样信():
+    """2026-11-03 C40221:原点前 1.7 m 摆了 5 个航空箱,挪 0.5 m 分就从 0.86 掉到 0.55–0.59,
+    σ 0.6–0.8 不信、停下等人;Super-LIO 其实是对的(重定位只修 6 cm)。单帧的分分不开「近处多了
+    东西」和「偏了半米」(office1 上偏 0.5 m 中位 0.55):刚对得很好、之后连续没跳的,走一小段
+    照样信。"""
+    from d1max_localizer.core import SLIO_QUALITY
+    t = 台(quality=SLIO_QUALITY)
+    x = t.walk(100, q=0.9)
+    t.out.clear()
+    x = t.walk(20, q=0.57, x0=x)                          # 再走 1 m
+    assert max(p.sigma_xy for p in t.poses()) < 0.5
+
+
+def test_W70_信用有限_分一直低_走远了照实算():
+    from d1max_localizer.core import SLIO_QUALITY
+    t = 台(quality=SLIO_QUALITY)
+    x = t.walk(100, q=0.9)
+    x = t.walk(120, q=0.57, x0=x)                         # 走 6 m 一直没对好过
+    assert t.poses()[-1].sigma_xy > 0.5
+
+
+def test_W70_信用不救太低的分():
+    from d1max_localizer.core import SLIO_QUALITY
+    t = 台(quality=SLIO_QUALITY)
+    x = t.walk(100, q=0.9)
+    t.out.clear()
+    t.walk(5, q=0.35, x0=x)
+    assert t.poses()[-1].sigma_xy > 0.5
+
+
+def test_W70_没对好过的_没有信用():
+    from d1max_localizer.core import SLIO_QUALITY
+    t = 台(quality=SLIO_QUALITY)
+    t.walk(100, q=0.57)
+    assert t.poses()[-1].sigma_xy > 0.5

@@ -207,7 +207,7 @@ local_costmap:
       obstacle_layer:
         plugin: nav2_costmap_2d::ObstacleLayer
         enabled: true
-        footprint_clearing_enabled: false
+        footprint_clearing_enabled: true
         observation_sources: occ free
         occ:
           topic: /d1max/obs_occ
@@ -254,7 +254,7 @@ global_costmap:
       obstacle_layer:
         plugin: nav2_costmap_2d::ObstacleLayer
         enabled: true
-        footprint_clearing_enabled: false
+        footprint_clearing_enabled: true
         observation_sources: occ free
         occ:
           topic: /d1max/obs_occ

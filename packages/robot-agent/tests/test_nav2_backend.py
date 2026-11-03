@@ -874,3 +874,43 @@ async def test_Nav2走到目标附近只差朝向_代理接过来自己转_工�
     assert link.kinds("cancel") and link.kinds("cancel")[-1]["goal_id"] == gid, "取消 Nav2 的目标"
     assert NavStatus.SUCCEED in t.status, (t.status, t.nav.fail_reason)
     assert abs(math.degrees(t.r.yaw) - 66) < 9, math.degrees(t.r.yaw)
+
+
+async def test_W70_原地转到朝向_差不到3度才算到(tmp_path):
+    """2026-11-03 C40221:原点朝向 0,转完停在 0.166 rad(9.5°):原来差 0.15 rad 以内就停。"""
+    link = 假转接()
+    t = _台(tmp_path, link)
+    await t.start(1.5, 4.0, math.radians(14))
+    await t.nav.goto(Pose.from_xy_yaw(1.55, 4.0, 0.0))
+    await t.跑(20.0)
+    assert NavStatus.SUCCEED in t.status, (t.status, t.nav.fail_reason)
+    assert abs(math.degrees(t.r.yaw)) < 3.5, math.degrees(t.r.yaw)
+
+
+async def test_W70_刚中止完_Nav2在取消上一个目标_回原点等它一下_不退回(tmp_path, monkeypatch):
+    """2026-11-03 C40221:用户中止任务后马上回原点,Nav2 还在取消上一个目标(转接节点报未就绪),
+    代理立刻退回自己的规划导航(倒退 1.3 m、停 20 s)。这种一会儿就好的未就绪,等它。"""
+    import d1max_agent.bridges.nav2_nav as N
+    monkeypatch.setattr(N, "NAV2_SETTLE_POLL_S", 0.01)
+    link = 假转接()
+    t = _台(tmp_path, link)
+    await t.start(1.5, 4.0, 0.0)
+    link.ready, link.reason = False, "等 Nav2 取消上一次留下的导航目标"
+    task = asyncio.get_running_loop().create_task(t.nav.goto(Pose.from_xy_yaw(6.0, 4.0, 0.0)))
+    await asyncio.sleep(0.05)
+    assert not task.done() and not link.kinds("goal")
+    link.ready, link.reason = True, ""
+    await asyncio.wait_for(task, 2.0)
+    assert link.kinds("goal") and t.nav.fallback_reason == ""
+
+
+async def test_W70_Nav2一直取消不完_等够了才退回自己的规划(tmp_path, monkeypatch):
+    import d1max_agent.bridges.nav2_nav as N
+    monkeypatch.setattr(N, "NAV2_SETTLE_POLL_S", 0.01)
+    monkeypatch.setattr(N, "NAV2_SETTLE_S", 0.1)
+    link = 假转接()
+    t = _台(tmp_path, link)
+    await t.start(1.5, 4.0, 0.0)
+    link.ready, link.reason = False, "等 Nav2 取消上一次留下的导航目标"
+    await asyncio.wait_for(t.nav.goto(Pose.from_xy_yaw(6.0, 4.0, 0.0)), 2.0)
+    assert "取消上一次" in t.nav.fallback_reason and not link.kinds("goal")

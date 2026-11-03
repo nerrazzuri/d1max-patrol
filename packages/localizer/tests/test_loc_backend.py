@@ -299,7 +299,7 @@ async def test_起_MOLA_出错_不悄悄吞掉(tmp_path):
     await be.load_prior(M, str(_先验(tmp_path)))
     await _settle()
     core.tick()
-    assert "起 MOLA出错" in [m.reason for m in core.drain() if isinstance(m, State)][-1]
+    assert "起定位程序出错" in [m.reason for m in core.drain() if isinstance(m, State)][-1]
 
 
 async def _跟踪着(c, core, be, x=3.0):

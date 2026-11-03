@@ -1854,9 +1854,10 @@ def test_W47_Nav2参数_没有YAML别名_机身是矩形_用Lattice和MPPI():
         p = d[cm][cm]["ros__parameters"]
         assert "robot_radius" not in p and "0.515" in p["footprint"]
         assert p["use_sim_time"] is True
-        # 感知节点早把机身的点滤掉了;开着「脚下清空」,窄门里机身轮廓(带余量)一压上门框就把门框清掉,
-        # 门框又在两侧盲区里标不回来(2026-10-29 仿真里 0.85 m 门撞过一次)
-        assert p["obstacle_layer"]["footprint_clearing_enabled"] is False
+        # W70(2026-11-03 C40221 现场):原来关着「脚下清空」(10-29 仿真 0.85 m 门里机身轮廓压上门框、
+        # 把门框清掉过一次),现场机身边上(两侧盲区)标上的障碍清不掉:起点 lethal、no valid path 卡几
+        # 分钟,1 m 口子里 MPPI 判处处碰撞出不来。地图上的墙在静态层,脚下清空只清障碍层。
+        assert p["obstacle_layer"]["footprint_clearing_enabled"] is True
         # 局部代价地图也要有静态地图层:MPPI 和脱困动作(Spin、后退)只看局部这张,地图上的墙进了两侧
         # 盲区、雷达记忆过期就没了(2026-10-29 仿真里 0.85 m 门里原地转扫到门框)
         assert "static_layer" in p["plugins"]

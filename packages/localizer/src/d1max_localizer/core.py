@@ -133,6 +133,14 @@ class QualityScale:
     #: 真 = 沿用转身前最后一帧的分,不往上抬(Super-LIO 套图分:外审 r1 #1,
     #: 锁错的 0.5 平稳地转不能变可信)
     turn_hold: bool = False
+    #: 转身停下之后还算在转身多久(秒;:data:`TURN_HOLD_S`)。Super-LIO 的套图分每 0.5 s 打一次、
+    #: 配后面 0.25 s 内的位姿,停下的几帧还沿用转身时那帧的分(W70,2026-11-03 C40221)。
+    turn_tail_s: float = TURN_HOLD_S
+    #: 连续信用(W70,2026-11-03 C40221):最近一帧「好」之后连续没跳,走过不到 ``credit_m`` 米、转过
+    #: 不到 ``credit_rad`` 的,分在 ``bad`` 以上就按「好」算 —— 近处新摆的箱子把分压到 0.55,单帧分
+    #: 不开它和偏了半米;真锁错多半从跳变开始(跳了就没有信用),太低的分照样不信。0 = 不用。
+    credit_m: float = 0.0
+    credit_rad: float = 0.0
 
 
 #: MOLA 的 ICP 质量(上面那几条常量的来历)。
@@ -141,7 +149,8 @@ MOLA_QUALITY = QualityScale(good=Q_GOOD, bad=Q_BAD, match=Q_MATCH, lowq=LOWQ_Q, 
 #: 在 mall3 图上:跟对时中位 0.95,< 0.9 占 17%、< 0.7 占 0.4%、最低约 0.67(两圈之间场景变了
 #: 的地方),没有低于 0.5 的;锁错时偏 1 m 中位 0.50、偏 3 m 0.23、转 10° 0.52。
 #: **一次录包定的线,真机再标。**
-SLIO_QUALITY = QualityScale(good=0.7, bad=0.4, match=0.4, lowq=0.6, drop=0.1, turn_hold=True)
+SLIO_QUALITY = QualityScale(good=0.7, bad=0.4, match=0.4, lowq=0.6, drop=0.1, turn_hold=True,
+                            turn_tail_s=1.5, credit_m=2.0, credit_rad=math.pi)
 
 
 @dataclass(frozen=True)
@@ -210,6 +219,7 @@ class LocalizerCore:
         self._steady_at = -1e18                          # 它的时间戳
         self._raw_stamp: float | None = None             # 最近一帧合法估计的时间戳(看门狗用)
         self._want_reloc = False
+        self._credit: list[float] | None = None          # 连续信用:[走过的米, 转过的弧度]
         self._queued = False
         self._expired = False
         self._target: RelocWant | None = None           # 最近一次重定位给的位置(核第一帧用)
@@ -253,6 +263,7 @@ class LocalizerCore:
         self._raw_at = None
         self._raw_stamp = None
         self._steady_q = None
+        self._credit = None
         self._last = None
         self._stamp = None
         self._lowq.clear()
@@ -352,7 +363,7 @@ class LocalizerCore:
         jump = tag is not None
         if self._last is not None and e.stamp > self._last[0]:
             if abs(_wrap(yaw - self._last[3])) / (e.stamp - self._last[0]) > TURN_RPS:
-                self._turn_until = e.stamp + TURN_HOLD_S
+                self._turn_until = e.stamp + self.qs.turn_tail_s
         turning = e.stamp <= self._turn_until
         # 转身时质量在 Q_BAD 以上不当证据(见 TURN_RPS)
         qs = self.qs
@@ -375,12 +386,15 @@ class LocalizerCore:
             quality = e.quality                          # 转太久(外审 r2 #1):照实算
         else:
             quality = max(e.quality, qs.good, qs.lowq)
+        credit = self._credit_step(e.quality, jump, x, y, yaw)
+        if credit:
+            quality = max(quality, qs.good)
         self._last = (e.stamp, x, y, yaw)
         self._reloc_good = self._reloc_good + 1 if (e.quality >= qs.good and not jump) else 0
         # 不当证据的转身帧照样进窗口(占比的分母),只是不拿来定「常态」:拿来定会抬高中位数,把转身前
         # 站着的常态帧算成「低」(2026-10-28 turn-144620 合并回放:站着 0.87、转身 0.93 → σ 1.5);
         # 整个不进又让转身时夹着的烂帧凑不够数、或中位数被烂帧拉低(复查 N2)
-        self._lowq.append((e.stamp, e.quality, neutral))
+        self._lowq.append((e.stamp, e.quality, neutral or credit))
         while self._lowq and e.stamp - self._lowq[0][0] > LOWQ_WINDOW_S:
             self._lowq.popleft()
         if e.quality >= qs.match or self._last_match is None:
@@ -532,6 +546,26 @@ class LocalizerCore:
         else:
             self._retry, self._retry_why = t, "定位程序未照给的位置定位,再请一次"
         return True
+
+    def _credit_step(self, q: float, jump: bool, x: float, y: float, yaw: float) -> bool:
+        """连续信用(:attr:`QualityScale.credit_m`):这一帧要不要按「好」算。"""
+        qs = self.qs
+        if qs.credit_m <= 0:
+            return False
+        if jump or self._last is None:
+            self._credit = None
+        elif q >= qs.good:
+            self._credit = [0.0, 0.0]
+        elif self._credit is not None:
+            self._credit[0] += math.hypot(x - self._last[1], y - self._last[2])
+            self._credit[1] += abs(_wrap(yaw - self._last[3]))
+            if self._credit[0] > qs.credit_m or self._credit[1] > qs.credit_rad:
+                log.info("连续信用用完了(走了 %.1f m、转了 %.0f°都没对好过):照实算",
+                         self._credit[0], math.degrees(self._credit[1]))
+                self._credit = None
+        if jump and q >= qs.good:
+            self._credit = None                          # 跳过的那帧不算「对好了」
+        return self._credit is not None and qs.bad < q < qs.good
 
     def _forget_reloc(self) -> None:
         self._queued = self._expired = False
