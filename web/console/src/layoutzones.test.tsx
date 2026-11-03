@@ -26,7 +26,7 @@ beforeEach(() => {
 afterEach(cleanup);
 
 const data: LayerData = {
-  areas: [{ zone: "北区", points: [[1, 1], [5, 1], [5, 5]] }], nav: null, routes: [], standby: [], robots: [],
+  areas: [{ zone: "北区", points: [[1, 1], [5, 1], [5, 5]] }], nav: null, routes: [], guardRoutes: [], posts: [], standby: [], robots: [],
   cameras: [{ name: "cam1", zone: "前门", onvif_url: "http://10.0.0.5/onvif", rtsp_url: "", username: "admin", has_password: true, motion: false },
     { name: "cam2", zone: "北区", onvif_url: "http://10.0.0.6/onvif", rtsp_url: "", username: "", has_password: false, motion: true }],
 };

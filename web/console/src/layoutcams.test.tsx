@@ -26,7 +26,7 @@ afterEach(cleanup);
 const cam = (o: Record<string, unknown> = {}) => ({ name: "cam1", zone: "前门", onvif_url: "http://10.0.0.5/onvif", rtsp_url: "", username: "admin", has_password: true, motion: false, ...o });
 const props = (cams: ReturnType<typeof cam>[]): TabProps => ({
   map: { map_id: "home", version: "3", note: "" }, base: "/api/maps/home/3", meta: META,
-  data: { areas: [], nav: null, routes: [], standby: [], robots: [], cameras: cams } as LayerData, say: () => {},
+  data: { areas: [], nav: null, routes: [], guardRoutes: [], posts: [], standby: [], robots: [], cameras: cams } as LayerData, say: () => {},
   reload: () => Promise.resolve(), setDirty: () => {}, registerSave: (fn) => { save = fn; },
   Map: (o: OwnLayer) => <div class="fakemap"><button type="button" class="pick" onClick={() => o.onPick?.(40, 30)}>pick</button><svg>{o.world}</svg></div>,
 });

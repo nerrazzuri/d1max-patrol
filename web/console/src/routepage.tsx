@@ -27,7 +27,9 @@ import {
   setDwell,
   toggleAction,
   yawToward,
+  clock,
   type Draft,
+  type RouteEta,
   type PointProblem,
   type Route,
   type RoutePoint,
@@ -64,7 +66,9 @@ export interface RouteEmbed {
  *  自己点「返回」就清掉。 */
 let reopen: { map: string; id: string } | null = null;
 
-export function RoutesPage({ say, embed }: { say: Say; embed?: RouteEmbed }) {
+/** ``kind``(W73):``patrol`` 巡逻路线(默认,带排程);``guard`` 防区路线(只给布防值守用,没有排程,能按防区生成)。 */
+export function RoutesPage({ say, embed, kind = "patrol" }: { say: Say; embed?: RouteEmbed; kind?: "patrol" | "guard" }) {
+  const guardKind = kind === "guard";
   const [maps, setMaps] = useState<MapRow[]>(embed ? [embed.map] : []);
   const [selState, setSel] = useState<MapRow | null>(embed?.map ?? null);
   const sel = embed ? embed.map : selState;
@@ -79,6 +83,9 @@ export function RoutesPage({ say, embed }: { say: Say; embed?: RouteEmbed }) {
   const [removing, setRemoving] = useState(false);
   // 2026-10-15 用户:所有路线一起画在图上太乱 —— 图上只画列表里选中的那一条;要对照别的路线再打开
   const [showOthers, setShowOthers] = useState(false);
+  const [genOpen, setGenOpen] = useState(false);
+  const [genNotes, setGenNotes] = useState<string[]>([]);
+  const [eta, setEta] = useState<RouteEta | null>(null);
   const root = useRef<HTMLDivElement>(null);
   const guard = useRef(clickGuard());
   // 外审 R2(2026-10-15 下午):读、存、删、重新拉的回包都可能晚到 —— 出发时记下「哪张图、第几次编辑」,
@@ -103,7 +110,7 @@ export function RoutesPage({ say, embed }: { say: Say; embed?: RouteEmbed }) {
   const load = useCallback(() => {
     if (!sel) return Promise.resolve();
     const tk = ticket();
-    return api<RouteView>("GET", `/api/routes?map_id=${enc(sel.map_id)}&map_version=${enc(sel.version)}`)
+    return api<RouteView>("GET", `/api/routes?map_id=${enc(sel.map_id)}&map_version=${enc(sel.version)}&kind=${kind}`)
       .then((v) => { if (sameMap(tk)) setView(v); })
       .catch((e) => { if (sameMap(tk)) { setView(null); say(errText(e)); } });
   }, [sel?.map_id, sel?.version]);
@@ -145,6 +152,18 @@ export function RoutesPage({ say, embed }: { say: Say; embed?: RouteEmbed }) {
     setPi(null);
     setProblems([]);
     setConflict(false);
+    setGenNotes([]);
+  }
+  /** W73:按防区生成的草稿 → 新建路线的编辑页(还没存;问题照存路线时那样标出来)。 */
+  function fromGenerated(id: string, points: RoutePoint[], errs: PointProblem[], notes: string[]) {
+    nextEdit();
+    setGenOpen(false);
+    setDraft({ id, isNew: true, base: 0, points, policy: {}, map: mapKey });
+    setOrig(undefined);
+    setPi(null);
+    setProblems(errs);
+    setConflict(false);
+    setGenNotes([rt("guardGenDone", { n: points.length }), ...notes]);
   }
   function startNew() {
     // 新建:右侧栏换成编辑页,名字在编辑页顶上填(2026-10-15 用户:原来名字框夹在路线列表和点位列表中间)
@@ -180,7 +199,7 @@ export function RoutesPage({ say, embed }: { say: Say; embed?: RouteEmbed }) {
     setConflict(false);
     try {
       const r = await api<Route>("POST", `/api/routes/${enc(draft.id)}`, {
-        map_id: sel.map_id, map_version: sel.version, waypoints: draft.points, policy: draft.policy, base_revision: draft.base,
+        map_id: sel.map_id, map_version: sel.version, waypoints: draft.points, policy: draft.policy, base_revision: draft.base, kind,
       });
       if (!still(tk)) return;                 // 已经离开这条路线 / 这张图:存下了,但不放进现在这一页
       say(rt("routeSaved", { rev: r.revision }));
@@ -287,7 +306,17 @@ export function RoutesPage({ say, embed }: { say: Say; embed?: RouteEmbed }) {
     setPi(null);
     setProblems([]);
     setConflict(false);
+    setGenNotes([]);
   }
+
+  const etaFor = draft && !draft.isNew && !dirty ? draft.id : "";
+  useEffect(() => {
+    setEta(null);
+    if (!etaFor) return;
+    const tk = ticket();
+    api<RouteEta>("GET", `/api/routes/${enc(etaFor)}/eta`).then((d) => { if (still(tk)) setEta(d); }).catch(() => {});
+  }, [etaFor, draft?.base]);
+  const etaOf = new Map((eta?.waypoints ?? []).map((w) => [w.name, w]));
 
   const selPoint = draft && pi !== null ? draft.points[pi] : undefined;
   const mySchedules = (view?.schedules ?? []).filter((s) => draft && !draft.isNew && s.mission === draft.id);
@@ -350,10 +379,14 @@ export function RoutesPage({ say, embed }: { say: Say; embed?: RouteEmbed }) {
               <>
             {/* 列表页:只有路线列表;点一条或「新建路线」换成编辑页(跟手机一样) */}
             <div class="routeside-head">
-              <h2>{rt("routesTitle")}</h2>
+              <h2>{guardKind ? rt("guardTitle") : rt("routesTitle")}</h2>
+              {guardKind && <button type="button" class="btn sm" data-guard-gen="1" onClick={() => setGenOpen(!genOpen)} disabled={!sel || !meta}
+                aria-pressed={genOpen}>{rt("guardGenBtn")}</button>}
               <button type="button" class="btn sm primary" onClick={startNew} disabled={!sel || !meta}>{rt("routeNewBtn")}</button>
             </div>
-            {routes.length === 0 && <p class="muted small">{rt("routesNone")}</p>}
+            {guardKind && <p class="muted small">{rt("guardOnlyArmed")}</p>}
+            {genOpen && sel && <GuardGenerate map={sel} taken={routes.map((r) => r.id)} say={say} onDone={fromGenerated} onClose={() => setGenOpen(false)} />}
+            {routes.length === 0 && <p class="muted small">{guardKind ? rt("guardNone") : rt("routesNone")}</p>}
             <ul class="routelist" aria-label={rt("routesTitle")}>
               {routes.map((r) => {
                 const n = schedCount(r.id);
@@ -400,6 +433,12 @@ export function RoutesPage({ say, embed }: { say: Say; embed?: RouteEmbed }) {
                 )}
                 {problems.length > 0 && <p class="small bad" role="alert">{rt("routeProblems", { n: problems.length })}</p>}
                 {wholeProblems.map((p, i) => <p key={i} class="small bad">{p.problem}</p>)}
+                {genNotes.map((n, i) => <p key={`g${i}`} class="muted small" data-gen-note={i}>{n}</p>)}
+                {draft && pts.length > 1 && (eta && !dirty ? (
+                  <p class="small route-eta" data-eta-total="1" title={rt("etaBasis", { v: eta.speed_mps })}>
+                    {rt("etaTotal", { t: clock(eta.total_s) })}{eta.basis === "straight" && <span class="muted"> · {rt("etaStraight")}</span>}
+                  </p>
+                ) : !draft.isNew && dirty ? <p class="muted small">{rt("etaAfterSave")}</p> : null)}
                 {pts.length === 0 && <p class="muted small">{rt("routeNoPoints")}</p>}
                 <ul class="pointlist" aria-label={rt("routePoints")}>
                   {pts.map((p, i) => (
@@ -408,6 +447,11 @@ export function RoutesPage({ say, embed }: { say: Say; embed?: RouteEmbed }) {
                       <button type="button" class="link" onClick={() => setPi(i)}>{p.name}</button>
                       {bad.has(i) && <span class="bad" title={bad.get(i)}>!</span>}
                       <span class="push" />
+                      {!dirty && etaOf.has(p.name) && (() => {
+                        const e = etaOf.get(p.name)!;
+                        return <span class="mono small eta" data-eta={i} title={`${rt("etaPoint", { t: clock(e.arrive_s) })}${e.actual_s !== null ? ` · ${rt("etaActual", { t: clock(e.actual_s) })}` : ""}`}>
+                          +{clock(e.arrive_s)}</span>;
+                      })()}
                       <button type="button" class="btn sm" aria-label={`${rt("pointUp")} ${i + 1}`} disabled={i === 0}
                         onClick={() => { change(reorder(pts, i, i - 1)); setPi(i - 1); }}>▲</button>
                       <button type="button" class="btn sm" aria-label={`${rt("pointDown")} ${i + 1}`} disabled={i === pts.length - 1}
@@ -429,7 +473,7 @@ export function RoutesPage({ say, embed }: { say: Say; embed?: RouteEmbed }) {
                   <button type="button" class="btn" disabled={!dirty} onClick={() => (draft.isNew ? setDraft(null) : orig && edit(orig))}>{rt("routeDiscard")}</button>
                   {!draft.isNew && <button type="button" class="btn stop" onClick={() => setRemoving(true)}>{rt("routeDelete")}</button>}
                 </div>
-                {!draft.isNew && (
+                {!draft.isNew && !guardKind && (
                   <SchedulePanel route={draft.id} view={view} schedules={mySchedules} say={say} reload={load} />
                 )}
               </>
@@ -441,6 +485,81 @@ export function RoutesPage({ say, embed }: { say: Say; embed?: RouteEmbed }) {
         <Confirm text={rt("routeDeleteConfirm", { name: draft.id })} yes={rt("routeDelete")} danger onNo={() => setRemoving(false)} onYes={() => void del()} />
       )}
     </div>
+  );
+}
+
+interface GenZone { zone: string; on: boolean; laps: number; dwell_s: number; photos: number }
+interface GenResult { waypoints: RoutePoint[]; problems: PointProblem[]; zones: { zone: string; points: number; note: string }[] }
+
+/** W73:按防区生成防区路线(设计 §4.2)。站点给的是草稿:放进编辑页,看过、挪过再存。 */
+function GuardGenerate({ map, taken, say, onDone, onClose }: {
+  map: MapRow; taken: string[]; say: Say;
+  onDone: (id: string, points: RoutePoint[], problems: PointProblem[], notes: string[]) => void; onClose: () => void;
+}) {
+  const [zones, setZones] = useState<GenZone[] | null>(null);
+  const [name, setName] = useState("");
+  const [spacing, setSpacing] = useState(6);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    api<{ areas: { zone: string }[] }>("GET", `/api/maps/${enc(map.map_id)}/${enc(map.version)}/areas`)
+      .then((d) => setZones((d.areas ?? []).map((a) => ({ zone: a.zone, on: true, laps: 1, dwell_s: 0, photos: 1 }))))
+      .catch(() => setZones([]));
+  }, [map.map_id, map.version]);
+  const patch = (z: string, f: Partial<GenZone>) => setZones((all) => (all ?? []).map((x) => (x.zone === z ? { ...x, ...f } : x)));
+  const num = (v: string, lo: number, hi: number) => { const n = Number(v); return Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : lo; };
+  const picked = (zones ?? []).filter((z) => z.on);
+  const dup = taken.includes(name.trim());
+  const ok = picked.length > 0 && NAME_RE.test(name.trim()) && !dup && !busy;
+  async function go() {
+    setBusy(true);
+    try {
+      const r = await api<GenResult>("POST", "/api/guard-routes/generate", {
+        map_id: map.map_id, map_version: map.version, spacing_m: spacing,
+        zones: picked.map((z) => ({ zone: z.zone, laps: z.laps, dwell_s: z.dwell_s, photos: z.photos })),
+      });
+      const notes = r.zones.filter((z) => z.points === 0).map((z) => rt("guardGenZoneNone", { zone: z.zone, why: z.note }));
+      onDone(name.trim(), r.waypoints, r.problems ?? [], notes);
+    } catch (e) {
+      say(errText(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <form class="panel guard-gen" aria-label={rt("guardGenTitle")} onSubmit={(e) => { e.preventDefault(); if (ok) void go(); }}>
+      <h3>{rt("guardGenTitle")}</h3>
+      <label class="routename">
+        <span class="small">{rt("routeName")}</span>
+        <input aria-label={rt("routeName")} value={name} maxLength={64} onInput={(e) => setName(e.currentTarget.value)} />
+        <span class={`small${dup || (name && !NAME_RE.test(name.trim())) ? " bad" : " muted"}`}>{dup ? rt("routeNameTaken") : rt("routeNameHint")}</span>
+      </label>
+      {zones === null ? <p class="muted small">…</p> : zones.length === 0 ? <p class="muted small">{rt("guardGenNoZones")}</p> : (
+        <table class="guard-gen-zones">
+          <caption class="small">{rt("guardGenZones")}</caption>
+          <thead><tr><th /><th class="small">{rt("guardGenLaps")}</th><th class="small">{rt("guardGenDwell")}</th><th class="small">{rt("guardGenPhotos")}</th></tr></thead>
+          <tbody>
+            {zones.map((z) => (
+              <tr key={z.zone} data-gen-zone={z.zone}>
+                <td><label><input type="checkbox" checked={z.on} onChange={(e) => patch(z.zone, { on: e.currentTarget.checked })} /> {z.zone}</label></td>
+                <td><input type="number" min="1" max="10" step="1" value={z.laps} aria-label={`${z.zone} ${rt("guardGenLaps")}`} disabled={!z.on}
+                  onInput={(e) => patch(z.zone, { laps: num(e.currentTarget.value, 1, 10) })} /></td>
+                <td><input type="number" min="0" max="600" step="1" value={z.dwell_s} aria-label={`${z.zone} ${rt("guardGenDwell")}`} disabled={!z.on}
+                  onInput={(e) => patch(z.zone, { dwell_s: num(e.currentTarget.value, 0, 600) })} /></td>
+                <td><input type="number" min="0" max="5" step="1" value={z.photos} aria-label={`${z.zone} ${rt("guardGenPhotos")}`} disabled={!z.on}
+                  onInput={(e) => patch(z.zone, { photos: num(e.currentTarget.value, 0, 5) })} /></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      <label class="field">{rt("guardGenSpacing")}
+        <input type="number" min="1" max="30" step="0.5" value={spacing} onInput={(e) => setSpacing(num(e.currentTarget.value, 1, 30))} />
+      </label>
+      <div class="row end">
+        <button type="button" class="btn sm" onClick={onClose}>{t("cancel")}</button>
+        <button type="submit" class="btn sm primary" disabled={!ok}>{rt("guardGenGo")}</button>
+      </div>
+    </form>
   );
 }
 

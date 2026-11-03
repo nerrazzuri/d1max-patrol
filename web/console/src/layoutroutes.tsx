@@ -11,3 +11,13 @@ export function RoutesTab(p: TabProps) {
     }} />
   );
 }
+
+/** 布置 → 防区路线(W73):同一个路线编辑,只列 / 存防区路线;能按防区生成;没有排程。 */
+export function GuardRoutesTab(p: TabProps) {
+  return (
+    <RoutesPage say={p.say} kind="guard" embed={{
+      map: p.map, meta: p.meta, Map: p.Map, setDirty: p.setDirty,
+      registerSave: (fn) => p.registerSave(fn ? async () => { await fn(); await p.reload("guardRoutes"); } : null),
+    }} />
+  );
+}

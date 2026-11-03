@@ -12,25 +12,34 @@ import { MapCanvas, type CanvasArea, type Screen } from "./mapcanvas";
 import { toPx, type NavZone, type PreviewMeta, type Pt } from "./mapview";
 
 type Say = (s: string) => void;
-export type LayoutTab = "zones" | "nogo" | "routes" | "roadnet" | "standby" | "cameras";
-export const LAYOUT_TABS: LayoutTab[] = ["zones", "nogo", "routes", "roadnet", "standby", "cameras"];
-const TAB_KEY: Record<LayoutTab, Key> = { zones: "lyZones", nogo: "lyNogo", routes: "lyRoutes", roadnet: "lyRoadnet", standby: "lyStandby", cameras: "lyCameras" };
+// W73:「防区路线」(只给布防值守用)跟「巡逻路线」分开两个标签
+export type LayoutTab = "zones" | "nogo" | "guard" | "routes" | "roadnet" | "standby" | "cameras";
+export const LAYOUT_TABS: LayoutTab[] = ["zones", "nogo", "guard", "routes", "roadnet", "standby", "cameras"];
+const TAB_KEY: Record<LayoutTab, Key> = { zones: "lyZones", nogo: "lyNogo", guard: "lyGuard", routes: "lyRoutes", roadnet: "lyRoadnet", standby: "lyStandby", cameras: "lyCameras" };
 /** 历史版本里的种类(站点 layout_history.kind)。 */
 // 路网(W48)第一版没有历史版本:那个标签上不显示「历史」
-const HISTORY_KIND: Partial<Record<LayoutTab, string>> = { zones: "zones", nogo: "nogo", routes: "route", standby: "standby", cameras: "cameras" };
+const HISTORY_KIND: Partial<Record<LayoutTab, string>> = { zones: "zones", nogo: "nogo", guard: "route", routes: "route", standby: "standby", cameras: "cameras" };
 
 export interface MapRow { map_id: string; version: string; note: string; active?: boolean }
 export interface Area { zone: string; points: Pt[] }
+/** W73:防区的查看点(出事去哪看)、值守位(空档站哪儿盯,带朝向);``auto``:站点算的。 */
+export interface ZonePost {
+  zone: string; auto: boolean; note: string; updated_by?: string;
+  view: { x: number; y: number } | null; watch: { x: number; y: number; yaw: number } | null;
+}
 export interface NavZones {
   revision: number; zones: NavZone[]; auto_confirmed?: boolean; confirm_text?: string; held?: NavZone[];
   confirmed?: { revision: number; by: string; at_ms: number; current: boolean; how: string } | null;
 }
-export interface LayoutRoute { id: string; revision: number; waypoints: { name: string; x: number; y: number; yaw: number }[] }
+export interface LayoutRoute { id: string; revision: number; kind?: "patrol" | "guard"; waypoints: { name: string; x: number; y: number; yaw: number }[] }
 export interface StandbyPt { robot_id: string; name: string; x: number; y: number; yaw: number; map_id: string; map_version: string; default?: boolean }
 export interface Placement { map_id: string; map_version: string; x: number; y: number; yaw: number; fov_deg: number }
 export interface CamRow { name: string; zone: string; onvif_url: string; rtsp_url?: string; username?: string; has_password?: boolean; motion?: boolean; placement?: Placement | null;
   warnings?: { code: string; text: string }[] }
-export interface LayerData { areas: Area[]; nav: NavZones | null; routes: LayoutRoute[]; standby: StandbyPt[]; cameras: CamRow[]; robots: string[] }
+export interface LayerData {
+  areas: Area[]; posts: ZonePost[]; nav: NavZones | null; routes: LayoutRoute[]; guardRoutes: LayoutRoute[];
+  standby: StandbyPt[]; cameras: CamRow[]; robots: string[];
+}
 
 export interface TabProps {
   map: MapRow;
@@ -87,7 +96,7 @@ export function tabFromHash(hash: string): LayoutTab {
   return (LAYOUT_TABS as string[]).includes(v ?? "") ? (v as LayoutTab) : "zones";
 }
 
-const EMPTY: LayerData = { areas: [], nav: null, routes: [], standby: [], cameras: [], robots: [] };
+const EMPTY: LayerData = { areas: [], posts: [], nav: null, routes: [], guardRoutes: [], standby: [], cameras: [], robots: [] };
 
 export function LayoutPage({ say, robots, tabs }: { say: Say; robots: string[]; tabs: Partial<Record<LayoutTab, FunctionComponent<TabProps>>> }) {
   const [maps, setMaps] = useState<MapRow[]>([]);
@@ -118,18 +127,22 @@ export function LayoutPage({ say, robots, tabs }: { say: Say; robots: string[]; 
     const b = base;
     const want = (x: keyof LayerData) => !k || k === x;
     const q = `map_id=${enc(sel.map_id)}&map_version=${enc(sel.version)}`;
-    const [areas, nav, routes, standby, cameras] = await Promise.all([
-      want("areas") ? api<{ areas: Area[] }>("GET", `${b}/areas`).then((d) => d.areas).catch(() => null) : null,
+    const [areaRes, nav, routes, guardRoutes, standby, cameras] = await Promise.all([
+      want("areas") || want("posts") ? api<{ areas: Area[]; posts?: ZonePost[] }>("GET", `${b}/areas`).catch(() => null) : null,
       want("nav") ? api<NavZones>("GET", `${b}/zones`).catch(() => null) : null,
       want("routes") ? api<{ routes: LayoutRoute[] }>("GET", `/api/routes?${q}`).then((d) => d.routes ?? []).catch(() => null) : null,
+      want("guardRoutes") ? api<{ routes: LayoutRoute[] }>("GET", `/api/routes?${q}&kind=guard`).then((d) => d.routes ?? []).catch(() => null) : null,
       want("standby") ? Promise.all(robots.map((r) => api<{ points: StandbyPt[] }>("GET", `/api/robots/${enc(r)}/standby`)
         .then((d) => (d.points ?? []).map((p) => ({ ...p, robot_id: r }))).catch(() => [] as StandbyPt[])))
         .then((all) => all.flat().filter((p) => p.map_id === sel.map_id && p.map_version === sel.version)) : null,
       want("cameras") ? api<{ cameras: CamRow[] }>("GET", "/api/admin/cameras").then((d) => d.cameras ?? []).catch(() => null) : null,
     ]);
     if (cur.current !== b) return;
+    const areaWant = want("areas") || want("posts");
     setData((o) => ({
-      areas: areas ?? (want("areas") ? [] : o.areas), nav: want("nav") ? nav : o.nav, routes: routes ?? (want("routes") ? [] : o.routes),
+      areas: areaRes?.areas ?? (areaWant ? [] : o.areas), posts: areaRes?.posts ?? (areaWant ? [] : o.posts),
+      nav: want("nav") ? nav : o.nav, routes: routes ?? (want("routes") ? [] : o.routes),
+      guardRoutes: guardRoutes ?? (want("guardRoutes") ? [] : o.guardRoutes),
       standby: standby ?? (want("standby") ? [] : o.standby), cameras: cameras ?? (want("cameras") ? [] : o.cameras), robots,
     }));
     if (want("nav")) api<PreviewMeta>("GET", `${b}/preview`).then((m) => { if (cur.current === b) setMeta(m); }).catch(() => {});
@@ -273,6 +286,9 @@ function dimWorld(tab: LayoutTab, meta: PreviewMeta, d: LayerData, map: MapRow):
     <>
       {tab !== "routes" && d.routes.map((r) => r.waypoints.length > 1 && (
         <polyline key={r.id} class="ly-route" points={polyPx(meta, r.waypoints.map((w) => [w.x, w.y] as Pt))} />
+      ))}
+      {tab !== "guard" && d.guardRoutes.map((r) => r.waypoints.length > 1 && (
+        <polyline key={`g-${r.id}`} class="ly-route guard" points={polyPx(meta, r.waypoints.map((w) => [w.x, w.y] as Pt))} />
       ))}
       {tab !== "cameras" && camsOn(d.cameras, map).map((c) => <path key={c.name} class="ly-fan" d={fanPath(meta, c.placement as Placement)} />)}
     </>

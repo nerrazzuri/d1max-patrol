@@ -37,7 +37,7 @@ const nav = (o: Partial<NavZones> = {}): NavZones => ({ revision: 2, zones: [POO
 const FakeMap = (o: OwnLayer) => <div class="fakemap"><button type="button" class="pick" onClick={() => o.onPick?.(10, 20)}>pick</button></div>;
 const props = (n: NavZones): TabProps => ({
   map: { map_id: "home", version: "3", note: "" }, base: "/api/maps/home/3", meta: META,
-  data: { areas: [], nav: n, routes: [], standby: [], cameras: [], robots: ["A"] } as LayerData, say: () => {},
+  data: { areas: [], nav: n, routes: [], guardRoutes: [], posts: [], standby: [], cameras: [], robots: ["A"] } as LayerData, say: () => {},
   reload: (k) => { reloaded.push(String(k)); return Promise.resolve(); }, setDirty: () => {}, registerSave: (fn) => { save = fn; }, Map: FakeMap,
 });
 const btn = (root: Element, text: string) => Array.from(root.querySelectorAll("button")).find((b) => b.textContent?.trim() === text) as HTMLButtonElement;
