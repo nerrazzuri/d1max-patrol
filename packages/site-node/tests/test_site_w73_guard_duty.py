@@ -470,3 +470,87 @@ async def test_布防前30分钟_电量撑不到第一次补能_提醒先充电�
     assert "布防前请先充电" in a["detail"] and "08:40" in a["detail"]
     await _跑(t, 3)
     assert len([x for x in t.duty.alerts.open if x["kind"] == "guard_prep"]) == 1
+
+
+# ------------------------------------------------------------ 外审 r1
+
+
+async def test_外审_换电拔着一块电池_值守不派下一圈(站):
+    t = 站
+    _方案(t)
+    t.duty.swap = type("换电", (), {"busy": staticmethod(
+        lambda rid: f"{rid} 的 1 号电池拔着,装回去之前不派")})()
+    await _跑(t, 5)
+    assert _patrols(t) == []
+    assert any("1 号电池拔着" in r["detail"] for r in _log(t, "waiting"))
+
+
+async def test_外审_跑到一半西区撤防_这一圈停下_接着只跑还布防着的(站):
+    t = 站
+    _方案(t)
+    await _跑(t, 1.5)                                    # 还在去 A 的路上
+    first = _patrols(t)[0]["task_id"]
+    t.arming.set_zone_home("西区", False)
+    t.arming.set_mode("home", by="olga")
+    await _跑(t, 6)
+    aborts = [c for c in t.site.commands("A", 500) if c["kind"] == "abort"]
+    assert any(c["task_id"] == first for c in aborts), "这一圈要进撤防的西区:停下"
+    assert _log(t, "zone_disarmed")
+    later = _patrols(t)[1:]
+    assert later and all(set(_names(p)) <= {"A", "B"} for p in later)
+    await _跑(t, 20)
+    assert "西区" not in _seen(t)
+
+
+async def test_外审_看见人_原地停下盯着_保安处理了接着值守(站):
+    t = 站
+    _方案(t)
+    await _跑(t, 1.5)
+    tid = _patrols(t)[0]["task_id"]
+    t.duty.alerts.raise_alert(kind="dog_sees_person", robot="A")
+    await _跑(t, 3)
+    assert any(c["kind"] == "abort" and c["task_id"] == tid
+               for c in t.site.commands("A", 500)), "停在原地"
+    assert t.duty.status()["runs"][0]["state"] == "held"
+    x = t.dog.x
+    await _跑(t, 5)
+    assert abs(t.dog.x - x) < 0.05 and len(_patrols(t)) == 1, "盯着:不派下一圈"
+    t.duty.alerts.resolve_all("A", "dog_sees_person", who="gina")
+    await _跑(t, 3)
+    assert len(_patrols(t)) == 2 and _log(t, "person_resume")
+
+
+async def test_外审_看见人盯满10分钟没人管_接着值守_同一条不再拦(站):
+    t = 站
+    _方案(t)
+    await _跑(t, 1.5)
+    t.duty.alerts.raise_alert(kind="dog_sees_person", robot="A")
+    await _跑(t, 2)
+    t.clock.advance(601)
+    await _跑(t, 4)
+    assert len(_patrols(t)) == 2, "没人管:接着值守"
+    assert t.duty.status()["runs"][0]["state"] != "held"
+
+
+async def test_外审_掉线的机器人_站在值守位上也不算看着(站):
+    t = 站
+    _方案(t, gap_min=1)
+    await _跑(t, 20)
+    for _ in range(40):
+        if t.duty.watching("A"):
+            break
+        await _跑(t, 0.5)
+    await _跑(t, 2)
+    before = _seen(t)["东区"]
+    t.site._fresh = lambda c: False                     # 掉线 / 状态旧了
+    await _跑(t, 5)
+    assert _seen(t)["东区"] == before
+
+
+def test_外审_固定方案的机器人别的方案占着_不硬派_任意一台不挑留给固定方案的(站):
+    t = 站
+    info = {"id": "night-guard", "map_id": MAP[0], "map_version": MAP[1]}
+    assert t.duty._pick({"robot": "A"}, info, {"A"}) == ("", "A 在跑另一条值守方案")
+    t.duty._reserved = {"A"}
+    rid, why = t.duty._pick({"robot": ""}, info, set())
+    assert rid == "" and "没有登记的机器人" in why

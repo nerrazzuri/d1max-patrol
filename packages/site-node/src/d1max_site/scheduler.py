@@ -105,6 +105,8 @@ class SiteScheduler:
         self.site_busy: Callable[[], set[str]] | None = None
         #: W73 第三期(设计 §6.4):在布防值守的机器人(``GuardDuty.robots``):到点的巡逻不派它。
         self.guard_busy: Callable[[], set[str]] | None = None
+        #: W73 外审 r1 #1:有一块电池拔着、在等换电池的不派(``SwapDesk.busy``,理由 / 空串)。
+        self.swap_busy: Callable[[str], str] | None = None
         self.dispatcher = dispatcher
         self._now = now_ms
         self._ref = time_reference
@@ -331,6 +333,14 @@ class SiteScheduler:
                 reason, kind = f"{rid} 正在驱离", "busy"
             if not reason and rid in self._guarding():
                 reason, kind = f"{rid} 在布防值守", "busy"
+            if not reason and self.swap_busy is not None:
+                try:
+                    w = self.swap_busy(rid)
+                except Exception:                        # 读不出来按在换算:宁可不派
+                    log.exception("%s 换电状态读不出来", rid)
+                    w = f"{rid} 换电状态读不出来"
+                if w:
+                    reason, kind = w, "busy"
             if not reason:
                 caps = self.dispatcher.clients[rid].capabilities
                 p = caps.tasks.get("patrol", {}) if caps else {}
@@ -354,7 +364,7 @@ class SiteScheduler:
         try:
             return set(self.guard_busy())
         except Exception:
-            log.exception("谁在布防值守读不出来:按都不在算(布防一圈优先级更高,狗上照样抢)")
+            log.exception("谁在布防值守读不出来:按都不在算(布防一圈优先级更高,机器人上照样抢)")
             return set()
 
     def _site_busy(self) -> set[str]:

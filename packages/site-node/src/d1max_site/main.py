@@ -1091,7 +1091,9 @@ class Server:
                              eta_min=self.guard.topup_eta_min, has_charger=_has_charger,
                              home=self.standby.home)
         self.swap.alerts = self.alerts
+        self.swap.standby = self.standby
         self.guard.swap = self.swap
+        self.scheduler.swap_busy = self.swap.busy
         self.incidents.swapping = self.swap.refuse
         # W73 第五期:外部设备按位置绑定;老接口按防区名报的先按圈好的防区找查看点
         from d1max_site.api import zone_posts as _zp
@@ -1361,7 +1363,6 @@ class Server:
                                      ("证据没封", "evidence_watch", "tick"),     # W30b
                                      ("版本", "compat", "tick"),                 # A7
                                      ("证书续签", "cert_renewer", "tick"),        # W55
-                                     ("换电", "swap", "tick"),                  # W73 第四期
                                      ("临时撤防到点退回", "arming", "tick")):        # W20
                 try:
                     getattr(getattr(self, part), meth)()
@@ -1370,6 +1371,7 @@ class Server:
             for what, part, meth in (("驱离", "deterrence", "tick"),      # W22:到点收、续声光
                                      ("回充", "charge", "tick"),          # W13
                                      ("布防值守", "guard", "tick"),       # W73 第二期
+                                     ("换电", "swap", "tick"),            # W73 第四期:会派回换电位
                                      ("受力警笛", "force", "sound"),      # W26:布防时被抱起来
                                      ("天气", "weather", "tick"),         # W29:雷暴撤排程、对账限速
                                      ("推送", "push", "tick"),            # A6:P1 推到手机

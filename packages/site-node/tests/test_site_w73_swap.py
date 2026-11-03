@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 
 from d1max_site.battery_swap import SwapDesk
@@ -57,10 +58,18 @@ class 台:
                              eta_min=lambda r: self.eta, has_charger=lambda r: self.charger,
                              home=lambda r, m, v: {"x": 0.0, "y": 0.0})
         self.desk.alerts = self.alerts
+        self.sent_home: list[int] = []
+        tt = self
+
+        class _待命点:
+            async def return_to(self, rid, *, issued_by):
+                tt.sent_home.append(tt.now)
+                return {"ack": {"result": "accepted"}}
+        self.desk.standby = _待命点()
 
     def tick(self, secs=1):
         self.now += secs * 1000
-        self.desk.tick()
+        asyncio.run(self.desk.tick())
 
     def kinds(self):
         return [a["kind"] for a in self.alerts.raised]
@@ -152,3 +161,71 @@ def test_换了一块就走了_一直提示2号还没换():
     t.tick()
     t.tick(30 * 60)
     assert t.desk.view()["robots"][0]["step"] == "second"
+
+
+def test_外审_拔着一块时站点重启_先让装回拔着的那块_绝不引导拔剩下那块():
+    t = 台()
+    t.packs = [None, 20.0]                               # 1 号拔着、2 号是唯一的电;站点刚重启
+    assert "1 号电池拔着" in t.desk.busy("A"), "值守、排程不派"
+    assert "正在换电池" in t.desk.refuse("A"), "报警也不打断"
+    t.tick()
+    v = t.desk.view()["robots"][0]
+    assert v["step"] == "first_out" and v["first"] == 1
+    [a] = t.alerts.raised
+    assert "装上一块满电的 1 号" in a["detail"] and "2 号先别动" in a["detail"]
+    assert "先换 2 号" not in a["detail"]
+
+
+def test_外审_拔错了_先换的那块还没好_另一块被拔了_让装回去():
+    t = 台()
+    t.need = 35.0
+    t.tick()
+    assert t.desk.view()["robots"][0]["first"] == 1
+    t.packs = [30.0, None]
+    t.tick()
+    assert t.desk.view()["robots"][0]["step"] == "wrong_out"
+    assert "2 号被拔了:先把它装回去" in t.desk._text(t.desk.s["A"])
+    assert t.desk.busy("A") and t.desk.refuse("A")
+
+
+def test_外审_低电时不在换电位_派它回去_没走成一分钟后再派():
+    t = 台()
+    t.need, t.pose = 35.0, (6.0, 0.0)                    # 停在路线末端
+    t.tick()
+    assert t.desk.view()["robots"][0]["step"] == "going" and len(t.sent_home) == 1
+    t.tick(30)
+    assert len(t.sent_home) == 1
+    t.tick(31)
+    assert len(t.sent_home) == 2, "没走成:一分钟后再派"
+    t.task = "standby-1"                                 # 在路上了:不重派
+    t.tick(120)
+    assert len(t.sent_home) == 2
+    t.task, t.pose = None, (0.5, 0.0)
+    t.tick()
+    assert t.desk.view()["robots"][0]["step"] == "first" and "swap_needed" in t.kinds()
+
+
+def test_外审_换到一半走了_插回不满_每一步没进展都会再推和升级():
+    t = 台()
+    t.need = 35.0
+    t.tick()
+    t.packs = [96.0, 60.0]                               # 1 号换好,人走了
+    t.tick()
+    assert t.desk.view()["robots"][0]["step"] == "second"
+    t.tick(10 * 60)
+    again = [a for a in t.alerts.raised if a["kind"] == "swap_needed"][1:]
+    assert len(again) == 1 and "现在换 2 号" in again[0]["detail"]
+    t.tick(10 * 60)
+    [m] = [a for a in t.alerts.raised if a["kind"] == "swap_overdue"]
+    assert "现在换 2 号" in m["detail"]
+    t.packs = [96.0, None]
+    t.tick()
+    t.packs = [96.0, 50.0]                               # 插回的不满:重新计时
+    t.tick()
+    t.tick(10 * 60)
+    assert sum(a["kind"] == "swap_needed" for a in t.alerts.raised) == 3
+
+
+def test_两块都在_没在换电_不拦():
+    t = 台()
+    assert t.desk.busy("A") == "" and t.desk.refuse("A") == ""

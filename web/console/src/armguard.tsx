@@ -16,7 +16,7 @@ export interface Plan { revision: number; entries: GuardEntry[]; limits: Record<
 interface Run { entry: number; robot_id: string; state: string; lap: number; task_id: string; next_lap_ms: number; watch_zone: string }
 interface ZoneSeen { zone: string; last_ms: number | null; robot_id: string; how: string; limit_min: number; armed: boolean; overdue: boolean }
 /** W73 第四期:没桩的换电进度(站点按两块电池的在位、电量判)。 */
-export interface Swap { robot_id: string; step: "going" | "first" | "first_out" | "first_low" | "second" | "second_out" | "any"; first: number | null; second: number | null; packs: (number | null)[] | null; battery_pct: number | null; since_ms: number; told_ms: number | null; ok_pct: number }
+export interface Swap { robot_id: string; step: "going" | "first" | "first_out" | "first_low" | "second" | "second_out" | "wrong_out" | "any"; first: number | null; second: number | null; packs: (number | null)[] | null; battery_pct: number | null; since_ms: number; told_ms: number | null; ok_pct: number }
 export interface Status { duty: { id: number; started_ms: number } | null; runs: Run[]; waiting: Record<string, string>; zones: ZoneSeen[]; now_ms: number; swaps?: Swap[] }
 interface DutyZone { zone: string; looks: number; max_gap_s: number }
 interface Duty { id: number; started_ms: number; ended_ms: number | null; laps: number; interruptions: number; missed: number; failed: number; zones: DutyZone[] }
@@ -57,6 +57,7 @@ const en = {
   gSwapFirstLow: "The new pack {a} reads below {p}% — use a full pack.",
   gSwapSecond: "Pack {a} done. Now swap pack {b}.",
   gSwapSecondOut: "Pack {b} is out — insert a full pack {b}.",
+  gSwapWrongOut: "Pack {b} was pulled — put it back first. Pack {a} is not done yet; never pull both.",
   gSwapAny: "Swap in a full battery (hot swap, the robot stays standing).",
   gPack: "Pack {n}: {v}",
   gPackOut: "out",
@@ -77,6 +78,7 @@ const en = {
   stWait: "waiting for the next lap",
   stResume: "interrupted, will carry on",
   stPaused: "stopped by a person, resting",
+  stHeld: "saw a person: holding still and watching, waiting for the guard",
   gWaiting: "Waiting: {why}",
   gSeenAgo: "checked {t} ago",
   gSeenNever: "not checked yet",
@@ -131,6 +133,7 @@ const zh: Record<GKey, string> = {
   gSwapFirstLow: "新插的 {a} 号电量不到 {p}%，请换满电的。",
   gSwapSecond: "{a} 号换好了。现在换 {b} 号。",
   gSwapSecondOut: "{b} 号已拔下 —— 插上满电的 {b} 号。",
+  gSwapWrongOut: "{b} 号被拔了 —— 先把它装回去。{a} 号还没换好，两块不要同时拔。",
   gSwapAny: "换上满电电池（热插拔，机器人站着不断电）。",
   gPack: "{n} 号：{v}",
   gPackOut: "未插",
@@ -151,6 +154,7 @@ const zh: Record<GKey, string> = {
   stWait: "等下一圈",
   stResume: "被叫走了，回来接着跑",
   stPaused: "被人中止，歇着",
+  stHeld: "看见人：原地盯着，等保安处理",
   gWaiting: "在等：{why}",
   gSeenAgo: "{t} 前看过",
   gSeenNever: "还没看过",
@@ -193,6 +197,7 @@ export function runText(r: Run): string {
     case "post": return gt("stPost", { z });
     case "wait": return gt("stWait");
     case "paused": return gt("stPaused");
+    case "held": return gt("stHeld");
     default: return gt("stResume");
   }
 }
@@ -409,6 +414,7 @@ export function swapText(w: Swap): string {
     case "first_low": return gt("gSwapFirstLow", { a, p: w.ok_pct });
     case "second": return gt("gSwapSecond", { a, b });
     case "second_out": return gt("gSwapSecondOut", { b });
+    case "wrong_out": return gt("gSwapWrongOut", { a, b });
     default: return gt("gSwapAny");
   }
 }

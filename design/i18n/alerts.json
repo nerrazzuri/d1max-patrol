@@ -330,15 +330,15 @@
   },
   "swap_soon": {
     "en": "Battery swap coming up",
-    "zh": "快要换电池了"
+    "zh": "即将换电"
   },
   "swap_needed": {
     "en": "Robot waiting for a battery swap",
-    "zh": "机器人等着换电池"
+    "zh": "机器人等待换电"
   },
   "swap_overdue": {
-    "en": "Nobody came to swap the battery",
-    "zh": "等换电池没人来"
+    "en": "Battery swap overdue",
+    "zh": "换电超时未处理"
   },
   "guard_prep": {
     "en": "Charge before arming",
