@@ -39,6 +39,18 @@ GIVE_UP_FRAMES = 100
 REFIT_EVERY = 5
 MAX_TILT_DEG = 5.0
 HEIGHT_RANGE_M = (0.2, 1.0)
+#: W71(11-03 商场,左前腿下了 5 cm 台阶,机身歪着,前方平地被判成凸起,四面都是挡):
+#: 地面每帧按眼前 :data:`LOCAL_GROUND_R_M` 以内的点重新拟合,高度按「离这一帧的地面多高」算,
+#: 不再拿自检时那一个平面硬套(歪 3°,2 m 外的地面就差 10 cm = 凸起的下沿)。
+#: 拟合出来的平面跟机身的「上」差超过 :data:`LOCAL_TILT_MAX_DEG`、离地高度跟自检估的差超过
+#: :data:`LOCAL_HEIGHT_TOL_M`(大平台、货架底板占满了眼前)、内点不到 :data:`MIN_GROUND_FRAC`,
+#: 都不认:用上一个认过的(最多 :data:`LOCAL_HOLD_FRAMES` 帧),再往前就退回自检的水平面。
+LOCAL_GROUND_R_M = 3.0
+LOCAL_TILT_MAX_DEG = 10.0
+LOCAL_HEIGHT_TOL_M = 0.08
+LOCAL_HOLD_FRAMES = 10
+LOCAL_ITERS = 60
+LOCAL_MAX_PTS = 2000
 MIN_GROUND_FRAC = 0.3
 PERMIT_MS = 300
 #: 旁路进程从协议 4 起认 ``clear``;6 起认 ``end``(狗尾那头的许可)。
@@ -187,14 +199,14 @@ MAX_GROUND_PTS = 4000
 
 
 def fit_ground(pts: Any, *, iters: int = 120, tol: float = 0.03, seed: int = 0,
-               max_pts: int = MAX_GROUND_PTS
+               max_pts: int = MAX_GROUND_PTS, r_max: float = 4.0
                ) -> tuple[tuple[float, float, float], float, float] | None:
     """狗身系的点里找地面:雷达以下、水平 0.5–4 m 的点做 RANSAC → (法向(朝上), 雷达离地高度,
     内点占比)。点太少回 ``None``。"""
     import numpy as np
     p = np.asarray(pts, dtype=float)
     r = np.hypot(p[:, 0], p[:, 1])
-    cand = p[(p[:, 2] < -0.1) & (r > 0.5) & (r < 4.0)]
+    cand = p[(p[:, 2] < -0.1) & (r > 0.5) & (r < r_max)]
     if len(cand) < 30:
         return None
     rng = np.random.default_rng(seed)
@@ -316,9 +328,10 @@ def classify(pts_base: Any, height: float, cfg: Config = DEFAULT) -> tuple[bytes
     return occ, known
 
 
-def classify_full(pts_base: Any, height: float, cfg: Config = DEFAULT
-                  ) -> tuple[bytes, bytes, bytes]:
-    """同 :func:`classify`,多一张「可疑」(滤雨点滤掉的格子;W29 复查,决策 42:代理当挡)。"""
+def classify_full(pts_base: Any, height: float, cfg: Config = DEFAULT,
+                  normal: Sequence[float] | None = None) -> tuple[bytes, bytes, bytes]:
+    """同 :func:`classify`,多一张「可疑」(滤雨点滤掉的格子;W29 复查,决策 42:代理当挡)。
+    ``normal``:这一帧的地面法向(机身系,朝上);给了就按「离这个平面多高」算(W71),不给当水平。"""
     import numpy as np
     p = np.asarray(pts_base, dtype=float)
     n = cfg.size
@@ -326,7 +339,7 @@ def classify_full(pts_base: Any, height: float, cfg: Config = DEFAULT
     known = np.zeros(n * n, dtype=np.uint8)
     if len(p) == 0:
         return occ.tobytes(), known.tobytes(), bytes(n * n)
-    h = p[:, 2] + height
+    h = (p @ np.asarray(normal, dtype=float) if normal is not None else p[:, 2]) + height
     hl, hw = cfg.body_len / 2 + cfg.margin, cfg.body_wid / 2 + cfg.margin
     body = (np.abs(p[:, 0]) <= hl) & (np.abs(p[:, 1]) <= hw) & (h < cfg.h_hi)
     r = np.floor(p[:, 0] / cfg.res + n / 2).astype(int)
@@ -522,6 +535,10 @@ class Perception:
         self._wall_frames = 0
         self._wall_since = -math.inf
         self.wall_seq = 0
+        #: W71 这一帧用的地面(法向, 离地高度)、上一个认过的隔了几帧、一共几帧没认(看日志用)。
+        self.plane: tuple[tuple[float, float, float], float] | None = None
+        self._plane_age = 0
+        self.plane_misses = 0
         if sidecar is not None and sidecar.on_line is None:
             sidecar.on_line = self.on_sidecar
 
@@ -605,10 +622,11 @@ class Perception:
             return grid
         rear = (self._rear_pts is not None
                 and self._clock() - self._rear_at <= self.rear_max_age_s)
-        occ, known, sus = classify_full(p, self.check.height, self.cfg)
+        nrm, height = self._local_ground(p)
+        occ, known, sus = classify_full(p, height, self.cfg, nrm)
         if rear:
             # 没标定(几何初值):只用它的「挡」,不用它的「空」放行;标过(W09i)两样都用
-            occ_r, known_r, sus_r = classify_full(self._rear_pts, self.check.height, self.cfg)
+            occ_r, known_r, sus_r = classify_full(self._rear_pts, height, self.cfg, nrm)
             occ = bytes(a | b for a, b in zip(occ, occ_r, strict=True))
             seen = known_r if self.rear_cal else occ_r
             known = bytes(a | b for a, b in zip(known, seen, strict=True))
@@ -634,6 +652,24 @@ class Perception:
                 and self.sidecar_proto >= TAIL_CLEAR_PROTO):
             self._send_permit(self.last_clear_tail, "tail")
         return grid
+
+    def _local_ground(self, p: Any) -> tuple[tuple[float, float, float], float]:
+        """这一帧的地面(法向, 离地高度):见 :data:`LOCAL_GROUND_R_M`。"""
+        base_h = float(self.check.height)
+        got = fit_ground(p, iters=LOCAL_ITERS, seed=self.seq, max_pts=LOCAL_MAX_PTS,
+                         r_max=LOCAL_GROUND_R_M)
+        if got is not None:
+            n, h, frac = got
+            tilt = math.degrees(math.acos(max(-1.0, min(1.0, n[2]))))
+            if (tilt <= LOCAL_TILT_MAX_DEG and abs(h - base_h) <= LOCAL_HEIGHT_TOL_M
+                    and frac >= MIN_GROUND_FRAC):
+                self.plane, self._plane_age = (n, h), 0
+                return n, h
+        self.plane_misses += 1
+        self._plane_age += 1
+        if self.plane is not None and self._plane_age <= LOCAL_HOLD_FRAMES:
+            return self.plane
+        return (0.0, 0.0, 1.0), base_h
 
     def _send_permit(self, dist: float, end: str | None) -> None:
         """发一条净空许可。旁路进程 ≥ 10:分档(带 ``vmax``,近处也许慢慢走);更老的:老规矩。"""
