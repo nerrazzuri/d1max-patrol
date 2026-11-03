@@ -328,6 +328,9 @@ async def test_close之后HAL停了_控制权放了_链路关了(台子):
 
 async def test_连不上站点_已拿到的控制权要放掉(台子, monkeypatch):
     broker, c, r, ears, rt, _ = 台子
+    import d1max_agent.runtime as R
+    monkeypatch.setattr(R, "FIRST_CONNECT_WAIT_S", 0.2)     # W70 首次连接要重试 120 s:测试里别真等
+    monkeypatch.setattr(R, "FIRST_CONNECT_RETRY_S", 0.05)
 
     async def 连不上():
         raise TimeoutError("broker 不在")
