@@ -1166,3 +1166,71 @@ async def test_W71_目标点贴着地图墙_交给Nav2之前挪到最近能站�
     await t.nav.goto(Pose.from_xy_yaw(6.0, 3.0, 0.0))            # 空地上的点原样
     g = link.kinds("goal")[-1]
     assert (g["x"], g["y"]) == (6.0, 3.0)
+
+
+async def test_W72_离终点还远_原地打转30秒没进展_报被挡_走起来了报恢复(tmp_path):
+    """用户 11-03:导航卡住几十秒要给站点告警(站点一分钟报 P2,恢复了自动解除);11-03 绕人贴着沙发,
+    Nav2 自己原地转了 70 秒,守卫没拦,站点什么都不知道。"""
+    from d1max_agent.bridges.nav2_nav import NAV2_NO_PROGRESS_S
+    link = 假转接()
+    t = _台(tmp_path, link)
+    await t.start(1.5, 4.0)
+    await t.nav.goto(Pose.from_xy_yaw(9.0, 4.0, 0.0))
+    gid = link.kinds("goal")[-1]["goal_id"]
+    blocked = lambda: [d for k, d in t.events if k == "nav_blocked"]   # noqa: E731
+    for _ in range(int((NAV2_NO_PROGRESS_S - 3) * 10)):    # Nav2 一直给原地转的速度
+        link.now += 0.1
+        link.cmd = (link.now, gid, 0.0, 0.0, 0.6)
+        await t.一拍()
+    assert blocked() == [], "还不到时候"
+    for _ in range(50):
+        link.now += 0.1
+        link.cmd = (link.now, gid, 0.0, 0.0, 0.6)
+        await t.一拍()
+    [b] = blocked()
+    assert "没向目标靠近" in b["reason"] and b["waited_s"] >= NAV2_NO_PROGRESS_S
+    for _ in range(40):                                     # 转回来、往前走起来了
+        link.now += 0.1
+        wz = -0.3 if t.r.yaw > 0.05 else (0.3 if t.r.yaw < -0.05 else 0.0)
+        link.cmd = (link.now, gid, 0.5, 0.0, wz)
+        await t.一拍()
+    assert ("nav_unblocked" in [k for k, _ in t.events]), "有进展了:报恢复,站点那条自动解除"
+    assert len(blocked()) == 1
+
+
+async def test_W72_一直在往前走_绕远路也不算卡住(tmp_path):
+    from d1max_agent.bridges.nav2_nav import NAV2_NO_PROGRESS_S
+    link = 假转接()
+    t = _台(tmp_path, link)
+    await t.start(1.5, 4.0)
+    await t.nav.goto(Pose.from_xy_yaw(1.5, 1.0, 0.0))     # 目标在身后
+    gid = link.kinds("goal")[-1]["goal_id"]
+    for _ in range(int((NAV2_NO_PROGRESS_S + 10) * 10)):   # 往前(背离目标)绕远路一直在走
+        link.now += 0.1
+        link.cmd = (link.now, gid, 0.3, 0.0, 0.0)
+        await t.一拍()
+        if t.r.x > 10.5:
+            break
+    assert [d for k, d in t.events if k == "nav_blocked"] == []
+
+
+async def test_W72_换了新目标_进展从头算_不拿上一个目标的时刻误报(tmp_path):
+    from d1max_agent.bridges.nav2_nav import NAV2_NO_PROGRESS_S
+    link = 假转接()
+    t = _台(tmp_path, link)
+    await t.start(1.5, 4.0)
+    await t.nav.goto(Pose.from_xy_yaw(5.0, 4.0, 0.0))
+    gid = link.kinds("goal")[-1]["goal_id"]
+    for _ in range(int((NAV2_NO_PROGRESS_S - 5) * 10)):     # 原地转了 25 秒(还没报)
+        link.now += 0.1
+        link.cmd = (link.now, gid, 0.0, 0.0, 0.6)
+        await t.一拍()
+    await t.nav.stop()
+    await t.跑(1.0)
+    await t.nav.goto(Pose.from_xy_yaw(1.5, 9.0, 0.0))       # 换成更远的目标
+    gid = link.kinds("goal")[-1]["goal_id"]
+    for _ in range(80):                                     # 新目标上转了 8 秒
+        link.now += 0.1
+        link.cmd = (link.now, gid, 0.0, 0.0, 0.6)
+        await t.一拍()
+    assert [d for k, d in t.events if k == "nav_blocked"] == []

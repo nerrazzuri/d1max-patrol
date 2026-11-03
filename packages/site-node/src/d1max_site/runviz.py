@@ -48,6 +48,9 @@ TRAIL_JUMP_M = 3.0
 PATH_MAX = 128
 #: 任务在跑、被挡超过这么久(秒)报 P2。
 BLOCK_ALERT_S = 60
+#: W72(用户 11-03):被挡这么久(秒)以上、没到报警就自己走了 —— 只记一笔已解决的(不推送、不要人处理);
+#: 更短的(等人让路)不记。
+BLOCK_RECORD_S = 20
 #: 重规划原因 → 人话的键(界面按语言翻)。
 REPLAN_WHY = ("off_route", "zones", "near_nogo", "detour", "preview")
 
@@ -203,6 +206,7 @@ class RunViz:
                 reason=str(d.get("reason") or "")[:200], x=_num(d.get("x")), y=_num(d.get("y")),
                 map_id=str(d.get("map_id") or ""), map_version=str(d.get("map_version") or ""))
         elif e.kind == "nav_unblocked":
+            self._note_short(rid, r)
             self._unblock(rid, r)
         elif e.kind == "nav_replan":
             why = str(d.get("why") or "")
@@ -218,6 +222,28 @@ class RunViz:
         r.replan = None
         r.path, r.path_seq = None, None
         self._unblock(rid, r)
+
+    def _note_short(self, rid: str, r: _Robot) -> None:
+        """W72:被挡了几十秒、没到报警就自己走了:记一笔(带被挡的位置)。"""
+        b = r.blocked
+        if b is None or b.alerted or self.alerts is None:
+            return
+        secs = (self._now() - b.since_ms) // 1000
+        if secs < BLOCK_RECORD_S:
+            return
+        ctx: dict[str, Any] = {}
+        if b.x is not None and b.y is not None and b.map_id:
+            ctx["pose"] = {"map_id": b.map_id, "map_version": b.map_version, "x": b.x, "y": b.y,
+                           "at_ms": b.since_ms}
+        if r.task_id:
+            ctx["task_id"] = r.task_id
+        try:
+            self.alerts.raise_alert(kind="nav_blocked", robot=rid,
+                                    title=f"机器人被挡 {secs} 秒后自己走了",
+                                    detail=f"{b.reason or '没说原因'};已恢复,只做记录", context=ctx,
+                                    record="site:nav_unblocked")
+        except Exception:
+            log.exception("%s 被挡的记录记不下来", rid)
 
     def _unblock(self, rid: str, r: _Robot) -> None:
         had, r.blocked = r.blocked, None

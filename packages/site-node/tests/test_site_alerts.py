@@ -169,13 +169,15 @@ def test_推送流里的没回待命点_记一条P2_别的推送不管(台):
     assert "t9" in a.detail and "监护" in a.detail
 
 
-def test_点位没到报卡住_到了不报(台):
+def test_点位没到记一笔_到了不报(台):
+    """W72:点位没到只记录(已解决);连着几趟没到才报 P1,见 test_site_alert_autoclear。"""
     c, db, desk, src, *_ = 台
     src.on_event("A", _ev("patrol_waypoint", task_id="t1", index=0, name="gate", ok=True, note=""))
     src.on_event("A", _ev("patrol_waypoint", task_id="t1", index=1, name="pond", ok=False,
                           note="导航失败"))
     [a] = desk.book.all()
-    assert a.kind == "stuck" and "pond" in a.title and a.detail == "导航失败"
+    assert a.kind == "stuck" and "pond" in a.title and a.detail.startswith("导航失败")
+    assert a.resolved_ms is not None
 
 
 def test_跑着任务时丢定位_先P2_30秒没好再P1_空闲时丢不报(台):
@@ -242,6 +244,7 @@ def test_掉线_跑着任务是P1_空闲是P2_回来了再掉再报(台):
     src.on_status("B", _status())
     stale.add("B")
     src.tick()
+    c.ms += 31_000                                    # W72:遗言报的掉线 30 秒没回来才报
     src.tick()
     got = {a.robot: (a.kind, a.level.value) for a in desk.book.all()}
     assert got == {"A": ("robot_offline", "P1"), "B": ("robot_offline_idle", "P2")}
@@ -338,6 +341,8 @@ def test_4G抖动_回来不到一分钟又掉_算同一次(台):
     c, db, desk, src, pushed, stale = 台
     src.on_status("A", _status())
     src.on_status("A", _status(online=False))
+    c.ms += 31_000                                    # W72:30 秒没回来才报
+    src.tick()
     a = [x for x in desk.book.all() if x.robot == "A"][0]
     desk.ack(a.key, who="gina")
     for _ in range(5):                                # 抖五次
@@ -350,7 +355,10 @@ def test_4G抖动_回来不到一分钟又掉_算同一次(台):
     c.ms += 10_000
     src.on_status("A", _status())
     c.ms += 61_000
+    src.tick()                                        # W72:稳定在线一分钟,那条自动解除
     src.on_status("A", _status(online=False))
+    c.ms += 31_000
+    src.tick()
     assert len([x for x in desk.book.all() if x.robot == "A"]) == 2, \
         "稳定在线一分钟后再掉是新的一次"
 
@@ -412,6 +420,8 @@ def test_站点重启_用库里最后见过的状态做种_不重复报也不降
     src2.on_status("A", _status(estop_clear=False))          # retained:急停还按着
     src2.on_status("B", _status(online=False))               # 停机期间的遗言
     src2.on_status("B", _status(online=False))
+    c.ms += 31_000                                           # W72:30 秒没回来才报
+    src2.tick()
     got = sorted((a.robot, a.kind) for a in desk.book.all())
     assert got == [("B", "robot_offline")], got
 

@@ -55,6 +55,22 @@ export function tonightEvents(alerts: Alert[], since: number): Alert[] {
   return alerts.filter((a) => a.first_ms >= since && forGuard(a)).sort((a, b) => b.first_ms - a.first_ms);
 }
 
+/** W72(用户 11-03):地图侧栏最多列几条。 */
+export const MAP_TODO_MAX = 5;
+
+/** W72:地图侧栏只列本班**还要人处理**的(没解决、给保安的),P1 在前、新的在前,最多 :data:`MAP_TODO_MAX` 条;
+ * 已解决、自动恢复的只在报警记录里看。 */
+export function mapTodo(alerts: Alert[], since: number): Alert[] {
+  const rank = (a: Alert) => (a.level === "P1" ? 0 : 1);
+  return tonightEvents(alerts, since).filter((a) => a.resolved_ms == null)
+    .sort((a, b) => rank(a) - rank(b) || b.first_ms - a.first_ms).slice(0, MAP_TODO_MAX);
+}
+
+/** W72:地图上的事件标记 —— 只留本班入侵类(在哪儿出的事,解决了也值得看)和还没处理的。 */
+export function mapPins(alerts: Alert[], since: number): Alert[] {
+  return tonightEvents(alerts, since).filter((a) => a.resolved_ms == null || a.audience === "intrusion");
+}
+
 /** 本班从几点算(交班时间,当地时间,默认 7:00、19:00;设计 §4.5、§11 第 4 条)。 */
 export function shiftStart(now: number, hours: [number, number] = [7, 19]): number {
   const d = new Date(now);

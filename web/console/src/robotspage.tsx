@@ -12,6 +12,7 @@ import { ConfirmPassword } from "./confirmpw";
 import { hm, robotNames } from "./data";
 import { Confirm, Modal } from "./dialogs";
 import { alertTitle, lang, t, type Key } from "./i18n";
+import { autoResolved } from "./model";
 import { Shape } from "./icons";
 import { locText, StateText, type UnitInfo } from "./live";
 
@@ -20,7 +21,8 @@ export interface RobotCard {
   robot_id: string; name: string; revoked: boolean; expires_at: number; online: boolean; battery_pct: number | null; patrols_today: number;
   /** W71 ``nav2``:Nav2 没起来(机器人退回自带规划)。 */
   problems: ({ key: string; kind: string; first_ms: number } | { device: string; state: string } | { nav2: string })[];
-  recent_problems: { key: string; kind: string; first_ms: number; resolved_ms: number | null }[];
+  /** W72:``level``、``resolved_by`` 老站点没有。 */
+  recent_problems: RecentProblem[];
   agent: string | null; compat: string; manual_only: boolean;
   wifi?: Wifi | null;
 }
@@ -171,6 +173,35 @@ export function RobotsPage({ say, now, units = [], readOnly = false }: { say: Sa
   );
 }
 
+type RecentProblem = { key: string; kind: string; level?: string; first_ms: number; resolved_ms: number | null; resolved_by?: string };
+
+/** W72(用户 11-03):详情里的告警分三组放在最下面 —— 要处理(没解决的 P1)、待跟进(没解决的其余,不急)、
+ * 记录(已解决的,收起来;自动恢复的标出来)。老站点没报级别的算要处理(宁可多看)。 */
+function RecentAlerts({ items }: { items: RecentProblem[] }) {
+  const open = items.filter((p) => p.resolved_ms == null);
+  const act = open.filter((p) => !p.level || p.level === "P1");
+  const later = open.filter((p) => p.level && p.level !== "P1");
+  const log = items.filter((p) => p.resolved_ms != null);
+  const row = (p: RecentProblem, tag?: string) => (
+    <li key={p.key}><time class="mono small">{day(p.first_ms)} {hm(p.first_ms)}</time> {alertTitle(lang.value, p.kind, p.kind)}
+      {tag && <span class="tag">{tag}</span>}</li>
+  );
+  return (
+    <section class="robot-alerts">
+      <h3>{t("robotRecent")}</h3>
+      {items.length === 0 && <p class="muted small">{t("robotRecentNone")}</p>}
+      {act.length > 0 && <div data-group="act"><h4>{t("robotAct")}</h4><ul class="plain">{act.map((p) => row(p, t("robotOpen")))}</ul></div>}
+      {later.length > 0 && <div data-group="later"><h4>{t("robotLater")}</h4><ul class="plain">{later.map((p) => row(p))}</ul></div>}
+      {log.length > 0 && (
+        <details data-group="log">
+          <summary>{t("robotLog", { n: log.length })}</summary>
+          <ul class="plain">{log.map((p) => row(p, autoResolved(p) ? t("vAuto") : t("vDone")))}</ul>
+        </details>
+      )}
+    </section>
+  );
+}
+
 function RobotDetail({ r, say, onChanged, onCode, onClose, readOnly = false }: {
   readOnly?: boolean;
   r: RobotCard; say: Say; onChanged: () => void; onCode: (c: { id: string; code: string; hours: number }) => void; onClose: () => void;
@@ -207,15 +238,6 @@ function RobotDetail({ r, say, onChanged, onCode, onClose, readOnly = false }: {
         {r.wifi && <><dt>{t("wifiLabel")}</dt><dd>{r.wifi.ssid || "—"} · {t(`link_${r.wifi.link}` as Key)}</dd></>}
       </dl>
       {!readOnly && r.wifi?.change && <WifiChange id={r.robot_id} ch={r.wifi.change} act={act} />}
-      <h3>{t("robotRecent")}</h3>
-      {r.recent_problems.length === 0 ? <p class="muted small">{t("robotRecentNone")}</p> : (
-        <ul class="plain">
-          {r.recent_problems.map((p) => (
-            <li key={p.key}><time class="mono small">{day(p.first_ms)} {hm(p.first_ms)}</time> {alertTitle(lang.value, p.kind, p.kind)}
-              {p.resolved_ms == null && <span class="tag">{t("robotOpen")}</span>}</li>
-          ))}
-        </ul>
-      )}
       {r.problems.some((p) => "device" in p) && (
         <p class="small">{r.problems.filter((p) => "device" in p).map(problemText).join(" · ")}</p>
       )}
@@ -242,6 +264,7 @@ function RobotDetail({ r, say, onChanged, onCode, onClose, readOnly = false }: {
             onChanged();
           }} />
       )}
+      <RecentAlerts items={r.recent_problems} />
     </aside>
   );
 }

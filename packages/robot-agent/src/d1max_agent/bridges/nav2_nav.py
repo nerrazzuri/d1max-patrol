@@ -109,6 +109,14 @@ TURN_TAKEOVER_RAD = 0.15
 NEAR_GOAL_M = 0.5
 NEAR_STALL_S = 15.0
 NEAR_PROGRESS_M = 0.05
+#: W72(用户 11-03:导航卡住几十秒要给站点告警,恢复了只留记录):离终点还远,这么多秒既没向终点靠近
+#: :data:`NAV2_PROGRESS_M`、也没离开原地 :data:`NAV2_MOVED_M`(原地打转、来回)——
+#: 报一次 ``nav_blocked``
+#: (站点从被挡起算一分钟报 P2,有进展了报 ``nav_unblocked``、站点自动解除)。绕远路一直在走不算。
+#: 11-03 商场绕人贴沙发:Nav2 自己原地转了约 70 s,守卫没拦,站点不知道。
+NAV2_NO_PROGRESS_S = 30.0
+NAV2_PROGRESS_M = 0.3
+NAV2_MOVED_M = 1.0
 #: 到了目标、只差朝向时原地转被挡(守卫、地图墙)这么久(秒):就停在这儿算到,留话说朝向差多少
 #: (W70,11-03 C40221:原点旁边有椅子、桌子,要转 170°,守卫一直拦,停了一分多钟)。换个方向转没用 ——
 #: 机身是对称的长方形,绕远那一边扫过的朝向(按 180° 折一下)包含了近的那一边。
@@ -179,6 +187,9 @@ class Nav2NavBackend(PlannedNavBackend):
         self._turn_err: float | None = None                # 上一拍原地转的误差(看转没转过头)
         self._turn_blocked_at: float | None = None         # 只差朝向的原地转从什么时候起被挡(W70)
         self._near_best: float | None = None               # 进了终点半米以后最近到过多近(W70)
+        #: W72:离终点最近到过多近、那一刻在哪、从什么时候起没进展、报过被挡没有。
+        self._prog: tuple[float, float, float, float] | None = None    # (最近距离, x, y, 起点时刻)
+        self._prog_told = False
         self._near_since = 0.0
         self._goal_msg: dict[str, Any] | None = None       # 这一段发给 Nav2 的目标(卡住了重发,W70)
         self._resends = 0
@@ -311,6 +322,7 @@ class Nav2NavBackend(PlannedNavBackend):
         self.link.send(msg)
         self._goal_msg, self._resends, self._quiet_since = dict(msg), 0, None
         self._edge, self._edge_tries, self._fwd_ref = None, 0, None
+        self._prog_reset()                                 # W72:新目标,进展从头算
         if here is not None:
             pts = [(here.x, here.y), *via, goal_xy]
             self.planned_length_m = PATH_FACTOR * sum(math.dist(a, b)
@@ -392,6 +404,7 @@ class Nav2NavBackend(PlannedNavBackend):
         self._turn_blocked_at = None
         self._goal_msg, self._quiet_since = None, None
         self._near_best = None
+        self._prog_reset()
         if status is not NavStatus.SUCCEED:
             self._cancel_nav2()
         self._nav2_goal = None
@@ -519,6 +532,8 @@ class Nav2NavBackend(PlannedNavBackend):
             return
         if tgt is not None and await self._near_stalled(here, tgt, dt_s):
             return
+        if tgt is not None:
+            self._watch_progress(here, tgt)
         c = link.cmd
         now = link._now()
         if c is None or now - c[0] > CMD_FRESH_S:
@@ -701,6 +716,37 @@ class Nav2NavBackend(PlannedNavBackend):
             await self._send(0.0, 0.0, dt_s)
             await self._enter_terminal(NavStatus.SUCCEED)
         return True
+
+    def _prog_reset(self) -> None:
+        if self._prog_told and self.on_event is not None:
+            self.on_event("nav_unblocked", {"waited_s": 0.0, "detour": False})
+        self._prog, self._prog_told = None, False
+
+    def _watch_progress(self, here: Any, tgt: Any) -> None:
+        """W72:离终点还远、:data:`NAV2_NO_PROGRESS_S` 秒没进展(没靠近、也没挪窝)报一次被挡;有进展了
+        报恢复。终点半米以内归 :meth:`_near_stalled` 管。"""
+        d = math.dist((here.x, here.y), (tgt.position.x, tgt.position.y))
+        now = self._secs()
+        if d <= NEAR_GOAL_M:
+            self._prog_reset()
+            return
+        p = self._prog
+        if p is None or d < p[0] - NAV2_PROGRESS_M or math.dist((here.x, here.y), (p[1], p[2])) \
+                >= NAV2_MOVED_M:
+            if self._prog_told and self.on_event is not None:
+                self.on_event("nav_unblocked", {"waited_s": round(now - p[3], 1) if p else 0.0,
+                                                "detour": True})
+            self._prog, self._prog_told = (d, here.x, here.y, now), False
+            return
+        if not self._prog_told and now - p[3] >= NAV2_NO_PROGRESS_S and self.on_event is not None:
+            self._prog_told = True
+            waited = now - p[3]
+            log.warning("离终点 %.1f m,%.0f 秒没向目标靠近、也没挪窝(原地打转或来回):报被挡",
+                        d, waited)
+            why = f"{waited:.0f} 秒没向目标靠近(原地打转或来回绕)"
+            self.on_event("nav_blocked", {"reason": why,
+                                          "x": round(here.x, 2), "y": round(here.y, 2),
+                                          "waited_s": round(waited, 1)})
 
     def _watch_stall(self, now: float) -> None:
         """Nav2 一直不给速度、也不回结果(W70):过 :data:`NAV2_STALL_S` 取消、重发同一个目标。"""
