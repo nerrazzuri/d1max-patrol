@@ -1147,3 +1147,22 @@ async def test_W71_机器人自己四周都被判成挡_Nav2失败_说机器人�
     await t.跑(1.0)
     assert NavStatus.FAILED in t.status and "被困" in t.nav.fail_reason, t.nav.fail_reason
     assert "目标点被占" not in t.nav.fail_reason and not t.nav.fail_final
+
+
+async def test_W71_目标点贴着地图墙_交给Nav2之前挪到最近能站的点(tmp_path):
+    """11-03 商场:站点查可达时把贴墙的点挪进来算(intercept_reach.snap),说「到得了」;机器人却把原点
+    交给 Nav2,Nav2 判终点在致命带里规划失败。自己的规划早就会挪(工单 20),Nav2 这条路也挪。"""
+    from d1max_agent.bridges.planned_nav import GOAL_SNAP_M
+    link = 假转接()
+    t = _台(tmp_path, link, walls=[(0.1, 4.7, 11.9, 4.8)])
+    await t.start(1.5, 4.0)
+    await t.nav.goto(Pose.from_xy_yaw(6.0, 4.3, 0.3))               # 离墙面 0.4 m:站点照收
+    g = link.kinds("goal")[-1]
+    assert g["y"] < 4.3 and math.dist((g["x"], g["y"]), (6.0, 4.3)) <= GOAL_SNAP_M + 1e-6, g
+    assert g["yaw"] == pytest.approx(0.3), "朝向不变"
+    await t.nav.stop()
+    await t.跑(1.0)
+    await t.跑(1.0)
+    await t.nav.goto(Pose.from_xy_yaw(6.0, 3.0, 0.0))            # 空地上的点原样
+    g = link.kinds("goal")[-1]
+    assert (g["x"], g["y"]) == (6.0, 3.0)
