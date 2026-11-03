@@ -934,3 +934,18 @@ async def test_W70_中止那一拍卡住_未在送时钟_回原点自己送上�
     link.send = 收到时钟就绪
     await asyncio.wait_for(t.nav.goto(Pose.from_xy_yaw(6.0, 4.0, 0.0)), 2.0)
     assert link.kinds("goal") and t.nav.fallback_reason == ""
+
+
+async def test_W70_只差朝向_转身会扫到墙_被挡10秒就停在这儿算到_不干等(tmp_path):
+    """11-03 C40221:原点旁边有椅子、桌子,要转 170°,守卫一直拦,停了一分多钟不动。"""
+    link = 假转接()
+    # 机头左前方 0.45 m 处一根柱子:转大半圈一定扫到
+    t = _台(tmp_path, link, walls=[(1.85, 4.35, 1.95, 4.45)])
+    await t.start(1.5, 4.0, 0.0)
+    await t.nav.goto(Pose.from_xy_yaw(1.55, 4.0, math.radians(170)))
+    await t.跑(5.0)
+    assert NavStatus.SUCCEED not in t.status, "被挡不到 10 s 先等"
+    await t.跑(8.0)
+    assert NavStatus.SUCCEED in t.status, (t.status, t.nav.fail_reason)
+    assert abs(math.degrees(t.r.yaw)) < 120, "确实被挡住、没转过去"
+    assert not t.crashed

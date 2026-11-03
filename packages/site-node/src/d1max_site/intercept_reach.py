@@ -30,6 +30,35 @@ class Reach:
     note: str = ""           # 查不了的那几样(不挡)
 
 
+#: 点在规划栅格的「致命带」里(离墙不到外接圆半径 0.52 m + 余量)但机身站得下(离墙至少机身半宽 0.29 m
+#: + 余量,跟 Nav2 的机身矩形一样)时,往外挪到最近的可走格子再查(W70,11-03 C40221:用户在靠墙处点的
+#: 两个点站点判「走不通」,Nav2 实际走得到)。挪多远 = 0.57 − 0.34 ≈ 0.25 m。
+SNAP_M = 0.25
+
+
+def snap(cm: Any, cell: tuple[int, int] | None) -> tuple[int, int] | None:
+    """``cell`` 不在致命带里原样返回;在墙、禁行区里回 None;在致命带里回 :data:`SNAP_M` 以内最近的
+    可走格子,没有回 None。"""
+    import numpy as np
+    if cell is None or cm.hard[cell]:
+        return None
+    if not cm.lethal[cell]:
+        return cell
+    k = max(1, int(round(SNAP_M / float(cm.res))))
+    r0, c0 = cell
+    h, w = cm.shape
+    ra, rb, ca, cb = max(0, r0 - k), min(h, r0 + k + 1), max(0, c0 - k), min(w, c0 + k + 1)
+    ok = ~cm.lethal[ra:rb, ca:cb] & ~cm.hard[ra:rb, ca:cb]
+    rr, cc = np.nonzero(ok)
+    if len(rr) == 0:
+        return None
+    d2 = (rr + ra - r0) ** 2 + (cc + ca - c0) ** 2
+    j = int(d2.argmin())
+    if d2[j] > k * k:
+        return None
+    return (int(rr[j] + ra), int(cc[j] + ca))
+
+
 class InterceptReach:
     def __init__(self, db: Any, maps: Any, zones: Any, *,
                  timeout_s: float = PLAN_TIMEOUT_S) -> None:
@@ -111,7 +140,7 @@ class InterceptReach:
             return None
         if cm is None:
             return None
-        s, g = cm.cell_of(*start), cm.cell_of(*goal)
+        s, g = snap(cm, cm.cell_of(*start)), snap(cm, cm.cell_of(*goal))
         if s is None or g is None:
             return None
         h, w = cm.shape
@@ -145,8 +174,9 @@ class InterceptReach:
             return Reach(problem=f"{name} 在规划栅格外面")
         if cm.hard[g]:
             return Reach(problem=f"{name} 在障碍或禁行区里")
-        if cm.lethal[g]:
-            return Reach(problem=f"{name} 离障碍太近,机器人站不下(机身半径 0.52 m 加余量)")
+        g = snap(cm, g)
+        if g is None:
+            return Reach(problem=f"{name} 离障碍太近,机器人站不下(机身半宽 0.29 m 加余量)")
         starts = self.starts(map_id, version)
         if not starts:
             return Reach(note="此地图上尚无待命点、原点,未检查从何处可以到达")
@@ -156,7 +186,7 @@ class InterceptReach:
         why = []
         timed_out = False
         for sname, sx, sy in starts:
-            s = cm.cell_of(sx, sy)
+            s = snap(cm, cm.cell_of(sx, sy)) or cm.cell_of(sx, sy)
             if s is None:
                 why.append(f"待命点 {sname} 在规划栅格外")
                 continue
