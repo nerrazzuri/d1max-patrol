@@ -173,7 +173,14 @@ export function RobotsPage({ say, now, units = [], readOnly = false }: { say: Sa
   );
 }
 
-type RecentProblem = { key: string; kind: string; level?: string; first_ms: number; resolved_ms: number | null; resolved_by?: string };
+type RecentProblem = { key: string; kind: string; level?: string; title?: string; first_ms: number; resolved_ms: number | null; resolved_by?: string };
+
+/** 今天的只写钟点,别的天写月-日 钟点。 */
+function when(ms: number, now: number = Date.now()): string {
+  const d = new Date(ms);
+  const same = day(ms) === day(now);
+  return same ? hm(ms) : `${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")} ${hm(ms)}`;
+}
 
 /** W72(用户 11-03):详情里的告警分三组放在最下面 —— 要处理(没解决的 P1)、待跟进(没解决的其余,不急)、
  * 记录(已解决的,收起来;自动恢复的标出来)。老站点没报级别的算要处理(宁可多看)。 */
@@ -182,20 +189,35 @@ function RecentAlerts({ items }: { items: RecentProblem[] }) {
   const act = open.filter((p) => !p.level || p.level === "P1");
   const later = open.filter((p) => p.level && p.level !== "P1");
   const log = items.filter((p) => p.resolved_ms != null);
-  const row = (p: RecentProblem, tag?: string) => (
-    <li key={p.key}><time class="mono small">{day(p.first_ms)} {hm(p.first_ms)}</time> {alertTitle(lang.value, p.kind, p.kind)}
-      {tag && <span class="tag">{tag}</span>}</li>
-  );
+  const row = (p: RecentProblem, tag?: { text: string; tone: string }) => {
+    const name = alertTitle(lang.value, p.kind, p.title || p.kind);
+    // 站点写的具体标题(「断联 20 秒后恢复」)是中文的:中文界面下跟在类型名后面
+    const more = lang.value === "zh" && p.title && p.title !== name ? p.title : "";
+    return (
+    <li key={p.key}>
+      <time class="mono">{when(p.first_ms)}</time>
+      <span class="rd-what">{name}{more && <small>{more}</small>}</span>
+      {tag ? <span class={`rd-tag ${tag.tone}`}>{tag.text}</span> : <span />}
+    </li>
+    );
+  };
+  const head = (key: Key, n: number) => <h4><span>{t(key)}</span><span class="rd-count">{n}</span></h4>;
   return (
-    <section class="robot-alerts">
-      <h3>{t("robotRecent")}</h3>
+    <section class="robot-alerts rd-sec">
+      <h3 class="rd-h">{t("robotRecent")}</h3>
       {items.length === 0 && <p class="muted small">{t("robotRecentNone")}</p>}
-      {act.length > 0 && <div data-group="act"><h4>{t("robotAct")}</h4><ul class="plain">{act.map((p) => row(p, t("robotOpen")))}</ul></div>}
-      {later.length > 0 && <div data-group="later"><h4>{t("robotLater")}</h4><ul class="plain">{later.map((p) => row(p))}</ul></div>}
+      {act.length > 0 && (
+        <div class="rd-group act" data-group="act">{head("robotAct", act.length)}
+          <ul class="rd-list">{act.map((p) => row(p, { text: t("robotOpen"), tone: "open" }))}</ul></div>
+      )}
+      {later.length > 0 && (
+        <div class="rd-group later" data-group="later">{head("robotLater", later.length)}
+          <ul class="rd-list">{later.map((p) => row(p))}</ul></div>
+      )}
       {log.length > 0 && (
-        <details data-group="log">
+        <details class="rd-group rd-log" data-group="log">
           <summary>{t("robotLog", { n: log.length })}</summary>
-          <ul class="plain">{log.map((p) => row(p, autoResolved(p) ? t("vAuto") : t("vDone")))}</ul>
+          <ul class="rd-list">{log.map((p) => row(p, autoResolved(p) ? { text: t("vAuto"), tone: "auto" } : { text: t("vDone"), tone: "done" }))}</ul>
         </details>
       )}
     </section>
@@ -219,38 +241,49 @@ function RobotDetail({ r, say, onChanged, onCode, onClose, readOnly = false }: {
     onChanged();
   };
   const compat: Key = r.compat === "ok" ? "compat_ok" : (`compat_${r.compat}` as Key);
+  const devices = r.problems.filter((p) => "device" in p);
+  const fact = (k: Key, v: string, mono = false) => <div><dt>{t(k)}</dt><dd class={mono ? "mono" : undefined}>{v}</dd></div>;
   return (
     <aside class="panel robot-detail" aria-label={label(r)}>
       <div class="panel-head">
         <h2>{label(r)}</h2>
+        {r.name && <small class="muted mono">{r.robot_id}</small>}
+        {r.online ? <span class="state tone-success">{t("online")}</span> : <span class="state tone-error">{t("st_offline")}</span>}
         <button type="button" class="btn sm push" onClick={onClose}>{t("close")}</button>
       </div>
-      {!readOnly && <form class="row" onSubmit={(e) => { e.preventDefault(); void act(() => api("POST", `/api/admin/robots/${enc(r.robot_id)}/name`, { name }), t("saved")); }}>
-        <label class="field grow">{t("robotName")}<input name="name" value={name} maxLength={32} placeholder={r.robot_id}
-          onInput={(e) => setName(e.currentTarget.value)} /></label>
-        <button type="submit" class="btn" disabled={name === r.name}>{t("robotNameSave")}</button>
-      </form>}
-      <dl class="kv small">
-        <dt>{t("robotId")}</dt><dd class="mono">{r.robot_id}</dd>
-        <dt>{t("colVersion")}</dt><dd>{r.agent ?? "—"} · {t(compat)}</dd>
-        <dt>{t("certExpires")}</dt><dd class="mono">{r.expires_at ? day(r.expires_at) : "—"}</dd>
-        <dt>{t("dispatchMode")}</dt><dd>{r.manual_only ? t("manualOnly") : t("autoDispatch")}</dd>
-        {r.wifi && <><dt>{t("wifiLabel")}</dt><dd>{r.wifi.ssid || "—"} · {t(`link_${r.wifi.link}` as Key)}</dd></>}
-      </dl>
-      {!readOnly && r.wifi?.change && <WifiChange id={r.robot_id} ch={r.wifi.change} act={act} />}
-      {r.problems.some((p) => "device" in p) && (
-        <p class="small">{r.problems.filter((p) => "device" in p).map(problemText).join(" · ")}</p>
+      <section class="rd-sec">
+        <dl class="rd-facts">
+          {fact("robotId", r.robot_id, true)}
+          {fact("colVersion", `${r.agent ?? "—"} · ${t(compat)}`)}
+          {fact("certExpires", r.expires_at ? day(r.expires_at) : "—", true)}
+          {fact("dispatchMode", r.manual_only ? t("manualOnly") : t("autoDispatch"))}
+          {r.wifi && fact("wifiLabel", `${r.wifi.ssid || "—"} · ${t(`link_${r.wifi.link}` as Key)}`)}
+        </dl>
+        {devices.length > 0 && <p class="note small">{devices.map(problemText).join(" · ")}</p>}
+      </section>
+      {!readOnly && r.wifi?.change && <section class="rd-sec"><WifiChange id={r.robot_id} ch={r.wifi.change} act={act} /></section>}
+      {!readOnly && (
+        <section class="rd-sec">
+          <form class="rd-name" onSubmit={(e) => { e.preventDefault(); void act(() => api("POST", `/api/admin/robots/${enc(r.robot_id)}/name`, { name }), t("saved")); }}>
+            <label class="rd-label" for={`rd-name-${r.robot_id}`}>{t("robotName")}</label>
+            <div class="rd-inline">
+              <input id={`rd-name-${r.robot_id}`} name="name" value={name} maxLength={32} placeholder={r.robot_id}
+                onInput={(e) => setName(e.currentTarget.value)} />
+              <button type="submit" class="btn sm" disabled={name === r.name}>{t("robotNameSave")}</button>
+            </div>
+          </form>
+          <div class="rd-actions">
+            <button type="button" class="btn sm" onClick={() => void act(() => api("POST", `/api/robots/${enc(r.robot_id)}/service`, { manual_only: !r.manual_only }))}>
+              {r.manual_only ? t("setAuto") : t("setManual")}
+            </button>
+            <button type="button" class="btn sm" onClick={() => void act(async () => {
+              const d = await api<{ code: string; hours: number }>("POST", `/api/admin/robots/${enc(r.robot_id)}/code`, {});
+              onCode({ id: r.robot_id, code: d.code, hours: d.hours });
+            })}>{t("newCode")}</button>
+            <button type="button" class="btn sm rd-danger" onClick={() => setUnbind("ask")}>{t("robotUnbind")}</button>
+          </div>
+        </section>
       )}
-      {!readOnly && <div class="row wrap">
-        <button type="button" class="btn sm" onClick={() => void act(() => api("POST", `/api/robots/${enc(r.robot_id)}/service`, { manual_only: !r.manual_only }))}>
-          {r.manual_only ? t("setAuto") : t("setManual")}
-        </button>
-        <button type="button" class="btn sm" onClick={() => void act(async () => {
-          const d = await api<{ code: string; hours: number }>("POST", `/api/admin/robots/${enc(r.robot_id)}/code`, {});
-          onCode({ id: r.robot_id, code: d.code, hours: d.hours });
-        })}>{t("newCode")}</button>
-        <button type="button" class="btn sm stop" onClick={() => setUnbind("ask")}>{t("robotUnbind")}</button>
-      </div>}
       {unbind === "ask" && (
         <Confirm text={t("robotUnbindConfirm", { id: label(r) })} yes={t("robotUnbind")} danger onNo={() => setUnbind(null)} onYes={() => setUnbind("pw")} />
       )}

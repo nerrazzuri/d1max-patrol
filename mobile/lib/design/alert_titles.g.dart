@@ -33,7 +33,7 @@ const Map<String, (String, String)> alertTitles = <String, (String, String)>{
   'site_too_old': ('Site software older than robot', '站点软件版本低于机器人'),
   'loc_degraded': ('Localization degraded, robot paused', '定位变差，原地等待恢复'),
   'loc_lost_idle': ('Idle robot not localized, cannot dispatch', '空闲机器人定位不可信，无法派遣'),
-  'nav_blocked': ('Robot blocked for over a minute', '机器人受阻超过一分钟'),
+  'nav_blocked': ('Robot blocked', '机器人被挡住'),
   'estop_pressed': ('E-stop pressed', '急停已按下'),
   'lease_expired': ('Supervision lease expired', '监护超时'),
   'suspend_stale': ('Robot paused too long', '暂停时间过长'),
