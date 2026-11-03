@@ -54,7 +54,7 @@ class ActiveBundle:
 
 
 def import_bundle(db: SiteDB, bundle_dir: Path, *, imported_by: str,
-                  now_ms: int) -> dict[str, Any]:
+                  now_ms: int, clash: Any = None) -> dict[str, Any]:
     """任务包 → 路线库(按名字替换;摘要见 ``routes.import_into_store``)。成功回
     ``{"bundle_id","version","missions","schedule_entries","timezone", "routes":{added,replaced,
     unchanged},"schedules":{…},"kept_routes","kept_schedules","timezone_change","changed"}``。"""
@@ -84,6 +84,8 @@ def import_bundle(db: SiteDB, bundle_dir: Path, *, imported_by: str,
         except BundleError as exc:
             raise CatalogError(str(exc)) from exc
     sched_wire = schedule.to_wire() if schedule is not None else {"timezone": "UTC", "entries": []}
+    # 外审 r1 #11:任务包盖掉的路线、排程也会跟布防值守撞(站点在跑时 ``clash`` 接上;离线命令行不查)
+    before = clash.snapshot() if clash is not None else []
     with db.tx() as c:
         row = c.execute("SELECT max(version) AS v FROM bundles WHERE bundle_id=?",
                         (m.bundle_id,)).fetchone()
@@ -104,6 +106,10 @@ def import_bundle(db: SiteDB, bundle_dir: Path, *, imported_by: str,
             c.execute("INSERT INTO missions(bundle_id, version, mission_id, definition) "
                       "VALUES (?,?,?,?)", (m.bundle_id, m.version, mid,
                                            json.dumps(mission.to_wire(), ensure_ascii=False)))
+        if clash is not None:
+            got = clash.since(before, routes=list(missions))
+            if got:
+                raise CatalogError("导进来以后跟布防值守撞了:" + ";".join(got))
     return {"bundle_id": m.bundle_id, "version": m.version, "missions": sorted(missions),
             "schedule_entries": [e.id for e in schedule.entries] if schedule is not None else [],
             "timezone": schedule.timezone if schedule is not None else None,

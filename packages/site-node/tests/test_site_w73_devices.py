@@ -135,3 +135,23 @@ async def test_放到图上的摄像头_ONVIF报来的按它的位置派_没放�
     p = t.desk.intercept("cam:cam-9")
     assert (p["x"], p["y"]) == (5.0, 0.0), "视线中线一半(默认看 10 m)"
 
+
+
+async def test_外审_重新圈防区以后_设备和摄像头按新防区判(设备):
+    from d1max_site.cctv import Camera, add_camera, set_placement
+    t = 设备
+    t.book.put("door-1", {"kind": "contact", "map_id": MAP[0], "map_version": MAP[1],
+                          "x": 3.0, "y": 1.0}, by="alice")
+    add_camera(t.db, Camera(name="cam-9", onvif_url="http://x", username="u", password="p",
+                            zone="front-yard"), now_ms=0)
+    set_placement(t.db, "cam-9", {"map_id": MAP[0], "map_version": MAP[1], "x": 0.0, "y": 0.0,
+                                  "yaw": 0.0, "fov_deg": 90.0})
+    assert t.book.get("door-1")["zone"] == "东区"
+    assert t.book.by_source("cctv-cam-9")["zone"] == "东区"
+    t.areas.remove(*MAP, "东区")
+    t.areas.set(*MAP, "西区", EAST, by="alice")             # 同一块地方改叫西区
+    assert t.book.get("door-1")["zone"] == "西区"
+    assert t.book.by_source("dev-door-1")["zone"] == "西区"
+    assert t.book.by_source("cctv-cam-9")["zone"] == "西区", "摄像头缓存不带旧防区"
+    t.areas.remove(*MAP, "西区")
+    assert t.book.get("door-1")["zone"] == "", "不在任何防区:按全站"

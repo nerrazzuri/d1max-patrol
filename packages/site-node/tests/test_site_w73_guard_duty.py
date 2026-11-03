@@ -418,6 +418,21 @@ def test_老数据本来就撞_不挡别的改动(站):
     _排(t, "s2", "10:00")                                # 跟布防不沾边的改动照存
 
 
+
+def test_外审_改路线让巡逻变长撞进布防_不让存_原样不动(站):
+    t = _冲突台(站)
+    _方案(t)
+    _排(t, "s1", "21:00")                                # 原来一圈几十秒,不撞
+    rev = t.store.get("day")["revision"]
+    far = ROUTE + [{"name": "E", "x": 4000.0, "y": 0.0, "yaw": 0.0}]   # 走一个多小时
+    with pytest.raises(RouteError, match="改了以后跟布防值守撞了.*s1"):
+        t.store.put_route("day", {"map_id": MAP[0], "map_version": MAP[1], "waypoints": far,
+                                  "base_revision": rev}, by="alice")
+    assert t.store.get("day")["revision"] == rev, "整个回滚了"
+    t.store.put_route("day", {"map_id": MAP[0], "map_version": MAP[1], "waypoints": ROUTE[:2],
+                              "base_revision": rev}, by="alice")      # 不撞的照存
+    assert t.store.get("day")["revision"] == rev + 1
+
 # ---------------------------------------------------------------- 第四期:电量线(设计 §7.2–7.3)
 
 async def test_电量过不了一圈的出站线_不开_要补能_回充按这条线起(站):

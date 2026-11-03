@@ -33,6 +33,11 @@ FLOOR_PCT = 20.0
 TRIP_ABORT_PCT = 10.0
 #: 回充的优先级:比排程巡检(10–49)高,比人手动派的(60)、事件派遣(80)低 —— 人和入侵抢得走。
 CHARGE_PRIORITY = 50
+#: W73 外审 r1 #8:报警出动(事件派遣,优先级 ≥ 这个数)的 ``goto``,狗上出发线、回撤线的底用停止线
+#: (§7.5「报警比布防放宽一档」),跟站点的报警出动线(``d1max_site.energy.alarm_line``)对得上 ——
+#: 不然站点按距离派出去、狗按普通 25% 底拒掉,报警没人去。
+ALARM_PRIORITY = 80
+ALARM_FLOOR_PCT = 15.0
 TASK_PREFIX = "charge-"
 DOCK_TIMEOUT_S = 180
 UNDOCK_TIMEOUT_S = 120

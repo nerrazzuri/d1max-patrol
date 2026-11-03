@@ -15,10 +15,13 @@
 from __future__ import annotations
 
 import json
+import logging
 import math
 from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any
+
+log = logging.getLogger(__name__)
 
 WEEK = 7 * 1440
 #: 没跑够次数时保守用时 = 预计 × 这个数。
@@ -215,6 +218,35 @@ class ClashCheck:
         return clashes(self.patrols(over.get("schedules")),
                        self.guards(plan=over.get("plan"), arming=over.get("arming")),
                        robots=self.robots())
+
+    def snapshot(self) -> list[str]:
+        """改之前的冲突(配 :meth:`since`:改路线、导任务包这种直接写库的用)。算不出按没有。"""
+        try:
+            return self.all()
+        except Exception:
+            log.exception("冲突检查:改之前的算不出来,按没有")
+            return []
+
+    def since(self, before: list[str], *, routes: Iterable[str] = ()) -> list[str]:
+        """库里已经写成新的(同一个事务、还没提交)以后:比 ``before`` 新多出来的冲突。
+        外审 r1 #11:改路线(加点、加停留、改防区路线经过的防区)也会造出冲突。
+        ``routes`` 的缓存用完清掉 —— 冲突了要回滚,值守那边别留着按回滚掉的版本算的东西。
+        算不出不拦(写不进去比漏查一次更糟)。"""
+        try:
+            return new_clashes(before, self.all())
+        except Exception:
+            log.exception("冲突检查:改之后的算不出来,这一次不拦")
+            return []
+        finally:
+            self.forget(routes)
+
+    def forget(self, routes: Iterable[str]) -> None:
+        ids = set(routes)
+        for attr in ("_route_cache", "_lap_cache"):
+            cache = getattr(self.guard, attr, None)
+            if isinstance(cache, dict):
+                for k in [k for k in cache if isinstance(k, tuple) and k and k[0] in ids]:
+                    cache.pop(k, None)
 
     def new(self, **over: Any) -> list[str]:
         """这次改动(``schedules`` / ``plan`` / ``arming`` 换成给的)新造出来的冲突。"""
