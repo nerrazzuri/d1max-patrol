@@ -914,3 +914,23 @@ async def test_W70_Nav2一直取消不完_等够了才退回自己的规划(tmp_
     link.ready, link.reason = False, "等 Nav2 取消上一次留下的导航目标"
     await asyncio.wait_for(t.nav.goto(Pose.from_xy_yaw(6.0, 4.0, 0.0)), 2.0)
     assert "取消上一次" in t.nav.fallback_reason and not link.kinds("goal")
+
+
+async def test_W70_中止那一拍卡住_未在送时钟_回原点自己送上时钟(tmp_path, monkeypatch):
+    """2026-11-03 C40221 11:58:01:中止后马上回原点,「Nav2 未就绪(代理未在送时钟)」→ 退回自己的
+    规划(倒退 1.3 m、停 20 s)。处理中止那一拍卡了 2 s 多,时钟没送;goto 自己先送上时钟再等。"""
+    import d1max_agent.bridges.nav2_nav as N
+    monkeypatch.setattr(N, "NAV2_SETTLE_POLL_S", 0.01)
+    link = 假转接()
+    t = _台(tmp_path, link)
+    await t.start(1.5, 4.0, 0.0)
+    link.ready, link.reason = False, "代理未在送时钟"
+    send = link.send
+
+    def 收到时钟就绪(m):
+        if m["type"] == "tick":
+            link.ready, link.reason = True, ""
+        return send(m)
+    link.send = 收到时钟就绪
+    await asyncio.wait_for(t.nav.goto(Pose.from_xy_yaw(6.0, 4.0, 0.0)), 2.0)
+    assert link.kinds("goal") and t.nav.fallback_reason == ""

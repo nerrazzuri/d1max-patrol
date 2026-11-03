@@ -56,3 +56,42 @@ class ClockSkew:
 
 __all__ = ["ALARM_S", "CLEAR_S", "DISPATCH_MAX_S", "MAX_AGE_MS", "MIN_SAMPLES_BEHIND", "WINDOW",
            "ClockSkew"]
+
+
+#: 同一台机器人最多这么久(毫秒)发一次带站点时刻的对时(W70)。
+NUDGE_EVERY_MS = 60_000
+
+
+class ClockNudger:
+    """W70(用户 2026-11-03 现场,选「代理向站点对时」):站点在笔记本上、机器人经 SSH 隧道接进来、
+    上不了外网时,机器人的 NTP 对不上(隧道只转 TCP),钟慢慢偏到 −28 s,站点拒发所有命令。钟差过
+    :data:`ALARM_S` 的,站点发 ``ops_timesync``,载荷带站点此刻的墙钟 ``site_ms``;机器人报了
+    ``ops_timesync.site_time`` 才发(老代理不认这个键,只会 makestep,白发)。``ops_timesync`` 本来
+    就不过钟差闸、机器人不判过期。告警主循环每拍调 :meth:`tick`。"""
+
+    def __init__(self, dispatcher: object, *, now_ms: Callable[[], int]) -> None:
+        self.d = dispatcher
+        self._now = now_ms
+        self._sent: dict[str, int] = {}
+
+    async def tick(self) -> None:
+        import logging
+        log = logging.getLogger(__name__)
+        for rid, c in list(getattr(self.d, "clients", {}).items()):
+            caps = getattr(c, "capabilities", None)
+            spec = caps.tasks.get("ops_timesync") if caps is not None else None
+            if not isinstance(spec, dict) or spec.get("site_time") is not True:
+                continue
+            skew = self.d.clock_skew_s(rid)
+            if skew is None or abs(skew) <= ALARM_S:
+                continue
+            now = self._now()
+            if now - self._sent.get(rid, -NUDGE_EVERY_MS) < NUDGE_EVERY_MS:
+                continue
+            self._sent[rid] = now
+            log.info("%s 的钟跟站点差 %+.1f 秒:发站点时刻让它对时", rid, skew)
+            try:
+                await self.d.map_command(rid, "ops_timesync", {"site_ms": now},
+                                         issued_by="site:clock")
+            except Exception as exc:                     # noqa: BLE001
+                log.warning("%s 对时没发出去:%s", rid, exc)

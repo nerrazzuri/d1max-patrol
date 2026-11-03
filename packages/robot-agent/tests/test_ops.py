@@ -579,3 +579,16 @@ def test_W68_外审r2_远程编Super_LIO_不动全局current_按版本记_目录
             assert "install.sh" in why
     finally:
         prefix.chmod(0o755)
+
+
+def test_W70_站点带了站点时刻_按收到时的钟差交给特权执行器_能力里说认(tmp_path):
+    """用户 11-03 现场选「代理向站点对时」:站点在笔记本上、经隧道接入,机器人慢 28 s。"""
+    s = SimOps(results={"timesync": {"how": "site", "stepped": True, "offset_ms": 28_000}})
+    d = _desk(tmp_path, priv=s, now_ms=lambda: 1_000_000)
+    assert d.kinds()["ops_timesync"] == {"site_time": True}
+    reason, data = d.handle("ops_timesync", {"site_ms": 1_028_000})
+    assert reason == "" and s.calls[-1] == ("timesync", {"offset_ms": 28_000})
+    assert data["stepped"] is True and data["offset_ms"] == 28_000
+    assert d.handle("ops_timesync", {"site_ms": "x"}).startswith("payload")
+    d.handle("ops_timesync", {})
+    assert s.calls[-1] == ("timesync", {})
