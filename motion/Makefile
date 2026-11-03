@@ -21,7 +21,7 @@ LDLIBS   += -lrobot_sdk -pthread
 
 # patrol_agent 放第一位：它是产品件，其余是现场留下的一次性侦察程序。
 BINS := patrol_agent hold01 hold02 stand01 stand2 walk1 walkonly liedown \
-        m0_takecontrol m1_standup
+        m0_takecontrol m1_standup battery_probe
 
 .PHONY: all clean
 all: $(BINS)
