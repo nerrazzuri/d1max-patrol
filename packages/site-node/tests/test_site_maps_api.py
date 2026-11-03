@@ -151,7 +151,7 @@ def _待命点(s, version, x, name="门口"):
                   "is_default) VALUES ('A', ?, ?, ?, ?, 0, 0, 1)", (name, MAP[0], version, x))
 
 
-def test_图里没带原点_没标原点不下发_待命点不顶替(站点):
+def test_图里没带原点_待命点不顶替(站点):
     """W13a 外审阻断:待命点是运营调度的点,不能变成安全返航的原点。"""
     s = 站点
     alice = _登(s, "alice")
@@ -159,23 +159,23 @@ def test_图里没带原点_没标原点不下发_待命点不顶替(站点):
     s.maps.import_dir(_dir(s, "nohome", home=False), map_id=MAP[0], version="12")
     _确认(s, alice, "12")
     body = {"map_id": MAP[0], "version": "12"}
-    code, d = s.req("POST", "/api/robots/A/map", body, token=alice)
-    assert code == 409 and d["reason"] == "no_home" and "标原点" in d["error"], (code, d)
     _待命点(s, "12", 3.0)
-    code, d = s.req("POST", "/api/robots/A/map", body, token=alice)
-    assert code == 409 and d["reason"] == "no_home", "只有待命点:还是不下发"
-    assert not s.db.query("SELECT 1 FROM commands WHERE kind='map_activate'"), "没发给机器人"
     assert s.req("POST", "/api/robots/A/map", body | {"without_home": 1}, token=alice)[0] == 400
-    _原点(s, "12", 1.5)
     code, d = s.req("POST", "/api/robots/A/map", body, token=alice)
     assert code == 200 and d["ack"]["result"] == "accepted", d
     _等(lambda: _caps(s).tasks["patrol"]["map_version"] == "12", timeout=8)
-    assert s.agent.parts.home is not None and s.agent.parts.home.pose.position.x == 1.5
+    assert s.agent.parts.home is None, "只有待命点:机器人上还是没有原点"
+    _原点(s, "12", 1.5)
+    code, d = s.req("POST", "/api/robots/A/map", body, token=alice)
+    assert code == 200 and d["ack"]["result"] == "accepted", d
+    _等(lambda: s.agent.parts.home is not None, timeout=8)
+    assert s.agent.parts.home.pose.position.x == 1.5
 
 
-def test_新图明说没原点也下发_狗上没有原点_自己走的任务起飞前就拒(站点):
-    """标原点要狗先载上这张图:管理员明说 ``without_home`` 才下发;狗上没原点就不接 goto
-    (遥控、设位置、标原点照常)。新版本也不继承旧版本的原点。"""
+def test_W70_新图没原点也直接下发_狗上没有原点_自己走的任务起飞前就拒(站点):
+    """标原点要狗先载上这张图、定好位(用户 11-03 现场:「设原点这个需要有地图了才能设置,地图的上传
+    不应该没有原点被禁止」):没原点照常下发,不用再明说 ``without_home``,审计里记一笔;狗上没原点
+    就不接 goto(遥控、设位置、标原点照常)。新版本也不继承旧版本的原点。"""
     s = 站点
     alice = _登(s, "alice")
     _等(lambda: _caps(s) is not None and "map_activate" in _caps(s).tasks)
@@ -184,8 +184,6 @@ def test_新图明说没原点也下发_狗上没有原点_自己走的任务起
     _确认(s, alice, "16")
     body = {"map_id": MAP[0], "version": "16"}
     code, d = s.req("POST", "/api/robots/A/map", body, token=alice)
-    assert code == 409 and d["reason"] == "no_home", "新版本不继承旧版本的原点"
-    code, d = s.req("POST", "/api/robots/A/map", body | {"without_home": True}, token=alice)
     assert code == 200 and d["ack"]["result"] == "accepted", d
     _等(lambda: _caps(s).tasks["patrol"]["map_version"] == "16", timeout=8)
     assert s.agent.parts.home is None, "机器人上没有原点"
