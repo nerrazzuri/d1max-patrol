@@ -15,7 +15,9 @@
 - ``seen.pbm``(可选,M9):只透过玻璃、门口看到过、被定成「不知道」的格子,站点画成淡淡的地面
   (只管显示,规划不读;``d1max_contract.maps.SEEN_FILE``);一格都没有就不写;
 - ``superlio_map.pcd``(W68):Super-LIO 定位用的地图点云 —— 回环之后的建图点云按
-  :data:`~d1max_localizer.slioloc.MAP_VOXEL_M` 降采样,跟 ``frames.json`` 同一个坐标系;
+  :data:`~d1max_localizer.slioloc.MAP_VOXEL_M` 降采样,跟 ``frames.json`` 同一个坐标系;W70 再去噪
+  (:mod:`d1max_localizer.mapclean`:射线清掉人和临时物、零星孤点;透过开口看到的只数不删),
+  ``build.json`` 的 ``superlio_map.denoise`` 记每步删了多少;
 - ``coverage.json``:「哪里有图」—— 建图时走过的路(地图平面上每 :data:`COVERAGE_STEP_M` 一点);
 - ``build.json``:怎么建的(来源、参数、各步耗时、标定说明)。
 
@@ -218,10 +220,13 @@ def package(work: Path, out: Path, *, prior_pack: PriorPack | None = None,
             "核雷达的装法和 frames 的标定(对账 S2)")
     frames.save(out / "frames.json")
     t0 = time.monotonic()
+    from d1max_localizer import mapclean, slioloc
+    slio = slioloc.voxel_down(points, slioloc.MAP_VOXEL_M)
+    rc = mapclean.RayClear(slio, slioloc.MAP_VOXEL_M)     # W70:画栅格那批逐帧扫描顺带清动态点
     body = np.array([frames.to_map2d(p, q)[:2] for _, p, q in traj])
     try:
         g, rays = _render(points, sensor, frames, body, traj, bag, lidar_topic,
-                          read_scans or bag_scans)
+                          read_scans or bag_scans, on_scan=rc.add)
     except grid.GridTooLarge as exc:
         raise BuildError(str(exc)) from exc
     grid.write(g, out / "floor")
@@ -229,10 +234,11 @@ def package(work: Path, out: Path, *, prior_pack: PriorPack | None = None,
     timings["grid_s"] = round(time.monotonic() - t0, 1)
     t0 = time.monotonic()
     _pack_prior(src / "raw_prior.mm", out / "prior.mm", prior_pack, run, src)
-    from d1max_localizer import slioloc
-    slio = slioloc.voxel_down(points, slioloc.MAP_VOXEL_M)
-    slioloc.write_pcd(out / slioloc.MAP_FILE, slio)
     timings["prior_s"] = round(time.monotonic() - t0, 1)
+    t0 = time.monotonic()
+    slio, denoise = _denoise(slio, sensor, frames, g, rc)
+    slioloc.write_pcd(out / slioloc.MAP_FILE, slio)
+    timings["denoise_s"] = round(time.monotonic() - t0, 1)
     cov = coverage(traj, frames)
     (out / "coverage.json").write_text(json.dumps({"version": 1, "step_m": COVERAGE_STEP_M,
                                                    "path": cov}) + "\n")
@@ -250,7 +256,8 @@ def package(work: Path, out: Path, *, prior_pack: PriorPack | None = None,
         "grid": {"res": g.res, "size": list(g.image.shape[::-1]), "origin": list(g.origin),
                  "rays": rays},
         "mola": _mola_info(work), "loop_closure": lc_info,
-        "superlio_map": {"points": len(slio), "voxel_m": slioloc.MAP_VOXEL_M},
+        "superlio_map": {"points": len(slio), "voxel_m": slioloc.MAP_VOXEL_M,
+                         "denoise": denoise},
         "geo": geo_info, "handedness": hand,
         "timings_s": timings}, ensure_ascii=False, indent=2) + "\n")
     return files
@@ -593,11 +600,36 @@ def _georeference(out: Path, bag: Path | None, traj: Sequence[Any], frames: Fram
             "clock_offset_s": off}
 
 
+def _denoise(slio: Any, sensor: Any, frames: Frames, g: Any, rc: Any) -> tuple[Any, dict[str, Any]]:
+    """W70:定位地图去噪(:mod:`d1max_localizer.mapclean`)。回(留下的点, 统计)。"""
+    import numpy as np
+
+    from d1max_localizer import grid, mapclean, slioloc
+
+    if not len(slio):
+        return slio, {"before": 0, "kept": 0, "skipped": []}
+    q = grid.level(np.asarray(slio, float), frames)
+    t = grid.level(np.asarray(sensor, float), frames)
+    ground = grid._Ground(t, grid._floor_height(q[:, 2], t[:, 2]), grid.TRAJ_MARGIN_M, q)
+    h, ok = ground.rel(q)
+    masks: dict[str, Any] = {}
+    if rc.scans:
+        masks["dynamic"] = rc.dynamic(height=np.where(ok, h, np.nan))
+    masks["isolated"] = mapclean.isolated(slio, slioloc.MAP_VOXEL_M)
+    through = mapclean.through_mask(slio, q[:, :2], g.seen, g.origin, g.res)
+    kept, stats = mapclean.apply(slio, masks)
+    stats["see_through_seen"] = int(through.sum())        # 只数不删(见 mapclean 模块说明)
+    stats["scans"] = rc.scans
+    if not rc.scans:
+        stats["skipped"].append("dynamic:没有逐帧扫描(没给录包或读不了),不做射线清除")
+    return kept, stats
+
+
 def _render(points: Any, sensor: Any, frames: Frames, body: Any, traj: Sequence[Any],
-            bag: Path | None, topic: str, read_scans: Callable[..., Iterator[Any]]
-            ) -> tuple[Any, str]:
+            bag: Path | None, topic: str, read_scans: Callable[..., Iterator[Any]],
+            on_scan: Callable[[Any, Any], None] | None = None) -> tuple[Any, str]:
     """画栅格:有录包用逐帧扫描的真射线,读不了(没有 ROS、话题不对、包坏了)退回模拟射线。回
-    (栅格, 用的哪种)。"""
+    (栅格, 用的哪种)。``on_scan``:每一帧扫描也交给它(W70 三维去噪)。"""
     from d1max_localizer import grid
 
     if bag is None:
@@ -617,6 +649,8 @@ def _render(points: Any, sensor: Any, frames: Frames, body: Any, traj: Sequence[
                 except Exception as exc:
                     raise _ScanReadError(f"{type(exc).__name__}: {exc}") from exc
                 used[0] += 1
+                if on_scan is not None:
+                    on_scan(*s)
                 yield s
         try:
             g = grid.render(points, sensor, frames, scans=counted(), body_path=body)
