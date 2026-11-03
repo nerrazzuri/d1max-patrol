@@ -240,8 +240,9 @@ async def test_abort让当前任务停并释放资源(cp):
 
 
 async def test_W70_中止了还没停稳_马上发回原点_不回忙_排在后面等它停(cp):
-    """11-03 C40221:abort 之后约 6 s 内 goto 一直回 busy(老任务还在等 Nav2 取消、狗刹停),人得自己掐时间
-    重发。正在中止的任务不再挡同级的新任务:新任务排进去,等它停了再起;老任务照旧记成 aborted。"""
+    """11-03 C40221:abort 之后约 6 s 内 goto 一直回 busy(老任务还在等 Nav2 取消、狗刹停),
+    人得自己掐时间重发。正在中止的任务不再挡同级的新任务:新任务排进去,等它停了再起;
+    老任务照旧记成 aborted。"""
     await cp.handle(_cmd().to_wire(), TOPIC)
     await cp.step(0.1)
     old = cp.current
