@@ -852,9 +852,14 @@ for pair in D1MAX_LOCALIZER=bridge:d1max-localizer D1MAX_OBSTACLES=bridge:d1max-
 done
 
 # 前后雷达合并(W09i)只给 MOLA 用;W68 起定位器是 Super-LIO,没人订 /d1max/merged_lidar。以前手工
-# enable 过的,装机时关掉(W70,用户 11-03 现场:白占两核多)。env 里还有人订它就不动。
-if systemctl is-enabled --quiet d1max-lidar-merge.service 2>/dev/null \
-    && ! grep -qE '^[^#]*merged_lidar' /etc/d1max/env 2>/dev/null; then
+# enable 过的,装机时关掉(W70,用户 11-03 现场:白占两核多)。env 里还有人订它就不动 ——
+# D1MAX_LOC_ARGS 里的 --lidar-topic 只有 --engine mola 才用(Super-LIO 只认前雷达,那一行是 MOLA 时代留下的)。
+MERGE_USED=0
+if grep -E '^[^#]*merged_lidar' /etc/d1max/env 2>/dev/null \
+    | grep -vqE '^[[:space:]]*D1MAX_LOC_ARGS='; then MERGE_USED=1; fi
+if grep -E '^[[:space:]]*D1MAX_LOC_ARGS=.*merged_lidar' /etc/d1max/env 2>/dev/null \
+    | grep -qE -- '--engine[= ]mola'; then MERGE_USED=1; fi
+if systemctl is-enabled --quiet d1max-lidar-merge.service 2>/dev/null && [[ $MERGE_USED == 0 ]]; then
   systemctl disable --now d1max-lidar-merge.service || true
   echo "  没人用前后雷达合并(定位器是 Super-LIO):d1max-lidar-merge 关了,不再开机自启"
 fi
