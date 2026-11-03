@@ -102,6 +102,22 @@ class _Ground:
                         best, best_n = label, n
             mark = bytearray(1 if m == best and best else 0 for m in mark)
         self.ok = np.frombuffer(bytes(mark), dtype=bool).reshape(h, w)
+        # 宽敞的格子(演示站点 11-04):站点这张栅格按 0.40 m 膨胀,机器人自己规划按外接圆
+        # ROBOT_RADIUS_M + INFLATE_MARGIN_M 膨胀 —— 中间那一圈在机器人那边是「终点贴得太近」。
+        # 挑点先挑离墙够机器人那一圈远的,防区里一个都没有才退回站得下的。
+        from d1max_contract.planning import costmap as cmod
+        from d1max_site.intercept_reach import REACH_RADIUS_M
+        extra = cmod.ROBOT_RADIUS_M + cmod.INFLATE_MARGIN_M - REACH_RADIUS_M
+        k = max(0, math.ceil(extra / float(cm.res) - 1e-9))
+        roomy = free.copy()
+        for _ in range(k):                       # 8 邻域腐蚀一格:周围一圈都得能走
+            pad = np.pad(roomy, 1, constant_values=False)
+            out = roomy.copy()
+            for dr in (0, 1, 2):
+                for dc in (0, 1, 2):
+                    out &= pad[dr:dr + h, dc:dc + w]
+            roomy = out
+        self.roomy = self.ok & roomy
 
     def _fill(self, seeds: list[int], mark: bytearray, label: int) -> int:
         """从 ``seeds`` 往外涂 ``label``,回涂了几格。"""
@@ -202,8 +218,11 @@ class ZonePosts:
                 return near, ""
             return None, "此版本地图没有规划栅格,无法自动选点"
         cm = g.cm
-        mask = costmap.polygon_mask(tuple((p[0], p[1]) for p in poly), cm.shape, float(cm.res),
-                                    cm.origin) & g.ok
+        inpoly = costmap.polygon_mask(tuple((p[0], p[1]) for p in poly), cm.shape,
+                                      float(cm.res), cm.origin)
+        mask = inpoly & g.roomy
+        if not mask.any():
+            mask = inpoly & g.ok
         rr, cc = np.nonzero(mask)
         if len(rr) == 0:
             if not (costmap.polygon_mask(tuple((p[0], p[1]) for p in poly), cm.shape,
