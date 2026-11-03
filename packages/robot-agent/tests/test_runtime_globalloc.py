@@ -375,3 +375,34 @@ async def test_W68_外审r2_找的这会儿机器人动了_没找到不计次不
     await _没初值地连上(t)
     await t.拍(80)
     assert not _事件(t.ears, "loc_not_found") and t.rt._find_tries == 0
+
+
+async def test_W71_趴着不找也不计次_站起来才找(台, monkeypatch):
+    """11-03 C40221:装第八批前趴下了,雷达太低对不上图,8 分钟里 3 次「位置偏差过大」用完了次数。"""
+    from d1max_contract.hal import MotionStatus
+    t = 台
+    pose = {"s": MotionStatus.LYING}
+
+    async def 姿势():
+        return pose["s"]
+    monkeypatch.setattr(t.rt.hal, "motion_status", 姿势)
+    t.view.pts = _乱点()
+    await _没初值地连上(t)
+    await t.拍(10 * 200)
+    assert not _事件(t.ears, "loc_not_found") and t.loc.relocs == []
+    assert "趴" in _遥测(t.ears).loc["reason"], _遥测(t.ears).loc["reason"]
+    pose["s"] = MotionStatus.STANDING
+    t.view.pts = _扫(t.occ, *TRUE, noise=0.02)
+    await t.拍(80)
+    assert len(t.loc.relocs) == 1, "站起来就找"
+
+
+async def test_W71_三次用完_隔两分钟再开一轮(台):
+    t = 台
+    t.view.pts = _乱点()
+    await _没初值地连上(t)
+    await t.拍(10 * 200)
+    assert len(_事件(t.ears, "loc_not_found")) == 3
+    t.view.pts = _扫(t.occ, *TRUE, noise=0.02)              # 人把它搬回图上了
+    await t.拍(10 * 150)
+    assert len(t.loc.relocs) == 1, "用完 3 次不是永远不找:隔两分钟再开一轮"
