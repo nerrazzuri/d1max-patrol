@@ -34,6 +34,11 @@ class Reach:
 #: + 余量,跟 Nav2 的机身矩形一样)时,往外挪到最近的可走格子再查(W70,11-03 C40221:用户在靠墙处点的
 #: 两个点站点判「走不通」,Nav2 实际走得到)。挪多远 = 0.57 − 0.34 ≈ 0.25 m。
 SNAP_M = 0.25
+#: 站点查走不走得通时机身按多宽算(米,外扩 = 它 + 余量 0.05):跟 Nav2 的机身长方形(半宽 0.29)对齐,
+#: 留一点余量 —— 通道要宽过约 0.9 m(W70,11-03 C40221:接上 Nav2 以后 1 m 的口子来回都过了,站点
+#: 按外接圆 0.52 m 要 1.14 m,用户沿玻璃墙点的路线全判「走不通」)。机器人自己的规划(退回老导航那段)
+#: 照旧按外接圆。
+REACH_RADIUS_M = 0.40
 
 
 def snap(cm: Any, cell: tuple[int, int] | None) -> tuple[int, int] | None:
@@ -104,7 +109,7 @@ class InterceptReach:
         if not (d / "floor.pgm").is_file() or not (d / "floor.yaml").is_file():
             cm = None
         else:
-            cm = costmap.from_map_dir(d, zs.zones)
+            cm = costmap.from_map_dir(d, zs.zones, robot_radius_m=REACH_RADIUS_M)
         with self._lock:
             self._costmaps[k] = cm
             while len(self._costmaps) > CACHE:
@@ -176,7 +181,7 @@ class InterceptReach:
             return Reach(problem=f"{name} 在障碍或禁行区里")
         g = snap(cm, g)
         if g is None:
-            return Reach(problem=f"{name} 离障碍太近,机器人站不下(机身半宽 0.29 m 加余量)")
+            return Reach(problem=f"{name} 离障碍太近,机器人站不下(机身半宽加余量)")
         starts = self.starts(map_id, version)
         if not starts:
             return Reach(note="此地图上尚无待命点、原点,未检查从何处可以到达")
