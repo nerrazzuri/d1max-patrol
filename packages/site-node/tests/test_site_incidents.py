@@ -144,10 +144,10 @@ async def test_两台狗_派离拦截点近的那台(站):
     b.telemetry = Telemetry(stamp=1, pose=near, battery_pct=90, task_state=None, loc_quality=1)
     picked = t.desk.pick_robot(t.desk.intercept("gate"))
     assert picked[0] == "B"
-    # W28(决策 46):近的那台电量 ≤ 30% 排最后,派远的;只有它能去时照派
-    b.telemetry = Telemetry(stamp=1, pose=near, battery_pct=30, task_state=None, loc_quality=1)
+    # W28(决策 46):近的那台电量在回撤线(W73:25%,原来 30%)以下排最后,派远的;只有它能去时照派
+    b.telemetry = Telemetry(stamp=1, pose=near, battery_pct=24, task_state=None, loc_quality=1)
     assert t.desk.pick_robot(t.desk.intercept("gate"))[0] == "A"
-    a.telemetry = Telemetry(stamp=1, pose=far, battery_pct=20, task_state=None, loc_quality=1)
+    a.telemetry = Telemetry(stamp=1, pose=far, battery_pct=22, task_state=None, loc_quality=1)
     assert t.desk.pick_robot(t.desk.intercept("gate"))[0] == "B", "都低:还按距离"
     b.status = dataclasses.replace(a.status, ready=dataclasses.replace(a.status.ready,
                                                                        loc_ok=False))

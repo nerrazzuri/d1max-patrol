@@ -147,6 +147,12 @@ class SimRobot:
     def inject_battery(self, pct: float) -> None:
         self._battery_pct = pct
         self._battery_t0 = self._now()
+        self._packs = None
+
+    def inject_packs(self, *packs: float | None) -> None:
+        """W73 第四期(换电引导):两块各剩多少,``None`` = 拔了;总电量按插着的里低的那块,不再耗。
+        再 :meth:`inject_battery` 一次就回到不分块。"""
+        self._packs = tuple(packs)
 
     def _battery_now(self) -> float:
         hours = max(0, self._now() - self._battery_t0) / 3_600_000
@@ -379,6 +385,11 @@ class SimRobot:
 
     async def battery(self) -> Battery:
         self._dock_tick()
+        packs = getattr(self, "_packs", None)
+        if packs is not None:
+            present = [v for v in packs if v is not None]
+            return Battery(percent=min(present) if present else 0.0, charging=self.docked,
+                           packs=packs)
         return Battery(percent=self._battery_now(), charging=self.docked)
 
     async def faults(self) -> tuple[Fault, ...]:

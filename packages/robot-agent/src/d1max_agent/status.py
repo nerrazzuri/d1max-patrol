@@ -105,10 +105,18 @@ def compose_telemetry(*, now_ms: int, odom: Odometry, battery: Battery, health: 
                            x=est.x, y=est.y, yaw=est.yaw)
         return Telemetry(stamp=now_ms, pose=pose, battery_pct=battery.percent,
                          task_state=task_state, loc_quality=anchor.quality(odom_ok),
-                         net={"online": online}, storage=storage, loc=anchor.to_wire(odom_ok))
+                         net={"online": online}, storage=storage, loc=anchor.to_wire(odom_ok),
+                         battery_packs=_packs(battery))
     pose = None
     if loaded_map is not None and odom.valid:
         pose = MapPose(map_id=loaded_map[0], map_version=loaded_map[1], frame_id="map",
                        x=odom.x, y=odom.y, yaw=odom.yaw)
     return Telemetry(stamp=now_ms, pose=pose, battery_pct=battery.percent, task_state=task_state,
-                     loc_quality=health.loc_quality, net={"online": online}, storage=storage)
+                     loc_quality=health.loc_quality, net={"online": online}, storage=storage,
+                     battery_packs=_packs(battery))
+
+
+def _packs(battery: Any) -> list[float | None] | None:
+    """W73 第四期:分块报了就带上(老 HAL 的 ``Battery`` 没这一项)。"""
+    p = getattr(battery, "packs", ())
+    return list(p) if p else None

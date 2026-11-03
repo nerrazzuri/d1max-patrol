@@ -120,8 +120,12 @@ class ImuSample:
 
 @dataclass(frozen=True)
 class Battery:
+    """``percent``:按**低的那块**算(厂家硬线按单块判,W73 设计 §7.2)。``packs``:每块各剩多少
+    (W73 第四期,换电引导用;``None`` = 这块没插;空 = 设备不分块报)。"""
+
     percent: float
     charging: bool
+    packs: tuple[float | None, ...] = ()
 
 
 @dataclass(frozen=True)

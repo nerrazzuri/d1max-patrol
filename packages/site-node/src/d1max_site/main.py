@@ -909,7 +909,7 @@ class Server:
         from d1max_site.charging import ChargeDesk
         ccfg = cfg.get("charging", {})
         self.charge = ChargeDesk(self.db, self.dispatcher, now_ms=wall_ms,
-                                 low_pct=float(ccfg.get("low_pct", 30)),
+                                 low_pct=float(ccfg.get("low_pct", 25)),   # W73:回撤线下限
                                  resume_pct=float(ccfg.get("resume_pct", 90)))
         self.charge.alerts = self.alerts
         # W33(决策 48):布防中狗没在驱离时自己看见人报 P1
@@ -1077,6 +1077,41 @@ class Server:
         _hold = self.standby.hold
         self.standby.hold = lambda rid, tid: _hold(rid, tid) or self.guard.holds(rid, tid)
         self.scheduler.guard_busy = self.guard.robots
+        # W73 第四期:有桩的按值守的出站线起回充、充到够撑到布防结束
+        self.charge.wants = self.guard.topup_line
+        self.charge.resume_for = self.guard.resume_pct
+        # W73 第四期:没桩的保安换电(进度按两块电池判)
+        from d1max_site.battery_swap import SwapDesk
+
+        def _has_charger(rid: str) -> bool:
+            c = self.dispatcher.clients.get(rid)
+            caps = c.capabilities.tasks if c is not None and c.capabilities is not None else {}
+            return self.charge.charger(rid) is not None and "dock" in caps
+        self.swap = SwapDesk(self.dispatcher, now_ms=wall_ms, need=self.guard.topup_line,
+                             eta_min=self.guard.topup_eta_min, has_charger=_has_charger,
+                             home=self.standby.home)
+        self.swap.alerts = self.alerts
+        self.guard.swap = self.swap
+        self.incidents.swapping = self.swap.refuse
+        # W73 第五期:外部设备按位置绑定;老接口按防区名报的先按圈好的防区找查看点
+        from d1max_site.api import zone_posts as _zp
+        from d1max_site.devices import DeviceBook
+        self.devices = DeviceBook(self.db, incidents=self.incidents, posts=_zp(self.api),
+                                  areas=self.areas, now_ms=wall_ms)
+        self.incidents.devices = self.devices
+        self.api.devices = self.devices
+
+        def _zone_point(zone: str) -> dict[str, Any] | None:
+            latest = self.incidents._latest_versions()
+            for m, v in latest.items():
+                for p in _zp(self.api).view(m, v):
+                    if p["zone"] == zone and p.get("view"):
+                        w = p.get("watch") or {}
+                        return {"name": f"zone:{zone}", "map_id": m, "map_version": v,
+                                "x": float(p["view"]["x"]), "y": float(p["view"]["y"]),
+                                "yaw": float(w.get("yaw", 0.0) or 0.0), "reach": ""}
+            return None
+        self.incidents.zone_point = _zone_point
         # W73 第三期:巡逻排程、布防时间表、值守方案保存时互相查撞没撞(按机器人、对称拦)
         from d1max_site.guard_clash import ClashCheck
         self.clash = ClashCheck(self.db, schedule=self.arming.schedule, guard=self.guard,
@@ -1326,6 +1361,7 @@ class Server:
                                      ("证据没封", "evidence_watch", "tick"),     # W30b
                                      ("版本", "compat", "tick"),                 # A7
                                      ("证书续签", "cert_renewer", "tick"),        # W55
+                                     ("换电", "swap", "tick"),                  # W73 第四期
                                      ("临时撤防到点退回", "arming", "tick")):        # W20
                 try:
                     getattr(getattr(self, part), meth)()

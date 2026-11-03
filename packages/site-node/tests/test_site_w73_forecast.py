@@ -35,7 +35,7 @@ def test_两小时一段_一圈9分35秒_约12圈():
     [e] = got["entries"]
     assert e["mode"] == "schedule" and e["lap_s"] == 575.0 and e["cycle_s"] == 575.0
     assert e["windows"] == [{"day": WED, "start": "01:00", "end": "03:00", "minutes": 120,
-                             "laps": 12}]
+                             "laps": 12, "topups": 0}]
     z = {x["zone"]: x for x in got["zones"]}
     assert z["东区"]["interval_s"] == pytest.approx(575.0)
     assert z["东区"]["limit_min"] == MIN_LIMIT_MIN == 15, "1.5 倍不到 15 分钟按 15"
@@ -102,3 +102,15 @@ def test_算不出一圈多久_说清楚():
     e = got["entries"][0]
     assert e["lap_s"] is None and e["windows"][0]["laps"] is None
     assert got["zones"][0]["interval_s"] is None and got["zones"][0]["limit_min"] == MIN_LIMIT_MIN
+
+
+def test_W73第四期_补一次能能开几圈_每段要补几次():
+    from d1max_site import energy
+    f = _fc([_entry()], {"night-guard": 900.0}, {"night-guard": ["东区"]},
+            slots=[_slot(2, "22:00", "24:00"), _slot(3, "00:00", "06:00")])
+    e = f["entries"][0]
+    n = energy.laps_per_charge(900.0, 900.0)
+    assert e["laps_per_charge"] == n and n > 3
+    w = e["windows"][0]
+    assert w["laps"] == 32 and w["topups"] == (32 - 1) // n
+    assert any(f"约每 {n} 圈要补一次能" in x for x in f["warnings"])

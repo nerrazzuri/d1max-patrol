@@ -8,14 +8,16 @@ import { lang, type Lang } from "./i18n";
 import { clock } from "./routes";
 
 export interface GuardEntry { id?: number; route: string; robot: string; gap_min: number; shuffle: boolean }
-interface Window { day: number; start: string; end: string; minutes: number; laps: number | null }
-interface FcEntry { id: number; route: string; robot: string; gap_min: number; lap_s: number | null; cycle_s: number | null; mode: "schedule" | "manual"; windows: Window[] }
+interface Window { day: number; start: string; end: string; minutes: number; laps: number | null; topups?: number | null }
+interface FcEntry { id: number; route: string; robot: string; gap_min: number; lap_s: number | null; cycle_s: number | null; mode: "schedule" | "manual"; windows: Window[]; laps_per_charge?: number | null }
 interface FcZone { zone: string; routes: string[]; interval_s: number | null; limit_min: number; limit_set: boolean }
 export interface Forecast { entries: FcEntry[]; zones: FcZone[]; warnings: string[] }
 export interface Plan { revision: number; entries: GuardEntry[]; limits: Record<string, number>; forecast: Forecast; clashes?: string[] }
 interface Run { entry: number; robot_id: string; state: string; lap: number; task_id: string; next_lap_ms: number; watch_zone: string }
 interface ZoneSeen { zone: string; last_ms: number | null; robot_id: string; how: string; limit_min: number; armed: boolean; overdue: boolean }
-export interface Status { duty: { id: number; started_ms: number } | null; runs: Run[]; waiting: Record<string, string>; zones: ZoneSeen[]; now_ms: number }
+/** W73 第四期:没桩的换电进度(站点按两块电池的在位、电量判)。 */
+export interface Swap { robot_id: string; step: "going" | "first" | "first_out" | "first_low" | "second" | "second_out" | "any"; first: number | null; second: number | null; packs: (number | null)[] | null; battery_pct: number | null; since_ms: number; told_ms: number | null; ok_pct: number }
+export interface Status { duty: { id: number; started_ms: number } | null; runs: Run[]; waiting: Record<string, string>; zones: ZoneSeen[]; now_ms: number; swaps?: Swap[] }
 interface DutyZone { zone: string; looks: number; max_gap_s: number }
 interface Duty { id: number; started_ms: number; ended_ms: number | null; laps: number; interruptions: number; missed: number; failed: number; zones: DutyZone[] }
 interface LogRow { at_ms: number; robot_id: string; kind: string; zone: string; point: string; detail: string }
@@ -43,6 +45,21 @@ const en = {
   gManual: "Not on a schedule: runs whenever the site is armed",
   gNoWindow: "The schedule never arms these zones",
   gWindow: "{d} {a}–{b}: about {n} laps",
+  gTopups: " ({n} top-ups)",
+  gPerCharge: "about {n} laps per charge",
+  gTimeline: "Timeline: on duty / topping up",
+  gTlDuty: "on duty",
+  gTlTopup: "topping up (zones on this route unwatched)",
+  gSwap: "Battery swap — {r}",
+  gSwapGoing: "Heading to the swap spot",
+  gSwapFirst: "Swap pack {a} first (the lower one). Leave pack {b} in.",
+  gSwapFirstOut: "Pack {a} is out — do not touch pack {b}. Insert a full pack {a}.",
+  gSwapFirstLow: "The new pack {a} reads below {p}% — use a full pack.",
+  gSwapSecond: "Pack {a} done. Now swap pack {b}.",
+  gSwapSecondOut: "Pack {b} is out — insert a full pack {b}.",
+  gSwapAny: "Swap in a full battery (hot swap, the robot stays standing).",
+  gPack: "Pack {n}: {v}",
+  gPackOut: "out",
   gWindowUnknown: "{d} {a}–{b}",
   gZoneEvery: "checked about every {t}",
   gZoneLimit: "alarm after {n} min unchecked",
@@ -102,6 +119,21 @@ const zh: Record<GKey, string> = {
   gManual: "没按时间表：布防着就一直跑",
   gNoWindow: "时间表里这些防区从不布防",
   gWindow: "{d} {a}–{b}：约 {n} 圈",
+  gTopups: "（要补能 {n} 次）",
+  gPerCharge: "补一次能约跑 {n} 圈",
+  gTimeline: "时间轴：值守 / 补能",
+  gTlDuty: "值守",
+  gTlTopup: "补能（这条路线的防区没人看）",
+  gSwap: "换电池 — {r}",
+  gSwapGoing: "正在去换电位",
+  gSwapFirst: "先换 {a} 号（电量低的那块），{b} 号别动。",
+  gSwapFirstOut: "{a} 号已拔下 —— 不要动 {b} 号。插上满电的 {a} 号。",
+  gSwapFirstLow: "新插的 {a} 号电量不到 {p}%，请换满电的。",
+  gSwapSecond: "{a} 号换好了。现在换 {b} 号。",
+  gSwapSecondOut: "{b} 号已拔下 —— 插上满电的 {b} 号。",
+  gSwapAny: "换上满电电池（热插拔，机器人站着不断电）。",
+  gPack: "{n} 号：{v}",
+  gPackOut: "未插",
   gWindowUnknown: "{d} {a}–{b}",
   gZoneEvery: "约每 {t} 看一次",
   gZoneLimit: "超过 {n} 分钟没看报警",
@@ -264,12 +296,14 @@ export function GuardPanel({ say, now, canEdit }: { say: (s: string) => void; no
             {fc.entries.map((e) => (
               <li key={e.id} class="guard-fc-entry">
                 <b>{e.route}</b> · {e.robot ? who(e.robot) : gt("gAnyRobot")} · {e.lap_s ? gt("gLap", { t: clock(e.lap_s) }) : gt("gLapUnknown")}
+                {e.laps_per_charge ? <span class="muted"> · {gt("gPerCharge", { n: e.laps_per_charge })}</span> : null}
                 <div class="muted small">
                   {e.mode === "manual" ? gt("gManual") : e.windows.length === 0 ? gt("gNoWindow")
                     : e.windows.map((w) => (w.laps != null
-                      ? gt("gWindow", { d: day(w.day), a: w.start, b: w.end, n: w.laps })
+                      ? gt("gWindow", { d: day(w.day), a: w.start, b: w.end, n: w.laps }) + (w.topups ? gt("gTopups", { n: w.topups }) : "")
                       : gt("gWindowUnknown", { d: day(w.day), a: w.start, b: w.end }))).join("；")}
                 </div>
+                {e.windows.slice(0, 1).map((w) => <Timeline key="tl" w={w} perCharge={e.laps_per_charge ?? null} />)}
               </li>
             ))}
           </ul>
@@ -309,6 +343,8 @@ export function GuardPanel({ say, now, canEdit }: { say: (s: string) => void; no
           )}
         </div>
       )}
+
+      {(status?.swaps ?? []).map((w) => <SwapCard key={w.robot_id} w={w} who={who} />)}
 
       {status && plan.entries.length > 0 && (
         <div class="guard-now">
@@ -360,5 +396,62 @@ export function GuardPanel({ say, now, canEdit }: { say: (s: string) => void; no
         </div>
       )}
     </section>
+  );
+}
+
+/** W73 第四期 换电引导:一块一块换,进度跟着电池走(站点判),保安不用点「下一步」。 */
+export function swapText(w: Swap): string {
+  const a = w.first ?? 1, b = w.second ?? 2;
+  switch (w.step) {
+    case "going": return gt("gSwapGoing");
+    case "first": return gt("gSwapFirst", { a, b });
+    case "first_out": return gt("gSwapFirstOut", { a, b });
+    case "first_low": return gt("gSwapFirstLow", { a, p: w.ok_pct });
+    case "second": return gt("gSwapSecond", { a, b });
+    case "second_out": return gt("gSwapSecondOut", { b });
+    default: return gt("gSwapAny");
+  }
+}
+
+function SwapCard({ w, who }: { w: Swap; who: (r: string) => string }) {
+  return (
+    <div class="guard-swap" role="status">
+      <h3>{gt("gSwap", { r: who(w.robot_id) })}</h3>
+      <p class={w.step.endsWith("_out") ? "guard-swap-step hot" : "guard-swap-step"}>{swapText(w)}</p>
+      {w.packs && (
+        <ul class="plain guard-packs">
+          {w.packs.map((v, i) => (
+            <li key={i} class={i + 1 === w.first ? "first" : ""}>
+              {gt("gPack", { n: i + 1, v: v == null ? gt("gPackOut") : `${Math.round(v)}%` })}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+/** W73 §7.6 时间轴(简版):一段布防里值守 / 补能各占多少;补能按每 N 圈一次、每次约 8 分钟画。 */
+function Timeline({ w, perCharge }: { w: Window; perCharge: number | null }) {
+  if (!w.laps || !perCharge || !w.topups) return null;
+  const gap = 8;                                   // 分钟,跟站点 energy.SWAP_GAP_MIN 一致
+  const lap = w.minutes / w.laps;
+  const parts: { kind: "duty" | "topup"; min: number }[] = [];
+  let left = w.minutes;
+  for (let i = 0; i < w.topups && left > 0; i++) {
+    const run = Math.min(left, perCharge * lap);
+    parts.push({ kind: "duty", min: run });
+    left -= run;
+    const g = Math.min(left, gap);
+    if (g > 0) { parts.push({ kind: "topup", min: g }); left -= g; }
+  }
+  if (left > 0) parts.push({ kind: "duty", min: left });
+  return (
+    <div class="guard-tl" aria-label={gt("gTimeline")}>
+      {parts.map((p, i) => (
+        <span key={i} class={p.kind === "topup" ? "guard-tl-topup" : "guard-tl-duty"}
+          style={{ flexGrow: p.min }} title={p.kind === "topup" ? gt("gTlTopup") : gt("gTlDuty")} />
+      ))}
+    </div>
   );
 }

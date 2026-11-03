@@ -29,7 +29,7 @@ async def 站(tmp_path):
     t = 台子(tmp_path)
     t.dog = SimRobot(now_ms=t.clock, max_vx=1.0, max_wz=1.5, stop_latency_s=0.2,
                      charger=CHARGER, charge_pct_per_h=3600.0)
-    t.dog.inject_battery(29.0)
+    t.dog.inject_battery(24.0)
     await t.start()
     t.charge = ChargeDesk(t.db, t.site, now_ms=t.clock)
     t.charge.alerts = 假告警台()
@@ -87,9 +87,10 @@ async def test_充电中来了入侵_电量够就出桩去_回来接着充_不�
     t = 站
     await _跑(t, 30)                                      # 在桩上充着了
     assert t.dog.docked
-    t.dog.inject_battery(40.0)                            # 不够 50%
+    t.dog.inject_battery(14.0)                            # W73:过不了报警出动线(停止线 + 看 5 分钟)
+    await _跑(t, 1)
     assert "电量不够" in t.charge.refuse("A")
-    t.dog.inject_battery(55.0)
+    t.dog.inject_battery(40.0)                            # 以前要 50%,现在 40% 够去了再回来
     await _跑(t, 2)
     assert t.charge.refuse("A") == ""
     await t.send(t.site.goto("A", target(-2.0), 0.8, issued_by="incident", priority=80,
@@ -172,11 +173,11 @@ async def test_入侵派遣挑狗_在充电电量不够就不挑_够了照挑(�
     desk = IncidentDesk(t.db, t.site, now_ms=t.clock)
     desk.charging = t.charge.refuse
     point = {"map_id": MAP[0], "map_version": MAP[1], "x": -2.0, "y": 0.0}
-    t.dog.inject_battery(40.0)
-    await _跑(t, 2)
+    t.dog.inject_battery(14.0)
+    await _跑(t, 1)
     rid, why = desk.pick_robot(point)
     assert rid is None and "在充电、电量不够" in why
-    t.dog.inject_battery(60.0)
+    t.dog.inject_battery(40.0)
     await _跑(t, 2)
     assert desk.pick_robot(point) == ("A", "")
 
@@ -191,7 +192,7 @@ def test_接口_看桩_管理员在这儿设桩_删桩_保安只能看(tmp_path)
         tok = {n: s.req("POST", "/api/login", {"name": n, "password": PW})[1]["token"]
                for n in ("gina", "alice")}
         code, v = s.req("GET", "/api/chargers", token=tok["gina"])
-        assert code == 200 and v["chargers"] == [] and v["low_pct"] == 30
+        assert code == 200 and v["chargers"] == [] and v["low_pct"] == 25
         assert s.req("POST", "/api/chargers/A", {"here": True}, token=tok["gina"])[0] == 403
         _等(lambda: s.disp.clients["A"].telemetry is not None)
         code, d = s.req("POST", "/api/chargers/A", {"here": True}, token=tok["alice"])
@@ -211,7 +212,7 @@ def test_接口_看桩_管理员在这儿设桩_删桩_保安只能看(tmp_path)
 
 async def test_电量在返航线下面_去桩前的路上不掉头回原点(站):
     t = 站
-    t.dog.inject_battery(26.5)                            # 高于中止线 25%,低于返航线(25% + 回原点)
+    t.dog.inject_battery(24.0)                            # 高于停止线 15%,低于返航线(25% + 回原点)
     await _跑(t, 40)
     assert abs(t.dog.x - CHARGER[0]) < 0.3, "去充是回原点的路:继续执行到桩前"
     assert _cmds(t, "dock")
@@ -355,3 +356,43 @@ async def test_W33外审_被打断待接着充时改成只许手动派_不再去
     n = len(_cmds(t, "goto"))
     await _跑(t, 40)
     assert len(_cmds(t, "goto")) == n and t.charge.view()["cycles"][0]["state"] == "resume"
+
+
+async def test_W73_值守要的补能线比回充起线高_按值守的起_充到值守要的(站):
+    """设计 §7.3:有桩时起线 = 值守算出的「不够跑一圈」那条,充到够撑到布防结束(不一定等满)。"""
+    t = 站
+    t.charge.wants = lambda rid: 36.0 if rid == "A" else None
+    t.charge.resume_for = lambda rid: 70.0 if rid == "A" else None
+    t.dog.inject_battery(35.0)
+    await _跑(t, 30)
+    [d] = _cmds(t, "dock")
+    assert d["payload"]["resume_pct"] == 70.0, "充到值守要的"
+    t.charge.wants = lambda rid: None
+    assert t.charge.view()["cycles"], "起了就充完这一轮"
+
+
+async def test_W73_回充起线默认按回撤线_25(站):
+    t = 站
+    t.dog.inject_battery(27.0)
+    await _跑(t, 5)
+    assert _cmds(t, "goto") == [], "27% 还在回撤线 25% 上面,空闲也不去充"
+    t.dog.inject_battery(24.0)
+    await _跑(t, 5)
+    assert _cmds(t, "goto")
+
+
+async def test_W73_报警出动_按去了看五分钟再回来的电判_不够不派_说清楚(站):
+    from d1max_site.incidents import IncidentDesk
+    t = 站
+    t.charge.remove_charger("A")
+    desk = IncidentDesk(t.db, t.site, now_ms=t.clock)
+    far = {"map_id": MAP[0], "map_version": MAP[1], "x": 400.0, "y": 0.0}   # 来回各约 23 分钟
+    near = {"map_id": MAP[0], "map_version": MAP[1], "x": 3.0, "y": 0.0}
+    t.dog.inject_battery(30.0)
+    await _跑(t, 2)
+    rid, why = desk.pick_robot(far)
+    assert rid is None and "电量" in why and "去了再回来" in why
+    assert desk.pick_robot(near) == ("A", "")
+    desk.swapping = lambda r: "A 正在换电池(1 号拔了,这一步不打断)" if r == "A" else ""
+    rid, why = desk.pick_robot(near)
+    assert rid is None and "正在换电池" in why

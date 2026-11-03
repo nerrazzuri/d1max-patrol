@@ -17,6 +17,8 @@ from __future__ import annotations
 import math
 from typing import Any
 
+from d1max_site.energy import SWAP_GAP_MIN, laps_per_charge
+
 WEEK_MIN = 7 * 1440
 #: 超时线最少这么多分钟(设计 §5.5,「我定的」)。
 MIN_LIMIT_MIN = 15
@@ -96,15 +98,25 @@ def forecast(entries: list[dict[str, Any]], *, lap_s: dict[str, float | None],
         cycle = max(float(lap), float(gap)) if lap else None
         zones = list(zones_of.get(route) or [])
         wins = []
+        # W73 第四期:满电(按最多充到的 95%)出发,补一次能之前能开几圈;每段要补几次
+        per = laps_per_charge(float(lap), cycle) if lap and cycle else None
         for a, b in weekly_windows(slots, zones, enabled=enabled):
             minutes = b - a
+            laps = int(minutes * 60 // cycle) if cycle else None
             wins.append({"day": (a // 1440) % 7, "start": _hhmm(a), "end": _hhmm(b) if b % 1440
-                         else "24:00", "minutes": minutes,
-                         "laps": int(minutes * 60 // cycle) if cycle else None})
+                         else "24:00", "minutes": minutes, "laps": laps,
+                         "topups": (laps - 1) // per if laps and per else None})
         out_entries.append({"id": e["id"], "route": route, "robot": e.get("robot", ""),
                             "gap_min": int(e.get("gap_min") or 0),
                             "lap_s": float(lap) if lap else None, "cycle_s": cycle,
-                            "mode": "schedule" if enabled else "manual", "windows": wins})
+                            "mode": "schedule" if enabled else "manual", "windows": wins,
+                            "laps_per_charge": per})
+        if per is not None and any((w["topups"] or 0) > 0 for w in wins):
+            n = max(w["topups"] or 0 for w in wins)
+            warnings.append(f"{route}:约每 {per} 圈要补一次能(最长那段要补 {n} 次)。有桩自己去充;"
+                            f"没桩要夜间换电 {n} 次,每次约 {SWAP_GAP_MIN} 分钟这条路线的防区"
+                            f"没人看、"
+                            f"只靠摄像头 —— 要不间断就两台轮换或配桩")
         if not lap:
             warnings.append(f"{route} 算不出一圈多久(路线有问题或地图没有规划栅格),圈数没法估")
         for z in zones:

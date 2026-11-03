@@ -327,5 +327,21 @@
   "guard_stuck": {
     "en": "Zone route keeps failing",
     "zh": "防区路线连着跑不成"
+  },
+  "swap_soon": {
+    "en": "Battery swap coming up",
+    "zh": "快要换电池了"
+  },
+  "swap_needed": {
+    "en": "Robot waiting for a battery swap",
+    "zh": "机器人等着换电池"
+  },
+  "swap_overdue": {
+    "en": "Nobody came to swap the battery",
+    "zh": "等换电池没人来"
+  },
+  "guard_prep": {
+    "en": "Charge before arming",
+    "zh": "布防前先补能"
   }
 }

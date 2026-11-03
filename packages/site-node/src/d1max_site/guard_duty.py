@@ -37,9 +37,11 @@ import math
 import random
 import uuid
 from collections.abc import Callable
+from datetime import datetime
 from typing import Any
 
 from d1max_contract.messages import MapPose
+from d1max_site import energy
 from d1max_site.db import SiteDB
 from d1max_site.priorities import GUARD_LAP, GUARD_PREFIX, GUARD_WATCH, STANDBY_PREFIX
 from d1max_site.routes import NAME_RE
@@ -61,7 +63,11 @@ POST_NEAR_M = 1.5
 #: 连着这么多圈跑不成报 P2。
 FAIL_ALERT = 3
 #: 电量不过这条线(%)不开新的一圈。第四期换成按任务算的出站线。
-MIN_PCT = 30.0
+#: 「不够跑一圈」判过以后这么久内算数(回充 / 换电按它起)。
+LOW_FRESH_MS = 120_000
+#: 布防开始前这么多分钟查电量(§7.1)。
+PREP_MIN = 30
+MIN_PCT = 25.0                                   # W73 第四期:兜底;实际按 energy.lap_line
 MAX_ENTRIES = 50
 MAX_GAP_MIN = 240
 MAX_LIMIT_MIN = 24 * 60
@@ -104,6 +110,11 @@ class GuardDuty:
         self.busy: Callable[[], set[str]] | None = None
         #: 这台在不在回充(``ChargeDesk``,站点接上)。
         self.charging: Callable[[str], bool] | None = None
+        #: W73 第四期:没桩的换电进度(``battery_swap.SwapDesk``;``status`` 里带出去)。
+        self.swap: Any = None
+        self._prep_told: dict[str, int] = {}
+        #: W73 第四期:电量过不了一圈出站线的 ``{机器人: (那条线, 一圈秒数)}``(补能按它起)。
+        self.low: dict[str, tuple[float, float, int]] = {}
         #: 收队时站在值守位上(手上没任务)的狗回待命点用(``StandbyManager``)。
         self.standby: Any = None
         #: 估一圈多久用的可达(``InterceptReach``;没有按直线估)。
@@ -317,6 +328,78 @@ class GuardDuty:
             return ""
         return running
 
+    def _prep_alerts(self, plan: dict[str, Any]) -> None:
+        """W73 §7.1:布防开始前 :data:`PREP_MIN` 分钟,值守方案里指定的机器人电量过不了一圈的出站线
+        → P2 ``guard_prep``「布防前请先充电 / 换电池」(一段布防一次)。"""
+        sched = getattr(self.arming, "schedule", None)
+        if self.alerts is None or sched is None or not sched.enabled():
+            return
+        now = self._now()
+        nb = sched.next_boundary(now)
+        if nb is None or nb - now > PREP_MIN * 60_000 or nb <= now:
+            return
+        at = datetime.fromtimestamp(nb / 1000, self._tz()).strftime("%H:%M")
+        for e in plan["entries"]:
+            rid, info = e["robot"], self._route(e["route"])
+            if not rid or info is None or self._prep_told.get(rid) == nb:
+                continue
+            pct = self._battery(rid)
+            line = max(self.min_pct, energy.lap_line(self._lap_s(info) or 0.0))
+            if pct is not None and pct < line:
+                self._prep_told[rid] = nb
+                self.alerts.raise_alert(
+                    kind="guard_prep", robot=rid, title=f"{rid} 电量不够开始值守",
+                    detail=f"{at} 开始布防值守,{rid} 现在 {pct:.0f}%,跑一圈要 ≥ {line:.0f}%:"
+                           f"布防前请先充电 / 换电池", now_ms=now)
+
+    def _tz(self) -> Any:
+        sched = getattr(self.arming, "schedule", None)
+        try:
+            return sched._tz() if sched is not None else None
+        except Exception:  # noqa: BLE001 - 时区读不出:按本机
+            return None
+
+    def topup_line(self, rid: str) -> float | None:
+        """W73 第四期:这台值守着、电量过不了一圈的出站线 → 那条线(回充 / 换电按它起);不然 None。"""
+        got = self._low_fresh(rid)
+        return got[0] if got is not None else None
+
+    def _low_fresh(self, rid: str) -> tuple[float, float, int] | None:
+        """值守刚判过「不够」的(值守每秒判一次;两分钟没再判 = 不在值守了)。"""
+        got = self.low.get(rid)
+        if got is None or self._now() - got[2] > LOW_FRESH_MS:
+            return None
+        return got
+
+    def topup_eta_min(self, rid: str) -> float | None:
+        """值守着的这台大约再过几分钟要补能(电量掉到一圈的出站线);没在值守 → None。"""
+        run = next((r for r in self._runs().values() if r["robot_id"] == rid), None)
+        if run is None:
+            return None
+        e = next((x for x in self.plan()["entries"] if x["id"] == run["entry"]), None)
+        info = self._route(e["route"]) if e is not None else None
+        pct = self._battery(rid)
+        if info is None or pct is None:
+            return None
+        line = max(self.min_pct, energy.lap_line(self._lap_s(info) or 0.0))
+        return max(0.0, (pct - line) / (energy.DRAIN_PCT_PER_H / 60.0))
+
+    def resume_pct(self, rid: str) -> float | None:
+        """补能补到多少回来:够撑到这段布防结束,最多 95%(§7.3)。"""
+        got = self._low_fresh(rid)
+        if got is None:
+            return None
+        now = self._now()
+        nb = None
+        sched = getattr(self.arming, "schedule", None)
+        if sched is not None:
+            try:
+                nb = sched.next_boundary(now)
+            except Exception:  # noqa: BLE001 - 算不出:按最多充
+                nb = None
+        remaining = (nb - now) / 1000.0 if nb is not None and nb > now else 12 * 3600.0
+        return energy.topup_target(remaining, got[1])
+
     def robots(self) -> set[str]:
         """值守中的机器人(排程别往它们身上派)。"""
         return {r["robot_id"] for r in self.db.query("SELECT robot_id FROM guard_runs")}
@@ -353,8 +436,12 @@ class GuardDuty:
         pct = self._battery(rid)
         if pct is None:
             return f"{rid} 还没报电量"
-        if pct <= self.min_pct:
-            return f"{rid} 电量 {pct:.0f}%,不过 {self.min_pct:.0f}% 不开新的一圈"
+        lap_s = self._lap_s(info) or 0.0
+        line = max(self.min_pct, energy.lap_line(lap_s))
+        if pct < line:                                   # W73 第四期:出站线,不够就先补能
+            self.low[rid] = (line, lap_s, self._now())
+            return f"{rid} 电量 {pct:.0f}%,不够跑一圈(要 ≥ {line:.0f}%),先补能"
+        self.low.pop(rid, None)
         running = self._blocking(rid)
         if running:
             return f"{rid} 在跑别的任务 {running}"
@@ -429,6 +516,11 @@ class GuardDuty:
             self._zone_alerts(plan, active, duty)
         except Exception:
             log.exception("防区多久没看这一拍没对上账")
+        if duty is None:
+            try:
+                self._prep_alerts(plan)
+            except Exception:
+                log.exception("布防前电量检查没办成")
 
     async def _drive(self, e: dict[str, Any], info: dict[str, Any], armed: list[str],
                      run: dict[str, Any] | None, taken: set[str]) -> None:
@@ -855,6 +947,7 @@ class GuardDuty:
                 "runs": [{k: r[k] for k in ("entry", "robot_id", "state", "lap", "task_id",
                                             "next_lap_ms", "watch_zone")} for r in runs],
                 "waiting": {str(k): v for k, v in self._waiting.items()},
+                "swaps": self.swap.view()["robots"] if self.swap is not None else [],
                 "zones": zones, "now_ms": now}
 
     def _summary(self, d: dict[str, Any]) -> dict[str, Any]:

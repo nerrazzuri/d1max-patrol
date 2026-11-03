@@ -48,6 +48,7 @@ from d1max_contract.charging import (
 )
 from d1max_contract.messages import MapPose
 from d1max_site.db import SiteDB
+from d1max_site.energy import alarm_line
 from d1max_site.pending_alerts import flush, queue
 from d1max_site.priorities import STANDBY_PREFIX
 
@@ -77,6 +78,9 @@ class ChargeDesk:
         self.dispatcher = dispatcher
         self._now = now_ms
         self.low_pct, self.resume_pct = low_pct, resume_pct
+        #: W73 第四期:值守要的补能线(比 ``low_pct`` 高就按它起)、要充到多少(``None`` = 按默认)。
+        self.wants: Callable[[str], float | None] | None = None
+        self.resume_for: Callable[[str], float | None] | None = None
         #: 告警台(``charge_failed``);站点主程序接上。
         self.alerts: Any = None
         #: 正在驱离的狗(``DeterrenceDesk.busy``):驱离中不去充。
@@ -125,16 +129,36 @@ class ChargeDesk:
         return task_id.startswith(TASK_PREFIX)
 
     def refuse(self, robot_id: str) -> str:
-        """入侵派遣问:这台狗正在回充、电量不到 50%(决策 45)→ 不派的理由;不然空串。"""
+        """入侵派遣问:这台狗正在回充、电量过不了报警出动线(W73 §7.2,替换决策 45 的 50%)→ 不派的
+        理由;不然空串。离现场多远那一份由派遣自己按距离再算(``IncidentDesk``)。"""
         c = self.dispatcher.clients.get(robot_id)
         running = c.status.task.task_id if c is not None and c.status and c.status.task else ""
         if not running.startswith(TASK_PREFIX):
             return ""
         pct = self._battery(robot_id)
-        if pct is None or pct < INTRUSION_MIN_PCT:
+        line = alarm_line(0.0)
+        if pct is None or pct < line:
             return (f"{robot_id} 在充电、电量不够"
-                    f"({'不知道' if pct is None else f'{pct:.0f}%'},要 ≥ {INTRUSION_MIN_PCT:.0f}%)")
+                    f"({'不知道' if pct is None else f'{pct:.0f}%'},要 ≥ {line:.0f}%)")
         return ""
+
+    def _low(self, rid: str) -> float:
+        w = None
+        if self.wants is not None:
+            try:
+                w = self.wants(rid)
+            except Exception:                            # 值守那头读不出:按默认的线
+                log.exception("%s 值守要的补能线读不出", rid)
+        return max(self.low_pct, w) if w is not None else self.low_pct
+
+    def _resume(self, rid: str) -> float:
+        r = None
+        if self.resume_for is not None:
+            try:
+                r = self.resume_for(rid)
+            except Exception:
+                log.exception("%s 值守要充到多少读不出", rid)
+        return float(r) if r is not None else self.resume_pct
 
     def _battery(self, robot_id: str) -> float | None:
         c = self.dispatcher.clients.get(robot_id)
@@ -219,7 +243,8 @@ class ChargeDesk:
         if cyc is None:
             pct = self._battery(rid)
             caps = c.capabilities.tasks if c.capabilities is not None else {}
-            if pct is not None and pct <= self.low_pct and "dock" in caps and self._idle(rid, c) \
+            low = self._low(rid)
+            if pct is not None and pct <= low and "dock" in caps and self._idle(rid, c) \
                     and self.dispatcher.autonomy(rid) == "autonomous":
                 other = self._charging_other(rid)
                 if other and pct > FLOOR_PCT:
@@ -233,7 +258,7 @@ class ChargeDesk:
                                  overlap="" if self._overlap_told(rid) else other)
             else:
                 self._held.pop(rid, None)
-                if pct is not None and pct > self.low_pct and self._overlap_told(rid):
+                if pct is not None and pct > low and self._overlap_told(rid):
                     with self.db.tx() as tx:            # 电量回到线上:这一回低电结束
                         tx.execute("DELETE FROM charge_overlaps WHERE robot_id=?", (rid,))
             return
@@ -360,7 +385,7 @@ class ChargeDesk:
                       "WHERE robot_id=?", (tid, now, rid))
         try:
             r = await self.dispatcher.dock(rid, tid, DockRequest(
-                resume_pct=self.resume_pct, dock_timeout_s=self.dock_timeout_s),
+                resume_pct=self._resume(rid), dock_timeout_s=self.dock_timeout_s),
                 issued_by="charge")
         except Exception as exc:  # noqa: BLE001 - 说不清狗收没收:留着,按终态 / 丢了对账
             log.warning("%s 对桩没派成(回执没到?):%s", rid, exc)

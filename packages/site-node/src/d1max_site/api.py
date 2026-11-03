@@ -243,6 +243,8 @@ class SiteApi:
         self.scheduler = scheduler
         self.standby = standby
         self.incidents = incidents
+        #: W73 第五期:外部设备按位置绑定(``devices.DeviceBook``;没接是 None)。
+        self.devices: Any = None
         self.alerts = alerts
         self.video = video
         self.teleop = teleop
@@ -758,6 +760,9 @@ class _Handler(TlsHandlerMixin):
             if path in ("/api/incidents", "/api/intercepts", "/api/zones"):
                 self._need(user, VIEW if method == "GET" else MANAGE)
                 return self._incident_admin(method, path)
+            if path == "/api/devices":                   # W73 第五期:外部设备按位置绑定
+                self._need(user, VIEW if method == "GET" else MANAGE)
+                return self._devices(method)
             if path == "/api/runs" or path.startswith(("/api/runs/", "/api/exports")):
                 return self._runs(method, path, user)
             if path in ("/api/reports/daily", "/api/reports/summary"):
@@ -1723,6 +1728,7 @@ class _Handler(TlsHandlerMixin):
         self._actor = f"source:{source}"
         if not desk.allow(source):                       # W16:每个事件源每分钟有上限
             raise HttpError(429, "此事件源一分钟内报得太多,超出的不收")
+        body = desk.prepare(source, body)               # W73 第五期:设备报来不带防区名
         try:
             desk.parse(body)
         except IncidentError as exc:
@@ -2200,6 +2206,34 @@ class _Handler(TlsHandlerMixin):
             return self._send_json(200, desk.set_manual(d.get("condition"), by=str(user),
                                                         hours=d.get("hours")))
         except WeatherError as exc:
+            raise HttpError(400, str(exc)) from exc
+
+    def _devices(self, method: str) -> None:
+        """W73 第五期 ``/api/devices``:GET 列表(不含密钥);POST ``{id, kind, map_id, map_version,
+        x, y, yaw?, fov_deg?, range_m?, note?}`` 登记 / 改(第一次登记回 ``secret``,只给这一次),
+        ``{id, rotate: true}`` 换密钥,``{id, remove: true}`` 删。"""
+        from d1max_site.devices import DeviceError
+        book = getattr(self.site, "devices", None)
+        if book is None:
+            raise HttpError(404, "此站点未启用外部设备登记")
+        if method == "GET":
+            return self._send_json(200, {"devices": book.list()})
+        if method != "POST":
+            raise HttpError(405, "只支持 GET/POST")
+        d = self._body()
+        if not isinstance(d, dict):
+            raise HttpError(400, "要一个对象")
+        dev = d.get("id")
+        try:
+            if d.get("remove") is True:
+                book.remove(str(dev))
+                return self._send_json(200, {"ok": True})
+            if d.get("rotate") is True:
+                return self._send_json(200, {"ok": True, "secret": book.rotate(str(dev)),
+                                             "source": f"dev-{dev}"})
+            body = {k: v for k, v in d.items() if k != "id"}
+            return self._send_json(200, book.put(dev, body, by=self._actor or ""))
+        except DeviceError as exc:
             raise HttpError(400, str(exc)) from exc
 
     def _incident_admin(self, method: str, path: str) -> None:

@@ -157,6 +157,10 @@ def rule(event: Event | DeviceEvent, ctx: SafetyContext) -> Ruling:
     return Ruling(Decision.CONTINUE, f"{type(event).__name__} 无对应规则,只记录")
 
 
+#: W73 决策 78 §7.2:回补能位的耗电按这么多倍留(路上绕障、等人让路、估得不准)。
+RETURN_FACTOR = 1.5
+
+
 def _return_cost(ctx: SafetyContext) -> float:
     """这一刻按多远算的回原点成本,**下有地板**。
 
@@ -188,7 +192,7 @@ def return_line_pct(ctx: SafetyContext) -> float:
     本身一样:**就算原点就在脚下,起身、站定、对位也要电。** 回原点从来不是
     免费的,0 只可能是"还没算",不可能是"不要钱"。
     """
-    dynamic = ctx.policy.battery_abort_pct + _return_cost(ctx)
+    dynamic = ctx.policy.battery_abort_pct + _return_cost(ctx) * RETURN_FACTOR
     return max(ctx.policy.battery_return_pct, dynamic)
 
 
@@ -214,10 +218,11 @@ def battery_ruling(ctx: SafetyContext) -> Ruling:
         # 照印"中止线 + 回原点",人读到的是"低于返航线 60%(中止线 25% +
         # 回原点 3%)"—— 25 加 3 不等于 60,站在狗旁边的人会以为程序算错了。
         cost = _return_cost(ctx)
-        if line > ctx.policy.battery_abort_pct + cost:
+        if line > ctx.policy.battery_abort_pct + cost * RETURN_FACTOR:
             why = f"静态下限 {ctx.policy.battery_return_pct:.0f}%"
         else:
-            why = f"中止线 {ctx.policy.battery_abort_pct:.0f}% + 回原点 {cost:.0f}%"
+            why = (f"中止线 {ctx.policy.battery_abort_pct:.0f}% + 回原点 {cost:.0f}%"
+                   f" × {RETURN_FACTOR:g}")
         return Ruling(Decision.RETURN_HOME,
                       f"电量 {ctx.battery_pct:.0f}% 低于返航线 {line:.0f}%"
                       f"({why}),返航")

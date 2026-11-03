@@ -1129,3 +1129,18 @@ details.ops > summary { cursor: pointer; font-weight: 600; padding: 6px 0; }
 .guard-gen-zones input[type="number"] { width: 4.5em; }
 .pointlist .eta { color: var(--c-textSecondary); }
 .route-eta { margin: 0; }
+
+/* W73 第四期 换电引导 */
+.guard-swap { border: 1px solid var(--c-warning); border-radius: 8px; padding: 12px 14px; margin: 12px 0; }
+.guard-swap h3 { margin: 0 0 6px; }
+.guard-swap-step { font-size: 1.1em; margin: 0 0 8px; }
+.guard-swap-step.hot { font-weight: 600; color: var(--c-warning); }
+.guard-packs { display: flex; gap: 16px; }
+.guard-packs li.first { font-weight: 600; }
+.guard-tl { display: flex; height: 8px; border-radius: 4px; overflow: hidden; margin-top: 6px; max-width: 480px; }
+.guard-tl-duty { background: var(--c-success, #3a8f5c); }
+.guard-tl-topup { background: var(--c-warning); }
+/* W73 第五期 外部设备 */
+.device-form { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.device-form input { width: 9em; }
+.device-secret { word-break: break-all; font-family: var(--font-mono, monospace); font-size: 0.9em; }

@@ -113,6 +113,36 @@ describe("值守方案面板", () => {
     await waitFor(() => expect(c.querySelector(".guard-log")?.textContent).toContain("到了 东区 A1"));
   });
 
+  it("预报里说补一次能能开几圈、每段要补几次", async () => {
+    plan = { ...plan, forecast: { ...FC, entries: [{ ...FC.entries[0], laps_per_charge: 9,
+      windows: [{ ...FC.entries[0].windows[0], topups: 1 }] }] } };
+    const { container: c } = panel();
+    await waitFor(() => expect(c.textContent).toContain("约 12 圈（要补能 1 次）"));
+    expect(c.textContent).toContain("补一次能约跑 9 圈");
+    const bar = c.querySelector(".guard-tl");
+    expect(bar).not.toBeNull();
+    expect(bar!.querySelectorAll(".guard-tl-topup").length).toBe(1);
+  });
+
+  it("换电引导:按两块电池自动走到哪一步,不用点下一步", async () => {
+    const swaps = [{ robot_id: "A", step: "first_out", first: 1, second: 2, packs: [null, 60], battery_pct: 60, since_ms: NOW - 120_000, told_ms: NOW - 60_000, ok_pct: 80 }];
+    setFetch(((url: string) => {
+      if (url === "/api/guard/status") return Promise.resolve(json({ ...STATUS, swaps }));
+      if (url === "/api/guard/plan") return Promise.resolve(json(plan));
+      if (url === "/api/guard/duties") return Promise.resolve(json(DUTIES));
+      if (url.startsWith("/api/routes?kind=guard")) return Promise.resolve(json({ routes: [{ id: "night-guard" }] }));
+      if (url === "/api/robots") return Promise.resolve(json({ robots: [{ robot_id: "A" }] }));
+      return Promise.resolve(json({}, 404));
+    }) as typeof fetch);
+    const { container: c } = panel();
+    await waitFor(() => expect(c.querySelector(".guard-swap")).not.toBeNull());
+    const t = c.querySelector(".guard-swap")!.textContent!;
+    expect(t).toContain("1 号已拔下");
+    expect(t).toContain("不要动 2 号");
+    expect(t).toContain("1 号：未插");
+    expect(t).toContain("2 号：60%");
+  });
+
   it("英文也说得通", () => {
     lang.value = "en";
     expect(runText({ entry: 1, robot_id: "A", state: "lap", lap: 2, task_id: "", next_lap_ms: 0, watch_zone: "" })).toBe("running lap 2");

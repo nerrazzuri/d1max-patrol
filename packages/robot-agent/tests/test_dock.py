@@ -385,7 +385,7 @@ async def test_复查_真代理_挂着危险时状态读不到_不充也不摘�
         await rt.close()
 
 
-async def test_W28_去桩的goto_中止线是10_别的还是25():
+async def test_W28_去桩的goto_中止线是10_别的是默认停止线15():
     from d1max_agent.tasks.engine_goto import EngineGotoTask
     from d1max_contract.charging import TRIP_ABORT_PCT
     from d1max_contract.messages import MapPose
@@ -395,7 +395,7 @@ async def test_W28_去桩的goto_中止线是10_别的还是25():
     t.charge = True
     assert t._mission().policy.battery_abort_pct == TRIP_ABORT_PCT
     t.charge = False
-    assert t._mission().policy.battery_abort_pct == 25.0
+    assert t._mission().policy.battery_abort_pct == 15.0           # W73 决策 78 §7.2
 
 
 async def test_W26外审2_充着时翻倒抱起来_停对桩不出桩_已经在出桩的也改停(monkeypatch):

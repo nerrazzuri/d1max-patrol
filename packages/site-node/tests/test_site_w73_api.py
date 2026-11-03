@@ -157,7 +157,7 @@ def test_值守状态和记录_保安能看(站点):
     g = _接值守(s)
     gina = _登(s, "gina")
     code, d = s.req("GET", "/api/guard/status", token=gina)
-    assert code == 200 and d["duty"] is None and d["runs"] == []
+    assert code == 200 and d["duty"] is None and d["runs"] == [] and d["swaps"] == []
     with s.db.tx() as c:
         c.execute("INSERT INTO guard_duties(started_ms, ended_ms) VALUES (100, 900)")
         c.execute("INSERT INTO guard_log(duty_id, at_ms, kind, zone, point) "
@@ -168,3 +168,28 @@ def test_值守状态和记录_保安能看(站点):
     assert code == 200 and d["log"][0]["point"] == "A"
     assert s.req("GET", "/api/guard/duties/99", token=gina)[0] == 404
     assert g is s.api.guard
+
+
+def test_W73第五期_设备登记在图上_管理员登记_密钥只给一次_保安只能看(站点):
+    from d1max_site.api import zone_posts
+    from d1max_site.devices import DeviceBook
+    from d1max_site.incidents import IncidentDesk
+    s = 站点
+    s.api.incidents = IncidentDesk(s.db, s.disp, now_ms=lambda: 1000)
+    s.api.devices = DeviceBook(s.db, incidents=s.api.incidents, posts=zone_posts(s.api),
+                               areas=s.api.areas, now_ms=lambda: 1000)
+    admin, gina = s.login(), _登(s, "gina")
+    body = {"id": "door-1", "kind": "contact", "map_id": "shop", "map_version": "1",
+            "x": EAST[0][0] + 1.0, "y": EAST[0][1] + 1.0}
+    assert s.req("POST", "/api/devices", body, token=gina)[0] == 403
+    code, d = s.req("POST", "/api/devices", body, token=admin)
+    assert code == 200, d
+    assert len(d["secret"]) == 64 and d["source"] == "dev-door-1" and d["device"]["zone"] == "东区"
+    code, d = s.req("GET", "/api/devices", token=gina)
+    assert code == 200 and d["devices"][0]["id"] == "door-1" and "secret" not in d["devices"][0]
+    code, d = s.req("POST", "/api/devices", {**body, "kind": "toaster"}, token=admin)
+    assert code == 400
+    code, d = s.req("POST", "/api/devices", {"id": "door-1", "rotate": True}, token=admin)
+    assert code == 200 and len(d["secret"]) == 64
+    assert s.req("POST", "/api/devices", {"id": "door-1", "remove": True}, token=admin)[0] == 200
+    assert s.req("GET", "/api/devices", token=gina)[1]["devices"] == []

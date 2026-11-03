@@ -579,3 +579,14 @@ async def test_横移_反过来的配置_调头时左右也反():
 def test_横移换算是负数_起不来():
     with pytest.raises(ValueError):
         D1MaxHal(lateral_mps_per_unit=-1.0)
+
+
+async def test_W73_两块电池分别报_拔掉的那块是None_电量按低的那块():
+    """设计 §7.4:换电引导要知道两块各剩多少、哪块拔了;旁路进程本来就分开发(拔了的发 0)。"""
+    async with _台子(stand=False) as (sim, hal):
+        sim.battery1, sim.battery2 = 30.0, 80.0
+        assert await _等(lambda: _eq(hal.battery(), 30.0))
+        assert (await hal.battery()).packs == (30.0, 80.0)
+        sim.battery1 = 0.0                              # 1 号拔了
+        assert await _等(lambda: _eq(hal.battery(), 80.0))
+        assert (await hal.battery()).packs == (None, 80.0)
