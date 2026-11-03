@@ -28,10 +28,10 @@ set -euo pipefail
 # @写盘 /etc/d1max/release-pub.d                                         换钥匙时另外认的发行公钥(A3;跟包里的一样)
 # @写盘 /etc/systemd/system/d1max-agent.service                           代理单元(狗上只有它一个服务,W00c5e)
 # @写盘 /etc/systemd/system/multi-user.target.wants/d1max-agent.service  systemctl enable 生成的自启链
-# @写盘 /etc/systemd/system/d1max-localizer.service                       定位器单元(W09b;只装不 enable)
-# @写盘 /etc/systemd/system/d1max-obstacles.service                       感知节点单元(W11;只装不 enable)
+# @写盘 /etc/systemd/system/d1max-localizer.service                       定位器单元(W09b;env 里写了要用才 enable)
+# @写盘 /etc/systemd/system/d1max-obstacles.service                       感知节点单元(W11;env 里写了要用才 enable)
 # @写盘 /etc/systemd/system/d1max-persons.service                         人员检测节点单元(W24;只装不 enable)
-# @写盘 /etc/systemd/system/d1max-nav2.service                            Nav2 + 转接节点单元(W47;只装不 enable)
+# @写盘 /etc/systemd/system/d1max-nav2.service                            Nav2 + 转接节点单元(W47;env 里写了要用才 enable)
 # @写盘 /etc/systemd/system/d1max-lidar-merge.service                     前后雷达合并单元(W09i;只装不 enable)
 # @写盘 /etc/systemd/system/d1max-sidecar.service                         运动控制旁路单元(工单 7;只装不 enable;程序在机器上编)
 # @写盘 /etc/systemd/system/d1max-zenohd.service                          自带算力板的 zenoh 路由(A5;只装不 enable;没填网关不起)
@@ -834,17 +834,20 @@ systemctl try-restart d1max-persons.service 2>/dev/null || true
 systemctl try-restart d1max-nav2.service 2>/dev/null || true
 systemctl try-restart d1max-lidar-merge.service 2>/dev/null || true
 systemctl try-restart d1max-zenohd.service 2>/dev/null || true
-# 这三个单元装机不替人 enable(真机验过才起用,做法写在各自单元文件开头:enable --now)。但 env 里
-# 已经写了要用、单元却没设开机自启的,说出来(W35,2026-10-13 C40221:三个都是手工 start 的,整机
-# 断电再开都不起,代理一直报没连上)。
-for pair in D1MAX_LOCALIZER:d1max-localizer D1MAX_OBSTACLES:d1max-obstacles \
-            D1MAX_PERSONS:d1max-persons; do
-  key=${pair%%:*}
+# env 里写了要用的(W70,用户 11-03 现场:W68 起定位器必用,重启后几个桥都没起、换图白等 120 s):
+# 装机就设开机自启并起来;env 里没写的照旧只装不 enable(真机验过才起用,做法写在各自单元文件开头)。
+for pair in D1MAX_LOCALIZER=bridge:d1max-localizer D1MAX_OBSTACLES=bridge:d1max-obstacles \
+            D1MAX_PERSONS=bridge:d1max-persons D1MAX_NAV=nav2:d1max-nav2; do
+  want=${pair%%:*}
   unit=${pair##*:}
-  if grep -qE "^[[:space:]]*$key=bridge[[:space:]]*$" /etc/d1max/env 2>/dev/null \
-      && ! systemctl is-enabled --quiet "$unit.service" 2>/dev/null; then
-    echo "  提示: /etc/d1max/env 里写了 $key=bridge,但 $unit 没设开机自启:整机断电再开它不会起,"
-    echo "        代理会一直报没连上。验过了就:sudo systemctl enable --now $unit"
+  if grep -qE "^[[:space:]]*${want}[[:space:]]*$" /etc/d1max/env 2>/dev/null \
+      && [[ -f "/etc/systemd/system/$unit.service" ]]; then
+    if systemctl enable --now "$unit.service"; then
+      echo "  /etc/d1max/env 里写了 $want:$unit 设了开机自启并已起来"
+    else
+      echo "  注意: /etc/d1max/env 里写了 $want,但 $unit 设开机自启或起来没成:" \
+           "journalctl -u $unit 看原因" >&2
+    fi
   fi
 done
 

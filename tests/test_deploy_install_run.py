@@ -274,25 +274,27 @@ def test_W35_包里没带轮子_不加参数(tmp_path):
     assert not any("--no-index" in c for c in _调用(tmp_path))
 
 
-def test_W35_开关写了bridge但服务没设自启_提示一句_设了就不提(tmp_path):
-    """现场:定位器、感知、人员检测三个服务是手工 ``start`` 的,整机断电再开都不起,代理一直报没连上。
-    装机脚本照旧不替人 enable(真机验过才起用),但 env 里已经写了要用、服务却没设自启的,说出来。"""
+def test_W70_开关写了bridge的服务_装机设开机自启并起来_注释掉的不管(tmp_path):
+    """W35 现场:定位器、感知、人员检测是手工 ``start`` 的,断电再开都不起;W70(用户 11-03 现场)
+    重启后定位器没起、换图白等 120 s。env 里写了要用的(``=bridge``、``D1MAX_NAV=nav2``),装机就
+    ``enable --now``;注释掉的、没写的照旧只装不 enable。"""
     script = _准备(tmp_path)
     etc = tmp_path / "etc/d1max"
     etc.mkdir(parents=True)
     (etc / "env").write_text("D1MAX_SITE_MQTT=\nD1MAX_MAP=\nD1MAX_HOME=\nD1MAX_HAL=sim\n"
                              "D1MAX_LOCALIZER=bridge\n  D1MAX_OBSTACLES=bridge\n"
-                             "#   D1MAX_PERSONS=bridge\n", encoding="utf-8")
-    wants = tmp_path / "etc/systemd/system/multi-user.target.wants"
-    wants.mkdir(parents=True)
-    (wants / "d1max-obstacles.service").write_text("", encoding="utf-8")
+                             "#   D1MAX_PERSONS=bridge\nD1MAX_NAV=planned\n", encoding="utf-8")
+    for u in ("d1max-localizer", "d1max-obstacles", "d1max-persons", "d1max-nav2"):
+        (tmp_path / f"etc/systemd/system/{u}.service").write_text("", encoding="utf-8")
     got = _跑(tmp_path, script)
     assert got.returncode == 0, got.stdout + got.stderr
-    assert "sudo systemctl enable --now d1max-localizer" in got.stdout
-    assert "enable --now d1max-obstacles" not in got.stdout, "已经设了自启"
-    assert "enable --now d1max-persons" not in got.stdout, "注释掉的不算"
-    assert not any(c.startswith("systemctl enable") and "localizer" in c
-                   for c in _调用(tmp_path)), "只提示,不替人 enable"
+    calls = _调用(tmp_path)
+    enabled = [c for c in calls if c.startswith("systemctl enable --now")]
+    assert any("d1max-localizer" in c for c in enabled), calls
+    assert any("d1max-obstacles" in c for c in enabled), calls
+    assert not any("d1max-persons" in c for c in enabled), "注释掉的不算"
+    assert not any("d1max-nav2" in c for c in enabled), "D1MAX_NAV 不是 nav2"
+    assert "设了开机自启并已起来" in got.stdout
 
 
 def _chrony狗(root: Path, *, 主配置: str | None, env: str) -> Path:

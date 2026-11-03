@@ -1251,7 +1251,7 @@ def test_定位器的启动脚本与单元_只装不启用_卸载删干净():
     装 = (DEPLOY / "install.sh").read_text(encoding="utf-8")
     assert "# @写盘 /etc/systemd/system/d1max-localizer.service" in 装
     assert 'install -m 0644 "$PKG/deploy/d1max-localizer.service" /etc/systemd/system/' in 装
-    assert "enable d1max-localizer" not in 装 and "systemctl start d1max-localizer" not in 装
+    assert "D1MAX_LOCALIZER=bridge:d1max-localizer" in 装      # W70:env 写了要用才 enable
     # 真机验收时有人手工起过的话,换了版本要跟着重启(没在跑就什么也不做)
     assert "systemctl try-restart d1max-localizer.service" in 装
     卸 = (DEPLOY / "uninstall.sh").read_text(encoding="utf-8")
@@ -1281,7 +1281,7 @@ def test_感知节点的启动脚本与单元_只装不启用_卸载删干净():
     装 = (DEPLOY / "install.sh").read_text(encoding="utf-8")
     assert "# @写盘 /etc/systemd/system/d1max-obstacles.service" in 装
     assert 'install -m 0644 "$PKG/deploy/d1max-obstacles.service" /etc/systemd/system/' in 装
-    assert "enable d1max-obstacles" not in 装 and "systemctl start d1max-obstacles" not in 装
+    assert "D1MAX_OBSTACLES=bridge:d1max-obstacles" in 装      # W70:env 写了要用才 enable
     assert "systemctl try-restart d1max-obstacles.service" in 装
     卸 = (DEPLOY / "uninstall.sh").read_text(encoding="utf-8")
     assert "# @删除 /etc/systemd/system/d1max-obstacles.service" in 卸
@@ -1308,7 +1308,7 @@ def test_人员检测节点_系统Python_同一账号_只装不起_卸载收干�
     装 = (DEPLOY / "install.sh").read_text(encoding="utf-8")
     assert "# @写盘 /etc/systemd/system/d1max-persons.service" in 装
     assert 'install -m 0644 "$PKG/deploy/d1max-persons.service" /etc/systemd/system/' in 装
-    assert "enable d1max-persons" not in 装 and "systemctl start d1max-persons" not in 装
+    assert "D1MAX_PERSONS=bridge:d1max-persons" in 装          # W70:env 写了要用才 enable
     assert "systemctl try-restart d1max-persons.service" in 装
     卸 = (DEPLOY / "uninstall.sh").read_text(encoding="utf-8")
     assert "# @删除 /etc/systemd/system/d1max-persons.service" in 卸
@@ -1837,7 +1837,7 @@ def test_W47_Nav2单元_单独ROS域_只装不起_卸载收干净():
     装 = (DEPLOY / "install.sh").read_text(encoding="utf-8")
     assert "# @写盘 /etc/systemd/system/d1max-nav2.service" in 装
     assert 'install -m 0644 "$PKG/deploy/d1max-nav2.service" /etc/systemd/system/' in 装
-    assert "enable d1max-nav2" not in 装 and "systemctl start d1max-nav2" not in 装
+    assert "D1MAX_NAV=nav2:d1max-nav2" in 装                   # W70:env 写了要用才 enable
     assert "systemctl try-restart d1max-nav2.service" in 装
     卸 = (DEPLOY / "uninstall.sh").read_text(encoding="utf-8")
     assert "# @删除 /etc/systemd/system/d1max-nav2.service" in 卸

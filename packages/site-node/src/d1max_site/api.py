@@ -3172,22 +3172,16 @@ class _Handler(TlsHandlerMixin):
                             extra={"reason": "zones_unconfirmed"})
         payload = ref.to_wire()
         # 这台狗在这张图上的原点:站点原点表里的是权威(W13a),有就下发、盖过图里的 home.json
-        # (W00c6f 内审应修 4);没有才按图里带的。**都没有**(新建的图、新版本):默认不下发,
-        # 管理员明说 ``without_home: true`` 才发 —— 狗上没有原点,起飞前检查拒 goto、巡检,
-        # 遥控、设位置、「在这儿标原点」照常(标原点要狗先载上这张图,所以不能一律拒)。
-        # 待命点不顶替原点(W13a 外审阻断)。
+        # (W00c6f 内审应修 4);没有才按图里带的。**都没有**(新建的图、新版本):照常下发、审计里记
+        # ``without_home`` —— 标原点要狗先载上这张图、定好位(用户 11-03 现场:不该因为没原点拦着
+        # 不让发),狗上没有原点,起飞前检查拒 goto、巡检,遥控、设位置、「在这儿标原点」照常。
+        # ``without_home`` 参数留着兼容老客户端,只查类型。待命点不顶替原点(W13a 外审阻断)。
         home = self._home_on(robot_id, ref.map_id, ref.version)
         if not isinstance(without, bool):
             raise HttpError(400, "without_home 要是 true/false")
         if home is not None:
             payload["home"] = home
         elif not any(f.name == "home.json" for f in ref.files):
-            if not without:
-                raise HttpError(
-                    409, f"{robot_id} 在 {ref.map_id}:{ref.version} 上尚无原点:下发之后机器人"
-                         "不接 goto、巡检,要先把机器人开到原点(充电桩前)、设好位置、"
-                         "「在这儿标原点」。确认要这样下发就带上 without_home",
-                    extra={"reason": "no_home"})
             self._audit_detail = {"without_home": True}
         return payload
 

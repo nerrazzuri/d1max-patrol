@@ -131,6 +131,9 @@ class _Mem:
     boot_id: str = ""
     #: 由掉线变回在线的时刻(站点的钟);``None`` = 还没掉过线。掉线告警的迟滞用它。
     online_since: int | None = None
+    #: 这一段连着在线从哪一刻起(站点的钟;站点起来后第一次见它在线也算);掉线清掉。连着在线过了
+    #: :data:`OFFLINE_REARM_MS` 就把挂着的「已离线」解决(W70,用户 11-03 现场)。
+    up_since: int | None = None
     #: 最后一次遥测里的地图位姿(``MapPose`` 的报文)与收到的时刻(站点的钟),告警带现场用(W17)。
     pose: dict | None = None
     pose_ms: int = 0
@@ -266,6 +269,8 @@ class SiteAlertSources:
         if m.offline:
             m.online_since = self._now()
             m.nogo_clear_since = None                  # 复查 N2:刚回来,从新的可信位置数
+        if m.up_since is None:
+            m.up_since = self._now()
         m.offline = False
         running = s.task is not None and s.task.state is TaskState.RUNNING
         m.running = running
@@ -347,6 +352,13 @@ class SiteAlertSources:
         for rid, m in list(self._mem.items()):
             if not m.offline and self._is_stale(rid):
                 self._offline(rid, m)
+            elif not m.offline and m.up_since is not None \
+                    and self._now() - m.up_since >= OFFLINE_REARM_MS \
+                    and self.desk.has_open(rid, "robot_offline_idle"):
+                try:                                      # W70:回来连着在线过了迟滞,离线那条解决
+                    self.desk.resolve_all(rid, "robot_offline_idle", who="site:online")
+                except Exception:
+                    log.exception("%s 回来了,离线那条解决不了,下一拍再来", rid)
             elif m.loc_since is not None and not m.loc_p1 \
                     and self._now() - m.loc_since >= LOC_P1_S * 1000:
                 try:                                      # 30 秒还没恢复:叫人(W29)
@@ -364,6 +376,7 @@ class SiteAlertSources:
         if m.offline:
             return
         m.offline = True
+        m.up_since = None
         # 掉线期间的事看不见:回来之后重新从它报的状态认起。跌倒的记忆也清掉(狗可能被扶起、重启)。
         m.estop = m.loc_lost_running = m.fallen = False
         m.loc_since = m.loc_idle_since = None              # 掉线不计(loc_bad 留着:回来好了照样解决)
@@ -455,11 +468,22 @@ class SiteAlertSources:
         elif e.kind == "map_integrity_failed":
             # W09g:狗起来时正在用的图校验不过 —— 没载、不宣告能自主(不退回命令行的图)。
             which = f"{d.get('map_id', '?')}:{d.get('version', '?')}"
-            self.desk.raise_alert(kind="map_integrity", robot=rid,
-                                  title=f"机器人上正在用的图已损坏:{which},不能自主",
-                                  detail=f"{str(d.get('reason', ''))[:240]};"
-                                         "重新下发此版本(同一版也会重新下载、逐个核对)")
+            reason = str(d.get("reason", ""))
+            if "需要重建" in reason:                     # W68 之前建的图(W70:图没坏,不说「已损坏」)
+                title = f"机器人上正在用的图需要重建:{which},不能自主"
+                fix = "用当前版本重新建图,或者下发一张新建的图"
+            else:
+                title = f"机器人上正在用的图已损坏:{which},不能自主"
+                fix = "重新下发此版本(同一版也会重新下载、逐个核对)"
+            self.desk.raise_alert(kind="map_integrity", robot=rid, title=title,
+                                  detail=f"{reason[:240]};{fix}")
         elif e.kind == "map_activated":
+            # W70(用户 11-03 现场):换图成功了,之前的换图失败、图坏了/要重建那两条解决
+            for kind in ("map_failed", "map_integrity"):
+                try:
+                    self.desk.resolve_all(rid, kind, who="site:map_activated")
+                except Exception:
+                    log.exception("%s 换图成功了,%s 那条解决不了", rid, kind)
             # 对账 S6:换了图,定位器要人在新图上给初始位置 —— 空闲丢定位宽限一阵
             m = self._m(rid)
             m.loc_quiet_until = max(m.loc_quiet_until, self._now() + LOC_IDLE_BOOT_S * 1000)

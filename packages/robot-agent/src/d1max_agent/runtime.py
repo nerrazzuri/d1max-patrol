@@ -85,6 +85,8 @@ LOAD_MAP_TIMEOUT_S = 120.0
 PRIOR_ACK_WAIT_S = 120.0
 #: 等定位器确认时多久看一眼(秒)。
 PRIOR_ACK_POLL_S = 0.2
+#: 换图等定位器确认时,定位器一直连不上这么久就不再等(W70:没在运行,白等 120 s)。
+LOC_DOWN_WAIT_S = 15.0
 
 
 def _parse_home(v: Any) -> tuple[float, float, float] | None:
@@ -2062,12 +2064,20 @@ class AgentRuntime:
         loop = asyncio.get_running_loop()
         deadline = loop.time() + PRIOR_ACK_WAIT_S
         key = (ref.map_id, ref.version)
+        down_since: float | None = None
         while True:
             state, why = status(key)
             if state == "ok":
                 return ""
             if state == "rejected":
                 return f"定位器不收此地图的先验:{why}"[:200]
+            if why == "定位器未连接":
+                down_since = loop.time() if down_since is None else down_since
+                if loop.time() - down_since >= LOC_DOWN_WAIT_S:
+                    return (f"定位器没在运行({LOC_DOWN_WAIT_S:g} s 连不上):在机器人上 "
+                            "sudo systemctl start d1max-localizer 后再发布这张图")
+            else:
+                down_since = None
             if loop.time() >= deadline:
                 tail = f"({why})" if why else ""
                 return f"定位器 {PRIOR_ACK_WAIT_S:g} s 未确认此地图的先验{tail}"[:200]

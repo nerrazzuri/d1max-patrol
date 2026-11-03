@@ -691,3 +691,56 @@ def test_W68_几处差不多像_标题说无法确定(台):
                           reason="有几处差不多像,无法确定机器人在哪,请到场设位置"))
     [a] = _空闲丢定位(desk)
     assert "无法确定" in a.title
+
+
+def _open(desk, robot="A") -> list[str]:
+    return sorted(a.kind for a in desk.book.open() if a.robot == robot)
+
+
+def test_W70_掉线回来_离线那条自己解决_站点重启后第一次见它在线也解决(台):
+    """用户 11-03 现场:装机时代理重启了一下,「机器人已离线」一直挂着。"""
+    c, db, desk, src, pushed, stale = 台
+    src.on_status("B", _status())
+    stale.add("B")
+    src.tick()
+    assert _open(desk, "B") == ["robot_offline_idle"]
+    stale.discard("B")
+    src.on_status("B", _status())
+    src.tick()
+    assert _open(desk, "B") == ["robot_offline_idle"], "刚回来:4G 抖动的迟滞里先不解决"
+    stale.add("B")
+    src.tick()                                         # 回来不到一分钟又掉:还是那一条
+    assert _open(desk, "B") == ["robot_offline_idle"]
+    stale.discard("B")
+    src.on_status("B", _status())
+    c.ms += 61_000                                     # 连着在线过了迟滞
+    src.tick()
+    assert _open(desk, "B") == [], "回来了:离线那条解决"
+    desk.raise_alert(kind="robot_offline_idle", robot="C", title="机器人已离线")
+    src2 = SiteAlertSources(desk, now_ms=c, is_stale=lambda rid: False)   # 站点重启
+    src2.on_status("C", _status())
+    c.ms += 61_000
+    src2.tick()
+    assert _open(desk, "C") == []
+
+
+def test_W70_换图成功_之前的换图失败和图要重建那两条自己解决(台):
+    c, db, desk, src, *_ = 台
+    src.on_event("A", _ev("map_integrity_failed", map_id="office", version="3",
+                          reason="此地图需要重建:旧版建的图没有 Super-LIO 定位用的点云"
+                                 "(superlio_map.pcd)"))
+    src.on_event("A", _ev("map_activate_failed", map_id="office", version="7",
+                          reason="定位器 120 s 未确认此地图的先验(定位器未连接)"))
+    assert _open(desk) == ["map_failed", "map_integrity"]
+    src.on_event("A", _ev("map_activated", map_id="office", version="7"))
+    assert _open(desk) == []
+
+
+def test_W70_旧版建的图_标题说要重建_不说已损坏(台):
+    c, db, desk, src, *_ = 台
+    src.on_event("A", _ev("map_integrity_failed", map_id="office", version="3",
+                          reason="此地图需要重建:旧版建的图没有 Super-LIO 定位用的点云"
+                                 "(superlio_map.pcd)"))
+    [a] = desk.book.all()
+    assert "需要重建" in a.title and "已损坏" not in a.title, a.title
+    assert "重建" in a.detail and "重新下发此版本" not in a.detail

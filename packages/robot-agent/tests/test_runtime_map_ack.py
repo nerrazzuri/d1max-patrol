@@ -95,6 +95,25 @@ async def test_定位器一直不回_超时算没成_也退回(台, monkeypatch)
     assert t.rt.loaded_map == ("m", "2") and keeper.active() == a
 
 
+async def test_W70_定位器没在运行_不白等120秒_报定位器没在运行(台, monkeypatch):
+    """用户 11-03 现场:重启后定位器没起,换图白等 120 s 才报「未连接」。一直连不上
+    :data:`~d1max_agent.runtime.LOC_DOWN_WAIT_S` 就报「定位器没在运行」、退回原来那张。"""
+    t, site, keeper = 台
+    a = await _activate(t, site, "2", "a1")
+    monkeypatch.setattr(rtmod, "LOC_DOWN_WAIT_S", 0.3)
+    await t.loc.close()                                # 定位器没在运行
+    await t.拍(2)
+    b = site.add("m", "3", {**FILES, "x": b"3"})
+    await t.rt._on_cmd(_cmd("map_activate", b, "a2", t.c))
+    await _跑(t.rt, t.broker, settle_s=20.0)
+    await t.rt.step(0.1)
+    await t.broker.drain()
+    failed = _events(t, "map_activate_failed")
+    why = failed[-1]["data"]["reason"] if failed else ""
+    assert "定位器没在运行" in why and "systemctl start d1max-localizer" in why, failed
+    assert t.rt.loaded_map == ("m", "2") and keeper.active() == a
+
+
 async def test_第一次换图就被拒_没有别的图可退_事件说清楚(tmp_path):
     site = 站点()
     keeper = MapKeeper(tmp_path / "keep", fetch=site.fetch)
