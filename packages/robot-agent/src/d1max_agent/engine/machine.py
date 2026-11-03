@@ -835,6 +835,8 @@ class MissionEngine(EventEmitter[RunSnapshot]):
 
         停导航放在 ``finally``(W00c6a):前面记状态出什么事,导航都要停 —— 以前第一步
         记 ABORTING 就抛(写盘失败),停导航那一句根本没执行到。"""
+        # W70(11-03 C40221:电量差 0.5% 没过起飞前检查,代理日志里一行都没有,只有站点事件里看得到)
+        log.info("这一趟中止:%s", reason)
         try:
             await self._transition(RunState.ABORTING, reason)
         finally:
