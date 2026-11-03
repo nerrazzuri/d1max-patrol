@@ -827,3 +827,14 @@ async def test_上装严重过热_结束这一趟回原点(make_engine, nav, dev
     assert await engine.wait_done(timeout_s=5.0) is RunState.DONE
     assert nav.home_calls == 1 and RunState.RETURNING in engine._seen
     await engine.aclose()
+
+
+async def test_W70_这一趟中止_代理日志里有一行原因(make_engine, nav, caplog):
+    """11-03 C40221:电量 29.0% 不到出发线 29.5%,只有站点事件里看得到。"""
+    import logging
+    nav.on_goto = [NavStatusEvent(NavStatus.FAILED)]
+    engine = make_engine()
+    mission = make_mission(policy=policy(on_waypoint_failed="abort"))
+    with caplog.at_level(logging.INFO, logger="d1max_agent.engine.machine"):
+        await run_to_end(engine, mission)
+    assert any("这一趟中止" in r.getMessage() for r in caplog.records)
