@@ -138,6 +138,9 @@ AUTO_FIND_HUMAN_GRACE_S = 30.0
 AUTO_FIND_EVERY_S = 60.0
 AUTO_FIND_MAX = 3
 AUTO_FIND_RETRY_S = 5.0
+#: W71(11-03 C40221:趴着 8 分钟用完 3 次,站起来以后不再找):一轮 :data:`AUTO_FIND_MAX` 次用完,
+#: 隔这么久(秒)再开一轮(人把它搬回图上、周围的人走开了,就能找到)。趴着不找、不计次。
+AUTO_FIND_ROUND_S = 120.0
 
 #: 一条回执编码之后最多这么大(字节)。站点 broker 单包上限 262144(``max_packet_size``,超了狗被断开),
 #: 留出主题与包头。带数据的回执各自有上限(日志尾巴、轨迹),这里是出口的兜底(外审 Qwen 第六节 2)。
@@ -1530,9 +1533,12 @@ class AgentRuntime:
             self._find_since = now
         wait = AUTO_FIND_HUMAN_GRACE_S if self._find_human else AUTO_FIND_WAIT_S
         if (now - self._find_since < wait or now < self._find_next
-                or self._find_tries >= AUTO_FIND_MAX
                 or self._running(self._map_job) or self._switching):
             return
+        if self._find_tries >= AUTO_FIND_MAX:              # W71:上一轮用完、隔够了:新开一轮
+            log.info("开机自己找位置:上一轮 %d 次没找到,隔了 %g 秒,再开一轮", AUTO_FIND_MAX,
+                     AUTO_FIND_ROUND_S)
+            self._find_tries = 0
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
@@ -1561,6 +1567,11 @@ class AgentRuntime:
             if (cur is not None and not cur.done) or not await self.hal.stopped():
                 self._find_next = self._mono() + AUTO_FIND_RETRY_S
                 return
+            if await self._lying():
+                # W71:趴着雷达太低,对不上图(11-03 8 分钟用完 3 次):不找、不计次,站起来再找
+                self.parts.nav.anchor.find_note = "机器人趴着:雷达太低对不上图,站起来后自动找位置"
+                self._find_next = self._mono() + AUTO_FIND_RETRY_S
+                return
             got = await self._relocalize(cmd, auto=True)
         why = got if isinstance(got, str) else got[0]
         anchor = self.parts.nav.anchor
@@ -1586,7 +1597,9 @@ class AgentRuntime:
         note = ("位置偏差过大:机器人可能不在地图上(或周围变化太大)" if kind == "off_map"
                 else "有几处差不多像,无法确定机器人在哪")
         if self._find_tries >= AUTO_FIND_MAX:
-            note += f";自动找位置 {AUTO_FIND_MAX} 次未成功,请到场设位置"
+            note += (f";自动找位置 {AUTO_FIND_MAX} 次未成功,"
+                     f"{AUTO_FIND_ROUND_S / 60:g} 分钟后再找一轮,或请到场设位置")
+            self._find_next = now + AUTO_FIND_ROUND_S
         else:
             note += ",请到场设位置"
         anchor.find_note = note
@@ -1594,6 +1607,14 @@ class AgentRuntime:
         self.events.emit("loc_not_found", {"map_id": m[0], "map_version": m[1], "cause": kind,
                                            "reason": note, "detail": detail[:200],
                                            "try": self._find_tries})
+
+    async def _lying(self) -> bool:
+        """运控明说趴着(读不到、说不清都当没趴)。"""
+        from d1max_contract.hal import MotionStatus
+        try:
+            return await self.hal.motion_status() == MotionStatus.LYING
+        except Exception:                                  # noqa: BLE001 - 说不清就照常找
+            return False
 
     async def _global_find(self) -> str | tuple[tuple[float, float, float], dict[str, Any], Any]:
         """自动找位置(W41):→ 拒收原因,或者 (位姿, 回执里带的东西)。"""
