@@ -476,3 +476,20 @@ def test_用户1031_排队的到点按那时站的地方回(台):
     assert start["name"] == "start" and start["pose"]["position"]["x"] == 3.0
     stored = json.loads(t.db.query("SELECT mission FROM adhoc_queue")[0]["mission"])
     assert [w["name"] for w in stored["waypoints"]] == ["a", "b"], "存的还是原来那条"
+
+
+def test_W71_今天的巡逻_跳过几个点也算完成_带上跳过几个(台):
+    """11-03 商场 Patrol1 15/16:站点、手机原来显示「未完成」。"""
+    t = 台
+    t.now["t"] = 毫秒(23, 0)
+    with t.db.tx() as c:
+        c.execute("INSERT INTO schedule_runs(entry_id, scheduled_ms, outcome, robot_id, task_id, "
+                  "decided_at) VALUES ('nightly', ?, 'started', 'A', 'sched-1', ?)",
+                  (毫秒(22, 0), 毫秒(22, 0)))
+        c.execute("INSERT INTO events(robot_id, boot_id, seq, event_id, kind, data, stamp, "
+                  "received_at) VALUES ('A','b',1,'e1','task_done',?,?,?)",
+                  (json.dumps({"task_id": "sched-1", "reason": "跳过 1 个点(P3):被挡",
+                               "skipped": 1, "skipped_names": ["P3"]}), 毫秒(22, 10),
+                   毫秒(22, 10)))
+    item = today_view(t.db, now_ms=t.now["t"])["items"][0]
+    assert item["state"] == "done" and item["skipped"] == 1 and "P3" in item["reason"]

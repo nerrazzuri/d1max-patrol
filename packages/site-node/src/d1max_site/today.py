@@ -27,8 +27,9 @@ _TERMINAL = {"task_done": "done", "task_failed": "failed", "task_aborted": "abor
 _PENDING = ("busy", "no_robot", "displaced", "supervised", "weather", "skew", "ambiguous")
 
 
-def _terminal(db: Any, robot: str, task_id: str) -> tuple[str, int, str] | None:
-    """这一趟的结束事件 → (状态, 时刻, 原因)。"""
+def _terminal(db: Any, robot: str, task_id: str) -> tuple[str, int, str, int] | None:
+    """这一趟的结束事件 → (状态, 时刻, 原因, 跳过了几个点)。W71:巡逻跳过几个点、到了一部分,机器人报
+    ``task_done`` 带 ``skipped``,手机、网页显示「完成(跳过 N 点)」。"""
     if not task_id:
         return None
     rows = db.query(
@@ -41,12 +42,14 @@ def _terminal(db: Any, robot: str, task_id: str) -> tuple[str, int, str] | None:
         data = json.loads(rows[0]["data"])
     except ValueError:
         data = {}
-    why = ""
+    why, skipped = "", 0
     if isinstance(data, dict):
         why = str(data.get("reason") or data.get("error") or data.get("detail") or "")[:200]
+        s = data.get("skipped")
+        skipped = s if isinstance(s, int) and not isinstance(s, bool) and s > 0 else 0
     if rows[0]["kind"] == "task_preempted":
         why = why or "被更急的任务打断了"
-    return _TERMINAL[rows[0]["kind"]], int(rows[0]["received_at"]), why
+    return _TERMINAL[rows[0]["kind"]], int(rows[0]["received_at"]), why, skipped
 
 
 def today_view(db: Any, *, now_ms: int, adhoc: Any = None) -> dict[str, Any]:
@@ -87,13 +90,14 @@ def _schedule_item(db: Any, e: Any, occ_ms: int, now_ms: int) -> dict[str, Any]:
     started = next((r for r in rows if r["outcome"] == "started"), None)
     item: dict[str, Any] = {"at_ms": occ_ms, "kind": "schedule", "label": e.mission,
                             "robot": e.robot, "by": "", "state": "later", "reason": "",
-                            "end_ms": None, "schedule_id": e.id, "adhoc_id": "", "task_id": ""}
+                            "end_ms": None, "schedule_id": e.id, "adhoc_id": "", "task_id": "",
+                            "skipped": 0}
     if started is not None:
         rid = started["robot_id"] or e.robot
         item.update(robot=rid, task_id=started["task_id"] or "")
         fin = _terminal(db, rid, item["task_id"])
         if fin is not None:
-            item.update(state=fin[0], end_ms=fin[1], reason=fin[2])
+            item.update(state=fin[0], end_ms=fin[1], reason=fin[2], skipped=fin[3])
         elif started["result"] in _RESULT:
             item["state"] = _RESULT[started["result"]]
         else:
@@ -120,13 +124,13 @@ def _adhoc_item(db: Any, r: dict[str, Any], now_ms: int) -> dict[str, Any]:
     item: dict[str, Any] = {"at_ms": at, "kind": "adhoc", "label": r["label"], "robot": r["robot"],
                             "by": r["by"], "state": r["state"], "reason": r["note"] or "",
                             "end_ms": None, "schedule_id": "", "adhoc_id": r["id"],
-                            "task_id": r["task_id"] or ""}
+                            "task_id": r["task_id"] or "", "skipped": 0}
     if r["state"] == "queued":
         item["end_ms"] = r["not_before_ms"] + int(r["estimate_s"]) * 1000
     elif r["state"] == "started":
         fin = _terminal(db, r["robot"], r["task_id"])
         if fin is not None:
-            item.update(state=fin[0], end_ms=fin[1], reason=fin[2])
+            item.update(state=fin[0], end_ms=fin[1], reason=fin[2], skipped=fin[3])
         else:
             item.update(state="running",
                         end_ms=(r["started_ms"] or now_ms) + int(r["estimate_s"]) * 1000,

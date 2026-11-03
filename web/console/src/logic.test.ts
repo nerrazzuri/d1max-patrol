@@ -434,3 +434,13 @@ describe("W40 设备健康", () => {
     expect(deviceSummary({ items: [{ id: "relay", state: "online" }], stale: true })?.tone).toBe("warning");
   });
 });
+
+describe("W71 今天的巡逻:跳过几个点也算完成", () => {
+  it("done + skipped → 完成(跳过 N 点),黄色", async () => {
+    const { stateOf } = await import("./todaypatrols");
+    const [label, tone] = stateOf("done", 2);
+    expect(tone).toBe("warn");
+    expect(label).toMatch(/2/);
+    expect(stateOf("done")[1]).toBe("ok");
+  });
+});
