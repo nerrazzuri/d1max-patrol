@@ -1032,3 +1032,26 @@ async def test_W70_Nav2一直在给速度_不重发(tmp_path):
         link.cmd = (link.now, gid, 0.2, 0.0, 0.0)
         await t.一拍()
     assert len(link.kinds("goal")) == 1
+
+
+async def test_W70_离终点不到半米_15秒没再靠近_停在这儿算到(tmp_path):
+    """11-03 17:16 商场 P8:终点离地图障碍 0.26 m(Nav2 的致命带里),机器人离终点 0.3 m
+    前后来回 2 分钟。"""
+    from d1max_agent.bridges.nav2_nav import NEAR_STALL_S
+    link = 假转接()
+    t = _台(tmp_path, link)
+    await t.start(1.5, 4.0)
+    await t.nav.goto(Pose.from_xy_yaw(1.85, 4.0, 0.0))     # 离终点 0.35 m,朝向已对上
+    gid = link.kinds("goal")[-1]["goal_id"]
+    n = int((NEAR_STALL_S - 2) * 10)
+    for i in range(n):                                      # Nav2 一直给前后来回的小速度
+        link.now += 0.1
+        link.cmd = (link.now, gid, 0.15 if i % 10 < 5 else -0.15, 0.0, 0.0)
+        await t.一拍()
+    assert NavStatus.SUCCEED not in t.status, "还不到时候"
+    for i in range(60):
+        link.now += 0.1
+        link.cmd = (link.now, gid, 0.15 if i % 10 < 5 else -0.15, 0.0, 0.0)
+        await t.一拍()
+    assert NavStatus.SUCCEED in t.status
+    assert link.kinds("cancel")[-1]["goal_id"] == gid

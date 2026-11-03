@@ -100,6 +100,12 @@ TURN_DONE_RAD = 0.05
 TURN_OVERSHOOT_RAD = 0.1
 #: Nav2 到了 xy 容差、朝向差过这么多才由代理接过来原地转(≈ Nav2 的 yaw_goal_tolerance)。
 TURN_TAKEOVER_RAD = 0.15
+#: 离终点这么近(米)以后,:data:`NEAR_STALL_S` 秒没再靠近 :data:`NEAR_PROGRESS_M`:终点多半贴着障碍、
+#: 在 Nav2 的致命带里,它进不了到点范围,只会前后来回(W70,11-03 17:16 商场 P8:离终点 0.3 m 来回
+#: 2 分钟,日志一行都没有)。就停在这儿算到(差朝向的先原地转),留话说差多少。巡逻点差半米可以接受。
+NEAR_GOAL_M = 0.5
+NEAR_STALL_S = 15.0
+NEAR_PROGRESS_M = 0.05
 #: 到了目标、只差朝向时原地转被挡(守卫、地图墙)这么久(秒):就停在这儿算到,留话说朝向差多少
 #: (W70,11-03 C40221:原点旁边有椅子、桌子,要转 170°,守卫一直拦,停了一分多钟)。换个方向转没用 ——
 #: 机身是对称的长方形,绕远那一边扫过的朝向(按 180° 折一下)包含了近的那一边。
@@ -154,6 +160,8 @@ class Nav2NavBackend(PlannedNavBackend):
         self._turn_only: float | None = None
         self._turn_err: float | None = None                # 上一拍原地转的误差(看转没转过头)
         self._turn_blocked_at: float | None = None         # 只差朝向的原地转从什么时候起被挡(W70)
+        self._near_best: float | None = None               # 进了终点半米以后最近到过多近(W70)
+        self._near_since = 0.0
         self._goal_msg: dict[str, Any] | None = None       # 这一段发给 Nav2 的目标(卡住了重发,W70)
         self._resends = 0
         self._quiet_since: float | None = None             # Nav2 从什么时候起没给速度
@@ -345,6 +353,7 @@ class Nav2NavBackend(PlannedNavBackend):
         self._turn_only = None
         self._turn_blocked_at = None
         self._goal_msg, self._quiet_since = None, None
+        self._near_best = None
         if status is not NavStatus.SUCCEED:
             self._cancel_nav2()
         self._nav2_goal = None
@@ -467,6 +476,8 @@ class Nav2NavBackend(PlannedNavBackend):
             self._turn_only, self._turn_err = tgt.yaw, None
             await self._turn_step(here, dt_s)
             return
+        if tgt is not None and await self._near_stalled(here, tgt, dt_s):
+            return
         c = link.cmd
         now = link._now()
         if c is None or now - c[0] > CMD_FRESH_S:
@@ -541,6 +552,32 @@ class Nav2NavBackend(PlannedNavBackend):
                                             "detour": True})
         self._guard_since, self._guard_told = None, False
         await self._send(vx, wz, dt_s)
+
+    async def _near_stalled(self, here: Any, tgt: Any, dt_s: float) -> bool:
+        """离终点 :data:`NEAR_GOAL_M` 以内、:data:`NEAR_STALL_S` 秒没再靠近(W70):停在这儿算到。"""
+        d = math.dist((here.x, here.y), (tgt.position.x, tgt.position.y))
+        if d > NEAR_GOAL_M:
+            self._near_best = None
+            return False
+        now = self._secs()
+        if self._near_best is None or d < self._near_best - NEAR_PROGRESS_M:
+            self._near_best, self._near_since = d, now
+            return False
+        if now - self._near_since < NEAR_STALL_S:
+            return False
+        err = math.remainder(tgt.yaw - here.yaw, 2 * math.pi)
+        log.warning("离终点 %.2f m,%.0f 秒没再靠近(终点多半贴着障碍,Nav2 进不了到点范围):"
+                    "就停在这儿算到%s", d, now - self._near_since,
+                    f",原地转 {math.degrees(err):.0f}°" if abs(err) > TURN_TAKEOVER_RAD else "")
+        self._cancel_nav2()
+        self._near_best = None
+        if abs(err) > TURN_TAKEOVER_RAD:
+            self._turn_only, self._turn_err = tgt.yaw, None
+            await self._turn_step(here, dt_s)
+        else:
+            await self._send(0.0, 0.0, dt_s)
+            await self._enter_terminal(NavStatus.SUCCEED)
+        return True
 
     def _watch_stall(self, now: float) -> None:
         """Nav2 一直不给速度、也不回结果(W70):过 :data:`NAV2_STALL_S` 取消、重发同一个目标。"""
