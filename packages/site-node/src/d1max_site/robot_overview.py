@@ -35,8 +35,8 @@ def overview(dispatcher: Any, db: Any, *, now_ms: int, tz: tzinfo) -> list[dict[
         [n] = db.query("SELECT COUNT(*) AS n FROM commands WHERE robot_id=? AND kind='patrol' "
                        "AND issued_at>=? AND (ack_result IS NULL OR ack_result NOT IN "
                        "('rejected', 'expired', 'timeout'))", (rid, day0))
-        rows = db.query("SELECT key, kind, level, title, first_ms, resolved_ms, resolved_by FROM alerts "
-                        "WHERE robot=? AND "
+        rows = db.query("SELECT key, kind, level, title, first_ms, resolved_ms, resolved_by "
+                        "FROM alerts WHERE robot=? AND "
                         "(resolved_ms IS NULL OR first_ms>=?) ORDER BY first_ms DESC LIMIT 1000",
                         (rid, since))
         mine = [r for r in rows if audience(r["kind"]) in PROBLEM_AUDIENCES]
