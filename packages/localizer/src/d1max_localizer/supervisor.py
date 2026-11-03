@@ -136,7 +136,7 @@ class MolaSupervisor:
         assert self._prior is not None
         env = {**UNBUFFERED_ENV, **(os.environ if self._env is None else self._env)}
         cmd = line_buffered(self._command_for(self._prior), path=env.get("PATH", os.defpath))
-        log.info("起 MOLA:%s", " ".join(cmd))
+        log.info("起定位程序:%s", " ".join(cmd))
         try:
             proc = await asyncio.create_subprocess_exec(
                 *cmd, env=env, start_new_session=True, stdin=asyncio.subprocess.DEVNULL,

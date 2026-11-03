@@ -23,6 +23,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import math
 import time
@@ -87,8 +88,17 @@ MPPI_REVERSE_RATIO = 0.3
 #: 离目标这么近(米,= Nav2 的 xy_goal_tolerance)只差朝向的,代理自己原地转,不交给 Nav2(11-02 工单 11:
 #: Smac Lattice 对「原地换朝向」规划不出路,60 s 不动)。
 TURN_ONLY_M = 0.2
-#: 原地转转到差这么多(弧度,≈ Nav2 的 yaw_goal_tolerance)算到。
-TURN_DONE_RAD = 0.15
+#: Nav2 一会儿就好的「未就绪」(刚中止完、在取消上一个目标;动作状态在同步):等这么久(秒)再决定退不
+#: 退回自己的规划导航(W70,2026-11-03 C40221:中止后马上回原点,退回去倒退 1.3 m、停 20 s)。
+NAV2_SETTLE_S = 10.0
+NAV2_SETTLE_POLL_S = 0.2
+NAV2_TRANSIENT = ("取消上一次", "动作状态同步")
+#: 原地转转到差这么多(弧度,约 3°)算到(W70,2026-11-03 C40221:原来 0.15,原点朝向每次差 8–10°)。
+TURN_DONE_RAD = 0.05
+#: 转过头了(误差变号)、差得不到这么多也算到:运控有死区、有延迟,不来回摆。
+TURN_OVERSHOOT_RAD = 0.1
+#: Nav2 到了 xy 容差、朝向差过这么多才由代理接过来原地转(≈ Nav2 的 yaw_goal_tolerance)。
+TURN_TAKEOVER_RAD = 0.15
 #: 原地转最快(弧度/秒):转快了定位器跟不上(11-02 工单 13)。
 TURN_ONLY_MAX_RPS = 0.6
 #: 前进速度不到这个(米/秒)就当「原地转」,按地图上的墙核一道(:meth:`Nav2NavBackend._turn_hits_map`)。
@@ -128,6 +138,8 @@ class Nav2NavBackend(PlannedNavBackend):
         self._nav2_goal: int | None = None
         #: 这一段只原地转到这个朝向(工单 11-02-11);``None`` = 不是。
         self._turn_only: float | None = None
+        self._turn_err: float | None = None                # 上一拍原地转的误差(看转没转过头)
+        self._settling = False                             # 在等 Nav2 一会儿就好的未就绪
         self._map_dir: Path | None = None
         self._map_req = 0
         self._t_ms = 0
@@ -192,6 +204,19 @@ class Nav2NavBackend(PlannedNavBackend):
 
     async def _go(self, pose: Pose, op: str) -> None:
         why = self.nav2_ready()
+        if why and any(k in why for k in NAV2_TRANSIENT):
+            if self._settling:
+                raise NavRequestError(op, f"在等 {why}")
+            log.info("%s:%s,等它最多 %g 秒", op, why, NAV2_SETTLE_S)
+            self._settling = True
+            try:
+                for _ in range(max(1, round(NAV2_SETTLE_S / NAV2_SETTLE_POLL_S))):
+                    await asyncio.sleep(NAV2_SETTLE_POLL_S)
+                    why = self.nav2_ready()
+                    if not why or not any(k in why for k in NAV2_TRANSIENT):
+                        break
+            finally:
+                self._settling = False
         if why:
             self.fallback_reason = why
             log.warning("%s:%s,这一段退回自己的规划导航", op, why)
@@ -207,6 +232,7 @@ class Nav2NavBackend(PlannedNavBackend):
             raise NavRequestError(op, "终点在禁行区里")
         self.fallback_reason = ""
         self._turn_only = None
+        self._turn_err = None
         if here is not None and math.dist((here.x, here.y),
                                           (pose.position.x, pose.position.y)) <= TURN_ONLY_M:
             self._nav2_goal = None
@@ -408,13 +434,13 @@ class Nav2NavBackend(PlannedNavBackend):
         tgt = self._target
         if tgt is not None and math.dist((here.x, here.y), (tgt.position.x, tgt.position.y)) \
                 <= TURN_ONLY_M and abs(math.remainder(tgt.yaw - here.yaw, 2 * math.pi)) \
-                > TURN_DONE_RAD:
+                > TURN_TAKEOVER_RAD:
             # 工单 11-02-18:到了 xy 容差、只差朝向 —— Nav2 在这儿常常转不起来(三次没进展、卡 50 s),
             # 代理取消它的目标,自己原地转
             log.info("Nav2 到了目标附近、只差朝向 %.0f°:代理接过来原地转",
                      math.degrees(math.remainder(tgt.yaw - here.yaw, 2 * math.pi)))
             self._cancel_nav2()
-            self._turn_only = tgt.yaw
+            self._turn_only, self._turn_err = tgt.yaw, None
             await self._turn_step(here, dt_s)
             return
         c = link.cmd
@@ -494,7 +520,10 @@ class Nav2NavBackend(PlannedNavBackend):
         """只差朝向:原地转到 :attr:`_turn_only`(工单 11-02-11)。地图上的墙、守卫照样管。"""
         assert self._turn_only is not None
         err = math.remainder(self._turn_only - here.yaw, 2 * math.pi)
-        if abs(err) <= TURN_DONE_RAD:
+        over = self._turn_err is not None and err * self._turn_err < 0
+        self._turn_err = err
+        if abs(err) <= TURN_DONE_RAD or (over and abs(err) <= TURN_OVERSHOOT_RAD):
+            self._turn_err = None
             await self._send(0.0, 0.0, dt_s)
             await self._enter_terminal(NavStatus.SUCCEED)
             return

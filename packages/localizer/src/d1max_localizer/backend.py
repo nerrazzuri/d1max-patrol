@@ -128,7 +128,7 @@ class MolaBackend:
 
     def _start(self, prior: Path) -> None:
         """(重)起定位程序(后台做)。"""
-        self._spawn(self.supervisor.start(prior), "起 MOLA")
+        self._spawn(self.supervisor.start(prior), "起定位程序")
 
     async def relocalize(self, x: float, y: float, yaw: float, sigma: float, *,
                          req: int | None = None, human: bool = True) -> str:

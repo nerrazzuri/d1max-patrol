@@ -1356,3 +1356,51 @@ async def test_工单11_上报的定位带原始ICP质量():
     assert loc.to_wire(True)["icp_quality"] == 0.94
     loc.on_pose(_位姿(3.0, 4.0))
     assert "icp_quality" not in loc.to_wire(True), "此帧未上报(老定位器):不带"
+
+
+async def test_W70_定位器还在跟踪_只是分低_丢定位重置先不重启它_宽限内回来了就不请(monkeypatch):
+    """2026-11-03 C40221:原地转身套图分掉到 0.61、σ 过线,引擎判丢定位重置,按最后位置重定位 =
+    Super-LIO 整个重启,停 7–20 s,修正量只有 2–9 cm。定位器自己还说在跟踪、没跳过:先等一阵。"""
+    import d1max_agent.bridge_localizer as B
+    monkeypatch.setattr(B, "RESET_GRACE_S", 2.0)
+    monkeypatch.setattr(B, "RESET_POLL_S", 0.01)
+    c, link, loc = await _就绪()
+    loc.on_state(State(seq=1, state="tracking", reason=""))
+    _稳(loc, 1.0, 1.0)
+    loc.on_pose(_位姿(1.0, 1.0, sigma=SIGMA_LOST_M + 0.3))
+    assert not loc.ok(True)
+    await loc.reset()
+    assert not [m for m in link.sent if isinstance(m, Relocalize)], "先不请"
+    c.t += 1.0
+    _稳(loc, 1.0, 1.0)                                   # 宽限内分回来了
+    await asyncio.sleep(0.05)
+    c.t += 5.0
+    await asyncio.sleep(0.05)
+    assert not [m for m in link.sent if isinstance(m, Relocalize)], "回来了就不请"
+
+
+async def test_W70_定位器还在跟踪_宽限过了还不可信_才按最后位置请(monkeypatch):
+    import d1max_agent.bridge_localizer as B
+    monkeypatch.setattr(B, "RESET_GRACE_S", 2.0)
+    monkeypatch.setattr(B, "RESET_POLL_S", 0.01)
+    c, link, loc = await _就绪()
+    loc.on_state(State(seq=1, state="tracking", reason=""))
+    _稳(loc, 1.0, 1.0)
+    loc.on_pose(_位姿(1.0, 1.0, sigma=SIGMA_LOST_M + 0.3))
+    await loc.reset()
+    assert not [m for m in link.sent if isinstance(m, Relocalize)]
+    c.t += 2.5
+    for _ in range(50):
+        await asyncio.sleep(0.01)
+        if [m for m in link.sent if isinstance(m, Relocalize)]:
+            break
+    r = [m for m in link.sent if isinstance(m, Relocalize)]
+    assert r and r[-1].sigma_xy == AUTO_RELOC_SIGMA_M
+
+
+async def test_W70_定位器自己说丢了_重置照旧马上请():
+    c, link, loc = await _就绪()
+    _稳(loc, 1.0, 1.0)
+    loc.on_state(State(seq=1, state="lost", reason="匹配在来回跳"))
+    await loc.reset()
+    assert [m for m in link.sent if isinstance(m, Relocalize)]

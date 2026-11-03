@@ -139,6 +139,11 @@ STAMP_STEP_S = 1.0
 RELOC_SIGMA_M = 0.5
 #: 丢定位后引擎要重置时,按最后可信的位置请定位器重定位,初值不确定度(米)。
 AUTO_RELOC_SIGMA_M = 1.0
+#: 丢定位重置时定位器自己还说在跟踪(只是分低、σ 过线):先等这么久,回来了就不请重定位(W70,
+#: 2026-11-03 C40221:原地转身分掉到 0.61,按最后位置重定位 = Super-LIO 整个重启,停 7–20 s,
+#: 修正量只有 2–9 cm)。过了还不可信再请。
+RESET_GRACE_S = 8.0
+RESET_POLL_S = 0.2
 #: 重定位只等「收下没有」(收敛看之后的帧);设位置是在命令锁里等的,不能久。
 RELOC_TIMEOUT_S = 1.0
 #: 换先验等回复(回复只说收下没有;载入进度走 ``status initializing``);没回就再发。
@@ -284,6 +289,7 @@ class BridgeLocalizer:
         self._settle = 0
         self._settle_why = ""
         self._settle_human = False
+        self._reset_task: asyncio.Task | None = None
         #: 交叉校验的窗口:上次跳变以来、配上了里程的帧。
         self._win: deque[_Fix] = deque()
         #: 在等的重定位:(请求号, 人给的);收下之前就登记(回复跟那一帧挨着到也不漏)。
@@ -662,10 +668,38 @@ class BridgeLocalizer:
         if g is None or m is None:
             log.info("丢定位后的重置:没有可信过的位置,等定位器自己找回来")
             return
+        lost_why = self.why_not(self._odom is not None)
+        if self._state == "tracking" and self._reloc is None:
+            log.info("丢定位后的重置(%s):定位器自己还在跟踪,先等 %g 秒,回来了就不重定位",
+                     lost_why or "?", RESET_GRACE_S)
+            if self._reset_task is None or self._reset_task.done():
+                self._reset_task = asyncio.get_running_loop().create_task(
+                    self._reset_later(m, self._now()))
+            return
+        await self._reset_now(m, lost_why)
+
+    async def _reset_later(self, m: tuple[str, str], start: float) -> None:
+        while True:
+            await asyncio.sleep(RESET_POLL_S)
+            if self._map != m or self._reloc is not None:
+                return
+            if self.ok(self._odom is not None):
+                log.info("丢定位后的重置:等了 %.1f 秒定位回来了,不重定位", self._now() - start)
+                return
+            if self._now() - start >= RESET_GRACE_S:
+                break
+        await self._reset_now(m, self.why_not(self._odom is not None))
+
+    async def _reset_now(self, m: tuple[str, str], lost_why: str) -> None:
+        g = self._good
+        if g is None or self._map != m:
+            return
         if g.odom is not None and self._odom is not None and g.epoch == self._epoch:
             pose, trusted = compose(g.T, self._odom), True
         else:
             pose, trusted = g.pose, False
+        log.info("丢定位后的重置(%s):请定位器在最后可信的位置 (%.2f, %.2f) 附近重定位",
+                 lost_why or "?", pose[0], pose[1])
         why = await self.relocalize(m, pose, AUTO_RELOC_SIGMA_M, human=False, trusted=trusted)
         if why:
             log.warning("丢定位后请定位器在 (%.2f, %.2f) 附近重定位,没成:%s", pose[0], pose[1], why)
