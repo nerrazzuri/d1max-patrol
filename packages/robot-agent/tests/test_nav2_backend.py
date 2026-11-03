@@ -451,6 +451,19 @@ async def test_看得清就快_斜前方有人就降_地图上的墙不算(tmp_p
     assert v < 0.8 * V_FAST, v
 
 
+@pytest.mark.parametrize("box, want", [
+    ((2.6, 3.8, 2.9, 4.2), 0.3),                            # 机头前约 0.6 m:1 m 以内
+    ((3.2, 2.1, 3.5, 2.4), 0.6),                            # 离机身边约 1.8 m(前 1.2、右 1.3)
+    ((4.2, 6.4, 4.5, 6.7), 1.0),                            # 前 2.2 m、左 2.4 m:2 m 之外
+])
+async def test_W70_看得清就快_人2米内降到0点6_1米内0点3_别的到1点0(tmp_path, box, want):
+    """用户 11-03:「速度提高到 1.0,周围 2 m 有人降到 0.6,1 m 以下 0.3」。"""
+    t = _台(tmp_path, 假转接())
+    await t.start(1.5, 4.0)
+    t.world.dyn["p"] = box
+    assert await _看清(t) == pytest.approx(want), box
+
+
 async def test_看得清就快_限速送给Nav2(tmp_path):
     link = 假转接()
     t = _台(tmp_path, link)
