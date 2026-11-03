@@ -85,6 +85,9 @@ log = logging.getLogger(__name__)
 
 #: 这一帧的位置是多久以前的:这么久以内算新鲜(秒)。
 FRESH_S = 0.5
+#: 拿里程推算多久才算「变差」、自动走限速(W70,11-03 C40221:Super-LIO 的位置偶尔晚到 0.5–0.6 s,
+#: 一趟反 U 型限速 4 次、每次 3–6 s)。里程推 1 s 内差不到几厘米。
+DEGRADED_DR_S = 1.0
 #: 不新鲜之后还能拿里程往前推多久、多远(先到先停,W08 决定 3;定位器自己推算的也算在里面)。
 DR_MAX_S = 2.0
 DR_MAX_M = 1.0
@@ -555,7 +558,7 @@ class BridgeLocalizer:
             return ""
         now, f = self._now(), self._fix
         why = ""
-        if f is not None and now - f.born > FRESH_S:
+        if f is not None and now - f.born > DEGRADED_DR_S:
             why = f"在拿里程推算(定位器的位置是 {now - f.born:.1f} 秒前的)"
         elif self.sigma_xy > SIGMA_DEGRADED_M:
             why = f"定位偏差可能到 {self.sigma_xy:.2f} m"
