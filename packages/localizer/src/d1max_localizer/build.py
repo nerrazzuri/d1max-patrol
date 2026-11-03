@@ -254,7 +254,7 @@ def package(work: Path, out: Path, *, prior_pack: PriorPack | None = None,
         "builder": _mola_info(work).get("builder", "mola-lidar-odometry"), "prior_pack":
         prior_pack.label(), "frames": why, "frames_count": len(traj),
         "grid": {"res": g.res, "size": list(g.image.shape[::-1]), "origin": list(g.origin),
-                 "rays": rays},
+                 "rays": rays, "specks_removed": g.specks},
         "mola": _mola_info(work), "loop_closure": lc_info,
         "superlio_map": {"points": len(slio), "voxel_m": slioloc.MAP_VOXEL_M,
                          "denoise": denoise},

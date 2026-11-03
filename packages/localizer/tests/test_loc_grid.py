@@ -838,3 +838,25 @@ def test_透过开口_掩码():
     one[20, 20] = True
     reach = G._geodesic(one, np.ones_like(one), 10)
     assert reach[20, 30] and not reach[20, 31] and reach[27, 27] and not reach[28, 28]
+
+
+def test_W71_空地里零星的占用格_打包时就清掉_柱子_贴墙的_挨着没建图的都留着():
+    """11-03 商场:建图时旁边跟着走的人在 2 m 宽的通道正中留下一串单格,站点判「走不通」,P8 卡住;
+    站点的 W41 清噪点找出 337 处,人看不过来。打包时按同一套规矩自动清。"""
+    F, U, X = G.FREE, G.UNKNOWN, G.OCCUPIED
+    img = np.full((60, 60), F, np.uint8)
+    img[0, :] = X                                           # 墙
+    img[30, 30:32] = X                                      # 空地正中两格:清
+    img[1, 20] = X                                          # 贴着墙:留
+    img[40:50, 10:20] = X                                   # 柱子 0.5 × 0.5 m:留
+    img[45:50, 45:50] = U                                   # 没建图的一块
+    img[47, 44] = X                                         # 挨着没建图的:说不准,留
+    crossed = np.ones(img.shape, bool)
+    crossed[0, :] = False
+    out, n = G.drop_specks(img, 0.05, crossed)
+    assert n == 1
+    assert out[30, 30] == F and out[30, 31] == F
+    assert out[1, 20] == X and out[45, 15] == X and out[47, 44] == X and out[0, 5] == X
+    assert img[30, 30] == X, "不改传进来的那张"
+    crossed[30, 30:32] = False
+    assert G.drop_specks(img, 0.05, crossed)[1] == 0, "射线从没穿过的(细柱子朝路那一面):留着"
