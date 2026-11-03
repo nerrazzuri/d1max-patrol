@@ -12,7 +12,7 @@ interface Window { day: number; start: string; end: string; minutes: number; lap
 interface FcEntry { id: number; route: string; robot: string; gap_min: number; lap_s: number | null; cycle_s: number | null; mode: "schedule" | "manual"; windows: Window[] }
 interface FcZone { zone: string; routes: string[]; interval_s: number | null; limit_min: number; limit_set: boolean }
 export interface Forecast { entries: FcEntry[]; zones: FcZone[]; warnings: string[] }
-export interface Plan { revision: number; entries: GuardEntry[]; limits: Record<string, number>; forecast: Forecast }
+export interface Plan { revision: number; entries: GuardEntry[]; limits: Record<string, number>; forecast: Forecast; clashes?: string[] }
 interface Run { entry: number; robot_id: string; state: string; lap: number; task_id: string; next_lap_ms: number; watch_zone: string }
 interface ZoneSeen { zone: string; last_ms: number | null; robot_id: string; how: string; limit_min: number; armed: boolean; overdue: boolean }
 export interface Status { duty: { id: number; started_ms: number } | null; runs: Run[]; waiting: Record<string, string>; zones: ZoneSeen[]; now_ms: number }
@@ -49,6 +49,7 @@ const en = {
   gLimitLabel: "Alarm after (min)",
   gLimitAuto: "auto",
   gWarn: "Notes",
+  gClash: "Clashes with patrol schedules (fix one side)",
   gNow: "Right now",
   gOff: "Not on duty (nothing armed that a plan covers).",
   gOn: "On duty since {t}",
@@ -107,6 +108,7 @@ const zh: Record<GKey, string> = {
   gLimitLabel: "超时报警（分钟）",
   gLimitAuto: "自动",
   gWarn: "提示",
+  gClash: "跟巡逻排程撞了（改一边）",
   gNow: "此刻",
   gOff: "没在值守（有方案的防区都没布防）。",
   gOn: "从 {t} 起值守中",
@@ -249,6 +251,12 @@ export function GuardPanel({ say, now, canEdit }: { say: (s: string) => void; no
         <button type="button" class="btn sm guard-add" onClick={() => setEntries([...entries, { route: routes[0], robot: "", gap_min: 0, shuffle: false }])}>{gt("gAdd")}</button>
       )}
 
+      {(plan.clashes ?? []).length > 0 && (
+        <div class="guard-warn guard-clash" role="alert">
+          <h3>{gt("gClash")}</h3>
+          <ul>{plan.clashes!.map((w) => <li key={w}>{w}</li>)}</ul>
+        </div>
+      )}
       {fc.entries.length > 0 && (
         <div class="guard-fc">
           <h3>{gt("gFc")}</h3>

@@ -13,6 +13,7 @@ import pytest
 from test_site_dispatcher import MAP, target, 台子
 
 from d1max_site.areas import AreaBook
+from d1max_site.arming_schedule import ScheduleError
 from d1max_site.guard_duty import GuardDuty, PlanError
 from d1max_site.modes import ArmingDesk
 from d1max_site.routes import RouteError, RouteStore
@@ -353,3 +354,65 @@ async def test_一圈跑完下一圈派不出去_只记一次跑完_等着(站):
     t.duty.busy = lambda: set()
     await _跑(t, 3)
     assert len(_patrols(t)) == 2 and _log(t, "lap_start")[-1]["detail"].startswith("第 2 圈")
+
+
+# ---------------------------------------------------------------- 第三期:保存时查冲突(设计 §6.3)
+
+def _冲突台(t):
+    from d1max_site.guard_clash import ClashCheck
+    t.store.set_timezone("UTC", by="alice")
+    t.store.put_route("day", {"map_id": MAP[0], "map_version": MAP[1], "waypoints": ROUTE,
+                              "base_revision": 0}, by="alice")
+    c = ClashCheck(t.db, schedule=t.arming.schedule, guard=t.duty, routes=t.store, now_ms=t.clock)
+    t.store.clash = t.arming.schedule.clash = t.duty.clash = c
+    t.arming.schedule.put({"enabled": True, "slots": [{"zone": "", "day": 0, "start": "22:00",
+                                                       "end": "24:00"}]}, by="olga")
+    return t
+
+
+def _排(t, eid, at, robot="A", days=("mon",)):
+    rows = t.db.query("SELECT revision FROM route_schedules WHERE entry_id=?", (eid,))
+    return t.store.put_schedule(eid, {"mission": "day", "at": at, "days": list(days),
+                                      "window_min": 5, "on_missed": "skip", "robot": robot,
+                                      "base_revision": rows[0]["revision"] if rows else 0},
+                                by="alice")
+
+
+def test_新排程拖进布防值守_不让存_写清楚(站):
+    t = _冲突台(站)
+    _方案(t)
+    with pytest.raises(RouteError, match=r"跟布防值守撞了.*A 在周一 21:55–22:0\d.*22:00"):
+        _排(t, "s1", "21:55")
+    _排(t, "s2", "21:00")                                # 早一点不撞
+    _排(t, "s3", "21:55", robot="B")                     # 别的机器人不撞
+
+
+def test_反过来_改布防时间撞上已有巡逻_也不让存(站):
+    t = _冲突台(站)
+    _方案(t)
+    _排(t, "s1", "21:00")
+    with pytest.raises(ScheduleError, match="跟巡逻排程撞了.*s1"):
+        t.arming.schedule.put({"enabled": True, "slots": [{"zone": "", "day": 0, "start": "20:30",
+                                                           "end": "24:00"}]}, by="olga")
+    with pytest.raises(ScheduleError, match="跟巡逻排程撞了"):
+        t.arming.schedule.add_exception({"first_day": "2027-01-18", "last_day": "2027-01-18",
+                                         "state": "armed"}, by="olga")   # 2027-01-18 是星期一
+    t.arming.schedule.add_exception({"first_day": "2027-01-19", "last_day": "2027-01-19",
+                                     "state": "armed"}, by="olga")       # 星期二没巡逻
+
+
+def test_反过来_改值守方案撞上已有巡逻_也不让存(站):
+    t = _冲突台(站)
+    _排(t, "s1", "22:30")
+    with pytest.raises(PlanError, match="跟巡逻排程撞了.*s1"):
+        _方案(t)
+    _方案(t, robot="B")
+
+
+def test_老数据本来就撞_不挡别的改动(站):
+    t = _冲突台(站)
+    _排(t, "s1", "22:30")                                # 那时还没值守方案
+    t.duty.clash = None
+    _方案(t)                                             # 绕开检查造出一个老冲突
+    t.duty.clash = t.store.clash
+    _排(t, "s2", "10:00")                                # 跟布防不沾边的改动照存

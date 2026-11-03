@@ -387,6 +387,11 @@ class RouteStore:
             raise RouteError(str(exc)) from exc
         entry = sch.entries[0]
         definition = _json(entry.to_wire())
+        clash = getattr(self, "clash", None)            # W73 第三期:跟布防值守撞了不让存
+        if clash is not None:
+            got = clash.new(schedules={entry_id: entry.to_wire()})
+            if got:
+                raise RouteError("跟布防值守撞了:" + ";".join(got))
         now = self._now()
         with self.db.tx() as tx:
             got = tx.execute("SELECT kind FROM routes WHERE route_id=?",

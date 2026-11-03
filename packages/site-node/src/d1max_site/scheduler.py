@@ -103,6 +103,8 @@ class SiteScheduler:
         #: 站点这头占着的狗(驱离会话;系统审查 S05):狗上一时没有任务(没配保持距离、补派窗口、
         #: 站点重启恢复中)也算忙,排程不许抢。站点主程序接 ``deterrence.busy``。
         self.site_busy: Callable[[], set[str]] | None = None
+        #: W73 第三期(设计 §6.4):在布防值守的机器人(``GuardDuty.robots``):到点的巡逻不派它。
+        self.guard_busy: Callable[[], set[str]] | None = None
         self.dispatcher = dispatcher
         self._now = now_ms
         self._ref = time_reference
@@ -327,6 +329,8 @@ class SiteScheduler:
                 reason, kind = f"{rid} 正在执行 {self.dispatcher.busy(rid)}", "busy"
             if not reason and rid in self._site_busy():
                 reason, kind = f"{rid} 正在驱离", "busy"
+            if not reason and rid in self._guarding():
+                reason, kind = f"{rid} 在布防值守", "busy"
             if not reason:
                 caps = self.dispatcher.clients[rid].capabilities
                 p = caps.tasks.get("patrol", {}) if caps else {}
@@ -343,6 +347,15 @@ class SiteScheduler:
             else:
                 ok.append(rid)
         return ok, taken, ";".join(why) or "没有登记的机器人", kinds
+
+    def _guarding(self) -> set[str]:
+        if self.guard_busy is None:
+            return set()
+        try:
+            return set(self.guard_busy())
+        except Exception:
+            log.exception("谁在布防值守读不出来:按都不在算(布防一圈优先级更高,狗上照样抢)")
+            return set()
 
     def _site_busy(self) -> set[str]:
         if self.site_busy is None:
@@ -403,6 +416,8 @@ class SiteScheduler:
             if rid in self._site_busy():
                 # 选狗之后、发之前驱离占了它(系统审查 S05):不发,整个事务回滚
                 raise DispatchRefused(f"{rid} 正在驱离")
+            if rid in self._guarding():
+                raise DispatchRefused(f"{rid} 在布防值守")
             # 用派遣器开的事务(跟命令入账同一个):哪一步炸了整个回滚 —— 这一轮不算起跑过、没有运行
             # 记录、命令也不发(外审复查)。``started`` 不用报告警,不走 ``_record``(它自己开事务)。
             tx.execute("INSERT INTO schedule_state(entry_id, last_started_ms) VALUES (?,?) "

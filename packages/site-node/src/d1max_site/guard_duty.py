@@ -173,6 +173,12 @@ class GuardDuty:
                     or not 1 <= m <= MAX_LIMIT_MIN:
                 raise PlanError(f"limits 里每个防区写 1–{MAX_LIMIT_MIN} 分钟:{z!r}={m!r}")
             limits.append((z, m))
+        clash = getattr(self, "clash", None)            # W73 第三期:跟巡逻排程撞了不让存
+        if clash is not None:
+            got = clash.new(plan={"entries": [{"id": i, "route": r, "robot": rb}
+                                              for i, r, rb, _, _ in rows]})
+            if got:
+                raise PlanError("跟巡逻排程撞了:" + ";".join(got))
         from d1max_site.site_settings import SiteSettings
         now = self._now()
         with self.db.tx() as c:

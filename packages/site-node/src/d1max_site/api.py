@@ -450,6 +450,18 @@ class SiteApi:
             raise HttpError(504, f"等机器人的回执超时: {exc}") from exc
 
 
+def _clashes(g: Any) -> list[str]:
+    """W73 第三期:现在就撞着的(老数据里留下的;新的保存时已经拦了)。"""
+    c = getattr(g, "clash", None)
+    if c is None:
+        return []
+    try:
+        return c.all()
+    except Exception:
+        log.exception("冲突查不出来")
+        return []
+
+
 def zone_posts(site: SiteApi) -> Any:
     """W73:站点的防区查看点、值守位台(第一次用时现建);没接防区的站点是 None。"""
     if site._zone_posts is None and site.areas is not None:
@@ -1839,7 +1851,8 @@ class _Handler(TlsHandlerMixin):
             self._need(user, VIEW)
             if path == "/api/guard/plan":
                 plan = g.plan()
-                return self._send_json(200, {**plan, "forecast": g.forecast(plan)})
+                return self._send_json(200, {**plan, "forecast": g.forecast(plan),
+                                             "clashes": _clashes(g)})
             if path == "/api/guard/status":
                 return self._send_json(200, g.status())
             if path == "/api/guard/duties":
@@ -1860,7 +1873,7 @@ class _Handler(TlsHandlerMixin):
             raise HttpError(409, str(exc)) from exc
         except PlanError as exc:
             raise HttpError(400, str(exc)) from exc
-        return self._send_json(200, {**plan, "forecast": g.forecast(plan)})
+        return self._send_json(200, {**plan, "forecast": g.forecast(plan), "clashes": _clashes(g)})
 
     def _chargers(self, method: str, path: str, user) -> None:
         """充电桩(W13)。看:``view``(带每台狗这一轮回充走到哪一步);登记、改桩前对准点
