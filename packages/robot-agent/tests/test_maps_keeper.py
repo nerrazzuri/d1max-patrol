@@ -344,3 +344,32 @@ def test_M9_图里多一个狗不用的文件_照样下载_照样逐个核_坏�
     site.files[("m", "3", SEEN_FILE)] = b"P4\n1 1\n\xff"          # 站点给的跟清单对不上
     with pytest.raises(MapInstallError):
         keeper.install(bad)
+
+
+def test_W71_新一版只改了平面图_别的文件机器人上已有就不再下(k):
+    """11-03 商场:清噪点 v4→v5→v6→v8,每版只改了 floor.pgm,机器人每次都从热点上整张重下 145 MB,
+    链路被占满,遥测积压、钟差估错。已有的同名同大小同哈希的文件(再核一遍内容)直接链接过来。"""
+    keeper, s = k
+    big = b"prior" * 1000
+    v1 = s.add("m", "1", {"prior.mm": big, "floor.pgm": b"old"})
+    keeper.install(v1)
+    keeper.commit(v1)
+    s.calls.clear()
+    v2 = s.add("m", "2", {"prior.mm": big, "floor.pgm": b"new"})
+    d = keeper.install(v2)
+    assert {n for n, _ in s.calls} == {"floor.pgm"}, s.calls
+    assert (d / "prior.mm").read_bytes() == big and (d / "floor.pgm").read_bytes() == b"new"
+
+
+def test_W71_本地那份内容坏了_照样下(k):
+    keeper, s = k
+    big = b"prior" * 1000
+    v1 = s.add("m", "1", {"prior.mm": big, "floor.pgm": b"old"})
+    p = keeper.install(v1)
+    keeper.commit(v1)
+    (p / "prior.mm").write_bytes(b"X" * len(big))           # 大小一样、内容坏了
+    s.calls.clear()
+    v2 = s.add("m", "2", {"prior.mm": big, "floor.pgm": b"new"})
+    d = keeper.install(v2)
+    assert "prior.mm" in {n for n, _ in s.calls}
+    assert (d / "prior.mm").read_bytes() == big
