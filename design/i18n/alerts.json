@@ -125,8 +125,8 @@
     "zh": "空闲机器人定位不可信，无法派遣"
   },
   "nav_blocked": {
-    "en": "Robot blocked for over a minute",
-    "zh": "机器人受阻超过一分钟"
+    "en": "Robot blocked",
+    "zh": "机器人被挡住"
   },
   "estop_pressed": {
     "en": "E-stop pressed",

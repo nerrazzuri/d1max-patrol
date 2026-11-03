@@ -35,7 +35,7 @@ def overview(dispatcher: Any, db: Any, *, now_ms: int, tz: tzinfo) -> list[dict[
         [n] = db.query("SELECT COUNT(*) AS n FROM commands WHERE robot_id=? AND kind='patrol' "
                        "AND issued_at>=? AND (ack_result IS NULL OR ack_result NOT IN "
                        "('rejected', 'expired', 'timeout'))", (rid, day0))
-        rows = db.query("SELECT key, kind, level, first_ms, resolved_ms, resolved_by FROM alerts "
+        rows = db.query("SELECT key, kind, level, title, first_ms, resolved_ms, resolved_by FROM alerts "
                         "WHERE robot=? AND "
                         "(resolved_ms IS NULL OR first_ms>=?) ORDER BY first_ms DESC LIMIT 1000",
                         (rid, since))
@@ -53,7 +53,7 @@ def overview(dispatcher: Any, db: Any, *, now_ms: int, tz: tzinfo) -> list[dict[
             # W71:Nav2 没起来(机器人退回自己的规划,照样能走,但现场要知道)
             problems.append({"nav2": str(n2.get("reason") or "")[:200]})
         recent = [{"key": r["key"], "kind": r["kind"], "level": r["level"],
-                   "first_ms": r["first_ms"],
+                   "title": r["title"] or "", "first_ms": r["first_ms"],
                    "resolved_ms": r["resolved_ms"], "resolved_by": r["resolved_by"] or ""}
                   for r in mine if r["first_ms"] >= since][:RECENT_MAX]
         out.append({"robot_id": rid, "name": names.get(rid, ""), "revoked": rec.revoked,
