@@ -145,7 +145,11 @@ def test_打包出版本的文件_上下装都标对_栅格跟定位同一个平
     assert 0 < len(slio) < len(pts)
     assert np.allclose(slio.min(axis=0), pts.min(axis=0), atol=L.MAP_VOXEL_M)
     assert np.allclose(slio.max(axis=0), pts.max(axis=0), atol=L.MAP_VOXEL_M)
-    assert b["superlio_map"] == {"points": len(slio), "voxel_m": L.MAP_VOXEL_M}
+    sm = b["superlio_map"]
+    assert sm["points"] == len(slio) and sm["voxel_m"] == L.MAP_VOXEL_M
+    dn = sm["denoise"]                                     # W70:没给录包 → 不做射线清除,写明
+    assert dn["kept"] == len(slio) and dn["scans"] == 0
+    assert any(x.startswith("dynamic:") for x in dn["skipped"])
     import os
     assert os.stat(out / "prior.mm").st_ino == os.stat(work / "raw_prior.mm").st_ino, \
         "不压缩就硬链接(内审小 10:530 MB 再拷一份)"
