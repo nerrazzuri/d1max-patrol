@@ -136,6 +136,17 @@ VIEW_CONE_BINS = 4
 #: 地方规划起来跟原来一样宽。
 PROTECT_M = 0.8
 FREE, UNKNOWN, OCCUPIED = 254, 205, 0
+#: W71 打包时清零星噪点(11-03 商场:旁边跟着走的人在 2 m 通道正中留下一串单格,站点判「走不通」;
+#: 站点 W41 清噪点找出 337 处,人看不过来)。规矩跟站点 ``d1max_site.map_denoise`` 同一套:占用格的
+#: 连通块(八邻)面积不超过 :data:`SPECK_MAX_M2`、外面一圈 :data:`SPECK_RING_M` 不挨着大块占用、
+#: 没建图的格子不超过 :data:`SPECK_RING_UNKNOWN`,**而且块里有一格穿过它的帧数是打中它的
+#: :data:`SPECK_PASS_RATIO` 倍以上**(人站过几帧就走了,这儿多半时候是空的),就改成空地。柱子只画朝路的
+#: 那一面、细柱子剩下几格,看得见它的帧大多打中它(测试里打中 31–58 帧、擦边穿过 40–59 帧;
+#: 人留下的打中 3 帧、穿过 34–40 帧):留着。只在有逐帧真射线时清。
+SPECK_MAX_M2 = 0.05
+SPECK_RING_M = 0.2
+SPECK_RING_UNKNOWN = 0.1
+SPECK_PASS_RATIO = 4
 #: 栅格最多多少格(站点预览的上限也是 2500 万像素);超了一格放粗一倍,粗到 :data:`MAX_RES_M`
 #: 还超就报错。
 MAX_CELLS = 25_000_000
@@ -153,6 +164,8 @@ class Grid:
     res: float
     #: 显示用的「看到过、狗没走过」(M9,见模块说明):跟 ``image`` 一样大的真假;没有是 ``None``。
     seen: np.ndarray | None = None
+    #: W71 打包时清掉的零星噪点有几处(:func:`drop_specks`)。
+    specks: int = 0
 
     def cell_of(self, x: float, y: float) -> tuple[int, int] | None:
         """地图平面上的点在图像里的 (行, 列);出了图是 None。"""
@@ -167,6 +180,62 @@ class Grid:
 def level(points: np.ndarray, frames: Frames) -> np.ndarray:
     """MOLA 系的 (N,3) 点 → 地图平面系(x、y 平面,z 高度)。"""
     return points @ np.asarray(frames.level_matrix(), dtype=float).T
+
+
+def drop_specks(img: np.ndarray, res: float, crossed: np.ndarray
+                ) -> tuple[np.ndarray, int]:
+    """空地里零星的占用块改成空地 → (新图, 清了几处)。``crossed``:别的时候有射线穿过的格子
+    (跟 ``img`` 一样大),块里一格都没有就不清。规矩见 :data:`SPECK_MAX_M2`;不改传进来的。"""
+    from collections import deque
+    out = img.copy()
+    max_px = int(SPECK_MAX_M2 / (res * res) + 1e-9)
+    if max_px < 1:
+        return out, 0
+    h, w = img.shape
+    ring = max(1, int(round(SPECK_RING_M / res)))
+    occ = img == OCCUPIED
+    label = np.zeros((h, w), np.int32)
+    comps: list[list[tuple[int, int]] | None] = [None]
+    for r0, c0 in zip(*np.nonzero(occ), strict=True):
+        if label[r0, c0]:
+            continue
+        k = len(comps)
+        comp: list[tuple[int, int]] = []
+        q = deque([(int(r0), int(c0))])
+        label[r0, c0] = k
+        while q:
+            r, c = q.popleft()
+            if len(comp) <= max_px:
+                comp.append((r, c))
+            for dr in (-1, 0, 1):
+                for dc in (-1, 0, 1):
+                    rr, cc = r + dr, c + dc
+                    if 0 <= rr < h and 0 <= cc < w and occ[rr, cc] and not label[rr, cc]:
+                        label[rr, cc] = k
+                        q.append((rr, cc))
+        comps.append(comp if len(comp) <= max_px else None)          # None = 大块
+    big = np.array([c is None for c in comps], dtype=bool)
+    big[0] = False
+    n = 0
+    for comp in comps:
+        if not comp:
+            continue
+        rs = [p[0] for p in comp]
+        cs = [p[1] for p in comp]
+        if not crossed[rs, cs].any():
+            continue                                                   # 射线从没穿过:实打实的东西
+        r_lo, r_hi, c_lo, c_hi = min(rs) - ring, max(rs) + ring, min(cs) - ring, max(cs) + ring
+        if r_lo < 0 or c_lo < 0 or r_hi >= h or c_hi >= w:
+            continue                                                   # 贴着图边
+        if big[label[r_lo:r_hi + 1, c_lo:c_hi + 1]].any():
+            continue                                                   # 挨着墙、家具
+        box = img[r_lo:r_hi + 1, c_lo:c_hi + 1]
+        if (box == UNKNOWN).sum() > SPECK_RING_UNKNOWN * (box.size - len(comp)):
+            continue                                                   # 挨着没建图的:说不准
+        for r, c in comp:
+            out[r, c] = FREE
+        n += 1
+    return out, n
 
 
 def _dilate(m: np.ndarray, n: int) -> np.ndarray:
@@ -414,11 +483,13 @@ def _raytrace_scans(scans: Iterable[tuple[np.ndarray, np.ndarray]], frames: Fram
                     lo: np.ndarray, shape: tuple[int, int], res: float, band: tuple[float, float],
                     max_range: float, ground: _Ground,
                     occ_h: tuple[np.ndarray, np.ndarray] | None = None,
-                    seen: _Seen | None = None) -> tuple[np.ndarray, int]:
+                    seen: _Seen | None = None,
+                    hits: np.ndarray | None = None) -> tuple[np.ndarray, int]:
     """真射线:每一帧从雷达到这一帧障碍层里的点(每个方位格最近的那个),路过的格子各记一次。
     ``occ_h``:每格障碍点离当地地面的(最低, 最高)(没有障碍点是 nan);给了就按三维判穿过
     (:data:`RAY_HEIGHT_TOL_M`)。``seen``:给了就顺带记下每格是直接看到还是透过开口看到、从哪些方向
-    看到(:class:`_Seen`)。回(每格被穿过的次数, 用了几帧)。"""
+    看到(:class:`_Seen`)。``hits``:给了(``H × W`` 个 int)就顺带记每格有几帧打中(W71 判噪点)。
+    回(每格被穿过的次数, 用了几帧)。"""
     H, W = shape
     passes = np.zeros(H * W, np.int32)
     step = res / 2
@@ -462,6 +533,9 @@ def _raytrace_scans(scans: Iterable[tuple[np.ndarray, np.ndarray]], frames: Fram
         xy = o + q[ray] * frac[:, None]
         c = ((xy - lo) / res).astype(int)
         end = ((o + q - lo) / res).astype(int)              # 打到的点那一格:归「打到」
+        if hits is not None:
+            ein = (end[:, 0] >= 0) & (end[:, 0] < W) & (end[:, 1] >= 0) & (end[:, 1] < H)
+            np.add.at(hits.reshape(-1), np.unique(end[ein, 1] * W + end[ein, 0]), 1)
         inside = (c[:, 0] >= 0) & (c[:, 0] < W) & (c[:, 1] >= 0) & (c[:, 1] < H) \
             & ((c[:, 0] != end[ray, 0]) | (c[:, 1] != end[ray, 1]))
         if lo_h is not None and bool(ook[0]):
@@ -655,10 +729,11 @@ def render(points: np.ndarray, sensor_traj: np.ndarray, frames: Frames, *, res: 
     views, used = None, 0
     if scans is not None:
         views = _Seen(H * W)
+        hit_scans = np.zeros((H, W), np.int32)
         passes, used = _raytrace_scans(scans, frames, lo, (H, W), res, (floor_clear, wall_top),
                                        max_range, ground,
                                        occ_h=(occ_lo.reshape(H, W), occ_hi.reshape(H, W)),
-                                       seen=views)
+                                       seen=views, hits=hit_scans)
     else:
         pc = ((t[:, :2] - lo) / res).astype(int)
         key = (pc[:, 0] // POSE_STRIDE_CELLS) * 100000 + (pc[:, 1] // POSE_STRIDE_CELLS)
@@ -688,6 +763,9 @@ def render(points: np.ndarray, sensor_traj: np.ndarray, frames: Frames, *, res: 
     img = np.full((H, W), UNKNOWN, np.uint8)
     img[free_m] = FREE
     img[occ_m] = OCCUPIED
+    specks = 0
+    if views is not None and used:
+        img, specks = drop_specks(img, res, passes >= SPECK_PASS_RATIO * np.maximum(hit_scans, 1))
     known = (img != UNKNOWN) | seen_only
     if known.any():                                         # 裁到有内容的范围,四周留 5 格
         ys, xs = np.where(known)
@@ -697,7 +775,7 @@ def render(points: np.ndarray, sensor_traj: np.ndarray, frames: Frames, *, res: 
         seen_only = seen_only[y0:y1, x0:x1]
         lo = lo + np.array([x0, y0]) * res
     return Grid(image=np.flipud(img).copy(), origin=(float(lo[0]), float(lo[1])), res=res,
-                seen=np.flipud(seen_only).copy() if seen_only.any() else None)
+                seen=np.flipud(seen_only).copy() if seen_only.any() else None, specks=specks)
 
 
 def write(grid: Grid, base: Path) -> tuple[Path, Path]:
