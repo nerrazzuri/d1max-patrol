@@ -421,3 +421,31 @@ def test_W68_外审_包里带了Super_LIO源码却没编译脚本_装机失败(t
     assert got.returncode != 0
     assert "装机失败" in got.stdout + got.stderr
     assert "systemctl start d1max-agent.service" not in _调用(tmp_path)
+
+
+def _合并狗(root: Path, env: str) -> Path:
+    script = _准备(root)
+    (root / "etc/d1max").mkdir(parents=True)
+    (root / "etc/d1max/env").write_text("D1MAX_MAP=\nD1MAX_HOME=\nD1MAX_HAL=sim\n" + env,
+                                        encoding="utf-8")
+    wants = root / "etc/systemd/system/multi-user.target.wants"
+    wants.mkdir(parents=True)
+    (wants / "d1max-lidar-merge.service").write_text("", encoding="utf-8")
+    return script
+
+
+def test_W70_没人用合并雷达_开着自启的合并服务装机时关掉(tmp_path):
+    """用户 11-03 现场:W68 起定位器用 Super-LIO,没人订 /d1max/merged_lidar,
+    合并服务却还开机自启、占两核多。"""
+    script = _合并狗(tmp_path, "D1MAX_LOCALIZER=bridge\n")
+    got = _跑(tmp_path, script)
+    assert got.returncode == 0, got.stdout + got.stderr
+    assert "systemctl disable --now d1max-lidar-merge.service" in _调用(tmp_path)
+    assert "没人用前后雷达合并" in got.stdout
+
+
+def test_W70_env里有人订合并雷达_合并服务不动(tmp_path):
+    script = _合并狗(tmp_path, 'D1MAX_LOC_ARGS="--lidar-topic /d1max/merged_lidar"\n')
+    got = _跑(tmp_path, script)
+    assert got.returncode == 0, got.stdout + got.stderr
+    assert "systemctl disable --now d1max-lidar-merge.service" not in _调用(tmp_path)

@@ -305,7 +305,7 @@ async def test_启动顺序_先登记cmd订阅再连接(台子):
 
     from d1max_agent import runtime as mod
     src = inspect.getsource(mod.AgentRuntime._start)          # start() 只包了一层回滚
-    assert src.index("subscribe(self.topics.cmd") < src.index("await self.transport.connect()")
+    assert src.index("subscribe(self.topics.cmd") < src.index("await self._first_connect()")
 
 
 # ------------------------------------------------------------ HAL 生命周期(W00b 外审阻断项)
@@ -660,3 +660,55 @@ async def test_遥控用单调钟_墙钟往回跳也按时停(tmp_path):
     assert rt.processor.current is None or rt.processor.current.kind != "teleop", \
         "租约按单调钟算:5 s 没续就该结束"
     await rt.close()
+
+
+async def test_W70_起来时连不上站点_不马上退出_重试连上了照常起(台子, monkeypatch):
+    """2026-11-03 C40221:装完新版那一刻隧道断着,代理连不上 broker 就退出,systemd 5 s 后再起,
+    开机守卫 8 s 内数满 2 次、把好好的新版退回了上一版。首次连接在进程里重试,网络好了照常起。"""
+    import d1max_agent.runtime as RT
+    monkeypatch.setattr(RT, "FIRST_CONNECT_RETRY_S", 0.01)
+    broker, c, r, ears, rt, _ = 台子
+    real = rt.transport.connect
+    n = [0]
+
+    async def 前两次连不上():
+        n[0] += 1
+        if n[0] <= 2:
+            raise ConnectionRefusedError("隧道断了")
+        await real()
+    monkeypatch.setattr(rt.transport, "connect", 前两次连不上)
+    await rt.start()
+    assert n[0] == 3 and rt.transport.connected
+
+
+async def test_W70_一直连不上_等够了照旧退出_让守卫数(台子, monkeypatch):
+    import d1max_agent.runtime as RT
+    monkeypatch.setattr(RT, "FIRST_CONNECT_RETRY_S", 0.01)
+    monkeypatch.setattr(RT, "FIRST_CONNECT_WAIT_S", 0.05)
+    broker, c, r, ears, rt, _ = 台子
+
+    async def 连不上():
+        raise ConnectionRefusedError("隧道断了")
+    monkeypatch.setattr(rt.transport, "connect", 连不上)
+    with pytest.raises(ConnectionRefusedError):
+        await rt.start()
+
+
+async def test_W70_一直连不上_退出前给守卫留条子(台子, monkeypatch):
+    import d1max_agent.runtime as RT
+    monkeypatch.setattr(RT, "FIRST_CONNECT_RETRY_S", 0.01)
+    monkeypatch.setattr(RT, "FIRST_CONNECT_WAIT_S", 0.03)
+    broker, c, r, ears, rt, _ = 台子
+    noted = []
+
+    class 假版本:
+        def note_connect_failure(self):
+            noted.append(1)
+    rt.releases = 假版本()
+
+    async def 连不上():
+        raise ConnectionRefusedError("隧道断了")
+    monkeypatch.setattr(rt.transport, "connect", 连不上)
+    with pytest.raises(ConnectionRefusedError):
+        await rt.start()
+    assert noted == [1]

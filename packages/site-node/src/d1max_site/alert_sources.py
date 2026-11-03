@@ -657,6 +657,8 @@ class SiteAlertSources:
                                   detail=f"跟站点差 {skew:+.1f} 秒(机器人该向站点主机对时,见 W09d)")
         elif abs(skew) <= SKEW_CLEAR_S:
             m.skew = False
+            if self.desk.has_open(rid, "clock_skew"):         # W70:钟对回来了,那条自己解决
+                self.desk.resolve_all(rid, "clock_skew", who="site:clock_ok")
         if t.storage is not None:
             self._storage(rid, m, t.storage)
         self._wifi_change(rid, m, t)

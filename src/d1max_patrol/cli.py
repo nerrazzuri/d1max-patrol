@@ -848,6 +848,7 @@ def _cmd_boot_guard(layout: Layout, now_ms: int) -> int:
     话 = {
         GuardAction.OK: "没有在途的升级,链是好的。",
         GuardAction.COUNTED: "有在途的升级,数了一次,让它起。",
+        GuardAction.WAITING_NET: "有在途的升级,上一次只是连不上站点:不算新版坏,不数,接着让它起。",
         GuardAction.ROLLED_BACK:
             f"连着 {MAX_BOOT_ATTEMPTS} 次开机都没坐实,已退回上一版。",
         GuardAction.REPAIRED: "链断了,已经按在途标记(或盘上最新的一版)修好。",

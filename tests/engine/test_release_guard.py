@@ -413,3 +413,46 @@ def test_包里的deploy是个文件_落槽不因补执行位而失败(tmp_path)
     (where / MANIFEST_NAME).write_text(json.dumps(payload), encoding="utf-8")
     stage(layout, where, now_ms=NOW)
     assert (layout.releases / "2026-09-26-dddddd" / "deploy").is_file()
+
+
+def test_W70_上一次是连不上站点才退出的_不算新版坏_不退(tmp_path):
+    """11-03 C40221:装完新版那一刻隧道断着,代理连不上 broker 退出,守卫 8 s 内数满 2 次把新版退了;
+    网络好了也一直停在旧版。连不上站点是外面的事,退回旧版也一样连不上:不数,接着等新版。"""
+    from d1max_agent.engine.release import note_connect_failure
+    layout = _两版(tmp_path)
+    activate(layout, "2026-09-20-77b2de", now_ms=NOW)
+    assert boot_guard(layout, now_ms=NOW) is GuardAction.COUNTED
+    for _ in range(10):
+        note_connect_failure(layout, now_ms=NOW)
+        assert boot_guard(layout, now_ms=NOW) is GuardAction.WAITING_NET
+    assert current_name(layout) == "2026-09-20-77b2de"
+    p = read_pending(layout)
+    assert p is not None and p.attempts == 1 and p.net_waits == 10
+    # 网络好了、起来了:照常提交
+    commit(layout)
+    assert read_pending(layout) is None
+
+
+def test_W70_连不上之后又崩了_崩的那次照数(tmp_path):
+    from d1max_agent.engine.release import note_connect_failure
+    layout = _两版(tmp_path)
+    activate(layout, "2026-09-20-77b2de", now_ms=NOW)
+    assert boot_guard(layout, now_ms=NOW) is GuardAction.COUNTED
+    note_connect_failure(layout, now_ms=NOW)
+    assert boot_guard(layout, now_ms=NOW) is GuardAction.WAITING_NET
+    assert boot_guard(layout, now_ms=NOW) is GuardAction.COUNTED          # 这次没留条子:崩的
+    assert boot_guard(layout, now_ms=NOW) is GuardAction.ROLLED_BACK
+
+
+def test_W70_一直连不上_等够了还是退(tmp_path):
+    """新版自己把连接弄坏了(证书路径改错之类)也是「连不上」:不能永远等,等够次数照退。"""
+    from d1max_agent.engine.release import MAX_NET_WAITS, note_connect_failure
+    layout = _两版(tmp_path)
+    activate(layout, "2026-09-20-77b2de", now_ms=NOW)
+    boot_guard(layout, now_ms=NOW)
+    for _ in range(MAX_NET_WAITS):
+        note_connect_failure(layout, now_ms=NOW)
+        assert boot_guard(layout, now_ms=NOW) is GuardAction.WAITING_NET
+    note_connect_failure(layout, now_ms=NOW)
+    assert boot_guard(layout, now_ms=NOW) is GuardAction.COUNTED
+    assert boot_guard(layout, now_ms=NOW) is GuardAction.ROLLED_BACK

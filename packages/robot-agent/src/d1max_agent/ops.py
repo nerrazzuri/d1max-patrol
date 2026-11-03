@@ -19,6 +19,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import platform
 import re
@@ -33,6 +34,8 @@ from typing import Any
 
 from d1max_contract import debuglog
 from d1max_contract.privops import PrivOps, PrivOpsError, PrivTimeout
+
+log = logging.getLogger(__name__)
 
 #: 我们自己的服务(同 deploy/d1max-ops-runner 的 ROBOT_UNITS;测试核一致)。
 OUR_UNITS = ("d1max-agent", "d1max-localizer", "d1max-obstacles", "d1max-persons",
@@ -353,6 +356,7 @@ class OpsDesk:
         for k in ("stepped", "offset_ms", "why"):
             if k in got:
                 out[k] = got[k]
+        log.info("对时:%s", json.dumps({**args, **out}, ensure_ascii=False)[:300])
         return "", out
 
     def _ops_debug(self, p: dict[str, Any]) -> str | tuple[str, dict[str, Any]]:
