@@ -110,6 +110,10 @@ async def _跑(rt, broker, n=20, r=None, c=None, settle_s=10.0):
         await rt.step(0.1)
         step_sim()
         await asyncio.sleep(0.01)
+    for _ in range(3):                             # 换图刚做完时发的事件还在队里:再跑几拍发出去
+        await rt.step(0.1)                         # (11-03 PR #260 CI:「换图没成」日志有了,事件没到)
+        step_sim()
+        await asyncio.sleep(0.01)
     await broker.drain()
 
 
