@@ -1090,3 +1090,9 @@ details.ops > summary { cursor: pointer; font-weight: 600; padding: 6px 0; }
 @media print { .kpi { break-inside: avoid; } }
 .eng-layers { margin-top: 8px; }
 .eng-layers summary { cursor: pointer; font-size: 13px; font-weight: 600; color: var(--c-textSecondary); }
+
+/* W72:布防时间页顶上的「现在」—— 左边说现在是什么、谁说了算,右边直接切 */
+.arm-now { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px 24px; padding: 16px; margin: 12px 0; }
+.arm-now-text h2 { margin: 0 0 4px; font-size: 15px; line-height: 20px; font-weight: 600; }
+.arm-now-text .arm-who { margin: 0; }
+.arm-now-btns { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
