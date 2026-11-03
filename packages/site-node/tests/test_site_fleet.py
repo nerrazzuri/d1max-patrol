@@ -1,7 +1,7 @@
 """多台狗(W28,决策 46):各管各的区域、**错开充**;排程挑狗、入侵派遣低电排后。
 
 错开充的规矩在 :class:`ChargeDesk` 上,这里用假派遣器(几台狗、电量手设)看它怎么起回充;一台狗走完
-整轮的真代理流程在 ``test_site_charging.py``。"""
+整轮的真代理流程在 ``test_site_charging.py``。W73 起回充线 30 → 25,电量数跟着下移。"""
 
 from __future__ import annotations
 
@@ -62,7 +62,7 @@ async def test_一台在充_另一台到线先接着守_守到20也去_报P2一�
     t.d.pct("A", 25.0)
     await t.desk.tick()
     assert _去充的(t) == ["A"]
-    t.d.pct("B", 29.0)
+    t.d.pct("B", 24.5)
     await t.desk.tick()
     assert _去充的(t) == ["A"], "A 在充:B 先接着守"
     assert t.desk.view()["held"] == [{"robot_id": "B", "waiting_for": "A"}]
@@ -83,7 +83,7 @@ async def test_在充的那台充完了_守着的那台马上去_不报(台):
     t = 台
     t.d.pct("A", 25.0)
     await t.desk.tick()
-    t.d.pct("B", 28.0)
+    t.d.pct("B", 23.5)
     await t.desk.tick()
     assert t.desk.view()["held"]
     t.desk._set("A", None)                                # A 这一轮完了、充到 90%
@@ -97,7 +97,7 @@ async def test_歇着的不算在充(台):
     t.d.pct("A", 25.0)
     await t.desk.tick()
     t.desk._set("A", "cooldown", until_ms=t.ms[0] + 600_000)    # A 没充成、歇着
-    t.d.pct("B", 28.0)
+    t.d.pct("B", 23.5)
     await t.desk.tick()
     assert _去充的(t) == ["A", "B"]
 
@@ -108,16 +108,16 @@ async def test_被打断待接着充的算在充(台):
     await t.desk.tick()
     t.desk._set("A", "resume")                            # 入侵抢走了,回来接着充
     t.d.clients["A"].status.task = SimpleNamespace(task_id="incident-1")
-    t.d.pct("B", 28.0)
+    t.d.pct("B", 23.5)
     await t.desk.tick()
     assert _去充的(t) == ["A"]
 
 
 async def test_几台同时到线_电量低的先去(台):
     t = 台
-    t.d.pct("A", 29.0)
-    t.d.pct("B", 26.0)
-    t.d.pct("C", 28.0)
+    t.d.pct("A", 24.5)
+    t.d.pct("B", 22.0)
+    t.d.pct("C", 23.5)
     await t.desk.tick()
     assert _去充的(t) == ["B"]
     assert {h["robot_id"] for h in t.desk.view()["held"]} == {"A", "C"}
@@ -127,7 +127,7 @@ async def test_只有一台登记了桩_到线就去(台):
     t = 台
     t.desk.remove_charger("B")
     t.desk.remove_charger("C")
-    t.d.pct("A", 29.0)
+    t.d.pct("A", 24.5)
     await t.desk.tick()
     assert _去充的(t) == ["A"]
 
