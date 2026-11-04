@@ -10,6 +10,9 @@
 - 保安一直不来、换到一半走了、插回的不满:每一步没进展 :data:`REPUSH_MIN` 分钟再推一次(说清哪块
   还没好),:data:`MANAGER_MIN` 分钟推给经理(``swap_overdue``)—— 按最后一次进展计时(外审 r1 #9)。
 - 低电判出来时不在换电位:站点派它回待命点(= 换电位),没走成 :data:`RESEND_S` 秒后再派(外审 r1 #3)。
+  这一趟按「去补能」发(``charge``:狗上出发线只看中止线、路上低电不掉头 —— 跟去充电桩那一趟一样,
+  外审 r2 #2);到没到按派去的同一个点判(站点接的是 ``StandbyManager.swap_point``,外审 r2 #3)。
+  **有一块拔着绝不派它走**:回换电位的路上被拔了一块,就地转去引导装回(外审 r2 #1)。
 - 正在拔着的那一步,报警派遣不打断(:meth:`refuse`,§7.5);**有一块拔着**(不管站点记没记着
   换电)值守、排程都不派它(:meth:`busy`,外审 r1 #1)。
 - 拔着一块的时候判进度,**先让装回拔着的那块**,绝不引导去拔剩下那块(外审 r1 #2:站点重启后
@@ -176,7 +179,8 @@ class SwapDesk:
                 st["step"] = "resumed"
         step = st["step"]
         if step == "going":
-            if not self._arrived(rid):
+            # 外审 r2 #1:拔着一块 → 不再派它回换电位,就地引导装回(另一块是唯一的电)
+            if self.missing(rid) is None and not self._arrived(rid):
                 await self._send_back(rid, st, now)
                 return
             st["arrived_ms"] = now
@@ -193,7 +197,9 @@ class SwapDesk:
             return
         if st["told_ms"] is None:
             st["told_ms"] = now
-            self._raise("swap_needed", rid, f"{rid} 已到换电位,请来换电池", self._text(st))
+            title = f"{rid} 已到换电位,请来换电池" if self._arrived(rid) \
+                else f"{rid} 有电池拔着,请到机器人旁边装回"
+            self._raise("swap_needed", rid, title, self._text(st))
             return
         idle = now - st["progress_ms"]
         if not st["repushed"] and idle >= REPUSH_MIN * 60_000:
@@ -208,13 +214,13 @@ class SwapDesk:
 
     async def _send_back(self, rid: str, st: dict[str, Any], now: int) -> None:
         """低电判出来时不在换电位、手上没任务:派它回待命点(= 换电位);没走成过一阵再派。"""
-        if self.standby is None or not self._idle(rid):
+        if self.standby is None or not self._idle(rid) or self.missing(rid) is not None:
             return
         if st["sent_ms"] is not None and now - st["sent_ms"] < RESEND_S * 1000:
             return
         st["sent_ms"] = now
         try:
-            await self.standby.return_to(rid, issued_by="site:swap")
+            await self.standby.return_to(rid, issued_by="site:swap", charge=True)
         except Exception as exc:  # noqa: BLE001 - 没标待命点、派不出去:原地换,到时候按原地判
             log.warning("%s 回换电位没派成:%s", rid, exc)
 

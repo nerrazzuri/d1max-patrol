@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 from test_site_dispatcher import target, 台子
 from test_site_schedule import 打包, 毫秒
@@ -705,3 +707,23 @@ async def test_W33外审_只许手动派的狗_雷暴撤巡检后的回程也不
     with _p.raises(StandbyError, match="只许手动派"):
         await t.stb.return_after_once("A", "sched-1", issued_by="weather:storm")
     assert _cmds(t, "goto") == []
+
+
+async def test_W73外审r2_换电位就是派去的默认待命点_回换电位按去补能发_低电也能走(站):
+    t = 站
+    t.stb.set("A", "dock", map_id="estate-1", map_version="7", x=0.6, y=0.0, yaw=0.0, default=True)
+    assert t.stb.swap_point("A", "estate-1", "7")["name"] == "dock"
+    assert t.stb.swap_point("A", "estate-1", "8") is None, "图版本对不上:派不过去,原地换"
+    t.dog.inject_battery(25.0)
+    r = await t.send(t.stb.return_to("A", issued_by="site:swap", charge=True))
+    assert r["ack"]["result"] == "accepted"
+    [g] = _cmds(t, "goto")
+    p = g["payload"]
+    p = json.loads(p) if isinstance(p, str) else p
+    assert p.get("charge") is True
+    await t.run(200)
+    kinds = [e["kind"] for e in reversed(t.site.recent_events("A", 100))]
+    rows = t.db.query("SELECT kind FROM events WHERE robot_id='A' AND kind IN "
+                      "('task_done','task_failed') AND json_extract(data,'$.task_id')=?",
+                      (g["task_id"],))
+    assert [x["kind"] for x in rows] == ["task_done"], (kinds, rows)

@@ -1089,7 +1089,7 @@ class Server:
             return self.charge.charger(rid) is not None and "dock" in caps
         self.swap = SwapDesk(self.dispatcher, now_ms=wall_ms, need=self.guard.topup_line,
                              eta_min=self.guard.topup_eta_min, has_charger=_has_charger,
-                             home=self.standby.home)
+                             home=self.standby.swap_point)
         self.swap.alerts = self.alerts
         self.swap.standby = self.standby
         self.guard.swap = self.swap

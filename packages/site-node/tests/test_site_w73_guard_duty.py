@@ -569,3 +569,47 @@ def test_外审_固定方案的机器人别的方案占着_不硬派_任意一�
     t.duty._reserved = {"A"}
     rid, why = t.duty._pick({"robot": ""}, info, set())
     assert rid == "" and "没有登记的机器人" in why
+
+
+def _中止先失败(t, n):
+    """派遣器的 abort 前 ``n`` 次抛错(没发出去),之后照常发。返回调用记录。"""
+    real, calls = t.site.abort, []
+
+    async def abort(rid, task_id, *, issued_by):
+        calls.append(task_id)
+        if len(calls) <= n:
+            raise RuntimeError("abort 没发出去")
+        return await real(rid, task_id, issued_by=issued_by)
+    t.site.abort = abort
+    return calls
+
+
+async def test_外审r2_看见人_中止没发成不当已停_重发_真停了才算盯着(站):
+    t = 站
+    _方案(t)
+    await _跑(t, 1.5)
+    calls = _中止先失败(t, 1)
+    t.duty.alerts.raise_alert(kind="dog_sees_person", robot="A")
+    await _跑(t, 2)
+    assert t.duty.status()["runs"][0]["state"] == "stopping", "中止没成:不算已经停下盯着"
+    assert len(calls) == 1
+    await _跑(t, 8)
+    assert len(calls) >= 2, "没停下:过几秒再发中止"
+    assert t.duty.status()["runs"][0]["state"] == "held"
+    x = t.dog.x
+    await _跑(t, 5)
+    assert abs(t.dog.x - x) < 0.05 and len(_patrols(t)) == 1
+
+
+async def test_外审r2_撤防后中止一直发不出去_不派新的一圈_报警(站):
+    t = 站
+    _方案(t)
+    await _跑(t, 1.5)
+    calls = _中止先失败(t, 99)
+    t.arming.set_zone_home("西区", False)
+    t.arming.set_mode("home", by="olga")
+    await _跑(t, 20)
+    assert len(_patrols(t)) == 1, "旧的一圈没确认停下:不派新的(两圈叠着跑)"
+    assert len(calls) >= 3
+    assert any(a["kind"] == "guard_stuck" and "停不下" in a["title"]
+               for a in t.duty.alerts.open)
