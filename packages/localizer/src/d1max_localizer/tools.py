@@ -66,8 +66,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     b.add_argument("--work", type=Path, default=None, help="中间文件(默认 <out>.work)")
     b.add_argument("--lidar-topic", default="/front_lidar")
     b.add_argument("--prior-pack", default="none", help="none 或 regroup:<体素米>:<范围倍数>")
-    b.add_argument("--reuse", action="store_true",
-                   help="边走边建的:MOLA 用 --work 里已有的输出;Super-LIO 用录包里它录下的位姿")
+    how = b.add_mutually_exclusive_group()
+    how.add_argument("--reuse", action="store_true",
+                     help="边走边建的:MOLA 用 --work 里已有的输出;Super-LIO 用录包里它录下的位姿")
+    how.add_argument("--replay", action="store_true",
+                     help="Super-LIO:录包里有位姿也不用,回放重算(录包时机器人在别的图上定位,"
+                          "录下的位姿不是建图轨迹;11-04 广场)")
     b.add_argument("--front", choices=("mola", "superlio"), default="mola",
                    help="建图前端(工单 21):superlio = Super-LIO 的轨迹 + 原始点云;mola = 原来的")
     b.add_argument("--rtk-antenna", type=lambda s: _floats(s, 2), default=(0.0, 0.0),
@@ -212,7 +216,7 @@ def _build(a: argparse.Namespace) -> int:
     from d1max_localizer import build
     work = a.work or a.out.with_name(a.out.name + ".work")
     if a.front == "superlio":
-        timings = _superlio_front(a.bag, work, reuse=a.reuse)
+        timings = _superlio_front(a.bag, work, reuse=a.reuse, replay=a.replay)
     else:
         timings = {} if a.reuse else build.run_mapping(a.bag, work, lidar_topic=a.lidar_topic)
     lc = build.find_loop_closure(a.loop_closure)
@@ -227,7 +231,8 @@ def _build(a: argparse.Namespace) -> int:
     return 0
 
 
-def _superlio_front(bag: Path, work: Path, *, reuse: bool) -> dict[str, float]:
+def _superlio_front(bag: Path, work: Path, *, reuse: bool,
+                    replay: bool = False) -> dict[str, float]:
     """Super-LIO 前端(工单 21):录包里有边走边建录下的位姿就用;没有(老的包、只录了原始数据)
     在隔离域里回放给 Super-LIO 重算。出 ``work`` 里的三样,之后照原来的打包(回环、栅格、先验)。"""
     import shutil
@@ -241,6 +246,8 @@ def _superlio_front(bag: Path, work: Path, *, reuse: bool) -> dict[str, float]:
     shutil.rmtree(work, ignore_errors=True)
     t0 = time.monotonic()
     try:
+        if replay:
+            raise S.SuperLioError("强制回放重算")
         poses, source = S.read_odom(bag, S.LIVE_TOPIC), "live"
     except S.SuperLioError:
         if reuse:

@@ -232,6 +232,23 @@ def test_建图命令_老包没有位姿_回放重算_边走边建的没有就�
         tools._superlio_front(tmp_path / "bag1", tmp_path / "w", reuse=True)
 
 
+def test_现场1104_录包里的位姿是定位模式下的_要能强制回放重算(tmp_path, monkeypatch):
+    """11-04 广场:录包时机器人上的定位器在旧图上定位,录进来的 Super-LIO 位姿不是建图轨迹。"""
+    from d1max_localizer import tools
+    seen = _fake_front(monkeypatch, tmp_path, live=True)
+    tools._superlio_front(tmp_path / "bag1", tmp_path / "w", reuse=False, replay=True)
+    assert ("bag1", S.LIVE_TOPIC) not in seen["read"] and "offline" in seen
+    assert seen["prepare"][0] == "replay"
+
+
+def test_建图命令_强制回放和用录下的位姿不能一起开(tmp_path, capsys):
+    from d1max_localizer import tools
+    with pytest.raises(SystemExit):
+        tools.main(["build", "--bag", str(tmp_path), "--out", str(tmp_path / "o"),
+                    "--front", "superlio", "--reuse", "--replay"])
+    assert "not allowed with" in capsys.readouterr().err
+
+
 def test_建图命令_没装Super_LIO_说先编(tmp_path, monkeypatch):
     from d1max_localizer import tools
     monkeypatch.setattr(S, "ROOT", tmp_path)
