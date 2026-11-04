@@ -28,7 +28,7 @@ def main(argv: list[str] | None = None) -> int:
     import rosbag2_py
     from d1max_localizer.build import cloud_xyz
     from d1max_localizer.frames import Frames
-    from d1max_localizer.obstacles import Config, Mount, Perception
+    from d1max_localizer.obstacles import Config, Mount, Perception, permit_vmax
     from rclpy.serialization import deserialize_message
     from sensor_msgs.msg import PointCloud2
 
@@ -43,6 +43,9 @@ def main(argv: list[str] | None = None) -> int:
     clears: list[float] = []
     occs: list[int] = []
     knowns: list[float] = []
+    vmaxs: list[float] = []
+    firsts: dict[str, int] = {}
+    pic = ""
     while r.has_next():
         _, raw, t_ns = r.read_next()
         n += 1
@@ -62,6 +65,27 @@ def main(argv: list[str] | None = None) -> int:
         fan = [known[(half + i) * cfg.size + half + j]
                for i in range(5, 25) for j in range(-10, 10)]
         knowns.append(sum(fan) / len(fan))
+        vmaxs.append(permit_vmax(per.last_clear, cfg))
+        # 11-04:许可走廊(机身宽 + 两边余量)里第一格挡 / 看不见的是哪一格
+        n_, front_, hw = cfg.size, cfg.body_len / 2, cfg.body_wid / 2 + cfg.margin
+        why, rows = "走廊全空", []
+        for rr in range(n_ // 2, n_):
+            x0 = (rr - n_ / 2) * cfg.res
+            if x0 < front_ - 1e-9:
+                continue
+            line = ""
+            for c in range(n_):
+                y0 = (c - n_ / 2) * cfg.res
+                if y0 + cfg.res <= -hw or y0 >= hw:
+                    continue
+                i = rr * n_ + c
+                line += "#" if occ[i] else ("?" if not known[i] else ".")
+                if why == "走廊全空" and (occ[i] or not known[i]):
+                    why = f"{'挡' if occ[i] else '看不见'} 前 {x0:.1f} m"
+            if len(rows) < 12:
+                rows.append(f"  {x0:4.1f} m |{line}|")
+        firsts[why] = firsts.get(why, 0) + 1
+        pic = "\n".join(reversed(rows))
         if a.max_frames and done >= a.max_frames:
             break
     ck = per.check
@@ -77,6 +101,11 @@ def main(argv: list[str] | None = None) -> int:
               f"最低 {min(knowns):.0%}")
         print(f"给许可的帧:{sum(1 for c in clears if c >= cfg.stop_dist(cfg.max_v) + 0.3)}"
               f" / {done}")
+        print(f"分档许可 vmax(m/s):中位 {statistics.median(vmaxs):.2f},最大 {max(vmaxs):.2f};"
+              f"< 0.05 不发的帧 {sum(1 for v in vmaxs if v < 0.05)} / {done}")
+        print("走廊里第一格挡 / 看不见:" + ",".join(
+            f"{k} ×{v}" for k, v in sorted(firsts.items(), key=lambda kv: -kv[1])[:6]))
+        print("最后一帧的许可走廊(# 挡、? 看不见、. 空;上 = 远,下 = 紧贴机身前沿):\n" + pic)
     return 0
 
 
