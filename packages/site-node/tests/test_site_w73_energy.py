@@ -9,16 +9,16 @@ from d1max_site import energy as e
 
 def test_回撤线_下限25_离得远就提前走():
     assert e.return_line(0) == 25.0
-    assert e.return_line(3600) == pytest.approx(15 + 100 / 3.5 * 1.5)
+    assert e.return_line(3600) == pytest.approx(15 + 22.3 * 1.5)
 
 
 def test_布防一圈的出站线_回撤线加一圈耗电乘1点2():
     # 15 分钟一圈 ≈ 33.6%(设计算的约 33)
-    assert e.lap_line(900) == pytest.approx(25 + 100 / 3.5 / 4 * 1.2)
+    assert e.lap_line(900) == pytest.approx(25 + 22.3 / 4 * 1.2)
 
 
 def test_报警出动_去加看5分钟加回来_后还在停止线以上():
-    assert e.alarm_line(600) == pytest.approx(15 + 100 / 3.5 * (1200 * 1.5 + 300) / 3600)
+    assert e.alarm_line(600) == pytest.approx(15 + 22.3 * (1200 * 1.5 + 300) / 3600)
     assert e.alarm_line(0) < e.lap_line(0), "报警比布防放宽一档"
 
 
@@ -38,3 +38,9 @@ def test_外审_狗上报警优先级跟站点事件派遣对得上():
     from d1max_contract.charging import ALARM_FLOOR_PCT, ALARM_PRIORITY
     from d1max_site.priorities import EVENT
     assert ALARM_PRIORITY == EVENT and ALARM_FLOOR_PCT == e.STOP_PCT
+
+
+def test_现场1104_耗电默认跟狗上返航一样_比实测多留余量():
+    from d1max_site import energy
+    measured = 0.30 * 60                                 # C40221 站着、走路都约 0.30%/min
+    assert energy.DRAIN_PCT_PER_H == 22.3 and energy.DRAIN_PCT_PER_H >= measured * 1.2
