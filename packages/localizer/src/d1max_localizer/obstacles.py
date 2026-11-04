@@ -393,6 +393,29 @@ def clear_distance(occ: bytes, known: bytes, cfg: Config = DEFAULT, *,
     return best
 
 
+def clear_why(occ: bytes, known: bytes, cfg: Config = DEFAULT) -> str:
+    """许可走廊(狗头那头)里第一格挡 / 看不见的是哪一格(看日志用;跟 :func:`clear_distance` 一个走法)。"""
+    n = cfg.size
+    front, half = cfg.body_len / 2, cfg.body_wid / 2 + cfg.margin
+    for r in range(n // 2, n):
+        x0 = (r - n / 2) * cfg.res
+        if x0 < front - 1e-9:
+            continue
+        for c in range(n):
+            y0 = (c - n / 2) * cfg.res
+            if y0 + cfg.res <= -half or y0 >= half:
+                continue
+            i = r * n + c
+            if occ[i] or not known[i]:
+                what = "挡" if occ[i] else "看不见"
+                return f"{what} 前 {x0:.1f} m、左 {y0 + cfg.res / 2:+.2f} m"
+    return "走廊全空"
+
+
+#: 每隔这么久(秒)记一行许可的情况(11-04 现场:感知连着旁路却一条不发,只能抓包查)。
+PERMIT_LOG_S = 10.0
+
+
 def _need(v: float, cfg: Config) -> float:
     """按 ``v`` 走要前面空多远:许可有效期里走的 + 这一帧的帧龄里走的 + 刹停 + 0.3 m(内审应修 2)。"""
     return v * (PERMIT_MS / 1000.0 + cfg.frame_age) + cfg.stop_dist(v) + 0.3
@@ -541,6 +564,9 @@ class Perception:
         self.plane_misses = 0
         if sidecar is not None and sidecar.on_line is None:
             sidecar.on_line = self.on_sidecar
+        self._permits = 0
+        self._why_no = ""
+        self._note_at = clock()
 
     @property
     def rear_cal(self) -> bool:
@@ -610,6 +636,9 @@ class Perception:
         self.check.feed(p)
         n = self.cfg.size
         if self.check.height is None:
+            why = f":{self.check.reason[:80]}" if self.check.reason else ""
+            self._why_no = f"自检 {self.check.check}{why}"
+            self._note()
             # 还在自检、自检没过:照样发一帧(全是未知)让代理知道是什么状态(内审应修 6)
             empty = pack_bits(bytes(n * n), n)
             self.seq += 1
@@ -646,12 +675,29 @@ class Perception:
         self.last_clear_tail = clear_distance(occ, known, self.cfg, end="tail")
         ok = self.check.check == "ok"
         if ok:
-            self._send_permit(self.last_clear, None)
+            self._send_permit(self.last_clear, None, occ, known)
+        else:
+            self._why_no = f"自检 {self.check.check}:{self.check.reason[:80]}"
         # 狗尾那头:后雷达标过、这一帧用上了、旁路进程认 end(5 号会把它当成狗头的许可)
         if (ok and rear and self.rear_cal and self.sidecar_proto is not None
                 and self.sidecar_proto >= TAIL_CLEAR_PROTO):
             self._send_permit(self.last_clear_tail, "tail")
+        self._note()
         return grid
+
+    def _note(self) -> None:
+        """每 :data:`PERMIT_LOG_S` 记一行:发了几条、最近一次没发是为什么、旁路连着没有。"""
+        if self.sidecar is None:
+            return
+        now = self._clock()
+        if now - self._note_at < PERMIT_LOG_S:
+            return
+        side = "没连上" if getattr(self.sidecar, "_sock", None) is None else \
+            f"连着(协议 {self.sidecar_proto})"
+        log.info("许可:近 %.0f s 发了 %d 条;最近没发:%s;前方空 %.2f m(vmax %.2f);旁路%s",
+                 now - self._note_at, self._permits, self._why_no or "—", self.last_clear,
+                 permit_vmax(self.last_clear, self.cfg), side)
+        self._note_at, self._permits, self._why_no = now, 0, ""
 
     def _local_ground(self, p: Any) -> tuple[tuple[float, float, float], float]:
         """这一帧的地面(法向, 离地高度):见 :data:`LOCAL_GROUND_R_M`。"""
@@ -671,7 +717,8 @@ class Perception:
             return self.plane
         return (0.0, 0.0, 1.0), base_h
 
-    def _send_permit(self, dist: float, end: str | None) -> None:
+    def _send_permit(self, dist: float, end: str | None, occ: bytes | None = None,
+                     known: bytes | None = None) -> None:
         """发一条净空许可。旁路进程 ≥ 10:分档(带 ``vmax``,近处也许慢慢走);更老的:老规矩。"""
         if self.sidecar is None:
             return
@@ -679,16 +726,23 @@ class Perception:
         if self.sidecar_proto is not None and self.sidecar_proto >= GRADED_CLEAR_PROTO:
             v = permit_vmax(dist, self.cfg)
             if v < MIN_PERMIT_V:
+                if end is None and occ is not None and known is not None:
+                    self._why_no = f"前方空 {dist:.2f} m 太近({clear_why(occ, known, self.cfg)})"
                 return
             msg["vmax"] = math.floor(v * 100.0) / 100.0      # 往下取,不许多给
             # #208 首审 G1:来源(这个感知进程的启动时刻)、帧序号 —— 旁路不认晚到的旧许可
             msg["src"], msg["seq"] = self.permit_src, self.seq
         elif not permit(dist, self.cfg):
+            if end is None and occ is not None and known is not None:
+                self._why_no = f"前方空 {dist:.2f} m 不够老许可({clear_why(occ, known, self.cfg)})"
             return
         if end is not None:
             msg["end"] = end
         self._cmd += 1
-        self.sidecar.send({"id": self._cmd, **msg})
+        if self.sidecar.send({"id": self._cmd, **msg}):
+            self._permits += 1
+        elif end is None:
+            self._why_no = "发不出去(旁路连不上)"
 
 
 def _bounded(lo: float, hi: float) -> Any:
