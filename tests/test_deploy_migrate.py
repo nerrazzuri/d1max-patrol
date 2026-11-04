@@ -18,7 +18,8 @@ def _stub(tmp: Path, enabled: set[str]) -> Path:
     s.write_text("#!/bin/sh\n"
                  f'echo "$*" >> "{log}"\n'
                  'if [ "$1" = is-enabled ]; then\n'
-                 f'  for u in {" ".join(sorted(enabled))}; do [ "$3" = "$u" ] && exit 0; done; exit 1\n'
+                 f'  for u in {" ".join(sorted(enabled))}; do\n'
+                 '    [ "$3" = "$u" ] && exit 0; done; exit 1\n'
                  "fi\nexit 0\n")
     s.chmod(0o755)
     return s
@@ -53,7 +54,8 @@ def _老机器(root: Path) -> None:
     for u in ("d1max-agent.service", "d1max-sidecar.service", "d1max-lidar-merge.service",
               "d1max-ops.path"):
         (unit / u).write_text("[Unit]\n")
-    (unit / "multi-user.target.wants" / "d1max-agent.service").symlink_to(unit / "d1max-agent.service")
+    wants = unit / "multi-user.target.wants" / "d1max-agent.service"
+    wants.symlink_to(unit / "d1max-agent.service")
 
 
 def test_改名迁移_老机器迁成新名字_证书原样_键改名_开着的单元按新名字再开(tmp_path):
@@ -66,10 +68,12 @@ def test_改名迁移_老机器迁成新名字_证书原样_键改名_开着的�
     assert "246810" not in r.stdout + r.stderr, "PIN 不打印"
     etc = root / "etc"
     assert not (etc / "d1max").exists() and not (etc / "d1max-site").exists()
-    assert (etc / "nexwar" / "tls" / "robot.key").read_text() == "KEY /etc/d1max", "私钥原样(不改内容)"
+    key = (etc / "nexwar" / "tls" / "robot.key").read_text()
+    assert key == "KEY /etc/d1max", "私钥原样(不改内容)"
     env = (etc / "nexwar" / "env").read_text()
     assert env == ("NEXWAR_HAL=d1max\nNEXWAR_DEVICE_PIN=246810\n"
-                   "NEXWAR_PAYLOAD=/etc/nexwar/payload.json\n"), "键改名、路径改新、机型名 d1max 不动"
+                   "NEXWAR_PAYLOAD=/etc/nexwar/payload.json\n"), \
+        "键改名、路径改新、机型名 d1max 不动"
     assert (etc / "nexwar" / "env").stat().st_mode & 0o777 == 0o600
     assert (etc / "nexwar_site" / "env").read_text() == "NEXWAR_SITE_LAT=1.5\n"
     assert (etc / "nexwar_ops.json").read_text() == '{"root": "/var/lib/nexwar_ops"}'
