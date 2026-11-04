@@ -6,8 +6,8 @@ from __future__ import annotations
 import pytest
 from test_site_api import PW, _等, 站
 
-from d1max_site.authz import AuthzBook
-from d1max_site.db import SiteDB
+from nexwar_site.authz import AuthzBook
+from nexwar_site.db import SiteDB
 
 
 @pytest.fixture

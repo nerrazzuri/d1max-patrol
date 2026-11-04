@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import numpy as np
-from d1max_localizer import mapclean as C
+from nexwar_localizer import mapclean as C
 
 V = 0.25
 

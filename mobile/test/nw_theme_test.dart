@@ -2,12 +2,12 @@
 // （大多数测试是光秃秃的 MaterialApp）；字体打在包里；最小字号 12。
 import 'dart:io';
 
-import 'package:d1max_patrol/design/nw_tokens.g.dart';
-import 'package:d1max_patrol/main.dart';
-import 'package:d1max_patrol/store/site_store.dart';
-import 'package:d1max_patrol/ui/nw/nw_theme.dart';
-import 'package:d1max_patrol/ui/nw/nw_widgets.dart';
-import 'package:d1max_patrol/ui/site_page.dart';
+import 'package:nexwar_patrol/design/nw_tokens.g.dart';
+import 'package:nexwar_patrol/main.dart';
+import 'package:nexwar_patrol/store/site_store.dart';
+import 'package:nexwar_patrol/ui/nw/nw_theme.dart';
+import 'package:nexwar_patrol/ui/nw/nw_widgets.dart';
+import 'package:nexwar_patrol/ui/site_page.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 

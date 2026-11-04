@@ -1,4 +1,4 @@
-"""``d1max-site`` 命令行(不需要 Mosquitto 的那部分)。"""
+"""``nexwar_site`` 命令行(不需要 Mosquitto 的那部分)。"""
 
 from __future__ import annotations
 
@@ -8,10 +8,10 @@ import stat
 import pytest
 from conftest import free_port
 
-from d1max_contract.registration import Registration
-from d1max_site import main as site_main
-from d1max_site.db import SiteDB
-from d1max_site.registry import Registry
+from nexwar_contract.registration import Registration
+from nexwar_site import main as site_main
+from nexwar_site.db import SiteDB
+from nexwar_site.registry import Registry
 
 
 @pytest.fixture
@@ -58,9 +58,9 @@ def test_没init的目录_各子命令都说清楚(tmp_path, capsys):
 
 
 def test_add_admin口令太短退2(home, monkeypatch, capsys):
-    monkeypatch.setenv("D1MAX_SITE_PASSWORD", "short")
+    monkeypatch.setenv("NEXWAR_SITE_PASSWORD", "short")
     assert site_main.main(["--home", str(home), "add-admin", "alice"]) == 2
-    monkeypatch.setenv("D1MAX_SITE_PASSWORD", "long-enough-pass")
+    monkeypatch.setenv("NEXWAR_SITE_PASSWORD", "long-enough-pass")
     assert site_main.main(["--home", str(home), "add-admin", "alice"]) == 0
 
 
@@ -73,9 +73,9 @@ def test_serve连不上broker退1(home):
 def test_API没start就stop不挂(home):
     import threading
 
-    from d1max_site.api import SiteApi
+    from nexwar_site.api import SiteApi
     db = SiteDB(home / "site.db")
-    from d1max_site.accounts import Accounts
+    from nexwar_site.accounts import Accounts
     api = SiteApi(host="127.0.0.1", port=0, loop=None, dispatcher=None,
                   accounts=Accounts(db, now_ms=lambda: 0))
     t = threading.Thread(target=api.stop)
@@ -87,14 +87,14 @@ def test_API没start就stop不挂(home):
 
 def test_只给局域网名字init_站点也连得上本机broker(tmp_path):
     """serve 默认连 mqtts://127.0.0.1:<端口>;站点证书不带 127.0.0.1 的话主机名校验不过,
-    d1max-site.service 会一直重启。"""
+    nexwar_site.service 会一直重启。"""
     import asyncio
     import subprocess
     import time
 
     from conftest import find_mosquitto
 
-    from d1max_contract.paho_transport import PahoTransport
+    from nexwar_contract.paho_transport import PahoTransport
     exe = find_mosquitto()
     if exe is None:
         pytest.skip("没有 mosquitto")
@@ -124,14 +124,15 @@ def test_只给局域网名字init_站点也连得上本机broker(tmp_path):
 def test_注册表里没有但CA里有效_revoke照样吊销证书(home):
     """enroll 签完证书、写注册表那一步失败,会留下一张有效证书而注册表没行:
     重签被 CA 拒、吊销被注册表拒,命令行上就修不了了。"""
-    from d1max_site.ca import SiteCA
+    from nexwar_site.ca import SiteCA
     SiteCA(home / "ca").issue_robot("Z", days=5, now_ms=1)          # 只签不登记
     assert site_main.main(["--home", str(home), "revoke", "Z"]) == 0
     assert site_main.main(["--home", str(home), "enroll", "Z"]) == 0
 
 
 def test_不是站点目录的属主就拒绝跑(home, monkeypatch, capsys):
-    """root 跑命令行会把 CRL 重写成 root 的 0600,d1max-mosquitto(以 d1max-site 跑)重启后读不了。"""
+    """root 跑命令行会把 CRL 重写成 root 的 0600,nexwar_mosquitto(以 nexwar_site 跑)重启后读不了。
+    """
     monkeypatch.setattr(site_main.os, "geteuid", lambda: home.stat().st_uid + 12345)
     assert site_main.main(["--home", str(home), "enroll", "A"]) == 2
     assert "属主" in capsys.readouterr().err
@@ -150,7 +151,7 @@ def test_init到一半失败_再init说清楚怎么办(tmp_path, capsys):
 def test_完整登记的狗_CA吊销失败_命令非零且不说已吊销(home, monkeypatch, capsys):
     """外审阻断:注册表吊销成功、CRL 更新失败时原来静默返回成功,运维以为吊销了,
     重启 broker 之后那张证书照样能连。"""
-    from d1max_site.ca import CAError, SiteCA
+    from nexwar_site.ca import CAError, SiteCA
     assert site_main.main(["--home", str(home), "enroll", "A"]) == 0
     capsys.readouterr()
 
@@ -184,7 +185,7 @@ def test_完整登记的狗_注册表吊销失败_命令非零并说明CRL已更
     out = capsys.readouterr()
     assert "已吊销 A" not in out.out
     assert "CRL 已更新" in out.err and "注册表" in out.err and "失败" in out.err
-    from d1max_site.ca import SiteCA
+    from nexwar_site.ca import SiteCA
     assert "A" not in SiteCA(home / "ca")._valid_subjects()
 
 
@@ -252,7 +253,7 @@ def test_老库的commands表补上priority列(tmp_path):
     assert "map_version" in {r[1] for r in db.query("PRAGMA table_info(standby_points)")}
     import stat as _stat
     assert _stat.S_IMODE(p.stat().st_mode) == 0o600, "库里有事件源密钥与会话"
-    from d1max_site.db import SCHEMA_VERSION
+    from nexwar_site.db import SCHEMA_VERSION
     assert db.query("SELECT value FROM meta WHERE key='schema'")[0]["value"] == str(SCHEMA_VERSION)
     db.close()
 
@@ -285,7 +286,7 @@ def test_事件派遣的命令行(home, capsys):
 
 
 def test_账号的命令行(home, monkeypatch, capsys):
-    monkeypatch.setenv("D1MAX_SITE_PASSWORD", "long-enough-pass")
+    monkeypatch.setenv("NEXWAR_SITE_PASSWORD", "long-enough-pass")
     assert site_main.main(["--home", str(home), "add-account", "gina", "--role", "guard",
                            "--display-name", "王保安"]) == 0
     assert site_main.main(["--home", str(home), "add-admin", "alice"]) == 0
@@ -293,7 +294,7 @@ def test_账号的命令行(home, monkeypatch, capsys):
     assert site_main.main(["--home", str(home), "disable", "gina"]) == 0
     assert site_main.main(["--home", str(home), "enable", "gina"]) == 0
     assert site_main.main(["--home", str(home), "disable", "alice"]) == 2, "最后一个 admin"
-    from d1max_site.accounts import Accounts
+    from nexwar_site.accounts import Accounts
     db = SiteDB(home / "site.db")
     assert Accounts(db, now_ms=lambda: 0).display_name("gina") == "王保安"       # W20
     assert Accounts(db, now_ms=lambda: 0).display_name("alice") == "alice", "没设就是账号名"
@@ -368,7 +369,7 @@ def test_W33_新登记的狗只许手动_robot_auto才接自动派遣_robot_manu
 def test_外审I3_没有可信钥匙不登记_删掉最后一把也不放行_不验签要显式打开(home, tmp_path, capsys):
     from test_site_releases import 做包
 
-    from d1max_contract import relsign
+    from nexwar_contract import relsign
     cfg = json.loads((home / "site.json").read_text())
     pub = tmp_path / "keys" / "release-pub.pem"
     cfg["release_pubkey"] = str(pub)

@@ -1,0 +1,1073 @@
+"""``nexwar_agent`` 的入口(W00b 决定 3、4)。
+
+装配:Transport(``mqtt://`` 走 Paho,``memory://`` 走进程内 broker —— 给演示与联调)
+× HAL(``sim``;``d1max`` 经 TCP 接常驻旁路进程,W00d)× 引擎(``assembly.build_engine``)
+× ``AgentRuntime``。
+一切都跑在 ``LoopBridge`` 的事件循环线程里,``asyncio.sleep(period)`` 每拍 ``step`` 一次。
+
+狗上只有这一个进程在开车(W00c5e:老的 HTTP 面 ``server.py`` 与 ``--legacy-http`` 退役,手机只连站点)。
+"""
+
+from __future__ import annotations
+
+import argparse
+import asyncio
+import logging
+import os
+import signal
+import sys
+import threading
+import time
+from collections.abc import Sequence
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+from urllib.parse import urlsplit
+
+from nexwar_agent import AGENT_VERSION
+from nexwar_agent.assembly import EngineParts, build_engine
+from nexwar_agent.runtime import AgentRuntime
+from nexwar_contract.memory_broker import MemoryBroker, MemoryTransport
+from nexwar_contract.registration import Registration
+from nexwar_contract.transport import Transport
+from nexwar_patrol.protocol.nav_types import Pose
+
+log = logging.getLogger(__name__)
+
+
+def wall_ms() -> int:
+    return int(time.time() * 1000)
+
+
+def _bindlink() -> Any:
+    """W42:烧写过的机器人(有 ``device.json``)或者配网服务的套接字已经在:接上本机配网服务。
+    配网服务后起也没事(每次问的时候才连)。``NEXWAR_BIND_SOCK`` 可以换套接字地址(演示站点用)。"""
+    from nexwar_agent.bindlink import SOCK, BindLink
+    sock = Path(os.environ.get("NEXWAR_BIND_SOCK") or SOCK)
+    if sock.exists() or Path("/etc/nexwar/device.json").exists():
+        return BindLink(sock)
+    return None
+
+
+def _map_arg(text: str) -> tuple[str, str]:
+    map_id, sep, version = text.rpartition(":")
+    if not sep or not map_id or not version:
+        raise argparse.ArgumentTypeError(f"--map 要写成 <map_id>:<version>,收到 {text!r}")
+    return map_id, version
+
+
+def _home_arg(text: str) -> Pose:
+    parts = text.split(",")
+    if len(parts) != 3:
+        raise argparse.ArgumentTypeError(f"--home 要写成 x,y,yaw,收到 {text!r}")
+    try:
+        x, y, yaw = (float(p) for p in parts)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"--home 里不是数: {text!r}") from exc
+    return Pose.from_xy_yaw(x, y, yaw)
+
+
+def _transport_arg(text: str) -> str:
+    if text == "memory://" or text.startswith(("mqtt://", "mqtts://")):
+        return text
+    raise argparse.ArgumentTypeError(
+        f"--transport 只认 mqtt://host[:port]、mqtts://host[:port] 或 memory://,收到 {text!r}")
+
+
+def _persons_key(args: argparse.Namespace) -> bytes | None:
+    """跨板人员桥的密钥:配了 ``--persons-listen`` 就必须有、读得出来,不然代理不起(说清楚为什么)。"""
+    if args.persons_listen is None:
+        return None
+    if args.persons_key is None:
+        raise SystemExit("--persons-listen 要配 --persons-key(共享密钥文件)")
+    from nexwar_agent.pers_server import load_key
+    try:
+        return load_key(args.persons_key)
+    except (OSError, ValueError) as exc:
+        raise SystemExit(f"人员桥密钥:{exc}") from exc
+
+
+def _hostport(text: str) -> tuple[str, int]:
+    host, _, port = text.rpartition(":")
+    if not host or not port.isdigit():
+        raise argparse.ArgumentTypeError(f"要写成 host:port,收到 {text!r}")
+    return host, int(port)
+
+
+#: 站点狗专用接收口的默认端口(W00c5d)。
+INTAKE_PORT = 8444
+
+#: ``--hal d1max`` 的旁路进程与单位换算默认值(W00d 决定三 A:**都待真机实测**)。
+#: W12:按 SDK 文档的低速档(比例 1.0 = 1.0 m/s、1.5 rad/s),死区按 #37;比例上限 0.5 不变(最快约 0.5
+#: m/s)。
+NEXWAR_DEFAULTS = {"sidecar": ("127.0.0.1", 8090), "mps_per_unit": 1.0, "radps_per_unit": 1.5,
+                  "deadband": 0.2, "max_fraction": 0.5, "stopped_eps": 0.02, "fwd_offset": 0.0,
+                  # 横移(2026-10-30):横向比例 1.0 当 1.0 m/s 算(实际慢只是走得慢);0 = 不横移
+                  "lateral_mps_per_unit": 1.0,
+                  # S11:旁路进程(协议 9)只收认证过的连接的运动命令;它起来时把令牌写在这
+                  "sidecar_token_file": "~/.nexwar/sidecar.token"}
+#: 改名前的旁路进程(机器人上还没重新编译的 patrol_agent)把令牌写在这;新路径没有就读它(兼容一个版本)
+OLD_SIDECAR_TOKEN = "~/.d1max/sidecar.token"
+
+
+def sidecar_token_path(given: str | None) -> str | None:
+    """旁路令牌文件:给的是缺省的新路径、它不在、老路径在 → 用老路径(记一条警告)。"""
+    if given is None or given != NEXWAR_DEFAULTS["sidecar_token_file"]:
+        return given
+    new, old = os.path.expanduser(given), os.path.expanduser(OLD_SIDECAR_TOKEN)
+    if not os.path.exists(new) and os.path.exists(old):
+        log.warning("旁路令牌在改名前的路径 %s(旁路进程还是老版本):先用它", OLD_SIDECAR_TOKEN)
+        return OLD_SIDECAR_TOKEN
+    return given
+#: 换算系数的合理范围(W12 外审阻断):SDK 文档低速档 1.0 m/s、1.5 rad/s 上下。老模板照抄的 0.4 / 1.0
+#: 是猜的,
+#: 照它换算代理以为的速度跟实际差一大截、限速区限不住 —— 不在范围里就不起,实测值真不在范围里要人加
+#: ``--units-confirmed``。``deploy/nexwar_units_check``(装机前查)用同一个范围(测试核)。
+UNIT_RANGES = {"mps_per_unit": (0.7, 1.5), "radps_per_unit": (1.1, 2.0)}
+
+
+def resolve_autonomy(args: argparse.Namespace) -> str:
+    """自主级别(W00c6i):显式给了就用它;没给的话**只有仿真**可自主,别的适配器一律要人监护
+    (内审:默认偏收紧,以后加的品牌也不例外)。"""
+    if args.autonomy is not None:
+        return args.autonomy
+    return "autonomous" if args.hal == "sim" else "supervised"
+
+
+def build_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(prog="nexwar_agent",
+                                description=f"D1 Max 机器人代理 {AGENT_VERSION}")
+    p.add_argument("--transport", type=_transport_arg, required=True,
+                   help="mqtt://host[:port]、mqtts://host[:port] 或 memory://(进程内,演示用)")
+    p.add_argument("--env-args", metavar="ARGS", default=None,
+                   help="/etc/nexwar/env 的 NEXWAR_AGENT_ARGS(启动脚本带进来,W32):"
+                        "这一版不认识的参数跳过并报站点,不会因为它起不来")
+    p.add_argument("--hal", choices=("sim", "d1max"), default="sim", help="品牌适配器")
+    p.add_argument("--autonomy", choices=("supervised", "autonomous"), default=None,
+                   help="自主级别(W00c6i):supervised = goto/巡检只在有人现场监护时才接;"
+                        "默认 --hal d1max 是 supervised、sim 是 autonomous。**真机器人改成 "
+                        "autonomous "
+                        "要等 W11 避障真机验收过了、用户同意**")
+    p.add_argument("--localizer", choices=("anchor", "bridge"), default="anchor",
+                   help="地图位姿从哪来(W09a):anchor = 里程锚定(人给一次位置);bridge = "
+                        "本机定位桥上的定位器(W09b 的 ROS 节点,或 --sim-localizer)。"
+                        "**真机器人在 W09b 的定位器验过之前不改**")
+    p.add_argument("--loc-socket", type=Path, default=None,
+                   help="本机定位桥的 Unix 套接字(默认 <store-dir>/loc.sock;只给代理这个账号)")
+    p.add_argument("--sim-localizer", action="store_true",
+                   help="仿真:在进程里起一个仿真定位器连本机定位桥"
+                        "(要 --hal sim --localizer bridge)")
+    p.add_argument("--nav", choices=("straight", "planned", "nav2"), default="straight",
+                   help="导航后端(W10):straight = 直线桥(过渡期);planned = 在规划栅格上规划、"
+                        "守禁行区与限速区;nav2 = 规划、局部避障交给 Nav2(W47,要 nexwar_nav2 单元;"
+                        "Nav2 没就绪的那一段退回 planned)。**真机器人在真机项验过之前不改**")
+    p.add_argument("--nav2-socket", type=Path, default=None,
+                   help="Nav2 转接的 Unix 套接字(默认 <store-dir>/nav2.sock)")
+    p.add_argument("--obstacles", choices=("none", "bridge"), default="none",
+                   help="局部避障(W11):bridge = 本机障碍桥上的感知节点(nexwar_obstacles)给局部栅格,"
+                        "规划后端每条速度命令先过守卫;要 --nav planned。"
+                        "**真机器人在 W11 真机项验过之前不改**")
+    p.add_argument("--nav-preview", choices=("on", "off"), default="on",
+                   help="提前绕(方案 2):沿路走时前面那段路上看到新障碍就提前重规划、不停车;"
+                        "off = 照旧走到跟前被挡、等 2 s 再绕(要 --nav planned、--obstacles bridge)")
+    p.add_argument("--obs-socket", type=Path, default=None,
+                   help="本机障碍桥的 Unix 套接字(默认 <store-dir>/obs.sock)")
+    p.add_argument("--persons", choices=("none", "bridge"), default="none",
+                   help="人员检测(W24):bridge = 本机人员桥上的检测节点(nexwar_persons)报看到的人,"
+                        "代理判有没有人、记事件给站点(告警、联动驱离)")
+    p.add_argument("--persons-socket", type=Path, default=None,
+                   help="本机人员桥的 Unix 套接字(默认 <store-dir>/persons.sock)")
+    p.add_argument("--persons-snapshots", type=Path, default=None,
+                   help="检测节点存截图的目录(默认 <store-dir>/person-snapshots)")
+    p.add_argument("--persons-listen", type=_hostport, default=None, metavar="HOST:PORT",
+                   help="人员检测跨板(检测在厂家 Orin、代理在自带的 RK3588):人员桥改在这个地址"
+                        "听 TCP(要配 --persons-key);不给 = 本机套接字")
+    p.add_argument("--persons-key", type=Path, default=None,
+                   help="跨板人员桥的共享密钥文件(一行十六进制,openssl rand -hex 32;chmod 600,"
+                        "两块板同一把)")
+    p.add_argument("--persons-peer", default=None, metavar="IP",
+                   help="跨板时只认这个 IP 连上来(厂家 Orin 的机器人内网地址;不给 = 只认密钥)")
+    p.add_argument("--robot-radius", type=float, default=None,
+                   help="规划膨胀用的机体外接圆半径(米,默认 0.52:930 × 480 mm,W08 决定 6)")
+    pl = p.add_argument_group("上装(W21,决策 36:RS485 Modbus 继电器板 + USB 声卡)")
+    pl.add_argument("--payload", type=Path,
+                    default=Path(os.environ.get("NEXWAR_PAYLOAD", "/etc/nexwar/payload.json")),
+                    help="上装配置(JSON:relay.port/baud/slave/coils、audio.device/clips_dir/"
+                         "tts_command);文件不在就是没装上装,能力全报 false")
+    pl.add_argument("--board", type=Path,
+                    default=Path(os.environ.get("NEXWAR_BOARD", "/etc/nexwar/board.json")),
+                    help="上装主控板的温度、风扇(W46:风扇测速线接哪几根 GPIO、门槛、日志目录);"
+                         "文件不在就不看(厂商 Orin 上、老机器人)")
+    pl.add_argument("--sim-payload", action="store_true",
+                    help="仿真机器人装上上装(警灯、警笛、聚光灯、喇叭;演示与测试用)")
+    rk = p.add_argument_group("RTK(W09e;决策 21:自己的为主、厂家的可选)")
+    rk.add_argument("--rtk", choices=("none", "own", "vendor"), default="none",
+                    help="none = 不接;own = 我们自己的串口驱动(**要先停厂家的 sixents_gps_driver**,"
+                         "它独占串口);vendor = 读厂家驱动的 /rtk_pvh(经辅助进程)")
+    rk.add_argument("--rtk-device", default="/dev/ttyTHS3")
+    rk.add_argument("--rtk-baud", type=int, default=460800)
+    rk.add_argument("--rtk-init", type=Path, default=None,
+                    help="起来时发给模组的命令,一行一条(模组命令真机核过再配)")
+    rk.add_argument("--rtk-vendor-cmd", default="/opt/nexwar/current/deploy/nexwar_rtk_vendor",
+                    help="厂家模式的辅助进程")
+    d1 = p.add_argument_group("--hal d1max(比例换算的几个数都待真机实测)")
+    d1.add_argument("--sidecar", type=_hostport, default=None,
+                    help="旁路进程 host:port,默认 127.0.0.1:8090")
+    d1.add_argument("--sidecar-token-file", default=None,
+                    help="旁路进程的令牌(协议 9:认证过才能开车;旁路进程起来时写),"
+                         "默认 ~/.nexwar/sidecar.token —— 跟旁路进程同一个账号跑才读得到")
+    d1.add_argument("--mps-per-unit", type=float, default=None,
+                    help="Move 比例 1.0 对应的 m/s,默认 1.0(SDK 文档低速档,W12)")
+    d1.add_argument("--radps-per-unit", type=float, default=None,
+                    help="转向比例 1.0 对应的 rad/s,默认 1.5(SDK 文档低速档)")
+    d1.add_argument("--units-confirmed", action="store_true",
+                    help="换算系数不在 SDK 低速档的合理范围里也起(实测值、人核过;W12)")
+    d1.add_argument("--deadband", type=float, default=None,
+                    help="低于这个 m/s 拒,默认 0.2(#37:比例 0.11 几乎不动)")
+    d1.add_argument("--max-fraction", type=float, default=None,
+                    help="前进比例上限,默认 0.5;最多 1.0(超过 0.5 要旁路也给 "
+                         "--max-fraction 并开净空许可门)")
+    d1.add_argument("--fwd-offset", type=float, default=None,
+                    help="前进的比例死区:比例 = 它 + vx ÷ --mps-per-unit(此时那是直线的斜率);"
+                         "默认 0 = 纯比例。C40221 实测 0.10、斜率 1.09(2026-10-08)")
+    d1.add_argument("--stopped-eps", type=float, default=None,
+                    help="里程速度低于它算停了(m/s、rad/s),默认 0.02;要大于站着时的噪声")
+    d1.add_argument("--invert-yaw", action="store_true", help="转向方向跟 SDK 相反时翻过来")
+    d1.add_argument("--lateral-mps-per-unit", type=float, default=None,
+                    help="横移比例 1.0 对应的 m/s,默认 1.0;0 = 不横移(遥控左杆左右)")
+    d1.add_argument("--invert-lateral", action="store_true",
+                    help="横移方向跟 SDK 相反时翻过来(真机核:左杆往左推,机器人该往左走)")
+    v = p.add_argument_group("视频经站点(W00c5b):站点要看时按需推 SRT")
+    # 厂家文档写的 192.168.234.1 是 RK3588 的 WiFi 那一侧(遥控器、笔记本从那边看);代理跑在
+    # Orin 上,到那个地址没有路由,要走有线的 192.168.168.168(2026-10-08 C40221 实测:前者不通,
+    # 后者两路都拉得到)。
+    v.add_argument("--camera-host", default="192.168.168.168",
+                   help="相机 RTSP 所在主机(rtsp://<host>:8554/front|back);缺省 RK3588 有线口")
+    v.add_argument("--cameras", type=Path,
+                   default=Path(os.environ.get("NEXWAR_CAMERAS", "/etc/nexwar/cameras.json")),
+                   help="自带两路以外的相机(W40:上装 V1.2 的热像)各从哪拉、录不录;"
+                        "没有这个文件就只有 front、back。文件里有口令:0640 root:robot")
+    v.add_argument("--links", default=os.environ.get("NEXWAR_LINKS", ""),
+                   help="设备健康(W40)里要查连不连得上的网络设备:名字=主机:端口,逗号隔开"
+                        "(上装 V1.2 的路由器 router=192.168.10.1:80)。cameras.json 里的相机自动查")
+    v.add_argument("--video-source", choices=("auto", "rtsp", "lavfi", "file"), default="auto",
+                   help="画面与录像从哪来:auto(缺省)真机器人拉相机 RTSP、仿真用测试图;"
+                        "rtsp 仿真也拉真相机(不抢控制权验视频、录像);lavfi 测试图;"
+                        "file 循环播 --video-dir 里录好的 <相机>.mp4(演示用真画面)")
+    v.add_argument("--video-dir", type=Path, default=None,
+                   help="--video-source file 用:放 front.mp4、back.mp4 的目录")
+    v.add_argument("--video-transcode", action="store_true",
+                   help="相机不是 H.264 时转成 H.264 再推(默认原样转封装,不占 CPU)")
+    v.add_argument("--ffmpeg", default="ffmpeg", help="ffmpeg 可执行文件")
+    v.add_argument("--evidence-pub", type=Path, default=Path("/etc/nexwar/evidence-pub.key"),
+                   help="站点的证据公钥(W30b):有这个文件就把照片、截图、录像封着存(机器人自己解不开);"
+                        "没有就照旧明文(站点报 P2)")
+    v.add_argument("--force-config", type=Path, default=Path("/etc/nexwar/force.json"),
+                   help="异常受力检测的门槛(W26):真机器人标定后写这个 JSON(只写要改的项);"
+                        "没有就用缺省(占位)")
+    v.add_argument("--record", default="auto",
+                   help="连续录像(W18):录哪几路相机,逗号分隔(front,back);none 不录;auto(缺省)"
+                        "真机器人录 front,back、仿真不录。要 --outbox:片段从录像发件箱传站点")
+    v.add_argument("--record-max-gb", type=float, default=30.0,
+                   help="机器人上攒着没传的录像最多多少(GB),超了删最旧的并报站点;默认 30")
+    p.add_argument("--registration", type=Path, required=True, help="站点签发的注册文件")
+    p.add_argument("--store-dir", type=Path, required=True, help="幂等记录、事件簿、代次落盘的目录")
+    p.add_argument("--runs-root", type=Path, default=None,
+                   help="引擎归档目录(老路子,不上传);给了 --outbox 就不要再给")
+    o = p.add_argument_group("发件箱(W00c5d,决策 8):运行记录边跑边传,站点确认即删")
+    o.add_argument("--outbox", type=Path, default=None,
+                   help="发件箱目录(运行记录落 <发件箱>/runs);可以指到临时硬盘")
+    o.add_argument("--outbox-max-gb", type=float, default=20.0,
+                   help="发件箱上限(GB),到了就不接新的巡检;默认 20")
+    o.add_argument("--outbox-mount", default=os.environ.get("NEXWAR_OUTBOX_MOUNT", ""),
+                   help="发件箱所在的挂载点(临时硬盘);给了就要求它真的挂着,不然不起"
+                        "(缺省读环境变量 NEXWAR_OUTBOX_MOUNT)")
+    o.add_argument("--release-root", type=Path,
+                   default=Path(os.environ["NEXWAR_RELEASE_ROOT"])
+                   if os.environ.get("NEXWAR_RELEASE_ROOT") else None,
+                   help="双槽发布根目录(站点下发版本,W00c5d 第三部分);缺省读 NEXWAR_RELEASE_ROOT")
+    o.add_argument("--mapping", action="store_true",
+                   help="开建图(W00c5d 第二部分:站点下 mapping/map_build);要本机有 ROS 2")
+    o.add_argument("--mapping-sim", type=Path, default=None, metavar="图目录",
+                   help="演示站点用(W54):假建图 —— 录包、打包流程是真的,建出的图照搬这张图,"
+                        "回环按仿真机器人走过的路算;只配 --hal sim")
+    o.add_argument("--intake", default=None,
+                   help="站点的机器人专用接收口 https://host:port;"
+                        "mqtts 时默认 https://<broker 主机>:8444")
+    p.add_argument("--map", type=_map_arg, required=True, help="已加载地图 <map_id>:<version>")
+    p.add_argument("--home", type=_home_arg, default=None,
+                   help="原点 x,y,yaw;不给的话预飞检查 home 那一项红,goto 一律 failed")
+    p.add_argument("--period", type=float, default=0.1, help="每拍间隔(秒)")
+    p.add_argument("--tls-ca", default=None, help="mqtts:站点 CA 证书")
+    p.add_argument("--tls-cert", default=None, help="mqtts:本机证书(站点 enroll 签发,CN=robot_id)")
+    p.add_argument("--tls-key", default=None, help="mqtts:本机私钥")
+    return p
+
+
+def make_rtk(args: argparse.Namespace) -> Any:
+    """按 ``--rtk`` 起 RTK 来源(W09e);``none`` 回 None。"""
+    if args.rtk == "none":
+        return None
+    from nexwar_agent.rtk import OwnRtk, VendorRtk
+    if args.rtk == "vendor":
+        return VendorRtk([args.rtk_vendor_cmd], now_ms=wall_ms)
+    init: list[str] = []
+    if args.rtk_init is not None:
+        init = [ln.strip() for ln in args.rtk_init.read_text("utf-8").splitlines()
+                if ln.strip() and not ln.lstrip().startswith("#")]
+    return OwnRtk(args.rtk_device, args.rtk_baud, init=init, now_ms=wall_ms)
+
+
+def _is_opt(tok: str) -> bool:
+    """``--x``、``-x`` 是参数;``-0.5``、``-1,2,0`` 是值(横线后面不是字母)。"""
+    import re
+    return re.match(r"^--?[A-Za-z]", tok) is not None
+
+
+def split_env_args(p: argparse.ArgumentParser, raw: str) -> tuple[list[str], list[str]]:
+    """``/etc/nexwar/env`` 的 ``NEXWAR_AGENT_ARGS``(W32,决策 47):这一版认识的留下,不认识的连同
+    后面跟着的值一起跳过 —— 那一串是整机的、不跟版本走,新版加的参数退回老版时老版不认,不能因为
+    这个起不来。→ (留下的, 跳过的;跳过的一个参数连同它的值算一项)。"""
+    import shlex
+    known = {s for a in p._actions for s in a.option_strings}
+    groups: list[list[str]] = []                      # 每个参数连同它后面跟着的值
+    for tok in shlex.split(raw or ""):
+        if _is_opt(tok) or not groups:
+            groups.append([tok])
+        else:
+            groups[-1].append(tok)
+    kept: list[str] = []
+    skipped: list[str] = []
+    for g in groups:
+        name = g[0].split("=", 1)[0]
+        if not _is_opt(g[0]) or name not in known or name == "--env-args":
+            skipped.append(" ".join(g))
+        elif len(g) == 2 and "=" not in g[0]:
+            kept.append(f"{g[0]}={g[1]}")              # --home=-1,2,0:横线开头的值 argparse 才认
+        else:
+            kept += g
+    return kept, skipped
+
+
+def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
+    p = build_parser()
+    argv = list(sys.argv[1:] if argv is None else argv)
+    # W32:``--env-args=<串>`` 是启动脚本从 /etc/nexwar/env 带来的;拆开、认不得的跳过,接在最后
+    # (跟以前直接摊在命令行末尾一样:写在后面的盖前面的)。命令行上直接给的参数照旧严格检查。
+    raw: list[str] = []
+    rest: list[str] = []
+    it = iter(argv)
+    for tok in it:
+        if tok.startswith("--env-args="):
+            raw.append(tok.split("=", 1)[1])
+        elif tok == "--env-args":
+            raw.append(next(it, ""))
+        else:
+            rest.append(tok)
+    kept: list[str] = []
+    skipped: list[str] = []
+    for r in raw:
+        k, s = split_env_args(p, r)
+        kept += k
+        skipped += s
+    args = p.parse_args(rest + kept)
+    args.skipped_env_args = skipped
+    for s in skipped:
+        log.warning("NEXWAR_AGENT_ARGS 里的 %r 这一版不认识:跳过(起来以后报站点)", s)
+    tls = (args.tls_ca, args.tls_cert, args.tls_key)
+    given = [t is not None for t in tls]
+    if args.transport.startswith("mqtts://"):
+        # 站点 broker 要双向认证(W00c1):缺哪一件都连不上,不如起动时就说清楚。
+        if not all(given):
+            p.error("mqtts:// 要带齐 --tls-ca、--tls-cert、--tls-key")
+    elif any(given):
+        p.error("--tls-* 只用于 mqtts://")
+    if (args.outbox is None) == (args.runs_root is None):
+        p.error("--outbox 与 --runs-root 给且只给一个(运行记录落在哪)")
+    if args.mapping_sim is not None and (args.hal != "sim" or args.outbox is None
+                                         or args.mapping):
+        p.error("--mapping-sim 只配 --hal sim、要 --outbox、不跟 --mapping 一起")
+    if args.mapping and args.outbox is None:
+        p.error("--mapping 要配 --outbox(录包和生成的图都写进发件箱传给站点)")
+    if args.obstacles == "bridge" and args.nav not in ("planned", "nav2"):
+        p.error("--obstacles bridge 要配 --nav planned 或 nav2(守卫在规划后端里)")
+    if args.nav == "nav2" and args.obstacles != "bridge":
+        p.error("--nav nav2 要配 --obstacles bridge(Nav2 的障碍层吃感知节点的栅格)")
+    if args.robot_radius is not None and not (0.1 <= args.robot_radius <= 2.0):
+        p.error("--robot-radius 要在 0.1–2.0 米之间")
+    if args.outbox is not None:
+        if not args.outbox.is_absolute():
+            p.error(f"--outbox 要是绝对路径(NEXWAR_OUTBOX 没设?):{args.outbox!s}")
+        mount = args.outbox_mount
+        if mount:
+            m = Path(mount)
+            if not os.path.ismount(m):
+                p.error(f"发件箱要在 {m} 上,可它没挂上(临时硬盘没插好?)—— 不往系统盘上写")
+            if m.resolve() not in (args.outbox.resolve(), *args.outbox.resolve().parents):
+                p.error(f"--outbox {args.outbox} 不在 {m} 底下")
+        args.runs_root = args.outbox / "runs"
+        if args.outbox_max_gb <= 0:
+            p.error("--outbox-max-gb 要大于 0")
+        if args.intake is None and args.transport.startswith("mqtts://"):
+            host = urlsplit(args.transport).hostname
+            args.intake = f"https://{host}:{INTAKE_PORT}"
+        if args.intake is not None and not args.intake.startswith("https://"):
+            p.error("--intake 只认 https://(机器人的身份是 mTLS 证书)")
+        if args.intake is not None and not all(given):
+            p.error("--intake 要带 --tls-ca、--tls-cert、--tls-key(机器人的身份是证书)")
+    if args.sim_localizer and (args.hal != "sim" or args.localizer != "bridge"):
+        p.error("--sim-localizer 要配 --hal sim --localizer bridge")
+    nexwar_only = [k for k in NEXWAR_DEFAULTS if getattr(args, k) is not None]
+    if args.invert_yaw:
+        nexwar_only.append("invert_yaw")
+    if args.invert_lateral:
+        nexwar_only.append("invert_lateral")
+    if args.units_confirmed:
+        nexwar_only.append("units_confirmed")
+    if args.hal == "d1max":
+        for k, v in NEXWAR_DEFAULTS.items():
+            if getattr(args, k) is None:
+                setattr(args, k, v)
+        bad = [f"--{k.replace('_', '-')} {getattr(args, k)}(要在 {lo}–{hi})"
+               for k, (lo, hi) in UNIT_RANGES.items()
+               if not lo <= getattr(args, k) <= hi]
+        if bad and not args.units_confirmed:
+            p.error("速度换算系数不在 SDK 低速档的合理范围里:" + "、".join(bad)
+                    + "。老模板的 0.4 / 1.0 是猜的(文档是 1.0 m/s、1.5 rad/s),照它换算限速区限不住;"
+                    "删掉用默认值、写实测值,实测值真不在范围里人核过之后加 --units-confirmed(W12)")
+    elif nexwar_only:
+        p.error(f"{', '.join('--' + k.replace('_', '-') for k in nexwar_only)} 只用于 --hal d1max")
+    return args
+
+
+@dataclass
+class Assembled:
+    bridge: Any
+    runtime: AgentRuntime
+    parts: EngineParts
+    hal: Any
+    broker: MemoryBroker | None
+    period_s: float
+    _stop: threading.Event
+    pump: Any = None
+    #: 仿真定位器(``--sim-localizer``,W09a):运行时起来之后连本机定位桥、按 10 Hz 出位姿。
+    sim_loc: Any = None
+
+    #: 启动参数里这一版不认识、跳过了的(W32):起来以后记一条事件,站点报 P2。
+    skipped_args: tuple[str, ...] = ()
+
+    def start(self) -> None:
+        """在 bridge 的循环里起运行时,并开始每拍 step;发件箱一起起。"""
+        self.bridge.call(self.runtime.start, timeout_s=30.0)
+        if self.skipped_args:
+            skipped = list(self.skipped_args)
+
+            async def tell() -> None:
+                self.runtime.events.emit("agent_args_skipped",
+                                         {"args": skipped, "version": AGENT_VERSION})
+            self.bridge.call(tell, timeout_s=10.0)
+        self.bridge.spawn(lambda: self._drive())
+        if self.sim_loc is not None:
+            self.bridge.spawn(lambda: self._sim_localize())
+        if self.pump is not None:
+            self.pump.start()
+
+    async def _sim_localize(self) -> None:
+        """仿真定位器:连上就按 10 Hz 出位姿;断了(被代理断开、代理重启桥)1 s 后重连。"""
+        while not self._stop.is_set():
+            try:
+                if await self.sim_loc.connect():
+                    await self.sim_loc.run(10.0)
+            except OSError as exc:
+                log.warning("仿真定位器连不上本机定位桥:%s", exc)
+            except Exception:                    # 别的毛病也不能让它悄悄停了、不再重连(W09a 内审)
+                log.exception("仿真定位器出错了,1 s 后重连")
+            await self.sim_loc.close()
+            await asyncio.sleep(1.0)
+
+    async def _drive(self) -> None:
+        dt = self.period_s
+        while not self._stop.is_set():
+            tick = getattr(self.hal, "tick", None)
+            if tick is not None:                 # sim 自己要推进;真 HAL 没有 tick
+                try:
+                    tick(dt)
+                except Exception:
+                    log.exception("HAL 的 tick 炸了,运行时这一拍照走")
+            try:
+                await self.runtime.step(dt)
+            except Exception:
+                log.exception("运行时一拍炸了,下一拍继续")
+            await asyncio.sleep(dt)
+
+    def stop(self) -> None:
+        self._stop.set()
+        if self.sim_loc is not None:
+            try:
+                self.bridge.call(self.sim_loc.close, timeout_s=5.0)
+            except Exception:
+                log.exception("仿真定位器关不干净")
+        try:
+            self.bridge.call(self.runtime.close, timeout_s=10.0)
+        except Exception:
+            log.exception("运行时关不干净")
+        # 发件箱最后停(先把狗停好、控制权放掉;发件箱停不等手上那一块传完)。
+        if self.pump is not None:
+            try:
+                self.pump.stop()
+            except Exception:
+                log.exception("发件箱停不干净")
+        self.bridge.stop()
+
+
+def _make_transport(url: str, client_id: str, broker: MemoryBroker | None, *,
+                    tls: tuple[str | None, str | None, str | None] = (None, None, None)
+                    ) -> Transport:
+    if url == "memory://":
+        assert broker is not None
+        return MemoryTransport(broker, client_id)
+    from nexwar_contract import paho_transport
+    ca, cert, key = tls
+    return paho_transport.PahoTransport(url, client_id=client_id, tls_ca=ca, tls_cert=cert,
+                                        tls_key=key)
+
+
+def build(args: argparse.Namespace) -> Assembled:
+    from nexwar_patrol.app.bridge import LoopBridge
+
+    registration = Registration.load(args.registration)
+    broker = MemoryBroker() if args.transport == "memory://" else None
+    bridge = LoopBridge()
+    bridge.start()
+
+    def _assemble() -> tuple[Any, EngineParts, AgentRuntime]:
+        media: dict | None
+        payload = None
+        if args.hal == "sim":
+            from nexwar_adapter_sim.robot import SimRobot
+            from nexwar_agent.bridges.sim_media import sim_media
+            hal: Any = SimRobot(now_ms=wall_ms, payload=args.sim_payload, lateral=True)
+            media = sim_media(wall_ms)
+            if args.video_source == "file" and args.video_dir is not None:
+                # W64:演示用真录像时,到点拍照也从录像里截一帧(不是空白图)
+                from nexwar_agent.bridges.rtsp_media import rtsp_media
+                from nexwar_agent.video_push import file_snapshot_source
+                media = rtsp_media(file_snapshot_source(args.video_dir), now_ms=wall_ms,
+                                   ffmpeg=args.ffmpeg)
+        else:
+            from nexwar_adapter_d1max.hal import D1MaxHal
+            host, port = args.sidecar
+            if args.payload.is_file():
+                from nexwar_adapter_d1max.payload import Payload, PayloadConfig
+                payload = Payload(PayloadConfig.load(args.payload))
+                log.info("上装配置 %s:接了 %s", args.payload,
+                         "、".join(o for o in ("strobe", "siren", "spotlight", "speaker")
+                                  if payload.has(o)) or "(一路都没有)")
+            hal = D1MaxHal(host, port, mps_per_unit=args.mps_per_unit,
+                           radps_per_unit=args.radps_per_unit, deadband_mps=args.deadband,
+                           max_fraction=args.max_fraction, fwd_offset=args.fwd_offset,
+                           invert_yaw=args.invert_yaw,
+                           lateral_mps_per_unit=args.lateral_mps_per_unit,
+                           invert_lateral=args.invert_lateral,
+                           stopped_eps=args.stopped_eps, now_ms=wall_ms, payload=payload,
+                           token_file=sidecar_token_path(args.sidecar_token_file))
+            # 工单 18:到点拍照跟实时画面用同一套 RTSP 相机,每次 ffmpeg 抽一帧 JPEG
+            from nexwar_agent.bridges.rtsp_media import rtsp_media
+            from nexwar_agent.video_push import rtsp_source as _rtsp_source
+            media = rtsp_media(_rtsp_source(args.camera_host, extra_cameras(args)),
+                               now_ms=wall_ms, ffmpeg=args.ffmpeg)
+        parts = build_engine(hal, runs_root=args.runs_root, now_ms=wall_ms, map_id=args.map[0],
+                             home=args.home, media=media, nav_kind=args.nav,
+                             robot_radius_m=args.robot_radius)
+        if hasattr(parts.nav, "preview"):
+            parts.nav.preview = args.nav_preview == "on"
+        transport = _make_transport(args.transport, registration.robot_id, broker,
+                                    tls=(args.tls_ca, args.tls_cert, args.tls_key))
+        from nexwar_agent.video_push import VideoPusher, file_source, lavfi_source, rtsp_source
+        kind = args.video_source if args.video_source != "auto" else (
+            "lavfi" if args.hal == "sim" else "rtsp")
+        if kind == "file":
+            from nexwar_contract.video import STANDARD_CAMERAS
+            folder = args.video_dir
+            missing = [f"{c}.mp4" for c in STANDARD_CAMERAS
+                       if folder is None or not (folder / f"{c}.mp4").is_file()]
+            if missing:
+                raise SystemExit(f"--video-source file:{folder} 里没有 {'、'.join(missing)}")
+            source = file_source(folder)
+        else:
+            source = lavfi_source if kind == "lavfi" else rtsp_source(args.camera_host,
+                                                                       extra_cameras(args))
+        video = VideoPusher(source=source, ffmpeg=args.ffmpeg, transcode=args.video_transcode)
+        pump = keeper = mapper = recorder = None
+        cams = record_cameras(args)
+        sealer = _sealer(args)
+        if args.outbox is not None:
+            pump, keeper, mapper = _outbox(args, registration, parts, record=bool(cams),
+                                           sealer=sealer)
+            if cams:
+                from nexwar_agent.recording import Recorder
+                recorder = Recorder(video_root(args), cams, source=source,
+                                    encode=args.video_transcode,
+                                    quota_bytes=int(args.record_max_gb * 2**30),
+                                    emit=lambda k, d: None, monotonic=time.monotonic,
+                                    ffmpeg=args.ffmpeg, sealer=sealer)
+        elif cams:
+            log.warning("给了 --record 但没有 --outbox:不录(片段要从录像发件箱传站点)")
+        if mapper is not None and args.mapping_sim is not None:
+            # 假建图跟着仿真机器人的位置长预览、算走过的路
+            mapper.orch.pose = lambda: (hal.x, hal.y, hal.yaw)
+        runtime = AgentRuntime(transport=transport, registration=registration, hal=hal,
+                               store_dir=args.store_dir, now_ms=wall_ms, loaded_map=args.map,
+                               parts=parts, video=video, recorder=recorder,
+                               autonomy=resolve_autonomy(args),
+                               storage_facts=pump.facts if pump is not None else None,
+                               maps=keeper, mapper=mapper,
+                               releases=_releases(args, registration),
+                               localizer=args.localizer, loc_socket=args.loc_socket,
+                               rtk=make_rtk(args), obstacles=args.obstacles,
+                               obs_socket=args.obs_socket, nav2_socket=args.nav2_socket,
+                               persons=args.persons,
+                               persons_socket=args.persons_socket,
+                               persons_snapshots=args.persons_snapshots,
+                               persons_listen=args.persons_listen,
+                               persons_key=_persons_key(args),
+                               persons_peer=args.persons_peer)
+        runtime.evidence_sealed = sealer is not None   # W30b:能力里报,没封站点报 P2
+        if args.tls_cert:
+            runtime.tls_cert = Path(args.tls_cert)       # 工单 9:能力里报在用证书哪天到期
+        if runtime.devices is not None:                 # W40:设备健康补上盘、网络设备
+            from nexwar_agent.devices import camera_links, parse_links
+            runtime.devices.outbox = Path(args.outbox) if args.outbox is not None else None
+            runtime.devices.outbox_mount = args.outbox_mount or ""
+            try:
+                links = parse_links(args.links or "")
+            except ValueError as exc:
+                raise SystemExit(str(exc)) from exc
+            runtime.devices.links = camera_links(extra_cameras(args) if kind == "rtsp" else {}) \
+                | links
+        if runtime.force is not None:                   # W26:标定过的门槛
+            from nexwar_agent.force import ForceConfig
+            try:
+                runtime.force.cfg = ForceConfig.load(args.force_config)
+            except (OSError, ValueError) as exc:     # 写错了:照缺省判,能力里带上,站点报 P2
+                log.error("受力门槛 %s 读不懂,用缺省:%s", args.force_config, exc)
+                runtime.force.config_error = str(exc)[:200]
+                runtime.events.emit("force_config_bad", {"reason": str(exc)[:200]})
+        if pump is not None:
+            runtime._outbox_retry = pump.retry_refused
+            runtime._unsealed = pump.unsealed
+            runtime.upload_hold = pump.set_hold         # W46:过热降负载时暂停上传
+        bind = _bindlink()
+        if bind is not None:
+            runtime.bind = bind                         # W42:WiFi 状态、解绑、确认换 WiFi
+        # W56:风扇堵转报警线接在上装继电器板的输入上(上装每秒读一次)
+        board = _board(args, relay_inputs=payload.input_bits
+                       if payload is not None and payload.cfg.inputs_reg >= 0 else None)
+        if board is not None:
+            runtime.attach_board(board)
+        if kind == "rtsp" and "thermal" in extra_cameras(args):   # W46:热像镜头被挡
+            from nexwar_agent.lens import LensWatch, ffmpeg_gray
+            runtime.attach_lens(LensWatch(ffmpeg_gray(source("thermal"), args.ffmpeg),
+                                          emit=lambda k, d: None))
+        runtime.attach_ops(_ops(args, registration, runtime))   # W55 远程运维
+        return hal, parts, runtime, pump
+
+    async def _in_loop():
+        return _assemble()
+
+    hal, parts, runtime, pump = bridge.call(_in_loop, timeout_s=30.0)
+    sim_loc = None
+    if args.sim_localizer:
+        from nexwar_adapter_sim.localizer import SimLocalizer
+        sim_loc = SimLocalizer(hal, args.loc_socket or Path(args.store_dir) / "loc.sock")
+    return Assembled(bridge=bridge, runtime=runtime, parts=parts, hal=hal, broker=broker,
+                     period_s=args.period, _stop=threading.Event(), pump=pump, sim_loc=sim_loc,
+                     skipped_args=tuple(getattr(args, "skipped_env_args", ())))
+
+
+class _NoIntake:
+    """没有接收口(memory:// 演示):只攒不传,文件都留在发件箱里。"""
+
+    def put(self, req):
+        from nexwar_agent.engine.uploader import SinkError
+        raise SinkError("没有配站点接收口")
+
+
+def extra_cameras(args: argparse.Namespace) -> dict[str, dict[str, Any]]:
+    """``--cameras``(W40):自带两路以外的相机。写错了代理不起(说清楚哪里错)。只读一次。"""
+    got = getattr(args, "_extra_cameras", None)
+    if got is None:
+        from nexwar_agent.video_push import CameraConfigError, load_cameras
+        try:
+            got = load_cameras(args.cameras) if getattr(args, "cameras", None) else {}
+        except CameraConfigError as exc:
+            raise SystemExit(str(exc)) from exc
+        args._extra_cameras = got
+    return got
+
+
+def record_cameras(args: argparse.Namespace) -> list[str]:
+    """``--record`` → 录哪几路(W18)。``auto``:真狗前后两路(加上 ``--cameras`` 里写了 ``record`` 的,
+    W40)、仿真不录;``none``/空:不录。"""
+    from nexwar_contract.video import STANDARD_CAMERAS
+    raw = (args.record or "").strip()
+    extra = extra_cameras(args) if args.hal == "d1max" or raw not in ("auto", "", "none") else {}
+    have = list(dict.fromkeys([*STANDARD_CAMERAS, *extra]))
+    if raw == "auto":
+        return [*STANDARD_CAMERAS, *(c for c, v in extra.items()
+                                     if v["record"] and c not in STANDARD_CAMERAS)] \
+            if args.hal == "d1max" else []
+    if raw in ("", "none"):
+        return []
+    cams = [c.strip() for c in raw.split(",") if c.strip()]
+    bad = [c for c in cams if c not in have]
+    if bad:
+        raise SystemExit(f"--record 不认识的相机 {bad}(只有 {have})")
+    return cams
+
+
+def video_root(args: argparse.Namespace) -> Path:
+    """录像(W18)就在发件箱里:``<发件箱>/video``(传)、``<发件箱>/.rec``(正在录)。跟发件箱同一块盘、
+    同一套权限(另开一个目录的话,发件箱在临时盘上时那一层未必写得进,代理就起不来了);运行记录那一块
+    量用量时不算这两个目录(``not_counted``)。"""
+    return Path(args.outbox)
+
+
+def _sealer(args: argparse.Namespace) -> Any:
+    """证据加密(W30b,决策 51):有站点公钥就封;没有(老狗、没装好)照旧明文。照片的封在
+    :class:`RunArchive` 上设一次(引擎、人员截图都经它存照片)。"""
+    from nexwar_agent.engine.archive import RunArchive
+    from nexwar_contract.evseal import Sealer, SealError, load_public
+    path = getattr(args, "evidence_pub", None)
+    sealer = None
+    if path is not None and Path(path).is_file():
+        try:
+            sealer = Sealer(load_public(path))
+        except SealError as exc:
+            log.error("证据公钥用不了(照旧明文存):%s", exc)
+    else:
+        log.warning("没有证据公钥 %s:照片、截图、录像明文存在机器人上(站点会报 P2)", path)
+    RunArchive.sealer = sealer
+    return sealer
+
+
+def after_switch(priv: Any, ops: Any) -> bool:
+    """换版本以后(W55):按这一版包里的服务单元更新(验签)、把我们所有的服务重启(代理最后,由执行器重启)。
+    回真 = 交给执行器了 / 退回上一版了(都会重启代理,这里不用自己退);回假 = 调用方自己退出,
+    systemd 从新的 current 起来。
+
+    外审 W55-3 I4:有服务起不来,而且这次升级还在途(没提交)→ 退回上一版,不让它被提交成「升级成功」。
+    退回会再走一遍这里(那时已不在途,不会再退)。"""
+    from nexwar_contract import privops
+    if priv is None or ops is None:
+        return False
+    try:
+        got = priv.call("units_apply", {"release": ops.current()}, timeout_s=120)
+        if not got.get("ok"):
+            log.warning("这一版的服务单元未更新:%s", got.get("error"))
+        got = priv.call("restart_all", timeout_s=900)
+        if got.get("ok"):
+            return True                          # 执行器最后会把代理也重启
+        why = f"重启全部服务失败:{got.get('error')}"
+    except privops.PrivOpsError as exc:
+        # 外审 W55-4 I4:执行器不可用、结果未知也一样 —— 服务是不是都换上了说不准,不许被提交
+        why = f"特权执行器不可用或结果未知:{exc}"
+    log.error("%s", why)
+    from nexwar_agent.engine import release as rel
+    try:
+        if rel.read_pending(ops.layout) is not None:
+            log.error("这次升级还没提交:退回上一版")
+            ops.rollback()
+            return True
+    except Exception:
+        # 外审 W55-4 N3:退回本身出错 —— 不能让这条线程悄悄结束、机器人一直卡在「重启中」:
+        # 记下来,照常退出代理(systemd 拉起来,开机守卫、升级前检查接着管)
+        log.exception("退回上一版失败:只重启代理")
+        return False
+    log.warning("只重启代理")
+    return False
+
+
+def _board(args: argparse.Namespace, *, relay_inputs: Any = None) -> Any:
+    """``--board``(W46):文件在才看板子温度、风扇;写错了代理不起(说清楚哪里错)。"""
+    path = getattr(args, "board", None)
+    if path is None or not Path(path).is_file():
+        return None
+    from nexwar_agent.boardhealth import BoardConfig, BoardConfigError, BoardMonitor
+    try:
+        cfg = BoardConfig.load(path)
+    except BoardConfigError as exc:
+        raise SystemExit(f"{path}:{exc}") from exc
+    mon = BoardMonitor(cfg, emit=lambda k, d: None, relay_inputs=relay_inputs)
+    mon.start()
+    return mon
+
+
+def _outbox(args: argparse.Namespace, registration: Registration, parts: EngineParts,
+            *, record: bool = False, sealer: Any = None) -> tuple[Any, Any, Any]:
+    """发件箱 + 后台线程;站点下发地图、录包重建(W00c5d 第二部分)。
+
+    上传、下载都走站点的狗专用口,**mTLS**:跟 MQTT 同一套证书(身份就是证书)。发件箱分三块:
+    运行记录 ``runs``、建图录包 ``bags``、重建出来的图 ``maps``,各自一个队列,一条线程轮着传。
+    返回 (发件箱线程, 地图工作副本, 录包重建)。"""
+    import ssl
+
+    from nexwar_agent.engine.http_sink import HttpSink
+    from nexwar_agent.mapping import (
+        DONE,
+        MappingService,
+        bag_classify,
+        map_classify,
+        map_settled,
+    )
+    from nexwar_agent.maps import MapKeeper, https_fetch
+    from nexwar_agent.outbox import Outbox, OutboxPump
+    cap = int(args.outbox_max_gb * 2**30)
+    sinks: list[Any] = [_NoIntake()] * 4
+    keeper = None
+    if args.intake is not None:
+        ctx = ssl.create_default_context(cafile=args.tls_ca)
+        ctx.load_cert_chain(args.tls_cert, args.tls_key)
+        sinks = [HttpSink(args.intake, ssl_context=ctx),
+                 HttpSink(args.intake + "/bags", ssl_context=ctx),
+                 HttpSink(args.intake + "/maps", ssl_context=ctx),
+                 HttpSink(args.intake + "/video", ssl_context=ctx)]
+        keeper = MapKeeper(Path(args.store_dir) / "maps", fetch=https_fetch(args.intake, ctx))
+    mapper = None
+    if args.mapping_sim is not None:
+        from nexwar_agent.sim_mapping import SimMappingOrchestrator
+        orch = SimMappingOrchestrator(args.mapping_sim, bags_dir=args.outbox / "bags",
+                                      work=Path(args.store_dir) / "mapwork")
+        mapper = MappingService(orch, bags_root=args.outbox / "bags",
+                                maps_out=args.outbox / "maps")
+        mapper.keeper = keeper
+    elif args.mapping:
+        from nexwar_patrol.app.mapping import MappingConfig, MappingOrchestrator
+        from nexwar_patrol.app.procs import ProcManager
+        store = Path(args.store_dir)
+        work = store / "mapwork"
+        orch = MappingOrchestrator(ProcManager(store / "logs"),
+                                   MappingConfig(bags_dir=args.outbox / "bags", maps_dir=work,
+                                                 front=os.environ.get("NEXWAR_MAP_FRONT",
+                                                                      "superlio")),
+                                   pause_units=_mapping_pauser())
+        mapper = MappingService(orch, bags_root=args.outbox / "bags",
+                                maps_out=args.outbox / "maps")
+        mapper.keeper = keeper                            # 建好的图放进本地库(W09c 决定 7)
+    from nexwar_agent.recording import STAGING, SUB
+    runs = Outbox(args.outbox, cap_bytes=cap, sink=sinks[0], sn=registration.robot_id,
+                  now_ms=wall_ms, not_counted=(SUB, STAGING))
+    bags = Outbox(args.outbox, cap_bytes=cap, sink=sinks[1], sn=registration.robot_id,
+                  now_ms=wall_ms, sub="bags", run_depth=1, classify=bag_classify,
+                  settled=mapper.bag_settled if mapper is not None
+                  else (lambda p: (p / DONE).is_file()),
+                  delete_lock=mapper.lock if mapper is not None else None)
+    maps = Outbox(args.outbox, cap_bytes=cap, sink=sinks[2], sn=registration.robot_id,
+                  now_ms=wall_ms, sub="maps", run_depth=2, classify=map_classify,
+                  settled=map_settled)
+
+    def _active() -> set[Path]:
+        # 引擎跑完之后 archive 还指着上一趟(W00c5d 内部评审):只有正在跑的那一趟算「正在写」,
+        # 不然最后一趟一直删不掉。
+        a = parts.engine.archive
+        return {a.path} if a is not None and parts.engine.running else set()
+    runs.active = _active
+    # 每一趟带随机后缀:传完就删,狗的钟往回拨也不会跟站点上早就收齐的那一趟撞名(内部评审)。
+    import secrets
+    parts.engine.run_suffix = lambda: f"{secrets.randbelow(10 ** 6):06d}"
+    video = ()
+    if record:
+        from nexwar_agent.recording import video_classify
+        video = (Outbox(video_root(args), cap_bytes=int(args.record_max_gb * 2**30),
+                        sink=sinks[3], sn=registration.robot_id, now_ms=wall_ms, sub=SUB,
+                        run_depth=2, classify=video_classify, settled=lambda p: True),)
+    if sealer is not None:
+        # W30b(决策 51):升级前就在发件箱里的明文照片、录像,在上传线程起来之前就地封上
+        from nexwar_agent.recording import VIDEO_FILE, VIDEO_SEALED
+        n = runs.seal_leftovers(sealer, lambda rel: rel.startswith("photos/"))
+        for v in video:
+            n += v.seal_leftovers(sealer, lambda rel: rel == VIDEO_FILE)
+        if n:
+            log.info("发件箱里 %d 个明文照片、录像补封上了(%s)", n, VIDEO_SEALED)
+    pump = OutboxPump(runs, more=(bags, maps), uncounted=video)
+    if mapper is not None:
+        from nexwar_agent.mapping import storage_pressure
+        mapper.pressure = lambda: storage_pressure(pump.facts())
+    return pump, keeper, mapper
+
+
+def _releases(args: argparse.Namespace, registration: Registration) -> Any:
+    """站点下发版本(W00c5d 第三部分):有双槽根目录、有站点接收口才开。"""
+    if args.release_root is None or args.intake is None:
+        return None
+    import functools
+    import ssl
+
+    from nexwar_agent.engine.release import Layout
+    from nexwar_agent.release_ops import (
+        ReleaseOps,
+        build_venv,
+        default_python,
+        https_fetch,
+        pip_args_from_env,
+    )
+    ctx = ssl.create_default_context(cafile=args.tls_ca)
+    ctx.load_cert_chain(args.tls_cert, args.tls_key)
+
+    holder: dict[str, Any] = {}
+
+    def restart() -> None:
+        # 等 3 秒,让回执与「在切了」那条事件先出去。
+        # W55:装了特权执行器的机器人,先按这一版包里的服务单元更新(验签)、再把**我们所有的服务**
+        # 重启(定位、避障、人员、雷达合并……,代理最后);没装的照旧只让代理自己退出,systemd 从新的
+        # current 起来(别的服务要等机器人重启才跑新版)。
+        def go() -> None:
+            from nexwar_contract import privops
+            if not after_switch(privops.from_config(), holder.get("ops")):
+                os.kill(os.getpid(), signal.SIGTERM)
+        threading.Timer(3.0, go).start()
+    from nexwar_contract import relsign
+    pub = Path(os.environ.get("NEXWAR_RELEASE_PUBKEY") or relsign.DEFAULT_PUBKEY)
+    unsigned_ok = os.environ.get("NEXWAR_RELEASE_UNSIGNED_OK") == "1"
+    if unsigned_ok:
+        log.warning("NEXWAR_RELEASE_UNSIGNED_OK=1:没装发行公钥时不验签名(只许开发、仿真用)")
+    holder["ops"] = ReleaseOps(Layout(root=args.release_root), fetch=https_fetch(args.intake, ctx),
+                               build=functools.partial(build_venv, pip_args=pip_args_from_env(),
+                                                       python=default_python()),
+                               work=Path(args.store_dir) / "release-dl", now_ms=wall_ms,
+                               restart=restart, sn=registration.robot_id,
+                               signature_check=lambda pkg: relsign.check_package(
+                                   pkg, pub, allow_unsigned=unsigned_ok))
+    return holder["ops"]
+
+
+def _mapping_pauser() -> Any:
+    """工单 21:Super-LIO 边走边建时暂停合并雷达、定位器(经特权执行器;没装执行器 = 不暂停)。
+    回 ``(on, 服务) -> (列表, 出错原因)``:暂停回真停了的(建图前没在跑的不算),恢复回没恢复成的。"""
+    from nexwar_contract import privops
+    priv = privops.from_config()
+    if priv is None:
+        return None
+
+    def pause(on: bool, units: Any) -> tuple[list[str], str]:
+        errs: list[str] = []
+        listed: list[str] = []
+        for unit in units:
+            try:
+                got = priv.call("pause" if on else "resume", {"unit": unit}, timeout_s=150)
+            except Exception as exc:  # noqa: BLE001 - 尽力而为,原因带回去
+                got = {"ok": False, "error": str(exc)}
+            ok = bool(got.get("ok"))
+            if not ok:
+                errs.append(f"{unit}:{got.get('error') or '未知原因'}")
+            # 暂停出错的可能已经停了(停到一半超时):保守记成停了,之后恢复;恢复出错的留着重试
+            if (on and (not ok or got.get("stopped", True))) or (not on and not ok):
+                listed.append(unit)
+        return listed, ";".join(errs)[:300]
+    return pause
+
+
+def _ops(args: argparse.Namespace, registration: Registration, runtime: Any) -> Any:
+    """W55 远程运维。装了特权执行器(``/etc/nexwar_ops.json``)就用它;仿真机器人用模拟的
+    (动作记下来、不真做,演示站点上点得动);真机没装执行器 = 要 root 的那几项不报。"""
+    from nexwar_agent.ops import OpsDesk
+    from nexwar_contract import privops
+    from nexwar_contract.debuglog import DebugWatch
+    priv: Any = privops.from_config()
+    if priv is None and args.hal == "sim":
+        priv = privops.SimOps(restarts=False)        # W61:没人会重启仿真代理,做完就放开
+    data_root = Path(os.environ.get("NEXWAR_DATA_ROOT") or Path(args.store_dir).parent)
+    desk = OpsDesk(robot_id=registration.robot_id, priv=priv, data_root=data_root,
+                   busy=lambda: "", releases=runtime.releases,
+                   tls_cert=Path(args.tls_cert or "/etc/nexwar/tls/robot.crt"),
+                   tls_ca=Path(args.tls_ca or "/etc/nexwar/tls/ca.crt"))
+    DebugWatch(desk.debug_flag).start()               # 代理自己的日志级别也跟着到点文件走
+    return desk
+
+
+#: 证书「还没生效」「已过期」(OpenSSL 的 X509_V_ERR_CERT_NOT_YET_VALID / CERT_HAS_EXPIRED)。
+_CERT_TIME_ERRORS = (9, 10)
+
+
+def tls_probe(url: str, ca: str | None, cert: str | None, key: str | None, *,
+              timeout_s: float = 5.0) -> BaseException | None:
+    """按同一套证书跟站点 broker 握一次手,回握手的错(没错、不是 mqtts 回 None)。paho 在自己的线程里
+    握手,失败时回调里不带异常,传输层只说「TCP 或 TLS 握手失败」—— 代理起不来时靠它拿到真的原因
+    (W09d)。"""
+    import socket
+    import ssl
+    if not url.startswith("mqtts://"):
+        return None
+    parts = urlsplit(url)
+    host, port = parts.hostname or "", parts.port or 8883
+    try:
+        ctx = ssl.create_default_context(cafile=ca)
+        if cert and key:
+            ctx.load_cert_chain(cert, key)
+        with socket.create_connection((host, port), timeout=timeout_s) as raw, \
+                ctx.wrap_socket(raw, server_hostname=host):
+            return None
+    except Exception as exc:  # noqa: BLE001 - 要的就是这个错
+        return exc
+
+
+def clock_hint(exc: BaseException, *, now_ms: int) -> str:
+    """连站点失败、原因是证书的有效期(W09d):多半是狗的钟不对 —— Orin 没有 NTP 时钟能慢半年,
+    站点证书就「还没生效」。回一句给现场看的提示;别的错回空串。"""
+    import datetime as dt
+    import ssl
+    seen: set[int] = set()
+    e: BaseException | None = exc
+    while e is not None and id(e) not in seen:
+        seen.add(id(e))
+        if isinstance(e, ssl.SSLCertVerificationError) and (
+                getattr(e, "verify_code", None) in _CERT_TIME_ERRORS
+                or "not yet valid" in str(e) or "has expired" in str(e)):
+            now = dt.datetime.fromtimestamp(now_ms / 1000, tz=dt.timezone.utc)
+            return (f"站点证书的有效期对不上:机器人的钟可能不对(现在是 {now:%Y-%m-%d %H:%M} UTC)。"
+                    "机器人该向站点主机对时(W09d:/etc/nexwar/env 填好站点地址后重跑装机脚本,"
+                    "timedatectl timesync-status 看)")
+        e = e.__cause__ or e.__context__
+    return ""
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    logging.basicConfig(level=logging.INFO,
+                        format="%(asctime)s %(levelname)s %(name)s %(message)s")
+    args = parse_args(argv)
+    assembled = build(args)
+    try:
+        assembled.start()
+    except Exception as exc:  # noqa: BLE001 - 连不上 broker 之类:退非零,交给 systemd 重试
+        log.error("nexwar_agent 起不来: %r", exc)
+        print(f"nexwar_agent 起不来: {exc!r}", file=sys.stderr, flush=True)
+        probe = tls_probe(args.transport, args.tls_ca, args.tls_cert, args.tls_key)
+        hint = clock_hint(probe or exc, now_ms=wall_ms())
+        if hint:
+            log.error("%s", hint)
+            print(hint, file=sys.stderr, flush=True)
+        assembled.stop()
+        return 1
+    got: list[str] = []
+
+    def _on_term(signum, frame):              # systemd 停服务发 SIGTERM:走同一条收尾路
+        got.append(signal.Signals(signum).name)
+        assembled._stop.set()
+
+    signal.signal(signal.SIGTERM, _on_term)
+    print(f"nexwar_agent 起来了:transport={args.transport} hal={args.hal} "
+          f"robot={assembled.runtime.registration.robot_id}", flush=True)
+    try:
+        while not assembled._stop.wait(0.5):
+            pass
+        if got:
+            print(f"收到 {got[0]},收尾中……", flush=True)
+    except KeyboardInterrupt:
+        print("\n收到 Ctrl+C,收尾中……", flush=True)
+    finally:
+        assembled.stop()
+    return 0
+
+
+if __name__ == "__main__":      # pragma: no cover - 入口
+    sys.exit(main())

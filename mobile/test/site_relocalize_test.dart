@@ -1,8 +1,8 @@
 // 设位置（W00c6e，里程锚定）：单狗页显示定位状态；能派单的人给狗设位置 —— 「狗在原点」一键，或者输坐标。
 import 'dart:math';
 
-import 'package:d1max_patrol/net/site_client.dart';
-import 'package:d1max_patrol/ui/site_page.dart';
+import 'package:nexwar_patrol/net/site_client.dart';
+import 'package:nexwar_patrol/ui/site_page.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 

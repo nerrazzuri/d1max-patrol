@@ -32,12 +32,12 @@ def test_四把都生成_私钥只有自己读_说明里有编号(tmp_path):
     assert stat.S_IMODE(out.stat().st_mode) == 0o700
     for f in ("release.key", "unbind.key", "factory.key", "android-release.jks"):
         assert stat.S_IMODE((out / f).stat().st_mode) == 0o600, f
-    from d1max_contract import relsign
+    from nexwar_contract import relsign
     note = (out / "钥匙说明.txt").read_text()
     assert relsign.key_id(out / "release-pub.pem") in note and "解绑令" in note
     assert "出厂钥匙" in note
-    from d1max_contract import ed25519
-    from d1max_contract.binding import sign_unbind, verify_unbind
+    from nexwar_contract import ed25519
+    from nexwar_contract.binding import sign_unbind, verify_unbind
     seed = ed25519.seed_from_pem((out / "unbind.key").read_bytes())
     tok = sign_unbind(seed, "D1M-1", now_ms=1_800_000_000_000, hours=24)
     pub = ed25519.pub_from_pem((out / "unbind-pub.pem").read_bytes())
@@ -65,8 +65,8 @@ def test_W63_已有三把_只补出厂钥匙_别的不动_说明里追加(tmp_pa
     assert mk.make_factory(out) == ["factory.key", "factory-pub.pem"]
     assert {f: (out / f).read_bytes() for f in before} == before
     assert stat.S_IMODE((out / "factory.key").stat().st_mode) == 0o600
-    from d1max_contract import device_id as di
-    from d1max_contract import ed25519
+    from nexwar_contract import device_id as di
+    from nexwar_contract import ed25519
     seed = ed25519.seed_from_pem((out / "factory.key").read_bytes())
     pub = ed25519.pub_from_pem((out / "factory-pub.pem").read_bytes())
     req = di.make_request(serial="D1M-1", model="d1max",

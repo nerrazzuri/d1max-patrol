@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from d1max_site.alerts import LEVEL_OF as LEVELS
+from nexwar_site.alerts import LEVEL_OF as LEVELS
 
 ROOT = Path(__file__).resolve().parents[1]
 CAT = json.loads((ROOT / "design" / "i18n" / "alerts.json").read_text(encoding="utf-8"))

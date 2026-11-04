@@ -6,7 +6,7 @@ import random
 
 import pytest
 
-from d1max_agent.lens import H, LensWatch, W, detail
+from nexwar_agent.lens import H, LensWatch, W, detail
 
 
 def _景(seed: int) -> bytes:

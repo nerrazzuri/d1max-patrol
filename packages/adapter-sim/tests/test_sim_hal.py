@@ -5,8 +5,8 @@ from __future__ import annotations
 
 import pytest
 
-from d1max_adapter_sim.robot import SimRobot
-from d1max_contract.hal import HalUnsupported, MotionStatus, VelocityCommand
+from nexwar_adapter_sim.robot import SimRobot
+from nexwar_contract.hal import HalUnsupported, MotionStatus, VelocityCommand
 
 
 class 钟:

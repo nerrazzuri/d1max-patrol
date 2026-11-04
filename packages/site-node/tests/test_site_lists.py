@@ -12,10 +12,10 @@ from test_site_incidents import _gotos, _报
 from test_site_modes import 事件台  # noqa: F401 - pytest 夹具
 from test_site_sightings import 台  # noqa: F401 - pytest 夹具
 
-from d1max_site.areas import AreaBook, AreaError, inside
-from d1max_site.authz import ALL_DAYS, AuthzBook, AuthzError
-from d1max_site.db import SiteDB
-from d1max_site.modes import ArmingDesk
+from nexwar_site.areas import AreaBook, AreaError, inside
+from nexwar_site.authz import ALL_DAYS, AuthzBook, AuthzError
+from nexwar_site.db import SiteDB
+from nexwar_site.modes import ArmingDesk
 
 NOW = 1_800_000_000_000
 SQUARE = [[0, 0], [10, 0], [10, 10], [0, 10]]
@@ -162,7 +162,7 @@ def test_外审I1_I3_授权在场的这一回_人一直在_授权不适用了就
 
 
 def test_外审I1_补报写在库里_重启以后照样补_告警台报不出去下一拍再报(台, tmp_path):  # noqa: F811
-    from d1max_site.sightings import PersonWatch
+    from nexwar_site.sightings import PersonWatch
     t = 台
     granted = {"on": True}
     _授权台(t, lambda zone: "Gardener" if granted["on"] and zone == "Back garden" else None)
@@ -292,7 +292,7 @@ def _PR105升过的库(t, tmp_path):
 
 
 def _升级后的台(t, tmp_path):
-    from d1max_site.sightings import PersonWatch
+    from nexwar_site.sightings import PersonWatch
     db = SiteDB(tmp_path / "s.db")                          # 真跑一遍补列迁移
     arming = ArmingDesk(db, now_ms=lambda: t.ms[0])
     w = PersonWatch(db, t.d, now_ms=lambda: t.ms[0], arming=arming, deterrence=t.det)
@@ -332,7 +332,7 @@ def test_复查R1_旧库升级_只记过授权P3的那一回_授权没了要补�
 def test_复查R1_旧库升级_真报过P1的那一回_不重复报(台, tmp_path, P1发出去了):  # noqa: F811
     t = 台
     if P1发出去了:
-        from d1max_site.alert_store import AlertDesk
+        from nexwar_site.alert_store import AlertDesk
         t.w.alerts = AlertDesk(t.db, now_ms=lambda: t.ms[0])   # P1 落进告警表
     else:
         t.w.alerts = None                                     # P1 还在 pending 里
@@ -388,7 +388,7 @@ def test_复查R1二_PR105升到52版错标成p1的_修复一次_补报一次_�
 def test_复查R1二_PR105升过的库里真报过P1的_修复以后还是p1_不重复报(台, tmp_path, P1发出去了):  # noqa: F811
     t = 台
     if P1发出去了:
-        from d1max_site.alert_store import AlertDesk
+        from nexwar_site.alert_store import AlertDesk
         t.w.alerts = AlertDesk(t.db, now_ms=lambda: t.ms[0])
     else:
         t.w.alerts = None

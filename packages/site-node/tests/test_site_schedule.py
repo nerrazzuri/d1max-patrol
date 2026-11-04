@@ -10,9 +10,9 @@ from zoneinfo import ZoneInfo
 import pytest
 from test_site_dispatcher import SITE, 台子
 
-from d1max_contract.bundle_format import SCHEDULE_NAME, build_bundle
-from d1max_site.catalog import CatalogError, active_bundle, import_bundle
-from d1max_site.scheduler import SiteScheduler
+from nexwar_contract.bundle_format import SCHEDULE_NAME, build_bundle
+from nexwar_site.catalog import CatalogError, active_bundle, import_bundle
+from nexwar_site.scheduler import SiteScheduler
 
 KL = ZoneInfo("Asia/Kuala_Lumpur")
 BUILT = "2026-09-07T14:03:00+08:00"
@@ -52,7 +52,7 @@ def 打包(tmp_path, version: int, *, schedule: str = 排程, mission=None, tag:
 
 
 def test_导入任务包_成为当前包(tmp_path):
-    from d1max_site.db import SiteDB
+    from nexwar_site.db import SiteDB
     db = SiteDB(tmp_path / "s.db")
     got = import_bundle(db, 打包(tmp_path, 1), imported_by="alice", now_ms=1)
     assert got["missions"] == ["loop"] and got["schedule_entries"] == ["nightly"]
@@ -66,7 +66,7 @@ def test_导入任务包_成为当前包(tmp_path):
 
 
 def test_版本不升_被改过_排程指向不存在的任务_都拒(tmp_path):
-    from d1max_site.db import SiteDB
+    from nexwar_site.db import SiteDB
     db = SiteDB(tmp_path / "s.db")
     import_bundle(db, 打包(tmp_path, 2), imported_by="alice", now_ms=1)
     with pytest.raises(CatalogError, match="版本号只许往上走"):
@@ -205,7 +205,7 @@ async def test_两台都能派_排程没指定_挑电量高的(站, tmp_path):
     t.clock.ms = 毫秒(22, 0, 30)
     await t.run(2)
     t.site.clients["B"].status_live_at = t.clock()
-    from d1max_contract.messages import Telemetry
+    from nexwar_contract.messages import Telemetry
     tel = Telemetry(stamp=t.clock.ms, pose=None, battery_pct=50.0, task_state=None,
                     loc_quality=1.0)
     t.site.clients["A"].telemetry = dataclasses.replace(tel, battery_pct=60.0)
@@ -223,7 +223,7 @@ async def test_两台都能派_排程没指定_挑电量高的(站, tmp_path):
     assert t.sched._best(["A", "B"])[0] == "B", "电量一样:定位质量高的"
     # W33:只许手动派的不进候选
     t.reg.set_manual_only("B", True, by="alice", now_ms=0)
-    from d1max_site.scheduler import active_bundle
+    from nexwar_site.scheduler import active_bundle
     act = active_bundle(t.db)
     ok, _, why, kinds = t.sched._candidates(act, act.schedule.entries[0], {})
     assert ok == ["A"] and "B 站点设成只许手动派" in why
@@ -257,7 +257,7 @@ async def test_视图有下一轮与最近一次(站):
 
 async def test_回执超时_本轮不再派第二次_结果照样回写(站, monkeypatch):
     """狗其实收到了、回执丢了:下一拍不许再派一趟(狗会排在第一趟后面再跑一遍)。"""
-    from d1max_contract.dispatch import DispatchTimeout
+    from nexwar_contract.dispatch import DispatchTimeout
     t = 站
     real_send = t.site._send
     calls = {"n": 0}
@@ -388,8 +388,8 @@ async def test_狗明确拒收_本轮记dispatch_failed_不每拍重发(站, tmp
 
 async def test_狗明确拒收_记dispatch_failed_这一轮不再重发(tmp_path):
     """用一台假狗:在线、就绪、报了地图,但对 patrol 一律回 rejected。"""
-    from d1max_contract.memory_broker import MemoryTransport
-    from d1max_contract.messages import (
+    from nexwar_contract.memory_broker import MemoryTransport
+    from nexwar_contract.messages import (
         Ack,
         AckResult,
         Capabilities,
@@ -397,7 +397,7 @@ async def test_狗明确拒收_记dispatch_failed_这一轮不再重发(tmp_path
         Ready,
         Status,
     )
-    from d1max_contract.topics import Topics
+    from nexwar_contract.topics import Topics
     t = 台子(tmp_path)
     t.clock.ms = 毫秒(21, 59)
     await t.site.start()

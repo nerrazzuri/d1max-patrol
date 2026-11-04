@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import pytest
 
-from d1max_contract.errors import ContractError
-from d1max_contract.hal import Battery
-from d1max_contract.messages import Telemetry
+from nexwar_contract.errors import ContractError
+from nexwar_contract.hal import Battery
+from nexwar_contract.messages import Telemetry
 
 
 def _t(**kw):

@@ -8,16 +8,16 @@ import json
 
 import pytest
 
-from d1max_adapter_sim.robot import SimRobot
-from d1max_agent.obs_server import ObsBridgeServer
-from d1max_agent.obstacles import ObstacleView
-from d1max_agent.runtime import AgentRuntime
-from d1max_contract.memory_broker import MemoryBroker, MemoryTransport
-from d1max_contract.messages import Capabilities
-from d1max_contract.obsbridge import Grid, Heartbeat, Hello, encode, pack_bits
-from d1max_contract.registration import Registration
-from d1max_contract.topics import Topics
-from d1max_patrol.protocol.nav_types import Pose
+from nexwar_adapter_sim.robot import SimRobot
+from nexwar_agent.obs_server import ObsBridgeServer
+from nexwar_agent.obstacles import ObstacleView
+from nexwar_agent.runtime import AgentRuntime
+from nexwar_contract.memory_broker import MemoryBroker, MemoryTransport
+from nexwar_contract.messages import Capabilities
+from nexwar_contract.obsbridge import Grid, Heartbeat, Hello, encode, pack_bits
+from nexwar_contract.registration import Registration
+from nexwar_contract.topics import Topics
+from nexwar_patrol.protocol.nav_types import Pose
 
 REG = Registration(site_id="s", robot_id="r", credential_fingerprint="f", issued_at=0,
                    expires_at=10**13)
@@ -158,7 +158,7 @@ def test_避障要配规划后端(tmp_path):
 
 
 def _wall(seq, cells=((30, 50), (31, 50))):
-    from d1max_contract.obsbridge import Wall
+    from nexwar_contract.obsbridge import Wall
     n = 100
     bits = [False] * (n * n)
     for r, c in cells:
@@ -202,7 +202,7 @@ async def test_W41_墙层(tmp_path):
 
 async def test_W71_运行时_能力里报Nav2就绪没有_变了重发(tmp_path, monkeypatch):
     """11-03 现场:Nav2 起没起来站点看不到,只能上机器人翻日志。"""
-    from d1max_agent.navbridge import NavBridgeServer
+    from nexwar_agent.navbridge import NavBridgeServer
     broker = MemoryBroker()
     ears = 耳朵()
     st = MemoryTransport(broker, "site")

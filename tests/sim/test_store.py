@@ -2,9 +2,9 @@
 
 import pytest
 
-from d1max_patrol.protocol.nav_requests import parse_map_ids, parse_paths_payload
-from d1max_patrol.protocol.nav_types import Pose, Waypoint
-from d1max_sim.store import MapStore, StoreError
+from nexwar_patrol.protocol.nav_requests import parse_map_ids, parse_paths_payload
+from nexwar_patrol.protocol.nav_types import Pose, Waypoint
+from nexwar_sim.store import MapStore, StoreError
 
 
 def _wp(name: str, x: float, y: float) -> Waypoint:

@@ -12,8 +12,8 @@ import errno
 
 import pytest
 
-from d1max_agent.engine import archive as arc
-from d1max_agent.engine.machine import FINAL_STATES, RunState
+from nexwar_agent.engine import archive as arc
+from nexwar_agent.engine.machine import FINAL_STATES, RunState
 
 from .conftest import _HOME
 
@@ -133,7 +133,7 @@ async def test_写失败的一趟_汇总里标着残缺(make_engine, sample_miss
     await engine.start(sample_mission, home=_HOME)
     await engine.wait_done(timeout_s=3.0)
     await engine.aclose()
-    from d1max_agent.engine.archive import read_manifest
+    from nexwar_agent.engine.archive import read_manifest
     summary = read_manifest(engine.archive.path)["summary"]
     assert summary["archive"]["write_failures"] == 1 and "No space" in summary["archive"]["error"]
 

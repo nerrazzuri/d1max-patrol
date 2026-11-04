@@ -5,13 +5,13 @@ from __future__ import annotations
 
 import math
 
-from d1max_adapter_sim.robot import SimRobot
-from d1max_agent.events import EventBook
-from d1max_agent.localization import LocEstimate
-from d1max_agent.tasks.teleop import TeleopTask
-from d1max_agent.zone_guard import TeleopZoneGuard, footprint, overlap_area
-from d1max_contract.teleop import TeleopFrame
-from d1max_contract.zones import Zone
+from nexwar_adapter_sim.robot import SimRobot
+from nexwar_agent.events import EventBook
+from nexwar_agent.localization import LocEstimate
+from nexwar_agent.tasks.teleop import TeleopTask
+from nexwar_agent.zone_guard import TeleopZoneGuard, footprint, overlap_area
+from nexwar_contract.teleop import TeleopFrame
+from nexwar_contract.zones import Zone
 
 #: 硬禁区:x ≥ 3 的一大片(「池子」)。
 POOL = ((3.0, -10.0), (10.0, -10.0), (10.0, 10.0), (3.0, 10.0))
@@ -130,7 +130,7 @@ async def test_普通禁行区不管横移(tmp_path):
 
 
 def test_遥控能力_能横移才报max_vy_是一半():
-    from d1max_agent.status import compose_capabilities
+    from nexwar_agent.status import compose_capabilities
 
     def caps(lateral):
         r = SimRobot(now_ms=钟(), lateral=lateral, max_vy=0.6)

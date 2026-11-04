@@ -7,11 +7,11 @@ from __future__ import annotations
 import pytest
 from test_runtime_maps import REG, T, _cmd, 耳朵, 钟
 
-from d1max_adapter_sim.robot import SimRobot
-from d1max_agent.commands import READ_KINDS
-from d1max_agent.runtime import AgentRuntime
-from d1max_contract.memory_broker import MemoryBroker, MemoryTransport
-from d1max_patrol.protocol.nav_types import Pose
+from nexwar_adapter_sim.robot import SimRobot
+from nexwar_agent.commands import READ_KINDS
+from nexwar_agent.runtime import AgentRuntime
+from nexwar_contract.memory_broker import MemoryBroker, MemoryTransport
+from nexwar_patrol.protocol.nav_types import Pose
 
 
 class 假录包:

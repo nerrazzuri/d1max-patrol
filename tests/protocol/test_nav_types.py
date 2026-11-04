@@ -4,7 +4,7 @@ import math
 
 import pytest
 
-from d1max_patrol.protocol.nav_types import (
+from nexwar_patrol.protocol.nav_types import (
     ALG_LIDAR_DISCONNECTED,
     ALG_NAV_BLOCKED,
     LOC_HEALTHY,

@@ -1,12 +1,12 @@
 // 狗的那几页重做（2026-10-14，P3）新加的行为：狗的状态怎么算、药丸什么颜色，列表上的筛选，
 // 单狗页的「叫停」在页头、没任务时置灰，电量读不到写「--」，诊断卡只放狗报的。
-import 'package:d1max_patrol/l10n.dart';
-import 'package:d1max_patrol/ui/nw/nw_cards.dart';
-import 'package:d1max_patrol/ui/nw/nw_p3_robots.dart';
-import 'package:d1max_patrol/ui/nw/nw_theme.dart';
-import 'package:d1max_patrol/ui/nw/nw_widgets.dart';
-import 'package:d1max_patrol/ui/site_page.dart';
-import 'package:d1max_patrol/ui/site_teleop.dart';
+import 'package:nexwar_patrol/l10n.dart';
+import 'package:nexwar_patrol/ui/nw/nw_cards.dart';
+import 'package:nexwar_patrol/ui/nw/nw_p3_robots.dart';
+import 'package:nexwar_patrol/ui/nw/nw_theme.dart';
+import 'package:nexwar_patrol/ui/nw/nw_widgets.dart';
+import 'package:nexwar_patrol/ui/site_page.dart';
+import 'package:nexwar_patrol/ui/site_teleop.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 

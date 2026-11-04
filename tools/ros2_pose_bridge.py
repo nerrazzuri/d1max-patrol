@@ -5,8 +5,8 @@
 
 它跑在 ROS2 的系统 Python 下(``/usr/bin/python3``,能 import rclpy),
 不是本仓库的 venv —— venv 里没有 rclpy,往 venv 里塞 ROS2 是条死路。
-所以这里不 import 任何 ``d1max_patrol`` 的东西,线协议就地手写一遍;
-权威定义在 ``src/d1max_patrol/protocol/pose_frames.py``,改协议要同时改两处。
+所以这里不 import 任何 ``nexwar_patrol`` 的东西,线协议就地手写一遍;
+权威定义在 ``src/nexwar_patrol/protocol/pose_frames.py``,改协议要同时改两处。
 
     source /opt/ros/humble/setup.bash
     /usr/bin/python3 tools/ros2_pose_bridge.py --listen 0.0.0.0:8091
@@ -53,7 +53,7 @@ def _quat_to_yaw(x: float, y: float, z: float, w: float) -> float:
 class PoseBridge(Node):
     def __init__(self, host: str, port: int, map_frame: str, base_frame: str,
                  hz: float) -> None:
-        super().__init__("d1max_pose_bridge")
+        super().__init__("nexwar_pose_bridge")
         self._map_frame = map_frame
         self._base_frame = base_frame
         self._period = 1.0 / hz

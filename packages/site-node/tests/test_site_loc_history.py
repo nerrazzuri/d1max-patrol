@@ -7,9 +7,9 @@ import sqlite3
 
 import pytest
 
-from d1max_contract.messages import MapPose, Ready, Status, TaskState, TaskSummary, Telemetry
-from d1max_site.db import SCHEMA_VERSION, SiteDB
-from d1max_site.loc_history import (
+from nexwar_contract.messages import MapPose, Ready, Status, TaskState, TaskSummary, Telemetry
+from nexwar_site.db import SCHEMA_VERSION, SiteDB
+from nexwar_site.loc_history import (
     KEEP_MS,
     MAX_ROWS,
     MERGE_GAP_MS,
@@ -260,7 +260,7 @@ def test_W41_被打断的那一小段太久以前_不往前接(台):
 def test_工单13_只是数字变了的原因合成一段_不刷屏():
     """2026-10-28 3z.6:「…;后来:定位偏差可能到 1.5 m;后来:1.3 m;后来:1.2 m;…」
     只是数字变也接一句。"""
-    from d1max_site.loc_history import _join
+    from nexwar_site.loc_history import _join
     s = "雷达被挡住了"
     for v in ("在按最后的位置重定位", "定位偏差可能到 1.5 m", "定位偏差可能到 1.3 m",
               "定位偏差可能到 1.2 m", "定位偏差可能到 0.7 m"):

@@ -311,7 +311,7 @@ def test_续期偶尔失败一次不断画面(站点):
 
 
 def test_迟到的旧一代失败事件_不杀新一代(站点):
-    from d1max_contract.messages import Event
+    from nexwar_contract.messages import Event
     s = 站点
     tok = _登(s)
     _新鲜(s, tok)
@@ -393,7 +393,7 @@ def test_W40_老狗不报相机清单_当它有前后两路(站点):
 def test_W41_帧率可配_没写是5_写错了报错():
     import pytest as _pt
 
-    from d1max_site.video import FPS_DEFAULT, video_fps
+    from nexwar_site.video import FPS_DEFAULT, video_fps
     assert video_fps({}) == FPS_DEFAULT == 5.0
     assert video_fps({"fps": 15}) == 15.0 and video_fps({"fps": 12.5}) == 12.5
     for bad in (0, 31, -1, "15", True, None, float("nan")):
@@ -424,7 +424,7 @@ def test_工单3_site_json_写错_serve_只打一行说明_退出码2(tmp_path, 
     import json
     import os
 
-    from d1max_site import main as site_main
+    from nexwar_site import main as site_main
     monkeypatch.setattr(os, "geteuid", lambda: tmp_path.stat().st_uid)
     home = tmp_path / "site"
     assert site_main.main(["--home", str(home), "init", "--site-id", "e",

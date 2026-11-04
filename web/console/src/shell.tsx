@@ -106,7 +106,7 @@ export function pageScheme(_p: Page): "dark" | "light" {
 
 /** 个人在「外观」里的选择:默认(深色)、跟随系统、一直深色、一直浅色。 */
 export type ThemePref = "auto" | "system" | "dark" | "light";
-const PREF_KEY = "d1max.look";
+const PREF_KEY = "nexwar.look";
 
 export function schemeFor(p: Page, pref: ThemePref, systemDark: boolean): "dark" | "light" {
   if (pref === "dark" || pref === "light") return pref;

@@ -9,11 +9,11 @@ import shutil
 
 import pytest
 
-from d1max_site import main as site_main
-from d1max_site import selfcheck as sc
+from nexwar_site import main as site_main
+from nexwar_site import selfcheck as sc
 
 GOOD_RUN = {
-    ("id",): (0, "d1max-site systemd-journal"),
+    ("id",): (0, "nexwar_site systemd-journal"),
     ("systemctl", "is-active"): (0, "active"),
     ("systemctl", "is-enabled"): (0, "enabled"),
     ("openssl",): (0, ""),
@@ -37,7 +37,7 @@ def 装好的(tmp_path, monkeypatch):
     home = tmp_path / "site"
     assert site_main.main(["--home", str(home), "init", "--site-id", "estate-1",
                            "--hostname", "localhost"]) == 0
-    monkeypatch.setenv("D1MAX_SITE_PASSWORD", "correct-horse-battery")
+    monkeypatch.setenv("NEXWAR_SITE_PASSWORD", "correct-horse-battery")
     assert site_main.main(["--home", str(home), "add-admin", "root"]) == 0
     keys = tmp_path / "keys"
     keys.mkdir()
@@ -70,7 +70,7 @@ def test_装对了_没有FAIL没有WARN(装好的):
     assert sc.render(checks).endswith("FAIL 0 条,WARN 0 条:能用了")
     names = set(_by(checks))
     assert {"站点身份", "站点证书", "管理员", "备份", "推送", "读日志", "机器人连的端口", "探活",
-            "对时服务", "盘", "服务 d1max-site", "服务 d1max-mosquitto", "发行公钥"} <= names
+            "对时服务", "盘", "服务 nexwar_site", "服务 nexwar_mosquitto", "发行公钥"} <= names
 
 
 def test_密钥缺了_长度不对_FAIL(装好的):
@@ -83,13 +83,13 @@ def test_密钥缺了_长度不对_FAIL(装好的):
 
 
 def test_服务没起是FAIL_没设自启是WARN(装好的):
-    down = _runner({("systemctl", "is-active", "d1max-site"): (3, "inactive")})
+    down = _runner({("systemctl", "is-active", "nexwar_site"): (3, "inactive")})
     by = _by(_check(装好的, run=down))
-    assert by["服务 d1max-site"].level == "FAIL"
-    assert "systemctl start" in by["服务 d1max-site"].detail
-    assert by["服务 d1max-mosquitto"].level == "PASS"
+    assert by["服务 nexwar_site"].level == "FAIL"
+    assert "systemctl start" in by["服务 nexwar_site"].detail
+    assert by["服务 nexwar_mosquitto"].level == "PASS"
     by = _by(_check(装好的, run=_runner({("systemctl", "is-enabled"): (1, "disabled")})))
-    assert by["服务 d1max-site"].level == "WARN"
+    assert by["服务 nexwar_site"].level == "WARN"
 
 
 def test_探活_不通_回503_端口没开_都是FAIL(装好的):
@@ -127,7 +127,7 @@ def test_少一块的是WARN_没管理员_没备份_没推送_读不到日志_�
     con.commit()
     con.close()
     checks = _check(装好的, cfg_over={"backup_dir": None, "push": None}, pub=tmp / "无",
-                    run=_runner({("id",): (0, "d1max-site"),
+                    run=_runner({("id",): (0, "nexwar_site"),
                                  ("systemctl", "is-active", "chrony"): (3, "inactive")}))
     by = _by(checks)
     for name in ("管理员", "备份", "推送", "读日志", "发行公钥", "对时服务"):

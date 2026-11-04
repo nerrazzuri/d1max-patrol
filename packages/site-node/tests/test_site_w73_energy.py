@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from d1max_site import energy as e
+from nexwar_site import energy as e
 
 
 def test_回撤线_下限25_离得远就提前走():
@@ -35,13 +35,13 @@ def test_补一次能之前能开几圈():
 
 
 def test_外审_狗上报警优先级跟站点事件派遣对得上():
-    from d1max_contract.charging import ALARM_FLOOR_PCT, ALARM_PRIORITY
-    from d1max_site.priorities import EVENT
+    from nexwar_contract.charging import ALARM_FLOOR_PCT, ALARM_PRIORITY
+    from nexwar_site.priorities import EVENT
     assert ALARM_PRIORITY == EVENT and ALARM_FLOOR_PCT == e.STOP_PCT
 
 
 def test_现场1104_耗电默认跟狗上返航一样_比实测多留余量():
-    from d1max_site import energy
+    from nexwar_site import energy
     measured = 0.30 * 60                                 # C40221 站着、走路都约 0.30%/min
     assert energy.DRAIN_PCT_PER_H == 22.3 and energy.DRAIN_PCT_PER_H >= measured * 1.2
 
@@ -50,9 +50,9 @@ def test_现场1104_耗电默认跟狗上返航一样_比实测多留余量():
                                               (200.0, 200.0)])
 def test_外审r2_8_报警出动线_不低于狗上的出发线(go_m, back_m):
     """站点放行的,狗上也接:狗上 = 停止线 + max(3%,全程耗电) × 1.5,全程 = 去 + 回原点。"""
-    from d1max_agent.engine.homing import DEFAULT_RETURN_PARAMS, estimate_cost_pct
-    from d1max_agent.engine.preflight import ESTIMATE_SLACK
-    from d1max_contract.charging import ALARM_FLOOR_PCT
+    from nexwar_agent.engine.homing import DEFAULT_RETURN_PARAMS, estimate_cost_pct
+    from nexwar_agent.engine.preflight import ESTIMATE_SLACK
+    from nexwar_contract.charging import ALARM_FLOOR_PCT
     robot = ALARM_FLOOR_PCT + estimate_cost_pct(go_m + back_m) * ESTIMATE_SLACK
     site = e.alarm_line(e.walk_s(go_m), e.walk_s(back_m), watch_s=0)
     assert site == pytest.approx(robot, abs=1e-6)

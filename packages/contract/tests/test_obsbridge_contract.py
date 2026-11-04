@@ -6,8 +6,8 @@ import json
 
 import pytest
 
-from d1max_contract.errors import ContractError
-from d1max_contract.obsbridge import (
+from nexwar_contract.errors import ContractError
+from nexwar_contract.obsbridge import (
     MAX_LINE,
     Grid,
     Heartbeat,

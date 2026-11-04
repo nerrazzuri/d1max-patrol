@@ -9,8 +9,8 @@ from pathlib import Path
 
 import pytest
 
-from d1max_agent.mapping import MappingService
-from d1max_agent.sim_mapping import SimMappingOrchestrator
+from nexwar_agent.mapping import MappingService
+from nexwar_agent.sim_mapping import SimMappingOrchestrator
 
 
 def _map_dir(tmp: Path) -> Path:

@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from d1max_site.accounts import ABS_MS, IDLE_MS, Accounts, AuthError, LockedOut
-from d1max_site.db import SiteDB
+from nexwar_site.accounts import ABS_MS, IDLE_MS, Accounts, AuthError, LockedOut
+from nexwar_site.db import SiteDB
 
 
 class 钟:
@@ -113,7 +113,7 @@ def test_同时算scrypt的不超过上限(acc, monkeypatch):
     import threading
     import time
 
-    import d1max_site.accounts as mod
+    import nexwar_site.accounts as mod
     a, _, _ = acc
     now = {"n": 0, "max": 0}
     lk = threading.Lock()
@@ -147,7 +147,7 @@ def _try(a, name):
 
 
 def test_W17_值守令牌_30天_没有闲置期_只存哈希_每人最多5个(acc):
-    from d1max_site.accounts import WATCH_ABS_MS, WATCH_MAX
+    from nexwar_site.accounts import WATCH_ABS_MS, WATCH_MAX
     a, c, db = acc
     tok, exp = a.issue_watch_token("alice")
     assert exp == c.ms + WATCH_ABS_MS

@@ -2,9 +2,9 @@
 // 切后台放；续不上、狗不接就说清楚、自己关掉；派单被 unsupervised 拒时说人话。
 import 'dart:async';
 
-import 'package:d1max_patrol/net/site_client.dart' show SiteError;
-import 'package:d1max_patrol/ui/site_page.dart';
-import 'package:d1max_patrol/ui/site_supervise.dart';
+import 'package:nexwar_patrol/net/site_client.dart' show SiteError;
+import 'package:nexwar_patrol/ui/site_page.dart';
+import 'package:nexwar_patrol/ui/site_supervise.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 

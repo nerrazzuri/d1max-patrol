@@ -9,9 +9,9 @@ from test_site_api import PW, 站
 from test_site_dispatcher import 台子
 from test_site_incidents import _gotos, _两台狗, _假派单, _报, _签好
 
-from d1max_site.db import SiteDB
-from d1max_site.incidents import IncidentDesk
-from d1max_site.modes import ArmingDesk, ModeError
+from nexwar_site.db import SiteDB
+from nexwar_site.incidents import IncidentDesk
+from nexwar_site.modes import ArmingDesk, ModeError
 
 
 class 钟:
@@ -209,7 +209,7 @@ async def test_W20外审_临时撤防撤的是别的防区_首单派失败照样
 
 
 def test_W20外审_临时撤防的防区很多_审计照样读得出来(台):
-    from d1max_site.audit import AuditLog
+    from nexwar_site.audit import AuditLog
     log = AuditLog(台.db, now_ms=台.clock)
     zones = [f"zone-{i:02d}-" + "x" * 110 for i in range(25)]
     台.set_mode("visitor", by="olga", zones=zones, minutes=60)
@@ -231,7 +231,7 @@ def test_W20外审_临时撤防的防区很多_审计照样读得出来(台):
 
 
 def test_审计详情_放得下原样_放不下先缩_再放不下只留键名_老的坏行也读得出来(台):
-    from d1max_site.audit import AuditLog, encode_detail
+    from nexwar_site.audit import AuditLog, encode_detail
     assert json.loads(encode_detail({"a": 1})) == {"a": 1}
     huge = {"blob": "y" * 5000, "more": {f"k{i}": "z" * 150 for i in range(40)}}
     out = encode_detail(huge)
@@ -244,7 +244,7 @@ def test_审计详情_放得下原样_放不下先缩_再放不下只留键名_�
 
 def test_临时撤防一次能撤的防区有个护栏(台):
     # W73:防区个数不设上下限(用户 11-04),护栏从 64 放到 MAX_VISITOR_ZONES(1000)只防乱传
-    from d1max_site.modes import MAX_VISITOR_ZONES
+    from nexwar_site.modes import MAX_VISITOR_ZONES
     with pytest.raises(ModeError):
         台.set_mode("visitor", by="olga", zones=[f"z{i}" for i in range(MAX_VISITOR_ZONES + 1)],
                     minutes=60)
@@ -308,7 +308,7 @@ def test_没开布防模式的站点_接口404(站点):
 
 
 def test_管理员能确认告警_保安照旧(站点):
-    from d1max_site.permissions import HANDLE_ALERTS, SET_MODE, allowed
+    from nexwar_site.permissions import HANDLE_ALERTS, SET_MODE, allowed
     assert allowed("owner", HANDLE_ALERTS) and allowed("guard", HANDLE_ALERTS)
     assert not allowed("guard", SET_MODE)
 

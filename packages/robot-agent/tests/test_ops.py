@@ -14,14 +14,14 @@ from pathlib import Path
 import pytest
 from test_runtime_maps import REG, T, _cmd, 耳朵, 钟
 
-from d1max_adapter_sim.robot import SimRobot
-from d1max_agent import ops as O
-from d1max_agent.release_ops import build_sidecar
-from d1max_agent.runtime import AgentRuntime
-from d1max_contract.debuglog import DebugWatch, until_ms
-from d1max_contract.memory_broker import MemoryBroker, MemoryTransport
-from d1max_contract.privops import SimOps
-from d1max_patrol.protocol.nav_types import Pose
+from nexwar_adapter_sim.robot import SimRobot
+from nexwar_agent import ops as O
+from nexwar_agent.release_ops import build_sidecar
+from nexwar_agent.runtime import AgentRuntime
+from nexwar_contract.debuglog import DebugWatch, until_ms
+from nexwar_contract.memory_broker import MemoryBroker, MemoryTransport
+from nexwar_contract.privops import SimOps
+from nexwar_patrol.protocol.nav_types import Pose
 
 ROOT = Path(__file__).resolve().parents[3]
 
@@ -32,7 +32,7 @@ def _desk(tmp_path, *, priv=None, busy="", run=None, **kw):
 
 
 def test_我们的服务名单_跟特权执行器一致():
-    loader = importlib.machinery.SourceFileLoader("r", str(ROOT / "deploy" / "d1max-ops-runner"))
+    loader = importlib.machinery.SourceFileLoader("r", str(ROOT / "deploy" / "nexwar_ops_runner"))
     spec = importlib.util.spec_from_loader("r", loader)
     r = importlib.util.module_from_spec(spec)
     loader.exec_module(r)
@@ -42,7 +42,7 @@ def test_我们的服务名单_跟特权执行器一致():
 def test_没装执行器_要root的不报_发了也说不支持(tmp_path):
     d = _desk(tmp_path)
     assert set(d.kinds()) == {"ops_journal", "ops_diag", "ops_debug", "ops_cleanup"}
-    assert d.handle("ops_restart", {"unit": "d1max-agent"}).startswith("unsupported")
+    assert d.handle("ops_restart", {"unit": "nexwar_agent"}).startswith("unsupported")
     assert d.handle("ops_shell", {}) == "unsupported"
 
 
@@ -57,23 +57,23 @@ def test_日志_能看哪些_不在单子上的拒_打码_截尾从整行开始(
     d = _desk(tmp_path, run=run)
     assert d.handle("ops_journal", {}) == ("", {"units": list(O.JOURNAL_UNITS)})
     assert d.handle("ops_journal", {"unit": "cron"}).startswith("payload")
-    assert d.handle("ops_journal", {"unit": "d1max-agent", "hours": 999}).startswith("payload")
-    why, got = d.handle("ops_journal", {"unit": "d1max-localizer", "hours": 2})
+    assert d.handle("ops_journal", {"unit": "nexwar_agent", "hours": 999}).startswith("payload")
+    why, got = d.handle("ops_journal", {"unit": "nexwar_localizer", "hours": 2})
     assert why == "" and got["truncated"] and got["text"].startswith("2026-10-31T")
     assert "SECRETVALUE" not in got["text"] and "token=***" in got["text"]
     assert ("ab" * 20) not in got["text"], "长串十六进制只留前 8 位"
     assert len(got["text"].encode()) <= O.MAX_JOURNAL
-    assert calls[-1][:4] == ["journalctl", "-u", "d1max-localizer.service", "--since"]
+    assert calls[-1][:4] == ["journalctl", "-u", "nexwar_localizer.service", "--since"]
 
 
 def test_重启_只认我们的服务_走执行器(tmp_path):
     s = SimOps()
     d = _desk(tmp_path, priv=s)
     assert d.handle("ops_restart", {"unit": "ssh"}).startswith("payload")
-    assert d.handle("ops_restart", {"unit": "d1max-persons"}) == ("", {"unit": "d1max-persons"})
-    assert s.calls == [("restart", {"unit": "d1max-persons"})]
+    assert d.handle("ops_restart", {"unit": "nexwar_persons"}) == ("", {"unit": "nexwar_persons"})
+    assert s.calls == [("restart", {"unit": "nexwar_persons"})]
     bad = _desk(tmp_path, priv=SimOps(fail={"restart": "systemctl 失败"}))
-    assert bad.handle("ops_restart", {"unit": "d1max-persons"}) == "priv_failed: systemctl 失败"
+    assert bad.handle("ops_restart", {"unit": "nexwar_persons"}) == "priv_failed: systemctl 失败"
 
 
 def test_重启整机_忙就拒_空闲才发(tmp_path):
@@ -135,7 +135,7 @@ def test_清理_只清不是当前也不是上一版的_日志交给执行器(tm
 
 def test_诊断快照_服务状态_环境里的PIN打码(tmp_path):
     env = tmp_path / "env"
-    env.write_text("D1MAX_HAL=d1max\nD1MAX_DEVICE_PIN=123456\nD1MAX_SITE_MQTT=mqtts://x:8883\n")
+    env.write_text("NEXWAR_HAL=d1max\nNEXWAR_DEVICE_PIN=123456\nNEXWAR_SITE_MQTT=mqtts://x:8883\n")
 
     def run(argv, t):
         if argv[0] == "systemctl":
@@ -145,8 +145,8 @@ def test_诊断快照_服务状态_环境里的PIN打码(tmp_path):
     _, got = d.handle("ops_diag", {})
     assert [s["unit"] for s in got["services"]] == list(O.OUR_UNITS)
     assert got["services"][0]["restarts"] == 3 and got["services"][0]["active"] == "active"
-    assert got["env"] == {"D1MAX_HAL": "d1max", "D1MAX_DEVICE_PIN": "***",
-                          "D1MAX_SITE_MQTT": "mqtts://x:8883"}
+    assert got["env"] == {"NEXWAR_HAL": "d1max", "NEXWAR_DEVICE_PIN": "***",
+                          "NEXWAR_SITE_MQTT": "mqtts://x:8883"}
     assert "memory" in got and "disks" in got and got["busy"] == ""
 
 
@@ -242,14 +242,14 @@ async def test_接进代理_能力里有_命令走得通(tmp_path):
     await broker.drain()
     tasks = ears.by["capabilities"][-1]["tasks"]
     assert {"ops_journal", "ops_diag", "ops_restart", "ops_reboot", "cert_csr"} <= set(tasks)
-    await rt._on_cmd(_cmd("ops_restart", {"unit": "d1max-localizer"}, "o1", c))
+    await rt._on_cmd(_cmd("ops_restart", {"unit": "nexwar_localizer"}, "o1", c))
     await rt._on_cmd(_cmd("ops_reboot", {}, "o2", c))
     await broker.drain()
     acks = {a["command_id"]: a for a in ears.by["cmd/ack"]}
-    assert acks["o1"]["result"] == "accepted" and acks["o1"]["data"] == {"unit": "d1max-localizer"}
+    assert acks["o1"]["result"] == "accepted" and acks["o1"]["data"] == {"unit": "nexwar_localizer"}
     # 接上以后问的是代理自己的「在不在忙」(空闲):重启整机照发
     assert acks["o2"]["result"] == "accepted"
-    assert s.calls == [("restart", {"unit": "d1max-localizer"}), ("reboot", {"delay_s": 5})]
+    assert s.calls == [("restart", {"unit": "nexwar_localizer"}), ("reboot", {"delay_s": 5})]
     # 外审 W55-1 第 8 条:收下重启整机的那一刻起什么都不接,直到重启
     assert rt._restarting
     await rt._on_cmd(_cmd("ops_diag", {}, "o3", c))
@@ -273,16 +273,16 @@ async def test_外审W55_1_重启服务_忙就拒_做完放开(tmp_path):
                             busy=lambda: ""))
     await rt.start()
     rt._busy_reason = lambda: "正在执行任务 t1"
-    await rt._on_cmd(_cmd("ops_restart", {"unit": "d1max-localizer"}, "r1", c))
+    await rt._on_cmd(_cmd("ops_restart", {"unit": "nexwar_localizer"}, "r1", c))
     await rt._on_cmd(_cmd("cert_install", {"cert": "x", "registration": {}}, "r2", c))
     await broker.drain()
     acks = {a["command_id"]: a for a in ears.by["cmd/ack"]}
     assert all("busy" in str(acks[k].get("reason")) for k in ("r1", "r2")), acks
     assert s.calls == [] and not rt._restarting
     rt._busy_reason = lambda: ""
-    await rt._on_cmd(_cmd("ops_restart", {"unit": "d1max-localizer"}, "r3", c))
+    await rt._on_cmd(_cmd("ops_restart", {"unit": "nexwar_localizer"}, "r3", c))
     await broker.drain()
-    assert s.calls == [("restart", {"unit": "d1max-localizer"})]
+    assert s.calls == [("restart", {"unit": "nexwar_localizer"})]
     assert not rt._restarting, "重启的不是代理自己:做完放开"
 
 
@@ -299,7 +299,7 @@ async def test_W61_演示站点的仿真机器人_换证书重启以后不卡在
                             busy=lambda: ""))
     await rt.start()
     for i, (kind, payload) in enumerate([("ops_reboot", {}),
-                                         ("ops_restart", {"unit": "d1max-agent"})]):
+                                         ("ops_restart", {"unit": "nexwar_agent"})]):
         await rt._on_cmd(_cmd(kind, payload, f"w{i}", c))
         await broker.drain()
         assert [a for a, _ in s.calls][-1] in ("reboot", "restart")
@@ -319,14 +319,14 @@ def _quiet():
 
 
 def test_外审W55_1_钟不准时_对时和读诊断不判过期():
-    from d1max_agent.commands import NEVER_EXPIRE
+    from nexwar_agent.commands import NEVER_EXPIRE
     assert {"ops_timesync", "ops_diag", "ops_journal"} <= NEVER_EXPIRE
     assert "ops_reboot" not in NEVER_EXPIRE
 
 
 
 async def test_外审W55_2_C3_执行器结果未知_维护状态不放_确定没做成才放(tmp_path):
-    from d1max_contract.privops import PrivTimeout
+    from nexwar_contract.privops import PrivTimeout
 
     class 慢执行器:
         def __init__(self):
@@ -376,7 +376,7 @@ class _卡住的执行器:
         self.cancelled = False
 
     def call(self, action, args=None, *, timeout_s=60.0, rid=None):
-        from d1max_contract.privops import PrivTimeout
+        from nexwar_contract.privops import PrivTimeout
         raise PrivTimeout("还没回", rid)
 
     def result(self, rid):
@@ -426,12 +426,12 @@ def test_外审W55_3_C3_未决请求还没被执行器拿走_撤回_不用等(tm
 
 
 def test_外审W55_3_I4_换版本后服务起不来_在途就退回上一版(tmp_path, monkeypatch):
-    from d1max_agent import main as M
-    from d1max_agent.engine import release as rel
+    from nexwar_agent import main as M
+    from nexwar_agent.engine import release as rel
 
     class 执行器:
         def call(self, action, args=None, *, timeout_s=60.0, rid=None):
-            return {"ok": action != "restart_all", "error": "d1max-localizer 起不来"}
+            return {"ok": action != "restart_all", "error": "nexwar_localizer 起不来"}
 
     class 版本:
         layout = object()
@@ -451,9 +451,9 @@ def test_外审W55_3_I4_换版本后服务起不来_在途就退回上一版(tmp
 
 
 def test_外审W55_4_I4_执行器不可用或结果未知_在途就退回(monkeypatch):
-    from d1max_agent import main as M
-    from d1max_agent.engine import release as rel
-    from d1max_contract.privops import PrivTimeout
+    from nexwar_agent import main as M
+    from nexwar_agent.engine import release as rel
+    from nexwar_contract.privops import PrivTimeout
 
     class 执行器:
         def call(self, action, args=None, *, timeout_s=60.0, rid=None):
@@ -474,8 +474,8 @@ def test_外审W55_4_I4_执行器不可用或结果未知_在途就退回(monkey
 
 
 def test_外审W55_4_N3_退回本身出错_不卡住_交回去让代理退出(monkeypatch):
-    from d1max_agent import main as M
-    from d1max_agent.engine import release as rel
+    from nexwar_agent import main as M
+    from nexwar_agent.engine import release as rel
 
     class 执行器:
         def call(self, action, args=None, *, timeout_s=60.0, rid=None):
@@ -496,7 +496,7 @@ def test_外审W55_4_N3_退回本身出错_不卡住_交回去让代理退出(mo
 async def test_代理起来_上一趟建图暂停的服务恢复_出错不碍起来_工单21():
     import types
 
-    from d1max_agent.runtime import AgentRuntime
+    from nexwar_agent.runtime import AgentRuntime
     calls = []
 
     async def leftover():
@@ -510,20 +510,20 @@ async def test_代理起来_上一趟建图暂停的服务恢复_出错不碍起
 
 
 def test_建图暂停_两个服务都经执行器_出错带回原因_工单21(monkeypatch):
-    from d1max_agent import main as M
-    from d1max_contract import privops
+    from nexwar_agent import main as M
+    from nexwar_contract import privops
     sim = privops.SimOps(fail={"resume": "起不来"},
                          results={"pause": {"stopped": True}})
     monkeypatch.setattr(privops, "from_config", lambda: sim)
     pause = M._mapping_pauser()
-    units = ["d1max-lidar-merge", "d1max-localizer"]
+    units = ["nexwar_lidar_merge", "nexwar_localizer"]
     assert pause(True, units) == (units, "")
-    assert sim.calls == [("pause", {"unit": "d1max-lidar-merge"}),
-                         ("pause", {"unit": "d1max-localizer"})]
-    left, err = pause(False, ["d1max-localizer"])
-    assert left == ["d1max-localizer"] and "d1max-localizer:起不来" in err
+    assert sim.calls == [("pause", {"unit": "nexwar_lidar_merge"}),
+                         ("pause", {"unit": "nexwar_localizer"})]
+    left, err = pause(False, ["nexwar_localizer"])
+    assert left == ["nexwar_localizer"] and "nexwar_localizer:起不来" in err
     sim.fail["pause"] = "超时"                                  # 停到一半出错:当停了,之后恢复
-    assert pause(True, ["d1max-localizer"]) == (["d1max-localizer"], "d1max-localizer:超时")
+    assert pause(True, ["nexwar_localizer"]) == (["nexwar_localizer"], "nexwar_localizer:超时")
     del sim.fail["pause"]
     sim.results["pause"] = {"stopped": False}                 # 建图前没在跑:没停,之后也不恢复
     assert pause(True, units) == ([], "")
@@ -533,14 +533,14 @@ def test_建图暂停_两个服务都经执行器_出错带回原因_工单21(mo
 
 def test_W68_外审_远程升级也编Super_LIO_编不成算装失败(tmp_path):
     """codex r1 #8:远程升级原来只装 Python 依赖、编旁路程序,不编必装的 Super-LIO 就写哨兵。"""
-    from d1max_agent.release_ops import build_superlio
+    from nexwar_agent.release_ops import build_superlio
     pkg, slot = tmp_path / "pkg", tmp_path / "slot"
     (pkg / "deploy").mkdir(parents=True)
     slot.mkdir()
     assert build_superlio(pkg, slot) == ""                      # 老包:没源码、没脚本
     (pkg / "packages/localizer/native/superlio").mkdir(parents=True)
     assert "不全" in build_superlio(pkg, slot)                   # 带了源码没脚本
-    script = pkg / "deploy" / "d1max-superlio-build"
+    script = pkg / "deploy" / "nexwar_superlio_build"
     script.write_text("x")
     script.chmod(0o644)                                          # 丢了执行位也照样编(用 bash 跑)
     seen = []
@@ -550,7 +550,7 @@ def test_W68_外审_远程升级也编Super_LIO_编不成算装失败(tmp_path):
         return 0, "Super-LIO 装好了"
     assert build_superlio(pkg, slot, prefix="/opt/x", run=ok) == ""
     assert seen[0][0] == ["bash", str(script)]
-    assert seen[0][1]["D1MAX_SUPERLIO_PREFIX"] == "/opt/x"
+    assert seen[0][1]["NEXWAR_SUPERLIO_PREFIX"] == "/opt/x"
     why = build_superlio(pkg, slot, run=lambda a, e: (1, "缺命令: colcon"))
     assert "Super-LIO" in why and "colcon" in why
 
@@ -560,18 +560,18 @@ def test_W68_外审r2_远程编Super_LIO_不动全局current_按版本记_目录
     机器人账号写不了。"""
     import os as _os
 
-    from d1max_agent.release_ops import build_superlio
+    from nexwar_agent.release_ops import build_superlio
     pkg, slot = tmp_path / "pkg", tmp_path / "slot"
     (pkg / "deploy").mkdir(parents=True)
-    (pkg / "deploy" / "d1max-superlio-build").write_text("x")
+    (pkg / "deploy" / "nexwar_superlio_build").write_text("x")
     (slot / "venv").mkdir(parents=True)
     prefix = tmp_path / "superlio"
     prefix.mkdir()
     seen = []
     assert build_superlio(pkg, slot, prefix=str(prefix),
                           run=lambda a, e: (seen.append(e), (0, ""))[1]) == ""
-    assert seen[0]["D1MAX_SUPERLIO_LINK"] == "0"
-    assert seen[0]["D1MAX_SUPERLIO_STAMP"] == str(slot / "venv" / "superlio-root")
+    assert seen[0]["NEXWAR_SUPERLIO_LINK"] == "0"
+    assert seen[0]["NEXWAR_SUPERLIO_STAMP"] == str(slot / "venv" / "superlio-root")
     prefix.chmod(0o555)
     try:
         if not _os.access(prefix, _os.W_OK):              # root 跑测试时跳过这一段

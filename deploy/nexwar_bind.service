@@ -1,0 +1,25 @@
+[Unit]
+Description=D1 Max 配网服务(W42:热点那一侧配网、绑定站点、解绑清机、换 WiFi)
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=0
+# 生产线烧写过(nexwar_patrol factory burn)才有 device.json;没烧写的机器(老机器、开发机)不起。
+ConditionPathExists=/etc/nexwar/device.json
+
+[Service]
+Type=simple
+# 要写 /etc/nexwar、停起我们的服务、清机、改路由器:root。热点那一侧只开它一个端口(只绑 LAN1 的地址)。
+User=root
+Environment=NEXWAR_DATA_ROOT=/var/lib/nexwar
+Environment=NEXWAR_OUTBOX=/var/lib/nexwar/outbox
+Environment=PYTHONUNBUFFERED=1
+# NEXWAR_BIND_HOST(3588 在路由器 LAN1 上的地址)、NEXWAR_ROUTER、NEXWAR_OUTBOX 从 env 文件来。
+EnvironmentFile=-/etc/nexwar/env
+# 代码在 root 独占的 /usr/local/lib/nexwar/bind/(装机脚本、特权执行器从签过名的包里拷来):root 跑的东西
+# 不许放在机器人账号能改的版本目录、venv 里(外审 W55-1)。参数从上面的 env 文件来(NEXWAR_BIND_HOST 等)。
+ExecStart=/usr/bin/python3 -I /usr/local/lib/nexwar/bind/run.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

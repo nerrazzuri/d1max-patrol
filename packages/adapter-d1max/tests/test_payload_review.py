@@ -16,7 +16,7 @@ class _坏板:
         self.history = []
 
     def write_coil(self, coil, on):
-        from d1max_adapter_d1max.payload import PayloadError
+        from nexwar_adapter_d1max.payload import PayloadError
         if self.fail(coil, on):
             raise PayloadError("注入:线圈写失败")
         self.state[coil] = on
@@ -27,7 +27,7 @@ class _坏板:
 
 
 def _红绿(relay, blink=0.0):
-    from d1max_adapter_d1max.payload import Payload, PayloadConfig
+    from nexwar_adapter_d1max.payload import Payload, PayloadConfig
     return Payload(PayloadConfig(coils={"red": 0, "green": 1},
                                  strobe_colors={"red": ("red",), "green": ("green",),
                                                 "yellow": ("red", "green")},
@@ -35,7 +35,7 @@ def _红绿(relay, blink=0.0):
 
 
 async def test_外审R1_旧颜色关不掉_不开新颜色_不混色():
-    from d1max_adapter_d1max.payload import PayloadError
+    from nexwar_adapter_d1max.payload import PayloadError
     r = _坏板()
     p = _红绿(r)
     await p.start()

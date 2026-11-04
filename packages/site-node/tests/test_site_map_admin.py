@@ -8,7 +8,7 @@ import time
 import pytest
 from test_site_api import MAP, PW, _等, 站
 
-from d1max_contract.maps import map_digest
+from nexwar_contract.maps import map_digest
 
 YAML = ("image: floor.pgm\nresolution: 0.1\norigin: [0.0, 0.0, 0.0]\nnegate: 0\n"
         "occupied_thresh: 0.65\nfree_thresh: 0.196\n")
@@ -255,7 +255,7 @@ def test_删除_正在换过去的那一版也拒(站点):
 
 def test_换图状态_从命令账和事件推_老代理的成功标出没等定位器_超时算没成(站点):
     s = 站点
-    adm = __import__("d1max_site.maps_admin", fromlist=["x"]).MapAdmin(s.api)
+    adm = __import__("nexwar_site.maps_admin", fromlist=["x"]).MapAdmin(s.api)
     now = int(time.time() * 1000)
 
     def cmd(i, t_ms, ack="accepted", reason=None):
@@ -351,7 +351,7 @@ def test_W71_换图等机器人时_总览带下载进度(站点):
     """用户 11-03:「下发到机器人的时候需要有个提示,网页不应该点了下载但是没提示」—— 145 MB 在热点上
     下好几分钟,网页一直只写「等机器人换」。站点给机器人发文件时记下发到第几个字节。"""
     s = 站点
-    adm = __import__("d1max_site.maps_admin", fromlist=["x"]).MapAdmin(s.api)
+    adm = __import__("nexwar_site.maps_admin", fromlist=["x"]).MapAdmin(s.api)
     now = int(time.time() * 1000)
     with s.db.tx() as c:
         c.execute("INSERT INTO commands(command_id, task_id, robot_id, kind, payload, "

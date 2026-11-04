@@ -12,8 +12,8 @@ import time
 
 import pytest
 
-from d1max_contract.rtcm import frame
-from d1max_site.rtk_relay import (
+from nexwar_contract.rtcm import frame
+from nexwar_site.rtk_relay import (
     NtripAccount,
     RtcmRelay,
     SourceError,
@@ -130,7 +130,7 @@ def test_账号文件_要0600_缺了说清楚(tmp_path):
 
 
 def test_v1_caster_拉到改正数据_带账号_回报位置(monkeypatch):
-    import d1max_site.rtk_relay as R
+    import nexwar_site.rtk_relay as R
     monkeypatch.setattr(R, "GGA_EVERY_S", 0.2)
     good = _msg(1077) + _msg(1005, 19)
     cs = 假caster(b"ICY 200 OK\r\n\r\n", good)
@@ -176,7 +176,7 @@ def test_v2_caster_分块传输也认():
     (b"HTTP/1.1 503 Busy\r\n\r\n", "503"),
 ])
 def test_caster_拒了_说人话_密码不进错误(monkeypatch, head, 说):
-    import d1max_site.rtk_relay as R
+    import nexwar_site.rtk_relay as R
     monkeypatch.setattr(R, "RECONNECT_S", 30.0)
     cs = 假caster(head)
     r = RtcmRelay(f"ntrip:127.0.0.1:{cs.port}/M", publish=lambda b: None, now_ms=lambda: 1,
@@ -196,7 +196,7 @@ def test_NTRIP源没给账号_起不来():
 
 
 def test_站点起的时候_NTRIP没账号文件就不起(tmp_path, capsys):
-    from d1max_site.main import cmd_serve
+    from nexwar_site.main import cmd_serve
     (tmp_path / "site.json").write_text(json.dumps({"site_id": "s", "broker_port": 1}))
     assert cmd_serve(tmp_path, "127.0.0.1", 0, None, "ntrip:caster:2101/M") == 2
     assert "ntrip.json" in capsys.readouterr().err

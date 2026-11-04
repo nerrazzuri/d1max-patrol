@@ -1,7 +1,7 @@
 Nexus Warden 第三方软件声明 / Third-party software notices
 Copyright (c) 2026 Nexus Dynamic. Nexus Warden 本身保留全部权利(见 LICENSE)。
 下面列出随 Nexus Warden 站点包、机器人包一起分发的第三方软件及其许可证全文。
-手机 App 的第三方声明在 App「我的 → 关于 → 开源许可」里。
+手机 App 的第三方声明在 App「我的 → 设置 → 开源许可」里。
 
 一览:
   - numpy 2.2.6  (BSD License)
@@ -1683,5 +1683,5 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
   - OpenCV:图像处理;Apache-2.0;系统包管理器安装
 
 人员检测模型:
-  人员检测模型(/etc/d1max/person.onnx)不随软件包分发,由工程师按现场放置。样机阶段用的是 YOLOv8n,其许可证为 AGPL-3.0;商用前须换用许可证允许商用的模型,或取得模型权利人的商业授权。
+  人员检测模型(/etc/nexwar/person.onnx)不随软件包分发,由工程师按现场放置。样机阶段用的是 YOLOv8n,其许可证为 AGPL-3.0;商用前须换用许可证允许商用的模型,或取得模型权利人的商业授权。
 

@@ -8,9 +8,9 @@ from types import SimpleNamespace
 import pytest
 from test_site_charging import 假告警台
 
-from d1max_site.db import SiteDB
-from d1max_site.force import ForceWatch
-from d1max_site.modes import ArmingDesk
+from nexwar_site.db import SiteDB
+from nexwar_site.force import ForceWatch
+from nexwar_site.modes import ArmingDesk
 
 
 class 假派遣:
@@ -118,7 +118,7 @@ async def test_撤防时被抱起来只报不响_过了45秒才发出去就不�
 
 
 async def test_报不成_下一拍再报(台):
-    from d1max_site.alert_store import AlertDesk
+    from nexwar_site.alert_store import AlertDesk
     t = 台
     desk = AlertDesk(t.db, now_ms=lambda: t.ms[0])
     real = desk.raise_alert
@@ -133,9 +133,9 @@ async def test_报不成_下一拍再报(台):
 
 
 def test_被撞报P2_门槛文件坏了报P2(tmp_path):
-    from d1max_contract.messages import Event
-    from d1max_site.alert_sources import SiteAlertSources
-    from d1max_site.alert_store import AlertDesk
+    from nexwar_contract.messages import Event
+    from nexwar_site.alert_sources import SiteAlertSources
+    from nexwar_site.alert_store import AlertDesk
     desk = AlertDesk(SiteDB(tmp_path / "s.db"), now_ms=lambda: 1)
     src = SiteAlertSources(desk, now_ms=lambda: 1)
 

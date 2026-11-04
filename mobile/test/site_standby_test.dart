@@ -1,8 +1,8 @@
 // 待命点与原点（W13a，决策 16）：列出原点和待命点；能派单的人叫狗回某一个；管理员在这儿设（代理报了
 // mark_home.standby 才有按钮）、设默认、删（先确认）。横屏 800×360。
-import 'package:d1max_patrol/net/site_client.dart';
-import 'package:d1max_patrol/ui/site_page.dart';
-import 'package:d1max_patrol/ui/site_standby.dart';
+import 'package:nexwar_patrol/net/site_client.dart';
+import 'package:nexwar_patrol/ui/site_page.dart';
+import 'package:nexwar_patrol/ui/site_standby.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 

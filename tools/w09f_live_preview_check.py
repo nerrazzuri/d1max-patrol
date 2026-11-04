@@ -52,9 +52,9 @@ def _kill(p: subprocess.Popen, sig: int = signal.SIGINT) -> None:
 
 
 async def main(a: argparse.Namespace) -> dict:
-    from d1max_agent.mapping import MappingService
-    from d1max_patrol.app.mapping import MappingConfig, MappingOrchestrator
-    from d1max_patrol.app.procs import ProcManager
+    from nexwar_agent.mapping import MappingService
+    from nexwar_patrol.app.mapping import MappingConfig, MappingOrchestrator
+    from nexwar_patrol.app.procs import ProcManager
 
     out: Path = a.out
     out.mkdir(parents=True, exist_ok=True)
@@ -63,8 +63,8 @@ async def main(a: argparse.Namespace) -> dict:
     await asyncio.sleep(2)
     orch = MappingOrchestrator(ProcManager(out / "logs"), MappingConfig(
         bags_dir=out / "outbox" / "bags", maps_dir=out / "maps", live_domain=a.domain,
-        ros_wrapper=REPO / "deploy/d1max-ros", live_preview=REPO / "deploy/d1max-live-preview",
-        map_builder=REPO / "deploy/d1max-map-build"))
+        ros_wrapper=REPO / "deploy/nexwar_ros", live_preview=REPO / "deploy/nexwar_live_preview",
+        map_builder=REPO / "deploy/nexwar_map_build"))
     svc = MappingService(orch, bags_root=out / "outbox" / "bags", maps_out=out / "maps-out")
     summary: dict = {}
     play = None

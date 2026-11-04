@@ -1,5 +1,5 @@
 {
-  "$doc": "Alert titles by kind (B1). The site sends Chinese title/detail; clients show these by kind and fall back to the site's text for unknown kinds. tests/test_design_i18n.py keeps it in sync with d1max_site.alerts.",
+  "$doc": "Alert titles by kind (B1). The site sends Chinese title/detail; clients show these by kind and fall back to the site's text for unknown kinds. tests/test_design_i18n.py keeps it in sync with nexwar_site.alerts.",
   "stuck": {
     "en": "Waypoint not reached",
     "zh": "未到达点位"

@@ -420,7 +420,7 @@ const en = {
   addRobot: "Add a robot",
   robotId: "Robot ID",
   certDays: "Certificate valid (days)",
-  addRobotHint: "The site issues the robot's certificate and a one-time activation code (valid 24 h). On the robot run: sudo /opt/d1max/bin/python -m d1max_patrol.cli provision --code '<code>'",
+  addRobotHint: "The site issues the robot's certificate and a one-time activation code (valid 24 h). On the robot run: sudo /opt/nexwar/bin/python -m nexwar_patrol.cli provision --code '<code>'",
   activationCode: "Activation code for {id}",
   codeHint: "One-time, valid {h} h. Don't paste it in tickets, screenshots or group chats.",
   copy: "Copy",
@@ -560,7 +560,7 @@ const en = {
   noCameras: "No fixed cameras yet.",
   checkFail: "Fail",
   colZone: "Zone",
-  camerasHint: "Fixed cameras are added on the site host with the d1max-site command.",
+  camerasHint: "Fixed cameras are added on the site host with the nexwar_site command.",
   connected: "Connected",
   notConnected: "Not connected",
   system: "System",
@@ -1169,7 +1169,7 @@ const en = {
   opsSynced: "Synced",
   opsNotSynced: "Not synced",
   opsCert: "Certificate expires",
-  opsEnv: "Settings (/etc/d1max/env, secrets masked)",
+  opsEnv: "Settings (/etc/nexwar/env, secrets masked)",
   mtTitle: "Trends (last 30 days)",
   mtDisk: "Site disk free",
   mtOnline: "Robots online",
@@ -1204,7 +1204,7 @@ const en = {
   upSiteRunning: "Update started at {t}, in progress…",
   upSiteDone: "Last update finished: {v}",
   appTitle: "App installers",
-  appHint: "Phones signed in to this site are offered newer versions automatically. Upload the installer together with its signed manifest (d1max release sign-app).",
+  appHint: "Phones signed in to this site are offered newer versions automatically. Upload the installer together with its signed manifest (nexwar release sign-app).",
   appNone: "None",
   appPlatform: "Platform",
   appFile: "Installer",
@@ -1633,7 +1633,7 @@ const zh: Partial<Record<Key, string>> = {
   addRobot: "添加四足机器人",
   robotId: "编号",
   certDays: "证书有效天数",
-  addRobotHint: "站点将签发此机器人的证书，并生成一次性开通码（24 小时有效）。在机器人上执行：sudo /opt/d1max/bin/python -m d1max_patrol.cli provision --code '<开通码>'",
+  addRobotHint: "站点将签发此机器人的证书，并生成一次性开通码（24 小时有效）。在机器人上执行：sudo /opt/nexwar/bin/python -m nexwar_patrol.cli provision --code '<开通码>'",
   activationCode: "{id} 的开通码",
   codeHint: "一次性，{h} 小时内有效。请勿粘贴到工单、截图或群聊中。",
   copy: "复制",
@@ -1773,7 +1773,7 @@ const zh: Partial<Record<Key, string>> = {
   noCameras: "暂无固定摄像头。",
   checkFail: "未通过",
   colZone: "防区",
-  camerasHint: "固定摄像头需在站点主机上用 d1max-site 命令添加。",
+  camerasHint: "固定摄像头需在站点主机上用 nexwar_site 命令添加。",
   connected: "已连接",
   notConnected: "未连接",
   system: "系统",
@@ -2382,7 +2382,7 @@ const zh: Partial<Record<Key, string>> = {
   opsSynced: "已同步",
   opsNotSynced: "未同步",
   opsCert: "证书到期",
-  opsEnv: "现场配置（/etc/d1max/env，密码类已打码）",
+  opsEnv: "现场配置（/etc/nexwar/env，密码类已打码）",
   mtTitle: "运行指标（最近 30 天）",
   mtDisk: "站点磁盘剩余",
   mtOnline: "在线机器人",
@@ -2417,7 +2417,7 @@ const zh: Partial<Record<Key, string>> = {
   upSiteRunning: "升级开始于 {t}，进行中…",
   upSiteDone: "上次升级完成：{v}",
   appTitle: "App 安装包",
-  appHint: "登录此站点的手机会自动收到新版本提示。请同时上传安装包和签名清单（d1max release sign-app 生成）。",
+  appHint: "登录此站点的手机会自动收到新版本提示。请同时上传安装包和签名清单（nexwar release sign-app 生成）。",
   appNone: "暂无",
   appPlatform: "平台",
   appFile: "安装包",
@@ -2440,7 +2440,7 @@ export function initialLang(stored: string | null, navLangs: readonly string[]):
 
 function readStored(): string | null {
   try {
-    return localStorage.getItem("d1max.lang");
+    return localStorage.getItem("nexwar.lang");
   } catch {
     return null;
   }
@@ -2459,7 +2459,7 @@ export const lang = signal<Lang>(
 export function setLang(l: Lang): void {
   lang.value = l;
   try {
-    localStorage.setItem("d1max.lang", l);
+    localStorage.setItem("nexwar.lang", l);
   } catch {
     /* 隐私模式:不记也行 */
   }

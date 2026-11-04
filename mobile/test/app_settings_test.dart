@@ -1,13 +1,13 @@
 // W55 设置页（用户 2026-10-31）：设置类的集中在一页 —— 语言、后台值守、P1 推送、App 版本、检查更新、开源许可；
 // 站点列表进来的多一组工程师工具、没有值守和检查更新；站点里换语言先问（会回到站点列表）。
-import 'package:d1max_patrol/l10n.dart';
-import 'package:d1max_patrol/net/app_update.dart';
-import 'package:d1max_patrol/net/background_watch.dart';
-import 'package:d1max_patrol/net/site_client.dart';
-import 'package:d1max_patrol/ui/app_settings.dart';
-import 'package:d1max_patrol/ui/arrival_alert.dart';
-import 'package:d1max_patrol/ui/nw/nw_shell.dart';
-import 'package:d1max_patrol/ui/site_tabs.dart';
+import 'package:nexwar_patrol/l10n.dart';
+import 'package:nexwar_patrol/net/app_update.dart';
+import 'package:nexwar_patrol/net/background_watch.dart';
+import 'package:nexwar_patrol/net/site_client.dart';
+import 'package:nexwar_patrol/ui/app_settings.dart';
+import 'package:nexwar_patrol/ui/arrival_alert.dart';
+import 'package:nexwar_patrol/ui/nw/nw_shell.dart';
+import 'package:nexwar_patrol/ui/site_tabs.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import types
 
-from d1max_localizer.rtkvendor import main, to_json
+from nexwar_localizer.rtkvendor import main, to_json
 
 
 def test_字段按候选名取_取不到不带():

@@ -1,6 +1,6 @@
 // W46：上装 V2 的设备健康多了主控板温度、风扇、功放，设备名说人话。
-import 'package:d1max_patrol/l10n.dart';
-import 'package:d1max_patrol/net/site_client.dart';
+import 'package:nexwar_patrol/l10n.dart';
+import 'package:nexwar_patrol/net/site_client.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {

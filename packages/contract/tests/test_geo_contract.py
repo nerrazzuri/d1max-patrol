@@ -6,8 +6,8 @@ import math
 
 import pytest
 
-from d1max_contract.errors import ContractError
-from d1max_contract.geo import GeoRef, enu_to_llh, llh_to_enu
+from nexwar_contract.errors import ContractError
+from nexwar_contract.geo import GeoRef, enu_to_llh, llh_to_enu
 
 LAT0, LON0 = 5.4141, 100.3288
 

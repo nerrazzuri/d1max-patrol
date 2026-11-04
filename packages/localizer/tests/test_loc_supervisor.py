@@ -11,8 +11,8 @@ import sys
 from pathlib import Path
 
 import pytest
-from d1max_localizer import supervisor
-from d1max_localizer.supervisor import MolaSupervisor, mola_command
+from nexwar_localizer import supervisor
+from nexwar_localizer.supervisor import MolaSupervisor, mola_command
 
 假MOLA = """
 import os, sys, time, pathlib
@@ -124,11 +124,11 @@ async def test_要求重启_关掉重起同一个先验(tmp_path):
 
 
 def test_MOLA_的启动命令():
-    cmd = mola_command(Path("/var/lib/d1max/agent/maps/m/3/prior.mm"), lidar_topic="/front_lidar")
+    cmd = mola_command(Path("/var/lib/nexwar/agent/maps/m/3/prior.mm"), lidar_topic="/front_lidar")
     assert cmd[:4] == ["ros2", "launch", "mola_lidar_odometry", "ros2-lidar-odometry.launch.py"]
     args = dict(a.split(":=", 1) for a in cmd[4:])
     assert args["start_mapping_enabled"] == "False"
-    assert args["mola_initial_map_mm_file"] == "/var/lib/d1max/agent/maps/m/3/prior.mm"
+    assert args["mola_initial_map_mm_file"] == "/var/lib/nexwar/agent/maps/m/3/prior.mm"
     assert args["lidar_topic_name"] == "/front_lidar"
     assert args["use_rviz"] == args["use_mola_gui"] == "False"
     assert args["ignore_lidar_pose_from_tf"] == "True"
@@ -149,7 +149,7 @@ async def test_要求重启一连来好几次_只重启一回_到点起得来(tm
 
 async def test_换图连着来_旧的关干净了才起新的_不留孤儿(tmp_path, monkeypatch):
     """W09b 内审应修 5 情形 A:原来取消正在关旧进程的起动,旧进程离了手、跟新的一起跑。"""
-    import d1max_localizer.supervisor as sv
+    import nexwar_localizer.supervisor as sv
     monkeypatch.setattr(sv, "KILL_AFTER_S", 0.3)
     s, r = _sup(tmp_path, mode="stubborn")
     await s.start(Path("/maps/a/prior.mm"))
@@ -168,7 +168,7 @@ async def test_换图连着来_旧的关干净了才起新的_不留孤儿(tmp_p
 
 async def test_正在关旧的时候收尾_收完就不再起新的(tmp_path, monkeypatch):
     """W09b 内审应修 5 情形 B:原来 stop 立刻返回,起动任务过一会儿又起了一个。"""
-    import d1max_localizer.supervisor as sv
+    import nexwar_localizer.supervisor as sv
     monkeypatch.setattr(sv, "KILL_AFTER_S", 0.3)
     s, r = _sup(tmp_path, mode="stubborn")
     await s.start(Path("/maps/a/prior.mm"))
@@ -207,7 +207,7 @@ async def test_它自己退了_底下剩的也收掉(tmp_path):
 
 async def test_两次起动同时来_串着做_只剩后来那个(tmp_path, monkeypatch):
     """W09b 内审应修 5:不串着做的话,两次起动都去关同一个旧进程、各起一个新的,前一个成了孤儿。"""
-    import d1max_localizer.supervisor as sv
+    import nexwar_localizer.supervisor as sv
     monkeypatch.setattr(sv, "KILL_AFTER_S", 0.3)
     s, r = _sup(tmp_path, mode="stubborn")
     await s.start(Path("/maps/a/prior.mm"))

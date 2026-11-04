@@ -2,10 +2,10 @@
 // 看（能缩放），画上这张图上登记的待命点（建出来的图对不对）。
 import 'dart:typed_data';
 
-import 'package:d1max_patrol/l10n.dart';
-import 'package:d1max_patrol/ui/site_mapping.dart';
-import 'package:d1max_patrol/ui/site_maps.dart';
-import 'package:d1max_patrol/ui/site_page.dart';
+import 'package:nexwar_patrol/l10n.dart';
+import 'package:nexwar_patrol/ui/site_mapping.dart';
+import 'package:nexwar_patrol/ui/site_maps.dart';
+import 'package:nexwar_patrol/ui/site_page.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 

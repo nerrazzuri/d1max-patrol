@@ -2,9 +2,9 @@
 // 站点推「模式变了」当场换；事件页的「撤防中」说人话。横屏 800×360。
 import 'dart:async';
 
-import 'package:d1max_patrol/net/site_client.dart';
-import 'package:d1max_patrol/ui/site_duty_page.dart';
-import 'package:d1max_patrol/ui/site_mode.dart';
+import 'package:nexwar_patrol/net/site_client.dart';
+import 'package:nexwar_patrol/ui/site_duty_page.dart';
+import 'package:nexwar_patrol/ui/site_mode.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 

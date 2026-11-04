@@ -11,7 +11,7 @@ import json
 
 import pytest
 
-from d1max_patrol.protocol.pose_frames import (
+from nexwar_patrol.protocol.pose_frames import (
     PROTO_VERSION,
     PoseFrame,
     PoseHello,

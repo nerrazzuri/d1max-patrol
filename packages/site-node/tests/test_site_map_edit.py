@@ -11,10 +11,10 @@ from test_site_api import MAP, PW, 站
 from test_site_intercept_reach import _屋子
 from test_site_maps import _files
 
-from d1max_site import map_edit as me
-from d1max_site import map_preview as mp
-from d1max_site.areas import AreaBook
-from d1max_site.map_display import DisplayError, check
+from nexwar_site import map_edit as me
+from nexwar_site import map_preview as mp
+from nexwar_site.areas import AreaBook
+from nexwar_site.map_display import DisplayError, check
 
 # 屋子:8 m × 4 m,分辨率 0.1,x=4 m 处一道墙(门 1.6 m 宽),外圈一圈墙
 META = {"resolution": 0.1, "origin": [0.0, 0.0, 0.0], "negate": 0, "occupied_thresh": 0.65,
@@ -218,8 +218,8 @@ def test_底图上传和大小限制(站点):
 
 
 def test_区域命名_报警写在A区_没命名用防区名(站点):
-    from d1max_site.alert_sources import SiteAlertSources
-    from d1max_site.map_display import MapDisplay
+    from nexwar_site.alert_sources import SiteAlertSources
+    from nexwar_site.map_display import MapDisplay
     s = 站点
     disp = MapDisplay(s.db, now_ms=lambda: 1)
     disp.put(MAP[0], MAP[1], {"regions": [{"name": "A区", "polygon": [[0, 0], [2, 0], [2, 2],

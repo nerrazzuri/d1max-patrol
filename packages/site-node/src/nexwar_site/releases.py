@@ -1,0 +1,142 @@
+"""站点的发布目录(W00c5d 第三部分,决策 8:版本也由站点管)。
+
+管理员在站点主机上 ``nexwar_site release-add <发布包目录>``:核对包里 ``release.json`` 写的指纹跟
+整棵树算出来的一致、名字跟目录名一致,再打成 ``<站点目录>/releases/<版本名>.tar.gz``(算大小与
+sha256),登记进 ``releases`` 表。狗从狗专用口下载(mTLS),自己再核一遍。
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import tarfile
+from collections.abc import Callable
+from pathlib import Path
+from typing import Any
+
+from nexwar_contract.digest import tree_sha256
+from nexwar_contract.errors import ContractError
+from nexwar_contract.releases import AGENT_START, ReleaseRef, check_release_name
+
+MANIFEST = "release.json"
+
+
+class ReleaseCatalogError(ValueError):
+    """这个包登记不了 / 找不到。"""
+
+
+class ReleaseCatalog:
+    def __init__(self, home: Path, db, *, now_ms: Callable[[], int],
+                 pubkey: Path | None = None) -> None:
+        #: 发行公钥(W30,决策 43):配了就登记时先验签名(狗上还会再验一遍)。
+        self.pubkey = pubkey
+        self.root = Path(home) / "releases"
+        self.root.mkdir(parents=True, exist_ok=True)
+        self.db = db
+        self._now = now_ms
+
+    def add(self, pkg: Path, *, note: str = "") -> dict[str, Any]:
+        pkg = Path(pkg)
+        try:
+            raw = json.loads((pkg / MANIFEST).read_text(encoding="utf-8"))
+            name = check_release_name(raw.get("name"))
+        except (OSError, ValueError, ContractError, AttributeError) as exc:
+            raise ReleaseCatalogError(f"{pkg} 不像一个发布包:{exc}") from exc
+        if name != pkg.name:
+            raise ReleaseCatalogError(f"{MANIFEST} 写的是 {name},目录名却是 {pkg.name}")
+        schema = raw.get("requires_mission_schema", 1)
+        if isinstance(schema, bool) or not isinstance(schema, int) or schema < 1:
+            # 升级前检查拿它跟站点当前任务包的 schema 比(W00c6d)。
+            raise ReleaseCatalogError(f"{MANIFEST} 的 requires_mission_schema 要是 ≥1 的整数:"
+                                      f"{schema!r}")
+        for p in pkg.rglob("*"):
+            if p.is_symlink() or not (p.is_file() or p.is_dir()) or \
+                    (p.is_file() and p.stat().st_nlink > 1):
+                # 狗那头只收普通文件与目录;带着链接(软的、硬的)登记,打出来的包里是链接条目,
+                # 狗解开之后指纹对不上,永远装不上。
+                raise ReleaseCatalogError(f"包里有链接或特殊文件:{p.relative_to(pkg)}")
+        if not (pkg / AGENT_START).is_file():
+            # 老服务那一代的包:狗上的代理不装它(装了也切不过去)。登记时就拒,别让管理员下发了
+            # 才在狗那头失败(W00c5 修复内部评审)。
+            raise ReleaseCatalogError(f"包里没有代理的启动脚本 {AGENT_START}(老服务那一代的包)")
+        got = tree_sha256(pkg, skip=MANIFEST)
+        if got != raw.get("content_sha256"):
+            raise ReleaseCatalogError(f"包的指纹不匹配:自述 {raw.get('content_sha256')},算出 {got}")
+        from nexwar_contract import relsign
+        # A 阶段外审 I3:配了公钥位置(``pubkey`` 不是 None)就**必须**验;一把可信钥匙都没有(没生成、
+        # 删光了)= 谁签的都不认,不是「不验」。不验签只有显式的开发开关(``site.json`` 的
+        # ``release_unsigned: true`` → 站点主程序传 ``pubkey=None``)。
+        if self.pubkey is not None:
+            if not relsign.trusted_keys(Path(self.pubkey)):  # A3:含 .d/ 里的
+                raise ReleaseCatalogError(
+                    f"{name}:站点上没有可信的发行公钥({self.pubkey} 和同名 .d/ 都没有),不登记。"
+                    "先生成发行钥匙(docs/W30-完工报告.md);只在开发环境不验签,在 site.json 里写 "
+                    "\"release_unsigned\": true")
+            try:
+                relsign.verify(raw, Path(self.pubkey))
+            except relsign.SignError as exc:
+                raise ReleaseCatalogError(f"{name}:{exc}(机器人上也会拒,不登记)") from exc
+        # 商业化 A7:这一版代理的兼容级别站点配不配得上(太老的发下去会一直重传,太新的站点不认)
+        from nexwar_contract.compat import SITE_MAX_AGENT_LEVEL, SITE_MIN_AGENT_LEVEL
+        lv = raw.get("compat_level", 1)
+        if not isinstance(lv, int) or isinstance(lv, bool):
+            raise ReleaseCatalogError(f"{MANIFEST} 的 compat_level 要是整数")
+        if lv < SITE_MIN_AGENT_LEVEL:
+            raise ReleaseCatalogError(f"{name} 的代理版本过旧(兼容级别 {lv},站点要 "
+                                      f"≥{SITE_MIN_AGENT_LEVEL}):发下去配不上此站点,不登记")
+        if lv > SITE_MAX_AGENT_LEVEL:
+            raise ReleaseCatalogError(f"{name} 的代理比站点新(兼容级别 {lv},站点只认到 "
+                                      f"{SITE_MAX_AGENT_LEVEL}):先升站点,再登记它")
+        if self.db.query("SELECT 1 FROM releases WHERE name=?", (name,)):
+            raise ReleaseCatalogError(f"{name} 已登记")
+        out = self.root / f"{name}.tar.gz"
+        tmp = out.with_name(out.name + ".tmp")
+        with tarfile.open(tmp, "w:gz") as tf:
+            tf.add(pkg, arcname=name, filter=_plain)
+        h = hashlib.sha256()
+        with open(tmp, "rb") as fh:
+            for chunk in iter(lambda: fh.read(1 << 20), b""):
+                h.update(chunk)
+        os.replace(tmp, out)
+        row = {"name": name, "version": str(raw.get("version", "")), "sha256": h.hexdigest(),
+               "size": out.stat().st_size, "created_ms": self._now(), "note": note[:200],
+               "requires_mission_schema": schema}
+        with self.db.tx() as c:
+            c.execute("INSERT INTO releases(name, version, sha256, size, created_ms, note, "
+                      "requires_mission_schema) VALUES (:name, :version, :sha256, :size, "
+                      ":created_ms, :note, :requires_mission_schema)", row)
+        return row
+
+    def list(self) -> list[dict[str, Any]]:
+        return [dict(r) for r in self.db.query("SELECT * FROM releases ORDER BY name DESC")]
+
+    def get(self, name: str) -> ReleaseRef:
+        rows = self.db.query("SELECT name, sha256, size FROM releases WHERE name=?", (name,))
+        if not rows:
+            raise ReleaseCatalogError(f"版本不存在:{name}")
+        return ReleaseRef(name=rows[0]["name"], sha256=rows[0]["sha256"], size=rows[0]["size"])
+
+    def requires_mission_schema(self, name: str) -> int:
+        """这一版要的任务包 schema(W00c6d 升级前检查)。"""
+        rows = self.db.query("SELECT requires_mission_schema FROM releases WHERE name=?", (name,))
+        if not rows:
+            raise ReleaseCatalogError(f"版本不存在:{name}")
+        return int(rows[0]["requires_mission_schema"])
+
+    def file_path(self, name: str) -> Path:
+        try:
+            check_release_name(name)
+        except ContractError as exc:
+            raise ReleaseCatalogError(str(exc)) from exc
+        self.get(name)
+        return self.root / f"{name}.tar.gz"
+
+
+def _plain(ti: tarfile.TarInfo) -> tarfile.TarInfo | None:
+    """只打普通文件与目录(链接、设备一律不带,狗那头也不收);属主清掉。"""
+    if not (ti.isfile() or ti.isdir()):
+        return None
+    ti.uid = ti.gid = 0
+    ti.uname = ti.gname = ""
+    return ti

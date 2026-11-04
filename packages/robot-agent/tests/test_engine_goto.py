@@ -8,13 +8,13 @@ import json
 
 import pytest
 
-from d1max_adapter_sim.robot import SimRobot
-from d1max_agent.assembly import build_engine
-from d1max_agent.engine.machine import RunState
-from d1max_agent.events import EventBook
-from d1max_agent.tasks.engine_goto import EngineGotoTask
-from d1max_contract.messages import MapPose, TaskState
-from d1max_patrol.protocol.nav_types import Pose
+from nexwar_adapter_sim.robot import SimRobot
+from nexwar_agent.assembly import build_engine
+from nexwar_agent.engine.machine import RunState
+from nexwar_agent.events import EventBook
+from nexwar_agent.tasks.engine_goto import EngineGotoTask
+from nexwar_contract.messages import MapPose, TaskState
+from nexwar_patrol.protocol.nav_types import Pose
 
 
 class 钟:
@@ -258,7 +258,7 @@ async def test_断线不安全时引擎暂停_重连继续(台子):
 def test_旧的GotoTask已经删了():
     import importlib
     with pytest.raises(ModuleNotFoundError):
-        importlib.import_module("d1max_agent.tasks.goto")
+        importlib.import_module("nexwar_agent.tasks.goto")
     assert json
 
 
@@ -266,7 +266,7 @@ async def test_停止一直确认不了_超时按失败收尾并再发一次停(
     """W00d 内审:``stopped()`` 的阈值没实测过,真狗站着的里程噪声若大于它,「停了」永远不成立,
     任务会卡在 RUNNING、资源一直不放。兜底:引擎进终态后 ``STOP_CONFIRM_TIMEOUT_S`` 还确认不了,
     再发一次停车,按 ``stop_unconfirmed`` 失败收尾。"""
-    from d1max_agent.tasks import engine_goto
+    from nexwar_agent.tasks import engine_goto
 
     c, r, parts, book = 台子
 
@@ -298,7 +298,7 @@ async def test_停止一直确认不了_超时按失败收尾并再发一次停(
 
 async def test_工单20_导航一派就拒_goal_blocked_任务记失败不记完成(台子, monkeypatch):
     """2026-10-28 16:26 回待命点(原点在膨胀区里):同一秒两次 goal_blocked、狗没动,任务却记 DONE。"""
-    from d1max_patrol.backends.base import NavRequestError
+    from nexwar_patrol.backends.base import NavRequestError
     c, r, parts, book = 台子
 
     async def 拒(pose):
@@ -316,9 +316,9 @@ def test_W73外审_报警出动的goto_出发线回撤线按停止线做底_普�
     """站点按「停止线 + 去回 × 1.5 + 看 5 分钟」派报警;狗上普通 goto 的底是 25%,不改会把它拒掉。"""
     from types import SimpleNamespace
 
-    from d1max_agent.engine.homing import HomePoint
-    from d1max_agent.engine.preflight import departure_line_pct
-    from d1max_contract.charging import ALARM_PRIORITY
+    from nexwar_agent.engine.homing import HomePoint
+    from nexwar_agent.engine.preflight import departure_line_pct
+    from nexwar_contract.charging import ALARM_PRIORITY
 
     def 任务(priority, charge=False):
         return EngineGotoTask(task_id="t", target=_target(3.0, 0.0), max_speed_mps=None,
@@ -339,9 +339,9 @@ def test_W73外审r3_4_回待命点这一趟_停止线15_出发按路程算_不�
     但不是去补能 —— 停止线留 15%,不像去充电桩那趟放到 10%、也不跳过路程预算。"""
     from types import SimpleNamespace
 
-    from d1max_agent.engine.homing import HomePoint
-    from d1max_agent.engine.preflight import back_mode, departure_line_pct
-    from d1max_contract.charging import HOMING_FLOOR_PCT
+    from nexwar_agent.engine.homing import HomePoint
+    from nexwar_agent.engine.preflight import back_mode, departure_line_pct
+    from nexwar_contract.charging import HOMING_FLOOR_PCT
 
     def 任务(x, **kw):
         return EngineGotoTask(task_id="t", target=_target(x, 0.0), max_speed_mps=None,

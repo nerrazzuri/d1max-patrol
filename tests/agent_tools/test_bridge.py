@@ -13,8 +13,8 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
-from d1max_patrol.app.bridge import LoopBridge
-from d1max_patrol.backends.base import EventEmitter
+from nexwar_patrol.app.bridge import LoopBridge
+from nexwar_patrol.backends.base import EventEmitter
 
 
 @pytest.fixture
@@ -216,7 +216,7 @@ def test_没start就call会被拒():
 
 def test_start两次不会起两条线程(bridge):
     bridge.start()
-    names = [t.name for t in threading.enumerate() if t.name == "d1max-loop"]
+    names = [t.name for t in threading.enumerate() if t.name == "nexwar_loop"]
     assert len(names) == 1
 
 

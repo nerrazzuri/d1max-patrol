@@ -6,7 +6,7 @@ import math
 
 import pytest
 
-from d1max_agent.localization import (
+from nexwar_agent.localization import (
     JUMP_M,
     SIGMA0_XY_M,
     SIGMA_LOST_M,
@@ -169,12 +169,12 @@ def test_修正量带转角_顺序对():
 
 
 def test_导航桥_真狗默认不按原样_等人的时限():
-    from d1max_adapter_sim.robot import SimRobot
-    from d1max_agent.bridges.hal_nav import HUMAN_RELOCALIZE_WAIT_S, HalNavBackend
+    from nexwar_adapter_sim.robot import SimRobot
+    from nexwar_agent.bridges.hal_nav import HUMAN_RELOCALIZE_WAIT_S, HalNavBackend
     sim = HalNavBackend(SimRobot(now_ms=lambda: 0), now_ms=lambda: 0, map_id="m")
     assert sim.anchor.identity and sim.RELOCALIZE_WAIT_S is None
     real = SimRobot(now_ms=lambda: 0)
-    real.adapter_id = "d1max/0.1.0"
+    real.adapter_id = "nexwar/0.1.0"
     bridge = HalNavBackend(real, now_ms=lambda: 0, map_id="m")
     assert not bridge.anchor.identity and bridge.RELOCALIZE_WAIT_S == HUMAN_RELOCALIZE_WAIT_S
 

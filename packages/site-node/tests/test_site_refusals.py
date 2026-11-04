@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from d1max_site.refusals import CODES, extra_for, reason_code
+from nexwar_site.refusals import CODES, extra_for, reason_code
 
-SRC = (Path(__file__).resolve().parents[1] / "src" / "d1max_site")
+SRC = (Path(__file__).resolve().parents[1] / "src" / "nexwar_site")
 
 真原话 = {
     "held": "A 被 gina 叫停了:先点「恢复」再派",

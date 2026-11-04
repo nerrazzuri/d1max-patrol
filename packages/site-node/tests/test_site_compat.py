@@ -7,15 +7,15 @@ from types import SimpleNamespace
 
 from test_site_api import PW, 站
 
-from d1max_contract.compat import (
+from nexwar_contract.compat import (
     AGENT_LEVEL,
     SITE_MAX_AGENT_LEVEL,
     SITE_MIN_AGENT_LEVEL,
     agent_verdict,
 )
-from d1max_site.alert_store import AlertDesk
-from d1max_site.compat import CompatWatch, versions
-from d1max_site.db import SiteDB
+from nexwar_site.alert_store import AlertDesk
+from nexwar_site.compat import CompatWatch, versions
+from nexwar_site.db import SiteDB
 
 
 def _狗(level=None, *, caps=True):
@@ -74,7 +74,7 @@ def test_站点库比程序新_老程序不开_也不改库(tmp_path):
 
     import pytest
 
-    from d1max_site.db import SCHEMA_VERSION, SchemaTooNew
+    from nexwar_site.db import SCHEMA_VERSION, SchemaTooNew
     SiteDB(tmp_path / "s.db").close()
     c = sqlite3.connect(tmp_path / "s.db")
     c.execute("UPDATE meta SET value=? WHERE key='schema'", (str(SCHEMA_VERSION + 1),))

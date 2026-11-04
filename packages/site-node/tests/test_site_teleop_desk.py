@@ -15,9 +15,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from d1max_contract.messages import AckResult
-from d1max_site.db import SiteDB
-from d1max_site.teleop import TeleopDesk, TeleopRefused
+from nexwar_contract.messages import AckResult
+from nexwar_site.db import SiteDB
+from nexwar_site.teleop import TeleopDesk, TeleopRefused
 
 
 class _Loop:
@@ -414,7 +414,7 @@ def test_硬禁区_狗说截了_变了才告诉手机_截了记审计(desk):
 
 def test_硬禁区_老狗不守_开遥控时就告诉手机(desk):
     """这张图上有硬禁区、狗的能力里没有 ``zones_set.teleop_hard``(老代理):开遥控时说清楚。"""
-    from d1max_contract.zones import ZoneSet
+    from nexwar_contract.zones import ZoneSet
     k, d = desk
     hard = ZoneSet.from_wire({"map_id": "m", "map_version": "1", "revision": 1, "zones": [
         {"id": "pool", "kind": "nogo", "hard": True, "polygon": [[0, 0], [1, 0], [1, 1]]}]})

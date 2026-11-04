@@ -83,13 +83,13 @@ class JPushRegistrar implements PushRegistrar {
   }
 }
 
-/// FCM 的推送号：安卓原生那头（`MainActivity` 的 `d1max/push` 通道）用打包时给的四个参数起 Firebase、
+/// FCM 的推送号：安卓原生那头（`MainActivity` 的 `nexwar/push` 通道）用打包时给的四个参数起 Firebase、
 /// 要令牌。手机上没有 Google 服务（国内的手机）、参数不对：拿不到，回 null，那台手机就只走极光。
 class FcmRegistrar implements PushRegistrar {
   FcmRegistrar({Map<String, String>? options, bool? android, MethodChannel? channel})
       : _options = options ?? _built,
         _android = android ?? Platform.isAndroid,
-        _channel = channel ?? const MethodChannel('d1max/push');
+        _channel = channel ?? const MethodChannel('nexwar/push');
 
   static const Map<String, String> _built = <String, String>{
     'appId': String.fromEnvironment('FCM_APP_ID'),

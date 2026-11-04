@@ -1,5 +1,5 @@
 // 区域页（2026-10-30 图铺满）：画的几样在右下的菜单里，比例、待命点、区域列表、确认在点开的说明栏里。
-import 'package:d1max_patrol/ui/site_mapping.dart' show SiteMapPreviewPage;
+import 'package:nexwar_patrol/ui/site_mapping.dart' show SiteMapPreviewPage;
 import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 

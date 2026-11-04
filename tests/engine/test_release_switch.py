@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from d1max_agent.engine.release import (
+from nexwar_agent.engine.release import (
     KEEP_RELEASES,
     MANIFEST_NAME,
     Layout,
@@ -78,7 +78,7 @@ def test_换链之前标记就已经在盘上了(tmp_path):
     activate(layout, "2026-09-06-a3f9c1", now_ms=NOW)
     commit(layout)
 
-    import d1max_agent.engine.release as rel
+    import nexwar_agent.engine.release as rel
 
     def 炸(_layout, _name):
         raise OSError("换到一半断电")
@@ -185,7 +185,7 @@ def test_在跑的那版和退路那版绝不删(tmp_path):
 
 
 def test_槽里还有巡检数据就不删(tmp_path, caplog):
-    """W01 的保险:数据本该在 /var/lib/d1max,但万一老机器没迁干净,
+    """W01 的保险:数据本该在 /var/lib/nexwar,但万一老机器没迁干净,
     宁可多占盘也不删证据。"""
     layout = _layout(tmp_path)
     for name in ("2026-09-01-aaaaaa", "2026-09-06-a3f9c1", "2026-09-20-77b2de"):

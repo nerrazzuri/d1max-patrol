@@ -60,7 +60,7 @@ LIO 出的是 6DoF pose + 3D 点云。给 Nav2 用时：**去地面 → 高度�
 不要再走 "3D→单层 LaserScan→2D SLAM" 老路（那正是今天丢 93% 信息的坑）。
 
 ## 测试数据
-今天录的验证包（前雷达+IMU+tf，83s）在笔记本 `runs/bags/d1max-lio-*`（1.8G，gitignore，本地拷走）。
+今天录的验证包（前雷达+IMU+tf，83s）在笔记本 `runs/bags/nexwar_lio-*`（1.8G，gitignore，本地拷走）。
 
 ## ★ RS-Airy IMU bring-up（外参已解，见最底部「★★★ 外参已解」；本节留档背景）
 实测 Airy IMU 有两个必须处理的点，否则 LIO 不动或发散：

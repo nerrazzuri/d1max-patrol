@@ -11,7 +11,7 @@ import time
 from pathlib import Path
 
 import pytest
-from d1max_localizer import rosinit
+from nexwar_localizer import rosinit
 
 SRC = Path(__file__).resolve().parents[1] / "src"
 
@@ -61,10 +61,10 @@ def test_停止信号_置位标志():
 _LOOP = textwrap.dedent("""
     import sys, rclpy
     from rclpy.executors import SingleThreadedExecutor
-    from d1max_localizer import rosinit
+    from nexwar_localizer import rosinit
     rosinit.init(rclpy)
     stop = rosinit.stop_flag()
-    node = rclpy.create_node("d1max_rosinit_test")
+    node = rclpy.create_node("nexwar_rosinit_test")
     ex = SingleThreadedExecutor()
     ex.add_node(node)
     print("ready", flush=True)

@@ -11,11 +11,11 @@ from urllib.parse import unquote
 
 import pytest
 
-from d1max_agent.engine.http_sink import HttpSink, build_body, parse_receipt
-from d1max_agent.engine.uploader import PutReceipt, PutRequest, SinkError
+from nexwar_agent.engine.http_sink import HttpSink, build_body, parse_receipt
+from nexwar_agent.engine.uploader import PutReceipt, PutRequest, SinkError
 
 样例 = PutRequest(
-    sn="D1MAX-TEST-01",
+    sn="NEXWAR-TEST-01",
     run="巡检一/20260911T101500Z",
     rel="photos/P1__front__20260911T101500Z.jpg",
     offset=7,
@@ -115,12 +115,12 @@ def test_元数据走header不走url() -> None:
     sink.put(样例)
     request, timeout = opener.收到[0]
     assert request.full_url == "http://console.example:8095/api/intake/put"
-    assert request.get_header("X-d1max-sn") == "D1MAX-TEST-01"
+    assert request.get_header("X-nexwar-sn") == "NEXWAR-TEST-01"
     # run/rel 里有中文,header 值必须 latin-1 编得出来 —— 所以转义,不裸传。
-    assert unquote(request.get_header("X-d1max-run")) == "巡检一/20260911T101500Z"
-    assert unquote(request.get_header("X-d1max-rel")) == "photos/P1__front__20260911T101500Z.jpg"
-    assert request.get_header("X-d1max-offset") == "7"
-    assert request.get_header("X-d1max-total") == "99"
+    assert unquote(request.get_header("X-nexwar-run")) == "巡检一/20260911T101500Z"
+    assert unquote(request.get_header("X-nexwar-rel")) == "photos/P1__front__20260911T101500Z.jpg"
+    assert request.get_header("X-nexwar-offset") == "7"
+    assert request.get_header("X-nexwar-total") == "99"
     assert timeout == 30
 
 

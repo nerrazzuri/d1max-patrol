@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 from test_site_api import MAP, PW, 站
 
-from d1max_site.map_preview import (
+from nexwar_site.map_preview import (
     MAX_SIDE,
     NoRaster,
     PreviewError,
@@ -113,7 +113,7 @@ def test_坏的pgm_没有栅格():
 def test_比头里说的大_P2太大_最大值不是255():
     """内审应修 2:头里写 4×2、后面拖一大截的 PGM 以前整份照收;P2(文本)一个像素几个字节、解析吃内存,
     单独一个小上限;最大值不是 255 的按比例换算。"""
-    import d1max_site.map_preview as mp
+    import nexwar_site.map_preview as mp
     y = parse_map_yaml(_YAML)
     with pytest.raises(PreviewError, match="比头里说的大"):
         render(_pgm(4, 2, bytes(8) + b"x" * 1000), y)
@@ -199,7 +199,7 @@ def test_没有这张图_404_没有栅格_404_坏的_500(站点, tmp_path):
 
 
 def test_同一版只渲染一次(站点, tmp_path, monkeypatch):
-    import d1max_site.map_preview as mp
+    import nexwar_site.map_preview as mp
     s = 站点
     gina = _登(s, "gina")
     _导入(s, tmp_path, "11", {"yard.pgm": _pgm(2, 1, bytes([0, 254])),
@@ -222,7 +222,7 @@ def test_先看大小再读_yaml太大也拒(站点, tmp_path, monkeypatch):
     「看图」站点就 OOM。现在先看大小:PGM 不许超过最大像素数能装下的,yaml 不超过 64 KB。"""
     import os
 
-    from d1max_site import map_preview as mp
+    from nexwar_site import map_preview as mp
     s = 站点
     d = tmp_path / "src-20"
     d.mkdir()
@@ -255,7 +255,7 @@ def test_同一版几个人一起点_只渲染一次(站点, tmp_path, monkeypat
     import threading
     import time
 
-    import d1max_site.map_preview as mp
+    import nexwar_site.map_preview as mp
     s = 站点
     _导入(s, tmp_path, "22", {"yard.pgm": _pgm(2, 1, bytes([0, 254])), "yard.yaml": _YAML.encode()})
     n = []

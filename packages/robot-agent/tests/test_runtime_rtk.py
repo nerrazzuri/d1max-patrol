@@ -7,11 +7,11 @@ import json
 
 from test_runtime_maps import REG, T, _跑, 耳朵, 钟
 
-from d1max_adapter_sim.robot import SimRobot
-from d1max_agent.runtime import AgentRuntime
-from d1max_contract.memory_broker import MemoryBroker, MemoryTransport
-from d1max_contract.messages import Telemetry
-from d1max_patrol.protocol.nav_types import Pose
+from nexwar_adapter_sim.robot import SimRobot
+from nexwar_agent.runtime import AgentRuntime
+from nexwar_contract.memory_broker import MemoryBroker, MemoryTransport
+from nexwar_contract.messages import Telemetry
+from nexwar_patrol.protocol.nav_types import Pose
 
 
 class 假RTK:
@@ -130,10 +130,10 @@ async def test_来源写改正炸了_不碍代理(tmp_path):
 def test_命令行_选来源(tmp_path):
     import argparse
 
-    from d1max_agent.main import make_rtk
-    from d1max_agent.rtk import OwnRtk, VendorRtk
+    from nexwar_agent.main import make_rtk
+    from nexwar_agent.rtk import OwnRtk, VendorRtk
     base = dict(rtk_device="/dev/ttyTHS3", rtk_baud=460800, rtk_init=None,
-                rtk_vendor_cmd="/x/d1max-rtk-vendor")
+                rtk_vendor_cmd="/x/nexwar_rtk_vendor")
     assert make_rtk(argparse.Namespace(rtk="none", **base)) is None
     own = make_rtk(argparse.Namespace(rtk="own", **base))
     assert isinstance(own, OwnRtk) and own.device == "/dev/ttyTHS3" and own.baud == 460800
@@ -142,4 +142,4 @@ def test_命令行_选来源(tmp_path):
     own = make_rtk(argparse.Namespace(rtk="own", **(base | {"rtk_init": init})))
     assert own.init == ["GPGGA COM1 0.2", "GPGST COM1 1"]
     v = make_rtk(argparse.Namespace(rtk="vendor", **base))
-    assert isinstance(v, VendorRtk) and v.argv == ["/x/d1max-rtk-vendor"]
+    assert isinstance(v, VendorRtk) and v.argv == ["/x/nexwar_rtk_vendor"]

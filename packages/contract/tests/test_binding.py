@@ -2,8 +2,8 @@
 
 import pytest
 
-from d1max_contract import binding as b
-from d1max_contract import ed25519
+from nexwar_contract import binding as b
+from nexwar_contract import ed25519
 
 
 def test_绑定码_手输宽容_大小写横杠和易混字母都认():

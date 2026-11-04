@@ -9,9 +9,9 @@ import time
 
 import pytest
 
-from d1max_agent.bridges.rtsp_media import FfmpegCamera, rtsp_media
-from d1max_agent.video_push import rtsp_source
-from d1max_patrol.backends.base import MediaError
+from nexwar_agent.bridges.rtsp_media import FfmpegCamera, rtsp_media
+from nexwar_agent.video_push import rtsp_source
+from nexwar_patrol.backends.base import MediaError
 
 JPEG = b"\xff\xd8\xff\xe0fakejpeg\xff\xd9"
 

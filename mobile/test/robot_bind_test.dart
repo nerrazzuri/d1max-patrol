@@ -3,12 +3,12 @@
 // 机器人详情里确认换 WiFi。机器人、热点、相机都是假的。
 import 'dart:convert';
 
-import 'package:d1max_patrol/net/robot_bind.dart';
-import 'package:d1max_patrol/net/site_client.dart';
-import 'package:d1max_patrol/store/site_store.dart';
-import 'package:d1max_patrol/ui/robot_bind_page.dart';
-import 'package:d1max_patrol/ui/site_robot.dart';
-import 'package:d1max_patrol/ui/site_robots.dart';
+import 'package:nexwar_patrol/net/robot_bind.dart';
+import 'package:nexwar_patrol/net/site_client.dart';
+import 'package:nexwar_patrol/store/site_store.dart';
+import 'package:nexwar_patrol/ui/robot_bind_page.dart';
+import 'package:nexwar_patrol/ui/site_robot.dart';
+import 'package:nexwar_patrol/ui/site_robots.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 

@@ -9,8 +9,8 @@ import subprocess
 
 import pytest
 
-from d1max_contract.registration import Registration
-from d1max_site.ca import CAError, SiteCA
+from nexwar_contract.registration import Registration
+from nexwar_site.ca import CAError, SiteCA
 
 NOW = 1_800_000_000_000
 
@@ -40,18 +40,18 @@ def test_init两次拒绝_不覆盖已有CA(ca):
 
 
 def test_狗证书CN是robot_id_能被CA验证_证书包齐全(ca, tmp_path):
-    b = ca.issue_robot("D1MAX-001", days=30, now_ms=NOW)
+    b = ca.issue_robot("NEXWAR-001", days=30, now_ms=NOW)
     for f in ("ca.crt", "robot.crt", "robot.key", "registration.json"):
         assert (b.dir / f).is_file(), f
     assert stat.S_IMODE((b.dir / "robot.key").stat().st_mode) == 0o600
     subj = _ossl("x509", "-in", str(b.dir / "robot.crt"), "-noout", "-subject").stdout
-    assert "CN = D1MAX-001" in subj or "CN=D1MAX-001" in subj
+    assert "CN = NEXWAR-001" in subj or "CN=NEXWAR-001" in subj
     v = _ossl("verify", "-CAfile", str(ca.ca_cert), str(b.dir / "robot.crt"))
     assert v.returncode == 0, v.stdout + v.stderr
     ext = _ossl("x509", "-in", str(b.dir / "robot.crt"), "-noout", "-ext", "extendedKeyUsage")
     assert "Client Authentication" in ext.stdout
     reg = Registration.load(b.dir / "registration.json")
-    assert (reg.site_id, reg.robot_id) == ("estate-1", "D1MAX-001")
+    assert (reg.site_id, reg.robot_id) == ("estate-1", "NEXWAR-001")
     assert reg.credential_fingerprint == b.fingerprint == ca.fingerprint(b.dir / "robot.crt")
     assert reg.issued_at == NOW and reg.expires_at == NOW + 30 * 86_400_000
     assert json.loads((b.dir / "registration.json").read_text())["schema"] == "1.0"
@@ -69,8 +69,8 @@ def test_站点服务证书带SAN_能当服务端(ca):
 
 
 def test_吊销之后CRL验不过(ca):
-    b = ca.issue_robot("D1MAX-001", days=30, now_ms=NOW)
-    ca.revoke("D1MAX-001")
+    b = ca.issue_robot("NEXWAR-001", days=30, now_ms=NOW)
+    ca.revoke("NEXWAR-001")
     v = _ossl("verify", "-crl_check", "-CAfile", str(ca.ca_cert), "-CRLfile", str(ca.crl),
               str(b.dir / "robot.crt"))
     assert v.returncode != 0 and "revoked" in (v.stdout + v.stderr).lower()
@@ -83,11 +83,11 @@ def test_robot_id不合主题规矩或是保留名_拒签(ca):
 
 
 def test_没吊销就重签同一台_拒绝(ca):
-    ca.issue_robot("D1MAX-001", days=30, now_ms=NOW)
+    ca.issue_robot("NEXWAR-001", days=30, now_ms=NOW)
     with pytest.raises(CAError):
-        ca.issue_robot("D1MAX-001", days=30, now_ms=NOW)
-    ca.revoke("D1MAX-001")
-    b2 = ca.issue_robot("D1MAX-001", days=30, now_ms=NOW)          # 吊销后可以重签
+        ca.issue_robot("NEXWAR-001", days=30, now_ms=NOW)
+    ca.revoke("NEXWAR-001")
+    b2 = ca.issue_robot("NEXWAR-001", days=30, now_ms=NOW)          # 吊销后可以重签
     assert b2.fingerprint
 
 
@@ -112,11 +112,11 @@ def test_主机名里有逗号换行_拒绝(ca):
 
 def test_工单9_续签_旧证书照样有效_吊销把新旧两张都吊掉(ca):
     """2026-10-28:狗的证书约 11-07 到期。原来同一台只能「先吊销再重签」,吊销那一刻狗就连不上了。"""
-    old = ca.issue_robot("D1MAX-001", days=30, now_ms=NOW)
+    old = ca.issue_robot("NEXWAR-001", days=30, now_ms=NOW)
     old_crt = (old.dir / "robot.crt").read_bytes()
     with pytest.raises(CAError):
-        ca.renew_robot("D1MAX-002", days=365, now_ms=NOW)        # 没签过的不许续
-    new = ca.renew_robot("D1MAX-001", days=365, now_ms=NOW + 1)
+        ca.renew_robot("NEXWAR-002", days=365, now_ms=NOW)        # 没签过的不许续
+    new = ca.renew_robot("NEXWAR-001", days=365, now_ms=NOW + 1)
     assert new.fingerprint != old.fingerprint
     assert new.registration.expires_at == NOW + 1 + 365 * 86_400_000
     v = _ossl("verify", "-CAfile", str(ca.ca_cert), str(new.dir / "robot.crt"))
@@ -126,7 +126,7 @@ def test_工单9_续签_旧证书照样有效_吊销把新旧两张都吊掉(ca)
     ok = _ossl("verify", "-crl_check", "-CAfile", str(ca.ca_cert), "-CRLfile", str(ca.crl),
                str(keep))
     assert ok.returncode == 0, "续签不吊销旧的:狗换证书之前照样连得上"
-    ca.revoke("D1MAX-001")
+    ca.revoke("NEXWAR-001")
     for crt in (keep, new.dir / "robot.crt"):
         v = _ossl("verify", "-crl_check", "-CAfile", str(ca.ca_cert), "-CRLfile", str(ca.crl),
                   str(crt))

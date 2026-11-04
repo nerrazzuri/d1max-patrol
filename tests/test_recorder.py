@@ -15,10 +15,10 @@ import json
 
 import pytest
 
-from d1max_patrol.backends.vendor_nav import VendorNavBackend
-from d1max_patrol.config.models import NavConfig
-from d1max_patrol.recorder import FrameRecorder, default_recording_path
-from d1max_sim.nav_server import SimNavServer
+from nexwar_patrol.backends.vendor_nav import VendorNavBackend
+from nexwar_patrol.config.models import NavConfig
+from nexwar_patrol.recorder import FrameRecorder, default_recording_path
+from nexwar_sim.nav_server import SimNavServer
 
 _POLLER_OFF = 3600.0
 

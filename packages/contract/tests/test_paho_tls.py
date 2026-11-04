@@ -8,7 +8,7 @@ import threading
 
 import pytest
 
-from d1max_contract.paho_transport import PahoTransport
+from nexwar_contract.paho_transport import PahoTransport
 
 
 def test_mqtts给证书就要成对给(tmp_path):

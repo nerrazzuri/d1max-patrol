@@ -1,4 +1,4 @@
-// 站点接口(商业化 B1)。网页靠 HttpOnly cookie 认人(脚本拿不到令牌);改东西的请求带 X-D1Max-Web 头防跨站伪造。
+// 站点接口(商业化 B1)。网页靠 HttpOnly cookie 认人(脚本拿不到令牌);改东西的请求带 X-Nexwar-Web 头防跨站伪造。
 
 export class ApiError extends Error {
   constructor(
@@ -31,7 +31,7 @@ export async function api<T = unknown>(method: "GET" | "POST", path: string, bod
   const headers: Record<string, string> = { Accept: "application/json" };
   if (method !== "GET") {
     headers["Content-Type"] = "application/json";
-    headers["X-D1Max-Web"] = "1";
+    headers["X-Nexwar-Web"] = "1";
   }
   let resp: Response;
   try {
@@ -73,7 +73,7 @@ export async function apiUpload<T = unknown>(path: string, file: Blob, headers: 
   try {
     resp = await fetcher(path, {
       method: "POST",
-      headers: { Accept: "application/json", "Content-Type": "application/octet-stream", "X-D1Max-Web": "1", ...headers },
+      headers: { Accept: "application/json", "Content-Type": "application/octet-stream", "X-Nexwar-Web": "1", ...headers },
       credentials: "same-origin",
       body: file,
     });

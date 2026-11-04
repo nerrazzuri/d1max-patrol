@@ -9,13 +9,13 @@ import math
 import numpy as np
 import pytest
 
-from d1max_adapter_sim.robot import SimRobot
-from d1max_agent.assembly import build_engine
-from d1max_agent.engine.machine import FINAL_STATES, RETURN_TIMEOUT_S, RunState
-from d1max_agent.engine.mission import Mission, MissionWaypoint, Policy
-from d1max_agent.planning.planner import Planner
-from d1max_contract.zones import ZoneSet
-from d1max_patrol.protocol.nav_types import Pose
+from nexwar_adapter_sim.robot import SimRobot
+from nexwar_agent.assembly import build_engine
+from nexwar_agent.engine.machine import FINAL_STATES, RETURN_TIMEOUT_S, RunState
+from nexwar_agent.engine.mission import Mission, MissionWaypoint, Policy
+from nexwar_agent.planning.planner import Planner
+from nexwar_contract.zones import ZoneSet
+from nexwar_patrol.protocol.nav_types import Pose
 
 RES = 0.05
 
@@ -99,8 +99,8 @@ def _任务(pts, **pol):
 
 
 def test_默认还是直线桥_不认识的拒(tmp_path):
-    from d1max_agent.bridges.hal_nav import HalNavBackend
-    from d1max_agent.bridges.planned_nav import PlannedNavBackend
+    from nexwar_agent.bridges.hal_nav import HalNavBackend
+    from nexwar_agent.bridges.planned_nav import PlannedNavBackend
     r = SimRobot(now_ms=lambda: 0)
     p = build_engine(r, runs_root=tmp_path, now_ms=lambda: 0, map_id="m", home=None)
     assert type(p.nav) is HalNavBackend
@@ -108,7 +108,7 @@ def test_默认还是直线桥_不认识的拒(tmp_path):
                       nav_kind="planned", robot_radius_m=0.4)
     assert isinstance(p2.nav, PlannedNavBackend) and p2.nav.robot_radius_m == 0.4
     assert p2.nav.PATH_KIND == "planned"
-    from d1max_agent.bridges.nav2_nav import Nav2NavBackend
+    from nexwar_agent.bridges.nav2_nav import Nav2NavBackend
     p3 = build_engine(r, runs_root=tmp_path, now_ms=lambda: 0, map_id="m", home=None,
                       nav_kind="nav2")
     assert isinstance(p3.nav, Nav2NavBackend) and p3.nav.PATH_KIND == "planned"   # W47
@@ -194,7 +194,7 @@ async def test_返航超时按路长(台子):
 
 
 async def test_返航电量按规划路长(台子):
-    from d1max_agent.engine.homing import ReturnParams
+    from nexwar_agent.engine.homing import ReturnParams
     c, r, parts = 台子
     eng = parts.engine
     # 让路长决定电量(不被 3% 下限盖住)
@@ -208,7 +208,7 @@ async def test_返航电量按规划路长(台子):
     planned = eng._return_cost_pct()
     L = parts.nav.path_length_hint(Pose.from_xy_yaw(10.0, 2.0), parts.home.pose)
     assert L > 12.0
-    from d1max_agent.engine.homing import estimate_cost_pct
+    from nexwar_agent.engine.homing import estimate_cost_pct
     p = eng._return_params
     assert straight == pytest.approx(estimate_cost_pct(8.0, p))
     assert planned == pytest.approx(estimate_cost_pct(L / 1.4, p))
@@ -266,8 +266,8 @@ async def test_规划期间被叫停_引擎不接着派下一个点(tmp_path):
 async def test_规划时没定位_走定位恢复_不把后面的点跑空(台子):
     """W10 外审 3:skip 策略下,第二个点规划时没有可信定位 —— 以前当场记失败、接着第三个、第四个……
     转眼跑空。现在停车、重定位、等恢复,然后重试当前点(不算一次重试)。"""
-    from d1max_patrol.backends.base import LocStatusEvent, NavNotLocalizedError
-    from d1max_patrol.protocol.nav_types import LocStatus
+    from nexwar_patrol.backends.base import LocStatusEvent, NavNotLocalizedError
+    from nexwar_patrol.protocol.nav_types import LocStatus
     c, r, parts = 台子
     nav = parts.nav
     real = nav.goto

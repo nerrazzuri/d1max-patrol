@@ -8,11 +8,11 @@ import math
 import numpy as np
 import pytest
 
-from d1max_agent.planning import astar, costmap
-from d1max_agent.planning.astar import LETHAL, PlanError, line_cells
-from d1max_agent.planning.costmap import CostmapError
-from d1max_agent.planning.planner import Planner
-from d1max_contract.zones import ZoneSet
+from nexwar_agent.planning import astar, costmap
+from nexwar_agent.planning.astar import LETHAL, PlanError, line_cells
+from nexwar_agent.planning.costmap import CostmapError
+from nexwar_agent.planning.planner import Planner
+from nexwar_contract.zones import ZoneSet
 
 
 def 写图(d, img_top_down: np.ndarray, res=0.05, origin=(0.0, 0.0), extra=""):

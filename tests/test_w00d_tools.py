@@ -13,10 +13,10 @@ from pathlib import Path
 
 import pytest
 
-from d1max_patrol.app.bridge import LoopBridge
-from d1max_patrol.protocol.agent_frames import PROTO_VERSION
-from d1max_patrol.protocol.agent_frames import MotionStatus as SdkMotion
-from d1max_sim.agent_server import SimAgentServer
+from nexwar_patrol.app.bridge import LoopBridge
+from nexwar_patrol.protocol.agent_frames import PROTO_VERSION
+from nexwar_patrol.protocol.agent_frames import MotionStatus as SdkMotion
+from nexwar_sim.agent_server import SimAgentServer
 
 ROOT = Path(__file__).resolve().parents[1]
 

@@ -23,13 +23,13 @@
 ``--mps-per-unit`` / ``--radps-per-unit`` / ``--invert-yaw``(实测速度 ÷ 实际发出的比例)。
 
 **要旁路进程的令牌**(协议 9,S11:旁路进程只收认证过的连接的运动命令)。令牌在旁路进程的
-``--token-file``(缺省起旁路进程那个账号的 ``~/.d1max/sidecar.token``,0600)。**显式给**,不设缺省:
+``--token-file``(缺省起旁路进程那个账号的 ``~/.nexwar/sidecar.token``,0600)。**显式给**,不设缺省:
 开车绕过了代理的禁行区、避障,得是人有意为之。
 
 用法::
 
     .venv/bin/python tools/w00d_motion_check.py --i-am-present \\
-        --token-file ~/.d1max/sidecar.token [--sidecar 127.0.0.1:8090]
+        --token-file ~/.nexwar/sidecar.token [--sidecar 127.0.0.1:8090]
     # 旁路进程是别的账号(或 root)起的:--token-file <(sudo cat <那个账号的令牌文件>)
 """
 
@@ -67,7 +67,7 @@ def build_parser() -> argparse.ArgumentParser:
                    help="我在现场、守着硬急停、周围净空。不给这个不跑")
     p.add_argument("--sidecar", type=_hostport, default=("127.0.0.1", 8090))
     p.add_argument("--token-file", default=None,
-                   help="旁路进程的令牌文件(协议 9;缺省位置 ~/.d1max/sidecar.token,要显式给)")
+                   help="旁路进程的令牌文件(协议 9;缺省位置 ~/.nexwar/sidecar.token,要显式给)")
     p.add_argument("--turn-fraction", type=float, default=0.3, help="转向比例值(正=想要逆时针)")
     p.add_argument("--turn-s", type=float, default=3.0)
     p.add_argument("--fwd-fraction", type=float, default=0.3, help="前进比例值")
@@ -92,7 +92,7 @@ async def _settle(hal: Any) -> float | None:
 
 
 async def _send(hal: Any, vx: float, wz: float, ttl_ms: int, seq: int = 1) -> None:
-    from d1max_contract.hal import VelocityCommand
+    from nexwar_contract.hal import VelocityCommand
 
     got = await hal.set_velocity(VelocityCommand(seq=seq, ttl_ms=ttl_ms, frame="base",
                                                  vx=vx, vy=0.0, wz=wz))
@@ -112,9 +112,9 @@ async def _drive(hal: Any, vx: float, wz: float, seconds: float) -> None:
 
 
 async def check(args: argparse.Namespace) -> dict[str, Any]:
-    from d1max_adapter_d1max.hal import D1MaxHal
-    from d1max_contract.hal import MotionStatus
-    from d1max_patrol.backends.sidecar_device import SidecarDeviceBackend
+    from nexwar_adapter_d1max.hal import D1MaxHal
+    from nexwar_contract.hal import MotionStatus
+    from nexwar_patrol.backends.sidecar_device import SidecarDeviceBackend
 
     host, port = args.sidecar
     b = SidecarDeviceBackend(host, port, token_file=args.token_file)
@@ -227,7 +227,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     if args.token_file is None:
         p.error("要旁路进程的令牌:--token-file <文件>(协议 9 只收认证过的连接的运动命令;"
-                "缺省位置 ~/.d1max/sidecar.token,显式给)")
+                "缺省位置 ~/.nexwar/sidecar.token,显式给)")
     _check_limits(p, args)
     got = asyncio.run(check(args))
     text = json.dumps(got, ensure_ascii=False, indent=2)

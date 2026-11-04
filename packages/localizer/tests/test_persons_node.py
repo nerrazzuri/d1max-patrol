@@ -8,9 +8,9 @@ import math
 
 import numpy as np
 import pytest
-from d1max_localizer.persons import Box, PersonNode, Settings, bearing_deg, range_m, yolo_people
+from nexwar_localizer.persons import Box, PersonNode, Settings, bearing_deg, range_m, yolo_people
 
-from d1max_contract.persbridge import Persons, parse
+from nexwar_contract.persbridge import Persons, parse
 
 
 def test_方向_正中是0_右边是负_左边是正_边上是半个视场():
@@ -174,7 +174,7 @@ def test_外审_后相机看到的人用后雷达量():
 def test_外审5_截图目录有上限_多了删最旧的(tmp_path):
     import os
 
-    from d1max_localizer.persons import MAX_SNAPSHOTS
+    from nexwar_localizer.persons import MAX_SNAPSHOTS
     c = 钟()
     n = PersonNode(假检测器([Box(0, 0, 10, 10, 0.9)]), snapshot_dir=tmp_path, monotonic=c,
                    settings=Settings(snapshot_every_s=1))
@@ -225,7 +225,7 @@ def _假推理库(monkeypatch, 有的):
 
 def test_推理后端_缺省CUDA不用TensorRT_装了也不用(monkeypatch, tmp_path):
     """TensorRT 第一次建引擎要好几分钟(C40221 上超过 5 分钟),每秒几帧的用量下不值:缺省 CUDA。"""
-    from d1max_localizer.persons import OnnxDetector
+    from nexwar_localizer.persons import OnnxDetector
     _假推理库(monkeypatch, ["TensorrtExecutionProvider", "CUDAExecutionProvider",
                         "CPUExecutionProvider"])
     模型 = tmp_path / "person.onnx"
@@ -239,7 +239,7 @@ def test_推理后端_缺省CUDA不用TensorRT_装了也不用(monkeypatch, tmp_
 def test_推理后端_开了trt才先用TensorRT_带引擎缓存和半精度_CPU限线程(monkeypatch, tmp_path):
     """CPU 版 onnxruntime 不限线程会占满所有核(C40221 上约 4.5 核);TensorRT 第一次建引擎要几分钟,
     不缓存的话每次重启都要再等。"""
-    from d1max_localizer.persons import OnnxDetector
+    from nexwar_localizer.persons import OnnxDetector
     _假推理库(monkeypatch, ["TensorrtExecutionProvider", "CUDAExecutionProvider",
                         "CPUExecutionProvider"])
     模型 = tmp_path / "person.onnx"
@@ -256,7 +256,7 @@ def test_推理后端_开了trt才先用TensorRT_带引擎缓存和半精度_CPU
 
 
 def test_推理后端_只有CPU就只给CPU_线程数照给的(monkeypatch, tmp_path):
-    from d1max_localizer.persons import OnnxDetector
+    from nexwar_localizer.persons import OnnxDetector
     _假推理库(monkeypatch, ["AzureExecutionProvider", "CPUExecutionProvider"])
     模型 = tmp_path / "person.onnx"
     模型.write_bytes(b"x")
@@ -282,7 +282,7 @@ def test_测距只用框中间_框边上更近的遮挡物不算():
 
 def test_OpenCV只开一个线程(monkeypatch, tmp_path):
     """OpenCV 缺省开跟核数一样大的线程池:C40221 上 8 个线程各吃 35–48%,定位器被挤到每秒 6 帧。"""
-    from d1max_localizer.persons import OnnxDetector
+    from nexwar_localizer.persons import OnnxDetector
     cv2 = _假推理库(monkeypatch, ["CPUExecutionProvider"])
     模型 = tmp_path / "person.onnx"
     模型.write_bytes(b"x")
@@ -291,7 +291,7 @@ def test_OpenCV只开一个线程(monkeypatch, tmp_path):
 
 
 def test_按一半分辨率解码_宽度按解出来的算(monkeypatch, tmp_path):
-    from d1max_localizer.persons import OnnxDetector
+    from nexwar_localizer.persons import OnnxDetector
     cv2 = _假推理库(monkeypatch, ["CPUExecutionProvider"])
     cv2.IMREAD_COLOR, cv2.IMREAD_REDUCED_COLOR_2 = 1, 17
     用的 = []
@@ -339,7 +339,7 @@ def test_跨板_截图不写盘_交给桥发_一张只交一次(tmp_path):
 
 
 def test_跨板_截图太大不发_这一帧不引用():
-    from d1max_contract.persbridge import MAX_SNAP_BYTES
+    from nexwar_contract.persbridge import MAX_SNAP_BYTES
     n = PersonNode(假检测器([Box(860, 300, 1060, 900, 0.88)]), remote_snapshots=True)
     big = b"\xff\xd8" + b"x" * (MAX_SNAP_BYTES + 10)
     m = _过契约(n.on_image("front", big, 5))
@@ -363,7 +363,7 @@ class _假代理:
         threading.Thread(target=self._run, daemon=True).start()
 
     def _run(self):
-        from d1max_contract import persbridge as pb
+        from nexwar_contract import persbridge as pb
         c, _ = self.srv.accept()
         f = c.makefile("rwb")
         f.write(pb.encode(pb.Challenge(nonce="ab" * 16)))
@@ -397,7 +397,7 @@ def test_跨板_连上先过挑战_收到外参交出去_发的报文对面收�
     import socket
     import time as _t
 
-    from d1max_localizer.persons import PersonLink
+    from nexwar_localizer.persons import PersonLink
     key = bytes(range(32))
     agent = _假代理(key)
     frames: list = []
@@ -422,7 +422,7 @@ def test_跨板_连上先过挑战_收到外参交出去_发的报文对面收�
 def test_跨板_密钥不对_对面断了_发不出去也不炸_过一会儿再连():
     import socket
 
-    from d1max_localizer.persons import PersonLink
+    from nexwar_localizer.persons import PersonLink
     agent = _假代理(bytes(range(32)))
     link = PersonLink(lambda: socket.create_connection(("127.0.0.1", agent.port), timeout=1),
                       key=b"\x01" * 32, reconnect_s=60)
@@ -445,7 +445,7 @@ def test_复查P212_冒充的代理_不知道密钥_什么也收不到_外参也
     import socket
     import time as _t
 
-    from d1max_localizer.persons import PersonLink
+    from nexwar_localizer.persons import PersonLink
     fake = _假代理(bytes(range(32)), knows_key=False)
     frames: list = []
     link = PersonLink(lambda: socket.create_connection(("127.0.0.1", fake.port), timeout=1),

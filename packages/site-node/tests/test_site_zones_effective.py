@@ -19,9 +19,9 @@ import pytest
 from test_site_api import MAP, PW, _等, 站
 from test_site_zones import POND, SLOW
 
-from d1max_contract.zones import ZoneSet
-from d1max_site.db import SiteDB
-from d1max_site.nav_zones import NavZones
+from nexwar_contract.zones import ZoneSet
+from nexwar_site.db import SiteDB
+from nexwar_site.nav_zones import NavZones
 
 HARD = POND | {"hard": True, "label": "泳池"}
 BIG = {"id": "pond", "kind": "nogo", "label": "池子大一圈",
@@ -417,7 +417,7 @@ def test_R1续1_全都确认过_只有到期_自动算确认(tmp_path):
 
 
 def test_R1_装不下_守着上一份在生效的(tmp_path):
-    from d1max_contract.zones import MAX_ZONES
+    from nexwar_contract.zones import MAX_ZONES
     z, _ = _z(tmp_path)
     many = [STEP | {"id": f"s{i}", "polygon": [[i, 20], [i + 0.5, 20], [i + 0.5, 21]]}
             for i in range(MAX_ZONES)]

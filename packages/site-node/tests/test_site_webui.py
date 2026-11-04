@@ -9,9 +9,9 @@ import urllib.request
 import pytest
 from test_site_api import PW, 站
 
-from d1max_site import webui
+from nexwar_site import webui
 
-WEB = {"X-D1Max-Web": "1"}
+WEB = {"X-Nexwar-Web": "1"}
 
 
 def _http(s, method, path, body=None, headers=None):
@@ -87,11 +87,11 @@ def test_网页登录_种HttpOnly_cookie_回复里没有令牌_cookie能看_改�
     assert _http(台, "GET", "/api/robots", headers=ck)[0] == 200
     code, _, body = _http(台, "POST", "/api/alerts/x/ack", {}, headers=ck)
     assert code == 403 and "防伪造" in json.loads(body)["error"]
-    code, _, _ = _http(台, "POST", "/api/alerts/x/ack", {}, headers=ck | {"X-D1Max-Web": "1"})
+    code, _, _ = _http(台, "POST", "/api/alerts/x/ack", {}, headers=ck | {"X-Nexwar-Web": "1"})
     assert code != 403
     code, h2, _ = _http(台, "POST", "/api/logout", {}, headers=ck)
     assert code == 403, "退出也要防伪造头"
-    code, h2, _ = _http(台, "POST", "/api/logout", {}, headers=ck | {"X-D1Max-Web": "1"})
+    code, h2, _ = _http(台, "POST", "/api/logout", {}, headers=ck | {"X-Nexwar-Web": "1"})
     assert code == 200 and "Max-Age=0" in h2["Set-Cookie"]
     assert _http(台, "GET", "/api/robots", headers=ck)[0] == 401, "退出以后 cookie 作废"
 
@@ -106,8 +106,8 @@ def test_手机命令行照旧_带令牌的不要防伪造头_普通登录照样
 
 
 def test_cookie_解析():
-    assert webui.cookie_token("a=1; d1max_session=tok; b=2") == "tok"
-    assert webui.cookie_token("d1max_session=") is None
+    assert webui.cookie_token("a=1; nexwar_session=tok; b=2") == "tok"
+    assert webui.cookie_token("nexwar_session=") is None
     assert webui.cookie_token(None) is None
     assert webui.cookie_token('bad"cookie') is None
 
@@ -124,7 +124,7 @@ def test_我是谁_cookie刷新以后认得出人和角色(台):
 
 
 def test_包里带的网页_构建过_没有内联脚本和内联样式():
-    """站点的 CSP 不许内联脚本、内联样式:构建产物(web/console → d1max_site/web)里不能有。"""
+    """站点的 CSP 不许内联脚本、内联样式:构建产物(web/console → nexwar_site/web)里不能有。"""
     import re
 
     idx = webui.WEB_DIR / "index.html"
@@ -152,12 +152,12 @@ def test_外审I4_跨站表单换登录_拒在种cookie之前_正常网页登录
     form = b'{"name": "alice", "password": "' + PW.encode() + b'", "web": true, "x": "="}'
     for headers in ({"Content-Type": "text/plain", "Origin": "https://evil.example"},
                     {"Content-Type": "application/json"},                       # 没有防伪造头
-                    {"Content-Type": "text/plain", "X-D1Max-Web": "1"}):         # 头有了但不是 JSON
+                    {"Content-Type": "text/plain", "X-Nexwar-Web": "1"}):         # 头有了但不是 JSON  # noqa: E501
         code, h = _raw(台, "POST", "/api/login", form, headers)
         assert code == 403 and "Set-Cookie" not in h, headers
     code, h = _raw(台, "POST", "/api/login", form,
-                   {"Content-Type": "application/json; charset=utf-8", "X-D1Max-Web": "1"})
-    assert code == 200 and "d1max_session=" in h["Set-Cookie"]
+                   {"Content-Type": "application/json; charset=utf-8", "X-Nexwar-Web": "1"})
+    assert code == 200 and "nexwar_session=" in h["Set-Cookie"]
     code, _, body = _http(台, "POST", "/api/login", {"name": "alice", "password": PW})
     assert code == 200 and json.loads(body)["token"], "手机、命令行登录不受影响"
 
@@ -182,7 +182,7 @@ def test_网页登录记成web_自己报成app也不认(台):
     code, _, _ = _http(台, "POST", "/api/login",
                        {"name": "alice", "password": PW, "web": True,
                         "client": {"kind": "app", "version": "9.9.9"}},
-                       headers={"X-D1Max-Web": "1"})
+                       headers={"X-Nexwar-Web": "1"})
     assert code == 200
     assert [(c["name"], c["kind"], c.get("version")) for c in 台.accounts.clients()] == [
         ("alice", "web", None)]

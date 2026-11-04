@@ -1,0 +1,159 @@
+"""地图编辑第一版的栅格那一半(W44 第四期,设计 §6 第 1、2、4 条):橡皮擦、画障碍。
+
+改的是机器人「哪里能走」的平面图(``floor.pgm``),**不改**认位置用的立体地图(``prior.mm``)。跟清噪点
+(:mod:`nexwar_site.map_denoise`)一样另存成新的一版(``maps_admin.edit``),原来那一版不动。
+
+一个操作:``{"op": "erase" | "obstacle", "shape": "stroke" | "line" | "rect",
+"points": [[x, y], ...](米), "width_m": 0.05–2.0}``。``stroke`` 是一笔(点连成线、按粗细画),
+``line`` 两个点的直线,``rect`` 两个对角的
+方框(实心,不看粗细)。``erase`` 改成空地(图里空闲格最常见的灰度),``obstacle`` 改成占用。
+W61(用户 2026-11-01:圈起来的杂物没擦掉):画笔**首尾接上**(:func:`closed_loop`)就是圈,
+圈里面整块一起改;统计(``erased_m2``、``obstacle_m2``)按**实际变了的格子**算,原来就是空地的不算擦了。
+空地、占用写哪个灰度按这张图的 ``floor.yaml``(``negate``、两个阈值)算(外审 R4:``negate=1`` 的图 0 是
+空地);阈值让某一种写不出来就拒绝,不写错。
+"""
+
+from __future__ import annotations
+
+import math
+from typing import Any
+
+from nexwar_site import map_preview as mp
+
+OPS = ("erase", "obstacle")
+SHAPES = ("stroke", "line", "rect")
+MAX_OPS = 500
+MAX_POINTS = 2000
+WIDTH_M = (0.05, 2.0)
+#: 画笔终点离起点不超过这么远(米;跟 3 倍粗细取大的)就算圈(W61)。网页 mapeditops.ts 同一个数。
+CLOSE_M = 0.5
+
+
+def closed_loop(o: dict[str, Any]) -> bool:
+    """画笔首尾接上了(至少 3 个点,终点回到起点附近):圈里面整块算进去。"""
+    pts = o["points"]
+    if o["shape"] != "stroke" or len(pts) < 3:
+        return False
+    (ax, ay), (bx, by) = pts[0], pts[-1]
+    return math.hypot(bx - ax, by - ay) <= max(CLOSE_M, 3 * o["width_m"])
+
+
+def _inside(xs: Any, ys: Any, poly: list[tuple[float, float]]) -> Any:
+    """每一格中心在不在多边形里(奇偶规则,射线法)。"""
+    import numpy as np
+    inside = np.zeros(xs.shape, dtype=bool)
+    n = len(poly)
+    for i in range(n):
+        (x1, y1), (x2, y2) = poly[i], poly[(i + 1) % n]
+        if y1 == y2:
+            continue
+        cross = (y1 > ys) != (y2 > ys)
+        xint = (x2 - x1) * (ys - y1) / (y2 - y1) + x1
+        inside ^= cross & (xs < xint)
+    return inside
+
+
+class EditError(ValueError):
+    """操作写得不对(接口回 400)。"""
+
+
+def check_ops(raw: Any) -> list[dict[str, Any]]:
+    if not isinstance(raw, list) or not raw:
+        raise EditError("ops 要是非空的列表")
+    if len(raw) > MAX_OPS:
+        raise EditError(f"一次最多 {MAX_OPS} 个操作")
+    out = []
+    for i, o in enumerate(raw):
+        if not isinstance(o, dict) or o.get("op") not in OPS or o.get("shape") not in SHAPES:
+            raise EditError(f"第 {i + 1} 个操作要有 op(erase / obstacle)和 "
+                            "shape(stroke / line / rect)")
+        pts = o.get("points")
+        if not isinstance(pts, list) or not 1 <= len(pts) <= MAX_POINTS:
+            raise EditError(f"第 {i + 1} 个操作的点要 1–{MAX_POINTS} 个")
+        clean = []
+        for p in pts:
+            if not (isinstance(p, list) and len(p) == 2 and all(
+                    isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
+                    for v in p)):
+                raise EditError(f"第 {i + 1} 个操作的点要是 [x, y](米)")
+            clean.append((float(p[0]), float(p[1])))
+        if o["shape"] in ("line", "rect") and len(clean) != 2:
+            raise EditError(f"第 {i + 1} 个操作:直线、方框要两个点")
+        w = o.get("width_m", 0.2)
+        if isinstance(w, bool) or not isinstance(w, (int, float)) or \
+                not WIDTH_M[0] <= w <= WIDTH_M[1]:
+            raise EditError(f"第 {i + 1} 个操作的粗细要在 {WIDTH_M[0]}–{WIDTH_M[1]} 米")
+        out.append({"op": o["op"], "shape": o["shape"], "points": clean, "width_m": float(w)})
+    return out
+
+
+def _value(lut: bytes, rank: int, prefer: tuple[int, ...], what: str | None) -> int:
+    """按这张图的编码,哪个灰度读出来是 ``rank``(0 占用 / 1 空地);先挑 ``prefer`` 里的(标准写法)。
+    一个都没有:要用(``what``)就拒绝,不用回 0 占位。"""
+    for v in prefer:
+        if lut[v] == rank:
+            return v
+    for v in range(256):
+        if lut[v] == rank:
+            return v
+    if what is not None:
+        raise EditError(f"此地图的 floor.yaml 阈值下没有哪个灰度算{what},无法修改")
+    return 0
+
+
+def apply_ops(pgm: bytes, meta: dict[str, Any], ops: list[dict[str, Any]]) -> tuple[bytes, dict]:
+    """→ (新的 PGM(P5、最大值 255), ``{"erased_m2", "obstacle_m2"}``)。
+    ``ops`` 先过 :func:`check_ops`。"""
+    import numpy as np
+    w, h, body = mp.parse_pgm(pgm)
+    img = np.frombuffer(body, dtype=np.uint8).reshape(h, w).copy()
+    ranks = mp.grid_ranks(pgm, meta)
+    free_vals = img[ranks == 1]
+    lut = mp._rank_lut(meta)
+    need = {o["op"] for o in ops}
+    if free_vals.size:
+        free = int(np.bincount(free_vals).argmax())
+    else:
+        free = _value(lut, 1, (254, 0), "空地" if "erase" in need else None)
+    occ = _value(lut, 0, (0, 255), "障碍" if "obstacle" in need else None)
+    res = float(meta["resolution"])
+    ox, oy = float(meta["origin"][0]), float(meta["origin"][1])
+    rows, cols = np.mgrid[0:h, 0:w]
+    xs = ox + (cols + 0.5) * res                       # 每一格中心的地图坐标
+    ys = oy + (h - rows - 0.5) * res
+    erased = np.zeros((h, w), dtype=bool)
+    added = np.zeros((h, w), dtype=bool)
+    for o in ops:
+        pts = o["points"]
+        if o["shape"] == "rect":
+            (x0, y0), (x1, y1) = pts
+            mask = ((xs >= min(x0, x1)) & (xs <= max(x0, x1))
+                    & (ys >= min(y0, y1)) & (ys <= max(y0, y1)))
+        else:
+            r = max(o["width_m"] / 2, res * 0.71)          # 再细也盖住线经过的那一格
+            mask = np.zeros((h, w), dtype=bool)
+            loop = closed_loop(o)
+            line = [*pts, pts[0]] if loop else pts
+            segs = list(zip(line, line[1:], strict=False)) or [(pts[0], pts[0])]
+            for (ax, ay), (bx, by) in segs:
+                dx, dy = bx - ax, by - ay
+                ll = dx * dx + dy * dy
+                t = np.clip(((xs - ax) * dx + (ys - ay) * dy) / ll, 0, 1) if ll > 0 else 0.0
+                mask |= (xs - (ax + t * dx)) ** 2 + (ys - (ay + t * dy)) ** 2 <= r * r
+            if loop:
+                mask |= _inside(xs, ys, pts)
+        if o["op"] == "erase":
+            img[mask] = free
+            erased |= mask
+            added &= ~mask
+        else:
+            img[mask] = occ
+            added |= mask
+            erased &= ~mask
+    cell = res * res
+    # W61:只数真的变了的格子(原来就是空地的不算擦了,原来就是障碍的不算画了)
+    erased &= ranks != 1
+    added &= ranks != 0
+    stats = {"erased_m2": round(float(erased.sum()) * cell, 2),
+             "obstacle_m2": round(float(added.sum()) * cell, 2)}
+    return b"P5\n%d %d\n255\n" % (w, h) + img.tobytes(), stats

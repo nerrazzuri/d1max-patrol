@@ -6,9 +6,9 @@ import json
 
 import pytest
 
-from d1max_contract import persbridge as pb
-from d1max_contract.errors import ContractError
-from d1max_contract.persbridge import (
+from nexwar_contract import persbridge as pb
+from nexwar_contract.errors import ContractError
+from nexwar_contract.persbridge import (
     MAX_LINE,
     MAX_PEOPLE,
     Heartbeat,
@@ -29,7 +29,7 @@ def _p(**kw):
 
 
 def test_往返():
-    for m in (Hello(proto=1, name="d1max-persons", version="0.1"), Heartbeat(seq=3),
+    for m in (Hello(proto=1, name="nexwar_persons", version="0.1"), Heartbeat(seq=3),
               Persons(**_p())):
         assert parse(encode(m)) == m
     m = parse(encode(Persons(**_p())))

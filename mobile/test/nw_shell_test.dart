@@ -1,20 +1,20 @@
 // 登录之后的外壳：底部五栏，第 5 栏按角色（W53：管理员「管理」、经理「日程」、保安和只看「我的」）；
 // 狗列表身上的站点级逻辑（事件流、响铃、登录过期退回）切到哪一栏都照样活着。
-import 'package:d1max_patrol/l10n.dart';
-import 'package:d1max_patrol/net/site_client.dart';
-import 'package:d1max_patrol/store/site_store.dart';
-import 'package:d1max_patrol/ui/map_manage.dart';
-import 'package:d1max_patrol/ui/nw/nw_shell.dart';
-import 'package:d1max_patrol/ui/nw/nw_theme.dart';
-import 'package:d1max_patrol/ui/alarm_log.dart';
-import 'package:d1max_patrol/ui/site_duty_page.dart';
-import 'package:d1max_patrol/ui/site_health.dart';
-import 'package:d1max_patrol/ui/site_intercepts.dart';
-import 'package:d1max_patrol/ui/site_maps.dart';
-import 'package:d1max_patrol/ui/site_page.dart';
-import 'package:d1max_patrol/ui/site_releases.dart';
-import 'package:d1max_patrol/ui/site_runs.dart';
-import 'package:d1max_patrol/ui/site_tabs.dart';
+import 'package:nexwar_patrol/l10n.dart';
+import 'package:nexwar_patrol/net/site_client.dart';
+import 'package:nexwar_patrol/store/site_store.dart';
+import 'package:nexwar_patrol/ui/map_manage.dart';
+import 'package:nexwar_patrol/ui/nw/nw_shell.dart';
+import 'package:nexwar_patrol/ui/nw/nw_theme.dart';
+import 'package:nexwar_patrol/ui/alarm_log.dart';
+import 'package:nexwar_patrol/ui/site_duty_page.dart';
+import 'package:nexwar_patrol/ui/site_health.dart';
+import 'package:nexwar_patrol/ui/site_intercepts.dart';
+import 'package:nexwar_patrol/ui/site_maps.dart';
+import 'package:nexwar_patrol/ui/site_page.dart';
+import 'package:nexwar_patrol/ui/site_releases.dart';
+import 'package:nexwar_patrol/ui/site_runs.dart';
+import 'package:nexwar_patrol/ui/site_tabs.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 

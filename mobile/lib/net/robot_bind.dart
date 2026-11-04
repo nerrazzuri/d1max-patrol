@@ -6,7 +6,7 @@
 ///
 /// 贴纸二维码 `D1MAXBOT1.<base64url(JSON)>`：`s` 序列号、`c` 绑定码、`w` 热点名、`p` 热点密码、
 /// `f` 配网证书指纹（前 32 位十六进制）、可选 `a` 配网服务地址（缺省 [defaultBindAddr]）。
-/// 跟 `d1max_contract.binding` 同一个格式。
+/// 跟 `nexwar_contract.binding` 同一个格式。
 library;
 
 import 'dart:async';
@@ -25,7 +25,7 @@ const String unbindPrefix = 'D1MAXUNBIND1.';
 const String defaultBindAddr = '192.168.1.2:8450';
 
 /// 热点密码：所有机器人统一一个（用户 2026-10-30：热点只用来配网、要站点同意、跟内网隔开，不用保密）。
-/// 跟 `d1max_contract.binding.HOTSPOT_PSK` 一样。
+/// 跟 `nexwar_contract.binding.HOTSPOT_PSK` 一样。
 const String hotspotPsk = 'NexusWarden';
 
 /// 热点名：`NW-` + 序列号后 6 位。
@@ -112,7 +112,7 @@ abstract class HotspotJoiner {
 }
 
 class ChannelHotspotJoiner implements HotspotJoiner {
-  static const MethodChannel _ch = MethodChannel('d1max/hotspot');
+  static const MethodChannel _ch = MethodChannel('nexwar/hotspot');
   const ChannelHotspotJoiner();
 
   @override

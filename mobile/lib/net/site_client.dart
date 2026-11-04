@@ -3,7 +3,7 @@
 /// （W00c5e 删掉了过渡用的「现场直连」）。
 ///
 /// **只认一张证书。** 站点用的是自己的 CA 签的证书，系统不认识它；这里不去装 CA，而是把站点
-/// 服务证书的 SHA-256（`d1max-site fingerprint` 打出来）钉死：握手时拿到的证书指纹对得上才连，
+/// 服务证书的 SHA-256（`nexwar_site fingerprint` 打出来）钉死：握手时拿到的证书指纹对得上才连，
 /// 对不上一律断开（设计决定二 A）。`SecurityContext(withTrustedRoots: false)` 让**每一张**证书
 /// 都走 `badCertificateCallback`，包括系统碰巧认识的——不然系统信任的证书会绕过钉扎。
 ///
@@ -36,7 +36,7 @@ class SiteError implements Exception {
   String toString() => status == 0 ? message : tr('$message ($status)', '$message（$status）');
 }
 
-/// 证书的 SHA-256（DER），小写十六进制、不带冒号。跟 `d1max-site fingerprint` 同一个算法。
+/// 证书的 SHA-256（DER），小写十六进制、不带冒号。跟 `nexwar_site fingerprint` 同一个算法。
 /// 边下边算指纹（App 安装包）：只留最后那一个结果。
 class _DigestSink implements Sink<Digest> {
   Digest? value;
@@ -77,7 +77,7 @@ String? checkSiteEntry(String url, String fingerprint) {
 }
 
 /// 登录之后的会话。
-/// 版本兼容（商业化 A7，跟站点的 `d1max_contract.compat` 对着）：这个 App 的接口级别、它要站点至少几级。
+/// 版本兼容（商业化 A7，跟站点的 `nexwar_contract.compat` 对着）：这个 App 的接口级别、它要站点至少几级。
 /// 只在「两头都要会」的接口改了的时候加一。
 const int appApiLevel = 1;
 

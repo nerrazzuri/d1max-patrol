@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pytest
 
-from d1max_site.db import SCHEMA_VERSION, SchemaTooNew, SiteDB
+from nexwar_site.db import SCHEMA_VERSION, SchemaTooNew, SiteDB
 
 FIX = Path(__file__).parent / "fixtures" / "schema"
 SNAPSHOTS = {int(re.search(r"v(\d+)", p.name).group(1)): p for p in sorted(FIX.glob("site-v*.sql"))}

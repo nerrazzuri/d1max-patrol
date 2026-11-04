@@ -1,11 +1,11 @@
 // 配对码（App V2）：手机读的跟站点出的是同一个形状；坏码、别的码、形状不对的地址都不收。
 import 'dart:convert';
 
-import 'package:d1max_patrol/l10n.dart';
-import 'package:d1max_patrol/net/pairing.dart';
+import 'package:nexwar_patrol/l10n.dart';
+import 'package:nexwar_patrol/net/pairing.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-// 这两条是站点的 d1max_site.pairing.encode 真出的（中文站点名、IPv6 地址各一条）。
+// 这两条是站点的 nexwar_site.pairing.encode 真出的（中文站点名、IPv6 地址各一条）。
 const _fromSite = 'D1MAXSITE1.eyJmIjoiYWJhYmFiYWJhYmFiYWJhYmFiYWJhYmFiYWJhYmFiYWJhYmFiYWJhYmFiYWJhYmFiYWJhYmFiYWJhYmFiYWJhYiIsIm4iOiLluoTlm63kuIDlj7ciLCJ1IjoiaHR0cHM6Ly8xOTIuMTY4LjEuNTo4NDQzIn0';
 const _fromSiteV6 = 'D1MAXSITE1.eyJmIjoiY2RjZGNkY2RjZGNkY2RjZGNkY2RjZGNkY2RjZGNkY2RjZGNkY2RjZGNkY2RjZGNkY2RjZGNkY2RjZGNkY2RjZCIsIm4iOiJFYXN0IEdhdGUiLCJ1IjoiaHR0cHM6Ly9bZmQwMDo6MV06ODQ0MyJ9';
 

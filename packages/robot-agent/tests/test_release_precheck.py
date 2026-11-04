@@ -13,8 +13,8 @@ import json
 
 from test_runtime_maps import _cmd, _发布台
 
-from d1max_agent.engine import release as rel
-from d1max_agent.release_precheck import PrecheckInputs, first_block, precheck
+from nexwar_agent.engine import release as rel
+from nexwar_agent.release_precheck import PrecheckInputs, first_block, precheck
 
 NEW = "2026-09-25-bbbbbb"
 
@@ -46,7 +46,7 @@ def test_定位器感知外参_还没部署_写明白_不拦():
 
 
 def test_接上来源之后_不健康就拦():
-    from d1max_agent.release_precheck import SourceCheck
+    from nexwar_agent.release_precheck import SourceCheck
     items = precheck(_好(sources=(SourceCheck("localizer", False, "定位器 3 s 未出位姿"),)))
     got = _项(items)
     assert not got["localizer"].ok and got["localizer"].blocking
@@ -55,7 +55,7 @@ def test_接上来源之后_不健康就拦():
 
 def test_不认识的来源_也列出来_不健康照样拦():
     """W00c6d 内审应修 1:以前清单只认三个名字,别的名字(比如 gnss)不健康被悄悄丢掉、照样切。"""
-    from d1max_agent.release_precheck import SourceCheck
+    from nexwar_agent.release_precheck import SourceCheck
     items = precheck(_好(sources=(SourceCheck("gnss", False, "没有固定解"),)))
     got = _项(items)
     assert "gnss" in got and not got["gnss"].ok and got["gnss"].blocking
@@ -227,8 +227,8 @@ async def test_接上健康来源_不健康就拦切版本_来源炸了卡住了
     又没名字就被丢掉、照样切;来源卡住没有超时,握着命令锁把监护心跳也卡住。"""
     import asyncio
 
-    import d1max_agent.runtime as runtime_mod
-    from d1max_agent.release_precheck import SourceCheck
+    import nexwar_agent.runtime as runtime_mod
+    from nexwar_agent.release_precheck import SourceCheck
     monkeypatch.setattr(runtime_mod, "PRECHECK_SOURCE_TIMEOUT_S", 0.05)
     broker, c, ears, relops, dog, rt = await _发布台(tmp_path)
     await rt.start()
@@ -269,14 +269,14 @@ async def test_核的是要切的那一版_不是在跑的(tmp_path):
 
 async def test_狗在忙_不核槽_不问来源_命令锁不卡(tmp_path):
     """内审应修 2:狗在忙时切版本本来就会被拒,不该先把整个槽算一遍、把每个来源问一遍(握着命令锁)。"""
-    from d1max_contract.messages import MapPose
+    from nexwar_contract.messages import MapPose
     broker, c, ears, relops, dog, rt = await _发布台(tmp_path)
     await rt.start()
     asked = []
 
     async def 来源():
         asked.append(1)
-        from d1max_agent.release_precheck import SourceCheck
+        from nexwar_agent.release_precheck import SourceCheck
         return SourceCheck("localizer", True, "好")
     rt.precheck_sources.append(("localizer", 来源))
     goto = {"target": MapPose(map_id="m", map_version="1", frame_id="map", x=5.0, y=0.0,
@@ -307,7 +307,7 @@ async def test_站点给的任务包schema_狗按槽里的自述比(tmp_path):
 
 async def test_退版本_又忙又读不到电量_先说忙(tmp_path):
     """退版本不走清单,但原因码的先后跟切版本一样:忙在电量前面(读电量会让出,收下之前还要再看一眼忙)。"""
-    from d1max_contract.messages import MapPose
+    from nexwar_contract.messages import MapPose
     broker, c, ears, relops, dog, rt = await _发布台(tmp_path)
     await rt.start()
     goto = {"target": MapPose(map_id="m", map_version="1", frame_id="map", x=5.0, y=0.0,

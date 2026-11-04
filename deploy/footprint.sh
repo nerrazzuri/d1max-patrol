@@ -23,7 +23,7 @@
 #   再跑一趟,中途 abort 的代价是整份快照都没了)。
 #
 #   **变量名一律用 ASCII。** bash 的标识符只认 ASCII 字母和下划线:
-#   `根=/opt/d1max` 这种写法不是赋值,而是一条"找不到的命令",配上
+#   `根=/opt/nexwar` 这种写法不是赋值,而是一条"找不到的命令",配上
 #   set -e 会让脚本停在那一行。注释和屏幕上的话照旧写中文。
 # =====================================================================
 set -u
@@ -38,8 +38,8 @@ set -u
 SURVEY_DIRS=(
   "/etc/systemd/system:2"
   "/opt:2"
-  # W01 之后巡检数据根在 /var/lib/d1max;装机会在这儿建目录,勘察范围要跟上,
-  # 不然装机前后的 diff 证明不了"只动了声明过的那几处"。深度 1 只看到 d1max 这一层。
+  # W01 之后巡检数据根在 /var/lib/nexwar;装机会在这儿建目录,勘察范围要跟上,
+  # 不然装机前后的 diff 证明不了"只动了声明过的那几处"。深度 1 只看到 nexwar 这一层。
   "/var/lib:1"
   # 填了站点地址之后装机脚本在这儿写对时配置(W09d)。/etc 只看深度 1,看不进 /etc/systemd 底下,
   # 不单列的话这一处写盘在 diff 里只露成一条「/etc/systemd 被改动」(2026-10-08 装 C40221 查出)。
@@ -62,18 +62,18 @@ SURVEY_DIRS=(
 OUR_PORTS=(8090 8091)
 
 # 想顺带盯住别人的端口就填这个变量,空格分开:
-#   D1MAX_FOOTPRINT_PORTS='7447 8554' sudo bash deploy/footprint.sh snapshot x.txt
+#   NEXWAR_FOOTPRINT_PORTS='7447 8554' sudo bash deploy/footprint.sh snapshot x.txt
 # **脚本里不写死任何一个别人的端口号。** 有 ss / netstat 的机器上整张监听表
 # 本来就会被一行不落地记下来,别人的端口自己会出现在快照里;只有在连
 # ss 和 netstat 都没有的机器上,才需要靠这个变量逐个去探。
-EXTRA_PORTS=${D1MAX_FOOTPRINT_PORTS:-}
+EXTRA_PORTS=${NEXWAR_FOOTPRINT_PORTS:-}
 
 # 勘察范围也可以整个换掉(空格分开的 "目录:深度")。**这是给测试和特殊现场
 # 留的口子**,正常装机不要用它 —— 换掉之后这份快照就不再是那五处的证据了。
-if [ -n "${D1MAX_FOOTPRINT_DIRS:-}" ]; then
+if [ -n "${NEXWAR_FOOTPRINT_DIRS:-}" ]; then
   # 故意不加引号:这个变量装的是好几个条目。
   # shellcheck disable=SC2206
-  SURVEY_DIRS=(${D1MAX_FOOTPRINT_DIRS})
+  SURVEY_DIRS=(${NEXWAR_FOOTPRINT_DIRS})
 fi
 
 DEFAULT_OUT_DIR=runs/footprint
@@ -236,18 +236,18 @@ do_diff() {
   # 整段用单引号裹着,**里面一个单引号都不能出现**。
   collect | awk -F'|' '
 function is_ours(p) {
-  if (p ~ /^\/opt\/d1max($|\/)/) return 1
-  if (p ~ /^\/etc\/d1max($|\/)/) return 1
-  if (p ~ /^\/var\/lib\/d1max($|\/)/) return 1
-  if (p == "/etc/systemd/timesyncd.conf.d/d1max.conf") return 1
-  if (p == "/etc/chrony/conf.d/d1max.conf") return 1
+  if (p ~ /^\/opt\/nexwar($|\/)/) return 1
+  if (p ~ /^\/etc\/nexwar($|\/)/) return 1
+  if (p ~ /^\/var\/lib\/nexwar($|\/)/) return 1
+  if (p == "/etc/systemd/timesyncd.conf.d/nexwar.conf") return 1
+  if (p == "/etc/chrony/conf.d/nexwar.conf") return 1
   # W55:特权执行器(目录、配置、请求结果目录)、日志留盘设置
-  if (p ~ /^\/usr\/local\/lib\/d1max($|\/)/) return 1
-  if (p == "/etc/d1max-ops.json") return 1
-  if (p ~ /^\/var\/lib\/d1max-ops($|\/)/) return 1
-  if (p == "/etc/systemd/journald.conf.d/d1max.conf") return 1
-  if (p ~ /^\/etc\/systemd\/system\/d1max-[^\/]*\.(service|path)$/) return 1
-  if (p ~ /^\/etc\/systemd\/system\/[^\/]*\.target\.wants\/d1max-[^\/]*\.(service|path)$/) return 1
+  if (p ~ /^\/usr\/local\/lib\/nexwar($|\/)/) return 1
+  if (p == "/etc/nexwar_ops.json") return 1
+  if (p ~ /^\/var\/lib\/nexwar_ops($|\/)/) return 1
+  if (p == "/etc/systemd/journald.conf.d/nexwar.conf") return 1
+  if (p ~ /^\/etc\/systemd\/system\/nexwar_[^\/]*\.(service|path)$/) return 1
+  if (p ~ /^\/etc\/systemd\/system\/[^\/]*\.target\.wants\/nexwar_[^\/]*\.(service|path)$/) return 1
   return 0
 }
 # 被勘察的那几处目录**自己**。在它们底下加一个文件, 父目录的 mtime 必然跟着

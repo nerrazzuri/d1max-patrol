@@ -2,8 +2,8 @@
 
 import pytest
 
-from d1max_patrol.config.loader import ConfigError, load_config
-from d1max_patrol.config.models import AppConfig, NavConfig
+from nexwar_patrol.config.loader import ConfigError, load_config
+from nexwar_patrol.config.models import AppConfig, NavConfig
 
 
 def test_不给路径时返回全默认配置():
@@ -64,7 +64,7 @@ def test_文件不存在报错(tmp_path):
 
 
 def test_环境变量覆盖_url(monkeypatch):
-    monkeypatch.setenv("D1MAX_NAV_URL", "ws://10.0.0.1:10010")
+    monkeypatch.setenv("NEXWAR_NAV_URL", "ws://10.0.0.1:10010")
     cfg = load_config(None)
     assert cfg.nav.url == "ws://10.0.0.1:10010"
 

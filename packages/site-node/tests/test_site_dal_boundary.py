@@ -7,7 +7,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-SRC = Path(__file__).resolve().parents[1] / "src" / "d1max_site"
+SRC = Path(__file__).resolve().parents[1] / "src" / "nexwar_site"
 
 #: 可以直接 import sqlite3 的模块(设计稿第 3 节)。多一个就要先说清楚为什么。
 MAY_IMPORT_SQLITE = {"db", "backup", "restore", "inventory", "selfcheck", "incidents"}

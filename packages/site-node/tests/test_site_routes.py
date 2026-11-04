@@ -14,18 +14,18 @@ from test_site_intercept_reach import _屋子
 from test_site_maps import _files
 from test_site_schedule import 任务, 排程, 毫秒
 
-from d1max_contract.bundle_format import SCHEDULE_NAME, build_bundle
-from d1max_site.catalog import (
+from nexwar_contract.bundle_format import SCHEDULE_NAME, build_bundle
+from nexwar_site.catalog import (
     CatalogError,
     active_bundle,
     active_bundle_schema,
     import_bundle,
     import_summary,
 )
-from d1max_site.db import SCHEMA_VERSION, SiteDB
-from d1max_site.dispatcher import MAX_PATROL_BYTES, MAX_PATROL_WAYPOINTS
-from d1max_site.maps import MapCatalog
-from d1max_site.routes import (
+from nexwar_site.db import SCHEMA_VERSION, SiteDB
+from nexwar_site.dispatcher import MAX_PATROL_BYTES, MAX_PATROL_WAYPOINTS
+from nexwar_site.maps import MapCatalog
+from nexwar_site.routes import (
     MAX_BYTES,
     MAX_WAYPOINTS,
     RouteConflict,
@@ -574,7 +574,7 @@ def test_接口_导入有摘要_导出落在站点目录_再导入收得下(站�
 async def test_库里改的排程_排程执行器照跑_旧钟点不补(tmp_path):
     from test_site_dispatcher import 台子
 
-    from d1max_site.scheduler import SiteScheduler
+    from nexwar_site.scheduler import SiteScheduler
     t = 台子(tmp_path)
     t.clock.ms = 毫秒(21, 59)
     t.dog.inject_battery(100.0)
@@ -615,8 +615,8 @@ async def test_库里改的排程_排程执行器照跑_旧钟点不补(tmp_path
 
 
 def _接规划(台, door: float | None = None):
-    from d1max_site.intercept_reach import InterceptReach
-    from d1max_site.nav_zones import NavZones
+    from nexwar_site.intercept_reach import InterceptReach
+    from nexwar_site.nav_zones import NavZones
     zones = NavZones(台.db, now_ms=lambda: 1000)
     if door is not None:                                 # 另一版图:门宽 door
         src = _files(台.tmp / f"src-door{door}")

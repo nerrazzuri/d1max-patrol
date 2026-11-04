@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import pytest
 
-from d1max_site.guard_forecast import (
+from nexwar_site.guard_forecast import (
     MIN_LIMIT_MIN,
     forecast,
     weekly_windows,
@@ -105,7 +105,7 @@ def test_算不出一圈多久_说清楚():
 
 
 def test_W73第四期_补一次能能开几圈_每段要补几次():
-    from d1max_site import energy
+    from nexwar_site import energy
     f = _fc([_entry()], {"night-guard": 900.0}, {"night-guard": ["东区"]},
             slots=[_slot(2, "22:00", "24:00"), _slot(3, "00:00", "06:00")])
     e = f["entries"][0]

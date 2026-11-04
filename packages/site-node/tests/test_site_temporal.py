@@ -6,12 +6,12 @@ from __future__ import annotations
 import pytest
 from test_site_dispatcher import target, 台子
 
-from d1max_contract.messages import Telemetry
-from d1max_contract.supervision import Supervise
-from d1max_contract.teleop import TeleopLease
-from d1max_contract.video import VideoRequest
-from d1max_site.dispatcher import DispatchRefused
-from d1max_site.temporal import GATED, READ, SAFE, temporal_class
+from nexwar_contract.messages import Telemetry
+from nexwar_contract.supervision import Supervise
+from nexwar_contract.teleop import TeleopLease
+from nexwar_contract.video import VideoRequest
+from nexwar_site.dispatcher import DispatchRefused
+from nexwar_site.temporal import GATED, READ, SAFE, temporal_class
 
 
 @pytest.mark.parametrize("kind,payload,want", [

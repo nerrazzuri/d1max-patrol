@@ -4,8 +4,8 @@
 
 ## 规矩
 
-- 只能 import `d1max_patrol.backends.base` 和 `d1max_patrol.protocol.nav_types`
-- 不许 import `vendor_nav`、不许 import `d1max_sim`、不许碰 `sim.faults`
+- 只能 import `nexwar_patrol.backends.base` 和 `nexwar_patrol.protocol.nav_types`
+- 不许 import `vendor_nav`、不许 import `nexwar_sim`、不许碰 `sim.faults`
 - 不许断言任何实现独有的属性(`fallback_matches`、`_pending`、…)
 
 违反以上任何一条,这套测试就不再是契约测试,换后端时会假通过。

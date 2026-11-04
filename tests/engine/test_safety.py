@@ -6,8 +6,8 @@ from dataclasses import replace
 
 import pytest
 
-from d1max_agent.engine.mission import Policy
-from d1max_agent.engine.safety import (
+from nexwar_agent.engine.mission import Policy
+from nexwar_agent.engine.safety import (
     BLOCKED_WAIT_S,
     MAX_LOC_RESET,
     WS_DOWN_PAUSE_S,
@@ -17,7 +17,7 @@ from d1max_agent.engine.safety import (
     return_line_pct,
     rule,
 )
-from d1max_patrol.backends.base import (
+from nexwar_patrol.backends.base import (
     AlgErrorEvent,
     BackendDisconnected,
     BackendReconnected,
@@ -28,8 +28,8 @@ from d1max_patrol.backends.base import (
     LocStatusEvent,
     NavStatusEvent,
 )
-from d1max_patrol.protocol.nav_frames import AlgErrorItem
-from d1max_patrol.protocol.nav_types import (
+from nexwar_patrol.protocol.nav_frames import AlgErrorItem
+from nexwar_patrol.protocol.nav_types import (
     ALG_LIDAR_DISCONNECTED,
     ALG_NAV_BLOCKED,
     LocStatus,
@@ -320,7 +320,7 @@ def test_规则表不碰后端也不碰io():
     import inspect
     from pathlib import Path
 
-    from d1max_agent.engine import safety
+    from nexwar_agent.engine import safety
     src = Path(inspect.getfile(safety)).read_text(encoding="utf-8")
     for banned in ("async def", "await ", "import asyncio", "open("):
         assert banned not in src, f"safety.py 里不该出现 {banned!r}"
@@ -366,7 +366,7 @@ def test_回原点这一趟本身_低于中止线照样中止(ctx):
 
 
 def test_上装过热_危急才返航_别的级别照走():
-    from d1max_patrol.backends.base import OverheatEvent
+    from nexwar_patrol.backends.base import OverheatEvent
     ctx = SafetyContext(policy=Policy(), battery_pct=80.0)
     r = rule(OverheatEvent("critical", "SoC 96 °C"), ctx)
     assert r.decision is Decision.RETURN_HOME and "过热" in r.reason and "SoC 96" in r.reason

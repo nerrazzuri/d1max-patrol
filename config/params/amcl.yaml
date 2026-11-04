@@ -1,7 +1,7 @@
 map_server:
   ros__parameters:
     use_sim_time: false
-    yaml_filename: "/tmp/d1max_map_rect.yaml"
+    yaml_filename: "/tmp/nexwar_map_rect.yaml"
     frame_id: "rect_map"
 amcl:
   ros__parameters:

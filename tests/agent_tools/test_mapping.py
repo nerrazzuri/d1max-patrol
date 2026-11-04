@@ -2,7 +2,7 @@
 
 **这里一个 ROS 进程都不真起。** 断言的对象是**生成出来的 ``ProcSpec``** ——
 命令行、环境变量。理由有两条:一是 CI 上没有 ROS;二是就算有,一次真建图
-要跑几分钟,那不是单元测试该干的事。建图脚本本身(``d1max-loc build``)在
+要跑几分钟,那不是单元测试该干的事。建图脚本本身(``nexwar_loc build``)在
 ``packages/localizer/tests/test_loc_build.py`` 里测。
 """
 
@@ -12,16 +12,16 @@ from pathlib import Path
 
 import pytest
 
-from d1max_agent.engine.homing import HomeError, HomePoint, load_home, save_home
-from d1max_patrol.app.mapping import (
+from nexwar_agent.engine.homing import HomeError, HomePoint, load_home, save_home
+from nexwar_patrol.app.mapping import (
     REBUILD_TIMEOUT_S,
     RECORD_TOPICS,
     MappingConfig,
     MappingError,
     MappingOrchestrator,
 )
-from d1max_patrol.app.procs import ProcError, ProcSpec
-from d1max_patrol.protocol.nav_types import Pose
+from nexwar_patrol.app.procs import ProcError, ProcSpec
+from nexwar_patrol.protocol.nav_types import Pose
 
 
 class FakeProcs:
@@ -65,7 +65,7 @@ class FakeProcs:
 
 @pytest.fixture(autouse=True)
 def _不等在线建图起稳(monkeypatch):
-    import d1max_patrol.app.mapping as M
+    import nexwar_patrol.app.mapping as M
     monkeypatch.setattr(M, "LIVE_SETTLE_S", 0.0)
 
 
@@ -79,7 +79,7 @@ def cfg(tmp_path) -> MappingConfig:
     return MappingConfig(
         bags_dir=tmp_path / "bags",
         maps_dir=tmp_path / "maps",
-        map_builder=Path("/opt/d1max/current/deploy/d1max-map-build"),
+        map_builder=Path("/opt/nexwar/current/deploy/nexwar_map_build"),
     )
 
 
@@ -107,7 +107,7 @@ def _argv(specs: list[ProcSpec], name: str) -> str:
 def test_建图起的是建图脚本_录包_输出_中间目录_雷达话题_先验打包都给了(orch, cfg, tmp_path):
     spec = orch.spec_for_build(tmp_path / "b", "m1")
     assert spec.name == "mapbuild"
-    assert spec.argv == ("/opt/d1max/current/deploy/d1max-map-build",
+    assert spec.argv == ("/opt/nexwar/current/deploy/nexwar_map_build",
                          "--bag", str(tmp_path / "b"),
                          "--out", str(cfg.maps_dir / "m1"),
                          "--work", str(cfg.maps_dir / ".work" / "m1"),
@@ -376,7 +376,7 @@ def test_没有目录也列得出来是空的(orch):
 
 
 def test_列图只算文件齐的版本目录(orch, cfg):
-    from d1max_contract.maps import GEOMETRY_FILES
+    from nexwar_contract.maps import GEOMETRY_FILES
     for name, files in (("a", GEOMETRY_FILES), ("b", GEOMETRY_FILES[:-1]),
                         (".work", GEOMETRY_FILES)):
         d = cfg.maps_dir / name
@@ -411,7 +411,7 @@ def test_日志目录_编排照进程管理器的报(orch, procs):
 
 
 def test_录包经_ROS_包装脚本起(orch, cfg, tmp_path):
-    """代理的服务里没有 source ROS:``ros2`` 不在 PATH 上。经 ``deploy/d1max-ros`` 起。"""
+    """代理的服务里没有 source ROS:``ros2`` 不在 PATH 上。经 ``deploy/nexwar_ros`` 起。"""
     spec = orch.spec_for_record(tmp_path / "b")
     assert spec.argv[0] == str(cfg.ros_wrapper) and spec.argv[1:4] == ("ros2", "bag", "record")
 
@@ -448,11 +448,11 @@ def test_在线建图跟定位器的_MOLA_不串_话题服务换到自己的命�
     import json
     env = orch.spec_for_live("m1").env
     args = json.loads(env["ROS_ARGS"])
-    assert args[:2] == ["-r", "__ns:=/d1max_mapping"]
+    assert args[:2] == ["-r", "__ns:=/nexwar_mapping"]
     remaps = dict(a.split(":=") for a in args[1::2])
     for name in ("/initialpose", "/relocalize_near_pose", "/lidar_odometry/pose",
                  "/lidar_odometry/pose_quality"):
-        assert remaps[name] == "/d1max_mapping" + name, name
+        assert remaps[name] == "/nexwar_mapping" + name, name
     assert env["MOLA_LOCALIZATION_PUBLISH_TF"] == "false"
     # W09f:位姿发(预览要),在自己的命名空间里,不跟定位器串;/tf 照旧不发
     assert env["MOLA_LOCALIZATION_PUBLISH_ODOM_MSGS"] == "true"
@@ -535,11 +535,11 @@ def test_预览进程_实时域_写到中间目录_订建图那边的位姿(orch
     assert orch.preview_dir("m1") == cfg.maps_dir / ".work" / "m1" / "preview"
     assert arg("--run") == "w1"
     assert arg("--lidar-topic") == cfg.lidar_topic
-    assert arg("--pose-topic") == "/d1max_mapping/lidar_odometry/pose"
+    assert arg("--pose-topic") == "/nexwar_mapping/lidar_odometry/pose"
     assert spec.env["ROS_DOMAIN_ID"] == "24" and spec.env["RMW_IMPLEMENTATION"] == "rmw_zenoh_cpp"
     assert spec.ready_pattern == "", "不等它就绪"
     assert MappingConfig(bags_dir=cfg.bags_dir, maps_dir=cfg.maps_dir).live_preview == Path(
-        "/opt/d1max/current/deploy/d1max-live-preview")
+        "/opt/nexwar/current/deploy/nexwar_live_preview")
 
 
 async def test_只录包不起预览(orch, procs):
@@ -646,7 +646,7 @@ async def test_停录部分失败_服务层跟编排一起回到不在录_边走
     """外审复查:编排先回闲着再抛其中一个停止异常,服务层原来只有正常返回才清 ``recording`` ——
     上层「在录」、下层「闲着」,之后停不了、也开不了,只能重启。按真的语义:两个停止都做过、编排已回
     闲着,再抛。"""
-    from d1max_agent.mapping import DONE, LIVE, MappingService
+    from nexwar_agent.mapping import DONE, LIVE, MappingService
     svc = MappingService(orch, bags_root=cfg.bags_dir, maps_out=tmp_path / "outbox" / "maps")
     await svc.start("yard", target=("m1", "5"), task_id="t1")
     bag = cfg.bags_dir / svc.last_bag
@@ -672,7 +672,7 @@ async def test_停录部分失败_服务层跟编排一起回到不在录_边走
 
 
 async def test_停录部分失败_只录包的_之后马上能再开(orch, procs, cfg, monkeypatch, tmp_path):
-    from d1max_agent.mapping import MappingService
+    from nexwar_agent.mapping import MappingService
     svc = MappingService(orch, bags_root=cfg.bags_dir, maps_out=tmp_path / "outbox" / "maps")
     await svc.start("yard")
     real = procs.stop
@@ -691,7 +691,7 @@ async def test_停录部分失败_只录包的_之后马上能再开(orch, procs
 
 async def test_编排说没在录_服务层也不在录(orch, cfg, tmp_path):
     """上下层万一对不上(编排已经闲着),停录也要让服务层回到不在录,不卡住。"""
-    from d1max_agent.mapping import MappingService
+    from nexwar_agent.mapping import MappingService
     svc = MappingService(orch, bags_root=cfg.bags_dir, maps_out=tmp_path / "outbox" / "maps")
     await svc.start("yard")
     await orch.stop_record()                           # 下层先停了
@@ -710,14 +710,14 @@ def _slio(tmp_path, procs, cfg, *, installed=True, pauser=None):
             (root / f).parent.mkdir(parents=True, exist_ok=True)
             (root / f).write_text("")
     c = replace(cfg, front="superlio", superlio_root=root,
-                superlio_live=tmp_path / "d1max-superlio-live")
+                superlio_live=tmp_path / "nexwar_superlio_live")
     return MappingOrchestrator(procs, c, pause_units=pauser)
 
 
 class _Pauser:
     """暂停:回真停了哪几个(建图前在跑的);恢复:回还没恢复成的。``fail_resume`` 次恢复失败。"""
 
-    def __init__(self, err: str = "", *, active=("d1max-lidar-merge", "d1max-localizer"),
+    def __init__(self, err: str = "", *, active=("nexwar_lidar_merge", "nexwar_localizer"),
                  fail_resume: int = 0) -> None:
         self.calls: list[bool] = []
         self.units: list[tuple[bool, list[str]]] = []
@@ -750,11 +750,11 @@ async def test_Super_LIO边走边建_起它的进程_录包带上它的位姿_�
     orch = _slio(tmp_path, procs, cfg, pauser=p)
     await orch.start_record("run1", live_map_id="mall")
     by = {s.name: s for s in procs.started}
-    assert by["molamap"].argv == (str(tmp_path / "d1max-superlio-live"),)
+    assert by["molamap"].argv == (str(tmp_path / "nexwar_superlio_live"),)
     assert by["molamap"].env["ROS_DOMAIN_ID"] == "24"
-    assert "/d1max_mapping/lio/odom" in by["bagrecord"].argv
+    assert "/nexwar_mapping/lio/odom" in by["bagrecord"].argv
     prev = by["mapview"].argv
-    assert prev[prev.index("--pose-topic") + 1] == "/d1max_mapping/lio/odom"
+    assert prev[prev.index("--pose-topic") + 1] == "/nexwar_mapping/lio/odom"
     assert "--superlio" in prev
     assert p.calls == [True]
     work = cfg.maps_dir / ".work" / "mall"
@@ -774,13 +774,13 @@ async def test_只录包不暂停_MOLA边走边建也不暂停_录包不带位�
     await orch.start_record("run1")
     await orch.stop_record()
     assert p.calls == []
-    assert "/d1max_mapping/lio/odom" not in procs.started[0].argv
+    assert "/nexwar_mapping/lio/odom" not in procs.started[0].argv
     from dataclasses import replace
     procs2 = type(procs)(tmp_path / "l2")
     o2 = MappingOrchestrator(procs2, replace(cfg, front="mola"), pause_units=p)
     await o2.start_record("run2", live_map_id="m")
     assert p.calls == []
-    assert "/d1max_mapping/lio/odom" not in procs2.started[0].argv
+    assert "/nexwar_mapping/lio/odom" not in procs2.started[0].argv
 
 
 async def test_暂停不成_照样建图_记下原因(tmp_path, procs, cfg):
@@ -808,7 +808,7 @@ async def test_代理重启时上一趟暂停的还没恢复_恢复(tmp_path, pr
     await orch.resume_leftover()
     assert p.calls == [False] and not (cfg.maps_dir / ".paused").exists()
     # 老标记没写哪几个:都恢复
-    assert p.units == [(False, ["d1max-lidar-merge", "d1max-localizer"])]
+    assert p.units == [(False, ["nexwar_lidar_merge", "nexwar_localizer"])]
     await orch.resume_leftover()
     assert p.calls == [False]
 
@@ -827,12 +827,12 @@ async def test_从录包重建_用当前前端_老的边走边建按它开录时
 
 
 async def test_外审_只恢复建图前在跑的服务(tmp_path, procs, cfg):
-    p = _Pauser(active=("d1max-localizer",))
+    p = _Pauser(active=("nexwar_localizer",))
     orch = _slio(tmp_path, procs, cfg, pauser=p)
     await orch.start_record("run1", live_map_id="mall")
-    assert p.units[0] == (True, ["d1max-lidar-merge", "d1max-localizer"])
+    assert p.units[0] == (True, ["nexwar_lidar_merge", "nexwar_localizer"])
     await orch.stop_record()
-    assert p.units[-1] == (False, ["d1max-localizer"])
+    assert p.units[-1] == (False, ["nexwar_localizer"])
 
 
 async def test_外审_开录途中出什么错都恢复_录包收掉(tmp_path, procs, cfg, monkeypatch):
@@ -852,7 +852,7 @@ async def test_外审_开录途中出什么错都恢复_录包收掉(tmp_path, p
 async def test_外审_恢复不成_后台一直重试到成(tmp_path, procs, cfg, monkeypatch):
     import asyncio
 
-    import d1max_patrol.app.mapping as M
+    import nexwar_patrol.app.mapping as M
     monkeypatch.setattr(M, "RESUME_RETRY_S", (0.01, 0.02))
     p = _Pauser(fail_resume=2)
     orch = _slio(tmp_path, procs, cfg, pauser=p)

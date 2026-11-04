@@ -4,13 +4,13 @@
 // 和这几页在各种屏幕、主题、语言、键盘弹起来时不溢出。
 import 'dart:async';
 
-import 'package:d1max_patrol/l10n.dart';
-import 'package:d1max_patrol/net/site_client.dart';
-import 'package:d1max_patrol/store/site_store.dart';
-import 'package:d1max_patrol/ui/nw/nw_cards.dart';
-import 'package:d1max_patrol/ui/nw/nw_theme.dart';
-import 'package:d1max_patrol/ui/site_add.dart';
-import 'package:d1max_patrol/ui/site_page.dart';
+import 'package:nexwar_patrol/l10n.dart';
+import 'package:nexwar_patrol/net/site_client.dart';
+import 'package:nexwar_patrol/store/site_store.dart';
+import 'package:nexwar_patrol/ui/nw/nw_cards.dart';
+import 'package:nexwar_patrol/ui/nw/nw_theme.dart';
+import 'package:nexwar_patrol/ui/site_add.dart';
+import 'package:nexwar_patrol/ui/site_page.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -288,7 +288,7 @@ void main() {
   });
 }
 
-// 站点的 d1max_site.pairing.encode 真出的码（见 pairing_test.dart）。
+// 站点的 nexwar_site.pairing.encode 真出的码（见 pairing_test.dart）。
 const _code = 'D1MAXSITE1.eyJmIjoiYWJhYmFiYWJhYmFiYWJhYmFiYWJhYmFiYWJhYmFiYWJhYmFiYWJhYmFiYWJhYmFiYWJhYmFiYWJhYmFiYWJhYiIsIm4iOiLluoTlm63kuIDlj7ciLCJ1IjoiaHR0cHM6Ly8xOTIuMTY4LjEuNTo4NDQzIn0';
 
 class _BrokenStore implements SiteStore {

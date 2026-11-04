@@ -10,20 +10,20 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-from d1max_localizer import slioloc as L
-from d1max_localizer.backend import FRAMES_FILE
-from d1max_localizer.core import Estimate, LocalizerCore
-from d1max_localizer.frames import Frames
-from d1max_localizer.slioback import SlioBackend
+from nexwar_localizer import slioloc as L
+from nexwar_localizer.backend import FRAMES_FILE
+from nexwar_localizer.core import Estimate, LocalizerCore
+from nexwar_localizer.frames import Frames
+from nexwar_localizer.slioback import SlioBackend
 
-from d1max_contract.locbridge import Pose, State
+from nexwar_contract.locbridge import Pose, State
 
 R_IL = np.array([-0.017043, -0.999836, 0.006192, -0.999855, 0.017041, -0.000495,
                  0.00039, -0.006199, -0.999981]).reshape(3, 3).T
 EXT = (R_IL.tolist(), [0.004279, 0.004176, -0.004436])
 FR = Frames(up=(0.0, 0.0, 1.0), sensor_up=(-1.0, 0.0, 0.0), sensor_forward=(0.0, 0.0, 1.0),
             sensor_height=0.2, sensor_in_base=(0.4043, 0.0))
-BASE = Path(__file__).resolve().parents[3] / "deploy/superlio/d1max.yaml"
+BASE = Path(__file__).resolve().parents[3] / "deploy/superlio/nexwar.yaml"
 M = ("estate-1", "7")
 
 

@@ -8,9 +8,9 @@ from types import SimpleNamespace
 import pytest
 from test_site_charging import 假告警台
 
-from d1max_site.db import SiteDB
-from d1max_site.modes import ArmingDesk
-from d1max_site.sightings import PersonWatch
+from nexwar_site.db import SiteDB
+from nexwar_site.modes import ArmingDesk
+from nexwar_site.sightings import PersonWatch
 
 
 class 假派遣:
@@ -115,8 +115,8 @@ def _分区台(台, *, default_on: bool = True):
     """gate(0–10)全天布防、house(20–30)撤防;「全部防区一样」那份 default_on 决定没画到的地方。"""
     from datetime import timezone
 
-    from d1max_site.areas import AreaBook
-    from d1max_site.arming_schedule import ArmingSchedule
+    from nexwar_site.areas import AreaBook
+    from nexwar_site.arming_schedule import ArmingSchedule
     t = 台
     sch = t.arming.schedule = ArmingSchedule(t.db, now_ms=lambda: t.ms[0], tz=lambda: timezone.utc)
     slots = [{"zone": "gate", "day": d, "start": "00:00", "end": "24:00"} for d in range(7)]
@@ -210,8 +210,8 @@ def _具名都撤防台(台, *, default_on=True):
     """gate、house 此刻都撤防;「全部防区一样」那份(没画到的地方)按 default_on。"""
     from datetime import timezone
 
-    from d1max_site.areas import AreaBook
-    from d1max_site.arming_schedule import ArmingSchedule
+    from nexwar_site.areas import AreaBook
+    from nexwar_site.arming_schedule import ArmingSchedule
     t = 台
     sch = t.arming.schedule = ArmingSchedule(t.db, now_ms=lambda: t.ms[0], tz=lambda: timezone.utc)
     slots = [{"zone": z, "day": 6, "start": "00:00", "end": "00:01"} for z in ("gate", "house")]

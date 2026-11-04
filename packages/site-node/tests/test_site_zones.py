@@ -8,9 +8,9 @@ import json
 import pytest
 from test_site_api import MAP, PW, _等, target, 站
 
-from d1max_site.db import SiteDB
-from d1max_site.nav_zones import CONFIRM_TEXT, NavZones, ZonesConflict, ZonesError
-from d1max_site.temporal import GATED, SAFE, temporal_class
+from nexwar_site.db import SiteDB
+from nexwar_site.nav_zones import CONFIRM_TEXT, NavZones, ZonesConflict, ZonesError
+from nexwar_site.temporal import GATED, SAFE, temporal_class
 
 POND = {"id": "pond", "kind": "nogo", "label": "池子",
         "polygon": [[5, 5], [6, 5], [6, 6], [5, 6]]}
@@ -564,8 +564,8 @@ def test_接口_到期删掉之后发给狗(站点):
 
 
 def test_接口_新版本带过来的_采纳并确认_待命点拦截点跟着过去(站点, tmp_path):
-    from d1max_site.incidents import IncidentDesk
-    from d1max_site.standby import StandbyManager
+    from nexwar_site.incidents import IncidentDesk
+    from nexwar_site.standby import StandbyManager
     s = 站点
     s.api.standby = StandbyManager(s.db, s.disp, now_ms=lambda: 1000)
     s.api.incidents = IncidentDesk(s.db, s.disp, now_ms=lambda: 1000)

@@ -9,10 +9,10 @@ from types import SimpleNamespace
 
 import pytest
 
-from d1max_contract.messages import Event, MapPose
-from d1max_site.db import SiteDB
-from d1max_site.deterrence import CAP_S, KEEP_S, DeterrenceDesk, DeterrenceError
-from d1max_site.priorities import EVENT
+from nexwar_contract.messages import Event, MapPose
+from nexwar_site.db import SiteDB
+from nexwar_site.deterrence import CAP_S, KEEP_S, DeterrenceDesk, DeterrenceError
+from nexwar_site.priorities import EVENT
 
 INTERCEPT = MapPose(map_id="m", map_version="1", frame_id="map", x=12.0, y=-3.0,
                     yaw=0.0).to_wire()
@@ -49,7 +49,7 @@ class 假派遣:
             manual_only=lambda rid: {"by": "t"} if rid in self.manual else None)
 
     def check_auto(self, rid):
-        from d1max_site.dispatcher import DispatchRefused
+        from nexwar_site.dispatcher import DispatchRefused
         if rid in self.manual:
             raise DispatchRefused(f"{rid} 站点设成只许手动派")
 
@@ -291,7 +291,7 @@ async def test_只有部分路_只开有的_没话术不放(tmp_path):
 def test_接口_保安跳级_狗上真开了_管理员能解除不能跳级_没在驱离404(tmp_path):
     from test_site_api import PW, _等, 站
 
-    from d1max_site.standby import StandbyManager
+    from nexwar_site.standby import StandbyManager
     s = 站(tmp_path, payload=True)
     try:
         s.accounts.add("gina", PW, role="guard")
@@ -579,8 +579,8 @@ async def test_接线_到了拦截点_待命点不自动回_驱离结束才回(t
     """真派遣器 + 真代理 + 仿真狗(装了上装):事件任务到了拦截点,待命点管理器不派回程。"""
     from test_site_dispatcher import 台子
 
-    from d1max_site.incidents import IncidentDesk
-    from d1max_site.standby import StandbyManager
+    from nexwar_site.incidents import IncidentDesk
+    from nexwar_site.standby import StandbyManager
     t = 台子(tmp_path)
     t.dog.payload = True                                  # 上装(仿真狗)
     await t.start()
@@ -797,7 +797,7 @@ async def test_W24外审6_保安处理掉告警之后站点重启_不再报一�
 
 
 async def test_W24复查二2_真告警台_告警报成删待报没成_保安解决后重启_不再报(台, monkeypatch):
-    from d1max_site.alert_store import AlertDesk
+    from nexwar_site.alert_store import AlertDesk
     t = 台
     t.desk.alerts = AlertDesk(t.db, now_ms=t.clock)
     await _到场(t)
@@ -1134,7 +1134,7 @@ async def test_W33_就地驱离_有人在遥控_没上装_不知道在哪_都开
 def test_W33_接口_就地驱离_保安能开_管理员不能_狗上真开了灯(tmp_path):
     from test_site_api import PW, _等, 站
 
-    from d1max_site.standby import StandbyManager
+    from nexwar_site.standby import StandbyManager
     s = 站(tmp_path, payload=True)
     try:
         s.accounts.add("gina", PW, role="guard")

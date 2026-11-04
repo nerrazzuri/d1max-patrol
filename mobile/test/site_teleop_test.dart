@@ -2,10 +2,10 @@
 // 结束原因说人话、退出放租。
 import 'dart:async';
 
-import 'package:d1max_patrol/net/site_client.dart' show SiteError;
-import 'package:d1max_patrol/ui/site_page.dart';
-import 'package:d1max_patrol/ui/site_teleop.dart';
-import 'package:d1max_patrol/ui/widget/joystick.dart';
+import 'package:nexwar_patrol/net/site_client.dart' show SiteError;
+import 'package:nexwar_patrol/ui/site_page.dart';
+import 'package:nexwar_patrol/ui/site_teleop.dart';
+import 'package:nexwar_patrol/ui/widget/joystick.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';

@@ -9,8 +9,8 @@ import urllib.request
 import pytest
 from test_site_api import PW, 站
 
-from d1max_site.db import SiteDB
-from d1max_site.recordings import KEEP_DAYS, RecordingStore, stamp_ms
+from nexwar_site.db import SiteDB
+from nexwar_site.recordings import KEEP_DAYS, RecordingStore, stamp_ms
 
 T0 = stamp_ms("20261004T010000Z")
 
@@ -145,9 +145,9 @@ def test_接口_没开录像的站点404(tmp_path):
 
 
 def test_狗报录像断了_删了没传的_站点为腾盘删了_都是P2(tmp_path):
-    from d1max_contract.messages import Event
-    from d1max_site.alert_sources import SiteAlertSources
-    from d1max_site.alert_store import AlertDesk
+    from nexwar_contract.messages import Event
+    from nexwar_site.alert_sources import SiteAlertSources
+    from nexwar_site.alert_store import AlertDesk
     db = SiteDB(tmp_path / "s.db")
     desk = AlertDesk(db, now_ms=lambda: T0)
     src = SiteAlertSources(desk, now_ms=lambda: T0)
@@ -280,12 +280,12 @@ def test_W18复查_前50段删不掉_第51段照样删_不被饿死(库, monkeyp
     ("bytes=100-", False), ("bytes=-0", False),
 ])
 def test_要哪一段_没带或看不懂整份发_够不着416(header, want):
-    from d1max_site.api import byte_range
+    from nexwar_site.api import byte_range
     assert byte_range(header, 100) == want and type(byte_range(header, 100)) is type(want)
 
 
 def test_空文件_要最后几个字节也是416():
-    from d1max_site.api import byte_range
+    from nexwar_site.api import byte_range
     assert byte_range("bytes=-5", 0) is False and byte_range("bytes=0-", 0) is False
 
 

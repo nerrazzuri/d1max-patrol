@@ -2,22 +2,22 @@
 // （800×360，常见手机横过来的大小）都不溢出；遥控页两根杆在两边、画面在中间、「停」一直在屏幕里。
 import 'dart:convert';
 
-import 'package:d1max_patrol/l10n.dart';
-import 'package:d1max_patrol/main.dart' show PatrolApp, landscapeOnly, lockLandscape;
-import 'package:d1max_patrol/store/site_store.dart';
-import 'package:d1max_patrol/ui/site_logs.dart';
-import 'package:d1max_patrol/ui/site_mapping.dart';
-import 'package:d1max_patrol/ui/site_maps.dart';
-import 'package:d1max_patrol/ui/site_page.dart';
-import 'package:d1max_patrol/ui/site_releases.dart';
-import 'package:d1max_patrol/ui/site_runs.dart';
-import 'package:d1max_patrol/ui/site_standby.dart';
-import 'package:d1max_patrol/ui/site_teleop.dart';
-import 'package:d1max_patrol/ui/site_video.dart';
-import 'package:d1max_patrol/ui/site_watch_page.dart';
-import 'package:d1max_patrol/ui/widget/fields_dialog.dart';
-import 'package:d1max_patrol/ui/widget/joystick.dart';
-import 'package:d1max_patrol/ui/widget/live_video.dart';
+import 'package:nexwar_patrol/l10n.dart';
+import 'package:nexwar_patrol/main.dart' show PatrolApp, landscapeOnly, lockLandscape;
+import 'package:nexwar_patrol/store/site_store.dart';
+import 'package:nexwar_patrol/ui/site_logs.dart';
+import 'package:nexwar_patrol/ui/site_mapping.dart';
+import 'package:nexwar_patrol/ui/site_maps.dart';
+import 'package:nexwar_patrol/ui/site_page.dart';
+import 'package:nexwar_patrol/ui/site_releases.dart';
+import 'package:nexwar_patrol/ui/site_runs.dart';
+import 'package:nexwar_patrol/ui/site_standby.dart';
+import 'package:nexwar_patrol/ui/site_teleop.dart';
+import 'package:nexwar_patrol/ui/site_video.dart';
+import 'package:nexwar_patrol/ui/site_watch_page.dart';
+import 'package:nexwar_patrol/ui/widget/fields_dialog.dart';
+import 'package:nexwar_patrol/ui/widget/joystick.dart';
+import 'package:nexwar_patrol/ui/widget/live_video.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';

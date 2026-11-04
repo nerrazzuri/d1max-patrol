@@ -1,7 +1,7 @@
 // 分级驱离（W22）：首页一场驱离一行、推的帧当场换；驱离页按角色出按钮（保安能跳级、管理员只能解除）；
 // 跳级、解除；结束了说清楚。横屏 800×360。
-import 'package:d1max_patrol/ui/site_deterrence.dart';
-import 'package:d1max_patrol/ui/site_page.dart';
+import 'package:nexwar_patrol/ui/site_deterrence.dart';
+import 'package:nexwar_patrol/ui/site_page.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 

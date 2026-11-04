@@ -8,14 +8,14 @@ import json
 
 import pytest
 
-from d1max_agent.maps import (
+from nexwar_agent.maps import (
     FetchRefused,
     MapInstallError,
     MapIntegrityError,
     MapKeeper,
     download_deadline_s,
 )
-from d1max_contract.maps import MapRef
+from nexwar_contract.maps import MapRef
 
 
 def _ref(map_id, version, files):
@@ -219,7 +219,7 @@ def test_站点不认Range_整个给回来_前面那段扔掉(tmp_path):
     import http.server
     import threading
 
-    from d1max_agent.maps import https_fetch
+    from nexwar_agent.maps import https_fetch
     data = bytes(range(256)) * 40
 
     class 老站点(http.server.BaseHTTPRequestHandler):
@@ -294,7 +294,7 @@ def test_站点回4xx_只有没有这个才算拒_证书一时认不出照样重
     import http.server
     import threading
 
-    from d1max_agent.maps import https_fetch
+    from nexwar_agent.maps import https_fetch
     codes = {"/maps/m/1/gone": 404, "/maps/m/1/cert": 403, "/maps/m/1/range": 416}
 
     class 站(http.server.BaseHTTPRequestHandler):
@@ -322,7 +322,7 @@ def test_M9_图里多一个狗不用的文件_照样下载_照样逐个核_坏�
     """M9 的兼容:新站点上的图可能带 ``seen.pbm``(只管显示,狗不读)。狗按清单逐个下、逐个核 —— 清单
     不认名字白名单,老代理也是这一套:多一个文件就多下一个、多核一个;它坏了跟别的文件坏了一样整张不装。
     没有它的老版本照旧。"""
-    from d1max_contract.maps import SEEN_FILE
+    from nexwar_contract.maps import SEEN_FILE
     keeper, site = k
     files = {"prior.mm": b"prior", "frames.json": b"{}", "floor.pgm": b"P5\n1 1\n255\n\xfe",
              SEEN_FILE: b"P4\n1 1\n\x80"}

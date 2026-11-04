@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from d1max_agent.events import EventBook
+from nexwar_agent.events import EventBook
 
 
 def _book(tmp_path, boot="b1"):

@@ -9,10 +9,10 @@ import tarfile
 
 import pytest
 
-from d1max_contract.compat import AGENT_LEVEL
-from d1max_contract.digest import tree_sha256
-from d1max_site.db import SiteDB
-from d1max_site.releases import ReleaseCatalog, ReleaseCatalogError
+from nexwar_contract.compat import AGENT_LEVEL
+from nexwar_contract.digest import tree_sha256
+from nexwar_site.db import SiteDB
+from nexwar_site.releases import ReleaseCatalog, ReleaseCatalogError
 
 NAME = "2026-09-25-bbbbbb"
 
@@ -22,8 +22,8 @@ def 做包(tmp, name=NAME, *, sha=None, schema=1, compat="现在"):
     (d / "src").mkdir(parents=True, exist_ok=True)
     (d / "src" / "x.py").write_text("print('hi')\n")
     (d / "deploy").mkdir(exist_ok=True)
-    (d / "deploy" / "d1max-agent-start").write_text("#!/bin/sh\n")
-    (d / "deploy" / "d1max-agent-start").chmod(0o755)
+    (d / "deploy" / "nexwar_agent_start").write_text("#!/bin/sh\n")
+    (d / "deploy" / "nexwar_agent_start").chmod(0o755)
     raw = {"name": name, "version": "0.9", "requires_mission_schema": schema,
            "content_sha256": sha or tree_sha256(d, skip="release.json")}
     if compat is not None:                                 # A7:None = 老包,没有兼容级别
@@ -87,7 +87,7 @@ def test_指纹不对_名字不对_不是发布包_都不登记(cat, tmp_path):
 def test_老服务那一代的包不登记_狗上的代理装了也切不过去(cat, tmp_path):
     """W00c5 修复内部评审:站点登记时就拒,别让管理员下发了才在狗那头失败。"""
     pkg = 做包(tmp_path)
-    (pkg / "deploy" / "d1max-agent-start").unlink()
+    (pkg / "deploy" / "nexwar_agent_start").unlink()
     (pkg / "release.json").write_text(json.dumps({
         "name": pkg.name, "version": "1", "content_sha256": tree_sha256(pkg, skip="release.json")}))
     with pytest.raises(ReleaseCatalogError, match="启动脚本"):
@@ -139,13 +139,13 @@ def test_老库的任务包表也补上schema列(tmp_path):
     c.execute("INSERT INTO bundles VALUES ('b', 1, 'x', 'UTC', '{}', 1, 'a', 1)")
     c.commit()
     c.close()
-    from d1max_site.catalog import active_bundle_schema
+    from nexwar_site.catalog import active_bundle_schema
     assert active_bundle_schema(SiteDB(db_path)) == ("b v1", 1)
 
 
 
 def test_A7_升级包的代理兼容级别_太老太新站点都不登记(cat, tmp_path):
-    from d1max_contract.compat import SITE_MAX_AGENT_LEVEL, SITE_MIN_AGENT_LEVEL
+    from nexwar_contract.compat import SITE_MAX_AGENT_LEVEL, SITE_MIN_AGENT_LEVEL
     with pytest.raises(ReleaseCatalogError, match="过旧"):
         cat.add(做包(tmp_path, "2026-10-10-aaaaa1", compat=None))
     with pytest.raises(ReleaseCatalogError, match="过旧"):

@@ -13,14 +13,14 @@ import pytest
 from test_relocalize import _ack, _事件, _遥测
 from test_runtime_maps import REG, T, _cmd, 耳朵, 钟
 
-from d1max_adapter_sim.localizer import SimLocalizer
-from d1max_adapter_sim.robot import SimRobot
-from d1max_agent.bridge_localizer import SETTLE_FIXES, BridgeLocalizer
-from d1max_agent.engine.machine import RunState
-from d1max_agent.runtime import AgentRuntime
-from d1max_contract.memory_broker import MemoryBroker, MemoryTransport
-from d1max_contract.messages import MapPose
-from d1max_patrol.protocol.nav_types import Pose
+from nexwar_adapter_sim.localizer import SimLocalizer
+from nexwar_adapter_sim.robot import SimRobot
+from nexwar_agent.bridge_localizer import SETTLE_FIXES, BridgeLocalizer
+from nexwar_agent.engine.machine import RunState
+from nexwar_agent.runtime import AgentRuntime
+from nexwar_contract.memory_broker import MemoryBroker, MemoryTransport
+from nexwar_contract.messages import MapPose
+from nexwar_patrol.protocol.nav_types import Pose
 
 
 class 台子:
@@ -197,7 +197,7 @@ async def test_定位器卡了一下一批一起到_不当跳_接着走(台, mon
 async def test_地图系跟里程系不重合_走到点_人给位置的修正量方向对(tmp_path, monkeypatch):
     """内审应修 8:仿真里地图系就是里程系,修正量 compose 的先后反了也看不出。这里地图系 ← 里程系
     转了 0.8 rad、平移 (3, -2)。"""
-    from d1max_agent.localization import compose
+    from nexwar_agent.localization import compose
     frame = (3.0, -2.0, 0.8)
     t = await 台子().起(tmp_path, frame=frame)
     try:
@@ -275,7 +275,7 @@ async def test_标原点用定位器的位置(台):
 
 
 async def test_换图请定位器换先验_升级前检查有定位器这一项(台):
-    from d1max_contract.maps import MapRef
+    from nexwar_contract.maps import MapRef
     t = 台
     await t.连()
     [(name, src)] = [(n, s) for n, s in t.rt.precheck_sources if n == "定位器"]
@@ -293,7 +293,7 @@ async def test_换图请定位器换先验_升级前检查有定位器这一项(
 
 
 async def test_没配定位器的狗_照旧里程锚定_不开套接字(tmp_path):
-    from d1max_agent.localization import OdomAnchor
+    from nexwar_agent.localization import OdomAnchor
     t = await 台子().起(tmp_path, localizer="anchor")
     try:
         assert isinstance(t.rt.parts.nav.anchor, OdomAnchor)
@@ -319,8 +319,8 @@ async def test_定位器连着却一声不吭_两秒后当它断了(台):
 async def test_换图时告诉定位器这张图在狗上的目录(tmp_path):
     from test_runtime_maps import 站点
 
-    from d1max_agent.maps import MapKeeper
-    from d1max_contract.maps import MapRef
+    from nexwar_agent.maps import MapKeeper
+    from nexwar_contract.maps import MapRef
     t = 台子()
     site = 站点()
     t.keeper = MapKeeper(tmp_path / "keep", fetch=site.fetch)
@@ -359,9 +359,9 @@ async def test_配了定位器的真狗_换图不经HAL_定位器换先验_重�
     换先验;适配器没有载入这一步也照样宣告 ``map_activate``。"""
     from test_runtime_maps import _跑, 站点
 
-    from d1max_agent.maps import MapKeeper
-    from d1max_contract.maps import MapRef
-    from d1max_contract.messages import Capabilities
+    from nexwar_agent.maps import MapKeeper
+    from nexwar_contract.maps import MapRef
+    from nexwar_contract.messages import Capabilities
     site = 站点()
     t = 台子()
     keeper = MapKeeper(tmp_path / "keep", fetch=site.fetch)
@@ -443,7 +443,7 @@ async def test_对账S6_定位可信但变差了_自动走的慢下来_好了再
 async def test_配了定位器_仿真狗有载入这一步也不调(tmp_path):
     from test_runtime_maps import _跑, 站点
 
-    from d1max_agent.maps import MapKeeper
+    from nexwar_agent.maps import MapKeeper
     site = 站点()
     t = 台子()
     keeper = MapKeeper(tmp_path / "keep", fetch=site.fetch)
@@ -469,7 +469,7 @@ async def test_配了定位器_不收没有先验的版本(tmp_path):
     狗之后一直定不了位。"""
     from test_runtime_maps import _跑, 站点
 
-    from d1max_agent.maps import MapKeeper
+    from nexwar_agent.maps import MapKeeper
     site = 站点()
     t = 台子()
     keeper = MapKeeper(tmp_path / "keep", fetch=site.fetch)
@@ -491,7 +491,7 @@ async def test_配了定位器_旧版没有Super_LIO点云的图_说要重建(tm
     """W68 用户定:定位换 Super-LIO,之前建的图要重建。"""
     from test_runtime_maps import _跑, 站点
 
-    from d1max_agent.maps import MapKeeper
+    from nexwar_agent.maps import MapKeeper
     site = 站点()
     t = 台子()
     keeper = MapKeeper(tmp_path / "keep", fetch=site.fetch)
@@ -511,7 +511,7 @@ async def test_配了定位器_旧版没有Super_LIO点云的图_说要重建(tm
 def test_自动重定位修正量小的不计数_大的照算_工单11_02_18():
     """11-02 复测:转弯自动重定位约 20 s 一次、修正 1–16 cm(定位器是对的,只是晚),2 分钟窗里照样凑满
     3 次中止。修正量在 0.3 m、0.15 rad 以内的不算丢定位重置;大的(来回跳、锁错)照算。"""
-    from d1max_agent.runtime import small_correction
+    from nexwar_agent.runtime import small_correction
     assert small_correction((0.16, -0.05, 0.05))
     assert not small_correction((0.5, 0.0, 0.0))
     assert not small_correction((0.0, 0.0, 0.3))

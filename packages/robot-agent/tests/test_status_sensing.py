@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import math
 
-from d1max_agent.status import compose_capabilities
-from d1max_contract.hal import ACTUATOR_KEYS, HalCapabilities
+from nexwar_agent.status import compose_capabilities
+from nexwar_contract.hal import ACTUATOR_KEYS, HalCapabilities
 
 BASE = {"lidar": False, "depth": False, "thermal": False, "imu": True, "joint_effort": False,
         "foot_force": False}
@@ -28,5 +28,5 @@ def test_W41_imu_hz_照HAL报的_坏值是0():
 
 
 def test_W41_真狗HAL报20Hz():
-    from d1max_adapter_d1max.hal import IMU_HZ
+    from nexwar_adapter_d1max.hal import IMU_HZ
     assert IMU_HZ == 20

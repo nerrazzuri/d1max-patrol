@@ -6,8 +6,8 @@ from __future__ import annotations
 
 import pytest
 
-from d1max_site.alert_audience import AUDIENCE_OF, GUARD_AUDIENCES, audience
-from d1max_site.alerts import LEVEL_OF, AlertBook, Level
+from nexwar_site.alert_audience import AUDIENCE_OF, GUARD_AUDIENCES, audience
+from nexwar_site.alerts import LEVEL_OF, AlertBook, Level
 
 
 @pytest.mark.parametrize("kind, want", [

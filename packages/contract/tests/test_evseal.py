@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from d1max_contract import evseal as E
+from nexwar_contract import evseal as E
 
 
 def test_X25519_对得上RFC7748的向量():

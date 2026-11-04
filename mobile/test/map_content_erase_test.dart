@@ -6,11 +6,11 @@
 //   存完底图重新取（站点按新的抹掉区画好了）。
 import 'dart:math' as math;
 
-import 'package:d1max_patrol/l10n.dart';
-import 'package:d1max_patrol/ui/map_view.dart';
-import 'package:d1max_patrol/ui/nw/nw_map_raster.dart';
-import 'package:d1max_patrol/ui/site_mapping.dart';
-import 'package:d1max_patrol/ui/site_maps.dart';
+import 'package:nexwar_patrol/l10n.dart';
+import 'package:nexwar_patrol/ui/map_view.dart';
+import 'package:nexwar_patrol/ui/nw/nw_map_raster.dart';
+import 'package:nexwar_patrol/ui/site_mapping.dart';
+import 'package:nexwar_patrol/ui/site_maps.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 

@@ -13,14 +13,14 @@ from __future__ import annotations
 
 import asyncio
 
-from d1max_agent.engine.machine import RunState
-from d1max_agent.engine.mission import Mission, MissionWaypoint, Policy
-from d1max_patrol.backends.base import (
+from nexwar_agent.engine.machine import RunState
+from nexwar_agent.engine.mission import Mission, MissionWaypoint, Policy
+from nexwar_patrol.backends.base import (
     BatteryEvent,
     NavRequestError,
     NavStatusEvent,
 )
-from d1max_patrol.protocol.nav_types import LocStatus, NavStatus, Pose
+from nexwar_patrol.protocol.nav_types import LocStatus, NavStatus, Pose
 
 from .conftest import _HOME, ARRIVED, NEVER, until
 

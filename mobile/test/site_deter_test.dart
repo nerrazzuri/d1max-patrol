@@ -1,7 +1,7 @@
 // 上装（W21）：单狗页的入口按角色和狗的能力出；只列接上的几路；开带时长、关随时；喇叭放话术、现打一段（狗配了 TTS 才有）；
 // 狗拒了说人话。横屏 800×360。
-import 'package:d1max_patrol/ui/site_deter.dart';
-import 'package:d1max_patrol/ui/site_page.dart';
+import 'package:nexwar_patrol/ui/site_deter.dart';
+import 'package:nexwar_patrol/ui/site_page.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 

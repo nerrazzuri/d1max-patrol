@@ -1,4 +1,4 @@
-"""W57:客户看到的只有一个版本号(``d1max_contract.product.PRODUCT_VERSION``)。各处写的版本要跟它一样,
+"""W57:客户看到的只有一个版本号(``nexwar_contract.product.PRODUCT_VERSION``)。各处写的版本要跟它一样,
 改版本时这里列出还没跟着改的文件。"""
 
 from __future__ import annotations
@@ -7,7 +7,7 @@ import json
 import re
 from pathlib import Path
 
-from d1max_contract.product import PRODUCT_NAME, PRODUCT_VERSION
+from nexwar_contract.product import PRODUCT_NAME, PRODUCT_VERSION
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -17,7 +17,7 @@ def _places() -> dict[str, str]:
     for p in [ROOT / "pyproject.toml", *sorted((ROOT / "packages").glob("*/pyproject.toml"))]:
         m = re.search(r'^version = "([^"]+)"', p.read_text(encoding="utf-8"), re.M)
         out[str(p.relative_to(ROOT))] = m.group(1) if m else ""
-    for rel in ("src/d1max_patrol/__init__.py", "src/d1max_sim/__init__.py"):
+    for rel in ("src/nexwar_patrol/__init__.py", "src/nexwar_sim/__init__.py"):
         m = re.search(r'^__version__ = "([^"]+)"', (ROOT / rel).read_text(encoding="utf-8"), re.M)
         out[rel] = m.group(1) if m else ""
     pub = re.search(r"^version: (\S+)", (ROOT / "mobile/pubspec.yaml").read_text(encoding="utf-8"),
@@ -44,10 +44,10 @@ def test_版本写法_主次修_候选版加rc():
 
 
 def test_站点显示的就是产品版本():
-    from d1max_site.health import site_version
+    from nexwar_site.health import site_version
     assert site_version() == PRODUCT_VERSION
 
 
 def test_候选版的App安装包也能签_站点也收():
-    from d1max_site.app_dist import build_of
+    from nexwar_site.app_dist import build_of
     assert build_of(f"{PRODUCT_VERSION}+3") == 3

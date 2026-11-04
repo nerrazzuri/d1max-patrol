@@ -12,13 +12,13 @@ import math
 
 import pytest
 
-from d1max_adapter_sim.robot import SimRobot
-from d1max_agent.assembly import build_engine
-from d1max_agent.engine.machine import FINAL_STATES, RunState
-from d1max_agent.engine.mission import Mission, MissionWaypoint, Policy
-from d1max_agent.status import compose_capabilities
-from d1max_patrol.backends.base import NavRequestError
-from d1max_patrol.protocol.nav_types import Pose
+from nexwar_adapter_sim.robot import SimRobot
+from nexwar_agent.assembly import build_engine
+from nexwar_agent.engine.machine import FINAL_STATES, RunState
+from nexwar_agent.engine.mission import Mission, MissionWaypoint, Policy
+from nexwar_agent.status import compose_capabilities
+from nexwar_patrol.backends.base import NavRequestError
+from nexwar_patrol.protocol.nav_types import Pose
 
 
 class 钟:
@@ -102,7 +102,7 @@ async def test_电量到线_引擎沿来路回原点_不走直线(台子):
 
 
 def test_能力里报导航走哪种路_直线桥报straight():
-    from d1max_agent.bridges.hal_nav import HalNavBackend
+    from nexwar_agent.bridges.hal_nav import HalNavBackend
     assert HalNavBackend.PATH_KIND == "straight"
     r = SimRobot(now_ms=lambda: 0)
     caps = compose_capabilities(robot_id="A", hal_caps=r.hal_capabilities(), adapter_id="sim",
@@ -128,9 +128,9 @@ async def test_直线桥报得出狗在哪(台子):
 async def test_半路电量返航的巡检_报失败带电量_不报跑完(台子, tmp_path):
     """内审阻断 1:引擎返航回到原点落 DONE,代理照样报 ``task_done`` —— 站点当成「跑完了、狗停在
     最后一个点」,派回程巡检让狗先直线奔从没到过的最后一点。半路返航就是没跑完。"""
-    from d1max_agent.events import EventBook
-    from d1max_agent.tasks.patrol import PatrolTask
-    from d1max_contract.messages import TaskState
+    from nexwar_agent.events import EventBook
+    from nexwar_agent.tasks.patrol import PatrolTask
+    from nexwar_contract.messages import TaskState
     c, r, parts = 台子
     book = EventBook(tmp_path / "ev.jsonl", boot_id="b1", now_ms=c)
     t = PatrolTask(task_id="t1", mission=_L(), parts=parts, events=book, now_ms=c)
@@ -150,12 +150,12 @@ async def test_半路电量返航的巡检_报失败带电量_不报跑完(台�
 
 
 async def test_半路电量返航的goto_也报失败(台子, tmp_path):
-    from d1max_agent.events import EventBook
-    from d1max_agent.tasks.engine_goto import EngineGotoTask
-    from d1max_contract.messages import TaskState
+    from nexwar_agent.events import EventBook
+    from nexwar_agent.tasks.engine_goto import EngineGotoTask
+    from nexwar_contract.messages import TaskState
     c, r, parts = 台子
     book = EventBook(tmp_path / "ev.jsonl", boot_id="b1", now_ms=c)
-    from d1max_contract.messages import MapPose
+    from nexwar_contract.messages import MapPose
     t = EngineGotoTask(task_id="g1", target=MapPose(map_id="m", map_version="1", frame_id="map",
                                                     x=4.0, y=0.0, yaw=0.0),
                        max_speed_mps=None, parts=parts, events=book, now_ms=c)
@@ -203,9 +203,9 @@ async def test_引擎落DONE但点位结果少了_也报失败不报跑完(台�
     只有半路返航会这样(上面那条);这里直接把引擎的结果截掉一条,钉住核条数那一句。"""
     import dataclasses
 
-    from d1max_agent.events import EventBook
-    from d1max_agent.tasks.patrol import PatrolTask
-    from d1max_contract.messages import TaskState
+    from nexwar_agent.events import EventBook
+    from nexwar_agent.tasks.patrol import PatrolTask
+    from nexwar_contract.messages import TaskState
     c, r, parts = 台子
     book = EventBook(tmp_path / "ev.jsonl", boot_id="b1", now_ms=c)
     m = Mission(mission="two", map_id="m", policy=Policy(),

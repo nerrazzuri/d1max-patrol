@@ -6,8 +6,8 @@ import math
 
 import pytest
 
-from d1max_contract.errors import ContractError
-from d1max_contract.routenet import OFF_NET_FACTOR, RouteNet, route
+from nexwar_contract.errors import ContractError
+from nexwar_contract.routenet import OFF_NET_FACTOR, RouteNet, route
 
 
 def _网(nodes, edges, rev=1):
@@ -108,7 +108,7 @@ def test_起点终点对着同一条路_沿这条路走一段():
 
 
 def test_沿路加密_每段每隔不到一米一个点_原来的点都在():
-    from d1max_contract.routenet import densify
+    from nexwar_contract.routenet import densify
     pts = densify([(0.0, 0.0), (3.5, 0.0), (3.5, 1.0)], step=1.0)
     assert pts[0] == (0.0, 0.0) and (3.5, 0.0) in pts and pts[-1] == (3.5, 1.0)
     assert all(math.dist(a, b) <= 1.0 + 1e-9 for a, b in zip(pts, pts[1:], strict=False))

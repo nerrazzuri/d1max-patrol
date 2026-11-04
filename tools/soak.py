@@ -83,9 +83,9 @@ def label(cmd: list[bytes]) -> str:
     text = " ".join(args)
     if "mosquitto" in text:
         return "mosquitto"
-    if "d1max-site" in text or "d1max_site" in text:
+    if "nexwar_site" in text or "nexwar_site" in text:
         return "site"
-    if "d1max-agent" in text or "d1max_agent" in text:
+    if "nexwar_agent" in text or "nexwar_agent" in text:
         for i, a in enumerate(args):
             if a == "--store-dir" and i + 1 < len(args):
                 tail = Path(args[i + 1]).name.removeprefix("agent").lstrip("-_")
@@ -157,10 +157,10 @@ class Api:
 
 def site_cli(home: Path, *argv: str) -> str:
     env = {k: v for k, v in os.environ.items() if k not in ("PYTHONPATH",)}
-    r = subprocess.run([str(ROOT / ".venv/bin/d1max-site"), "--home", str(home), *argv],
+    r = subprocess.run([str(ROOT / ".venv/bin/nexwar_site"), "--home", str(home), *argv],
                        capture_output=True, text=True, env=env, timeout=120)
     if r.returncode != 0:
-        raise RuntimeError(f"d1max-site {' '.join(argv)}: {r.stderr.strip()}")
+        raise RuntimeError(f"nexwar_site {' '.join(argv)}: {r.stderr.strip()}")
     return r.stdout.strip()
 
 
@@ -224,7 +224,7 @@ class Soak:
         sig = hmac.new(bytes.fromhex(self.secret), stamp.encode() + b"." + body,
                        hashlib.sha256).hexdigest()
         code, got, _ = self.api.raw("POST", "/api/incidents", data=body, head={
-            "X-D1MAX-Source": SOURCE, "X-D1MAX-Timestamp": stamp, "X-D1MAX-Signature": sig,
+            "X-Nexwar-Source": SOURCE, "X-Nexwar-Timestamp": stamp, "X-Nexwar-Signature": sig,
             "Authorization": ""})
         self.note("incident", code == 200, f"{code} {got.get('error', '')}")
 
@@ -361,7 +361,7 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="演示站点长跑测试")
     ap.add_argument("--hours", type=float, default=72.0)
     ap.add_argument("--out", type=Path, required=True, help="结果目录(samples.csv、summary.json)")
-    ap.add_argument("--dir", type=Path, default=Path.home() / ".cache" / "d1max-soak",
+    ap.add_argument("--dir", type=Path, default=Path.home() / ".cache" / "nexwar_soak",
                     help="演示站点目录(起之前清掉)")
     ap.add_argument("--host", default="127.0.0.2")
     ap.add_argument("--api-port", type=int, default=8473)

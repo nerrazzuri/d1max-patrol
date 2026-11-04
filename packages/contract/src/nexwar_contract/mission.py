@@ -1,0 +1,421 @@
+"""巡检任务的定义格式与 YAML 往返。
+
+格式见设计 spec §6.1,以及子规范 `2026-09-02-巡检App设计.md` §7.1 加的
+``check`` 字段 —— 那是给 VLM 的判读依据,写成自由文本而不是枚举,因为每个
+点位要看的东西天差地别,枚举一定不够用。
+
+**路线是快照,不是引用。** 从厂商路径拉下来之后就固化在这个文件里。
+别人在 App 里改了路径,历史报告不该跟着变。
+
+**为什么读写的就是 YAML 文件本身,不引数据库:** 手写的任务和页面上编的
+任务必须是同一份东西,随时能互相切换,也能进 git 看 diff。多一层存储就多
+一个"页面上看到的和文件里写的不一样"的失败模式。
+"""
+
+from __future__ import annotations
+
+import os
+from dataclasses import dataclass, field, replace
+from pathlib import Path
+from typing import Any
+
+import yaml
+
+from nexwar_contract.geometry import Pose
+
+#: 第一版支持的动作类型。见设计 spec §6.1。
+ACTION_TYPES = frozenset({"dwell", "photo", "light", "head"})
+
+#: 机器上的两路相机。见清单 #29。
+CAMERAS = frozenset({"front", "back"})
+
+#: 单点失败之后怎么办。
+ON_WAYPOINT_FAILED = frozenset({"abort", "skip", "retry_then_skip"})
+
+#: 定位丢了之后怎么办。默认先暂停试重置,试满次数再中止(主规范 §6.4)。
+ON_LOC_LOST = frozenset({"pause_then_abort", "abort"})
+
+#: 控制权被拿走之后怎么办。默认暂停 —— 上装抢走控制权是可以人工夺回的
+#: (清单 #46/#47),不必直接判整趟失败。
+ON_CONTROL_LOST = frozenset({"pause", "abort"})
+
+#: 电量到返航线之后怎么办(W00c6b 内审)。``return_home`` 掉头回原点;``continue`` 接着往前走 ——
+#: 这一趟本身就是回原点的路(站点在巡检之后派的回程巡检),掉头是往远端走。低于中止线两种都原地停。
+ON_BATTERY_LOW = frozenset({"return_home", "continue"})
+#: 巡检点的顺序(W14):``fixed`` 照写的顺序;``shuffle`` 每一趟站点派之前打乱
+#: (随机路线,让人摸不准规律)。
+#: **打乱归站点**:狗收到的永远是一个固定顺序的任务(老代理不受影响)。走直线的狗(``goto.path``
+#: 是 ``straight``)站点不打乱 —— 打乱之后点与点之间的直线没人走过,可能穿墙。
+ORDERS = frozenset({"fixed", "shuffle"})
+
+#: 点位名里绝对不能出现的东西 —— 它会成为照片文件名的一部分。
+_NAME_FORBIDDEN = ("/", "\\", "..", "\x00")
+
+#: 保留期的下限(一周)。狗上按水位清盘、删除预告那一套随老服务退役(W00c5e),保留期
+#: 现在只是任务包里的一个字段,删不删由站点定。
+MIN_RETENTION_DAYS = 7
+
+
+class MissionError(ValueError):
+    """任务定义不合法。
+
+    消息里**必须带上出错的那个值本身** —— "动作类型不认识"帮不了任何人,
+    "动作类型不认识: teleport"才能让人直接去文件里找到那一行。
+    """
+
+
+@dataclass(frozen=True, slots=True)
+class Action:
+    """点位上的一个动作。
+
+    四种动作共用一个结构而不是做成四个类:它要往返 YAML,而 YAML 里就是
+    一个带 ``type`` 的扁平映射。分成四个类只会让加载和导出两头都多一层分发。
+    """
+
+    type: str
+    seconds: float = 0.0
+    camera: str = ""
+    on: bool = True
+    pitch: float = 0.0
+    yaw: float = 0.0
+
+    def to_wire(self) -> dict[str, Any]:
+        """只导出这种动作用得上的字段 —— 全导出会让 YAML 变得没法读。"""
+        out: dict[str, Any] = {"type": self.type}
+        if self.type == "dwell":
+            out["seconds"] = self.seconds
+        elif self.type == "photo":
+            out["camera"] = self.camera
+        elif self.type == "light":
+            out["on"] = self.on
+        elif self.type == "head":
+            out["pitch"] = self.pitch
+            out["yaw"] = self.yaw
+        return out
+
+
+@dataclass(frozen=True, slots=True)
+class MissionWaypoint:
+    """一个巡检点位。"""
+
+    name: str
+    pose: Pose
+    check: str = ""
+    actions: tuple[Action, ...] = ()
+
+    def to_wire(self) -> dict[str, Any]:
+        out: dict[str, Any] = {"name": self.name, "pose": self.pose.to_wire()}
+        if self.check:
+            out["check"] = self.check
+        if self.actions:
+            out["actions"] = [a.to_wire() for a in self.actions]
+        return out
+
+
+@dataclass(frozen=True, slots=True)
+class Policy:
+    """跑这个任务时的策略。默认值取自设计 spec §6.1 的样例。"""
+
+    waypoint_timeout_s: float = 120.0
+    on_waypoint_failed: str = "retry_then_skip"
+    waypoint_retry: int = 1
+    #: 回撤线的静态下限(W73 决策 78 §7.2:回撤线 = max(25%,停止线 + 回补能位耗电 × 1.5))。
+    battery_return_pct: float = 25.0
+    #: 停止线(W73 决策 78 §7.2,原来 25):低于它原地站住不动、报 P1。厂商的强制趴窝线是单块电池
+    #: 10%(硬件手册 2.3.3),留 5 个点给人赶过来(满载约 10 分钟,站着更久,待真机实测 §11);
+    #: 不让它走到这儿靠的是回撤线按路程算、提前走。
+    battery_abort_pct: float = 15.0
+    on_loc_lost: str = "pause_then_abort"
+    on_control_lost: str = "pause"
+    loops: int = 1
+    #: 这一趟的归档留多少天(spec §4.4)。**按任务算,不是全局设置** —— 日巡
+    #: 留 30 天够了,季度大检那一趟得留一年。整份 policy 会随 manifest 落进
+    #: 每一趟的目录,所以清扫器读一趟就知道它该留多久,不需要知道任务今天
+    #: 还在不在、策略后来有没有改。
+    #:
+    #: **没有永久保留这一说。** 盘是 128GB,拿 0 或 -1 当永不删的话,水位删除
+    #: 迟早要在一堆标着永不删的目录上做决定,而那时它只剩两条路:违反
+    #: 承诺,或者让盘满到狗停机。
+    retention_days: int = 90
+    #: 电量到返航线之后怎么办,见 ``ON_BATTERY_LOW``。
+    on_battery_low: str = "return_home"
+    #: 巡检点的顺序,见 ``ORDERS``(W14)。
+    order: str = "fixed"
+    #: 拍照失败算不算这个点失败(W17)。巡检:算(照片就是这一趟的产出)。代理自己拼的 goto 现场照片:
+    #: 不算 —— 狗到了就是到了,照片拍不成只记一笔。不进线格式:任务包里不许写,只有代理内部用。
+    photo_optional: bool = False
+    #: 去充电桩的这一趟(W13)。出发线只看中止线:去充是电量唯一能回来的路,原地不动只会耗干;路上照样
+    #: 到中止线就停。不进线格式:只有代理自己拼的回充 goto 用。
+    charging_trip: bool = False
+
+    def to_wire(self) -> dict[str, Any]:
+        out = {
+            "waypoint_timeout_s": self.waypoint_timeout_s,
+            "on_waypoint_failed": self.on_waypoint_failed,
+            "waypoint_retry": self.waypoint_retry,
+            "battery_return_pct": self.battery_return_pct,
+            "battery_abort_pct": self.battery_abort_pct,
+            "on_loc_lost": self.on_loc_lost,
+            "on_control_lost": self.on_control_lost,
+            "loops": self.loops,
+            "retention_days": self.retention_days,
+        }
+        # 默认值不写:线格式对老夹具、老任务文件不变;老代理不认识也不会拒(未知字段不看)。
+        if self.on_battery_low != "return_home":
+            out["on_battery_low"] = self.on_battery_low
+        if self.order != "fixed":
+            out["order"] = self.order
+        return out
+
+
+#: 地图版本最长几个字符(同 ``nexwar_contract.maps.NAME_RE`` 的 64)。
+MAX_MAP_VERSION_LEN = 64
+
+
+@dataclass(frozen=True, slots=True)
+class Mission:
+    """一份完整的巡检任务。"""
+
+    mission: str
+    map_id: str
+    waypoints: tuple[MissionWaypoint, ...]
+    policy: Policy = field(default_factory=Policy)
+    route_source: str = "inline"
+    route_path_id: str = ""
+    #: 这些点是在这张图的**哪一版**上量的(R1,2026-10-14)。地图号 + 版本才是一个坐标系:每次建图
+    #: 原点都不一样,第 3 版上的 (3, 2) 落到第 4 版上可能是一个能走、但不对的地方。站点只把任务派给
+    #: 加载着这一版的狗,命令里的 ``map_version`` 就是它(狗再核一遍)。
+    #: **空串 = 没绑**:老任务包、站点升级前导入的任务、狗自己拼的任务(回充 goto)。契约照样读得进来
+    #: (不然站点库里的老任务一升级就读炸),站点不派、新狗不收;**绝不拿「狗现在用的版本」去补**。
+    map_version: str = ""
+
+    def to_wire(self) -> dict[str, Any]:
+        out: dict[str, Any] = {"mission": self.mission, "map_id": self.map_id}
+        if self.map_version:
+            # 没绑的不写:线格式跟老的一样(老夹具、老代理不受影响;老代理不认识这个键也不拒)
+            out["map_version"] = self.map_version
+        if self.route_source != "inline" or self.route_path_id:
+            out["route"] = {"source": self.route_source,
+                            "path_id": self.route_path_id}
+        out["waypoints"] = [w.to_wire() for w in self.waypoints]
+        out["policy"] = self.policy.to_wire()
+        return out
+
+
+# --------------------------------------------------------------------- 校验
+
+
+def _require(cond: bool, msg: str) -> None:
+    if not cond:
+        raise MissionError(msg)
+
+
+def _num(raw: Any, key: str, where: str, default: float | None = None) -> float:
+    if key not in raw:
+        _require(default is not None, f"{where} 缺少必填字段 {key}")
+        return float(default)  # type: ignore[arg-type]
+    value = raw[key]
+    # bool 是 int 的子类,不拦住的话 ``seconds: true`` 会变成 1.0。
+    _require(isinstance(value, (int, float)) and not isinstance(value, bool),
+             f"{where} 的 {key} 应为数字,实际为 {value!r}")
+    return float(value)
+
+
+def _parse_action(raw: Any, where: str) -> Action:
+    _require(isinstance(raw, dict), f"{where} 的动作应为映射,实际为 {raw!r}")
+    kind = raw.get("type")
+    _require(isinstance(kind, str) and kind in ACTION_TYPES,
+             f"{where} 的动作类型不认识: {kind!r}(支持 {sorted(ACTION_TYPES)})")
+    if kind == "photo":
+        camera = raw.get("camera")
+        _require(isinstance(camera, str) and camera in CAMERAS,
+                 f"{where} 的 photo 动作未说清楚哪个相机: {camera!r}"
+                 f"(支持 {sorted(CAMERAS)})")
+        return Action(type="photo", camera=camera)  # type: ignore[arg-type]
+    if kind == "dwell":
+        seconds = _num(raw, "seconds", f"{where} 的 dwell 动作")
+        _require(seconds >= 0, f"{where} 的 dwell 时长不能是负数: {seconds}")
+        return Action(type="dwell", seconds=seconds)
+    if kind == "light":
+        on = raw.get("on", True)
+        _require(isinstance(on, bool), f"{where} 的 light.on 应为真假值,实际为 {on!r}")
+        return Action(type="light", on=on)
+    return Action(type="head",
+                  pitch=_num(raw, "pitch", f"{where} 的 head 动作", 0.0),
+                  yaw=_num(raw, "yaw", f"{where} 的 head 动作", 0.0))
+
+
+def _parse_waypoint(raw: Any, index: int) -> MissionWaypoint:
+    where = f"第 {index + 1} 个点位"
+    _require(isinstance(raw, dict), f"{where} 应为映射,实际为 {raw!r}")
+    name = raw.get("name")
+    _require(isinstance(name, str) and name.strip(), f"{where} 缺少 name")
+    assert isinstance(name, str)  # 上一行已经保证,这行只是给类型检查看的
+    for bad in _NAME_FORBIDDEN:
+        _require(bad not in name,
+                 f"{where} 的点位名不能含 {bad!r}: {name!r} —— "
+                 f"点位名会成为照片文件名的一部分")
+    try:
+        pose = Pose.from_wire(raw.get("pose"))
+    except ValueError as exc:
+        raise MissionError(f"{where}({name}) 的 pose 不合法: {exc}") from exc
+
+    check = raw.get("check", "")
+    _require(isinstance(check, str), f"{where}({name}) 的 check 应为字符串")
+
+    actions_raw = raw.get("actions", []) or []
+    _require(isinstance(actions_raw, list),
+             f"{where}({name}) 的 actions 应为列表,实际为 {actions_raw!r}")
+    actions = tuple(_parse_action(a, f"{where}({name})") for a in actions_raw)
+    return MissionWaypoint(name=name, pose=pose, check=check, actions=actions)
+
+
+def _parse_policy(raw: Any) -> Policy:
+    if raw is None:
+        return Policy()
+    _require(isinstance(raw, dict), f"policy 应为映射,实际为 {raw!r}")
+    base = Policy()
+    got: dict[str, Any] = {}
+    for key in ("waypoint_timeout_s", "battery_return_pct", "battery_abort_pct"):
+        if key in raw:
+            got[key] = _num(raw, key, "policy")
+    if "waypoint_retry" in raw:
+        value = raw["waypoint_retry"]
+        _require(isinstance(value, int) and not isinstance(value, bool) and value >= 0,
+                 f"policy.waypoint_retry 应为非负整数,实际为 {value!r}")
+        got["waypoint_retry"] = value
+    if "loops" in raw:
+        value = raw["loops"]
+        _require(isinstance(value, int) and not isinstance(value, bool) and value >= 1,
+                 f"policy.loops 应为正整数,实际为 {value!r}")
+        got["loops"] = value
+    if "retention_days" in raw:
+        value = raw["retention_days"]
+        _require(isinstance(value, int) and not isinstance(value, bool)
+                 and value >= MIN_RETENTION_DAYS,
+                 f"policy.retention_days 应为不小于 {MIN_RETENTION_DAYS} 的整数,"
+                 f"实际为 {value!r} —— 0 和负数不当永久保留用,"
+                 f"盘满那天水位删除只剩违约或停机两条路")
+        got["retention_days"] = value
+    if "on_waypoint_failed" in raw:
+        value = raw["on_waypoint_failed"]
+        _require(value in ON_WAYPOINT_FAILED,
+                 f"policy.on_waypoint_failed 不认识: {value!r}"
+                 f"(支持 {sorted(ON_WAYPOINT_FAILED)})")
+        got["on_waypoint_failed"] = value
+    for key, allowed in (("on_loc_lost", ON_LOC_LOST),
+                         ("on_control_lost", ON_CONTROL_LOST),
+                         ("on_battery_low", ON_BATTERY_LOW),
+                         ("order", ORDERS)):
+        if key in raw:
+            value = raw[key]
+            # 词表在这里卡死,而不是等到出事那一刻在安全规则表里才发现不认识
+            # —— 那时候狗已经在外面了。
+            _require(value in allowed,
+                     f"policy.{key} 不认识: {value!r}(支持 {sorted(allowed)})")
+            got[key] = value
+
+    policy = replace(base, **got)
+    _require(policy.battery_abort_pct <= policy.battery_return_pct,
+             f"中止电量({policy.battery_abort_pct})不能高于返航电量"
+             f"({policy.battery_return_pct}) —— 那样永远轮不到返航")
+    _require(policy.waypoint_timeout_s > 0,
+             f"policy.waypoint_timeout_s 必须为正,实际为 {policy.waypoint_timeout_s}")
+    return policy
+
+
+def parse_mission(raw: Any) -> Mission:
+    """从已经解出来的映射构任务。页面提交的 JSON 也走这里。"""
+    _require(isinstance(raw, dict), f"任务定义应为映射,实际为 {raw!r}")
+
+    name = raw.get("mission")
+    _require(isinstance(name, str) and name.strip(), "缺少 mission(任务名)")
+    map_id = raw.get("map_id")
+    _require(isinstance(map_id, str) and map_id.strip(), "缺少 map_id(地图名)")
+    map_version = _parse_map_version(raw)
+
+    route = raw.get("route") or {}
+    _require(isinstance(route, dict), f"route 应为映射,实际为 {route!r}")
+    route_source = route.get("source", "inline")
+    _require(route_source in ("inline", "vendor_path"),
+             f"route.source 不认识: {route_source!r}")
+    route_path_id = route.get("path_id", "")
+    _require(isinstance(route_path_id, str),
+             f"route.path_id 应为字符串,实际为 {route_path_id!r}")
+
+    waypoints_raw = raw.get("waypoints")
+    _require(isinstance(waypoints_raw, list), "缺少 waypoints(点位列表)")
+    assert isinstance(waypoints_raw, list)
+    _require(bool(waypoints_raw), "至少要有一个点位")
+    waypoints = tuple(_parse_waypoint(w, i) for i, w in enumerate(waypoints_raw))
+
+    seen: set[str] = set()
+    for wp in waypoints:
+        _require(wp.name not in seen,
+                 f"点位名重复: {wp.name} —— 照片按点位名归档,重名会互相覆盖")
+        seen.add(wp.name)
+
+    return Mission(
+        mission=name,           # type: ignore[arg-type]
+        map_id=map_id,          # type: ignore[arg-type]
+        waypoints=waypoints,
+        policy=_parse_policy(raw.get("policy")),
+        route_source=route_source,
+        route_path_id=route_path_id,
+        map_version=map_version,
+    )
+
+
+def _parse_map_version(raw: dict[str, Any]) -> str:
+    """没写 → 空串(没绑,见 :attr:`Mission.map_version`);写了就得是像样的版本号。**不收数字**:
+    版本号是字符串(``"4"``、``"2026-10-08"``),``4`` 和 ``4.0`` 谁转成谁是一次猜。"""
+    if "map_version" not in raw:
+        return ""
+    v = raw["map_version"]
+    if not isinstance(v, str):
+        hint = f'(写成字符串 "{v}")' if isinstance(v, (int, float)) and not isinstance(v, bool) \
+            else ""
+        raise MissionError(f"map_version 应为字符串(这些点是在哪一版地图上量的),实际为 {v!r}{hint}")
+    _require(bool(v) and v == v.strip() and v.isprintable() and len(v) <= MAX_MAP_VERSION_LEN,
+             f"map_version 应为 1–{MAX_MAP_VERSION_LEN} 个字符、不带首尾空白,实际为 {v!r}")
+    return v
+
+
+# --------------------------------------------------------------------- 往返
+
+
+def load_mission(path: Path) -> Mission:
+    """从 YAML 文件读一份任务。"""
+    try:
+        text = Path(path).read_text(encoding="utf-8")
+    except OSError as exc:
+        raise MissionError(f"无法读取任务文件 {path}: {exc}") from exc
+    try:
+        raw = yaml.safe_load(text)
+    except yaml.YAMLError as exc:
+        raise MissionError(f"任务文件 {path} 不是合法的 YAML: {exc}") from exc
+    return parse_mission(raw)
+
+
+def dump_mission(mission: Mission) -> str:
+    """导成 YAML 文本。
+
+    ``allow_unicode=True`` 是硬要求:不然 ``check`` 里的中文变成一串
+    ``\\uXXXX``,人就没法在编辑器里改了 —— 而"手写和页面编的是同一份东西"
+    正是不引数据库的全部理由。
+    """
+    return yaml.safe_dump(mission.to_wire(), allow_unicode=True,
+                          sort_keys=False, default_flow_style=False)
+
+
+def save_mission(mission: Mission, path: Path) -> None:
+    """写回 YAML 文件。先写临时文件再 ``os.replace``。
+
+    理由跟 ``archive.write_state`` 一样:就地覆盖时断电会留下半个文件,
+    而半个任务文件是跑不了的 —— 现场丢的是整条路线。
+    """
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(dump_mission(mission), encoding="utf-8")
+    os.replace(tmp, path)

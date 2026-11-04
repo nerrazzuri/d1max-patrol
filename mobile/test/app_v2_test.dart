@@ -3,22 +3,22 @@ import 'dart:async';
 // App V2：英文为主中文可选、扫码 / 粘贴配对码添加站点、告警页（视觉规范 2.5）、竖屏顶栏、遥控锁横屏。
 import 'dart:io';
 
-import 'package:d1max_patrol/l10n.dart';
-import 'package:d1max_patrol/main.dart' show PatrolApp;
-import 'package:d1max_patrol/model/alert.dart';
-import 'package:d1max_patrol/net/site_client.dart';
-import 'package:d1max_patrol/store/site_store.dart';
-import 'package:d1max_patrol/ui/site_add.dart';
-import 'package:d1max_patrol/ui/site_alert_scene.dart';
-import 'package:d1max_patrol/ui/site_runs.dart' show SiteRunPage;
-import 'package:d1max_patrol/ui/site_mapping.dart' show zoneLabelText;
-import 'package:d1max_patrol/ui/site_page.dart';
-import 'package:d1max_patrol/ui/site_standby.dart';
-import 'package:d1max_patrol/ui/site_teleop.dart';
-import 'package:d1max_patrol/ui/site_watch_page.dart';
-import 'package:d1max_patrol/ui/nw/nw_theme.dart';
-import 'package:d1max_patrol/ui/widget/alarm_widgets.dart';
-import 'package:d1max_patrol/ui/widget/bar_actions.dart';
+import 'package:nexwar_patrol/l10n.dart';
+import 'package:nexwar_patrol/main.dart' show PatrolApp;
+import 'package:nexwar_patrol/model/alert.dart';
+import 'package:nexwar_patrol/net/site_client.dart';
+import 'package:nexwar_patrol/store/site_store.dart';
+import 'package:nexwar_patrol/ui/site_add.dart';
+import 'package:nexwar_patrol/ui/site_alert_scene.dart';
+import 'package:nexwar_patrol/ui/site_runs.dart' show SiteRunPage;
+import 'package:nexwar_patrol/ui/site_mapping.dart' show zoneLabelText;
+import 'package:nexwar_patrol/ui/site_page.dart';
+import 'package:nexwar_patrol/ui/site_standby.dart';
+import 'package:nexwar_patrol/ui/site_teleop.dart';
+import 'package:nexwar_patrol/ui/site_watch_page.dart';
+import 'package:nexwar_patrol/ui/nw/nw_theme.dart';
+import 'package:nexwar_patrol/ui/widget/alarm_widgets.dart';
+import 'package:nexwar_patrol/ui/widget/bar_actions.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -26,7 +26,7 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'site_page_test.dart' show FakeApi;
 
-// 站点的 d1max_site.pairing.encode 真出的码（见 pairing_test.dart）。
+// 站点的 nexwar_site.pairing.encode 真出的码（见 pairing_test.dart）。
 const _code = 'D1MAXSITE1.eyJmIjoiYWJhYmFiYWJhYmFiYWJhYmFiYWJhYmFiYWJhYmFiYWJhYmFiYWJhYmFiYWJhYmFiYWJhYmFiYWJhYmFiYWJhYiIsIm4iOiLluoTlm63kuIDlj7ciLCJ1IjoiaHR0cHM6Ly8xOTIuMTY4LjEuNTo4NDQzIn0';
 
 void _portrait(WidgetTester t) {
@@ -128,7 +128,7 @@ void main() {
 
     testWidgets('第一次打开是英文；在站点列表换成中文，整个界面跟着换，选了什么存下来', (t) async {
       _english();
-      final dir = Directory.systemTemp.createTempSync('d1max-lang');
+      final dir = Directory.systemTemp.createTempSync('nexwar_lang');
       addTearDown(() => dir.deleteSync(recursive: true));
       final langs = LangStore(File('${dir.path}/lang.json'));
       expect(await t.runAsync(langs.load), AppLang.en, reason: '没存过：英文');
@@ -155,7 +155,7 @@ void main() {
     });
 
     test('语言文件坏了、内容不认识：当没选过（英文），不崩', () async {
-      final dir = Directory.systemTemp.createTempSync('d1max-lang');
+      final dir = Directory.systemTemp.createTempSync('nexwar_lang');
       addTearDown(() => dir.deleteSync(recursive: true));
       final f = File('${dir.path}/lang.json');
       for (final bad in ['', '{', '[]', '{"lang":"fr"}', '{"lang":1}']) {

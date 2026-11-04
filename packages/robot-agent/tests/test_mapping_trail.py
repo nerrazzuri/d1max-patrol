@@ -8,11 +8,11 @@ import math
 import pytest
 from test_runtime_maps import REG, T, _cmd, _跑, 耳朵, 钟
 
-from d1max_adapter_sim.robot import SimRobot
-from d1max_agent.mapping_trail import MAX_POINTS, MappingTrail
-from d1max_agent.runtime import AgentRuntime
-from d1max_contract.memory_broker import MemoryBroker, MemoryTransport
-from d1max_patrol.protocol.nav_types import Pose
+from nexwar_adapter_sim.robot import SimRobot
+from nexwar_agent.mapping_trail import MAX_POINTS, MappingTrail
+from nexwar_agent.runtime import AgentRuntime
+from nexwar_contract.memory_broker import MemoryBroker, MemoryTransport
+from nexwar_patrol.protocol.nav_types import Pose
 
 
 def test_按距离和转角抽稀_以起点为原点():

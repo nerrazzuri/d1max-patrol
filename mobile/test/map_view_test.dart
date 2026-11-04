@@ -4,17 +4,17 @@
 import 'dart:math' as math;
 import 'dart:typed_data';
 
-import 'package:d1max_patrol/l10n.dart';
-import 'package:d1max_patrol/model/alert.dart';
-import 'package:d1max_patrol/net/site_client.dart';
-import 'package:d1max_patrol/ui/map_view.dart';
-import 'package:d1max_patrol/ui/nw/nw_map_raster.dart';
-import 'package:d1max_patrol/ui/nw/nw_p2_duty.dart' show NwMapThumb;
-import 'package:d1max_patrol/ui/nw/nw_shell.dart';
-import 'package:d1max_patrol/ui/nw/nw_theme.dart';
-import 'package:d1max_patrol/ui/site_alert_scene.dart';
-import 'package:d1max_patrol/ui/site_mapping.dart';
-import 'package:d1max_patrol/ui/site_maps.dart';
+import 'package:nexwar_patrol/l10n.dart';
+import 'package:nexwar_patrol/model/alert.dart';
+import 'package:nexwar_patrol/net/site_client.dart';
+import 'package:nexwar_patrol/ui/map_view.dart';
+import 'package:nexwar_patrol/ui/nw/nw_map_raster.dart';
+import 'package:nexwar_patrol/ui/nw/nw_p2_duty.dart' show NwMapThumb;
+import 'package:nexwar_patrol/ui/nw/nw_shell.dart';
+import 'package:nexwar_patrol/ui/nw/nw_theme.dart';
+import 'package:nexwar_patrol/ui/site_alert_scene.dart';
+import 'package:nexwar_patrol/ui/site_mapping.dart';
+import 'package:nexwar_patrol/ui/site_maps.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 

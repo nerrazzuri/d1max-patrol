@@ -9,10 +9,10 @@ from types import SimpleNamespace
 import pytest
 from test_site_api import MAP, PW, _等, target, 站
 
-from d1max_contract.digest import canonical_digest
-from d1max_contract.maps import map_digest
-from d1max_contract.zones import ZoneSet, zones_digest
-from d1max_site.dispatcher import DispatchRefused
+from nexwar_contract.digest import canonical_digest
+from nexwar_contract.maps import map_digest
+from nexwar_contract.zones import ZoneSet, zones_digest
+from nexwar_site.dispatcher import DispatchRefused
 
 POND = {"id": "pond", "kind": "nogo", "label": "池子",
         "polygon": [[5, 5], [6, 5], [6, 6], [5, 6]]}
@@ -152,9 +152,9 @@ def _fake_client(rc, tasks=None):
 
 
 def test_图摘要不一样_拒派_说清楚是哪一版_一样放行(tmp_path):
-    from d1max_site.db import SiteDB
-    from d1max_site.dispatcher import Dispatcher
-    from d1max_site.maps import MapCatalog
+    from nexwar_site.db import SiteDB
+    from nexwar_site.dispatcher import Dispatcher
+    from nexwar_site.maps import MapCatalog
 
     db = SiteDB(tmp_path / "s.db")
     cat = MapCatalog(tmp_path, db, now_ms=lambda: 1000)
@@ -216,8 +216,8 @@ def test_站点这边换了同一版的文件_狗上的旧内容被认出来(站
 def test_巡检命令带任务修订_狗记下_能力里报(站点):
     """站点发 patrol 带 ``mission_rev``(任务定义的内容摘要);狗原样记、running_config 报。"""
     s = 站点
-    from d1max_contract.mission import Mission, MissionWaypoint
-    from d1max_patrol.protocol.nav_types import Pose
+    from nexwar_contract.mission import Mission, MissionWaypoint
+    from nexwar_patrol.protocol.nav_types import Pose
     alice = _登(s)
     _ready(s)
     s.req("POST", ZP + "/confirm", {"revision": 0, "confirm": True, "empty_ok": True}, token=alice)

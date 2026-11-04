@@ -13,7 +13,7 @@
 - **没有身体 pitch/roll 命令**。只有 `stand()` / `lie()`(整体起立/趴下)和 `set_gimbal`(云台/头,不是身体)。
 - **狗上老服务那套 HTTP 控制接口(`/api/control/*`、`/api/teleop`)W00c5e 退役了。** 本目录的 `calibrate_drive.py` 本来就不走它:直接连旁路进程(`SidecarDeviceBackend`,TCP 8090)。人手遥控改走站点(手机遥控页,决策 7:只有前后与转向)。
 - **stand/lie 只有旁路进程这一条路**(`SidecarDeviceBackend` 的 `stand/lie`,`calibrate_drive.py --stand-lie` 用的就是它);站点遥控不发 stand/lie。
-- 代理自带录包话题(`src/d1max_patrol/app/mapping.py` 的 `RECORD_TOPICS`)= `/front_lidar,/tf,/tf_static,/odom/*`,**无 IMU** → 用本目录 `record_bag.sh` 代替。
+- 代理自带录包话题(`src/nexwar_patrol/app/mapping.py` 的 `RECORD_TOPICS`)= `/front_lidar,/tf,/tf_static,/odom/*`,**无 IMU** → 用本目录 `record_bag.sh` 代替。
 
 ---
 
@@ -46,7 +46,7 @@
 复用项目 `SidecarDeviceBackend` 的 `walk/stand/lie`,默认 dry-run,`--arm` 才动。
 ```bash
 # 这台笔记本带去办公室。连上狗网络后(host 填 Orin IP)。要动狗得给旁路进程的令牌(S11,见下):
-# 令牌每条命令现递一次、不落盘:--token-file <(ssh robot@<ORIN_IP> cat .d1max/sidecar.token)
+# 令牌每条命令现递一次、不落盘:--token-file <(ssh robot@<ORIN_IP> cat .nexwar/sidecar.token)
 # (下面写作 --token-file TOK;别把 <(...) 存进变量,命令一结束那个 fd 就关了)
 python3 tools/field-record/calibrate_drive.py --host <ORIN_IP> --dry-run                      # 看计划(不要令牌)
 python3 tools/field-record/calibrate_drive.py --host <ORIN_IP> --token-file TOK --test         # 小步试(1拍前进+停)
@@ -54,7 +54,7 @@ python3 tools/field-record/calibrate_drive.py --host <ORIN_IP> --token-file TOK 
 python3 tools/field-record/calibrate_drive.py --host <ORIN_IP> --token-file TOK --arm --stand-lie  # 正式跑(另开终端先跑 record_bag.sh calib)
 ```
 - **令牌(S11,旁路进程协议 9)**:旁路进程只收认证过的连接的运动命令;令牌在起旁路进程那个账号的
-  `~/.d1max/sidecar.token`(0600,旁路进程每次起来重写)。这个脚本绕过代理的禁行区、避障,所以令牌要人
+  `~/.nexwar/sidecar.token`(0600,旁路进程每次起来重写)。这个脚本绕过代理的禁行区、避障,所以令牌要人
   **显式**给(`--token-file`),不设缺省;停车(halt)不要令牌。旁路进程是别的账号或 root 起的,就 `sudo cat` 那个账号的。
 - **前提(关键)**:`acquire_control()` 只是**核对**旁路进程握着控制权;真正的 TakeControl 是**旁路进程在开机窗口抢的**。
   所以 SDK 驱动前必须:**重启狗 + 旁路进程抢赢握手**(否则上装占着,acquire 抛错,当天走不了 SDK 这条)。

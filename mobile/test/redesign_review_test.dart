@@ -1,9 +1,9 @@
 // App 重做外审(2026-10-14,`../reviews/2026-10-14-App-redesign-e0f829f-b20a8bc-review.md`)的三条。
-import 'package:d1max_patrol/ui/nw/nw_p4_admin.dart';
-import 'package:d1max_patrol/ui/nw/nw_widgets.dart';
-import 'package:d1max_patrol/ui/site_maps.dart';
-import 'package:d1max_patrol/ui/site_page.dart';
-import 'package:d1max_patrol/ui/site_teleop.dart';
+import 'package:nexwar_patrol/ui/nw/nw_p4_admin.dart';
+import 'package:nexwar_patrol/ui/nw/nw_widgets.dart';
+import 'package:nexwar_patrol/ui/site_maps.dart';
+import 'package:nexwar_patrol/ui/site_page.dart';
+import 'package:nexwar_patrol/ui/site_teleop.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 

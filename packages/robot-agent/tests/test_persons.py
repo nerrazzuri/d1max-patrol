@@ -9,13 +9,13 @@ import json
 
 from test_runtime_obstacles import REG, T, _连
 
-from d1max_adapter_sim.robot import SimRobot
-from d1max_agent.persons import GONE_S, PersonView
-from d1max_agent.runtime import AgentRuntime
-from d1max_contract.memory_broker import MemoryBroker, MemoryTransport
-from d1max_contract.messages import Capabilities
-from d1max_contract.persbridge import PROTO, Hello, Person, Persons, encode
-from d1max_patrol.protocol.nav_types import Pose
+from nexwar_adapter_sim.robot import SimRobot
+from nexwar_agent.persons import GONE_S, PersonView
+from nexwar_agent.runtime import AgentRuntime
+from nexwar_contract.memory_broker import MemoryBroker, MemoryTransport
+from nexwar_contract.messages import Capabilities
+from nexwar_contract.persbridge import PROTO, Hello, Person, Persons, encode
+from nexwar_patrol.protocol.nav_types import Pose
 
 
 class 钟:
@@ -359,7 +359,7 @@ def test_W41_人员忽略区_落在里面的不算人_没测到距离的照算()
 async def test_W41_代理按狗此刻的位置把人放到图上_落在忽略区才忽略(tmp_path):
     import math
 
-    from d1max_contract.zones import ZoneSet
+    from nexwar_contract.zones import ZoneSet
     r = SimRobot(now_ms=lambda: 1_000_000)
     rt = AgentRuntime(transport=MemoryTransport(MemoryBroker(), "dog"), registration=REG, hal=r,
                       store_dir=tmp_path / "agent", now_ms=lambda: 1_000_000,

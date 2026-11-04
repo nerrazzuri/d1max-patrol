@@ -4,7 +4,7 @@
 /// 中文只留在注释、docstring 和字符串字面量里。
 library;
 
-import 'package:d1max_patrol/ui/widget/joystick.dart';
+import 'package:nexwar_patrol/ui/widget/joystick.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'support/pump.dart';

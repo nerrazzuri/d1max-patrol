@@ -7,9 +7,9 @@ from pathlib import Path
 
 
 def test_引擎不import_http():
-    import d1max_agent.engine  # 引擎的真身(W00b 起住在 robot-agent 包里)
+    import nexwar_agent.engine  # 引擎的真身(W00b 起住在 robot-agent 包里)
 
-    for py in Path(d1max_agent.engine.__file__).parent.glob("*.py"):
+    for py in Path(nexwar_agent.engine.__file__).parent.glob("*.py"):
         src = py.read_text(encoding="utf-8")
-        for banned in ("import http", "socketserver", "d1max_patrol.app"):
+        for banned in ("import http", "socketserver", "nexwar_patrol.app"):
             assert banned not in src, f"{py.name} 里出现了 {banned}"

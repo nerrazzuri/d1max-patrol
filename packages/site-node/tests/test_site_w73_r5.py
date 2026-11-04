@@ -8,7 +8,7 @@ from dataclasses import replace
 
 from test_site_w73_guard_duty import 站, _方案, _跑, _patrols, MAP
 from test_site_w73_r4 import _待命, _狗上线, _回程
-from d1max_site.battery_swap import SwapDesk
+from nexwar_site.battery_swap import SwapDesk
 
 
 def swap(t, s):

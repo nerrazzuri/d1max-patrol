@@ -9,8 +9,8 @@ import math
 import pytest
 from test_site_incidents import 站, 签  # noqa: F401  (夹具)
 
-from d1max_site.areas import AreaBook
-from d1max_site.devices import DeviceBook, DeviceError
+from nexwar_site.areas import AreaBook
+from nexwar_site.devices import DeviceBook, DeviceError
 
 MAP = ("estate-1", "7")
 EAST = [[2.0, -3.0], [8.0, -3.0], [8.0, 3.0], [2.0, 3.0]]
@@ -93,7 +93,7 @@ async def test_设备只说被触发了_站点按它的位置派(设备):
 
 
 async def test_删了设备_回调验签不过_拦截点也没了(设备):
-    from d1max_site.incidents import IncidentAuthError
+    from nexwar_site.incidents import IncidentAuthError
     t = 设备
     sec = t.book.put("door-1", {"kind": "contact", "map_id": MAP[0], "map_version": MAP[1],
                                 "x": 3.0, "y": 1.0}, by="alice")["secret"]
@@ -117,7 +117,7 @@ async def test_老接口_按防区名_先找圈好的防区_找不到按老映�
 
 
 async def test_放到图上的摄像头_ONVIF报来的按它的位置派_没放的照老映射(设备):
-    from d1max_site.cctv import Camera, OnvifEvent, add_camera, incident_body, set_placement
+    from nexwar_site.cctv import Camera, OnvifEvent, add_camera, incident_body, set_placement
     t = 设备
     await t.run(12)
     add_camera(t.db, Camera(name="cam-9", onvif_url="http://x", username="u", password="p",
@@ -138,7 +138,7 @@ async def test_放到图上的摄像头_ONVIF报来的按它的位置派_没放�
 
 
 async def test_外审_重新圈防区以后_设备和摄像头按新防区判(设备):
-    from d1max_site.cctv import Camera, add_camera, set_placement
+    from nexwar_site.cctv import Camera, add_camera, set_placement
     t = 设备
     t.book.put("door-1", {"kind": "contact", "map_id": MAP[0], "map_version": MAP[1],
                           "x": 3.0, "y": 1.0}, by="alice")
@@ -158,7 +158,7 @@ async def test_外审_重新圈防区以后_设备和摄像头按新防区判(�
 
 
 def test_外审r2_10_摄像头移出所有防区_按全站算_不退回旧防区(设备):
-    from d1max_site.cctv import Camera, add_camera, set_placement
+    from nexwar_site.cctv import Camera, add_camera, set_placement
     t = 设备
     add_camera(t.db, Camera(name="cam-9", onvif_url="http://x", username="u", password="p",
                             zone="东区"), now_ms=0)
@@ -170,8 +170,8 @@ def test_外审r2_10_摄像头移出所有防区_按全站算_不退回旧防区
 
 
 async def test_外审r3_5_摄像头移出所有防区_报来的事件也按全站_不用事件里带的旧防区(设备):
-    from d1max_site.cctv import Camera, OnvifEvent, add_camera, incident_body, set_placement
-    from d1max_site.modes import ArmingDesk
+    from nexwar_site.cctv import Camera, OnvifEvent, add_camera, incident_body, set_placement
+    from nexwar_site.modes import ArmingDesk
     t = 设备
     await t.run(12)
     cam = Camera(name="cam-9", onvif_url="http://x", username="u", password="p", zone="东区")

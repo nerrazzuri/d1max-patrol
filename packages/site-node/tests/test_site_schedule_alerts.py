@@ -21,10 +21,10 @@ import pytest
 from test_site_dispatcher import 台子
 from test_site_schedule import 打包, 排程, 毫秒
 
-from d1max_contract.messages import Ack, AckResult
-from d1max_site.catalog import import_bundle
-from d1max_site.routes import RouteStore
-from d1max_site.scheduler import SiteScheduler
+from nexwar_contract.messages import Ack, AckResult
+from nexwar_site.catalog import import_bundle
+from nexwar_site.routes import RouteStore
+from nexwar_site.scheduler import SiteScheduler
 
 
 @pytest.fixture
@@ -239,7 +239,7 @@ async def test_排程写了robot_说在那只狗名下(站, tmp_path):
 
 
 async def test_发之前就被拦下_当场说dispatch_failed_在那只狗名下(站, monkeypatch):
-    from d1max_site.dispatcher import DispatchRefused
+    from nexwar_site.dispatcher import DispatchRefused
     t = 站
 
     async def 拦(*a, **k):
@@ -295,7 +295,7 @@ async def test_回执超时_狗一直没接_两分钟后说lost(站, monkeypatch
 
 
 async def test_回执超时_其实狗收到了在跑_不说(站, monkeypatch):
-    from d1max_contract.dispatch import DispatchTimeout
+    from nexwar_contract.dispatch import DispatchTimeout
     t = 站
     real_send = t.site._send
 
@@ -314,7 +314,7 @@ async def test_回执超时_其实狗收到了在跑_不说(站, monkeypatch):
 
 
 def _丢回执(monkeypatch, t):
-    from d1max_contract.dispatch import DispatchTimeout
+    from nexwar_contract.dispatch import DispatchTimeout
 
     async def 没发出去(*a, before_send=None, **k):
         if before_send is not None:
@@ -355,7 +355,7 @@ async def test_回执超时_狗在跑这一趟_不算丢(站, monkeypatch):
 async def test_老库里的账_升级之后当说过了_不翻出来(tmp_path):
     import sqlite3
 
-    from d1max_site.db import SiteDB
+    from nexwar_site.db import SiteDB
     path = tmp_path / "old.db"
     c = sqlite3.connect(path)
     c.execute("CREATE TABLE schedule_runs (id INTEGER PRIMARY KEY AUTOINCREMENT, entry_id TEXT "
@@ -375,7 +375,7 @@ async def test_老库里的账_升级之后当说过了_不翻出来(tmp_path):
 
 
 async def test_回调炸了_账照记_下一拍再说(站, monkeypatch):
-    from d1max_site.dispatcher import DispatchRefused
+    from nexwar_site.dispatcher import DispatchRefused
     t = 站
 
     async def 拦(*a, **k):
@@ -404,9 +404,9 @@ async def test_回调炸了_账照记_下一拍再说(站, monkeypatch):
 
 @pytest.fixture
 def 告警(tmp_path):
-    from d1max_site.alert_sources import SiteAlertSources
-    from d1max_site.alert_store import AlertDesk
-    from d1max_site.db import SiteDB
+    from nexwar_site.alert_sources import SiteAlertSources
+    from nexwar_site.alert_store import AlertDesk
+    from nexwar_site.db import SiteDB
     db = SiteDB(tmp_path / "a.db")
     desk = AlertDesk(db, now_ms=lambda: 1_000)
     yield desk, SiteAlertSources(desk, now_ms=lambda: 1_000)
@@ -428,7 +428,7 @@ def test_去向对应的告警与级别(告警, outcome, kind, level):
 
 
 def test_没派给哪只狗_报在站点名下(告警):
-    from d1max_site.alert_sources import SITE
+    from nexwar_site.alert_sources import SITE
     desk, src = 告警
     src.on_schedule_outcome("nightly", None, "ambiguous", "能派的机器人不止一台")
     [a] = desk.book.all()
@@ -457,7 +457,7 @@ def test_几条排程合成一条告警_标题里都在(告警):
 
 
 async def test_W14_排程巡检被手动派单打断_说这一轮没巡完_不续_一轮只说一次(站):
-    from d1max_site.priorities import MANUAL
+    from nexwar_site.priorities import MANUAL
     t = 站
     t.clock.ms = 毫秒(22, 0, 30)
     await t.run(2)

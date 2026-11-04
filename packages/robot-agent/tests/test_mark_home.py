@@ -84,11 +84,11 @@ async def test_标了原点_正在用的图重启照用_再下发按站点的(tm
     """站点下发的图(``active.json``)上标了原点,代理重启按标的;之后站点再下发、带着原点,按站点的。"""
     from test_runtime_maps import REG, 站点, 耳朵, 钟
 
-    from d1max_adapter_sim.robot import SimRobot
-    from d1max_agent.maps import MapKeeper
-    from d1max_agent.runtime import AgentRuntime
-    from d1max_contract.memory_broker import MemoryBroker, MemoryTransport
-    from d1max_patrol.protocol.nav_types import Pose
+    from nexwar_adapter_sim.robot import SimRobot
+    from nexwar_agent.maps import MapKeeper
+    from nexwar_agent.runtime import AgentRuntime
+    from nexwar_contract.memory_broker import MemoryBroker, MemoryTransport
+    from nexwar_patrol.protocol.nav_types import Pose
     broker, c, site = MemoryBroker(), 钟(), 站点()
     r = SimRobot(now_ms=c)
     ears = 耳朵()
@@ -153,7 +153,7 @@ async def test_里程不新鲜_拒(tmp_path):
 async def test_在跑任务_拒忙_原点不变(tmp_path):
     """内审应修 3:goto 刚收下、狗还没起步(停着)也不标 —— 不然原点变成半路上的一个点,这一趟返航
     还去老原点、站点的默认待命点却已经是新点。"""
-    from d1max_contract.messages import MapPose
+    from nexwar_contract.messages import MapPose
     broker, c, ears, dog, rt = await _台(tmp_path)
     await _设位置(rt, broker, dog, c)
     await rt._on_cmd(_cmd("goto", {"target": MapPose(map_id="m", map_version="1", frame_id="map",
@@ -198,9 +198,9 @@ async def test_遥控开着_可以标(tmp_path):
 
     from test_runtime_maps import T
 
-    from d1max_contract.messages import Command
-    from d1max_contract.teleop import teleop_grant_payload
-    from d1max_contract.transport import Message
+    from nexwar_contract.messages import Command
+    from nexwar_contract.teleop import teleop_grant_payload
+    from nexwar_contract.transport import Message
     broker, c, ears, dog, rt = await _台(tmp_path)
     rt._video_live = lambda: True
     await _设位置(rt, broker, dog, c)
@@ -217,14 +217,14 @@ async def test_遥控开着_可以标(tmp_path):
 
 
 async def test_没有正在用的图_按启动参数载的图_标了重启照用(tmp_path):
-    """内审阻断 1:部署脚本按 ``D1MAX_MAP``/``D1MAX_HOME`` 起(没有站点下发的 ``active.json``,也可以
+    """内审阻断 1:部署脚本按 ``NEXWAR_MAP``/``NEXWAR_HOME`` 起(没有站点下发的 ``active.json``,也可以
     没配地图保管),新现场第一次标原点走的就是这条路。以前只改了内存、回执照样收下,重启回到
     ``--home``。"""
     from test_runtime_maps import REG
 
-    from d1max_agent.runtime import AgentRuntime
-    from d1max_contract.memory_broker import MemoryTransport
-    from d1max_patrol.protocol.nav_types import Pose
+    from nexwar_agent.runtime import AgentRuntime
+    from nexwar_contract.memory_broker import MemoryTransport
+    from nexwar_patrol.protocol.nav_types import Pose
     broker, c, ears, dog, rt = await _台(tmp_path)
     await _设位置(rt, broker, dog, c, x=4.0, y=4.0, yaw=0.7)
     await rt._on_cmd(_cmd("mark_home", {}, "p1", c))
@@ -259,7 +259,7 @@ async def test_落不了盘_拒_原点不变_不发事件(tmp_path):
 
 
 def test_原点簿_按图号版本记_删_坏文件当没有(tmp_path):
-    from d1max_agent.homes import MAX_ENTRIES, HomeBook
+    from nexwar_agent.homes import MAX_ENTRIES, HomeBook
     b = HomeBook(tmp_path / "homes.json")
     assert b.get("m", "7") is None
     b.put("m", "7", (1.0, 2.0, 0.5), now_ms=1)

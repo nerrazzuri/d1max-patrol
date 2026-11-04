@@ -1,19 +1,19 @@
 // W53（用户 2026-10-30 / 10-31）：值守页跟着一台机器人走、画面手动开、按角色的按钮、派巡逻弹框
 // （估时、撞日程排队、被拒说原因）、今天的巡逻、管理栏（要你处理、开站清单）、账号审批、日程、申请账号、
 // 上手导览和报警练习。
-import 'package:d1max_patrol/l10n.dart';
-import 'package:d1max_patrol/net/site_client.dart';
-import 'package:d1max_patrol/store/site_store.dart';
-import 'package:d1max_patrol/ui/guide.dart';
-import 'package:d1max_patrol/ui/nw/nw_shell.dart';
-import 'package:d1max_patrol/ui/nw/nw_widgets.dart';
-import 'package:d1max_patrol/ui/patrol_dispatch.dart';
-import 'package:d1max_patrol/ui/refusal.dart';
-import 'package:d1max_patrol/ui/site_duty_page.dart';
-import 'package:d1max_patrol/ui/site_list.dart';
-import 'package:d1max_patrol/ui/site_tabs.dart';
-import 'package:d1max_patrol/ui/site_video.dart';
-import 'package:d1max_patrol/ui/site_watch_page.dart';
+import 'package:nexwar_patrol/l10n.dart';
+import 'package:nexwar_patrol/net/site_client.dart';
+import 'package:nexwar_patrol/store/site_store.dart';
+import 'package:nexwar_patrol/ui/guide.dart';
+import 'package:nexwar_patrol/ui/nw/nw_shell.dart';
+import 'package:nexwar_patrol/ui/nw/nw_widgets.dart';
+import 'package:nexwar_patrol/ui/patrol_dispatch.dart';
+import 'package:nexwar_patrol/ui/refusal.dart';
+import 'package:nexwar_patrol/ui/site_duty_page.dart';
+import 'package:nexwar_patrol/ui/site_list.dart';
+import 'package:nexwar_patrol/ui/site_tabs.dart';
+import 'package:nexwar_patrol/ui/site_video.dart';
+import 'package:nexwar_patrol/ui/site_watch_page.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 

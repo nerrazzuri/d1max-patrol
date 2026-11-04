@@ -7,14 +7,14 @@ import asyncio
 
 import pytest
 
-from d1max_patrol.backends.base import (
+from nexwar_patrol.backends.base import (
     LocStatusEvent,
     MappingStatusEvent,
     NavRequestError,
     NavStatusEvent,
     NavTimeoutError,
 )
-from d1max_patrol.protocol.nav_types import (
+from nexwar_patrol.protocol.nav_types import (
     NAV_TERMINAL,
     LocStatus,
     MappingStatus,

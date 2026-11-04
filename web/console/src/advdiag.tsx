@@ -47,7 +47,7 @@ export function DiagPage({ say }: { say: (s: string) => void }) {
           <select aria-label={t("bundleHours")} value={String(hours)} onChange={(e) => setHours(Number(e.currentTarget.value))}>
             {[6, 24, 72, 168].map((h) => <option key={h} value={String(h)}>{t("opsHours", { n: h })}</option>)}
           </select>
-          <a class="btn" href={`/api/support-bundle?hours=${hours}`} download="d1max-support.tar.gz">{t("supportBundle")}</a>
+          <a class="btn" href={`/api/support-bundle?hours=${hours}`} download="nexwar_support.tar.gz">{t("supportBundle")}</a>
         </span>
       </div>
       <p class="muted lead">{t("diagWhen")}</p>

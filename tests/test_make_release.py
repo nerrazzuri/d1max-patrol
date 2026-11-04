@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from d1max_contract import relsign
+from nexwar_contract import relsign
 
 ROOT = Path(__file__).resolve().parent.parent
 NOW = 1_791_000_000_000
@@ -42,7 +42,7 @@ def world(tmp_path):
     key = tmp_path / "usb" / "release.key"
     key.parent.mkdir()
     relsign.keygen(key, repo / "deploy/release-pub.pem")
-    from d1max_contract import ed25519
+    from nexwar_contract import ed25519
     (repo / "deploy/factory-pub.pem").write_bytes(
         ed25519.public_pem(ed25519.public_key(ed25519.new_seed())))
     _git(repo, "init", "-q")
@@ -225,7 +225,7 @@ def test_发行闸_过了闸的同一份_发得出去_记录里写着(world, tmp
     repo, key, out = world
     dest = _gate(world, tmp_path)
     gate = json.loads(dest.read_text("utf-8"))
-    assert gate["kind"] == "d1max-release-gate" and len(gate["commit"]) == 40
+    assert gate["kind"] == "nexwar_release_gate" and len(gate["commit"]) == 40
     assert not gate["wheels"]
     assert mr.run(_parse(["--repo", str(repo), "--key", str(key), "--out", str(out),
                           "--skip-android", "--gate", str(dest)]), now_ms=NOW) == 0
@@ -311,12 +311,12 @@ def test_发行闸的工作流_整套_ci_严格跑_点名的测试文件都在_�
 def test_CI_的安卓包是调试签名_发行脚本才要求正式钥匙():
     ci = (ROOT / ".github/workflows/ci.yml").read_text("utf-8")
     assert "requireReleaseKey" not in ci
-    assert "-Pd1max.requireReleaseKey=true" in (ROOT / "tools/make_release.py").read_text("utf-8")
+    assert "-Pnexwar.requireReleaseKey=true" in (ROOT / "tools/make_release.py").read_text("utf-8")
 
 
 def test_W55_安卓包旁边出站点分发用的签名清单_站点认(world, monkeypatch, tmp_path):
     """W55:App 从站点分发。发行脚本编完安卓包,用发行钥匙签一份清单;站点验签收下。"""
-    from d1max_site.app_dist import AppStore
+    from nexwar_site.app_dist import AppStore
     repo, key, out = world
     apk = tmp_path / "app-release.apk"
     apk.write_bytes(b"PK-apk")
@@ -340,3 +340,13 @@ def test_W57_pubspec版本带候选号_安卓包名和清单里都留着(tmp_pat
     assert mr.pubspec_version(tmp_path) == "1.0.0-rc.1"
     (tmp_path / "mobile" / "pubspec.yaml").write_text("name: x\nversion: 1.2.3+7\n")
     assert mr.pubspec_version(tmp_path) == "1.2.3"
+
+
+def test_发行打包传的签名开关_跟安卓构建读的是同一个属性名():
+    """改名时抓到过:构建脚本读 ``nexwar.requireReleaseKey``,发行脚本还传老名字 —— 没正式钥匙也会
+    悄悄出调试签名的包。两边按同一个名字核。"""
+    import re
+    gradle = (ROOT / "mobile/android/app/build.gradle.kts").read_text("utf-8")
+    m = re.search(r'findProperty\("([\w.]+requireReleaseKey)"\)', gradle)
+    assert m, "安卓构建里找不到 requireReleaseKey 开关"
+    assert f"-P{m.group(1)}=true" in (ROOT / "tools/make_release.py").read_text("utf-8")

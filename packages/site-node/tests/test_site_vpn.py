@@ -8,7 +8,7 @@ import os
 
 import pytest
 
-from d1max_site import vpn
+from nexwar_site import vpn
 
 
 def test_X25519_对得上RFC7748的测试向量():
@@ -80,7 +80,7 @@ def test_删了的地址不复用_站点配置里没了它(tmp_path):
 
 
 def test_命令行_init_add_list_server_conf(tmp_path, capsys):
-    from d1max_site.main import main
+    from nexwar_site.main import main
     home = tmp_path / "site"
     home.mkdir()
     assert main(["--home", str(home), "vpn", "init", "--endpoint", "home.example.net"]) == 0
@@ -95,12 +95,12 @@ def test_命令行_init_add_list_server_conf(tmp_path, capsys):
 
 
 def test_新站点的证书里就带隧道地址():
-    from d1max_site.ca import LOCAL_NAMES
+    from nexwar_site.ca import LOCAL_NAMES
     assert "172.29.70.1" in LOCAL_NAMES
 
 
 def test_老站点证书里没有隧道地址_init说清楚_要明着重签_重签打新指纹(tmp_path, capsys):
-    from d1max_site.main import cmd_fingerprint, main
+    from nexwar_site.main import cmd_fingerprint, main
     home = tmp_path / "site"
     assert main(["--home", str(home), "init", "--site-id", "s1", "--hostname", "site.lan"]) == 0
     ext = home / "ca" / "server" / "server_ext.cnf"
@@ -122,7 +122,7 @@ def test_复查I1_装配置的提示和文档_不经过临时文件(tmp_path, ca
     改成管道直接写进 /etc/wireguard(umask 077),不落临时文件。"""
     from pathlib import Path
 
-    from d1max_site.main import main
+    from nexwar_site.main import main
     home = tmp_path / "site"
     home.mkdir()
     assert main(["--home", str(home), "vpn", "init", "--endpoint", "1.2.3.4"]) == 0

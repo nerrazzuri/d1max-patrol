@@ -9,8 +9,8 @@ import math
 import pytest
 from test_site_w73_guard_plan import 台  # noqa: F401 —— 夹具
 
-from d1max_contract.geometry import Pose
-from d1max_site.route_eta import (
+from nexwar_contract.geometry import Pose
+from nexwar_site.route_eta import (
     NOMINAL_SPEED_MPS,
     PHOTO_S,
     TURN_RAD_S,

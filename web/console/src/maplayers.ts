@@ -16,7 +16,7 @@ export const DEFAULT_LAYERS: ReadonlySet<Layer> = new Set<Layer>(["zones", "came
 export function layersFor(saved: ReadonlySet<Layer>, role: string): Set<Layer> {
   return new Set([...saved].filter((l) => role === "engineer" || !ENGINEERING_LAYERS.includes(l)));
 }
-const LAYERS_KEY = "d1max.maplayers";
+const LAYERS_KEY = "nexwar.maplayers";
 
 export function loadLayers(): Set<Layer> {
   try {

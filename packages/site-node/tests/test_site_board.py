@@ -6,21 +6,21 @@ T0 = 1_793_000_000_000
 
 
 def _src(tmp_path):
-    from d1max_site.alert_sources import SiteAlertSources
-    from d1max_site.alert_store import AlertDesk
-    from d1max_site.db import SiteDB
+    from nexwar_site.alert_sources import SiteAlertSources
+    from nexwar_site.alert_store import AlertDesk
+    from nexwar_site.db import SiteDB
     desk = AlertDesk(SiteDB(tmp_path / "s.db"), now_ms=lambda: T0)
     return desk, SiteAlertSources(desk, now_ms=lambda: T0)
 
 
 def _ev(kind, data):
-    from d1max_contract.messages import Event
+    from nexwar_contract.messages import Event
     return Event(event_id=f"{kind}-{data.get('level')}", kind=kind, stamp=T0, data=data,
                  boot_id="b", seq=1)
 
 
 def test_过热三级出告警_回到正常不出(tmp_path):
-    from d1max_site.alert_audience import audience
+    from nexwar_site.alert_audience import audience
     desk, src = _src(tmp_path)
     src.on_event("A", _ev("board_thermal", {"level": "ok", "reason": "SoC 50 °C"}))
     assert desk.open() == []
@@ -42,7 +42,7 @@ def test_过热三级出告警_回到正常不出(tmp_path):
 
 
 def test_热像镜头被挡_出P2给管理员(tmp_path):
-    from d1max_site.alert_audience import audience
+    from nexwar_site.alert_audience import audience
     desk, src = _src(tmp_path)
     src.on_event("A", _ev("thermal_lens_blocked", {"camera": "thermal", "detail": 1.2,
                                                    "baseline": 9.8}))

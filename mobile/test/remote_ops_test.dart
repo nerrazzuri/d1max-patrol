@@ -5,12 +5,12 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:ui' show PlatformDispatcher;
 
-import 'package:d1max_patrol/l10n.dart';
-import 'package:d1max_patrol/net/app_update.dart';
-import 'package:d1max_patrol/net/error_log.dart';
-import 'package:d1max_patrol/net/site_client.dart';
-import 'package:d1max_patrol/ui/app_update_ui.dart';
-import 'package:d1max_patrol/ui/robot_ops.dart';
+import 'package:nexwar_patrol/l10n.dart';
+import 'package:nexwar_patrol/net/app_update.dart';
+import 'package:nexwar_patrol/net/error_log.dart';
+import 'package:nexwar_patrol/net/site_client.dart';
+import 'package:nexwar_patrol/ui/app_update_ui.dart';
+import 'package:nexwar_patrol/ui/robot_ops.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -23,8 +23,8 @@ Map<String, dynamic> _diag() => <String, dynamic>{
       'disks': <String, dynamic>{'/': <String, dynamic>{'total': 100 << 30, 'used': 1, 'free': 40 << 30}},
       'time': <String, dynamic>{'synced': false},
       'services': <dynamic>[
-        <String, dynamic>{'unit': 'd1max-agent.service', 'active': 'active', 'sub': 'running', 'restarts': 3},
-        <String, dynamic>{'unit': 'd1max-nav2.service', 'active': '', 'sub': ''},
+        <String, dynamic>{'unit': 'nexwar_agent.service', 'active': 'active', 'sub': 'running', 'restarts': 3},
+        <String, dynamic>{'unit': 'nexwar_nav2.service', 'active': '', 'sub': ''},
       ],
     };
 
@@ -45,15 +45,15 @@ void main() {
     expect(lines['可用内存'], '1.0 GB / 8.0 GB');
     expect(lines['磁盘剩余（/）'], '40.0 GB / 100.0 GB');
     expect(lines['时间同步'], '未同步');
-    expect(lines['d1max-agent.service'], 'active/running · 重启 3 次');
-    expect(lines.containsKey('d1max-nav2.service'), isFalse);
+    expect(lines['nexwar_agent.service'], 'active/running · 重启 3 次');
+    expect(lines.containsKey('nexwar_nav2.service'), isFalse);
   });
 
   testWidgets('诊断快照、日志按服务和时间段取', (t) async {
     final api = FakeApi('admin')
       ..opsReply = (a, _) => a == 'diag'
           ? _diag()
-          : <String, dynamic>{'unit': 'd1max-agent', 'text': 'hello journal', 'truncated': true};
+          : <String, dynamic>{'unit': 'nexwar_agent', 'text': 'hello journal', 'truncated': true};
     await _open(t, api);
     await t.tap(find.byKey(RobotOpsPage.diagKey));
     await t.pumpAndSettle();
@@ -63,7 +63,7 @@ void main() {
     expect(find.text('hello journal'), findsOneWidget);
     expect(find.textContaining('仅显示最近一部分'), findsOneWidget);
     expect(api.opsCalls.last.$2, 'journal');
-    expect(api.opsCalls.last.$4, <String, String>{'unit': 'd1max-agent', 'hours': '6'});
+    expect(api.opsCalls.last.$4, <String, String>{'unit': 'nexwar_agent', 'hours': '6'});
   });
 
   testWidgets('重启整机要再输密码，带上 confirm_password；取消就不发', (t) async {
@@ -97,13 +97,13 @@ void main() {
     await _open(t, api);
     await t.tap(find.byKey(const Key('ops-unit')));
     await t.pumpAndSettle();
-    await t.tap(find.text('d1max-localizer').last);
+    await t.tap(find.text('nexwar_localizer').last);
     await t.pumpAndSettle();
     await t.tap(find.byKey(RobotOpsPage.restartKey));
     await t.pumpAndSettle();
     await t.tap(find.text('重启'));
     await t.pumpAndSettle();
-    expect(api.opsCalls.single.$3, <String, dynamic>{'unit': 'd1max-localizer'});
+    expect(api.opsCalls.single.$3, <String, dynamic>{'unit': 'nexwar_localizer'});
   });
 
   testWidgets('机器人只报了诊断：没有重启、日志这些按钮', (t) async {

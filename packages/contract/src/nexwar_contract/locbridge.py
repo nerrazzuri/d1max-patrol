@@ -1,0 +1,248 @@
+"""本机定位桥的报文(W09a,W08 决定 2、4)。
+
+定位器(ROS 那一侧,W09b)跟代理在同一台狗上,经 Unix 套接字说话:**一行一个 JSON**(UTF-8),每行
+最多 :data:`MAX_LINE` 字节。代理这边监听,定位器来连,第一行必须是 ``hello``。这一份两边都用,所以放在
+契约包、不依赖 ROS。
+
+定位器 → 代理:
+
+- ``hello {proto, name, version}``
+- ``pose {seq, stamp_ns, map_id, map_version, x, y, yaw, sigma_xy, sigma_yaw, source, jump,
+  reloc_id?, meas_age_ms?}``:地图位姿与不确定度(米、弧度);``source`` 是 ``scan_match``/``rtk``/
+  ``fused``;``jump`` 为真 = 这一帧跟上一帧不连续(比如刚重定位完);``reloc_id`` = 是哪一次
+  重定位请求的结果(收下重定位之后**第一帧要带上**,之后的可带可不带;代理收到不小于它在等的那个号就算
+  重定位完了)。
+  ``stamp_ns`` 是这一帧对应的**测量时刻**(那一帧点云的时间),定位器自己的钟,**要严格递增**(同一个
+  时间戳再来一遍当重发、不算新的;往回跳超过 1 s 代理当钟被拨过)。代理拿「收到时刻 − 时间戳」估这一帧
+  比平常晚到了多少,配那一刻的里程。``meas_age_ms`` = 离上一次真匹配过了多久(定位器匹配不上、自己拿
+  里程推着报的时候填;正常是 0),代理把它算进新鲜和推算上限。
+  版本 1 里多出不认识的字段整行拒收(加字段要升协议版本)。
+- ``status {seq, state, reason}``:``initializing``/``tracking``/``lost``
+- ``hb {seq}``:心跳,每秒一条
+- ``reply {req, ok, reason}``:对代理请求的回复。**只说收下没有、要快**(代理重定位只等 1 s):
+  换先验的载入进度走 ``status initializing``、重定位的结果看之后的帧。
+
+代理 → 定位器:``hello {proto}``、``set_prior {req, map_id, map_version, dir}``(换先验:这张图在狗上
+的目录;空 = 狗上没有这张图的目录(按启动参数载的图),定位器按自己的配置找;没回代理会再发,同一张图
+再来一遍当没事)、``relocalize {req, map_id, map_version, x, y, yaw, sigma_xy}``(带初值重定位;人设
+位置,或者丢定位后代理按最后可信的位置请它找回来)、``hb {seq}``、``error {reason}``(握手不对,
+说完就断)。
+"""
+
+from __future__ import annotations
+
+import json
+import math
+from dataclasses import asdict, dataclass
+from typing import Any, ClassVar
+
+from nexwar_contract.errors import ContractError
+from nexwar_contract.maps import check_name
+
+PROTO = 1
+MAX_LINE = 16 * 1024
+SOURCES = ("scan_match", "rtk", "fused")
+STATES = ("initializing", "tracking", "lost")
+#: 定位器载好图、没有初值(新图、没人给过位置)时 ``initializing`` 的原因:代理见到它就不等,
+#: 马上自动找位置(W68,用户 11-02:开机自己找位置)。
+WAIT_INIT_REASON = "等人给初始位置"
+
+
+def _pos_int(v: Any, what: str, *, zero: bool = False) -> None:
+    if isinstance(v, bool) or not isinstance(v, int) or v < (0 if zero else 1):
+        raise ContractError(f"定位桥:{what} 要是{'不小于 0' if zero else '正'}的整数:{v!r}")
+
+
+def _num(v: Any, what: str, *, nonneg: bool = False) -> None:
+    try:
+        ok = not isinstance(v, bool) and isinstance(v, (int, float)) and math.isfinite(v)
+    except OverflowError:                        # 几百位的整数
+        ok = False
+    if not ok:
+        raise ContractError(f"定位桥:{what} 要是有限数:{str(v)[:40]!r}")
+    if nonneg and v < 0:
+        raise ContractError(f"定位桥:{what} 不许为负:{v!r}")
+
+
+def _text(v: Any, what: str, limit: int, *, empty: bool = True) -> None:
+    if not isinstance(v, str) or len(v) > limit or (not empty and not v):
+        raise ContractError(f"定位桥:{what} 要是{'' if empty else '非空'}字符串、最多 {limit} 字")
+
+
+@dataclass(frozen=True)
+class Hello:
+    T: ClassVar[str] = "hello"
+    proto: int
+    name: str = ""
+    version: str = ""
+
+    def __post_init__(self) -> None:
+        _pos_int(self.proto, "proto")
+        _text(self.name, "name", 64)
+        _text(self.version, "version", 64)
+
+
+@dataclass(frozen=True)
+class Pose:
+    T: ClassVar[str] = "pose"
+    seq: int
+    stamp_ns: int
+    map_id: str
+    map_version: str
+    x: float
+    y: float
+    yaw: float
+    sigma_xy: float
+    sigma_yaw: float
+    source: str
+    jump: bool = False
+    reloc_id: int | None = None
+    #: 这一帧离定位器上一次真匹配过了多久(毫秒;真匹配的那一帧是 0)。定位器匹配不上、拿自己的里程
+    #: 往前推的时候要照实说 —— 代理把它算进新鲜(W09a 内审阻断 1)。
+    meas_age_ms: int = 0
+    #: MOLA 这一帧的原始 ICP 质量(0–1;工单 11:站点原来只看得到 σ 换算的 1−2σ)。老定位器不报。
+    icp_quality: float | None = None
+
+    def __post_init__(self) -> None:
+        _pos_int(self.seq, "seq")
+        _pos_int(self.stamp_ns, "stamp_ns", zero=True)
+        _pos_int(self.meas_age_ms, "meas_age_ms", zero=True)
+        check_name(self.map_id, "定位桥:map_id")
+        check_name(self.map_version, "定位桥:map_version")
+        for k in ("x", "y", "yaw"):
+            _num(getattr(self, k), k)
+        for k in ("sigma_xy", "sigma_yaw"):
+            _num(getattr(self, k), k, nonneg=True)
+        if self.source not in SOURCES:
+            raise ContractError(f"定位桥:source 要是 {'/'.join(SOURCES)}:{self.source!r}")
+        if not isinstance(self.jump, bool):
+            raise ContractError("定位桥:jump 要是 true/false")
+        if self.reloc_id is not None:
+            _pos_int(self.reloc_id, "reloc_id")
+        if self.icp_quality is not None:
+            _num(self.icp_quality, "icp_quality", nonneg=True)
+            if self.icp_quality > 1.0:
+                raise ContractError(f"定位桥:icp_quality 要在 0–1:{self.icp_quality!r}")
+
+
+@dataclass(frozen=True)
+class State:
+    T: ClassVar[str] = "status"
+    seq: int
+    state: str
+    reason: str = ""
+
+    def __post_init__(self) -> None:
+        _pos_int(self.seq, "seq")
+        if self.state not in STATES:
+            raise ContractError(f"定位桥:state 要是 {'/'.join(STATES)}:{self.state!r}")
+        _text(self.reason, "reason", 200)
+
+
+@dataclass(frozen=True)
+class Heartbeat:
+    T: ClassVar[str] = "hb"
+    seq: int
+
+    def __post_init__(self) -> None:
+        _pos_int(self.seq, "seq")
+
+
+@dataclass(frozen=True)
+class Reply:
+    T: ClassVar[str] = "reply"
+    req: int
+    ok: bool
+    reason: str = ""
+
+    def __post_init__(self) -> None:
+        _pos_int(self.req, "req")
+        if not isinstance(self.ok, bool):
+            raise ContractError("定位桥:ok 要是 true/false")
+        _text(self.reason, "reason", 200)
+
+
+@dataclass(frozen=True)
+class SetPrior:
+    T: ClassVar[str] = "set_prior"
+    req: int
+    map_id: str
+    map_version: str
+    dir: str
+
+    def __post_init__(self) -> None:
+        _pos_int(self.req, "req")
+        check_name(self.map_id, "定位桥:map_id")
+        check_name(self.map_version, "定位桥:map_version")
+        _text(self.dir, "dir", 4096)
+
+
+@dataclass(frozen=True)
+class Relocalize:
+    T: ClassVar[str] = "relocalize"
+    req: int
+    map_id: str
+    map_version: str
+    x: float
+    y: float
+    yaw: float
+    sigma_xy: float
+    #: 是不是人给的位置(W41:原来定位器一律当人给的,代理自己按最后位置请的也写「人给的」)。
+    human: bool = True
+
+    def __post_init__(self) -> None:
+        _pos_int(self.req, "req")
+        check_name(self.map_id, "定位桥:map_id")
+        check_name(self.map_version, "定位桥:map_version")
+        for k in ("x", "y", "yaw"):
+            _num(getattr(self, k), k)
+        _num(self.sigma_xy, "sigma_xy", nonneg=True)
+        if not isinstance(self.human, bool):
+            raise ContractError("定位桥:human 要是布尔")
+
+
+@dataclass(frozen=True)
+class Error:
+    T: ClassVar[str] = "error"
+    reason: str
+
+    def __post_init__(self) -> None:
+        _text(self.reason, "reason", 200)
+
+
+Message = Hello | Pose | State | Heartbeat | Reply | SetPrior | Relocalize | Error
+_TYPES: dict[str, type] = {c.T: c for c in (Hello, Pose, State, Heartbeat, Reply, SetPrior,
+                                             Relocalize, Error)}
+
+
+#: 后来才加的字段 → 默认值:取默认值时不写进报文,老版本收到的跟以前一字不差(W40/W41 外审 R9:新代理的
+#: 人工重定位总带 ``human: true``,老定位器整条拒收)。不是默认值照写 —— 老的拒收,不悄悄理解错。
+_LATE_DEFAULTS: dict[str, Any] = {"human": True, "icp_quality": None}
+
+
+def encode(msg: Message) -> bytes:
+    d = {k: v for k, v in asdict(msg).items()
+         if not (k in _LATE_DEFAULTS and v == _LATE_DEFAULTS[k]
+                 and type(v) is type(_LATE_DEFAULTS[k]))}
+    return json.dumps({"t": msg.T, **d}, ensure_ascii=False,
+                      separators=(",", ":")).encode("utf-8") + b"\n"
+
+
+def parse(line: bytes) -> Message:
+    """一行 → 报文。不成形的抛 ``ContractError``(说清楚哪里不对)。"""
+    if len(line) > MAX_LINE:
+        raise ContractError(f"定位桥:一行太长({len(line)} 字节,最多 {MAX_LINE})")
+    try:
+        d = json.loads(line.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError) as exc:
+        raise ContractError(f"定位桥:不是 UTF-8 的 JSON:{exc}") from None
+    if not isinstance(d, dict):
+        raise ContractError("定位桥:一行要是一个 JSON 对象")
+    t = d.pop("t", None)
+    cls = _TYPES.get(t) if isinstance(t, str) else None
+    if cls is None:
+        raise ContractError(f"定位桥:不认识的报文类型:{t!r}")
+    try:
+        return cls(**d)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ContractError(f"定位桥:{cls.T} 的字段错误:{exc}") from None

@@ -7,7 +7,7 @@ import pytest
 from test_relocalize import _遥测
 from test_runtime_localizer import 台子
 
-from d1max_contract.geo import GeoRef, enu_to_llh
+from nexwar_contract.geo import GeoRef, enu_to_llh
 
 GEO = GeoRef(5.41, 100.32, 10.0, yaw_deg=0.0, tx=0.0, ty=0.0)
 
@@ -131,7 +131,7 @@ async def test_换图_读新图的geo_json(tmp_path):
     from test_runtime_localizer import 真狗样
     from test_runtime_maps import _cmd, _跑, 站点
 
-    from d1max_agent.maps import MapKeeper
+    from nexwar_agent.maps import MapKeeper
     site = 站点()
     keeper = MapKeeper(tmp_path / "keep", fetch=site.fetch)
     t = 台子()

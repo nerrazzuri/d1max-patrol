@@ -18,7 +18,7 @@ from pathlib import Path
 
 import numpy as np
 
-from d1max_agent.planning import astar, costmap
+from nexwar_agent.planning import astar, costmap
 
 
 def main(argv: list[str] | None = None) -> int:

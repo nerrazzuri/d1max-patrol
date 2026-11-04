@@ -214,8 +214,8 @@ class _SiteAddPageState extends State<SiteAddPage> {
                     maxLines: 3,
                     mono: true,
                     label: tr(
-                      'Certificate fingerprint (d1max-site fingerprint)',
-                      '证书指纹（d1max-site fingerprint）',
+                      'Certificate fingerprint (nexwar_site fingerprint)',
+                      '证书指纹（nexwar_site fingerprint）',
                     ),
                   ),
                   const SizedBox(height: Nw.s24),

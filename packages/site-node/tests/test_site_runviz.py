@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import pytest
 
-from d1max_contract.messages import (
+from nexwar_contract.messages import (
     Event,
     MapPose,
     Ready,
@@ -14,9 +14,9 @@ from d1max_contract.messages import (
     TaskSummary,
     Telemetry,
 )
-from d1max_site.alert_store import AlertDesk
-from d1max_site.db import SiteDB
-from d1max_site.runviz import (
+from nexwar_site.alert_store import AlertDesk
+from nexwar_site.db import SiteDB
+from nexwar_site.runviz import (
     BLOCK_ALERT_S,
     PATH_MAX,
     TRAIL_AGE_MS,
@@ -282,7 +282,7 @@ def test_告警种类登记了_有英文中文标题_是P2():
     import json
     from pathlib import Path
 
-    from d1max_site.alerts import LEVEL_OF, Level
+    from nexwar_site.alerts import LEVEL_OF, Level
     assert LEVEL_OF["nav_blocked"] is Level.P2
     cat = json.loads((Path(__file__).resolve().parents[3] / "design" / "i18n" / "alerts.json")
                      .read_text(encoding="utf-8"))
@@ -363,7 +363,7 @@ def test_W41_轨迹_遥控器拿走控制权那段不记_拿回来另起一段(�
 
 def test_W72_被挡几十秒没到一分钟_自己走了_只记一笔已解决的_太短的不记(台):
     """用户 11-03:导航卡住恢复了只记录,不要人处理。"""
-    from d1max_site.runviz import BLOCK_RECORD_S
+    from nexwar_site.runviz import BLOCK_RECORD_S
     c, rv, desk = 台
     rv.on_status("A", _status(True))
     rv.on_event("A", _ev("nav_blocked", reason="30 秒没向目标靠近", x=1.0, y=1.0, waited_s=30.0))

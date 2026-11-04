@@ -13,9 +13,9 @@ import pytest
 from test_site_api import PW, 站
 from test_site_releases import NAME, 做包
 
-from d1max_contract import relsign
-from d1max_site.db import SiteDB
-from d1max_site.release_queue import MIN_BATTERY, ReleaseQueue
+from nexwar_contract import relsign
+from nexwar_site.db import SiteDB
+from nexwar_site.release_queue import MIN_BATTERY, ReleaseQueue
 
 
 def _签(d, key):
@@ -55,7 +55,7 @@ def _传(s, tok, data: bytes, pw: str | None = PW):
     r.add_header("Content-Type", "application/octet-stream")
     r.add_header("Authorization", f"Bearer {tok}")
     if pw is not None:
-        r.add_header("X-D1Max-Confirm", pw)
+        r.add_header("X-Nexwar-Confirm", pw)
     try:
         with urllib.request.urlopen(r, timeout=30) as resp:
             return resp.status, json.loads(resp.read())
@@ -267,7 +267,7 @@ def test_实测_不支持换版本的机器人_排队当场拒绝_说清楚(站�
 def test_实测_排着的发不出去_同一个原因只记一次_不刷堆栈(tmp_path, caplog):
     import logging
 
-    from d1max_site.dispatcher import Unsupported
+    from nexwar_site.dispatcher import Unsupported
 
     class 不支持(假派遣):
         async def map_command(self, rid, kind, payload, *, issued_by):
@@ -276,10 +276,10 @@ def test_实测_排着的发不出去_同一个原因只记一次_不刷堆栈(t
     _狗(d)
     q = ReleaseQueue(SiteDB(tmp_path / "s.db"), d, now_ms=lambda: 1, payload=lambda n: {"name": n})
     q.add("A", NAME, by="alice")
-    with caplog.at_level(logging.WARNING, logger="d1max_site.release_queue"):
+    with caplog.at_level(logging.WARNING, logger="nexwar_site.release_queue"):
         for _ in range(5):
             asyncio.run(q.tick())
-    recs = [r for r in caplog.records if r.name == "d1max_site.release_queue"]
+    recs = [r for r in caplog.records if r.name == "nexwar_site.release_queue"]
     assert len(recs) == 1 and recs[0].exc_info is None and "不支持" in recs[0].getMessage()
     assert len(q.list()) == 1                                  # 留着:代理升级了还能接着换
 
@@ -308,7 +308,7 @@ def test_外审复查R3_迁移做到一半进程没了_重开排着的还在(tmp
     _库64(path)
     child = r"""
 import os, sqlite3, sys
-from d1max_site.db import SiteDB
+from nexwar_site.db import SiteDB
 original = sqlite3.connect
 def connect(*a, **kw):
     c = original(*a, **kw)

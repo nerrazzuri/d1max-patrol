@@ -6,12 +6,12 @@ import base64
 
 import pytest
 
-from d1max_contract import binding as b
-from d1max_contract import ed25519
-from d1max_patrol.bind import core as c
-from d1max_patrol.bind.paths import BindPaths, read_json, write_json
-from d1max_patrol.bind.router import FakeRouter
-from d1max_patrol.bind.sitelink import LinkError
+from nexwar_contract import binding as b
+from nexwar_contract import ed25519
+from nexwar_patrol.bind import core as c
+from nexwar_patrol.bind.paths import BindPaths, read_json, write_json
+from nexwar_patrol.bind.router import FakeRouter
+from nexwar_patrol.bind.sitelink import LinkError
 
 CODE = "7KQ27M9XD4HTPR8W"
 SITE = {"url": "https://192.168.1.10:8443", "fp": "ab" * 32, "name": "庄园"}
@@ -316,7 +316,7 @@ def test_外审I13_改动最后怎样了_进遥测(机):
 
 
 def test_扫附近WiFi_同名留最强_强的在前_空名不列_要绑定码(机):
-    from d1max_patrol.bind.router import WifiSeen
+    from nexwar_patrol.bind.router import WifiSeen
     机.router.nearby = (WifiSeen("B", -80, True), WifiSeen("A", -50, False),
                         WifiSeen("B", -60, True), WifiSeen("", -40, True))
     with pytest.raises(c.BindRefused):
@@ -364,7 +364,7 @@ def test_W57_签解绑令_记台账(tmp_path, capsys):
     import argparse
     import csv
 
-    from d1max_patrol.bind.cli import add_args, run
+    from nexwar_patrol.bind.cli import add_args, run
     ap = argparse.ArgumentParser()
     add_args(ap.add_subparsers(dest="command", required=True))
     k = tmp_path / "unbind.key"

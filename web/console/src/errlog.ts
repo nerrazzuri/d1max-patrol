@@ -6,7 +6,7 @@ interface Item { at_ms: number; kind: string; page: string; message: string; det
 
 const MAX = 500;
 const queue: Item[] = [];
-const VERSION = (document.querySelector('meta[name="d1max-version"]') as HTMLMetaElement | null)?.content ?? "";
+const VERSION = (document.querySelector('meta[name="nexwar_version"]') as HTMLMetaElement | null)?.content ?? "";
 
 export function note(kind: string, message: string, detail = ""): void {
   queue.push({ at_ms: Date.now(), kind, page: location.hash.slice(0, 120), message: message.slice(0, 2000),

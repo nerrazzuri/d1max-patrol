@@ -34,7 +34,7 @@ from pathlib import Path
 
 import pytest
 
-from d1max_agent.engine.release import _NAME_RE
+from nexwar_agent.engine.release import _NAME_RE
 from tests.test_deploy_coexist import 有bash
 from tests.test_deploy_files import DEPLOY, ROOT, 交付文件, 六位数
 
@@ -56,11 +56,11 @@ from tests.test_deploy_files import DEPLOY, ROOT, 交付文件, 六位数
     DEPLOY / "install.sh": (
         ("1/7", "2/7", "3/7", "4/7", "5/7", "6/7", "7/7"), 6000),
     # 现状约 1900 字。systemd 单元的三个段,少一个这份单元就不是单元了。
-    DEPLOY / "d1max-agent.service": (
+    DEPLOY / "nexwar_agent.service": (
         ("[Unit]", "[Service]", "[Install]"), 1200),
     # 现状约 1600 字。代理的启动参数都在这儿(W00c5d 第三部分内部评审 B1)。
-    DEPLOY / "d1max-agent-start": (
-        ("exec", "--transport", "--tls-key", "--hal", "--outbox", "D1MAX_AGENT_ARGS"), 1000),
+    DEPLOY / "nexwar_agent_start": (
+        ("exec", "--transport", "--tls-key", "--hal", "--outbox", "NEXWAR_AGENT_ARGS"), 1000),
     # 实测 8700 上下 —— 采集要覆盖 snapshot、diff 两条路和端口那一段,
     # 少于下界说明有人把兜底或者某一类采集删了
     DEPLOY / "footprint.sh": (
@@ -236,10 +236,10 @@ def test_泄密护栏认的就是这么多位():
 #
 # **这一节存在的全部理由,是下面这件真事。**
 #
-# ``deploy/install.sh`` 的变量名和函数名原来是中文(``根=/opt/d1max``、
+# ``deploy/install.sh`` 的变量名和函数名原来是中文(``根=/opt/nexwar``、
 # ``说() {...}``)。bash 的变量名**只认 ASCII**(``legal_identifier()`` 是逐
-# 字节判的),``根=/opt/d1max`` 因此不是赋值,而是「执行一条叫
-# ``根=/opt/d1max`` 的命令」;配上第 4 行的 ``set -euo pipefail``,脚本在
+# 字节判的),``根=/opt/nexwar`` 因此不是赋值,而是「执行一条叫
+# ``根=/opt/nexwar`` 的命令」;配上第 4 行的 ``set -euo pipefail``,脚本在
 # **第一行有效语句上**就退 127 —— 也就是说,这份交付件一行都跑不起来,而它
 # 明天要在 Orin NX 上跑。跟 locale 无关,``bash -n`` 也查不出来:语法是合法的,
 # 只是语义完全不是作者想的那样。
@@ -364,7 +364,7 @@ def 可执行片段(行: str, 状态: int) -> tuple[str, int, str | None]:
 def 代码行(文本: str) -> list[tuple[int, str]]:
     """整份脚本逐行走一遍,回 ``(行号, 可执行片段)``。**heredoc 的正文整段跳过。**
 
-    heredoc 正文是喂给别的程序的数据(install.sh 那两段就是 ``/etc/d1max/env``
+    heredoc 正文是喂给别的程序的数据(install.sh 那两段就是 ``/etc/nexwar/env``
     的模板和一屏给人看的提示),里头的中文、``=``、``$`` 一律不是标识符。
     """
     行们 = 文本.split("\n")
@@ -456,19 +456,19 @@ def test_扫描器认得出中文标识符也放得过中文散文():
     """
     样本 = "\n".join([
         "#!/usr/bin/env bash",
-        "# 注释里写 根=/opt/d1max 和 $根 都不算数",
-        "根=/opt/d1max",
-        "用户=${D1MAX_USER:-robot}",
+        "# 注释里写 根=/opt/nexwar 和 $根 都不算数",
+        "根=/opt/nexwar",
+        "用户=${NEXWAR_USER:-robot}",
         "说() { printf '%s' \"$*\"; }",
         'echo "落在 $根/bin 底下"',
         "echo '单引号里的 $根 不展开'",
         "for 一版 in a b; do :; done",
         "read -r 一行",
         'echo "版本=1 只是个参数, 不是赋值"',
-        "ROOT=/opt/d1max",
+        "ROOT=/opt/nexwar",
         'echo "$ROOT/根目录 是正当写法"',
         "cat <<'模板'",
-        "里面写 根=/opt/d1max 和 $根 都不算数",
+        "里面写 根=/opt/nexwar 和 $根 都不算数",
         "模板",
         "echo 尾巴",
     ])
@@ -487,7 +487,7 @@ def test_扫描器认得出中文标识符也放得过中文散文():
 def test_每份shell脚本的语法都过得去(脚本: Path):
     """``bash -n``。
 
-    它查不出中文标识符那类问题(``根=/opt/d1max`` 语法完全合法),所以它**不是**
+    它查不出中文标识符那类问题(``根=/opt/nexwar`` 语法完全合法),所以它**不是**
     上面那条的替代品;但真的语法错还是要当场拦住,而且这是整份名单上唯一一次
     「让 bash 自己读一遍这份脚本」的机会。
     """
@@ -605,7 +605,7 @@ def test_装机脚本把根下的解释器装成一个wrapper():
     # 不能在生成的时候就被这一层吃掉。这里按**脚本里的写法**对, 不是按落盘结果。
     assert r'exec "$ROOT/bin-venv/bin/python" "\$@"' in 脚本, (
         "根下的 wrapper 不见了 —— 单元里两条 ExecStartPre 都是打 "
-        "/opt/d1max/bin/python 的")
+        "/opt/nexwar/bin/python 的")
     assert 'chmod 0755 "$ROOT/bin/python"' in 脚本, (
         "wrapper 没有 chmod 0755, systemd 起不动它")
     # 老机器上装的是软链, 重跑时得先拆掉 —— ``-x`` 对「指向可执行文件的软链」
@@ -619,7 +619,7 @@ def test_装机脚本的用法例子过得了包名正则():
 
     ``engine/release.py`` 的 ``_NAME_RE`` 只认 ``<日期>-<6 到 12 位十六进制>``,
     ``verify_package()`` 还要求目录名跟包里 release.json 的 name 一字不差。
-    原来的例子写的是 ``d1max-2026-09-20-77b2de``, 带前缀 —— 照着敲的人会在
+    原来的例子写的是 ``nexwar_2026_09_20_77b2de``, 带前缀 —— 照着敲的人会在
     3/7 步被 release install 拒掉, 而那时候前两步已经白跑了。
     **要改的是例子, 不是去放宽正则**: 目录名跟 manifest 对齐是故意的,
     它同时也是防路径穿越的那道闸。
@@ -646,7 +646,7 @@ def test_装机脚本在动盘之前就把两种装不下去的情况拦掉():
 
     原来这两样都是往后拖的: 打错的路径一路带到 2/7 末尾的 ``cp -a`` 才炸,
     没有 robot 账号则是 1/7 的 ``chown`` 撞上 ``chown: invalid user`` —— 而
-    ``chown`` 排在 ``mkdir -p`` 之后。两种都在 ``/opt/d1max`` 已经建出来之后
+    ``chown`` 排在 ``mkdir -p`` 之后。两种都在 ``/opt/nexwar`` 已经建出来之后
     中止, 留半个脚印给人收, 而 ``footprint.sh`` 的 diff 里会多出东西。
     失败要早、要便宜、要说人话。
     """
@@ -684,30 +684,30 @@ def test_当前版本名有显式的空默认值():
 
 
 def test_装机脚本绝不source那份给systemd用的env():
-    """``/etc/d1max/env`` 是给 systemd ``EnvironmentFile=`` 用的, **不是 shell 脚本**。
+    """``/etc/nexwar/env`` 是给 systemd ``EnvironmentFile=`` 用的, **不是 shell 脚本**。
 
     systemd 按字面量解析: 等号右边整段就是值, 不分词、不做命令替换、分号不是
-    分隔符。而 ``. /etc/d1max/env`` 是让 bash 求值同一份文件 —— 这份文件由现场
+    分隔符。而 ``. /etc/nexwar/env`` 是让 bash 求值同一份文件 —— 这份文件由现场
     拿 nano 手填, 三种人手敲得出来的写法当场出事:
 
-    * ``D1MAX_SN=C4 0221`` —— systemd 收下; bash 去执行 ``0221``, ``set -e``
+    * ``NEXWAR_SN=C4 0221`` —— systemd 收下; bash 去执行 ``0221``, ``set -e``
       当场 127, 装机死在 7/7, 前六步白跑;
-    * ``D1MAX_CONSOLE_TOKEN=a;reboot`` —— systemd 收下; bash **以 root 把
+    * ``NEXWAR_CONSOLE_TOKEN=a;reboot`` —— systemd 收下; bash **以 root 把
       reboot 跑了**;
-    * ``D1MAX_PIN=$(...)`` —— systemd 当字面量; bash 做命令替换。
+    * ``NEXWAR_PIN=$(...)`` —— systemd 当字面量; bash 做命令替换。
 
     所以这里钉死: 装机脚本里不许再出现 source 那份文件的任何形状。
     """
     脚本 = (DEPLOY / "install.sh").read_text(encoding="utf-8")
     代码 = "\n".join(片段 for _, 片段 in 代码行(脚本))
-    for 形状 in (". /etc/d1max/env", "source /etc/d1max/env"):
+    for 形状 in (". /etc/nexwar/env", "source /etc/nexwar/env"):
         assert 形状 not in 代码, (
-            f"install.sh 又去 source /etc/d1max/env 了({形状!r})。那份文件是 "
+            f"install.sh 又去 source /etc/nexwar/env 了({形状!r})。那份文件是 "
             f"systemd 按字面量解析的, shell 求值它等于让现场手填的一行字"
             f"以 root 身份跑起来")
-    # 换上来的读法必须还在, 不然 D1MAX_SN 根本传不到 release activate。
+    # 换上来的读法必须还在, 不然 NEXWAR_SN 根本传不到 release activate。
     assert "read_env_value()" in 脚本, "读 env 的那个函数没了"
-    assert 'sed -n "s/^[[:space:]]*$1=//p" /etc/d1max/env' in 脚本
+    assert 'sed -n "s/^[[:space:]]*$1=//p" /etc/nexwar/env' in 脚本
 
 
 def test_读env的规矩跟systemd对得上():
@@ -740,32 +740,32 @@ def test_env里的SN过一道字符白名单():
     那一层的事」本来就记过账(挂账 142), 这里正是那一层。
 
     白名单是 ``^[A-Za-z0-9._-]+$``: 本项目见过的真 SN(``C40221``、
-    ``D1M-0007``、``D1MAX-TEST-01``)全都过得去, 它挡的只是空格和标点。
+    ``D1M-0007``、``NEXWAR-TEST-01``)全都过得去, 它挡的只是空格和标点。
     """
     脚本 = (DEPLOY / "install.sh").read_text(encoding="utf-8")
     assert "=~ ^[A-Za-z0-9._-]+$" in 脚本, "SN 的字符白名单没了"
     白名单 = re.compile(r"^[A-Za-z0-9._-]+$")
-    for 真SN in ("C40221", "D1M-TEST", "D1M-0007", "D1MAX-01", "D1MAX-TEST-01", "SN-A1"):
+    for 真SN in ("C40221", "D1M-TEST", "D1M-0007", "NEXWAR-01", "NEXWAR-TEST-01", "SN-A1"):
         assert 白名单.match(真SN), f"白名单把一个真序列号挡了:{真SN}"
     for 脏的 in ("C4 0221", "a;reboot", '"C40221"', "序列号"):
         assert not 白名单.match(脏的), f"白名单放过了一个脏值:{脏的}"
     # 挡在 activate 之前才有意义 —— 挡在后面等于没挡。
     assert (脚本.index("=~ ^[A-Za-z0-9._-]+$")
-            < 脚本.index("d1max_patrol.cli release activate"))
+            < 脚本.index("nexwar_patrol.cli release activate"))
 
 
 def test_两道守卫测的是解析出来的值而不是行在不在():
-    """原来两道守卫是 ``grep -qE '^D1MAX_PIN=.+'`` / ``'^D1MAX_SN=.+'``。
+    """原来两道守卫是 ``grep -qE '^NEXWAR_PIN=.+'`` / ``'^NEXWAR_SN=.+'``。
 
-    它问的是「文件里有没有一行长这样」, 而 ``D1MAX_PIN=`` 后面跟几个空格
+    它问的是「文件里有没有一行长这样」, 而 ``NEXWAR_PIN=`` 后面跟几个空格
     它判「有 PIN」—— systemd 剥完空白读出来却是空串, 于是脚本照常 stop/start,
     机器照样进那个每 5 秒刷一条日志的启动循环。**守卫在, 墙也在。**
     """
     脚本 = (DEPLOY / "install.sh").read_text(encoding="utf-8")
-    assert '[[ -z "${D1MAX_SN//[[:space:]]/}" ]]' in 脚本
+    assert '[[ -z "${NEXWAR_SN//[[:space:]]/}" ]]' in 脚本
     assert '[[ -z "$(read_env_value "$key")" ]]' in 脚本, "站点值那一道也要按解析出来的值判"
     代码 = "\n".join(片段 for _, 片段 in 代码行(脚本))
-    assert "grep -qE '^D1MAX_" not in 代码, "又退回去数行了, 要测的是解析出来的值"
+    assert "grep -qE '^NEXWAR_" not in 代码, "又退回去数行了, 要测的是解析出来的值"
 
 
 def test_env文件建出来就是0600():
@@ -780,9 +780,9 @@ def test_env文件建出来就是0600():
     0644 的那一份, 重跑一次才收得紧。
     """
     脚本 = (DEPLOY / "install.sh").read_text(encoding="utf-8")
-    assert "install -m 0600 /dev/null /etc/d1max/env" in 脚本, "建出来的时候就得是 0600"
+    assert "install -m 0600 /dev/null /etc/nexwar/env" in 脚本, "建出来的时候就得是 0600"
     行们 = 脚本.split("\n")
-    收紧 = [i for i, 行 in enumerate(行们) if 行 == "chmod 0600 /etc/d1max/env"]
+    收紧 = [i for i, 行 in enumerate(行们) if 行 == "chmod 0600 /etc/nexwar/env"]
     assert 收紧, "没有顶格的 chmod 0600 —— 老机器重跑收不紧(缩进了就是在 if 里面)"
     重载 = next(i for i, 行 in enumerate(行们) if 行 == "systemctl daemon-reload")
     assert 收紧[0] < 重载, "收紧权限排在 daemon-reload 后面了"
@@ -793,7 +793,7 @@ def test_根下装依赖那一步有哨兵挡着重跑():
 
     2/7 那条 ``pip install "$TMP_PKG"`` 原来在任何 ``if`` 外面: ``pyproject.toml``
     用 ``setuptools.build_meta``, PEP 517 的构建隔离每趟都要现拉 setuptools,
-    于是**重跑必联网**。离线现场跑第二趟忘了带 ``D1MAX_PIP_ARGS=`` 就挂死在
+    于是**重跑必联网**。离线现场跑第二趟忘了带 ``NEXWAR_PIP_ARGS=`` 就挂死在
     2/7(pip 默认 5 次重试、每次 15 秒), ``set -e`` 中止, 连 ``stop``/``start``
     都不跑 —— SN 永远不生效, 而现场看到的是「装到一半不动了」。
 
@@ -814,7 +814,7 @@ def test_根下装依赖那一步有哨兵挡着重跑():
 def test_包目录名在动盘之前就核过():
     """名字不对的包, 3/7 的 ``release install`` 必拒。
 
-    而那时候 ``/opt/d1max`` 已经建出来、根下那个跟版本无关的解释器也装完了
+    而那时候 ``/opt/nexwar`` 已经建出来、根下那个跟版本无关的解释器也装完了
     (离线现场还为它插过一次 U 盘), 现场要回头收拾半个脚印。跟另外两条前置
     检查同一条理由: 失败要早、要便宜、要说人话。
 
@@ -826,7 +826,7 @@ def test_包目录名在动盘之前就核过():
     assert 命中, "找不到包目录名的前置检查"
     脚本里的 = re.compile(命中.group(1))
     样本 = ("2026-09-20-77b2de", "2026-09-13-abcdef123456",
-            "d1max-2026-09-20-77b2de", "2026-09-20-77B2DE", "2026-09-20-77b2",
+            "nexwar_2026_09_20_77b2de", "2026-09-20-77B2DE", "2026-09-20-77b2",
             "2026-9-20-77b2de", "2026-09-20-77b2de1234567", "current", "")
     for 名 in 样本:
         assert bool(脚本里的.match(名)) == bool(_NAME_RE.match(名)), (
@@ -840,7 +840,7 @@ def test_卸载脚本真删之前有一道root闸():
 
     ``reap_agent`` 收掉 patrol_agent(agent 是登录用户用 field-agent.sh 起的,
     同一个用户 ``kill -TERM`` 就够), SDK 会话一丢, 不重启 RK3588 就再也抢不
-    回来。真正需要 root 的是后面那几条 ``rm /opt/d1max``。没有这道闸, 一次
+    回来。真正需要 root 的是后面那几条 ``rm /opt/nexwar``。没有这道闸, 一次
     忘了 sudo 的运行会: 先把控制权永久交还给上装 → 再在第一条 rm 上 EACCES
     → ``set -e`` 打死 → 盘上一个字节没卸、5/5 回执也打不出来。
 
@@ -882,9 +882,9 @@ def test_单元文件的行尾被钉成LF():
     属性 = (ROOT / ".gitattributes").read_text(encoding="utf-8")
     assert re.search(r"(?m)^\*\.service\s+text\s+eol=lf\s*$", 属性), (
         ".gitattributes 里没把 *.service 钉成 LF")
-    assert re.search(r"(?m)^deploy/d1max-agent-start\s+text\s+eol=lf\s*$", 属性), (
+    assert re.search(r"(?m)^deploy/nexwar_agent_start\s+text\s+eol=lf\s*$", 属性), (
         ".gitattributes 里没把代理的启动脚本钉成 LF(它没有 .sh 后缀,上面那几条盖不到它)")
-    单元们 = list(DEPLOY.glob("*.service")) + [DEPLOY / "d1max-agent-start"]
+    单元们 = list(DEPLOY.glob("*.service")) + [DEPLOY / "nexwar_agent_start"]
     assert len(单元们) >= 2, "deploy/ 底下一个 .service 都没有?"
     for 路径 in 单元们:
         assert b"\r" not in 路径.read_bytes(), f"{路径.name} 里有回车符"

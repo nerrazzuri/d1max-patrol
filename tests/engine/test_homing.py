@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from d1max_agent.engine.homing import (
+from nexwar_agent.engine.homing import (
     DEFAULT_RETURN_PARAMS,
     HomeError,
     HomePoint,
@@ -21,7 +21,7 @@ from d1max_agent.engine.homing import (
     route_length_m,
     save_home,
 )
-from d1max_patrol.protocol.nav_types import Pose
+from nexwar_patrol.protocol.nav_types import Pose
 
 
 def _home(map_id: str = "一号厂房") -> HomePoint:

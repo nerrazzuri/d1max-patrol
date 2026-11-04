@@ -12,7 +12,7 @@ tp = importlib.util.module_from_spec(spec)
 sys.modules["third_party"] = tp
 spec.loader.exec_module(tp)
 
-BUILT = ROOT / "packages/site-node/src/d1max_site/web/assets/third-party-notices.txt"
+BUILT = ROOT / "packages/site-node/src/nexwar_site/web/assets/third-party-notices.txt"
 
 
 def test_运行时依赖没有GPL和AGPL():

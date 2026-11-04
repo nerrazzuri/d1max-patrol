@@ -13,8 +13,8 @@ from urllib.parse import quote
 import pytest
 from test_site_api import PW, _等, 站
 
-from d1max_contract.messages import TaskState, Telemetry
-from d1max_contract.storage import StorageFacts
+from nexwar_contract.messages import TaskState, Telemetry
+from nexwar_contract.storage import StorageFacts
 
 S1 = "20260925T010000Z"
 
@@ -153,7 +153,7 @@ def test_值守汇总_狗的盘况与站点的备份(站点):
 
 
 def test_W30_看照片看记录记审计_10分钟内同一样只记一次_下载导出也记(站点, monkeypatch):
-    from d1max_site.privacy import PrivacyDesk
+    from nexwar_site.privacy import PrivacyDesk
     s = 站点
     s.api.privacy = PrivacyDesk(s.db, s.store, now_ms=s.api._now)
     rid, _photo = _传一趟(s)
@@ -168,7 +168,7 @@ def test_W30_看照片看记录记审计_10分钟内同一样只记一次_下载
                 if a["action"] in ("VIEW", "DOWNLOAD")]
     assert views().count(("olga", "VIEW", f"run/{rid}")) == 1
     assert len([v for v in views() if "/photo/" in v[2]]) == 1, "10 分钟内同一张只记一次"
-    import d1max_site.api as api_mod
+    import nexwar_site.api as api_mod
     monkeypatch.setattr(api_mod, "VIEW_AUDIT_EVERY_MS", 0)
     _get_raw(s, f"/api/runs/{rid}/photos/{quote(name)}", gina)
     assert ("gina", "VIEW", f"run/{rid}/photo/{name}") in views()

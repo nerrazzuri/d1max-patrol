@@ -93,7 +93,7 @@ def test_狗报的上装能力_站点原样给手机(站点):
 def test_W21复查_狗报上装关不上_站点出P1_好了自己解决(tmp_path):
     """端到端:仿真狗报 ``payload_siren`` 故障 → 真代理发 robot_fault → 真站点告警源出告警;
     消了就解决。"""
-    from d1max_contract.hal import Fault
+    from nexwar_contract.hal import Fault
     s = 站(tmp_path, payload=True, alerts=True)
     try:
         tok = s.login()

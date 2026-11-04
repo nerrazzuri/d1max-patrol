@@ -1,8 +1,8 @@
 // 拦截点与防区（W16）：列出；管理员在狗现在的位置设拦截点、把防区绑到拦截点、取消防区、删拦截点（都先确认）；
 // 别的角色只看。事件页的去向说人话。横屏 800×360。
-import 'package:d1max_patrol/net/site_client.dart';
-import 'package:d1max_patrol/ui/site_intercepts.dart';
-import 'package:d1max_patrol/ui/site_page.dart';
+import 'package:nexwar_patrol/net/site_client.dart';
+import 'package:nexwar_patrol/ui/site_intercepts.dart';
+import 'package:nexwar_patrol/ui/site_page.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 

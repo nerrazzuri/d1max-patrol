@@ -26,8 +26,8 @@ interface Diag {
   env?: Record<string, string>; debug_until_ms?: number;
 }
 
-const UNITS = ["d1max-agent", "d1max-localizer", "d1max-obstacles", "d1max-persons", "d1max-lidar-merge",
-  "d1max-nav2", "d1max-sidecar", "d1max-zenohd", "d1max-bind"];
+const UNITS = ["nexwar_agent", "nexwar_localizer", "nexwar_obstacles", "nexwar_persons", "nexwar_lidar_merge",
+  "nexwar_nav2", "nexwar_sidecar", "nexwar_zenohd", "nexwar_bind"];
 /** 能远程重启的:全部(配网服务的代码在 root 独占目录里)。 */
 const RESTARTABLE = UNITS;
 
@@ -35,9 +35,9 @@ export function RobotOps({ robotId, tasks, say }: { robotId: string; tasks: stri
   const base = `/api/robots/${enc(robotId)}/ops`;
   const [diag, setDiag] = useState<Diag | null>(null);
   const [log, setLog] = useState<{ unit: string; text: string; truncated: boolean } | null>(null);
-  const [unit, setUnit] = useState("d1max-agent");
+  const [unit, setUnit] = useState("nexwar_agent");
   const [hours, setHours] = useState(6);
-  const [svc, setSvc] = useState("d1max-agent");
+  const [svc, setSvc] = useState("nexwar_agent");
   const [rebooting, setRebooting] = useState(false);
   const [clean, setClean] = useState<{ items: Record<string, { bytes: number | null; detail?: string[] }> } | null>(null);
   const [busy, setBusy] = useState(false);
@@ -90,7 +90,7 @@ export function RobotOps({ robotId, tasks, say }: { robotId: string; tasks: stri
 
       <div class="row-wrap ops-log">
         <select aria-label={t("opsLogUnit")} value={unit} onChange={(e) => setUnit(e.currentTarget.value)}>
-          {[...UNITS, "ssh", "wg-quick@d1max", "chrony"].map((u) => <option key={u} value={u}>{u}</option>)}
+          {[...UNITS, "ssh", "wg-quick@nexwar", "chrony"].map((u) => <option key={u} value={u}>{u}</option>)}
         </select>
         <select aria-label={t("opsLogHours")} value={String(hours)} onChange={(e) => setHours(Number(e.currentTarget.value))}>
           {[1, 6, 24, 72, 168].map((h) => <option key={h} value={String(h)}>{t("opsHours", { n: h })}</option>)}
@@ -308,7 +308,7 @@ export function SiteUpdate({ say }: { say: Say }) {
       {ask && file && (
         <ConfirmPassword title={t("upSiteConfirm")} onClose={() => setAsk(false)}
           onConfirm={async (pw) => {
-            await apiUpload("/api/system/update", file, { "X-D1Max-Confirm": pw });
+            await apiUpload("/api/system/update", file, { "X-Nexwar-Confirm": pw });
             setAsk(false);
             say(t("upSiteStarted"));
             reload();

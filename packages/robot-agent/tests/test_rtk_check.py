@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from d1max_agent.rtk_check import DIFF_M, HOLD_S, RELOC_COOLDOWN_S, RtkCheck
-from d1max_contract.geo import GeoRef, enu_to_llh
+from nexwar_agent.rtk_check import DIFF_M, HOLD_S, RELOC_COOLDOWN_S, RtkCheck
+from nexwar_contract.geo import GeoRef, enu_to_llh
 
 GEO = GeoRef(5.41, 100.32, 10.0, yaw_deg=30.0, tx=2.0, ty=-1.0, antenna_in_base=(0.3, 0.0))
 
@@ -175,7 +175,7 @@ def test_标准差是NaN_不参与():
 
 async def test_定位桥_RTK说不对时_最后可信的位置不跟着走_丢定位重置不按它请():
     """W09e 内审应修 2:原来 _good 一路跟着错的位置走,引擎丢定位后的 reset() 又把它拉回错处。"""
-    from d1max_agent.bridge_localizer import BridgeLocalizer
+    from nexwar_agent.bridge_localizer import BridgeLocalizer
     b = BridgeLocalizer(monotonic=lambda: 0.0)
     asked = []
 

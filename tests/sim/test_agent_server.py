@@ -17,7 +17,7 @@ from collections.abc import AsyncIterator
 
 import pytest
 
-from d1max_patrol.protocol.agent_frames import (
+from nexwar_patrol.protocol.agent_frames import (
     PROTO_VERSION,
     Ack,
     ControlLostFrame,
@@ -30,7 +30,7 @@ from d1max_patrol.protocol.agent_frames import (
     decode_frame,
     encode_command,
 )
-from d1max_sim.agent_server import STAND_SECONDS, WALK_DEADBAND, SimAgentServer
+from nexwar_sim.agent_server import STAND_SECONDS, WALK_DEADBAND, SimAgentServer
 
 
 class _RawClient:

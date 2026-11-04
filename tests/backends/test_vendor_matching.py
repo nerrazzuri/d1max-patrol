@@ -4,25 +4,25 @@ import asyncio
 
 import pytest
 
-from d1max_patrol.backends import vendor_nav
-from d1max_patrol.backends.base import (
+from nexwar_patrol.backends import vendor_nav
+from nexwar_patrol.backends.base import (
     AlgErrorEvent,
     NavConnectionError,
     NavRequestError,
     NavTimeoutError,
 )
-from d1max_patrol.backends.vendor_nav import VendorNavBackend, _Pending
-from d1max_patrol.config.models import NavConfig
-from d1max_patrol.protocol import nav_requests as R
-from d1max_patrol.protocol.nav_frames import AlgErrorItem, Response
-from d1max_patrol.protocol.nav_types import (
+from nexwar_patrol.backends.vendor_nav import VendorNavBackend, _Pending
+from nexwar_patrol.config.models import NavConfig
+from nexwar_patrol.protocol import nav_requests as R
+from nexwar_patrol.protocol.nav_frames import AlgErrorItem, Response
+from nexwar_patrol.protocol.nav_types import (
     LocStatus,
     MappingStatus,
     NavStatus,
     Pose,
     Waypoint,
 )
-from d1max_sim.nav_server import SimNavServer
+from nexwar_sim.nav_server import SimNavServer
 
 #: 把状态轮询器静默掉。本文件测的是响应匹配层,而轮询器是一个后台请求
 #: 发生器 —— 它会占着 _pending、把自己的迟到响应计进 dropped_frames、

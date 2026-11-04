@@ -13,7 +13,7 @@ from test_relocalize import _ack, _goto, _事件, _遥测
 from test_runtime_localizer import 台子
 from test_runtime_maps import _cmd
 
-from d1max_agent.globalloc import GlobalLoc
+from nexwar_agent.globalloc import GlobalLoc
 
 TRUE = (3.0, 3.0, 0.4)
 
@@ -317,7 +317,7 @@ async def test_W68_外审_自动找在排队时人设了位置_拿到锁后不�
     async with t.rt._cmd_lock:
         await t.拍(40)                                    # 自动找已经起了、在等锁
         assert t.rt._running(t.rt._find_job)
-        from d1max_contract.messages import Command
+        from nexwar_contract.messages import Command
         cmd = Command(command_id="r1", task_id="r1", kind="relocalize", issued_at=t.c.ms,
                       expires_at=t.c.ms + 60_000, control_epoch=1,
                       payload={"x": 0.5, "y": 0.5, "yaw": 0.0})
@@ -379,7 +379,7 @@ async def test_W68_外审r2_找的这会儿机器人动了_没找到不计次不
 
 async def test_W71_趴着不找也不计次_站起来才找(台, monkeypatch):
     """11-03 C40221:装第八批前趴下了,雷达太低对不上图,8 分钟里 3 次「位置偏差过大」用完了次数。"""
-    from d1max_contract.hal import MotionStatus
+    from nexwar_contract.hal import MotionStatus
     t = 台
     pose = {"s": MotionStatus.LYING}
 

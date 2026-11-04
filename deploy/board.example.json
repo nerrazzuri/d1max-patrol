@@ -4,7 +4,7 @@
     {"name": "exhaust_r", "relay_input": 1, "alarm_active": "high"},
     {"name": "stir", "relay_input": 2, "alarm_active": "high"}
   ],
-  "log_dir": "/var/lib/d1max/board",
+  "log_dir": "/var/lib/nexwar/board",
   "limits": {"warn_soc": 80, "shed_soc": 85, "crit_soc": 95,
              "warn_nvme": 65, "shed_nvme": 70, "crit_nvme": 75}
 }

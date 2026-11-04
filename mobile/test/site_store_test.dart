@@ -1,7 +1,7 @@
 // 站点列表落盘（W00c4）：往返、坏文件报错不吞、口令不在文件里。
 import 'dart:io';
 
-import 'package:d1max_patrol/store/site_store.dart';
+import 'package:nexwar_patrol/store/site_store.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {

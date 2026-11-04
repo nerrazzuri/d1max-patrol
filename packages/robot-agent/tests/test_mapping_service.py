@@ -6,7 +6,7 @@ import json
 
 import pytest
 
-from d1max_agent.mapping import (
+from nexwar_agent.mapping import (
     DONE,
     MappingError,
     MappingService,
@@ -14,8 +14,8 @@ from d1max_agent.mapping import (
     map_classify,
     map_settled,
 )
-from d1max_agent.outbox import Outbox
-from d1max_contract.maps import GEOMETRY_FILES, MapRef
+from nexwar_agent.outbox import Outbox
+from nexwar_contract.maps import GEOMETRY_FILES, MapRef
 
 
 class 假编排:
@@ -40,7 +40,7 @@ class 假编排:
     async def package(self, bag, map_id):
         self.packaged = (bag, map_id)
         if self.package_fail:
-            from d1max_patrol.app.mapping import MappingError as OrchError
+            from nexwar_patrol.app.mapping import MappingError as OrchError
             raise OrchError(self.package_fail)
         return await self.rebuild(bag, map_id, _mode="live")
 
@@ -189,8 +189,8 @@ def test_起来时收拾_攒到一半的图扔掉_录到一半的包补上完成
 async def test_盘紧了传完的包不留着备重建(svc):
     """W00c5d 第三部分内部评审:留着的包把发件箱撑满,巡检就被拒 storage_full。盘紧了就让位 ——
     站点上有一份。"""
-    from d1max_agent.mapping import storage_pressure
-    from d1max_contract.storage import StorageFacts
+    from nexwar_agent.mapping import storage_pressure
+    from nexwar_contract.storage import StorageFacts
     await svc.start("yard")
     await svc.stop()
     bag = svc.bags_root / svc.last_bag
@@ -384,7 +384,7 @@ async def test_边走边建记着开录那条命令的号_重启之后也在(tmp
 # ------------------------------------------------------------------ 建图预览(W09f)
 
 def _snap(svc, map_id, **kw):
-    """编排的预览进程写的快照(``d1max_localizer.livemap.Snapshots`` 的格式)。"""
+    """编排的预览进程写的快照(``nexwar_localizer.livemap.Snapshots`` 的格式)。"""
     d = svc.orch.preview_dir(map_id)
     d.mkdir(parents=True, exist_ok=True)
     doc = {"seq": 3, "run": "yard-x", "res": 0.1, "origin": [-2.0, -1.0], "width": 40,
@@ -407,7 +407,7 @@ async def test_预览_没在边走边建是_live_false(svc, tmp_path, monkeypatc
 
 
 async def test_预览_边走边建还没第一张_有了带图_since_相同不带图(svc, tmp_path, monkeypatch):
-    import d1max_agent.mapping as M
+    import nexwar_agent.mapping as M
     monkeypatch.setattr(M.time, "time", lambda: 1004.26)
     _preview_orch(svc, tmp_path)
     await svc.start("yard", ("estate-1", "9"))
@@ -437,7 +437,7 @@ async def test_预览_停录之后打包之前照给最后一张_打完了没有
 
 
 async def test_预览_图太大不带_说太大(svc, tmp_path):
-    import d1max_agent.mapping as M
+    import nexwar_agent.mapping as M
     _preview_orch(svc, tmp_path)
     await svc.start("yard", ("estate-1", "9"))
     _snap(svc, "estate-1", png="A" * (M.PREVIEW_PNG_MAX_B64 + 4))
@@ -482,7 +482,7 @@ async def test_预览_在录但版本刚被停录清掉_不炸(svc, tmp_path):
 
 
 async def test_预览_整条超预算去掉图_说明照给(svc, tmp_path, monkeypatch):
-    import d1max_agent.mapping as M
+    import nexwar_agent.mapping as M
     _preview_orch(svc, tmp_path)
     await svc.start("yard", ("estate-1", "9"))
     _snap(svc, "estate-1", png="A" * 400, trail=[[float(i), 0.0] for i in range(50)])
@@ -517,7 +517,7 @@ async def test_建好的图带geo_json就一起收进清单_没有照旧(svc):
 
 async def test_M9_建好的图带seen_pbm就一起收进清单_没有照旧(svc):
     """M9:显示用的掩码 ``seen.pbm`` 跟 geo.json 一样是可选文件:有就收、跟着传、照样校验。"""
-    from d1max_contract.maps import SEEN_FILE
+    from nexwar_contract.maps import SEEN_FILE
     svc.orch.made = (*GEOMETRY_FILES, SEEN_FILE)
     await svc.start("yard3")
     await svc.stop()

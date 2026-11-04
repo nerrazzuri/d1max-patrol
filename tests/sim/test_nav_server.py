@@ -7,22 +7,22 @@ import pytest
 from websockets.asyncio.client import connect
 from websockets.exceptions import ConnectionClosed
 
-from d1max_patrol.protocol import nav_requests as R
-from d1max_patrol.protocol.nav_frames import (
+from nexwar_patrol.protocol import nav_requests as R
+from nexwar_patrol.protocol.nav_frames import (
     AlgErrorItem,
     AlgErrorNotify,
     Response,
     encode_request,
     parse_message,
 )
-from d1max_patrol.protocol.nav_types import (
+from nexwar_patrol.protocol.nav_types import (
     LocStatus,
     MappingStatus,
     NavStatus,
     Pose,
     Waypoint,
 )
-from d1max_sim.nav_server import _TICK_IO_TIMEOUT_S, SimNavServer
+from nexwar_sim.nav_server import _TICK_IO_TIMEOUT_S, SimNavServer
 
 
 @pytest.fixture

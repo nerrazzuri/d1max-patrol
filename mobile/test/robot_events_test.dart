@@ -1,7 +1,7 @@
 // 机器人详情页「最近的事件」写成人话（2026-10-30 走查：原来把事件数据原样印出来）。
-import 'package:d1max_patrol/l10n.dart';
-import 'package:d1max_patrol/ui/robot_events.dart';
-import 'package:d1max_patrol/ui/site_robot.dart';
+import 'package:nexwar_patrol/l10n.dart';
+import 'package:nexwar_patrol/ui/robot_events.dart';
+import 'package:nexwar_patrol/ui/site_robot.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 

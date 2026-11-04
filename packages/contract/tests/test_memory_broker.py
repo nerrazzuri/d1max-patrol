@@ -8,8 +8,8 @@ import asyncio
 
 import pytest
 
-from d1max_contract.memory_broker import MemoryBroker, MemoryTransport
-from d1max_contract.transport import Message
+from nexwar_contract.memory_broker import MemoryBroker, MemoryTransport
+from nexwar_contract.transport import Message
 
 
 class _收:

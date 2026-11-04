@@ -12,14 +12,14 @@ import json
 
 import pytest
 
-from d1max_adapter_sim.robot import SimRobot
-from d1max_agent.main import build_parser, resolve_autonomy
-from d1max_agent.runtime import AgentRuntime
-from d1max_agent.status import compose_capabilities
-from d1max_contract.memory_broker import MemoryBroker, MemoryTransport
-from d1max_contract.registration import Registration
-from d1max_contract.topics import Topics
-from d1max_patrol.protocol.nav_types import Pose
+from nexwar_adapter_sim.robot import SimRobot
+from nexwar_agent.main import build_parser, resolve_autonomy
+from nexwar_agent.runtime import AgentRuntime
+from nexwar_agent.status import compose_capabilities
+from nexwar_contract.memory_broker import MemoryBroker, MemoryTransport
+from nexwar_contract.registration import Registration
+from nexwar_contract.topics import Topics
+from nexwar_patrol.protocol.nav_types import Pose
 
 REG = Registration(site_id="s", robot_id="r", credential_fingerprint="f", issued_at=0,
                    expires_at=10**12)
@@ -285,7 +285,7 @@ async def test_狗的墙钟不准_监护照样能用_租约按单调钟(监护�
 
 
 async def test_要人监护_遥控不受监护约束(监护台):
-    from d1max_contract.teleop import teleop_grant_payload
+    from nexwar_contract.teleop import teleop_grant_payload
     broker, c, r, ears, rt, site = 监护台
     grant = _cmd("teleop", teleop_grant_payload(lease_epoch=1, operator="gina",
                                                 lease_ttl_ms=5000), "t1", c, task_id="teleop-1")

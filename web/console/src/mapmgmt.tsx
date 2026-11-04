@@ -1,5 +1,5 @@
 // 地图管理页(管理员):每张图每个版本是什么、哪几只狗在用、发布到狗、回退、删旧版本、两版对比。
-// 后端见 packages/site-node/src/d1max_site/maps_admin*.py;文字走本文件里的 tr(英, 中),不碰 i18n.ts。
+// 后端见 packages/site-node/src/nexwar_site/maps_admin*.py;文字走本文件里的 tr(英, 中),不碰 i18n.ts。
 import { useCallback, useEffect, useRef, useState } from "preact/hooks";
 import { api, ApiError, enc } from "./api";
 import { Confirm, Modal } from "./dialogs";

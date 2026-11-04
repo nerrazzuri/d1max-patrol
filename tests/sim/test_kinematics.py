@@ -4,8 +4,8 @@ import math
 
 import pytest
 
-from d1max_patrol.protocol.nav_types import Pose
-from d1max_sim.kinematics import Planar2DModel, wrap_angle
+from nexwar_patrol.protocol.nav_types import Pose
+from nexwar_sim.kinematics import Planar2DModel, wrap_angle
 
 DT = 0.05
 

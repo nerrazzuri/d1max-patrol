@@ -15,7 +15,7 @@ const en = {
   kContact: "Door contact", kAlarm: "Alarm panel", kOther: "Other",
   dAdd: "Add / update", dRemove: "Delete", dRotate: "New key",
   dView: "robot goes to ({x}, {y})", dZone: "zone {z}", dNoZone: "not in any zone (site-wide)",
-  dSecret: "Callback for {id}: header X-D1MAX-Source: {src}, key (shown once): {key}",
+  dSecret: "Callback for {id}: header X-Nexwar-Source: {src}, key (shown once): {key}",
 };
 type DKey = keyof typeof en;
 const zh: Record<DKey, string> = {
@@ -26,7 +26,7 @@ const zh: Record<DKey, string> = {
   kContact: "门磁", kAlarm: "报警主机", kOther: "其他",
   dAdd: "登记 / 更新", dRemove: "删除", dRotate: "换密钥",
   dView: "机器人去 ({x}, {y})", dZone: "防区 {z}", dNoZone: "不在任何防区（按全站）",
-  dSecret: "{id} 的回调：请求头 X-D1MAX-Source: {src}，密钥（只显示这一次）：{key}",
+  dSecret: "{id} 的回调：请求头 X-Nexwar-Source: {src}，密钥（只显示这一次）：{key}",
 };
 const DICTS: Record<Lang, Record<DKey, string>> = { en, zh };
 function dt(k: DKey, v?: Record<string, string | number>): string {

@@ -8,11 +8,11 @@ import math
 
 from test_runtime_maps import REG, T, _cmd, _跑, 耳朵, 钟
 
-from d1max_adapter_sim.robot import SimRobot
-from d1max_agent.runtime import AgentRuntime
-from d1max_contract.memory_broker import MemoryBroker, MemoryTransport
-from d1max_contract.messages import MapPose, Status, Telemetry
-from d1max_patrol.protocol.nav_types import Pose
+from nexwar_adapter_sim.robot import SimRobot
+from nexwar_agent.runtime import AgentRuntime
+from nexwar_contract.memory_broker import MemoryBroker, MemoryTransport
+from nexwar_contract.messages import MapPose, Status, Telemetry
+from nexwar_patrol.protocol.nav_types import Pose
 
 
 async def _台(tmp_path, *, identity=False, home=(0.0, 0.0, 0.0)):
@@ -127,7 +127,7 @@ async def test_坐标不像话_地图对不上_在走_都拒(tmp_path):
 
 async def test_没有任务_狗在动_不收(tmp_path):
     """遥控开着走(直接下 HAL 速度,不经任务):狗在动就不收。"""
-    from d1max_contract.hal import VelocityCommand
+    from nexwar_contract.hal import VelocityCommand
     broker, c, ears, dog, rt = await _台(tmp_path)
     await dog.set_velocity(VelocityCommand(seq=1, ttl_ms=5000, frame="base", vx=0.5, vy=0.0,
                                            wz=0.0))
@@ -218,7 +218,7 @@ async def test_断线时安全不安全_看锚定(tmp_path):
 
 
 async def test_开机时导航桥就报定位不可信_不等第一拍(tmp_path):
-    from d1max_patrol.protocol.nav_types import LocStatus
+    from nexwar_patrol.protocol.nav_types import LocStatus
     broker, c, ears, dog, rt = await _台(tmp_path)
     assert await rt.parts.nav.loc_status() is LocStatus.LOC_LOST
     await rt.close()
@@ -227,7 +227,7 @@ async def test_开机时导航桥就报定位不可信_不等第一拍(tmp_path)
 async def test_换了图_锚定作废_要重新设位置(tmp_path):
     from test_runtime_maps import 站点
 
-    from d1max_agent.maps import MapKeeper
+    from nexwar_agent.maps import MapKeeper
     broker, c = MemoryBroker(), 钟()
     ears = 耳朵()
     st = MemoryTransport(broker, "site")
@@ -318,8 +318,8 @@ async def test_在原点设位置_朝向也照原点的(tmp_path):
 
 async def test_任务跑着_狗停着驻留_不收设位置_丢定位暂停时收(tmp_path):
     """内审阻断 2:以前只看狗停没停 —— 巡检在点上驻留时点了「在原点」,当场改了下一段怎么走。"""
-    from d1max_contract.mission import Action, Mission, MissionWaypoint, Policy
-    from d1max_patrol.protocol.nav_types import Pose as P
+    from nexwar_contract.mission import Action, Mission, MissionWaypoint, Policy
+    from nexwar_patrol.protocol.nav_types import Pose as P
     broker, c, ears, dog, rt = await _台(tmp_path)
     await rt._on_cmd(_cmd("relocalize", {"x": 0.0, "y": 0.0, "yaw": 0.0}, "r", c))
     m = Mission(mission="d", map_id="m", map_version="1", policy=Policy(), waypoints=(

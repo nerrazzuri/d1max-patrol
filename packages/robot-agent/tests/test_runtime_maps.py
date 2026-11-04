@@ -7,15 +7,15 @@ import json
 
 import pytest
 
-from d1max_adapter_sim.robot import SimRobot
-from d1max_agent.maps import MapKeeper
-from d1max_agent.runtime import AgentRuntime
-from d1max_contract.memory_broker import MemoryBroker, MemoryTransport
-from d1max_contract.messages import Capabilities, Command
-from d1max_contract.registration import Registration
-from d1max_contract.topics import Topics
-from d1max_contract.transport import Message
-from d1max_patrol.protocol.nav_types import Pose
+from nexwar_adapter_sim.robot import SimRobot
+from nexwar_agent.maps import MapKeeper
+from nexwar_agent.runtime import AgentRuntime
+from nexwar_contract.memory_broker import MemoryBroker, MemoryTransport
+from nexwar_contract.messages import Capabilities, Command
+from nexwar_contract.registration import Registration
+from nexwar_contract.topics import Topics
+from nexwar_contract.transport import Message
+from nexwar_patrol.protocol.nav_types import Pose
 
 REG = Registration(site_id="s", robot_id="r", credential_fingerprint="f", issued_at=0,
                    expires_at=10**13)
@@ -153,7 +153,7 @@ async def test_哈希不对_或适配器载不进_不换图_发失败事件(台)
     await rt._on_cmd(_cmd("map_activate", ref, "b2", c))
     await _跑(rt, broker)
     assert rt.loaded_map == ("m", "1")
-    from d1max_contract.maps import MapRef
+    from nexwar_contract.maps import MapRef
     assert not rt.maps.dir_of(MapRef.from_wire(ref)).exists(), "载不进去的扔掉,机器人上不留"
     assert "定位起不来" in [e for e in ears.by["event"]
                             if e["kind"] == "map_activate_failed"][-1]["data"]["reason"]
@@ -164,7 +164,7 @@ async def test_跑着任务先下载_等狗空下来才换_坏载荷拒(台):
     await rt._on_cmd(_cmd("map_activate", {"map_id": "../x"}, "c0", c))
     await broker.drain()
     assert ears.by["cmd/ack"][-1]["reason"].startswith("payload")
-    from d1max_contract.messages import MapPose
+    from nexwar_contract.messages import MapPose
     goto = {"target": MapPose(map_id="m", map_version="1", frame_id="map", x=5.0, y=0.0,
                               yaw=0.0).to_wire()}
     await rt._on_cmd(_cmd("goto", goto, "c1", c))
@@ -209,7 +209,7 @@ async def test_下载时照接任务_只有载入切坐标系那一小段不接(
     rt.maps._fetch = 慢
     await rt._on_cmd(_cmd("map_activate", ref, "d1", c))
     await asyncio.sleep(0.05)                     # 换图那一趟已经开跑、卡在下载里
-    from d1max_contract.messages import MapPose
+    from nexwar_contract.messages import MapPose
     goto = {"target": MapPose(map_id="m", map_version="1", frame_id="map", x=0.2, y=0.0,
                               yaw=0.0).to_wire()}
     await rt._on_cmd(_cmd("goto", goto, "d2", c))
@@ -321,7 +321,7 @@ async def test_发布命令_装在后台_切要空闲要装好_能力里报在�
     await _跑(rt, broker)
     assert ("install", new) in rel.calls
     assert any(e["kind"] == "release_installed" for e in ears.by["event"])
-    from d1max_contract.messages import MapPose
+    from nexwar_contract.messages import MapPose
     goto = {"target": MapPose(map_id="m", map_version="1", frame_id="map", x=5.0, y=0.0,
                               yaw=0.0).to_wire()}
     await rt._on_cmd(_cmd("goto", goto, "r3", c))
@@ -386,7 +386,7 @@ class 假录包:
 
 
 async def test_盘满了不录包_没在录不停_隔离的让它再传(tmp_path):
-    from d1max_contract.storage import StorageFacts
+    from nexwar_contract.storage import StorageFacts
     broker, c = MemoryBroker(), 钟()
     ears = 耳朵()
     st = MemoryTransport(broker, "site")
@@ -521,7 +521,7 @@ async def _发布台(tmp_path, **kw):
 
 
 async def test_切版本收下之后到重启前什么都不接_切不成就放开(tmp_path):
-    from d1max_contract.messages import MapPose
+    from nexwar_contract.messages import MapPose
     broker, c, ears, rel, dog, rt = await _发布台(tmp_path, mapper=假录包())
     await rt.start()
     new = "2026-09-25-bbbbbb"
@@ -585,8 +585,8 @@ async def test_站点点名切回老服务那一代的槽_回执拒收_不切不
     """W00c5 外审阻断 1 的命令这一层:用真的 ``ReleaseOps``(不是假发布),新版在跑,盘上留着一个
     装好了、没有代理启动脚本的老槽;站点点名切它 → 当场拒收(``no_agent_start``),链不动、不重启、
     收下之后那段「什么都不接」也不进。"""
-    from d1max_agent.engine import release as relmod
-    from d1max_agent.release_ops import SENTINEL, ReleaseOps
+    from nexwar_agent.engine import release as relmod
+    from nexwar_agent.release_ops import SENTINEL, ReleaseOps
     old, new = "2026-09-20-aaaaaa", "2026-09-25-bbbbbb"
     layout = relmod.Layout(root=tmp_path / "opt")
     for name, agent in ((old, False), (new, True)):
@@ -595,8 +595,8 @@ async def test_站点点名切回老服务那一代的槽_回执拒收_不切不
         (pkg / "src" / "x.py").write_text("x = 1\n")
         if agent:
             (pkg / "deploy").mkdir()
-            (pkg / "deploy" / "d1max-agent-start").write_text("#!/bin/sh\n")
-            (pkg / "deploy" / "d1max-agent-start").chmod(0o755)
+            (pkg / "deploy" / "nexwar_agent_start").write_text("#!/bin/sh\n")
+            (pkg / "deploy" / "nexwar_agent_start").chmod(0o755)
         (pkg / "release.json").write_text(json.dumps({
             "name": name, "version": "0.9", "content_sha256": relmod.tree_sha256(pkg),
             "requires_mission_schema": 1, "built_at": "2026-09-25T00:00:00Z"}))
@@ -683,7 +683,7 @@ async def test_边走边建_开录带地图号与版本_停下后在后台收尾
     async def finish():
         rec.calls.append(("finish",))
         rec.pending = None
-        from d1max_contract.maps import MapRef
+        from nexwar_contract.maps import MapRef
         return MapRef.from_wire({"map_id": "m", "version": "5", "files": [
             {"name": "x", "size": 1, "sha256": "a" * 64}]}), "live"
     rec.start, rec.stop, rec.finish = start, stop, finish
@@ -758,7 +758,7 @@ async def test_起来时接着收尾上次没收完的边走边建_收不了的�
     async def finish():
         done.append(rec.pending)
         rec.pending = None
-        from d1max_contract.maps import MapRef
+        from nexwar_contract.maps import MapRef
         return MapRef.from_wire({"map_id": "m", "version": "5", "files": [
             {"name": "x", "size": 1, "sha256": "a" * 64}]}), "bag"
     rec.finish = finish
@@ -773,7 +773,7 @@ async def test_起来时接着收尾上次没收完的边走边建_收不了的�
 
 
 async def test_收尾时停录_能力里说能边走边建(tmp_path):
-    from d1max_contract.messages import Capabilities
+    from nexwar_contract.messages import Capabilities
     rec = _假边走边建()
     broker, c, ears, rt = await _起(tmp_path, rec)
     await broker.drain()
@@ -811,7 +811,7 @@ async def test_停录报错_有待打包的照样去收尾_不卡住(tmp_path):
 
     async def finish():
         rec.pending = None
-        from d1max_contract.maps import MapRef
+        from nexwar_contract.maps import MapRef
         return MapRef.from_wire({"map_id": "m", "version": "5", "files": [
             {"name": "x", "size": 1, "sha256": "a" * 64}]}), "bag"
     rec.stop, rec.finish = stop, finish

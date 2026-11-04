@@ -4,8 +4,8 @@ import inspect
 
 import pytest
 
-from d1max_patrol.protocol import nav_requests as R
-from d1max_patrol.protocol.nav_types import Pose, Waypoint
+from nexwar_patrol.protocol import nav_requests as R
+from nexwar_patrol.protocol.nav_types import Pose, Waypoint
 
 
 def test_建图请求参数是数字零而不是_null():

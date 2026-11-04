@@ -173,9 +173,9 @@ run "能写哪些地方"      'for d in /opt /usr/local /etc/systemd/system "$HO
 
 # 这几条问的是「装过 deploy/install.sh 没有」——第 4 卷的装机脚本落地之后，
 # 现场勘察就该顺手把这台的部署状态一起量出来，免得回来发现漏问。
-run "代理单元是不是已经开机自启" "systemctl is-enabled d1max-agent 2>&1"
-run "current 指向哪一版"        "ls -l /opt/d1max/current 2>&1"
-run "在途的升级标记"            "cat /opt/d1max/pending.json 2>/dev/null; echo '(空=没有在途的升级)'"
+run "代理单元是不是已经开机自启" "systemctl is-enabled nexwar_agent 2>&1"
+run "current 指向哪一版"        "ls -l /opt/nexwar/current 2>&1"
+run "在途的升级标记"            "cat /opt/nexwar/pending.json 2>/dev/null; echo '(空=没有在途的升级)'"
 run "/opt 那块盘还剩多少"       "df -h /opt 2>&1"
 
 # ------------------------------------------------------------------ SDK

@@ -5,10 +5,10 @@ from __future__ import annotations
 import pytest
 from test_site_api import MAP, PW, _等, 站
 
-from d1max_contract.zones import Zone
-from d1max_site.db import SiteDB
-from d1max_site.route_nets import RouteNetConflict, RouteNetError, RouteNets
-from d1max_site.temporal import SAFE, temporal_class
+from nexwar_contract.zones import Zone
+from nexwar_site.db import SiteDB
+from nexwar_site.route_nets import RouteNetConflict, RouteNetError, RouteNets
+from nexwar_site.temporal import SAFE, temporal_class
 
 
 def _body(nodes, edges, base=0):

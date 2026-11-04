@@ -2,9 +2,9 @@
 // （等宽字、能滚、有刷新）。日志经站点现取，站点不存。
 import 'dart:async';
 
-import 'package:d1max_patrol/net/site_client.dart';
-import 'package:d1max_patrol/ui/site_logs.dart';
-import 'package:d1max_patrol/ui/site_page.dart';
+import 'package:nexwar_patrol/net/site_client.dart';
+import 'package:nexwar_patrol/ui/site_logs.dart';
+import 'package:nexwar_patrol/ui/site_page.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 

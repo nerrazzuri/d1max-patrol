@@ -13,7 +13,7 @@ import tty
 
 import pytest
 
-from d1max_adapter_d1max.payload import (
+from nexwar_adapter_d1max.payload import (
     ModbusRelay,
     Payload,
     PayloadConfig,
@@ -299,8 +299,8 @@ async def test_没接喇叭_放就拒(tmp_path):
 
 
 async def test_真狗HAL装上上装_能力照实报_入口走继电器板和喇叭(板子, tmp_path):
-    from d1max_adapter_d1max.hal import D1MaxHal
-    from d1max_contract.hal import HalUnsupported
+    from nexwar_adapter_d1max.hal import D1MaxHal
+    from nexwar_contract.hal import HalUnsupported
     (tmp_path / "warn-zh.wav").write_bytes(b"RIFF")
     log: list = []
     p = Payload(PayloadConfig(coils={"strobe": 0, "siren": 1}, audio_device="hw:1",
@@ -327,7 +327,7 @@ async def test_真狗HAL装上上装_能力照实报_入口走继电器板和喇
 
 
 def test_真狗HAL没装上装_四路都报没有():
-    from d1max_adapter_d1max.hal import D1MaxHal
+    from nexwar_adapter_d1max.hal import D1MaxHal
     hal = D1MaxHal(backend=object())                          # type: ignore[arg-type]
     acts = hal.hal_capabilities().actuators
     assert not any(acts[k] for k in ("strobe", "siren", "speaker", "spotlight"))
@@ -347,7 +347,7 @@ async def test_话术名不许越出话术目录(tmp_path):
 
 
 async def test_真狗HAL断开_上装全关(板子):
-    from d1max_adapter_d1max.hal import D1MaxHal
+    from nexwar_adapter_d1max.hal import D1MaxHal
 
     class 假旁路:
         async def close(self):
@@ -445,7 +445,7 @@ async def test_外审2_起来全关失败_接着关_期间报故障(板子):
 
 
 async def test_外审2_真狗HAL把关不上的几路当故障报(板子):
-    from d1max_adapter_d1max.hal import D1MaxHal
+    from nexwar_adapter_d1max.hal import D1MaxHal
 
     class 假旁路:
         def current_faults(self, fresh_s):
@@ -791,7 +791,7 @@ async def test_V12喇叭警笛_没有警笛声文件就不报这一路(tmp_path)
 
 
 async def test_V12喇叭警笛放坏了_报警笛故障_好了就没(tmp_path):
-    from d1max_adapter_d1max.hal import D1MaxHal
+    from nexwar_adapter_d1max.hal import D1MaxHal
     (tmp_path / "siren.wav").write_bytes(b"RIFF")
     log: list = []
     rc = {"v": 1}
@@ -816,7 +816,7 @@ async def test_V12喇叭警笛放坏了_报警笛故障_好了就没(tmp_path):
 
 
 async def test_V12故障按路合起来报_线圈名站点不认识(板子, tmp_path):
-    from d1max_adapter_d1max.hal import D1MaxHal
+    from nexwar_adapter_d1max.hal import D1MaxHal
 
     class 假旁路:
         def current_faults(self, fresh_s):
@@ -835,7 +835,7 @@ async def test_V12故障按路合起来报_线圈名站点不认识(板子, tmp_
 
 
 async def test_V12真狗HAL_颜色和左右灯走到上装(板子, tmp_path):
-    from d1max_adapter_d1max.hal import D1MaxHal
+    from nexwar_adapter_d1max.hal import D1MaxHal
     p = _v12(tmp_path, 板子)
     hal = D1MaxHal(backend=object(), payload=p)             # type: ignore[arg-type]
     await hal.strobe("green", "flash", 5)
@@ -852,7 +852,7 @@ async def test_V12真狗HAL_颜色和左右灯走到上装(板子, tmp_path):
 
 
 async def test_V12设备健康_继电器板_喇叭_喇叭警笛(板子, tmp_path):
-    from d1max_adapter_d1max.payload import alsa_card_present
+    from nexwar_adapter_d1max.payload import alsa_card_present
     (tmp_path / "warn-zh.wav").write_bytes(b"RIFF")
     p = _v12(tmp_path, 板子, run=_假跑([]))
     p.card_present = lambda dev: True
@@ -907,7 +907,7 @@ def test_V12配置样例读得进来_警笛声生成得出来(tmp_path):
     c = PayloadConfig.load(root / "deploy" / "payload.v12.example.json")
     assert set(c.spotlight) == {"left", "right"} and c.siren_clip == "siren"
     out = tmp_path / "siren.wav"
-    subprocess.run([sys.executable, "-m", "d1max_adapter_d1max.siren", str(out)], check=True,
+    subprocess.run([sys.executable, "-m", "nexwar_adapter_d1max.siren", str(out)], check=True,
                    capture_output=True)
     with wave.open(str(out)) as w:
         assert w.getnchannels() == 1 and w.getframerate() == 16000 and w.getnframes() == 32000

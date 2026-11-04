@@ -2,11 +2,11 @@
 // 定位变差的说法、两个新接口的请求。
 import 'dart:math' as math;
 
-import 'package:d1max_patrol/net/site_client.dart';
-import 'package:d1max_patrol/ui/nw/nw_map_raster.dart';
-import 'package:d1max_patrol/ui/run_viz.dart';
-import 'package:d1max_patrol/ui/site_maps.dart';
-import 'package:d1max_patrol/ui/site_page.dart' show SiteRobotPage;
+import 'package:nexwar_patrol/net/site_client.dart';
+import 'package:nexwar_patrol/ui/nw/nw_map_raster.dart';
+import 'package:nexwar_patrol/ui/run_viz.dart';
+import 'package:nexwar_patrol/ui/site_maps.dart';
+import 'package:nexwar_patrol/ui/site_page.dart' show SiteRobotPage;
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 

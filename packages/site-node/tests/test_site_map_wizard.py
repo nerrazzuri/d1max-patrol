@@ -8,7 +8,7 @@ import pytest
 from test_site_api import MAP, PW, 站
 from test_site_map_admin import BUILD, put_version
 
-from d1max_site.map_wizard import (
+from nexwar_site.map_wizard import (
     MapWizard,
     WizardError,
     next_version,

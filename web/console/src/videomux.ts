@@ -1,5 +1,5 @@
 // 所有画面走一条 WebSocket(W51)。原来每路 MJPEG 占一条 HTTP/1.1 连接,浏览器对一个站点最多 6 条,只敢开
-// 3 路长连、别的隔 2 秒取一张;WebSocket 不算在那 6 条里,一条装下所有画面(站点那头见 d1max_site/video_mux.py)。
+// 3 路长连、别的隔 2 秒取一张;WebSocket 不算在那 6 条里,一条装下所有画面(站点那头见 nexwar_site/video_mux.py)。
 //
 // 用法:``subscribe(画面地址, 每秒几帧, {onFrame, onError})`` 回一个退订函数。同一路几个人看只订一次(fps 取大的)。
 // 每来一帧给一个 blob: 地址(上一帧的地址收回);这一路出错(站点回的原因)或者连接断了叫 onError —— 调用方

@@ -12,10 +12,10 @@ from types import SimpleNamespace
 import pytest
 from test_site_api import PW, 站
 
-from d1max_site import main as site_main
-from d1max_site.alert_store import AlertDesk
-from d1max_site.db import SiteDB
-from d1max_site.health import HealthDesk, redact_cfg, redact_text, support_bundle
+from nexwar_site import main as site_main
+from nexwar_site.alert_store import AlertDesk
+from nexwar_site.db import SiteDB
+from nexwar_site.health import HealthDesk, redact_cfg, redact_text, support_bundle
 
 NOW = 1_800_000_000_000
 DAY = 86_400_000
@@ -132,7 +132,7 @@ def test_诊断包_不带密钥令牌库文件_日志打码(台, tmp_path):
     t = 台
     (t.home / "site.json").write_text(json.dumps({
         "site_id": "e", "push": {"app_key": "AK-123", "secret_file": "/etc/x"},
-        "backup_key": "/etc/d1max-site/backup.key", "camera_password": "pw!"}))
+        "backup_key": "/etc/nexwar_site/backup.key", "camera_password": "pw!"}))
     t.desk.raise_alert(kind="dog_sees_person", robot="A", title="机器人看见人了")
     hexs = "ab" * 32
 
@@ -144,7 +144,7 @@ def test_诊断包_不带密钥令牌库文件_日志打码(台, tmp_path):
         names = tar.getnames()
         files = {n.split("/", 1)[1]: tar.extractfile(n).read() for n in names}
     assert {"README.txt", "versions.json", "health.json", "site.json", "db_counts.json",
-            "alerts_7d.json", "metrics.csv", "logs/d1max-site.log"} <= set(files)
+            "alerts_7d.json", "metrics.csv", "logs/nexwar_site.log"} <= set(files)
     blob = b"".join(files.values())
     for bad in (b"AK-123", b"pw!", b"tok-SECRET-123", hexs.encode()):
         assert bad not in blob, bad

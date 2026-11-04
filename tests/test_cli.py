@@ -13,9 +13,9 @@ import builtins
 
 import pytest
 
-from d1max_patrol import cli
-from d1max_patrol.cli import _amain, build_parser, main
-from d1max_sim.nav_server import SimNavServer
+from nexwar_patrol import cli
+from nexwar_patrol.cli import _amain, build_parser, main
+from nexwar_sim.nav_server import SimNavServer
 
 
 @pytest.fixture
@@ -70,12 +70,12 @@ def test_解析器认识所有子命令():
 
 
 def test_仿真器没装时_sim_子命令给中文提示(monkeypatch, capsys):
-    """MIN-1: 真机现场可能只装了 d1max_patrol,`sim` 子命令不能撞裸 ImportError。"""
+    """MIN-1: 真机现场可能只装了 nexwar_patrol,`sim` 子命令不能撞裸 ImportError。"""
     真import = builtins.__import__
 
     def 拦住仿真器(name, *args, **kwargs):
-        if name.startswith("d1max_sim"):
-            raise ImportError("No module named 'd1max_sim'")
+        if name.startswith("nexwar_sim"):
+            raise ImportError("No module named 'nexwar_sim'")
         return 真import(name, *args, **kwargs)
 
     monkeypatch.setattr(builtins, "__import__", 拦住仿真器)
@@ -167,7 +167,7 @@ async def test_goto_在定位未就绪时返回1(sim, capsys):
 
 
 async def test_paths_与_walk(sim, capsys):
-    from d1max_patrol.protocol.nav_types import Pose, Waypoint
+    from nexwar_patrol.protocol.nav_types import Pose, Waypoint
 
     map_id = sim.store.create_map("厂区")
     sim.store.set_path(map_id, "一号线", [
@@ -218,7 +218,7 @@ async def test_walk_遇到不存在的路线返回1(sim, capsys):
 
 
 async def test_walk_中途失败即刻停下(sim, capsys):
-    from d1max_patrol.protocol.nav_types import Pose, Waypoint
+    from nexwar_patrol.protocol.nav_types import Pose, Waypoint
 
     map_id = sim.store.create_map("厂区")
     sim.store.set_path(map_id, "线", [
@@ -253,7 +253,7 @@ async def test_超时参数会传下去(sim, capsys):
 
 
 async def test_工单4_speed_0_本机就拒_提示用_stop_不发给厂家导航(sim, capsys):
-    """2026-10-28:``d1max speed 0`` 走厂家导航接口,速度 0 原样发过去(不是停车)。
+    """2026-10-28:``nexwar speed 0`` 走厂家导航接口,速度 0 原样发过去(不是停车)。
     W05 的约定是本机拒。"""
     assert await run(sim, "speed") == 0
     before = capsys.readouterr().out

@@ -11,7 +11,7 @@ import pytest
 from test_site_api import PW, 站
 from test_site_recordings import T0, _存
 
-from d1max_site.recordings import SEGMENT_S, FrameCache, RecordingStore
+from nexwar_site.recordings import SEGMENT_S, FrameCache, RecordingStore
 
 
 def _假ffmpeg(tmp_path, *, ok=True):
@@ -26,7 +26,7 @@ def _假ffmpeg(tmp_path, *, ok=True):
 
 @pytest.fixture
 def 库(tmp_path):
-    from d1max_site.db import SiteDB
+    from nexwar_site.db import SiteDB
     return RecordingStore(SiteDB(tmp_path / "s.db"), tmp_path / "rec", now_ms=lambda: T0)
 
 

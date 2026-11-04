@@ -16,15 +16,15 @@ import numpy as np
 import pytest
 import test_bridge_localizer as b
 
-from d1max_contract.hal import Odometry
-from d1max_contract.locbridge import Relocalize
+from nexwar_contract.hal import Odometry
+from nexwar_contract.locbridge import Relocalize
 
 # ---------------------------------------------------------------- R1 原地转:还在转的那股劲也查
 
 
 def _前左有个点():
-    from d1max_agent.obstacles import ObstacleView
-    from d1max_contract.obsbridge import Grid, pack_bits
+    from nexwar_agent.obstacles import ObstacleView
+    from nexwar_contract.obsbridge import Grid, pack_bits
     v = ObstacleView(monotonic=lambda: 0.0, latency_s=0.0)
     v.note_odom(0, 0, 0)
     n, res = 80, 0.05
@@ -36,7 +36,7 @@ def _前左有个点():
 
 
 def test_外审R1_正在往左快转_新命令往右慢转_左边那股劲扫到的也要查():
-    from d1max_agent.obstacles import ObstacleGuard
+    from nexwar_agent.obstacles import ObstacleGuard
     g, v = ObstacleGuard(), _前左有个点()
     assert g.check(0.0, -0.32, 0.0, v, (0, 0, 0)).ok                  # 只看新命令:往右,放行
     assert not g.check(0.0, 1.5, 0.0, v, (0, 0, 0)).ok
@@ -51,7 +51,7 @@ def test_外审R1_正在往左快转_新命令往右慢转_左边那股劲扫到
 def _左后看不见():
     import test_obstacle_avoid as ob
 
-    from d1max_agent.obstacles import ObstacleView
+    from nexwar_agent.obstacles import ObstacleView
     n = 80
     c = [(i - n / 2 + 0.5) * 0.05 for i in range(n)]
     known = [(r, k) for r in range(n) for k in range(n)
@@ -65,7 +65,7 @@ def _左后看不见():
 def test_复查N1_里程转速一点点反向噪声_不把反向那一侧也查上():
     """复查 N1:里程报 −0.001 rad/s 的噪声,原来也按完整角余量(0.2 rad)查反向那一侧,左后一小块
     看不见就把往左对准一直挡住。噪声以下的不算在转;还在转的那股劲只按延迟 + 刹停算,不再加余量。"""
-    from d1max_agent.obstacles import ObstacleGuard
+    from nexwar_agent.obstacles import ObstacleGuard
     g, v = ObstacleGuard(), _左后看不见()
     assert g.check(0.0, 0.4, 0.0, v, (0, 0, 0)).ok
     for w in ((0.0, -0.001), (0.0, -0.03), (-0.02, 0.0)):
@@ -74,7 +74,7 @@ def test_复查N1_里程转速一点点反向噪声_不把反向那一侧也查�
 
 
 async def test_外审R1_导航把实测转速和上一拍发的转速都交给守卫():
-    from d1max_agent.bridges.planned_nav import PlannedNavBackend
+    from nexwar_agent.bridges.planned_nav import PlannedNavBackend
     seen = []
 
     class 守卫:
@@ -112,7 +112,7 @@ async def test_外审R2_代理重启_最后可信位置的朝向线跟着落盘_
 
 
 async def test_外审R2_老格式的盘上没记朝向线_按位置线推(tmp_path):
-    from d1max_agent.bridge_localizer import (
+    from nexwar_agent.bridge_localizer import (
         ANCHOR_TRUSTED_M,
         ANCHOR_TRUSTED_YAW_RAD,
         ANCHOR_YAW_RAD,
@@ -146,9 +146,9 @@ def _假狗(view):
 async def _对不上的场面(tmp_path, *, conflict=True):
     from test_globalloc import RES, _房间, _扫, 不对称
 
-    from d1max_agent.globalloc import GlobalLoc, Matcher
-    from d1max_agent.obstacles import ObstacleView
-    from d1max_agent.runtime import AgentRuntime
+    from nexwar_agent.globalloc import GlobalLoc, Matcher
+    from nexwar_agent.obstacles import ObstacleView
+    from nexwar_agent.runtime import AgentRuntime
     c, link, loc = await b._就绪()
     true = (3.0, 3.0, 0.4)
     if conflict:
@@ -245,8 +245,8 @@ async def test_外审R4_稳下来后的点云核对没动_照样认出对的那�
 
 
 async def test_外审R5_拍照失败的原因不带相机口令(tmp_path):
-    from d1max_agent.bridges.rtsp_media import FfmpegCamera
-    from d1max_patrol.backends.base import MediaError
+    from nexwar_agent.bridges.rtsp_media import FfmpegCamera
+    from nexwar_patrol.backends.base import MediaError
     ff = tmp_path / "ffmpeg"
     ff.write_text("#!/bin/sh\n"
                   'echo "rtsp://admin:FAKE_SECRET_190@10.0.0.9/front: Connection refused" >&2\n'
@@ -261,7 +261,7 @@ async def test_外审R5_拍照失败的原因不带相机口令(tmp_path):
 
 
 async def _起一个卡住的(tmp_path):
-    from d1max_agent.bridges.rtsp_media import FfmpegCamera
+    from nexwar_agent.bridges.rtsp_media import FfmpegCamera
     pid, ff = tmp_path / "pid", tmp_path / "ffmpeg"
     ff.write_text(f"#!/bin/sh\necho $$ > {pid}\nexec sleep 30\n")
     ff.chmod(0o755)
@@ -299,7 +299,7 @@ async def test_外审R6_拍照被取消_ffmpeg_跟着收掉(tmp_path):
 
 
 async def test_外审R6_关掉取图源_还在抽帧的_ffmpeg_收掉(tmp_path):
-    from d1max_patrol.backends.base import MediaError
+    from nexwar_patrol.backends.base import MediaError
     cam, task, p = await _起一个卡住的(tmp_path)
     try:
         await cam.close()
@@ -318,7 +318,7 @@ async def test_外审R6_关掉取图源_还在抽帧的_ffmpeg_收掉(tmp_path):
 async def test_外审R7_提前绕看出终点被盖住_马上报_不等走到跟前(tmp_path):
     import test_obstacle_avoid as ob
 
-    from d1max_patrol.protocol.nav_types import Pose
+    from nexwar_patrol.protocol.nav_types import Pose
     t = ob.台子(tmp_path, rear=True, cone=True)
     await t.start(1.5, 4.0)
     await t.nav.goto(Pose.from_xy_yaw(7.0, 4.0))
@@ -345,7 +345,7 @@ async def test_外审R7_提前绕看出终点被盖住_马上报_不等走到跟
 async def test_外审R7_提前报过终点被盖住_没真被挡就停了_站点那边的被挡清掉(tmp_path):
     import test_obstacle_avoid as ob
 
-    from d1max_patrol.protocol.nav_types import Pose
+    from nexwar_patrol.protocol.nav_types import Pose
     t = ob.台子(tmp_path, rear=True, cone=True)
     await t.start(1.5, 4.0)
     await t.nav.goto(Pose.from_xy_yaw(7.0, 4.0))
@@ -368,7 +368,7 @@ async def test_复查N1_里程转速带噪声_原地往左对准照样对得上(
 
     import test_obstacle_avoid as ob
 
-    from d1max_patrol.protocol.nav_types import NavStatus, Pose
+    from nexwar_patrol.protocol.nav_types import NavStatus, Pose
     n = 80
     c = [(i - n / 2 + 0.5) * 0.05 for i in range(n)]
     known = [(r, k) for r in range(n) for k in range(n)
@@ -392,8 +392,8 @@ async def test_复查N1_里程转速带噪声_原地往左对准照样对得上(
 
 
 async def test_复查N3_取图源关的时候ffmpeg正在起_起来了也收掉(tmp_path):
-    from d1max_agent.bridges.rtsp_media import FfmpegCamera
-    from d1max_patrol.backends.base import MediaError
+    from nexwar_agent.bridges.rtsp_media import FfmpegCamera
+    from nexwar_patrol.backends.base import MediaError
     pid, ff = tmp_path / "pid", tmp_path / "ffmpeg"
     ff.write_text(f"#!/bin/sh\necho $$ > {pid}\nexec sleep 30\n")
     ff.chmod(0o755)
@@ -424,7 +424,7 @@ async def test_复查N3_取图源关的时候ffmpeg正在起_起来了也收掉(
 async def test_复查N4_提前报过又真被挡住_停下这一段_站点那边的被挡清掉(tmp_path):
     import test_obstacle_avoid as ob
 
-    from d1max_patrol.protocol.nav_types import Pose
+    from nexwar_patrol.protocol.nav_types import Pose
     t = ob.台子(tmp_path, rear=True, cone=True)
     await t.start(1.5, 4.0)
     await t.nav.goto(Pose.from_xy_yaw(7.0, 4.0))
@@ -443,7 +443,7 @@ async def test_复查N4_提前报过又真被挡住_停下这一段_站点那边
 async def test_复查N4_被挡放弃这一段_不发不挡了_引擎还要重试同一个点(tmp_path):
     import test_obstacle_avoid as ob
 
-    from d1max_patrol.protocol.nav_types import NavStatus, Pose
+    from nexwar_patrol.protocol.nav_types import NavStatus, Pose
     t = ob.台子(tmp_path, rear=True, cone=True)
     await t.start(1.5, 4.0)
     await t.nav.goto(Pose.from_xy_yaw(7.0, 4.0))
@@ -457,7 +457,7 @@ async def test_复查N4_被挡放弃这一段_不发不挡了_引擎还要重试
 async def test_复查N4_放弃这一段以后_箱子挪走重试成功_补发不挡了(tmp_path):
     import test_obstacle_avoid as ob
 
-    from d1max_patrol.protocol.nav_types import NavStatus, Pose
+    from nexwar_patrol.protocol.nav_types import NavStatus, Pose
     t = ob.台子(tmp_path, rear=True, cone=True)
     await t.start(1.5, 4.0)
     await t.nav.goto(Pose.from_xy_yaw(7.0, 4.0))
@@ -480,7 +480,7 @@ async def test_复查N4_放弃这一段以后_箱子挪走重试成功_补发不
 async def test_复查N4_放弃以后_改去别处一路畅通走起来了_当场补发不挡了(tmp_path):
     import test_obstacle_avoid as ob
 
-    from d1max_patrol.protocol.nav_types import NavStatus, Pose
+    from nexwar_patrol.protocol.nav_types import NavStatus, Pose
     t = ob.台子(tmp_path, rear=True, cone=True)
     await t.start(1.5, 4.0)
     await t.nav.goto(Pose.from_xy_yaw(7.0, 4.0))

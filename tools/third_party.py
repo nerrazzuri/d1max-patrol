@@ -13,7 +13,7 @@
 手机 App 的第三方声明由 Flutter 自动收集,在 App「我的 → 设置 → 开源许可」里看。
 装机时由系统装的程序(mosquitto、ffmpeg、ROS 2、MOLA 等)不是我们分发的,在文末单独列出。
 
-构建网页(``npm run build``)时这份文件跟着进 ``d1max_site/web/assets/``,站点在
+构建网页(``npm run build``)时这份文件跟着进 ``nexwar_site/web/assets/``,站点在
 ``/assets/third-party-notices.txt`` 提供。改了依赖以后重跑本脚本,再构建网页。
 """
 
@@ -28,8 +28,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / "web" / "console" / "public" / "assets" / "third-party-notices.txt"
-OURS = ("d1max-contract", "d1max-patrol", "d1max-robot-agent", "d1max-site-node",
-        "d1max-localizer", "d1max-adapter-d1max", "d1max-adapter-sim")
+OURS = ("nexwar_contract", "nexwar_patrol", "nexwar_robot_agent", "nexwar_site_node",
+        "nexwar_localizer", "nexwar_adapter_d1max", "nexwar_adapter_sim")
 #: 运行时要的附加项(``dev``、``build`` 不算)
 EXTRAS = {"mqtt", "planning"}
 COPYLEFT = re.compile(r"\b(A?GPL|SSPL)\b", re.I)
@@ -49,8 +49,8 @@ EXTERNAL = (
     ("OpenCV", "图像处理", "Apache-2.0", "系统包管理器安装"),
 )
 
-#: 人员检测模型:不随包分发,由工程师放到 /etc/d1max/person.onnx
-MODEL_NOTE = ("人员检测模型(/etc/d1max/person.onnx)不随软件包分发,由工程师按现场放置。"
+#: 人员检测模型:不随包分发,由工程师放到 /etc/nexwar/person.onnx
+MODEL_NOTE = ("人员检测模型(/etc/nexwar/person.onnx)不随软件包分发,由工程师按现场放置。"
               "样机阶段用的是 YOLOv8n,其许可证为 AGPL-3.0;商用前须换用许可证允许商用的模型,"
               "或取得模型权利人的商业授权。")
 
@@ -80,11 +80,11 @@ def python_closure() -> list[md.Distribution]:
                 continue
             sub = {e.strip() for e in (m.group(2) or "").split(",") if e.strip()}
             dep = _norm(m.group(1))
-            if dep not in seen and not dep.startswith("d1max-"):
+            if dep not in seen and not dep.startswith("nexwar-"):
                 todo.append((dep, sub))
-            elif dep.startswith("d1max-") and sub:
+            elif dep.startswith("nexwar-") and sub:
                 todo.append((dep, sub))
-        if not key.startswith("d1max-"):
+        if not key.startswith("nexwar-"):
             seen[key] = dist
     return [seen[k] for k in sorted(seen)]
 

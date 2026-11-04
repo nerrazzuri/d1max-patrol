@@ -4,13 +4,13 @@ from __future__ import annotations
 
 from test_patrol_task import _跑, 钟
 
-from d1max_adapter_sim.robot import SimRobot
-from d1max_agent.assembly import build_engine
-from d1max_agent.bridges.sim_media import PLACEHOLDER_JPEG, sim_media
-from d1max_agent.events import EventBook
-from d1max_agent.tasks.engine_goto import EngineGotoTask
-from d1max_contract.geometry import Pose
-from d1max_contract.messages import MapPose, TaskState
+from nexwar_adapter_sim.robot import SimRobot
+from nexwar_agent.assembly import build_engine
+from nexwar_agent.bridges.sim_media import PLACEHOLDER_JPEG, sim_media
+from nexwar_agent.events import EventBook
+from nexwar_agent.tasks.engine_goto import EngineGotoTask
+from nexwar_contract.geometry import Pose
+from nexwar_contract.messages import MapPose, TaskState
 
 
 async def _goto(tmp_path, *, media, photo):

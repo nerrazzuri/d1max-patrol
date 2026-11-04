@@ -7,10 +7,10 @@ import json
 
 import pytest
 
-from d1max_contract import device_id as di
-from d1max_contract import ed25519
-from d1max_site.attest import NEUTRAL, AttestDesk, AttestRefused
-from d1max_site.db import SiteDB
+from nexwar_contract import device_id as di
+from nexwar_contract import ed25519
+from nexwar_site.attest import NEUTRAL, AttestDesk, AttestRefused
+from nexwar_site.db import SiteDB
 
 HW = "c" * 64
 
@@ -156,7 +156,7 @@ def test_没装出厂公钥的站点_谁都进不来_也记(tmp_path):
 
 
 def test_解绑以后_同一序列号换了板子可以重新加入(台):
-    from d1max_site.registry import Registry
+    from nexwar_site.registry import Registry
     desk, db, factory, _ = 台
     reg = Registry(db, site_id="estate-1")
     reg.enroll("D1M-0001", fingerprint="sha256:" + "a" * 64, issued_at=0, expires_at=1)

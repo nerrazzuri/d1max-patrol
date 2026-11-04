@@ -18,7 +18,7 @@ from types import SimpleNamespace
 import pytest
 from test_runtime_zones import 地面
 
-from d1max_agent.bridges import planned_nav as pn
+from nexwar_agent.bridges import planned_nav as pn
 
 
 def _图(tmp_path, version, origin):
@@ -36,8 +36,8 @@ def 台(tmp_path, monkeypatch):
     """真 ``AgentRuntime._switch_map``/``_load_grid``、真 ``PlannedNavBackend``;
     ``hold`` 里的版本读栅格时卡住,
     ``fail`` 里的版本读栅格时出错,直到放行。"""
-    from d1max_adapter_sim.robot import SimRobot
-    from d1max_agent.runtime import AgentRuntime
+    from nexwar_adapter_sim.robot import SimRobot
+    from nexwar_agent.runtime import AgentRuntime
     for version, origin in (("3", 30), ("4", 0), ("5", 50)):
         _图(tmp_path, version, origin)
     nav = pn.PlannedNavBackend(SimRobot(now_ms=lambda: 0), now_ms=lambda: 0, map_id="m")

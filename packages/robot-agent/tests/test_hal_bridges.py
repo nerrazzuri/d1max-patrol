@@ -8,10 +8,10 @@ import asyncio
 
 import pytest
 
-from d1max_adapter_sim.robot import SimRobot
-from d1max_agent.bridges.hal_device import HalDeviceBackend
-from d1max_agent.bridges.hal_nav import HalNavBackend
-from d1max_patrol.backends.base import (
+from nexwar_adapter_sim.robot import SimRobot
+from nexwar_agent.bridges.hal_device import HalDeviceBackend
+from nexwar_agent.bridges.hal_nav import HalNavBackend
+from nexwar_patrol.backends.base import (
     BatteryEvent,
     ControlLostEvent,
     DeviceBackendError,
@@ -21,7 +21,7 @@ from d1max_patrol.backends.base import (
     NavRequestError,
     NavStatusEvent,
 )
-from d1max_patrol.protocol.nav_types import LocStatus, NavStatus, Pose
+from nexwar_patrol.protocol.nav_types import LocStatus, NavStatus, Pose
 
 
 class 钟:
@@ -262,7 +262,7 @@ async def test_设备桥透传与不支持项(台子):
     for call in (dev.stand(), dev.lie(), dev.walk(1.0, 0.1, 0.0, 0.0)):
         with pytest.raises(DeviceBackendError):
             await call
-    await r.set_velocity(__import__("d1max_contract.hal", fromlist=["VelocityCommand"])
+    await r.set_velocity(__import__("nexwar_contract.hal", fromlist=["VelocityCommand"])
                          .VelocityCommand(seq=1, ttl_ms=5000, frame="base", vx=0.5, vy=0, wz=0))
     await dev.halt()
     await _步(c, r, nav, 3, dev=dev)
@@ -350,7 +350,7 @@ async def test_电量事件只在变化时发_不是每拍一条(台子):
 
 
 async def test_W46过热级别变了才发事件(台子):
-    from d1max_patrol.backends.base import OverheatEvent
+    from nexwar_patrol.backends.base import OverheatEvent
     c, r, nav, dev = 台子
     lvl = ["ok", "主控板正常"]
     dev.overheat = lambda: tuple(lvl)

@@ -13,10 +13,10 @@ from pathlib import Path
 
 import pytest
 
-from d1max_patrol import provision as dog
-from d1max_site import main as site_main
-from d1max_site import provision as site
-from d1max_site.db import SiteDB
+from nexwar_patrol import provision as dog
+from nexwar_site import main as site_main
+from nexwar_site import provision as site
+from nexwar_site.db import SiteDB
 
 NOW = 1_800_000_000_000
 
@@ -136,17 +136,17 @@ def test_端到端_狗钉住指纹领证书包_放好文件_私钥0600_env只改
     home = 站
     srv = _站点(home)
     try:
-        etc = tmp_path / "etc-d1max"
+        etc = tmp_path / "etc-nexwar"
         etc.mkdir()
-        (etc / "env").write_text("# 注释\nD1MAX_SITE_MQTT=\nD1MAX_MAP=m:1\nD1MAX_HAL=sim\n")
+        (etc / "env").write_text("# 注释\nNEXWAR_SITE_MQTT=\nNEXWAR_MAP=m:1\nNEXWAR_HAL=sim\n")
         rid = dog.provision(srv.code(_码(home)), etc=etc, user=None)
         assert rid == "A"
         assert stat.S_IMODE((etc / "tls/robot.key").stat().st_mode) == 0o600
         assert (etc / "tls/robot.crt").read_bytes() == (home / "ca/issued/A/robot.crt").read_bytes()
         assert json.loads((etc / "registration.json").read_text())["robot_id"] == "A"
         env = (etc / "env").read_text()
-        assert "D1MAX_SITE_MQTT=mqtts://localhost:8883" in env
-        assert "# 注释" in env and "D1MAX_MAP=m:1" in env and "D1MAX_HAL=sim" in env
+        assert "NEXWAR_SITE_MQTT=mqtts://localhost:8883" in env
+        assert "# 注释" in env and "NEXWAR_MAP=m:1" in env and "NEXWAR_HAL=sim" in env
         with pytest.raises(dog.ProvisionError, match="错误、已过期或者已用过了"):
             dog.provision(srv.code(site.encode(dict(dog.decode(_码(home)), t="错的"))),
                           etc=etc, user=None)
@@ -182,13 +182,13 @@ def test_已经开通成别的编号_不换_force才换(tmp_path):
 def test_出厂自检_缺什么说什么(tmp_path):
     etc = tmp_path / "etc"
     rows = {c.name: c for c in dog.selfcheck(etc=etc, user=None, run=lambda c: (1, "inactive"))}
-    assert rows["注册文件"].level == "FAIL" and rows["env D1MAX_SITE_MQTT"].level == "FAIL"
+    assert rows["注册文件"].level == "FAIL" and rows["env NEXWAR_SITE_MQTT"].level == "FAIL"
     (etc / "tls").mkdir(parents=True)
     for n in ("ca.crt", "robot.crt", "robot.key"):
         (etc / "tls" / n).write_text("x")
     (etc / "tls/robot.key").chmod(0o644)
     (etc / "registration.json").write_text(json.dumps({"robot_id": "A"}))
-    (etc / "env").write_text("D1MAX_SITE_MQTT=mqtts://s:8883\nD1MAX_MAP=m:1\nD1MAX_HOME=0,0,0\n")
+    (etc / "env").write_text("NEXWAR_SITE_MQTT=mqtts://s:8883\nNEXWAR_MAP=m:1\nNEXWAR_HOME=0,0,0\n")
     (etc / "release-pub.pem").write_text("x")
 
     def 跑(cmd):
@@ -292,9 +292,9 @@ def test_外审I1_读证书包时证书变了_当没读到(tmp_path, monkeypatch
 def test_外审W63_2_第3条_设备公钥跟领证书在同一个事务里记_冲突就整体不给_码不作废(站):
     """领证书提交以后、记公钥之前要是解绑了,旧公钥会被写回去。所以记公钥放进领证书的事务:
     要么一起成,要么一起不成。"""
-    from d1max_contract import device_id as di
-    from d1max_contract import ed25519
-    from d1max_site.attest import AttestDesk, AttestRefused
+    from nexwar_contract import device_id as di
+    from nexwar_contract import ed25519
+    from nexwar_site.attest import AttestDesk, AttestRefused
     home = 站
     c = site.decode(_码(home))
     factory = ed25519.new_seed()

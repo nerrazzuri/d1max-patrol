@@ -10,10 +10,10 @@ from types import SimpleNamespace as NS
 
 import pytest
 
-from d1max_agent.globalloc import Candidate, GlobalLoc, Matcher, Verdict
-from d1max_agent.obstacles import ObstacleView
-from d1max_agent.runtime import AgentRuntime
-from d1max_contract.locbridge import Relocalize
+from nexwar_agent.globalloc import Candidate, GlobalLoc, Matcher, Verdict
+from nexwar_agent.obstacles import ObstacleView
+from nexwar_agent.runtime import AgentRuntime
+from nexwar_contract.locbridge import Relocalize
 
 
 def _rt(loc, m, mono):

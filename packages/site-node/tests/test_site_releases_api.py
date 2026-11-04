@@ -6,7 +6,7 @@ import pytest
 from test_site_api import PW, _等, 站
 from test_site_releases import NAME, 做包
 
-from d1max_contract.bundle_format import BUNDLE_SCHEMA
+from nexwar_contract.bundle_format import BUNDLE_SCHEMA
 
 
 class 假发布:
@@ -169,7 +169,7 @@ def test_升级前检查_没登记的版本_也能查_狗按槽里的自述比sc
     """W00c6d 内审应修 3:U 盘装上去的版本站点没登记,以前查回 404、切却跳过 schema 检查。"""
     from test_site_schedule import 打包
 
-    from d1max_site.catalog import import_bundle
+    from nexwar_site.catalog import import_bundle
     s = 站点
     alice = _登(s, "alice")
     import_bundle(s.db, 打包(tmp_path, 1), imported_by="alice", now_ms=1)
@@ -229,7 +229,7 @@ def test_站点备份过期了_提示不拦(站点, tmp_path):
 def test_新版要的任务包schema比站点当前包高_清单不过_切也不许(站点, tmp_path):
     from test_site_schedule import 打包
 
-    from d1max_site.catalog import import_bundle
+    from nexwar_site.catalog import import_bundle
     s = 站点
     alice = _登(s, "alice")
     import_bundle(s.db, 打包(tmp_path, 1), imported_by="alice", now_ms=1)
@@ -284,7 +284,7 @@ def test_站点当前任务包是新格式_新版要的也够_过(站点, tmp_pa
     import yaml
     from test_site_schedule import 打包
 
-    from d1max_site.catalog import import_bundle
+    from nexwar_site.catalog import import_bundle
     s = 站点
     alice = _登(s, "alice")
     b = 打包(tmp_path, 1)

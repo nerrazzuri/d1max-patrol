@@ -10,10 +10,10 @@ import zipfile
 
 import pytest
 
-from d1max_site.backup import STALE_MS, SiteBackup
-from d1max_site.db import SiteDB
-from d1max_site.evidence import EvidenceStore
-from d1max_site.runs import QUIET_MS, RunDesk, RunError
+from nexwar_site.backup import STALE_MS, SiteBackup
+from nexwar_site.db import SiteDB
+from nexwar_site.evidence import EvidenceStore
+from nexwar_site.runs import QUIET_MS, RunDesk, RunError
 
 S1, S2 = "20260925T010000Z", "20260926T010000Z"
 
@@ -251,7 +251,7 @@ def test_没判成的隔一阵再试_最多三轮(台):
     assert store.run(rid)["verdicts"] == {"pending": 1}
     assert desk.pending_judge() == [], "马上重试没意义"
     tries = 1
-    from d1max_site.runs import RETRY_MS
+    from nexwar_site.runs import RETRY_MS
     for _ in range(5):
         c.ms += RETRY_MS + 1
         tries += desk.step()

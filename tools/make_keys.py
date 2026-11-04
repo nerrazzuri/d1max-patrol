@@ -48,8 +48,8 @@ def _inside(child: Path, parent: Path) -> bool:
 def make(out: Path, *, org: str, android: bool = True,
          keytool: str | None = None) -> list[str]:
     """生成到 ``out``,回生成了哪些文件。出错抛 ``SystemExit``(说清楚)。"""
-    from d1max_contract import ed25519, relsign
-    from d1max_contract.binding import key_id
+    from nexwar_contract import ed25519, relsign
+    from nexwar_contract.binding import key_id
     if _inside(out, ROOT):
         raise SystemExit(f"输出目录 {out} 在仓库里面:放到仓库外面(~/nexus-keys 或加密 U 盘)")
     out.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -104,8 +104,8 @@ def make(out: Path, *, org: str, android: bool = True,
 
 
 def _factory_key(out: Path) -> str:
-    from d1max_contract import device_id as di
-    from d1max_contract import ed25519
+    from nexwar_contract import device_id as di
+    from nexwar_contract import ed25519
     seed = ed25519.new_seed()
     (out / "factory.key").write_bytes(ed25519.private_pem(seed))
     (out / "factory.key").chmod(0o600)

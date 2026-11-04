@@ -11,7 +11,7 @@
 /// **标识符全是 ASCII**：这台机器上的 Dart SDK 不接受非 ASCII 标识符。
 library;
 
-import 'package:d1max_patrol/model/alert.dart';
+import 'package:nexwar_patrol/model/alert.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 /// 一条告警在 wire 上完整的 14 个键（`engine/alerts.py` 的 `Alert.to_wire()`）。

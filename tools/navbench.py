@@ -77,13 +77,13 @@ _NAV2: dict[str, Any] = {}
 
 
 async def _nav2_up() -> Any:
-    """起 Nav2(``deploy/nav2/d1max_nav2.launch.py`` + 我们的参数)和转接节点,等它们连上代理这头的服务端。"""
+    """起 Nav2(``deploy/nav2/nexwar_nav2.launch.py`` + 我们的参数)和转接节点,等它们连上代理这头的服务端。"""
     if "link" in _NAV2:
         return _NAV2["link"]
     import os
     import subprocess
 
-    from d1max_agent.navbridge import NavBridgeServer
+    from nexwar_agent.navbridge import NavBridgeServer
     d = Path(tempfile.mkdtemp(prefix="navbench-"))
     sock = d / "nav2.sock"
     link = NavBridgeServer(sock)
@@ -99,7 +99,7 @@ async def _nav2_up() -> Any:
     # 跟狗上同一个启动文件(Nav2 + 转接节点 + 行为树换成绝对路径)
     pypath = f"{ROOT}/packages/localizer/src:{ROOT}/packages/contract/src"
     nav2 = subprocess.Popen(
-        ["bash", "-c", src + f"ros2 launch {ROOT}/deploy/nav2/d1max_nav2.launch.py "
+        ["bash", "-c", src + f"ros2 launch {ROOT}/deploy/nav2/nexwar_nav2.launch.py "
                              f"params_file:={params} socket:={sock} pythonpath:={pypath}"],
         env=env, stdout=open(logs / "nav2.log", "w"), stderr=subprocess.STDOUT,
         start_new_session=True)
@@ -133,8 +133,8 @@ async def run_planned(sc: dict[str, Any], defaults: dict[str, Any], seed: int,
     """跑一次(``planned`` 或 ``nav2`` 后端;仿真台子同一个)。"""
     from test_obstacle_avoid import 台子
 
-    from d1max_patrol.backends.base import NavRequestError
-    from d1max_patrol.protocol.nav_types import NavStatus, Pose
+    from nexwar_patrol.backends.base import NavRequestError
+    from nexwar_patrol.protocol.nav_types import NavStatus, Pose
 
     rng = random.Random(seed)
     jit = {**defaults["jitter"], **sc.get("jitter", {})}
@@ -153,8 +153,8 @@ async def run_planned(sc: dict[str, Any], defaults: dict[str, Any], seed: int,
         link = None
         if backend == "nav2":
             link = await _nav2_up()
-            from d1max_agent.bridges.nav2_nav import Nav2NavBackend
-            from d1max_agent.planning.planner import Planner
+            from nexwar_agent.bridges.nav2_nav import Nav2NavBackend
+            from nexwar_agent.planning.planner import Planner
             old = t.nav
             nav = Nav2NavBackend(t.r, now_ms=t.c, map_id="m", planner=Planner(in_process=True),
                                  link=link)
@@ -164,7 +164,7 @@ async def run_planned(sc: dict[str, Any], defaults: dict[str, Any], seed: int,
             t.c.ms = _NAV2["t_ms"] = _NAV2["t_ms"] + 60_000      # 仿真钟跨场景只往前
         t.nav.load_grid(Path(d))
         if sc.get("route_net"):                               # W48 路网
-            from d1max_contract.routenet import RouteNet
+            from nexwar_contract.routenet import RouteNet
             t.nav.set_route_net(RouteNet.from_wire({"map_id": "m", "map_version": "",
                                                     "revision": 1, **sc["route_net"]}))
         passed = {i: math.inf for i, _ in enumerate(sc.get("must_pass", []))}

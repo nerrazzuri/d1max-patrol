@@ -13,9 +13,9 @@ from __future__ import annotations
 
 import json
 
-from d1max_site.alert_store import AlertDesk
-from d1max_site.db import SiteDB
-from d1max_site.push import (
+from nexwar_site.alert_store import AlertDesk
+from nexwar_site.db import SiteDB
+from nexwar_site.push import (
     JPUSH_NOTIFY_ID_VENDORS,
     Fcm,
     JPush,
@@ -197,7 +197,7 @@ def test_极光不认去重字段回400_通道自己不重发_交回外层_之�
 
     import pytest
 
-    from d1max_site.push import JPush, PushRetryNow
+    from nexwar_site.push import JPush, PushRetryNow
     sent = []
 
     def opener(req, timeout):
@@ -223,7 +223,7 @@ def _极光400台(tmp_path, change):
     import io
     import urllib.error
 
-    from d1max_site.push import EXPIRE_MS
+    from nexwar_site.push import EXPIRE_MS
     clock = [NOW]
     db = SiteDB(tmp_path / "s.db")
     with db.tx() as c:
@@ -287,7 +287,7 @@ def test_极光回别的错_不重发():
 
     import pytest
 
-    from d1max_site.push import JPush, PushError
+    from nexwar_site.push import JPush, PushError
     sent = []
 
     def opener(req, timeout):

@@ -12,13 +12,13 @@ import json
 
 import pytest
 
-from d1max_adapter_sim.robot import SimRobot
-from d1max_agent.engine import archive as arc
-from d1max_agent.runtime import AgentRuntime
-from d1max_contract.memory_broker import MemoryBroker, MemoryTransport
-from d1max_contract.registration import Registration
-from d1max_contract.topics import Topics
-from d1max_patrol.protocol.nav_types import NavStatus, Pose
+from nexwar_adapter_sim.robot import SimRobot
+from nexwar_agent.engine import archive as arc
+from nexwar_agent.runtime import AgentRuntime
+from nexwar_contract.memory_broker import MemoryBroker, MemoryTransport
+from nexwar_contract.registration import Registration
+from nexwar_contract.topics import Topics
+from nexwar_patrol.protocol.nav_types import NavStatus, Pose
 
 REG = Registration(site_id="s", robot_id="r", credential_fingerprint="f", issued_at=0,
                    expires_at=10**12)
@@ -196,7 +196,7 @@ async def test_排队那一路的停车挂钩也撤导航桥(台子):
 
 
 def _msg(cmd):
-    from d1max_contract.transport import Message
+    from nexwar_contract.transport import Message
     return Message(T.cmd, json.dumps(cmd).encode(), 1, False)
 
 
@@ -346,13 +346,13 @@ async def test_HAL停车抛错_导航桥不卡_运行时不炸_任务收尾(慢�
         await _跑(rt, r, c, broker, 1)              # 不许抛
     assert engine.crash == "" and engine.snapshot.reason == "halt", \
         "停导航失败也要把中止走完(原因是 halt),不是炸穿之后被收尾兜成「收尾时出错」"
-    from d1max_patrol.protocol.nav_types import NavStatus
+    from nexwar_patrol.protocol.nav_types import NavStatus
     assert await rt.parts.nav.nav_status() is not NavStatus.ACTIVE
     assert rt.processor.current is None or rt.processor.current.done
 
 
 async def test_代理自己的事件簿和幂等记录写不进去_每拍不炸_叫停回执照发(台子, tmp_path):
-    """W00c6a 内审 S3:默认部署下代理的 store-dir 跟归档在同一块盘上(``/var/lib/d1max``)。盘只读时
+    """W00c6a 内审 S3:默认部署下代理的 store-dir 跟归档在同一块盘上(``/var/lib/nexwar``)。盘只读时
     以前事件簿、幂等记录的写一抛,那一拍的状态、遥测都不发;每条命令处理完记幂等时抛,回执发不出去
     —— 叫停也一样。"""
     import os
@@ -386,7 +386,7 @@ async def test_到了点_停稳之前来的叫停_报叫停中止(台子):
     """引擎已经 DONE、任务还在等停车确认时来了叫停:请求过中止就报中止(W00c6a 内审)。"""
     broker, c, r, ears, rt, site = 台子
     await site.publish(T.cmd, json.dumps(_goto(0.5, "g1", c)).encode())
-    from d1max_agent.engine.machine import RunState
+    from nexwar_agent.engine.machine import RunState
     for _ in range(100):
         await _跑(rt, r, c, broker, 1)
         if rt.parts.engine.snapshot.state is RunState.DONE:

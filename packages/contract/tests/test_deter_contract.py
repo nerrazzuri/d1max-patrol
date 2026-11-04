@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from d1max_contract.deter import DeterRequest, parse_deter
-from d1max_contract.errors import ContractError
+from nexwar_contract.deter import DeterRequest, parse_deter
+from nexwar_contract.errors import ContractError
 
 
 @pytest.mark.parametrize("p", [

@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from d1max_site.db import SiteDB
-from d1max_site.registry import Registry, RegistryError
+from nexwar_site.db import SiteDB
+from nexwar_site.registry import Registry, RegistryError
 
 T0 = 1_800_000_000_000
 

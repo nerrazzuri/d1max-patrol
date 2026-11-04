@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from d1max_contract import device_id as di
-from d1max_contract import ed25519
+from nexwar_contract import device_id as di
+from nexwar_contract import ed25519
 
 NOW = 1_800_000_000_000
 
@@ -20,7 +20,7 @@ HW = "a" * 64
 
 
 def _req(device, serial="D1M-0001", hw=HW):
-    return di.make_request(serial=serial, model="d1max-v2", device_pub=ed25519.public_key(device),
+    return di.make_request(serial=serial, model="nexwar_v2", device_pub=ed25519.public_key(device),
                            hw_id=hw)
 
 

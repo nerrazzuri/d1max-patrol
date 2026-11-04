@@ -9,8 +9,8 @@ import re
 import time
 from pathlib import Path
 
-from d1max_patrol.protocol.agent_frames import PROTO_VERSION, Ack
-from d1max_sim.agent_server import SimAgentServer
+from nexwar_patrol.protocol.agent_frames import PROTO_VERSION, Ack
+from nexwar_sim.agent_server import SimAgentServer
 from tests.sim.test_agent_server import _client
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -144,7 +144,7 @@ async def test_vel不排在walk后面():
 
 
 async def test_锁死与硬急停也拒_跟CPP的DoVel一致():
-    from d1max_patrol.protocol.agent_frames import EmergencyStatus, MotionStatus
+    from nexwar_patrol.protocol.agent_frames import EmergencyStatus, MotionStatus
 
     async with _client() as (sim, client):
         await _站起(sim, client)
@@ -206,7 +206,7 @@ def test_CPP抢控制权看回执_行为测试编译并通过_旁路四处都走
 
 
 def test_旁路进程的vel全走运动安全门_常量两边一致():
-    from d1max_patrol.backends.sidecar_device import MAX_WALK_SPEED, VEL_TTL_MAX_MS, VEL_TTL_MIN_MS
+    from nexwar_patrol.backends.sidecar_device import MAX_WALK_SPEED, VEL_TTL_MAX_MS, VEL_TTL_MIN_MS
 
     hdr = (ROOT / "motion" / "vel_gate.hpp").read_text(encoding="utf-8")
     for name, want in (("kMaxFraction", MAX_WALK_SPEED), ("kTtlMinMs", VEL_TTL_MIN_MS),
@@ -233,7 +233,7 @@ def test_旁路进程的vel全走运动安全门_常量两边一致():
 
 
 async def test_走着的时候硬急停或趴下_目标作废_恢复了也不接着走():
-    from d1max_patrol.protocol.agent_frames import EmergencyStatus, MotionStatus
+    from nexwar_patrol.protocol.agent_frames import EmergencyStatus, MotionStatus
 
     async with _client() as (sim, client):
         await _站起(sim, client)
@@ -260,7 +260,7 @@ async def test_走着的时候硬急停或趴下_目标作废_恢复了也不接
 
 async def test_急停Unknown也拒_走着时变Unknown就停_恢复也不接着走():
     """复审阻断 1:急停三态,两路都明确 Recover 才能走(同 vel_gate.hpp)。"""
-    from d1max_patrol.protocol.agent_frames import EmergencyStatus
+    from nexwar_patrol.protocol.agent_frames import EmergencyStatus
 
     async with _client() as (sim, client):
         await _站起(sim, client)

@@ -9,8 +9,8 @@
 #     sudo bash deploy/uninstall.sh --agent-root <目录>   # 指定放 runs/ 的那个目录
 #     sudo bash deploy/uninstall.sh --purge-agent-binary # 连编出来的二进制一起删
 #
-#   **默认就是彻底卸干净**:服务、单元、自启链、/opt/d1max 整个根、
-#   /etc/d1max 整个目录(含站点证书包、注册文件、现场填的 env)、数据根,以及正在跑的
+#   **默认就是彻底卸干净**:服务、单元、自启链、/opt/nexwar 整个根、
+#   /etc/nexwar 整个目录(含站点证书包、注册文件、现场填的 env)、数据根,以及正在跑的
 #   patrol_agent 和它留下的管道 / pid 文件 / 现场日志。
 #   只想重装、不想重新向站点登记这只狗的,用 --keep-data。
 #
@@ -20,12 +20,12 @@
 #   这脚本要能在无人值守的 provisioning 里跑,一个会阻塞等输入的脚本
 #   比它要防的问题更麻烦。
 #
-#   这台机器上没有的那一半会自动跳过:Orin 上没有 runs/d1max-agent.fifo,
-#   agent 那一段就是个空操作;笔记本上没有 /opt/d1max,盘上那一段同理。
+#   这台机器上没有的那一半会自动跳过:Orin 上没有 runs/nexwar_agent.fifo,
+#   agent 那一段就是个空操作;笔记本上没有 /opt/nexwar,盘上那一段同理。
 #   什么都没装过的机器上跑一遍,干干净净退 0。
 #
 #   **变量名一律用 ASCII。** bash 的标识符只认 ASCII 字母和下划线:
-#   `根=/opt/d1max` 这种写法不是赋值,而是一条"找不到的命令",配上
+#   `根=/opt/nexwar` 这种写法不是赋值,而是一条"找不到的命令",配上
 #   set -euo pipefail 会让脚本停在那一行。注释和屏幕上的话照旧写中文。
 # =====================================================================
 set -euo pipefail
@@ -40,92 +40,92 @@ set -euo pipefail
 #
 # 这条对账是"卸载卸得干净、又只卸我们自己的"这句话唯一不靠人记性的凭据。
 #
-# @删除 /opt/d1max                                                       整个根
-# @删除 /opt/d1max/bin                                                   跟版本无关的解释器
-# @删除 /opt/d1max/bin-venv                                              上面那个解释器的 venv
-# @删除 /opt/d1max/releases                                              版本槽(代码和 venv)
-# @删除 /opt/d1max/current                                               版本链
-# @删除 /opt/d1max/pending.json                                          在途升级标记
-# @删除 /opt/d1max/rolled_back.json                                      开机守卫退回上一版时留的条子
-# @删除 /var/lib/d1max                                                   数据根(发件箱、事件簿、幂等记录)
-# @删除 /etc/d1max                                                       整个配置目录
-# @删除 /etc/d1max/env                                                   现场值(站点地址、地图、原点、适配器、SN)
-# @删除 /etc/d1max/release-pub.pem                                       发行公钥(W30)
-# @删除 /etc/d1max/release-pub.d                                         另外认的发行公钥(A3)
-# @删除 /etc/d1max/unbind-pub.d                                          随发行新增的解绑公钥(W57;随整个配置目录删)
-# @删除 /etc/d1max/unbind-revoked.txt                                    作废的解绑公钥编号(W57;随整个配置目录删)
-# @删除 /etc/d1max/factory-pub.pem                                       出厂公钥(W63;随整个配置目录删)
-# @删除 /etc/d1max/factory-pub.d                                         另外认的出厂公钥(W63;随整个配置目录删)
-# @删除 /etc/systemd/system/d1max-agent.service                           代理单元
-# @删除 /etc/systemd/system/multi-user.target.wants/d1max-agent.service  代理的开机自启链
-# @删除 /etc/systemd/system/d1max-localizer.service                       定位器单元(W09b)
-# @删除 /etc/systemd/system/multi-user.target.wants/d1max-localizer.service 定位器的自启链(有人手工 enable 过的话)
-# @删除 /etc/systemd/system/d1max-obstacles.service                       感知节点单元(W11)
-# @删除 /etc/systemd/system/multi-user.target.wants/d1max-obstacles.service 感知节点的自启链(有人手工 enable 过的话)
-# @删除 /etc/systemd/system/d1max-persons.service                         人员检测节点单元(W24)
-# @删除 /etc/systemd/system/multi-user.target.wants/d1max-persons.service 人员检测节点的自启链(有人手工 enable 过的话)
-# @删除 /etc/systemd/system/d1max-nav2.service                            Nav2 单元(W47)
-# @删除 /etc/systemd/system/multi-user.target.wants/d1max-nav2.service    Nav2 单元的自启链(有人手工 enable 过的话)
-# @删除 /etc/systemd/system/d1max-lidar-merge.service                     前后雷达合并单元(W09i)
-# @删除 /etc/systemd/system/multi-user.target.wants/d1max-lidar-merge.service 前后雷达合并的自启链(有人手工 enable 过的话)
-# @删除 /etc/systemd/system/d1max-sidecar.service                         运动控制旁路单元(工单 7)
-# @删除 /etc/systemd/system/multi-user.target.wants/d1max-sidecar.service 运动控制旁路的自启链(有人手工 enable 过的话)
-# @删除 /etc/systemd/system/d1max-zenohd.service                          自带算力板的 zenoh 路由单元(A5)
-# @删除 /etc/systemd/system/multi-user.target.wants/d1max-zenohd.service zenoh 路由的自启链(enable 过的话)
-# @删除 /etc/systemd/system/d1max-bind.service                            配网服务单元(W42)
-# @删除 /etc/systemd/system/multi-user.target.wants/d1max-bind.service   配网服务的自启链(烧写时 enable 的)
-# @删除 /etc/systemd/timesyncd.conf.d/d1max.conf                          对时配置(W09d;删了之后按系统原来的配置对时)
-# @删除 /etc/chrony/conf.d/d1max.conf                                     对时片段(决策 61;删了之后 chrony 回到厂家的配置)
-# @删除 /usr/local/lib/d1max                                             特权执行器和它验签用的模块(W55)
-# @删除 /etc/d1max-ops.json                                              特权执行器的配置(W55)
-# @删除 /var/lib/d1max-ops                                               特权执行器的请求、结果目录(W55)
-# @删除 /etc/systemd/system/d1max-ops.path                               特权执行器的路径单元(W55)
-# @删除 /etc/systemd/system/d1max-ops.service                            特权执行器(W55)
-# @删除 /etc/systemd/system/paths.target.wants/d1max-ops.path            路径单元的自启链
-# @删除 /etc/systemd/journald.conf.d/d1max.conf                          日志留盘设置(W55;删了回到系统原来的设置)
-# @删除 /etc/systemd/system/d1max-bootguard.service                      老的守卫单元(多数机器上没有)
-# @删除 /etc/systemd/system/d1max-patrol.service                         老服务(W00c5e 退役;没重跑过装机脚本的老机器上还在)
-# @删除 /etc/systemd/system/multi-user.target.wants/d1max-patrol.service 老服务的自启链
-# @删除 /usr/local/sbin/d1max-privileged                                 老的特权助手
-# @删除 /etc/sudoers.d/d1max                                             老助手的 sudo 白名单
-# @删除 /usr/local/sbin/d1max-restart-now                                老服务重启的内部入口
-# @删除 /opt/d1max/bundles                                               老服务的任务包目录
+# @删除 /opt/nexwar                                                       整个根
+# @删除 /opt/nexwar/bin                                                   跟版本无关的解释器
+# @删除 /opt/nexwar/bin-venv                                              上面那个解释器的 venv
+# @删除 /opt/nexwar/releases                                              版本槽(代码和 venv)
+# @删除 /opt/nexwar/current                                               版本链
+# @删除 /opt/nexwar/pending.json                                          在途升级标记
+# @删除 /opt/nexwar/rolled_back.json                                      开机守卫退回上一版时留的条子
+# @删除 /var/lib/nexwar                                                   数据根(发件箱、事件簿、幂等记录)
+# @删除 /etc/nexwar                                                       整个配置目录
+# @删除 /etc/nexwar/env                                                   现场值(站点地址、地图、原点、适配器、SN)
+# @删除 /etc/nexwar/release-pub.pem                                       发行公钥(W30)
+# @删除 /etc/nexwar/release-pub.d                                         另外认的发行公钥(A3)
+# @删除 /etc/nexwar/unbind-pub.d                                          随发行新增的解绑公钥(W57;随整个配置目录删)
+# @删除 /etc/nexwar/unbind-revoked.txt                                    作废的解绑公钥编号(W57;随整个配置目录删)
+# @删除 /etc/nexwar/factory-pub.pem                                       出厂公钥(W63;随整个配置目录删)
+# @删除 /etc/nexwar/factory-pub.d                                         另外认的出厂公钥(W63;随整个配置目录删)
+# @删除 /etc/systemd/system/nexwar_agent.service                           代理单元
+# @删除 /etc/systemd/system/multi-user.target.wants/nexwar_agent.service  代理的开机自启链
+# @删除 /etc/systemd/system/nexwar_localizer.service                       定位器单元(W09b)
+# @删除 /etc/systemd/system/multi-user.target.wants/nexwar_localizer.service 定位器的自启链(有人手工 enable 过的话)
+# @删除 /etc/systemd/system/nexwar_obstacles.service                       感知节点单元(W11)
+# @删除 /etc/systemd/system/multi-user.target.wants/nexwar_obstacles.service 感知节点的自启链(有人手工 enable 过的话)
+# @删除 /etc/systemd/system/nexwar_persons.service                         人员检测节点单元(W24)
+# @删除 /etc/systemd/system/multi-user.target.wants/nexwar_persons.service 人员检测节点的自启链(有人手工 enable 过的话)
+# @删除 /etc/systemd/system/nexwar_nav2.service                            Nav2 单元(W47)
+# @删除 /etc/systemd/system/multi-user.target.wants/nexwar_nav2.service    Nav2 单元的自启链(有人手工 enable 过的话)
+# @删除 /etc/systemd/system/nexwar_lidar_merge.service                     前后雷达合并单元(W09i)
+# @删除 /etc/systemd/system/multi-user.target.wants/nexwar_lidar_merge.service 前后雷达合并的自启链(有人手工 enable 过的话)
+# @删除 /etc/systemd/system/nexwar_sidecar.service                         运动控制旁路单元(工单 7)
+# @删除 /etc/systemd/system/multi-user.target.wants/nexwar_sidecar.service 运动控制旁路的自启链(有人手工 enable 过的话)
+# @删除 /etc/systemd/system/nexwar_zenohd.service                          自带算力板的 zenoh 路由单元(A5)
+# @删除 /etc/systemd/system/multi-user.target.wants/nexwar_zenohd.service zenoh 路由的自启链(enable 过的话)
+# @删除 /etc/systemd/system/nexwar_bind.service                            配网服务单元(W42)
+# @删除 /etc/systemd/system/multi-user.target.wants/nexwar_bind.service   配网服务的自启链(烧写时 enable 的)
+# @删除 /etc/systemd/timesyncd.conf.d/nexwar.conf                          对时配置(W09d;删了之后按系统原来的配置对时)
+# @删除 /etc/chrony/conf.d/nexwar.conf                                     对时片段(决策 61;删了之后 chrony 回到厂家的配置)
+# @删除 /usr/local/lib/nexwar                                             特权执行器和它验签用的模块(W55)
+# @删除 /etc/nexwar_ops.json                                              特权执行器的配置(W55)
+# @删除 /var/lib/nexwar_ops                                               特权执行器的请求、结果目录(W55)
+# @删除 /etc/systemd/system/nexwar_ops.path                               特权执行器的路径单元(W55)
+# @删除 /etc/systemd/system/nexwar_ops.service                            特权执行器(W55)
+# @删除 /etc/systemd/system/paths.target.wants/nexwar_ops.path            路径单元的自启链
+# @删除 /etc/systemd/journald.conf.d/nexwar.conf                          日志留盘设置(W55;删了回到系统原来的设置)
+# @删除 /etc/systemd/system/nexwar_bootguard.service                      老的守卫单元(多数机器上没有)
+# @删除 /etc/systemd/system/nexwar_patrol.service                         老服务(W00c5e 退役;没重跑过装机脚本的老机器上还在)
+# @删除 /etc/systemd/system/multi-user.target.wants/nexwar_patrol.service 老服务的自启链
+# @删除 /usr/local/sbin/nexwar_privileged                                 老的特权助手
+# @删除 /etc/sudoers.d/nexwar                                             老助手的 sudo 白名单
+# @删除 /usr/local/sbin/nexwar_restart_now                                老服务重启的内部入口
+# @删除 /opt/nexwar/bundles                                               老服务的任务包目录
 #
 # 带 --keep-data 时这几处留着,每一处的理由都要能说出口:
 #
-# @保留 /etc/d1max          配置目录留着:站点签发的证书包、注册文件、env 都在它底下
-# @保留 /etc/d1max/env      现场填过的值(站点地址、地图、原点、SN),重装不用再填
-# @保留 /opt/d1max          根目录本身留着(只清里面的解释器、版本槽、链)
-# @保留 /var/lib/d1max      数据根:发件箱里还没传到站点的东西在这儿
+# @保留 /etc/nexwar          配置目录留着:站点签发的证书包、注册文件、env 都在它底下
+# @保留 /etc/nexwar/env      现场填过的值(站点地址、地图、原点、SN),重装不用再填
+# @保留 /opt/nexwar          根目录本身留着(只清里面的解释器、版本槽、链)
+# @保留 /var/lib/nexwar      数据根:发件箱里还没传到站点的东西在这儿
 
 # ------------------------------------------------------------ 常量
 # **写死,不给环境变量覆盖**,跟 install.sh 第 11 行同一个口径。下面那些
 # rm 的范围锁用的也是这几个字面量而不是这几个变量 —— 哪怕有人把变量改了,
 # 锁还在原地。
-ROOT=/opt/d1max
-ETC_DIR=/etc/d1max
+ROOT=/opt/nexwar
+ETC_DIR=/etc/nexwar
 UNIT_DIR=/etc/systemd/system
-MAIN_UNIT=d1max-agent.service
-OLD_UNIT=d1max-bootguard.service
-LEGACY_UNIT=d1max-patrol.service
-WANTS_LINK=/etc/systemd/system/multi-user.target.wants/d1max-agent.service
-LOC_UNIT=d1max-localizer.service
-LOC_WANTS_LINK=/etc/systemd/system/multi-user.target.wants/d1max-localizer.service
-OBS_UNIT=d1max-obstacles.service
-OBS_WANTS_LINK=/etc/systemd/system/multi-user.target.wants/d1max-obstacles.service
-PERS_UNIT=d1max-persons.service
-PERS_WANTS_LINK=/etc/systemd/system/multi-user.target.wants/d1max-persons.service
-NAV2_UNIT=d1max-nav2.service
-NAV2_WANTS_LINK=/etc/systemd/system/multi-user.target.wants/d1max-nav2.service
-MERGE_UNIT=d1max-lidar-merge.service
-MERGE_WANTS_LINK=/etc/systemd/system/multi-user.target.wants/d1max-lidar-merge.service
-SIDE_UNIT=d1max-sidecar.service
-SIDE_WANTS_LINK=/etc/systemd/system/multi-user.target.wants/d1max-sidecar.service
-ZENOH_UNIT=d1max-zenohd.service
-ZENOH_WANTS_LINK=/etc/systemd/system/multi-user.target.wants/d1max-zenohd.service
-BIND_UNIT=d1max-bind.service
-BIND_WANTS_LINK=/etc/systemd/system/multi-user.target.wants/d1max-bind.service
-LEGACY_WANTS_LINK=/etc/systemd/system/multi-user.target.wants/d1max-patrol.service
+MAIN_UNIT=nexwar_agent.service
+OLD_UNIT=nexwar_bootguard.service
+LEGACY_UNIT=nexwar_patrol.service
+WANTS_LINK=/etc/systemd/system/multi-user.target.wants/nexwar_agent.service
+LOC_UNIT=nexwar_localizer.service
+LOC_WANTS_LINK=/etc/systemd/system/multi-user.target.wants/nexwar_localizer.service
+OBS_UNIT=nexwar_obstacles.service
+OBS_WANTS_LINK=/etc/systemd/system/multi-user.target.wants/nexwar_obstacles.service
+PERS_UNIT=nexwar_persons.service
+PERS_WANTS_LINK=/etc/systemd/system/multi-user.target.wants/nexwar_persons.service
+NAV2_UNIT=nexwar_nav2.service
+NAV2_WANTS_LINK=/etc/systemd/system/multi-user.target.wants/nexwar_nav2.service
+MERGE_UNIT=nexwar_lidar_merge.service
+MERGE_WANTS_LINK=/etc/systemd/system/multi-user.target.wants/nexwar_lidar_merge.service
+SIDE_UNIT=nexwar_sidecar.service
+SIDE_WANTS_LINK=/etc/systemd/system/multi-user.target.wants/nexwar_sidecar.service
+ZENOH_UNIT=nexwar_zenohd.service
+ZENOH_WANTS_LINK=/etc/systemd/system/multi-user.target.wants/nexwar_zenohd.service
+BIND_UNIT=nexwar_bind.service
+BIND_WANTS_LINK=/etc/systemd/system/multi-user.target.wants/nexwar_bind.service
+LEGACY_WANTS_LINK=/etc/systemd/system/multi-user.target.wants/nexwar_patrol.service
 
 say()  { printf '%s\n' "$*"; }
 warn() { printf '%s\n' "$*" >&2; }
@@ -177,7 +177,7 @@ done
 # 这脚本第一个不可逆的动作是收掉 patrol_agent,而那一步**恰恰不需要 root**
 # (agent 是登录用户用 field-agent.sh 起的,同一个用户 kill -TERM 就够)。
 # SDK 会话一丢,不重启 RK3588 就再也抢不回来(真机验证 §5 #46/#47)。
-# 真正需要 root 的是后面 rm /opt/d1max 那几处。没有这道闸的话,一次忘了 sudo
+# 真正需要 root 的是后面 rm /opt/nexwar 那几处。没有这道闸的话,一次忘了 sudo
 # 的运行会:先把控制权永久交还给上装 -> 再在第一条 rm 上 EACCES -> set -e
 # 当场打死 -> 盘上一个字节没卸、5/5 回执也打不出来。也就是最不可逆的那一步
 # 照做了,该做的一步都没做,现场还看不到回执。
@@ -194,8 +194,8 @@ fi
 if [ -z "$AGENT_ROOT" ]; then
   AGENT_ROOT=$(cd "$(dirname "$0")/.." 2>/dev/null && pwd) || AGENT_ROOT=$PWD
 fi
-AGENT_FIFO="$AGENT_ROOT/runs/d1max-agent.fifo"
-AGENT_PIDFILE="$AGENT_ROOT/runs/d1max-agent.pid"
+AGENT_FIFO="$AGENT_ROOT/runs/nexwar_agent.fifo"
+AGENT_PIDFILE="$AGENT_ROOT/runs/nexwar_agent.pid"
 AGENT_LOGDIR="$AGENT_ROOT/runs/field-logs"
 AGENT_BIN="$AGENT_ROOT/motion/patrol_agent"
 
@@ -206,7 +206,7 @@ AGENT_BIN="$AGENT_ROOT/motion/patrol_agent"
 # 这几条写不对就是事故,不是 bug。
 
 # 盘上属于我们的那几处。范围里**没有**任何一条能匹配到别家的目录、
-# 别家的 ROS、或者任何不叫 d1max-* 的 systemd 单元。
+# 别家的 ROS、或者任何不叫 nexwar_* 的 systemd 单元。
 rm_sys() {
   local target=${1:-} why=${2:-}
   if [ -z "$target" ]; then
@@ -214,22 +214,22 @@ rm_sys() {
     return 0
   fi
   case "$target" in
-    /opt/d1max|/opt/d1max/*) ;;
-    /etc/d1max|/etc/d1max/*) ;;
-    /var/lib/d1max|/var/lib/d1max/*) ;;
-    /etc/systemd/system/d1max-*.service) ;;
-    /etc/systemd/system/*.target.wants/d1max-*.service) ;;
-    /usr/local/sbin/d1max-privileged) ;;
-    /usr/local/sbin/d1max-restart-now) ;;
-    /etc/sudoers.d/d1max) ;;
-    /etc/systemd/timesyncd.conf.d/d1max.conf) ;;
-    /etc/chrony/conf.d/d1max.conf) ;;
-    /usr/local/lib/d1max|/usr/local/lib/d1max/*) ;;
-    /etc/d1max-ops.json) ;;
-    /var/lib/d1max-ops|/var/lib/d1max-ops/*) ;;
-    /etc/systemd/system/d1max-ops.path) ;;
-    /etc/systemd/system/paths.target.wants/d1max-ops.path) ;;
-    /etc/systemd/journald.conf.d/d1max.conf) ;;
+    /opt/nexwar|/opt/nexwar/*) ;;
+    /etc/nexwar|/etc/nexwar/*) ;;
+    /var/lib/nexwar|/var/lib/nexwar/*) ;;
+    /etc/systemd/system/nexwar_*.service) ;;
+    /etc/systemd/system/*.target.wants/nexwar_*.service) ;;
+    /usr/local/sbin/nexwar_privileged) ;;
+    /usr/local/sbin/nexwar_restart_now) ;;
+    /etc/sudoers.d/nexwar) ;;
+    /etc/systemd/timesyncd.conf.d/nexwar.conf) ;;
+    /etc/chrony/conf.d/nexwar.conf) ;;
+    /usr/local/lib/nexwar|/usr/local/lib/nexwar/*) ;;
+    /etc/nexwar_ops.json) ;;
+    /var/lib/nexwar_ops|/var/lib/nexwar_ops/*) ;;
+    /etc/systemd/system/nexwar_ops.path) ;;
+    /etc/systemd/system/paths.target.wants/nexwar_ops.path) ;;
+    /etc/systemd/journald.conf.d/nexwar.conf) ;;
     *)
       warn "  拒绝删除 $target —— 不在允许的范围里。这是护栏,不是错误。"
       return 0
@@ -262,7 +262,7 @@ rm_agent_trace() {
     return 0
   fi
   case "$target" in
-    */runs/d1max-agent.fifo|*/runs/d1max-agent.pid|*/runs/field-logs) ;;
+    */runs/nexwar_agent.fifo|*/runs/nexwar_agent.pid|*/runs/field-logs) ;;
     */motion/patrol_agent) ;;
     *)
       warn "  拒绝删除 $target —— 不在允许的范围里。这是护栏,不是错误。"
@@ -451,15 +451,15 @@ stop_service() {
   rm_sys "$BIND_WANTS_LINK" "配网服务的自启链,没烧写过就没有"
   rm_sys "$UNIT_DIR/$SIDE_UNIT" "运动控制旁路单元(工单 7)"
   rm_sys "$SIDE_WANTS_LINK" "运动控制旁路的自启链,没 enable 过就没有"
-  rm_sys "/etc/systemd/timesyncd.conf.d/d1max.conf" "对时配置(W09d),站点地址没填过就没有"
+  rm_sys "/etc/systemd/timesyncd.conf.d/nexwar.conf" "对时配置(W09d),站点地址没填过就没有"
   if [ "$DO_IT" = 1 ]; then
     systemctl try-restart systemd-timesyncd >/dev/null 2>&1 || true
   fi
-  rm_sys "/etc/chrony/conf.d/d1max.conf" "chrony 的对时片段(决策 61),对时不归 chrony 管的机器上没有"
-  # W70:装机时注释掉了厂家主配置里指向厂家板的行,原文件留在 /etc/d1max/chrony.conf.orig —— 放回去
-  if [ -f /etc/d1max/chrony.conf.orig ] && [ -f /etc/chrony/chrony.conf ]; then
+  rm_sys "/etc/chrony/conf.d/nexwar.conf" "chrony 的对时片段(决策 61),对时不归 chrony 管的机器上没有"
+  # W70:装机时注释掉了厂家主配置里指向厂家板的行,原文件留在 /etc/nexwar/chrony.conf.orig —— 放回去
+  if [ -f /etc/nexwar/chrony.conf.orig ] && [ -f /etc/chrony/chrony.conf ]; then
     if [ "$DO_IT" = 1 ]; then
-      cp -p /etc/d1max/chrony.conf.orig /etc/chrony/chrony.conf
+      cp -p /etc/nexwar/chrony.conf.orig /etc/chrony/chrony.conf
       say "  放回厂家的 /etc/chrony/chrony.conf(装机时注释掉了指向厂家板的对时行)"
     else
       say "  会放回厂家的 /etc/chrony/chrony.conf(装机时注释掉了指向厂家板的对时行)"
@@ -470,23 +470,23 @@ stop_service() {
   fi
   # W55 特权执行器:先停路径单元(不再拉起),再删单元、执行器、配置、目录
   if [ "$DO_IT" = 1 ]; then
-    systemctl disable --now d1max-ops.path >/dev/null 2>&1 || true
+    systemctl disable --now nexwar_ops.path >/dev/null 2>&1 || true
   fi
-  rm_sys "/etc/systemd/system/paths.target.wants/d1max-ops.path" "特权执行器路径单元的自启链"
-  rm_sys "/etc/systemd/system/d1max-ops.path" "特权执行器的路径单元(W55)"
-  rm_sys "$UNIT_DIR/d1max-ops.service" "特权执行器(W55)"
-  rm_sys "/usr/local/lib/d1max" "特权执行器和它验签用的模块(W55)"
-  rm_sys "/etc/d1max-ops.json" "特权执行器的配置(W55)"
-  rm_sys "/var/lib/d1max-ops" "特权执行器的请求、结果目录(W55)"
-  rm_sys "/etc/systemd/journald.conf.d/d1max.conf" "日志留盘设置(W55)"
+  rm_sys "/etc/systemd/system/paths.target.wants/nexwar_ops.path" "特权执行器路径单元的自启链"
+  rm_sys "/etc/systemd/system/nexwar_ops.path" "特权执行器的路径单元(W55)"
+  rm_sys "$UNIT_DIR/nexwar_ops.service" "特权执行器(W55)"
+  rm_sys "/usr/local/lib/nexwar" "特权执行器和它验签用的模块(W55)"
+  rm_sys "/etc/nexwar_ops.json" "特权执行器的配置(W55)"
+  rm_sys "/var/lib/nexwar_ops" "特权执行器的请求、结果目录(W55)"
+  rm_sys "/etc/systemd/journald.conf.d/nexwar.conf" "日志留盘设置(W55)"
   rm_sys "$UNIT_DIR/$OLD_UNIT" "老的守卫单元,多数机器上本来就没有"
   rm_sys "$UNIT_DIR/$LEGACY_UNIT" "老服务(W00c5e 退役),重跑过装机脚本的机器上已经没有"
   rm_sys "$LEGACY_WANTS_LINK" "老服务的自启链"
   # 先删 sudoers 再删助手 —— 反过来的话中间有一瞬白名单指着一个不存在
   # 的路径,谁在那一刻建出同名文件谁就是 root。
-  rm_sys "/etc/sudoers.d/d1max" "老助手的 sudo 白名单"
-  rm_sys "/usr/local/sbin/d1max-privileged" "老的特权助手"
-  rm_sys "/usr/local/sbin/d1max-restart-now" "老服务重启的内部入口"
+  rm_sys "/etc/sudoers.d/nexwar" "老助手的 sudo 白名单"
+  rm_sys "/usr/local/sbin/nexwar_privileged" "老的特权助手"
+  rm_sys "/usr/local/sbin/nexwar_restart_now" "老服务重启的内部入口"
   if [ "$DO_IT" = 1 ]; then
     systemctl daemon-reload >/dev/null 2>&1 || true
     systemctl reset-failed "$MAIN_UNIT" >/dev/null 2>&1 || true
@@ -506,7 +506,7 @@ wipe_disk() {
   real=$(readlink -f "$ROOT/current" 2>/dev/null) || real=
   if [ -n "$real" ] && [ "$real" != "$ROOT/current" ]; then
     say "  current 这条链现在指着:$real"
-    say "  数据在 /var/lib/d1max(发件箱里可能还有没传到站点的东西)。"
+    say "  数据在 /var/lib/nexwar(发件箱里可能还有没传到站点的东西)。"
   fi
 
   if [ "$KEEP_DATA" = 1 ]; then
@@ -525,11 +525,11 @@ wipe_disk() {
         -print -quit 2>/dev/null | grep -q .; then
       say "  留着:$ROOT/releases —— 里面还有搬迁时因重名没搬进数据根的 *.migrated 副本,自己核对完再删。"
     else
-      rm_sys "$ROOT/releases" "版本槽;数据不在里面了(W01 之后在 /var/lib/d1max)"
+      rm_sys "$ROOT/releases" "版本槽;数据不在里面了(W01 之后在 /var/lib/nexwar)"
     fi
     say "  留着:$ETC_DIR/env —— 现场填过的站点地址、地图、原点、SN,重装不用再填。"
     say "  留着:$ETC_DIR —— 站点签发的证书包、注册文件、env 都在它底下;删了要重新向站点登记。"
-    say "  留着:/var/lib/d1max —— 数据根:发件箱里还没传到站点的东西在这儿。"
+    say "  留着:/var/lib/nexwar —— 数据根:发件箱里还没传到站点的东西在这儿。"
     say "  留着:$ROOT —— 根目录本身。"
   else
     say "  默认模式:全部清掉,不留痕迹。"
@@ -540,7 +540,7 @@ wipe_disk() {
     rm_sys "$ROOT/bin-venv" "上面那个解释器的 venv"
     rm_sys "$ROOT/releases" "版本槽"
     rm_sys "$ROOT/bundles" "老服务的任务包目录"
-    rm_sys "/var/lib/d1max" "数据根"
+    rm_sys "/var/lib/nexwar" "数据根"
     rm_sys "$ROOT" "整个根"
     rm_sys "$ETC_DIR/env" "现场值"
     rm_sys "$ETC_DIR/release-pub.pem" "发行公钥"
@@ -575,9 +575,9 @@ announce() {
   if [ "$KEEP_DATA" != 1 ]; then
     say "同时会删掉(默认模式):"
     say "  $ROOT 整个根 —— 代码、版本槽"
-    say "  /var/lib/d1max —— 数据根:**发件箱里还没传到站点的东西**也在这儿"
+    say "  /var/lib/nexwar —— 数据根:**发件箱里还没传到站点的东西**也在这儿"
     say "  $ETC_DIR 整个目录 —— 包括站点签发的证书包与注册文件"
-    say "  $UNIT_DIR 底下我们的 d1max-* 单元和开机自启链"
+    say "  $UNIT_DIR 底下我们的 nexwar_* 单元和开机自启链"
     say "  patrol_agent 的命令管道、pid 文件、现场日志"
     say ""
     say "只想重装、不想重新向站点登记这只狗的,按 Ctrl+C 停下来,"
@@ -586,7 +586,7 @@ announce() {
     say "$ROOT/releases 会删掉,除非里面还有搬迁时没搬完的 *.migrated 副本 —— 有就留着,自己核对完再删。"
   fi
   say ""
-  say "**不动的东西**:别家的栈、ROS、任何不叫 d1max-* 的 systemd 单元,"
+  say "**不动的东西**:别家的栈、ROS、任何不叫 nexwar_* 的 systemd 单元,"
   say "一个字节都不碰 —— 这不是靠自觉,是 rm 前那两把锁挡着的。"
 }
 
@@ -611,7 +611,7 @@ receipt() {
   fi
   say ""
   say "  **这几样这个脚本清不掉,要的话得人去做:**"
-  say "    1. systemd 的历史日志(journalctl -u d1max-agent 还查得到)。"
+  say "    1. systemd 的历史日志(journalctl -u nexwar_agent 还查得到)。"
   say "       要清得用 journalctl --vacuum-time= 之类,那会连别人的日志一起清,"
   say "       所以这个脚本不替你做这个决定。"
   say "    2. 装机时 pip 在 ~/.cache/pip 里留下的轮子缓存。"

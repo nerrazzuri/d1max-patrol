@@ -12,7 +12,7 @@ import pytest
 
 np = pytest.importorskip("numpy")
 
-from d1max_localizer.obstacles import (  # noqa: E402
+from nexwar_localizer.obstacles import (  # noqa: E402
     GRADED_CLEAR_PROTO,
     REFIT_EVERY,
     Config,
@@ -29,7 +29,7 @@ from d1max_localizer.obstacles import (  # noqa: E402
     permit_vmax,
 )
 
-from d1max_contract.obsbridge import Grid, unpack_bits  # noqa: E402
+from nexwar_contract.obsbridge import Grid, unpack_bits  # noqa: E402
 
 #: RS-Airy 原始系:X 朝上、Z 朝前(``tools/lio/README.md``);建图标出来的 frames.json 就是这样。
 AIRY = SimpleNamespace(sensor_up=(1.0, 0.0, 0.0), sensor_forward=(0.0, 0.0, 1.0),
@@ -356,14 +356,14 @@ def test_图名带上一级目录的不认(tmp_path):
 
 
 def _后雷达(m, calibrated):
-    from d1max_localizer.lidars import geometry_guess
+    from nexwar_localizer.lidars import geometry_guess
     T = np.array(geometry_guess(m.up, m.fwd))
     T[:3, 3] = [-2 * m.x * v for v in m.fwd]       # 两台雷达沿「前」相距 2 × 前雷达的偏移
     return RearMount(front=m, T_front_rear=T, calibrated=calibrated)
 
 
 def _后雷达系(rear, base):
-    from d1max_localizer.merge import transform
+    from nexwar_localizer.merge import transform
     return transform(np.linalg.inv(rear.T_front_rear), 到雷达系(rear.front, base))
 
 
@@ -562,7 +562,7 @@ def test_W35_自检没过之后_趴着站着的帧掺在一起_不算过():
 
 
 def test_W41_墙那一层_攒一秒发一条wall_合契约_只要离地04到18米的():
-    from d1max_contract.obsbridge import Wall, parse
+    from nexwar_contract.obsbridge import Wall, parse
     m = Mount.from_frames(AIRY)
     obs = 假对端()
     t = [0.0]
@@ -694,7 +694,7 @@ def test_W71_眼前被大平台占满_地面不跟着平台走():
 
 
 def test_现场1104_刹车减速度和延迟按启动参数_量出来填进去_1米每秒才许得出来():
-    from d1max_localizer.obstacles import DEFAULT, config_from_args, permit_vmax
+    from nexwar_localizer.obstacles import DEFAULT, config_from_args, permit_vmax
     assert config_from_args([]) == DEFAULT
     cfg = config_from_args(["--decel", "1.2", "--latency", "0.15", "--frame-age", "0.1"])
     assert (cfg.decel, cfg.latency, cfg.frame_age) == (1.2, 0.15, 0.1)

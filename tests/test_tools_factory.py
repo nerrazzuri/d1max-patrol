@@ -14,8 +14,8 @@ from pathlib import Path
 
 import pytest
 
-from d1max_contract import device_id as di
-from d1max_contract import ed25519
+from nexwar_contract import device_id as di
+from nexwar_contract import ed25519
 
 ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location("factory_station", ROOT / "tools" / "factory.py")

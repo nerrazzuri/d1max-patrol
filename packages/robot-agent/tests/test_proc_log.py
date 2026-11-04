@@ -11,10 +11,10 @@ import os
 import pytest
 from test_runtime_maps import REG, T, _cmd, 耳朵, 钟
 
-from d1max_adapter_sim.robot import SimRobot
-from d1max_agent.runtime import AgentRuntime
-from d1max_contract.memory_broker import MemoryBroker, MemoryTransport
-from d1max_patrol.protocol.nav_types import Pose
+from nexwar_adapter_sim.robot import SimRobot
+from nexwar_agent.runtime import AgentRuntime
+from nexwar_contract.memory_broker import MemoryBroker, MemoryTransport
+from nexwar_patrol.protocol.nav_types import Pose
 
 
 class 假录包:
@@ -147,8 +147,8 @@ async def test_指到日志目录外面的链接_当没有(tmp_path):
 
 
 def test_日志目录_从进程管理器经编排报到录包服务(tmp_path):
-    from d1max_agent.mapping import MappingService
-    from d1max_patrol.app.procs import ProcManager
+    from nexwar_agent.mapping import MappingService
+    from nexwar_patrol.app.procs import ProcManager
     pm = ProcManager(tmp_path / "logs")
     assert pm.log_dir == tmp_path / "logs"
 
@@ -227,7 +227,7 @@ async def test_大回执在锁外发_弱网上传的时候别的命令照样处�
 
 async def test_列表时文件没了_读不了_照样回执(tmp_path, monkeypatch):
     """内审应修 2:列表那一路读目录出错以前没人接,命令不回回执(站点等到 504)。"""
-    from d1max_agent import proc_logs
+    from nexwar_agent import proc_logs
     broker, c, ears, rt, logs = await _台(tmp_path)
     (logs / "a.log").write_text("x")
     (logs / "b.log").write_text("y")
@@ -279,7 +279,7 @@ async def test_管道_硬链接_当没有_不会卡住(tmp_path):
 async def test_编码预算真的管用_整包在broker上限以内(tmp_path):
     """内审小问题 2:以前的测试把预算放到 300 KiB 也是绿的。四分之一是控制字符的日志,128 KiB 原样
     编码要约 290 KB,超过 broker 单包上限(262144):必须按预算裁。"""
-    from d1max_agent.runtime import _dumps
+    from nexwar_agent.runtime import _dumps
     broker, c, ears, rt, logs = await _台(tmp_path)
     line = b"\x01" * 25 + b"a" * 74 + b"\n"
     (logs / "slam.log").write_bytes(line * 1400)                         # 140 KB
@@ -296,8 +296,8 @@ async def test_过期的_要重启了_都不查(tmp_path):
 
     from test_runtime_maps import T
 
-    from d1max_contract.messages import Command
-    from d1max_contract.transport import Message
+    from nexwar_contract.messages import Command
+    from nexwar_contract.transport import Message
     broker, c, ears, rt, logs = await _台(tmp_path)
     (logs / "a.log").write_text("x")
     old = Command(command_id="x1", task_id="t", kind="proc_log", issued_at=c.ms - 90_000,
@@ -316,8 +316,8 @@ async def test_过期的_要重启了_都不查(tmp_path):
 async def test_回执太大_不带数据只说原因_整包在broker上限以内(tmp_path, monkeypatch):
     """外审(Qwen)第六节 2:各种带数据的回执各管各的大小,出口没有兜底;以后新加一种、忘了限,超过站点
     broker 的单包上限(262144)狗就被断开。出口兜一道:超了就不带数据,原因里写多大。"""
-    from d1max_agent import proc_logs
-    from d1max_agent.runtime import ACK_MAX_BYTES, _dumps
+    from nexwar_agent import proc_logs
+    from nexwar_agent.runtime import ACK_MAX_BYTES, _dumps
     broker, c, ears, rt, logs = await _台(tmp_path)
     monkeypatch.setattr(proc_logs, "list_logs", lambda d: {"logs": ["x" * 400_000]})
     await rt._on_cmd(_cmd("proc_log", {}, "g1", c))            # 锁外发的那一路

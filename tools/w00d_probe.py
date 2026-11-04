@@ -41,9 +41,9 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 async def probe(host: str, port: int, watch_s: float) -> dict[str, Any]:
-    from d1max_adapter_d1max.hal import D1MaxHal
-    from d1max_patrol.backends.sidecar_device import SidecarDeviceBackend
-    from d1max_patrol.protocol.agent_frames import MIN_PROTO_VERSION, PROTO_VERSION
+    from nexwar_adapter_d1max.hal import D1MaxHal
+    from nexwar_patrol.backends.sidecar_device import SidecarDeviceBackend
+    from nexwar_patrol.protocol.agent_frames import MIN_PROTO_VERSION, PROTO_VERSION
 
     b = SidecarDeviceBackend(host, port)
     hal = D1MaxHal(host, port, backend=b)

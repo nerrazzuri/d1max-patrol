@@ -11,12 +11,12 @@ import time
 from pathlib import Path
 
 import pytest
-from d1max_localizer.client import BridgeClient
-from d1max_localizer.core import Estimate, LocalizerCore
-from d1max_localizer.frames import Frames, mat_to_quat
+from nexwar_localizer.client import BridgeClient
+from nexwar_localizer.core import Estimate, LocalizerCore
+from nexwar_localizer.frames import Frames, mat_to_quat
 
-from d1max_agent.bridge_localizer import SETTLE_FIXES, BridgeLocalizer
-from d1max_agent.locbridge import LocBridgeServer
+from nexwar_agent.bridge_localizer import SETTLE_FIXES, BridgeLocalizer
+from nexwar_agent.locbridge import LocBridgeServer
 
 FLAT = Frames(up=(0.0, 0.0, 1.0), sensor_up=(0.0, 0.0, 1.0), sensor_forward=(1.0, 0.0, 0.0),
               sensor_height=0.0)
@@ -130,7 +130,7 @@ async def test_重定位_图不对_先验没载好_MOLA_不收_都说原因(台)
     await _等(lambda: t.core.can_relocalize())
     t.mola.refuse = "初值附近对不上"
     assert await t.agent.relocalize(M, (1.0, 2.0, 0.3)) == "localizer_refused: 初值附近对不上"
-    from d1max_contract.locbridge import Relocalize
+    from nexwar_contract.locbridge import Relocalize
     got = await t.cli._reloc(Relocalize(req=9, map_id="estate-1", map_version="8", x=0.0, y=0.0,
                                         yaw=0.0, sigma_xy=0.5))
     assert got == {"ok": False, "reason": "定位器载的不是这张图"}

@@ -14,9 +14,9 @@ def test_包里的数据文件都声明了_装成_wheel_才带得上():
     # 狗上是 Python 3.10,没有 tomllib:按 pyproject 里那一节的写法直接读
     text = (PKG / "pyproject.toml").read_text()
     sec = re.search(r"^\[tool\.setuptools\.package-data\]\n(.*?)(?=^\[|\Z)", text, re.M | re.S)
-    line = re.search(r"^d1max_localizer\s*=\s*\[(.*?)\]", sec.group(1), re.M) if sec else None
+    line = re.search(r"^nexwar_localizer\s*=\s*\[(.*?)\]", sec.group(1), re.M) if sec else None
     globs = re.findall(r'"([^"]+)"', line.group(1)) if line else []
-    root = PKG / "src" / "d1max_localizer"
+    root = PKG / "src" / "nexwar_localizer"
     data = [p.relative_to(root).as_posix() for p in root.rglob("*")
             if p.is_file() and p.suffix not in (".py", ".pyc") and "__pycache__" not in p.parts]
     assert data, "包里应该有数据文件(建图回环的管线配置)"

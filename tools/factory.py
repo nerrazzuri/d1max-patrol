@@ -40,8 +40,8 @@ for _p in ("packages/contract/src", "src"):
 #: 板子上的临时目录(root 独占;最后删掉)。
 REMOTE_DIR = "/tmp/nw-factory"
 #: 板子上跑我们代码的解释器:当前这一版自己的(工单 11-02-3:守卫退回旧版时根下那个不跟着退)。
-REMOTE_PY = "/opt/d1max/current/venv/bin/python"
-REMOTE_REQUEST = "/etc/d1max/device/device-request.json"
+REMOTE_PY = "/opt/nexwar/current/venv/bin/python"
+REMOTE_REQUEST = "/etc/nexwar/device/device-request.json"
 
 Run = Callable[..., subprocess.CompletedProcess]
 
@@ -65,7 +65,7 @@ class _Board:
         return r.stdout or b""
 
     def cli(self, args: list[str], *, what: str) -> bytes:
-        return self.sh("sudo " + shlex.join([self.py, "-m", "d1max_patrol.cli", *args]), what=what)
+        return self.sh("sudo " + shlex.join([self.py, "-m", "nexwar_patrol.cli", *args]), what=what)
 
     def put(self, path: str, data: bytes, *, what: str) -> None:
         self.sh("sudo sh -c " + shlex.quote(f"umask 077; cat > {path}"), what=what, input=data)
@@ -82,7 +82,7 @@ def _check_keys(keys: Path) -> tuple[Path, Path]:
 
 
 def _sign(key: Path, req: dict[str, Any], workdir: Path, ledger: Path) -> dict[str, Any]:
-    from d1max_patrol.bind.cli import _sign_devices
+    from nexwar_patrol.bind.cli import _sign_devices
     workdir.mkdir(mode=0o700, parents=True, exist_ok=True)
     rp = workdir / f"{req['serial']}.request.json"
     rp.write_text(json.dumps(req, ensure_ascii=False), encoding="utf-8")

@@ -8,9 +8,9 @@ from pathlib import Path
 
 import pytest
 
-from d1max_agent.devices import DeviceHealth, camera_links, parse_links
-from d1max_contract.devices import device, parse_devices
-from d1max_contract.errors import ContractError
+from nexwar_agent.devices import DeviceHealth, camera_links, parse_links
+from nexwar_contract.devices import device, parse_devices
+from nexwar_contract.errors import ContractError
 
 U = namedtuple("U", "total used free")
 
@@ -125,10 +125,10 @@ def test_一样都没有就不报():
 async def test_仿真狗装了上装_随遥测带设备健康(tmp_path):
     from test_runtime_maps import REG, T, _跑, 耳朵, 钟
 
-    from d1max_adapter_sim.robot import SimRobot
-    from d1max_agent.runtime import AgentRuntime
-    from d1max_contract.memory_broker import MemoryBroker, MemoryTransport
-    from d1max_patrol.protocol.nav_types import Pose
+    from nexwar_adapter_sim.robot import SimRobot
+    from nexwar_agent.runtime import AgentRuntime
+    from nexwar_contract.memory_broker import MemoryBroker, MemoryTransport
+    from nexwar_patrol.protocol.nav_types import Pose
     broker, c = MemoryBroker(), 钟()
     ears = 耳朵()
     st = MemoryTransport(broker, "site")

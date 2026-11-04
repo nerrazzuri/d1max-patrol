@@ -5,9 +5,9 @@ from __future__ import annotations
 import pytest
 from test_site_api import 站
 
-from d1max_site.alert_store import AlertDesk
-from d1max_site.alerts import MAX_SHELVE_MS
-from d1max_site.db import SiteDB
+from nexwar_site.alert_store import AlertDesk
+from nexwar_site.alerts import MAX_SHELVE_MS
+from nexwar_site.db import SiteDB
 
 NOW = 1_800_000_000_000
 

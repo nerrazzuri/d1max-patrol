@@ -11,13 +11,18 @@ import math
 import pytest
 from obs_world import 世界, 假感知
 
-from d1max_adapter_sim.robot import SimRobot
-from d1max_agent.bridges.planned_nav import CREEP_M, PlannedNavBackend
-from d1max_agent.obstacles import FRESH_S, ObstacleGuard, ObstacleView
-from d1max_agent.planning.planner import Planner
-from d1max_contract.obsbridge import Grid, pack_bits
-from d1max_patrol.backends.base import AlgErrorEvent, NavRequestError, NavStatusEvent
-from d1max_patrol.protocol.nav_types import ALG_LIDAR_DISCONNECTED, ALG_NAV_BLOCKED, NavStatus, Pose
+from nexwar_adapter_sim.robot import SimRobot
+from nexwar_agent.bridges.planned_nav import CREEP_M, PlannedNavBackend
+from nexwar_agent.obstacles import FRESH_S, ObstacleGuard, ObstacleView
+from nexwar_agent.planning.planner import Planner
+from nexwar_contract.obsbridge import Grid, pack_bits
+from nexwar_patrol.backends.base import AlgErrorEvent, NavRequestError, NavStatusEvent
+from nexwar_patrol.protocol.nav_types import (
+    ALG_LIDAR_DISCONNECTED,
+    ALG_NAV_BLOCKED,
+    NavStatus,
+    Pose,
+)
 
 
 class 钟:
@@ -240,7 +245,7 @@ class 台子:
             self.view.on_grid(self._q.pop(0)[1])
         if self.r.require_clearance:
             # W47:旁路进程 ≥ 10 的分档许可(同感知节点 _send_permit)
-            from d1max_localizer.obstacles import MIN_PERMIT_V, PERMIT_MS, Config, permit_vmax
+            from nexwar_localizer.obstacles import MIN_PERMIT_V, PERMIT_MS, Config, permit_vmax
             for end in ("head", "tail") if self.per.rear_cal else ("head",):
                 v = permit_vmax(self.per.净空(g, end), Config())
                 if v >= MIN_PERMIT_V:
@@ -271,7 +276,7 @@ class 台子:
 
 class _放行:
     def check(self, vx, wz, v_meas, view, pose, *, w_now=()):
-        from d1max_agent.obstacles import Verdict
+        from nexwar_agent.obstacles import Verdict
         return Verdict(True)
 
 
@@ -446,7 +451,7 @@ async def test_W34_现场视野_弧线被挡_前面真有东西_不往前挪(tmp
 async def test_W34_转向被挡_真挡在身后_往前挪开_只有看不见也挪(tmp_path):
     """原来:挡住原地转的是看得见的东西就不挪。工单 25(2026-10-28 15:57 屁股贴墙):真挡在身后,往前
     挪开正好躲开;挪的整段检查会拦挪向真挡的那一头。"""
-    from d1max_agent.obstacles import Verdict
+    from nexwar_agent.obstacles import Verdict
     for hits, crept in (((( -0.52, 0.05),), True), ((), True)):
         t = 台子(tmp_path, rear=True, cone=True)
         await t.start(3.0, 4.0, yaw=0.0)
@@ -501,7 +506,7 @@ async def test_临时障碍过期_任务结束清掉(tmp_path):
 
 
 def _区域(*zs):
-    from d1max_contract.zones import ZoneSet
+    from nexwar_contract.zones import ZoneSet
     return ZoneSet.from_wire({"map_id": "m", "map_version": "v", "revision": 1, "zones": list(zs)})
 
 
@@ -672,7 +677,7 @@ async def test_半路调了头_导航桥自己停(tmp_path):
 # ------------------------------------------------------------ 近障降速(W12)
 
 def test_近障_只看行进方向前面那条带子里的挡_看不见不算():
-    from d1max_agent.obstacles import FRESH_S  # noqa: F401
+    from nexwar_agent.obstacles import FRESH_S  # noqa: F401
     v = _view_with([(30, 20)])                              # 40 格、0.1 m:x = 1.05、y = 0.05
     assert v.near_ahead(1, 0.515, 0.79) == pytest.approx(1.05 - 0.515, abs=1e-6)
     assert v.near_ahead(-1, 0.515, 0.79) == math.inf, "身后没有"
@@ -999,7 +1004,7 @@ async def test_工单14_机头前045米有箱子_判往前挪不了_身后有挡
 
 def test_工单21_站着不动_两侧看过的记忆不过期_挪了窝照旧10秒():
     """狗一停下超过 10 s 两侧就算没看过,之后哪怕转 5° 都要先挪。站着(含原地转)不过期,挪了窝照旧。"""
-    from d1max_agent.obstacles import MEMORY_STILL_S
+    from nexwar_agent.obstacles import MEMORY_STILL_S
     t = [0.0]
     v = ObstacleView(monotonic=lambda: t[0], latency_s=0.0)
     v.note_odom(0.0, 0.0, 0.0)
@@ -1147,7 +1152,7 @@ async def test_工单28_发了速度命令狗不动_按被挡计时上报_到时
 async def test_工单25_原地转被身后真挡拦住_选往前挪(tmp_path):
     from types import SimpleNamespace
 
-    from d1max_agent.bridges.planned_nav import BLOCK_DETOUR_S
+    from nexwar_agent.bridges.planned_nav import BLOCK_DETOUR_S
     t = 台子(tmp_path, rear=True, cone=True, walls=[(2.9, 0.0, 3.1, 8.0)])
     await t.start(3.6, 4.0, yaw=0.0)                           # 狗尾 3.135,离墙 0.035 m
     for _ in range(5):
@@ -1181,7 +1186,7 @@ def test_绕障_背面补格_看得见是空的不补(tmp_path):
     """细杆子:雷达看得见它后面是空的,背面那几格不补(不然细杆子也被当成一堵墙)。"""
     from types import SimpleNamespace
 
-    from d1max_agent.bridges.planned_nav import SHADOW_M
+    from nexwar_agent.bridges.planned_nav import SHADOW_M
     t = 台子(tmp_path, rear=True)
     t.nav._odom_pose = (0.0, 0.0, 0.0)
     v = ObstacleView(monotonic=lambda: 0.0, latency_s=0.0)

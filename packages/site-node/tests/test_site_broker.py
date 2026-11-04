@@ -8,9 +8,9 @@ import uuid
 
 import pytest
 
-from d1max_contract.paho_transport import PahoTransport
-from d1max_contract.topics import PUBLISH_KINDS, TopicAcl, Topics
-from d1max_site.broker_conf import BrokerPaths, render_acl, render_conf
+from nexwar_contract.paho_transport import PahoTransport
+from nexwar_contract.topics import PUBLISH_KINDS, TopicAcl, Topics
+from nexwar_site.broker_conf import BrokerPaths, render_acl, render_conf
 
 SITE = "estate-1"
 
@@ -118,7 +118,7 @@ async def test_没有客户端证书连不上(broker):
 
 
 async def test_别的CA签的证书连不上(broker, tmp_path):
-    from d1max_site.ca import SiteCA
+    from nexwar_site.ca import SiteCA
     other = SiteCA(tmp_path / "other")
     other.init(SITE)
     bundle = other.issue_robot("A", days=30, now_ms=1_800_000_000_000)

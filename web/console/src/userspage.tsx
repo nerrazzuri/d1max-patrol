@@ -163,7 +163,7 @@ export function UsersPage({ me, say, now }: { me: string; say: Say; now: number 
           {made.vpn?.conf && (
             <p class="row">
               <span class="muted small">{t("engVpnConf", { a: made.vpn.address ?? "" })}</span>
-              <a class="btn sm" download={`d1max-${made.name}.conf`}
+              <a class="btn sm" download={`nexwar_${made.name}.conf`}
                 href={`data:text/plain;charset=utf-8,${encodeURIComponent(made.vpn.conf)}`}>{t("download")}</a>
             </p>
           )}

@@ -2,11 +2,11 @@
 // 里面那个标准按钮上；状态色不会同色字压同色底（设计稿里有三处是那样，看不见）。
 import 'dart:math' as math;
 
-import 'package:d1max_patrol/l10n.dart';
-import 'package:d1max_patrol/ui/nw/nw_button.dart';
-import 'package:d1max_patrol/ui/nw/nw_cards.dart';
-import 'package:d1max_patrol/ui/nw/nw_theme.dart';
-import 'package:d1max_patrol/ui/nw/nw_widgets.dart';
+import 'package:nexwar_patrol/l10n.dart';
+import 'package:nexwar_patrol/ui/nw/nw_button.dart';
+import 'package:nexwar_patrol/ui/nw/nw_cards.dart';
+import 'package:nexwar_patrol/ui/nw/nw_theme.dart';
+import 'package:nexwar_patrol/ui/nw/nw_widgets.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 

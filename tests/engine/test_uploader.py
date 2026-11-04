@@ -8,8 +8,8 @@ from pathlib import Path
 
 import pytest
 
-from d1max_agent.engine.upload_queue import UploadQueue
-from d1max_agent.engine.uploader import (
+from nexwar_agent.engine.upload_queue import UploadQueue
+from nexwar_agent.engine.uploader import (
     PutReceipt,
     PutRequest,
     SinkError,
@@ -61,7 +61,7 @@ def 一趟(tmp_path: Path) -> Path:
 
 def 造(runs_root: Path, tmp_path: Path, sink: 假服务器) -> Uploader:
     q = UploadQueue(tmp_path / "queue.jsonl")
-    return Uploader(runs_root, q, sink, sn="D1MAX-TEST-01", rand=lambda: 0.0)
+    return Uploader(runs_root, q, sink, sn="NEXWAR-TEST-01", rand=lambda: 0.0)
 
 
 def test_前缀哈希只算前n个字节(tmp_path: Path) -> None:
@@ -103,7 +103,7 @@ def test_一步一步传完事件流_哈希对上才算完(一趟: Path, tmp_pat
     step = up.run_once(now_ms=0)
     assert step.key == "巡检一/20260911T101500Z/events.jsonl"
     assert step.action == "done"
-    assert sink.盘["D1MAX-TEST-01/巡检一/20260911T101500Z/events.jsonl"] == bytearray(
+    assert sink.盘["NEXWAR-TEST-01/巡检一/20260911T101500Z/events.jsonl"] == bytearray(
         b'{"kind": "started"}\n'
     )
 
@@ -218,7 +218,7 @@ def test_续传_只发没发过的那一段(tmp_path: Path) -> None:
     up.scan()
     assert up.run_once(now_ms=0).action == "done"
     assert [(r.offset, len(r.data)) for r in sink.收到] == [(0, 10), (10, 7)]
-    落盘 = sink.盘["D1MAX-TEST-01/巡检一/20260911T101500Z/events.jsonl"]
+    落盘 = sink.盘["NEXWAR-TEST-01/巡检一/20260911T101500Z/events.jsonl"]
     assert bytes(落盘) == b"A" * 10 + b"B" * 7
 
 

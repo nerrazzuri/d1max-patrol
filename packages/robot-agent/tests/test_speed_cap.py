@@ -7,8 +7,8 @@ from __future__ import annotations
 from test_deter import _台
 from test_runtime_maps import _cmd, _跑
 
-from d1max_agent.bridges.hal_nav import AUTO_RELOCALIZE_WAIT_S, HUMAN_RELOCALIZE_WAIT_S
-from d1max_contract.messages import MapPose
+from nexwar_agent.bridges.hal_nav import AUTO_RELOCALIZE_WAIT_S, HUMAN_RELOCALIZE_WAIT_S
+from nexwar_contract.messages import MapPose
 
 
 async def _限(rt, broker, ears, c, v, cid, ttl=600):
@@ -77,7 +77,7 @@ async def test_到点自己取消_重发能力_重投照收_载荷不对拒(tmp_
 async def test_限得比死区还低_按死区():
     from types import SimpleNamespace
 
-    from d1max_agent.bridges.hal_nav import HalNavBackend
+    from nexwar_agent.bridges.hal_nav import HalNavBackend
     caps = SimpleNamespace(max_vx=1.0, max_wz=1.5, deadband_vx=0.2)
     nav = HalNavBackend.__new__(HalNavBackend)
     nav._hal = SimpleNamespace(hal_capabilities=lambda: caps)   # 能力每次现取(11-04)
@@ -92,8 +92,8 @@ async def test_限得比死区还低_按死区():
 def test_定位器自己能找回来的_丢定位等30秒_里程锚定等人10分钟():
     from types import SimpleNamespace
 
-    from d1max_agent.bridge_localizer import BridgeLocalizer
-    from d1max_agent.bridges.hal_nav import HalNavBackend
+    from nexwar_agent.bridge_localizer import BridgeLocalizer
+    from nexwar_agent.bridges.hal_nav import HalNavBackend
     nav = HalNavBackend.__new__(HalNavBackend)
     nav.anchor = SimpleNamespace(identity=False, AUTO_RECOVERS=BridgeLocalizer.AUTO_RECOVERS)
     assert nav.RELOCALIZE_WAIT_S == AUTO_RELOCALIZE_WAIT_S == 30.0
@@ -107,7 +107,7 @@ def test_限着速时_近障从更远就开始减速():
     import math
     from types import SimpleNamespace
 
-    from d1max_agent.bridges.planned_nav import NEAR_SLOW_FROM_M, PlannedNavBackend
+    from nexwar_agent.bridges.planned_nav import NEAR_SLOW_FROM_M, PlannedNavBackend
     nav = PlannedNavBackend.__new__(PlannedNavBackend)
     caps = SimpleNamespace(max_vx=1.0, max_wz=1.5, deadband_vx=0.2)
     nav._hal = SimpleNamespace(hal_capabilities=lambda: caps)   # 能力每次现取(11-04)
@@ -124,7 +124,7 @@ def test_对账S6_定位变差_自动走限0点3_比全狗限速低的照全狗�
     import math
     from types import SimpleNamespace
 
-    from d1max_agent.bridges.hal_nav import LOC_DEGRADED_MPS, HalNavBackend
+    from nexwar_agent.bridges.hal_nav import LOC_DEGRADED_MPS, HalNavBackend
     caps = SimpleNamespace(max_vx=1.0, max_wz=1.5, deadband_vx=0.2)
     nav = HalNavBackend.__new__(HalNavBackend)
     why = [""]

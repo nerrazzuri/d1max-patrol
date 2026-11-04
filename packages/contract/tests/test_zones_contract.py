@@ -6,8 +6,8 @@ import math
 
 import pytest
 
-from d1max_contract.errors import ContractError
-from d1max_contract.zones import (
+from nexwar_contract.errors import ContractError
+from nexwar_contract.zones import (
     ZoneSet,
     distance_to_polygon,
     is_simple,
@@ -312,7 +312,7 @@ def test_抹掉区_发给不认得的老狗_换成同一块禁行区_别的一�
 
 
 def test_多边形包含():
-    from d1max_contract.zones import polygon_contains
+    from nexwar_contract.zones import polygon_contains
     sq = ((0.0, 0.0), (2.0, 0.0), (2.0, 2.0), (0.0, 2.0))
     assert polygon_contains(sq, sq)
     assert polygon_contains(tuple(map(tuple, BIG)), sq)
@@ -324,8 +324,8 @@ def test_多边形包含():
 def test_W41_人员忽略区_认得_不带限速硬禁区墙线_不管狗怎么走():
     import numpy as np
 
-    from d1max_contract.planning.costmap import build
-    from d1max_contract.zones import tightens, zones_digest
+    from nexwar_contract.planning.costmap import build
+    from nexwar_contract.zones import tightens, zones_digest
     ign = {"id": "robot-exhibit", "kind": "ignore", "label": "展品",
            "polygon": [[0, 0], [2, 0], [2, 2], [0, 2]]}
     nogo = {"id": "pond", "kind": "nogo", "polygon": [[5, 5], [6, 5], [6, 6], [5, 6]]}

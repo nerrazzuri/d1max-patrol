@@ -6,7 +6,7 @@ import json
 
 import pytest
 
-from d1max_patrol.app.identity import (
+from nexwar_patrol.app.identity import (
     CONFIRM_PHRASE,
     Payload,
     read_payload,
@@ -105,8 +105,8 @@ def test_落盘的是合法json而且带时刻(tmp_path):
 
 
 def test_从环境变量读路径(tmp_path, monkeypatch):
-    """没有 override 时, payload_path() 从环境变量 D1MAX_PAYLOAD_FILE 读路径。"""
-    from d1max_patrol.app.identity import PAYLOAD_ENV, payload_path
+    """没有 override 时, payload_path() 从环境变量 NEXWAR_PAYLOAD_FILE 读路径。"""
+    from nexwar_patrol.app.identity import PAYLOAD_ENV, payload_path
 
     env_path = tmp_path / "somewhere.json"
     monkeypatch.setenv(PAYLOAD_ENV, str(env_path))
@@ -121,7 +121,7 @@ def test_从环境变量读路径(tmp_path, monkeypatch):
 
 def test_环境变量缺失时使用默认路径(tmp_path, monkeypatch):
     """没有 override 也没有环境变量时, payload_path() 返回默认的 PAYLOAD_FILE。"""
-    from d1max_patrol.app.identity import PAYLOAD_ENV, PAYLOAD_FILE, payload_path
+    from nexwar_patrol.app.identity import PAYLOAD_ENV, PAYLOAD_FILE, payload_path
 
     monkeypatch.delenv(PAYLOAD_ENV, raising=False)
     got = payload_path()

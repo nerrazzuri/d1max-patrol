@@ -16,17 +16,17 @@ from pathlib import Path
 
 import pytest
 
-from d1max_patrol.backends.base import NavRequestError, NavStatusEvent
-from d1max_patrol.backends.local_nav import (
+from nexwar_patrol.backends.base import NavRequestError, NavStatusEvent
+from nexwar_patrol.backends.local_nav import (
     LocalNavBackend,
     LocalNavParams,
     wrap_angle,
 )
-from d1max_patrol.backends.sidecar_device import SidecarDeviceBackend
-from d1max_patrol.protocol.agent_frames import MotionStatus
-from d1max_patrol.protocol.nav_types import LocStatus, NavStatus, Pose
-from d1max_sim.agent_server import WALK_DEADBAND, SimAgentServer
-from d1max_sim.pose_server import SimPoseServer
+from nexwar_patrol.backends.sidecar_device import SidecarDeviceBackend
+from nexwar_patrol.protocol.agent_frames import MotionStatus
+from nexwar_patrol.protocol.nav_types import LocStatus, NavStatus, Pose
+from nexwar_sim.agent_server import WALK_DEADBAND, SimAgentServer
+from nexwar_sim.pose_server import SimPoseServer
 
 MAP_ID = "测试图"
 

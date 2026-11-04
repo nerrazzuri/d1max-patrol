@@ -12,9 +12,9 @@ import pytest
 
 np = pytest.importorskip("numpy")
 
-from d1max_localizer import build as B  # noqa: E402
-from d1max_localizer import grid as G  # noqa: E402
-from d1max_localizer.frames import Frames, mat_to_quat  # noqa: E402
+from nexwar_localizer import build as B  # noqa: E402
+from nexwar_localizer import grid as G  # noqa: E402
+from nexwar_localizer.frames import Frames, mat_to_quat  # noqa: E402
 
 
 def _Rz(a):
@@ -140,7 +140,7 @@ def test_打包出版本的文件_上下装都标对_栅格跟定位同一个平
     assert b["source"] == "bag:t-1" and b["prior_pack"] == "none"
     assert (out / "prior.mm").read_bytes() == b"prior"
     # W68:Super-LIO 的点云跟建图点云同一个坐标系、降过采样
-    from d1max_localizer import slioloc as L
+    from nexwar_localizer import slioloc as L
     slio = L.read_pcd(out / L.MAP_FILE)
     assert 0 < len(slio) < len(pts)
     assert np.allclose(slio.min(axis=0), pts.min(axis=0), atol=L.MAP_VOXEL_M)
@@ -165,7 +165,7 @@ def test_打包出版本的文件_上下装都标对_栅格跟定位同一个平
     for x, y in cov[::3]:                                 # 走过的路(狗身中心)落在可通行格子上
         assert grid[g.cell_of(x, y)] == G.FREE, (x, y)
     # 不是镜像:狗在世界里往左转头(朝向增大),地图平面上的朝向也要增大 —— 标反了「上」的话正好反号
-    from d1max_localizer.replay import read_tum
+    from nexwar_localizer.replay import read_tum
     yaws = np.unwrap([f.to_map2d(p, q)[2] for _, p, q in read_tum(work / "traj.tum")])
     world = [0.3 * math.sin(i / 15) for i in range(120)]
     assert np.corrcoef(yaws, world)[0, 1] > 0.99
@@ -212,7 +212,7 @@ def test_MOLA_建图的命令_版本与参数记下来进_build_json(tmp_path):
 
 
 def test_打包出的文件表就是契约里的那张():
-    from d1max_contract.maps import GEOMETRY_FILES
+    from nexwar_contract.maps import GEOMETRY_FILES
     assert B.FILES == GEOMETRY_FILES
 
 
@@ -254,7 +254,7 @@ def test_有录包就用逐帧扫描打真射线_读不了退回模拟射线_写
     assert json.loads((tmp_path / "out5" / "build.json").read_text())["grid"]["rays"].startswith(
         "synthetic:话题 /rear_lidar")
     B.package(work, tmp_path / "out6", run=假MOLA(pts), bag=tmp_path / "bag", read_scans=读扫描,
-              lidar_topic="/d1max/merged_lidar")
+              lidar_topic="/nexwar/merged_lidar")
     assert got, "前后雷达合并的话题(W09i)也在前雷达系里:照样打真射线"
 
 
@@ -277,9 +277,9 @@ def test_栅格拿到狗身中心走过的路(tmp_path, monkeypatch):
 
 
 def test_M9_栅格带显示掩码就写_seen_pbm_进文件表_没有就不写(tmp_path, monkeypatch):
-    """M9:「看到过、狗没走过」的掩码是可选文件(``d1max_contract.maps.SEEN_FILE``),栅格有才写、
+    """M9:「看到过、狗没走过」的掩码是可选文件(``nexwar_contract.maps.SEEN_FILE``),栅格有才写、
     才进文件表;没有的那一版文件表跟原来一模一样。"""
-    from d1max_contract.maps import OPTIONAL_FILES, SEEN_FILE
+    from nexwar_contract.maps import OPTIONAL_FILES, SEEN_FILE
     assert SEEN_FILE in OPTIONAL_FILES
     work, pts = _scene(tmp_path, False)
     real = G.render
@@ -326,7 +326,7 @@ def test_从真的mcap录包读逐帧扫描_按轨迹时刻配位姿(tmp_path):
         from pathlib import Path
         from rclpy.serialization import serialize_message
         from sensor_msgs.msg import PointCloud2, PointField
-        from d1max_localizer import build as B
+        from nexwar_localizer import build as B
         bag = Path({str(tmp_path / 'bag')!r})
         w = rosbag2_py.SequentialWriter()
         w.open(rosbag2_py.StorageOptions(uri=str(bag), storage_id="mcap"),
@@ -397,10 +397,10 @@ def test_录包里有RTK解_配经纬度写geo_json_没有就不写_build_json�
     """W09e 决定 6。合成场景的轨迹未必走够 10 m:写没写跟 build.json、文件表一致;写了朝向要对。"""
     import math
 
-    from d1max_localizer.frames import Frames
-    from d1max_localizer.replay import read_tum
+    from nexwar_localizer.frames import Frames
+    from nexwar_localizer.replay import read_tum
 
-    from d1max_contract.geo import GEO_FILE, GeoRef, enu_to_llh
+    from nexwar_contract.geo import GEO_FILE, GeoRef, enu_to_llh
     work, pts = _scene(tmp_path, False)
     bag = tmp_path / "bag"
     bag.mkdir()
@@ -432,7 +432,7 @@ def test_录包里有RTK解_配经纬度写geo_json_没有就不写_build_json�
 
 def test_配准出错不让整次建图失败(tmp_path, monkeypatch):
     """W09e 内审小:geo.json 是可选的。"""
-    import d1max_localizer.geo as G
+    import nexwar_localizer.geo as G
     work, pts = _scene(tmp_path, False)
     bag = tmp_path / "bag"
     bag.mkdir()
@@ -462,7 +462,7 @@ def _lc_tool(tmp_path):
     share = prefix / "share" / "mola_sm_loop_closure"
     share.mkdir(parents=True, exist_ok=True)
     share.joinpath("package.xml").write_text("<package><version>1.2.2</version></package>\n")
-    share.joinpath("d1max-build.txt").write_text("mola_sm_loop_closure e737aa8 (MRPT 2.15)\n")
+    share.joinpath("nexwar_build.txt").write_text("mola_sm_loop_closure e737aa8 (MRPT 2.15)\n")
     return str(exe)
 
 
@@ -477,7 +477,7 @@ def _plain(tmp_path, pts, work):
 
 
 def test_有回环工具_跑回环_从回环后的simplemap重出点云先验与轨迹_build_json记下(tmp_path):
-    from d1max_localizer.replay import read_tum
+    from nexwar_localizer.replay import read_tum
     work, pts = _scene(tmp_path, False)
     cli = _lc_tool(tmp_path)
     fake = 假MOLA(pts, closures=3, shift=(0.0, 0.01, 0.0))
@@ -590,8 +590,8 @@ def test_找回环工具(tmp_path):
     def none(name):
         return None
     assert B.find_loop_closure("off", env={}, which=on_path) is None
-    assert B.find_loop_closure("auto", env={"D1MAX_LOOP_CLOSURE": "off"}, which=on_path) is None
-    assert B.find_loop_closure("auto", env={"D1MAX_LOOP_CLOSURE": exe}, which=none) == exe
+    assert B.find_loop_closure("auto", env={"NEXWAR_LOOP_CLOSURE": "off"}, which=on_path) is None
+    assert B.find_loop_closure("auto", env={"NEXWAR_LOOP_CLOSURE": exe}, which=none) == exe
     assert B.find_loop_closure(exe, env={}, which=none) == exe
     assert B.find_loop_closure("auto", env={}, which=on_path) == \
         "/opt/ros/humble/bin/mola-sm-lc-cli"
@@ -602,7 +602,7 @@ def test_找回环工具(tmp_path):
 
 
 def test_建图命令_回环开关交给打包(tmp_path, monkeypatch):
-    from d1max_localizer import tools
+    from nexwar_localizer import tools
     seen = {}
 
     def 打包(work, out, **kw):
@@ -700,7 +700,7 @@ def test_S2_地图跟狗反着转_不出图_说清楚(tmp_path):
 def test_S2_上判反了_里程是对的_核出来不出图(tmp_path, monkeypatch):
     """模拟 10-13 狗上那次(怀疑):``orient`` 把「上」判反了(倒装的雷达按装法的正负号标),地图平面
     是镜像的。"""
-    from d1max_localizer.frames import calibrate
+    from nexwar_localizer.frames import calibrate
     work, pts, yaws = _转圈(tmp_path, True)
 
     def 判反(points, traj):
@@ -752,7 +752,7 @@ import math, rosbag2_py
 from pathlib import Path
 from rclpy.serialization import serialize_message
 from nav_msgs.msg import Odometry
-from d1max_localizer import build as B
+from nexwar_localizer import build as B
 bag = Path(BAG)
 w = rosbag2_py.SequentialWriter()
 w.open(rosbag2_py.StorageOptions(uri=str(bag), storage_id="mcap"),

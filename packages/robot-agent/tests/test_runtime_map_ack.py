@@ -7,11 +7,11 @@ import pytest
 from test_runtime_localizer import 台子, 真狗样
 from test_runtime_maps import _cmd, _跑, 站点
 
-import d1max_agent.runtime as rtmod
-from d1max_agent.maps import MapKeeper
-from d1max_contract.maps import MapRef, map_digest
-from d1max_contract.messages import Capabilities
-from d1max_contract.zones import ZoneSet, zones_digest
+import nexwar_agent.runtime as rtmod
+from nexwar_agent.maps import MapKeeper
+from nexwar_contract.maps import MapRef, map_digest
+from nexwar_contract.messages import Capabilities
+from nexwar_contract.zones import ZoneSet, zones_digest
 
 FILES = {"prior.mm": b"p", "frames.json": b"{}", "superlio_map.pcd": b"c"}
 
@@ -97,7 +97,7 @@ async def test_定位器一直不回_超时算没成_也退回(台, monkeypatch)
 
 async def test_W70_定位器没在运行_不白等120秒_报定位器没在运行(台, monkeypatch):
     """用户 11-03 现场:重启后定位器没起,换图白等 120 s 才报「未连接」。一直连不上
-    :data:`~d1max_agent.runtime.LOC_DOWN_WAIT_S` 就报「定位器没在运行」、退回原来那张。"""
+    :data:`~nexwar_agent.runtime.LOC_DOWN_WAIT_S` 就报「定位器没在运行」、退回原来那张。"""
     t, site, keeper = 台
     a = await _activate(t, site, "2", "a1")
     monkeypatch.setattr(rtmod, "LOC_DOWN_WAIT_S", 0.3)
@@ -110,7 +110,7 @@ async def test_W70_定位器没在运行_不白等120秒_报定位器没在运�
     await t.broker.drain()
     failed = _events(t, "map_activate_failed")
     why = failed[-1]["data"]["reason"] if failed else ""
-    assert "定位器没在运行" in why and "systemctl start d1max-localizer" in why, failed
+    assert "定位器没在运行" in why and "systemctl start nexwar_localizer" in why, failed
     assert t.rt.loaded_map == ("m", "2") and keeper.active() == a
 
 
@@ -166,7 +166,7 @@ async def test_没有定位器的狗_载入成功就算_confirmed是load(tmp_pat
 async def test_running_config_带最近一趟巡检命令的任务修订_站点给了原样记_没给自己算(台):
     from types import SimpleNamespace
 
-    from d1max_contract.digest import canonical_digest
+    from nexwar_contract.digest import canonical_digest
     t, site, keeper = 台
     mission = {"mission": "night", "waypoints": []}
     m = SimpleNamespace(mission="night", map_version="2")

@@ -7,7 +7,7 @@ import math
 
 import numpy as np
 
-from d1max_contract.obsbridge import Grid, pack_bits
+from nexwar_contract.obsbridge import Grid, pack_bits
 
 RES = 0.05
 BODY_HL, BODY_HW = 0.465, 0.24
@@ -104,6 +104,6 @@ class 假感知:
 
     def 净空(self, g: Grid, end: str = "head") -> float:
         """跟感知节点一样:机身前方(``end="tail"``:后方)走廊第一个挡 / 未知有多远。"""
-        from d1max_localizer.obstacles import Config, clear_distance
+        from nexwar_localizer.obstacles import Config, clear_distance
         occ, known = g.bits()
         return clear_distance(occ, known, Config(), end=end)

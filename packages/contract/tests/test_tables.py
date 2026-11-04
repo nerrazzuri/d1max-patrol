@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from d1max_contract.policy import OFFLINE_POLICY, OfflinePolicy, policy_for
-from d1max_contract.resources import RESOURCES, TASK_RESOURCES, conflicts, resources_for
+from nexwar_contract.policy import OFFLINE_POLICY, OfflinePolicy, policy_for
+from nexwar_contract.resources import RESOURCES, TASK_RESOURCES, conflicts, resources_for
 
 
 def test_六种资源():

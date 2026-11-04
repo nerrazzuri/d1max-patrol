@@ -1,6 +1,6 @@
 /// App 从站点更新（W55）：自助客户没有应用商店渠道，新版 App 由管理员 / 工程师传到站点（公司签名，站点验签）；
 /// App 登录后问站点有没有比自己新的（比构建号），有就提示，点了下载、核对大小和指纹，再交给系统安装：
-/// - 安卓：系统的安装确认（`d1max/install` 通道，原生 `PackageInstaller`；第一次要人允许「安装未知应用」）。
+/// - 安卓：系统的安装确认（`nexwar/install` 通道，原生 `PackageInstaller`；第一次要人允许「安装未知应用」）。
 /// - 桌面：存到「下载」文件夹并打开那个文件夹，由人关掉 App 后运行安装包。
 library;
 
@@ -67,7 +67,7 @@ class AppUpdater {
     return await getDownloadsDirectory() ?? await getApplicationDocumentsDirectory();
   }
 
-  static const MethodChannel _ch = MethodChannel('d1max/install');
+  static const MethodChannel _ch = MethodChannel('nexwar/install');
 
   Future<String> _installDefault(File f) async {
     if (platform == 'android') {

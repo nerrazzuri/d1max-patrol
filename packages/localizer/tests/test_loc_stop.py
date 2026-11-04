@@ -1,4 +1,4 @@
-"""工单 1(2026-10-28 3z.13):``systemctl stop d1max-localizer`` → ``terminate called without an
+"""工单 1(2026-10-28 3z.13):``systemctl stop nexwar_localizer`` → ``terminate called without an
 active exception``、ABRT,systemd 记 failed。台式机复现:旧代码连起连停 20 次 abort 9 次。
 真起 rclpy(要装了 ROS 的机器,CI 上跳过)。"""
 
@@ -21,7 +21,7 @@ def test_工单1_收到停止信号_退出码0_不abort(tmp_path):
     env_py = f"{ROOT}/packages/localizer/src:{ROOT}/packages/contract/src"
     for i in range(8):
         cmd = (f"source {ROS} && export PYTHONPATH={env_py}:${{PYTHONPATH:-}} && "
-               f"exec /usr/bin/python3 -m d1max_localizer.main --socket {tmp_path}/none-{i} "
+               f"exec /usr/bin/python3 -m nexwar_localizer.main --socket {tmp_path}/none-{i} "
                "--log-level ERROR")
         p = subprocess.Popen(["/bin/bash", "-c", cmd], stdout=subprocess.DEVNULL,
                              stderr=subprocess.PIPE, env={k: v for k, v in os.environ.items()

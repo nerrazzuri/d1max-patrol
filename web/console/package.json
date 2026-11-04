@@ -1,9 +1,9 @@
 {
-  "name": "d1max-console",
+  "name": "nexwar_console",
   "private": true,
   "version": "1.0.0-rc.1",
   "type": "module",
-  "description": "D1 Max duty console (B1): built into packages/site-node/src/d1max_site/web and served by the site.",
+  "description": "D1 Max duty console (B1): built into packages/site-node/src/nexwar_site/web and served by the site.",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",

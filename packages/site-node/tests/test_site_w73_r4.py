@@ -6,11 +6,11 @@ from __future__ import annotations
 
 from test_site_w73_guard_duty import MAP, _patrols, _方案, _跑, 站
 
-from d1max_agent.engine.preflight import back_mode, departure_line_pct
-from d1max_contract.mission import parse_mission
-from d1max_patrol.protocol.nav_types import Pose
-from d1max_site.battery_swap import SwapDesk
-from d1max_site.standby import StandbyManager
+from nexwar_agent.engine.preflight import back_mode, departure_line_pct
+from nexwar_contract.mission import parse_mission
+from nexwar_patrol.protocol.nav_types import Pose
+from nexwar_site.battery_swap import SwapDesk
+from nexwar_site.standby import StandbyManager
 
 
 def _待命(t, x, home=True):

@@ -10,8 +10,8 @@ import json
 
 import pytest
 
-from d1max_contract.bundle_format import BUNDLE_SCHEMA, BundleError, build_bundle
-from d1max_contract.mission import MissionError, parse_mission
+from nexwar_contract.bundle_format import BUNDLE_SCHEMA, BundleError, build_bundle
+from nexwar_contract.mission import MissionError, parse_mission
 
 _WP = {"name": "P1", "pose": {"position": {"x": 1.0, "y": 2.0, "z": 0.0},
                               "orientation": {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0}}}
@@ -74,7 +74,7 @@ def test_打包_绑了版本的任务原样带着版本(tmp_path):
 def test_代理级别3_新站点认2和3_老站点认不了3():
     """A7 的规矩:两头都得会的东西改了才加级别。3 级的代理不收没绑版本的巡检(老站点派的全是这种),
     所以老站点(最高认 2)要先升;新站点照样派 2 级的狗(命令里放任务的版本,老狗本来就核)。"""
-    from d1max_contract.compat import (
+    from nexwar_contract.compat import (
         AGENT_LEVEL,
         SITE_MAX_AGENT_LEVEL,
         SITE_MIN_AGENT_LEVEL,

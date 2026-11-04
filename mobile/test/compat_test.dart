@@ -1,5 +1,5 @@
 // 版本兼容（商业化 A7）：站点登录回复里的级别配不配这个 App。
-import 'package:d1max_patrol/net/site_client.dart';
+import 'package:nexwar_patrol/net/site_client.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {

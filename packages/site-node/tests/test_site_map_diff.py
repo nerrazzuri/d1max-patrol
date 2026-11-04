@@ -8,7 +8,7 @@ import zlib
 import numpy as np
 import pytest
 
-from d1max_site import map_diff as md
+from nexwar_site import map_diff as md
 
 OCC, FREE, UNK = 0, 1, 2
 

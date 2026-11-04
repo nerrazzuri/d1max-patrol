@@ -7,8 +7,8 @@ from types import SimpleNamespace
 import pytest
 from test_site_api import PW, _等, 站
 
-from d1max_site.db import SiteDB
-from d1max_site.setup import GuideError, read_guide, setup_view, write_guide
+from nexwar_site.db import SiteDB
+from nexwar_site.setup import GuideError, read_guide, setup_view, write_guide
 
 
 class 假派遣器:
@@ -57,7 +57,7 @@ def test_标成不用了的项不算没做(tmp_path):
 
 
 def test_向导记录_按账号_合并写_不认的键拒(tmp_path):
-    from d1max_site.accounts import Accounts
+    from nexwar_site.accounts import Accounts
     db = SiteDB(tmp_path / "s.db")
     acc = Accounts(db, now_ms=lambda: 0)
     acc.add("g", "pass-word-123", role="guard")

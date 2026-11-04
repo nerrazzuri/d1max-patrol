@@ -1,4 +1,4 @@
-"""真 Mosquitto 的测试夹具(W00c1)。找 broker 的顺序:环境变量 ``D1MAX_MOSQUITTO`` → PATH 里的
+"""真 Mosquitto 的测试夹具(W00c1)。找 broker 的顺序:环境变量 ``NEXWAR_MOSQUITTO`` → PATH 里的
 ``mosquitto`` → ``/usr/sbin/mosquitto``;都没有就跳过真 broker 测试。起在临时目录与空闲端口上,
 站点 CA、A/B 两台狗的证书包、站点服务证书都现签。"""
 
@@ -14,15 +14,15 @@ from pathlib import Path
 
 import pytest
 
-from d1max_site.broker_conf import BrokerPaths, render_acl, render_conf
-from d1max_site.ca import RobotBundle, SiteCA
+from nexwar_site.broker_conf import BrokerPaths, render_acl, render_conf
+from nexwar_site.ca import RobotBundle, SiteCA
 
 SITE = "estate-1"
 NOW = 1_800_000_000_000
 
 
 def find_mosquitto() -> str | None:
-    env = os.environ.get("D1MAX_MOSQUITTO")
+    env = os.environ.get("NEXWAR_MOSQUITTO")
     if env:
         return env if Path(env).is_file() else None
     return shutil.which("mosquitto") or (
@@ -99,7 +99,7 @@ class Broker:
 def make_broker(root: Path, robots=("A", "B")) -> Broker:
     exe = find_mosquitto()
     if exe is None:
-        pytest.skip("没有 mosquitto(设 D1MAX_MOSQUITTO 或 apt install mosquitto),"
+        pytest.skip("没有 mosquitto(设 NEXWAR_MOSQUITTO 或 apt install mosquitto),"
                     "跳过真 broker 测试")
     ca = SiteCA(root / "ca")
     ca.init(SITE)

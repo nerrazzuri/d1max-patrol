@@ -5,7 +5,7 @@
 // 切完在 tearDown 里切回来。
 import 'dart:async';
 
-import 'package:d1max_patrol/l10n.dart';
+import 'package:nexwar_patrol/l10n.dart';
 
 Future<void> testExecutable(FutureOr<void> Function() testMain) async {
   appLang.value = AppLang.zh;

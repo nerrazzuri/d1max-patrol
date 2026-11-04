@@ -7,7 +7,7 @@ from __future__ import annotations
 import math
 
 import pytest
-from d1max_localizer.core import (
+from nexwar_localizer.core import (
     AUTO_RELOC_SIGMA_M,
     JUMP_LOST_N,
     NO_SCAN_S,
@@ -19,9 +19,9 @@ from d1max_localizer.core import (
     Estimate,
     LocalizerCore,
 )
-from d1max_localizer.frames import Frames, mat_to_quat
+from nexwar_localizer.frames import Frames, mat_to_quat
 
-from d1max_contract.locbridge import Pose, State
+from nexwar_contract.locbridge import Pose, State
 
 FLAT = Frames(up=(0.0, 0.0, 1.0), sensor_up=(0.0, 0.0, 1.0), sensor_forward=(1.0, 0.0, 0.0),
               sensor_height=0.0)
@@ -361,7 +361,7 @@ def test_定位程序退出了_说原因_起来之后照常():
 def test_重定位之后第一帧离给的位置太远_当它没照办_不发_再请_三次不成报丢():
     """2026-09-27 实跑:MOLA 还没收到过点云时收下的重定位,被它第一帧点云上的初始定位按默认原点盖掉了
     —— 代理拿到的是原点附近的位置,还当它可信。"""
-    from d1max_localizer.core import RELOC_APPLY_S, RELOC_MAX_TRIES
+    from nexwar_localizer.core import RELOC_APPLY_S, RELOC_MAX_TRIES
     n = int(RELOC_APPLY_S * 10) + 1                        # 过了生效的那一阵还在原点
     t = 台(init=False)
     assert t.core.relocalized(req=7, x=5.0, y=4.0, yaw=1.7, sigma=0.5, human=True)
@@ -400,7 +400,7 @@ def test_MOLA_还在起_人给的位置先记着():
 
 def test_近几秒质量不高的帧多了_σ涨到代理不信_偶尔一帧不算():
     """2026-09-27 回放:平滑地错到 2 m 的那几段,质量中位数照样很高,但低于 0.9 的帧占了 17–25%。"""
-    from d1max_localizer.core import LOWQ_Q, LOWQ_WINDOW_S, SIGMA_BAD_M
+    from nexwar_localizer.core import LOWQ_Q, LOWQ_WINDOW_S, SIGMA_BAD_M
     t = 台()
     t.c.t += RELOC_SETTLE_S
     t.walk(40)
@@ -420,9 +420,9 @@ def test_近几秒质量不高的帧多了_σ涨到代理不信_偶尔一帧不�
 
 def test_不可信的σ明显高于代理那条线():
     """代理 σ **大于** 1.0 m 才不信;给正好 1.0 的话代理照样信(2026-09-27 回放踩到)。"""
-    from d1max_localizer.core import SIGMA_BAD_M
+    from nexwar_localizer.core import SIGMA_BAD_M
 
-    from d1max_agent.bridge_localizer import SIGMA_LOST_M
+    from nexwar_agent.bridge_localizer import SIGMA_LOST_M
     assert SIGMA_BAD_M > SIGMA_LOST_M
     t = 台()
     t.c.t += RELOC_SETTLE_S
@@ -433,7 +433,7 @@ def test_不可信的σ明显高于代理那条线():
 
 def test_来回跳_从最后一次跳起满_5_秒才恢复():
     """三次跳隔开(0、2、4 s):窗口里不足 3 次不等于不跳了 —— 最后一次跳之后要满 5 s。"""
-    from d1max_localizer.core import JUMP_CLEAR_S
+    from nexwar_localizer.core import JUMP_CLEAR_S
     t = 台()
     t.c.t += RELOC_SETTLE_S
     x = t.walk(5)
@@ -460,7 +460,7 @@ def test_跳的那一帧不当最后可信的位置():
 
 
 def test_重启之后不带着以前的低质量帧():
-    from d1max_localizer.core import LOWQ_Q, SIGMA_BAD_M
+    from nexwar_localizer.core import LOWQ_Q, SIGMA_BAD_M
     t = 台()
     t.c.t += RELOC_SETTLE_S
     x = 0.0
@@ -492,7 +492,7 @@ def test_雷达断了一阵再恢复_不算_MOLA_卡住():
 
 def test_在等初值的时候_MOLA_一帧都不吐也要看门():
     """W09b 内审应修 1:原来等初值时看门不管,MOLA 刚起来就停摆(空点云)会永远「在起」。"""
-    from d1max_localizer.core import START_TIMEOUT_S
+    from nexwar_localizer.core import START_TIMEOUT_S
     t = 台(init=False)
     t.core.reloc_queued()
     for _ in range(int(START_TIMEOUT_S * 10) + 5):         # 点云一直在来,MOLA 一帧不吐
@@ -530,7 +530,7 @@ def test_MOLA_重启_人给的还没确认的那次按原请求号重发():
 
 def test_自动重定位之后先不信_σ_高于代理的线():
     """W09b 内审应修 3:自动重定位的 σ 起点给 1.0 正好压线,重启 0.7 s 代理就信了。"""
-    from d1max_agent.bridge_localizer import SIGMA_LOST_M
+    from nexwar_agent.bridge_localizer import SIGMA_LOST_M
     t = 台()
     t.c.t += RELOC_SETTLE_S
     x = t.walk(10)
@@ -546,7 +546,7 @@ def test_自动重定位之后先不信_σ_高于代理的线():
 
 def test_跳过之后几秒里的帧都不当最后可信的位置_σ_也高于代理的线():
     """W09b 内审应修 4:原来跳过之后的下一帧 σ 0.5、正好压着「可信」的线,成了最后可信的位置。"""
-    from d1max_agent.bridge_localizer import SIGMA_LOST_M
+    from nexwar_agent.bridge_localizer import SIGMA_LOST_M
     t = 台()
     t.c.t += RELOC_SETTLE_S
     x = t.walk(10)
@@ -616,7 +616,7 @@ def test_点云停的那一刻_最后一帧点云比_MOLA_的输出晚到一点_
 def test_MOLA_的重定位是异步生效的_头几帧还是旧位置_给它一会儿():
     """2026-09-27 真 ROS 实跑:重定位收下之后头几帧还在旧位置,原来立刻算没照办,三次重试一下就
     耗光。"""
-    from d1max_localizer.core import RELOC_APPLY_S
+    from nexwar_localizer.core import RELOC_APPLY_S
     t = 台(init=False)
     t.core.relocalized(req=4, x=5.0, y=0.0, yaw=0.0, sigma=0.5, human=True)
     t.step(0.0, 0.0)                                       # 还是旧的
@@ -676,7 +676,7 @@ def _走一段分数(t, qs, x):
 
 
 def test_W68_Super_LIO的分数线_跟对了掉到0点67也信():
-    from d1max_localizer.core import SLIO_QUALITY
+    from nexwar_localizer.core import SLIO_QUALITY
     t = 台(quality=SLIO_QUALITY)
     x = t.walk(150, q=0.93)
     t.out.clear()
@@ -693,7 +693,7 @@ def test_W68_同样的分数按MOLA的线_不信():
 
 
 def test_W68_Super_LIO的分数线_偏1米那种0点5_不信():
-    from d1max_localizer.core import SLIO_QUALITY
+    from nexwar_localizer.core import SLIO_QUALITY
     t = 台(quality=SLIO_QUALITY)
     x = t.walk(150, q=0.93)
     t.out.clear()
@@ -725,7 +725,7 @@ def _原地转身_外审(t, x, n, q):
 
 def test_W68_外审_Super_LIO锁错0点5_原地转身_不因转身升成可信():
     """codex r1 #1:原来转身时 0.4 以上一律升成「好」,锁错(0.5)平稳地转就被信了。"""
-    from d1max_localizer.core import SLIO_QUALITY
+    from nexwar_localizer.core import SLIO_QUALITY
     t = 台(quality=SLIO_QUALITY)
     x = t.walk(150, q=0.5)
     t.out.clear()
@@ -734,7 +734,7 @@ def test_W68_外审_Super_LIO锁错0点5_原地转身_不因转身升成可信()
 
 
 def test_W68_外审_Super_LIO跟对了_转身时分数掉到0点6_照样信():
-    from d1max_localizer.core import SLIO_QUALITY
+    from nexwar_localizer.core import SLIO_QUALITY
     t = 台(quality=SLIO_QUALITY)
     x = t.walk(150, q=0.93)
     t.out.clear()
@@ -756,7 +756,7 @@ def test_W68_外审_一直发时间戳不合法的帧_看门狗照样判卡住()
 
 def test_W68_外审r2_转身沿用转身前的分有期限_转久了照实算():
     """codex r2 #1:沿用转身前的高分没有期限,一直转、分一直 0.5 也一直可信。"""
-    from d1max_localizer.core import SLIO_QUALITY
+    from nexwar_localizer.core import SLIO_QUALITY
     t = 台(quality=SLIO_QUALITY)
     x = t.walk(150, q=0.95)
     t.out.clear()
@@ -779,7 +779,7 @@ def test_W70_Super_LIO转完停下_打分晚到的转身低分_不让σ过线():
     """2026-11-03 C40221 反 U 型:代理接过来原地转 -48°,停下后才出来转身那帧的套图分(每 0.5 s
     打一次、配后面 0.25 s 内的位姿,停下的几帧还沿用它)0.61 → σ 过 0.5 → 代理判丢定位、
     重启 Super-LIO。"""
-    from d1max_localizer.core import SLIO_QUALITY
+    from nexwar_localizer.core import SLIO_QUALITY
     t = 台(quality=SLIO_QUALITY)
     x = t.walk(150, q=0.95)
     _原地转身_外审(t, x, 10, 0.95)
@@ -798,7 +798,7 @@ def test_W70_Super_LIO刚对得很好_走近新摆的箱子分掉到0点57_连�
     σ 0.6–0.8 不信、停下等人;Super-LIO 其实是对的(重定位只修 6 cm)。单帧的分分不开「近处多了
     东西」和「偏了半米」(office1 上偏 0.5 m 中位 0.55):刚对得很好、之后连续没跳的,走一小段
     照样信。"""
-    from d1max_localizer.core import SLIO_QUALITY
+    from nexwar_localizer.core import SLIO_QUALITY
     t = 台(quality=SLIO_QUALITY)
     x = t.walk(100, q=0.9)
     t.out.clear()
@@ -807,7 +807,7 @@ def test_W70_Super_LIO刚对得很好_走近新摆的箱子分掉到0点57_连�
 
 
 def test_W70_信用有限_分一直低_走远了照实算():
-    from d1max_localizer.core import SLIO_QUALITY
+    from nexwar_localizer.core import SLIO_QUALITY
     t = 台(quality=SLIO_QUALITY)
     x = t.walk(100, q=0.9)
     x = t.walk(120, q=0.57, x0=x)                         # 走 6 m 一直没对好过
@@ -815,7 +815,7 @@ def test_W70_信用有限_分一直低_走远了照实算():
 
 
 def test_W70_信用不救太低的分():
-    from d1max_localizer.core import SLIO_QUALITY
+    from nexwar_localizer.core import SLIO_QUALITY
     t = 台(quality=SLIO_QUALITY)
     x = t.walk(100, q=0.9)
     t.out.clear()
@@ -824,7 +824,7 @@ def test_W70_信用不救太低的分():
 
 
 def test_W70_没对好过的_没有信用():
-    from d1max_localizer.core import SLIO_QUALITY
+    from nexwar_localizer.core import SLIO_QUALITY
     t = 台(quality=SLIO_QUALITY)
     t.walk(100, q=0.57)
     assert t.poses()[-1].sigma_xy > 0.5

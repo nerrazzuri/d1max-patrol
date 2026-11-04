@@ -19,7 +19,7 @@ import numpy as np
 import pytest
 from test_site_api import MAP, PW, 站
 
-from d1max_site import map_preview as mp
+from nexwar_site import map_preview as mp
 
 FREE, OCC, UNKNOWN = 1, 0, 2          # grid_ranks 的名次
 
@@ -282,7 +282,7 @@ _YAML = "image: yard.pgm\nresolution: 0.05\norigin: [-10.0, -5.0, 0.0]\n"
 
 @pytest.fixture
 def 站点(tmp_path):
-    from d1max_site.areas import AreaBook
+    from nexwar_site.areas import AreaBook
     s = 站(tmp_path, maps={})
     s.accounts.add("gina", PW, role="guard")
     s.api.areas = AreaBook(s.db, now_ms=lambda: 1)

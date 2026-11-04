@@ -9,8 +9,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from d1max_site.db import SiteDB
-from d1max_site.weather import (
+from nexwar_site.db import SiteDB
+from nexwar_site.weather import (
     AUTO_STALE_S,
     CAP_TTL_S,
     POLL_S,
@@ -245,7 +245,7 @@ class 假待命:
 
     async def return_after_once(self, rid, after, *, issued_by):
         if self.unsafe:
-            from d1max_site.standby import StandbyError
+            from nexwar_site.standby import StandbyError
             raise StandbyError(self.unsafe)
         if self.fail:
             self.fail -= 1
@@ -340,7 +340,7 @@ async def test_外审2_限速_狗不重发能力也按时续_站点重启先补�
 
 
 async def test_W29复查_回不得_意图作废_报没回待命点_不再派(台):
-    from d1max_site.alert_store import AlertDesk
+    from nexwar_site.alert_store import AlertDesk
     t = 台
     t.desk.standby = stb = 假待命()
     t.desk.alerts = AlertDesk(t.db, now_ms=t.clock)
@@ -359,7 +359,7 @@ async def test_W29复查_回不得_意图作废_报没回待命点_不再派(台
 
 
 async def test_W29复查二_回不得的告警写不进去_下一拍补_重启也补_不重复(台, monkeypatch):
-    from d1max_site.alert_store import AlertDesk
+    from nexwar_site.alert_store import AlertDesk
     t = 台
     t.desk.standby = stb = 假待命()
     t.desk.alerts = desk = AlertDesk(t.db, now_ms=t.clock)

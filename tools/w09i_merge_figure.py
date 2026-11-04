@@ -17,11 +17,11 @@ import argparse
 from pathlib import Path
 
 import numpy as np
-from d1max_localizer import dualbag
-from d1max_localizer.frames import Frames
-from d1max_localizer.lidars import load
-from d1max_localizer.merge import transform, voxel_down
-from d1max_localizer.replay import read_tum
+from nexwar_localizer import dualbag
+from nexwar_localizer.frames import Frames
+from nexwar_localizer.lidars import load
+from nexwar_localizer.merge import transform, voxel_down
+from nexwar_localizer.replay import read_tum
 
 
 def _pgm(path: Path) -> np.ndarray:

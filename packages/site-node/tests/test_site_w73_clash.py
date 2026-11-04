@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from d1max_site.guard_clash import Patrol, clashes, guard_busy, patrol_busy
+from nexwar_site.guard_clash import Patrol, clashes, guard_busy, patrol_busy
 
 MON, TUE, SUN = 0, 1, 6
 
@@ -75,12 +75,12 @@ def test_布防值守中的机器人_到点的巡逻不派_说在布防值守(tm
     """设计 §6.4:布防期间到点的巡逻排程,这台在值守 → 记跳过「布防中」,不派。"""
     from types import SimpleNamespace
 
-    from d1max_contract.mission import parse_mission
-    from d1max_contract.schedule import parse_schedule
-    from d1max_site.catalog import ActiveBundle
-    from d1max_site.db import SiteDB
-    from d1max_site.dispatcher import Dispatcher
-    from d1max_site.scheduler import SiteScheduler
+    from nexwar_contract.mission import parse_mission
+    from nexwar_contract.schedule import parse_schedule
+    from nexwar_site.catalog import ActiveBundle
+    from nexwar_site.db import SiteDB
+    from nexwar_site.dispatcher import Dispatcher
+    from nexwar_site.scheduler import SiteScheduler
     now = 1_800_000_000_000
     db = SiteDB(tmp_path / "db")
     mission = parse_mission({"mission": "loop", "map_id": "m", "policy": {}, "waypoints": [

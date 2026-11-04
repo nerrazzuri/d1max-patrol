@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from d1max_patrol.protocol.nav_frames import (
+from nexwar_patrol.protocol.nav_frames import (
     AlgErrorItem,
     AlgErrorNotify,
     ProtocolError,

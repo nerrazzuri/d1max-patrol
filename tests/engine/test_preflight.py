@@ -7,18 +7,18 @@ from types import SimpleNamespace
 
 import pytest
 
-from d1max_agent.engine.form import STANDALONE, Form
-from d1max_agent.engine.homing import HomePoint, ReturnParams
-from d1max_agent.engine.mission import MissionWaypoint, Policy
-from d1max_agent.engine.preflight import departure_line_pct, run_preflight
-from d1max_agent.engine.removable import DiskRole, Removable
-from d1max_agent.engine.safety import (
+from nexwar_agent.engine.form import STANDALONE, Form
+from nexwar_agent.engine.homing import HomePoint, ReturnParams
+from nexwar_agent.engine.mission import MissionWaypoint, Policy
+from nexwar_agent.engine.preflight import departure_line_pct, run_preflight
+from nexwar_agent.engine.removable import DiskRole, Removable
+from nexwar_agent.engine.safety import (
     Decision,
     SafetyContext,
     battery_ruling,
     return_line_pct,
 )
-from d1max_patrol.protocol.nav_types import LocStatus, NavStatus, Pose
+from nexwar_patrol.protocol.nav_types import LocStatus, NavStatus, Pose
 
 from .conftest import make_mission
 
@@ -334,7 +334,7 @@ async def test_七项里随便哪一项炸了都只算那一项没过(tmp_path, 
     """
     async def boom(*args, **kw):
         raise RuntimeError(f"{name} 这一项炸了")
-    monkeypatch.setattr(f"d1max_agent.engine.preflight._check_{name}", boom)
+    monkeypatch.setattr(f"nexwar_agent.engine.preflight._check_{name}", boom)
     r = await _run(fake_nav, fake_device, sample_mission, tmp_path)
     assert [c.name for c in r.checks] == NAMES, "炸掉一项不许少报另外六项"
     assert [c.name for c in r.failures] == [name]
@@ -369,20 +369,20 @@ async def test_别的狗的镜像盘也拦得住(tmp_path, sample_mission, fake_
                                       fake_device):
     """``robot_sn`` 要真传到 ``blocks_takeoff`` 那儿去,不是关起门来测纯函数。"""
     disks = [Removable(mount=Path("/media/mirror"), role=DiskRole.MIRROR,
-                       sn="D1MAX-0002")]
+                       sn="NEXWAR-0002")]
     r = await _run(fake_nav, fake_device, sample_mission, tmp_path,
-                   removable=disks, robot_sn="D1MAX-0001")
+                   removable=disks, robot_sn="NEXWAR-0001")
     assert [c.name for c in r.failures] == ["removable"]
     assert "别的机器人" in r.failures[0].detail
-    assert "D1MAX-0002" in r.failures[0].detail, "得说清是哪块盘"
+    assert "NEXWAR-0002" in r.failures[0].detail, "得说清是哪块盘"
 
 
 async def test_自己的镜像盘照样放行(tmp_path, sample_mission, fake_nav,
                                     fake_device):
     disks = [Removable(mount=Path("/media/mirror"), role=DiskRole.MIRROR,
-                       sn="D1MAX-0001")]
+                       sn="NEXWAR-0001")]
     r = await _run(fake_nav, fake_device, sample_mission, tmp_path,
-                   removable=disks, robot_sn="D1MAX-0001")
+                   removable=disks, robot_sn="NEXWAR-0001")
     assert r.ok
 
 

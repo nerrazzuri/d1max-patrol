@@ -12,7 +12,7 @@ import time
 
 import pytest
 
-from d1max_site.ws import WsClosed, WsConn, accept_key, check_upgrade
+from nexwar_site.ws import WsClosed, WsConn, accept_key, check_upgrade
 
 
 def _client_frame(payload: bytes, opcode: int = 1, *, mask: bool = True, fin: bool = True) -> bytes:

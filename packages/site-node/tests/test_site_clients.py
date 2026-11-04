@@ -7,8 +7,8 @@ import sqlite3
 import pytest
 from test_site_api import PW, 站
 
-from d1max_site.accounts import Accounts, clean_client
-from d1max_site.db import SCHEMA_VERSION, SiteDB
+from nexwar_site.accounts import Accounts, clean_client
+from nexwar_site.db import SCHEMA_VERSION, SiteDB
 
 APP = {"kind": "app", "version": "1.0.0", "api_level": 1, "platform": "android"}
 

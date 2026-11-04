@@ -12,9 +12,9 @@ import pytest
 from test_site_alerts_api import _登
 from test_site_api import PW, 站
 
-from d1max_site.alert_store import AlertDesk
-from d1max_site.db import SiteDB
-from d1max_site.push import JPush, PushDesk, PushError, collapse_id, load_sender
+from nexwar_site.alert_store import AlertDesk
+from nexwar_site.db import SiteDB
+from nexwar_site.push import JPush, PushDesk, PushError, collapse_id, load_sender
 
 NOW = 1_800_000_000_000
 
@@ -213,7 +213,7 @@ def test_配置_没配_没密钥文件_配好了(tmp_path):
 def test_没配推送_告警不排队_值守汇总说没配(tmp_path):
     from types import SimpleNamespace
 
-    from d1max_site.watch import watch_summary
+    from nexwar_site.watch import watch_summary
     db = SiteDB(tmp_path / "s.db")
     desk = AlertDesk(db, now_ms=lambda: NOW)
     desk.raise_alert(kind="dog_sees_person", robot="A", title="x")
@@ -253,7 +253,7 @@ async def test_推送那条道在线程里跑_卡住不挡事件循环(monkeypat
     import time as _t
     from types import SimpleNamespace
 
-    import d1max_site.main as main
+    import nexwar_site.main as main
     cls = next(v for v in vars(main).values() if isinstance(v, type) and "_lane" in vars(v))
     where, gate = [], threading.Event()
 
@@ -291,7 +291,7 @@ def test_F4_前一条等网络跨过了一小时_后一条不再发(台):
 
 
 def test_F4_分批发_第一批发着的时候有人确认了_后面的批次不发(台, monkeypatch):
-    import d1max_site.push as push
+    import nexwar_site.push as push
     desk, p, j, clock, db = 台
     monkeypatch.setattr(push, "BATCH", 1)
     p.register("gina", "rid-gina-2", "android", session="s-gina")
@@ -312,7 +312,7 @@ def test_F4_分批发_第一批发着的时候有人确认了_后面的批次不
 def test_外审I2_推送跟着退出和撤权走_不跟着闲置过期走(tmp_path):
     """App 被系统清掉、半小时没请求、站点重启了:照样推。明确退出、停用、改角色、重设口令:不推。
     退出以后迟到的登记不能把它加回来。没绑登录的老数据不推。"""
-    from d1max_site.accounts import Accounts, _token_hash
+    from nexwar_site.accounts import Accounts, _token_hash
     clock = [NOW]
     db = SiteDB(tmp_path / "s.db")
     acc = Accounts(db, now_ms=lambda: clock[0])
@@ -460,7 +460,7 @@ def test_H9_手机登记的通道站点没配_不推它_体检说得出有几台
     v = p.view()
     assert v["providers"] == ["jpush"] and v["devices_unreachable"] == 1
     assert v["devices_by_provider"] == {"fcm": 1}
-    from d1max_site.health import HealthDesk
+    from nexwar_site.health import HealthDesk
     assert "1 台登记的通道站点未配置,无法接收" in HealthDesk._push_detail(v)
     db.close()
 
@@ -501,7 +501,7 @@ def test_H9_登记_通道名不认识_令牌太长_拒(双通道):
 
 
 def test_H9_配置_老写法是极光_新写法两个并列_一个配坏了另一个照用并说原因(tmp_path):
-    from d1max_site.push import Fcm, load_senders
+    from nexwar_site.push import Fcm, load_senders
     (tmp_path / "jp").write_text("sec\n", "utf-8")
     acct = tmp_path / "fcm.json"
     acct.write_text(json.dumps({"project_id": "proj", "client_email": "a@b", "private_key": "PEM"}),
@@ -543,7 +543,7 @@ def _http错(code, body):
 
 
 def test_H9_FCM_报文_鉴权换一次令牌反复用_快到期再换():
-    from d1max_site.push import Fcm
+    from nexwar_site.push import Fcm
     calls, clock = [], [1000.0]
 
     def opener(req, timeout):
@@ -581,7 +581,7 @@ def test_H9_FCM_报文_鉴权换一次令牌反复用_快到期再换():
 
 
 def test_H9_FCM_令牌失效记下不算失败_别的错算失败并发完其余的_鉴权错了下次重新换():
-    from d1max_site.push import Fcm
+    from nexwar_site.push import Fcm
     seen, auth = [], [0]
 
     def opener(req, timeout):
@@ -613,7 +613,7 @@ def test_H9_FCM_令牌失效记下不算失败_别的错算失败并发完其余
 def test_H9_FCM_鉴权失败_连不上_都是PushError():
     import urllib.error
 
-    from d1max_site.push import Fcm
+    from nexwar_site.push import Fcm
 
     def 拒(req, timeout):
         raise _http错(400, {"error": "invalid_grant"})
@@ -633,7 +633,7 @@ def test_H9_用系统openssl签RS256_验得过_私钥不对说得出(tmp_path):
     import shutil
     import subprocess
 
-    from d1max_site.push import openssl_rs256
+    from nexwar_site.push import openssl_rs256
     if shutil.which("openssl") is None:
         pytest.skip("没有 openssl")
     key = tmp_path / "k.pem"
@@ -668,7 +668,7 @@ def test_H9_库从54升上来_老的推送号算极光_队里的照发(tmp_path)
     db = SiteDB(path)
     assert db.query("SELECT provider FROM push_devices")[0]["provider"] == "jpush"
     assert db.query("SELECT done FROM push_outbox")[0]["done"] == ""
-    from d1max_site.db import SCHEMA_VERSION
+    from nexwar_site.db import SCHEMA_VERSION
     assert db.query("SELECT value FROM meta WHERE key='schema'")[0]["value"] == str(SCHEMA_VERSION)
     db.close()
 
@@ -693,7 +693,7 @@ def test_H9_真接口_登记带通道名_回站点配了哪几个(tmp_path):
 
 
 def _真FCM(opener):
-    from d1max_site.push import Fcm
+    from nexwar_site.push import Fcm
     return Fcm("p", "e", "K", opener=opener, signer=lambda k, d: b"s", now_s=lambda: 0.0)
 
 
@@ -822,7 +822,7 @@ def test_外审I2_整个通道不通_连着几台都失败就先停_不把每一
 
 def test_外审I2_极光一批发成功记下这一批_下一批失败只补下一批(台, monkeypatch):
     desk, p, j, clock, db = 台
-    monkeypatch.setattr("d1max_site.push.BATCH", 2)
+    monkeypatch.setattr("nexwar_site.push.BATCH", 2)
     with db.tx() as c:
         for i in range(3):
             c.execute("INSERT INTO accounts(name, role, salt, pw_hash, created_at, disabled) "

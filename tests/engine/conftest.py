@@ -21,10 +21,10 @@ import time
 
 import pytest
 
-from d1max_agent.engine.homing import HomePoint
-from d1max_agent.engine.machine import MissionEngine
-from d1max_agent.engine.mission import Action, Mission, MissionWaypoint, Policy
-from d1max_patrol.backends.base import (
+from nexwar_agent.engine.homing import HomePoint
+from nexwar_agent.engine.machine import MissionEngine
+from nexwar_agent.engine.mission import Action, Mission, MissionWaypoint, Policy
+from nexwar_patrol.backends.base import (
     DeviceEvent,
     Event,
     EventEmitter,
@@ -35,7 +35,7 @@ from d1max_patrol.backends.base import (
     NavBackendError,
     NavStatusEvent,
 )
-from d1max_patrol.protocol.nav_types import LocStatus, NavStatus, Pose
+from nexwar_patrol.protocol.nav_types import LocStatus, NavStatus, Pose
 
 from ..conftest import NoDisks
 

@@ -1,0 +1,919 @@
+"""感知节点(W11 设计稿 §1–3、§6,W08 决定 8):雷达点云 → 狗身系局部栅格 + 前方净空许可。
+
+- **外参**来自 ``frames.json``(``sensor_up``、``sensor_forward``、``sensor_in_base``:建图流水线按
+  点云判上下、按狗走动的方向标前,不靠装法 —— #64 的「装反 180°」其实是「上」的正负号弄反了,见
+  ``docs/真机验证.md（§5）`` #64);后雷达按 ``lidars.json``(W09i:换进前雷达系再走前雷达的外参;
+  没有这份文件 = 头尾对称的几何初值、没标定)。**标过才用后雷达的「空」**,没标定只用它的「挡」。
+- **启动自检**:前 :data:`CHECK_FRAMES` 帧拟合地面,地面法向跟「上」夹角 ≤ 5°、雷达离地 0.2–1.0 m、
+  地面内点够多,才 ``ok``;不然 ``extrinsic_bad``(代理据此不宣告能自主走)。离地高度取自检的中位数。
+- **每帧**:凸起障碍(离地 0.10–1.30 m)、落差(近处比地面低 0.15 m 以上)→ 挡;打到地面、矮草 → 看见了;
+  别的格子 = 未知(代理当挡)。机身自己(腿)的点不算。
+- **滤雨点**(W29):凸起的格子只有一个点、周围 8 格都没有凸起的,当雨滴丢掉:不挡,**那一格也不算看见**
+  (同格打到地面也不算,W29 外审 4)。代理当未知;雨滴一闪就没,代理的记忆往回找前几帧看见过的。
+- **净空**:机身前沿往前、机身宽 + 每边 0.05 m 的走廊里第一个「挡 / 未知」有多远 → 给旁路进程发许可
+  ``clear {ms, dist}``(第二层,只在够刹停的时候发)。狗尾那头同样算(W09i):后雷达标过、旁路进程
+  ≥ 6 号才发 ``clear {ms, dist, end: "tail"}``(5 号会把它当成狗头的许可)。
+- 栅格**不带记忆**:滚动记忆在代理里做(代理有里程)。
+
+核心纯 numpy(不 import ROS);ROS 只在 :func:`main` 里。
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import logging
+import math
+import os
+import socket
+import time
+from collections.abc import Sequence
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+log = logging.getLogger(__name__)
+
+CHECK_FRAMES = 20
+GIVE_UP_FRAMES = 100
+REFIT_EVERY = 5
+MAX_TILT_DEG = 5.0
+HEIGHT_RANGE_M = (0.2, 1.0)
+#: W71(11-03 商场,左前腿下了 5 cm 台阶,机身歪着,前方平地被判成凸起,四面都是挡):
+#: 地面每帧按眼前 :data:`LOCAL_GROUND_R_M` 以内的点重新拟合,高度按「离这一帧的地面多高」算,
+#: 不再拿自检时那一个平面硬套(歪 3°,2 m 外的地面就差 10 cm = 凸起的下沿)。
+#: 拟合出来的平面跟机身的「上」差超过 :data:`LOCAL_TILT_MAX_DEG`、离地高度跟自检估的差超过
+#: :data:`LOCAL_HEIGHT_TOL_M`(大平台、货架底板占满了眼前)、内点不到 :data:`MIN_GROUND_FRAC`,
+#: 都不认:用上一个认过的(最多 :data:`LOCAL_HOLD_FRAMES` 帧),再往前就退回自检的水平面。
+LOCAL_GROUND_R_M = 3.0
+LOCAL_TILT_MAX_DEG = 10.0
+LOCAL_HEIGHT_TOL_M = 0.08
+LOCAL_HOLD_FRAMES = 10
+LOCAL_ITERS = 60
+LOCAL_MAX_PTS = 2000
+MIN_GROUND_FRAC = 0.3
+PERMIT_MS = 300
+#: 旁路进程从协议 4 起认 ``clear``;6 起认 ``end``(狗尾那头的许可)。
+CLEAR_PROTO = 4
+TAIL_CLEAR_PROTO = 6
+#: 旁路进程从这一号起认分档许可(``clear`` 带 ``vmax``,W47):按许可夹前进速度。更老的把任何许可都当成
+#: 「0.5 比例随便走」—— 对它们照旧只在够 :data:`LEGACY_PERMIT_V` 刹停时才发、不带 ``vmax``。
+GRADED_CLEAR_PROTO = 10
+#: 老许可按这个速度算够不够(W08 第一版 ≤ 0.6 m/s)。
+LEGACY_PERMIT_V = 0.6
+#: 分档许可算出来比这还慢就不发(前进置零):这么慢狗只原地踏步(实测死区约 0.13 m/s)。
+MIN_PERMIT_V = 0.05
+#: 地面候选平面跟「上」最多差 45°(对着墙起来时别把墙当地面;外参歪 5–45° 照样查得出来)。
+MIN_UP_COS = math.cos(math.radians(45.0))
+SIDECAR = ("127.0.0.1", 8090)
+#: W41 全局重定位:墙那一层的位图(``wall`` 报文)多大一格、多少格、攒多久发一次;离狗身中心这么近的点
+#: 不要(机身、上装自己)。
+WALL_RES = 0.1
+WALL_SIZE = 200
+WALL_EVERY_S = 1.0
+WALL_MIN_R = 0.7
+
+
+def wall_cells(pts_base: Any, height: float, *, res: float = WALL_RES,
+               size: int = WALL_SIZE) -> Any:
+    """狗身系的点 → 落在墙那一层(离地 :data:`~nexwar_contract.obsbridge.WALL_BAND`)的格子
+    (``size × size`` 个真假,行优先;格子约定同局部栅格)。"""
+    import numpy as np
+
+    from nexwar_contract.obsbridge import WALL_BAND
+    out = np.zeros(size * size, dtype=bool)
+    p = np.asarray(pts_base, dtype=float).reshape(-1, 3)
+    if not len(p):
+        return out
+    h = p[:, 2] + height
+    keep = (h >= WALL_BAND[0]) & (h <= WALL_BAND[1]) & np.isfinite(p).all(axis=1) \
+        & (np.hypot(p[:, 0], p[:, 1]) >= WALL_MIN_R)
+    r = np.floor(p[keep, 0] / res + size / 2).astype(int)
+    c = np.floor(p[keep, 1] / res + size / 2).astype(int)
+    inb = (r >= 0) & (r < size) & (c >= 0) & (c < size)
+    out[r[inb] * size + c[inb]] = True
+    return out
+
+
+@dataclass(frozen=True)
+class Config:
+    res: float = 0.1
+    size: int = 80
+    h_lo: float = 0.10                  # 凸起障碍的下沿(离地,米;草尖会不会误报是真机项)
+    h_hi: float = 1.30                  # 上沿(狗高约 0.6 m,带上头顶的东西)
+    ground_tol: float = 0.08            # 离地这么近算地面
+    drop: float = 0.15                  # 比地面低这么多算落差
+    near: float = 3.0                   # 落差只在这么近里认(远处地面点少、误报多)
+    body_len: float = 0.93
+    body_wid: float = 0.48
+    margin: float = 0.05
+    #: 滤雨点(W29):凸起的格子里只有一个点、周围 8 格也都没有凸起 → 当雨滴、飞虫:不算挡,那一格也不算
+    #: 看见(未知,W29 外审 4)。
+    #: 真的东西(杆子、人)竖着有好几线打到,不会只剩孤零零一个点。
+    speckle: bool = True
+    max_v: float = 1.0                  # 分档许可最多许到这么快(W47;遥控器低速档满量程约 1.0)
+    latency: float = 0.2                # 链路延迟(秒,待 W00d 量)
+    decel: float = 0.5                  # 刹车减速度(m/s²,待真机量)
+    frame_age: float = 0.2              # 一帧点云从扫到到算完(秒,待真机量)
+    #: 机身前沿往前这么远以内,「看不见」不当挡(**挡**照样当挡):贴身那排时不时一格没回波,一格就把许可
+    #: 掐掉,1.0 m/s 一顿一顿(11-04 现场)。代理那层同样不管机头前 0.5 m 的看不见(``FRONT_BLIND_M``),
+    #: 那里的东西走近之前就看见过、守卫照样查。
+    near_blind: float = 0.3
+
+    def stop_dist(self, v: float) -> float:
+        return v * self.latency + v * v / (2.0 * self.decel)
+
+
+DEFAULT = Config()
+
+
+@dataclass(frozen=True)
+class Mount:
+    """雷达系 → 狗身系(x 朝前、y 朝左、z 朝上,原点在狗身中心、**雷达那么高**)。"""
+
+    fwd: tuple[float, float, float]     # 狗身 +x 在雷达系里的方向
+    left: tuple[float, float, float]
+    up: tuple[float, float, float]
+    x: float = 0.0                      # 雷达在狗身上的水平位置
+    y: float = 0.0
+
+    @classmethod
+    def from_frames(cls, f: Any) -> Mount:
+        up = _unit(f.sensor_up)
+        fwd = _unit(_reject(f.sensor_forward, up))
+        left = _cross(up, fwd)
+        sx, sy = (f.sensor_in_base if f.sensor_in_base is not None else (0.0, 0.0))
+        return cls(fwd=fwd, left=left, up=up, x=float(sx), y=float(sy))
+
+    def mirrored(self) -> Mount:
+        """后雷达的猜测外参:前雷达绕上轴转 π、装在狗身后面(真机录包标定之前只用它的「挡」)。"""
+        neg = tuple(-v for v in self.fwd)
+        return Mount(fwd=neg, left=tuple(-v for v in self.left), up=self.up,  # type: ignore[arg-type]
+                     x=-self.x, y=-self.y)
+
+    def to_base(self, pts: Any) -> Any:
+        import numpy as np
+        R = np.array([self.fwd, self.left, self.up], dtype=float)
+        out = np.asarray(pts, dtype=float) @ R.T
+        out[:, 0] += self.x
+        out[:, 1] += self.y
+        return out
+
+
+@dataclass(frozen=True)
+class RearMount:
+    """后雷达(W09i):先按 ``T_front_rear`` 换进前雷达系,再走前雷达的外参。"""
+
+    front: Mount
+    T_front_rear: Any                   # 4×4
+    calibrated: bool = False
+
+    @classmethod
+    def from_lidars(cls, front: Mount, frames: Any, lidars_path: Path | None) -> RearMount:
+        from nexwar_localizer.lidars import load
+        lid = load(lidars_path, up=frames.sensor_up, forward=frames.sensor_forward)
+        return cls(front=front, T_front_rear=lid.T_front_rear, calibrated=lid.calibrated)
+
+    def to_base(self, pts: Any) -> Any:
+        from nexwar_localizer.merge import transform
+        return self.front.to_base(transform(self.T_front_rear, pts))
+
+
+def _unit(v: Sequence[float]) -> tuple[float, float, float]:
+    n = math.sqrt(sum(c * c for c in v))
+    if not n or not math.isfinite(n):
+        raise ValueError(f"外参:向量长度错误 {v!r}")
+    return (v[0] / n, v[1] / n, v[2] / n)
+
+
+def _reject(v: Sequence[float], u: Sequence[float]) -> tuple[float, float, float]:
+    d = sum(a * b for a, b in zip(v, u, strict=True))
+    return (v[0] - d * u[0], v[1] - d * u[1], v[2] - d * u[2])
+
+
+def _cross(a: Sequence[float], b: Sequence[float]) -> tuple[float, float, float]:
+    return (a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0])
+
+
+# ------------------------------------------------------------ 地面与自检
+
+#: 地面拟合最多用这么多个候选点(随机抽)。真狗一帧地面候选几万个,RANSAC 120 轮每轮都扫一遍,
+#: 感知节点光这一步就占一半 CPU、自检攒不够帧(2026-10-08 C40221);拟一个平面几千个点足够。
+MAX_GROUND_PTS = 4000
+
+
+def fit_ground(pts: Any, *, iters: int = 120, tol: float = 0.03, seed: int = 0,
+               max_pts: int = MAX_GROUND_PTS, r_max: float = 4.0
+               ) -> tuple[tuple[float, float, float], float, float] | None:
+    """狗身系的点里找地面:雷达以下、水平 0.5–4 m 的点做 RANSAC → (法向(朝上), 雷达离地高度,
+    内点占比)。点太少回 ``None``。"""
+    import numpy as np
+    p = np.asarray(pts, dtype=float)
+    r = np.hypot(p[:, 0], p[:, 1])
+    cand = p[(p[:, 2] < -0.1) & (r > 0.5) & (r < r_max)]
+    if len(cand) < 30:
+        return None
+    rng = np.random.default_rng(seed)
+    if len(cand) > max_pts:
+        cand = cand[rng.choice(len(cand), max_pts, replace=False)]
+    best, best_n = None, 0
+    for _ in range(iters):
+        a, b, c = cand[rng.choice(len(cand), 3, replace=False)]
+        n = np.cross(b - a, c - a)
+        nn = np.linalg.norm(n)
+        if nn < 1e-6:
+            continue
+        n = n / nn
+        if n[2] < 0:
+            n = -n
+        if n[2] < MIN_UP_COS:
+            continue                                     # 墙、箱子的侧面不当地面候选
+        d = -float(n @ a)
+        inl = np.abs(cand @ n + d) < tol
+        k = int(inl.sum())
+        if k > best_n:
+            best, best_n = inl, k
+    if best is None:
+        return None
+    q = cand[best]
+    centroid = q.mean(0)
+    # full_matrices=False:只要 3×3 那一块。缺省会造 N×N 的 U —— 真狗上地面内点几万个,每帧都卡在这
+    # (2026-10-08 C40221:感知节点 99% 的时间在这句,2 秒发不出一帧,代理当它断了)。
+    _, _, vt = np.linalg.svd(q - centroid, full_matrices=False)
+    n = vt[2]
+    if n[2] < 0:
+        n = -n
+    height = float(n @ centroid) * -1.0          # 雷达(原点)到平面的距离
+    return (float(n[0]), float(n[1]), float(n[2])), height, best_n / len(cand)
+
+
+class SelfCheck:
+    """启动自检:攒 :data:`CHECK_FRAMES` 帧的地面拟合,取中位数判;:data:`GIVE_UP_FRAMES` 帧还攒不够
+    (一直找不到地面 —— 外参的「上」弄反了、对着墙)就判没过(内审应修 6:原来永远「还在自检」)。
+    过了之后**接着估离地高度**(每 :data:`REFIT_EVERY` 帧一次,取最近 :data:`CHECK_FRAMES` 次的
+    中位数):狗开机是趴着的,站起来高度变了,不跟着变的话近处地面全成了落差。
+
+    **没过之后接着判**(W35,2026-10-13 C40221:感知在狗趴着时起来,地面歪 9.1° 判没过,狗站起来以后
+    也一直是没过,要人去重启感知):每 :data:`REFIT_EVERY` 帧拟一次,新攒够一轮再判,过了就 ``ok``。
+    外参真歪了的照样一直没过。"""
+
+    def __init__(self, frames: int = CHECK_FRAMES) -> None:
+        self.need = frames
+        self.fits: list[tuple[float, float, float]] = []    # (倾角°, 高度, 内点占比)
+        self.tried = 0
+        self.check = "initializing"
+        self.reason = ""
+        self.height: float | None = None
+        self._heights: list[float] = []
+        self._again: list[tuple[float, float, float]] = []   # 没过之后新攒的一轮
+
+    def feed(self, pts_base: Any) -> None:
+        self.tried += 1
+        if self.check == "extrinsic_bad":
+            if self.tried % REFIT_EVERY:
+                return
+            got = fit_ground(pts_base, seed=self.tried)
+            if got is not None:
+                n, h, frac = got
+                tilt = math.degrees(math.acos(max(-1.0, min(1.0, n[2]))))
+                self._again.append((tilt, h, frac))
+            if len(self._again) >= self.need:
+                self.fits, self._again = self._again, []
+                self._judge()
+            return
+        if self.check == "ok":
+            if self.tried % REFIT_EVERY:
+                return
+            got = fit_ground(pts_base, seed=self.tried)
+            if got is None:
+                return
+            n, h, frac = got
+            tilt = math.degrees(math.acos(max(-1.0, min(1.0, n[2]))))
+            if tilt <= MAX_TILT_DEG and frac >= MIN_GROUND_FRAC \
+                    and HEIGHT_RANGE_M[0] <= h <= HEIGHT_RANGE_M[1]:
+                self._heights = (self._heights + [h])[-self.need:]
+                self.height = sorted(self._heights)[len(self._heights) // 2]
+            return
+        got = fit_ground(pts_base, seed=len(self.fits))
+        if got is not None:
+            n, h, frac = got
+            tilt = math.degrees(math.acos(max(-1.0, min(1.0, n[2]))))
+            self.fits.append((tilt, h, frac))
+        if len(self.fits) >= self.need:
+            self._judge()
+        elif self.tried >= GIVE_UP_FRAMES:
+            self.check = "extrinsic_bad"
+            self.reason = (f"{self.tried} 帧里只有 {len(self.fits)} 帧找得到地面(外参的「上」反了?"
+                           "对着墙?)")
+
+    def _judge(self) -> None:
+        def med(i: int) -> float:
+            v = sorted(f[i] for f in self.fits)
+            return v[len(v) // 2]
+        tilt, h, frac = med(0), med(1), med(2)
+        why = []
+        if tilt > MAX_TILT_DEG:
+            why.append(f"地面跟外参的「上」差 {tilt:.1f}°(> {MAX_TILT_DEG:g}°)")
+        if not HEIGHT_RANGE_M[0] <= h <= HEIGHT_RANGE_M[1]:
+            why.append(f"雷达离地 {h:.2f} m(不在 {HEIGHT_RANGE_M[0]}–{HEIGHT_RANGE_M[1]} m)")
+        if frac < MIN_GROUND_FRAC:
+            why.append(f"地面点只占 {frac:.0%}(对着墙?)")
+        self.height = h
+        self._heights = [f[1] for f in self.fits]
+        self.check, self.reason = ("extrinsic_bad", ";".join(why)) if why else ("ok", "")
+
+
+# ------------------------------------------------------------ 每帧
+
+def classify(pts_base: Any, height: float, cfg: Config = DEFAULT) -> tuple[bytes, bytes]:
+    """狗身系的点(z 相对雷达)→ (挡, 看见过) 两张 ``size × size`` 的 0 / 1 位图
+    (行 = x 朝前,列 = y 朝左)。"""
+    occ, known, _ = classify_full(pts_base, height, cfg)
+    return occ, known
+
+
+def classify_full(pts_base: Any, height: float, cfg: Config = DEFAULT,
+                  normal: Sequence[float] | None = None) -> tuple[bytes, bytes, bytes]:
+    """同 :func:`classify`,多一张「可疑」(滤雨点滤掉的格子;W29 复查,决策 42:代理当挡)。
+    ``normal``:这一帧的地面法向(机身系,朝上);给了就按「离这个平面多高」算(W71),不给当水平。"""
+    import numpy as np
+    p = np.asarray(pts_base, dtype=float)
+    n = cfg.size
+    occ = np.zeros(n * n, dtype=np.uint8)
+    known = np.zeros(n * n, dtype=np.uint8)
+    if len(p) == 0:
+        return occ.tobytes(), known.tobytes(), bytes(n * n)
+    h = (p @ np.asarray(normal, dtype=float) if normal is not None else p[:, 2]) + height
+    hl, hw = cfg.body_len / 2 + cfg.margin, cfg.body_wid / 2 + cfg.margin
+    body = (np.abs(p[:, 0]) <= hl) & (np.abs(p[:, 1]) <= hw) & (h < cfg.h_hi)
+    r = np.floor(p[:, 0] / cfg.res + n / 2).astype(int)
+    c = np.floor(p[:, 1] / cfg.res + n / 2).astype(int)
+    inside = (r >= 0) & (r < n) & (c >= 0) & (c < n) & ~body
+    idx = r * n + c
+    ground = inside & (np.abs(h) <= cfg.ground_tol)
+    low = inside & (h > cfg.ground_tol) & (h < cfg.h_lo)            # 矮草、碎石:看见了、不挡
+    bump = inside & (h >= cfg.h_lo) & (h <= cfg.h_hi)
+    lone = None
+    if cfg.speckle and bump.any():
+        cnt = np.bincount(idx[bump], minlength=n * n).reshape(n, n)
+        has = np.pad(cnt > 0, 1)
+        nb = sum(has[1 + dr:n + 1 + dr, 1 + dc:n + 1 + dc].astype(int)
+                 for dr in (-1, 0, 1) for dc in (-1, 0, 1) if dr or dc)
+        lone = ((cnt == 1) & (nb == 0)).ravel()
+        bump = bump & ~lone[np.where(inside, idx, 0)]
+    dist = np.hypot(p[:, 0], p[:, 1])
+    drop = inside & (h < -cfg.drop) & (dist <= cfg.near)
+    known[idx[ground | low | bump | drop]] = 1
+    occ[idx[bump | drop]] = 1
+    if lone is not None:
+        # 滤掉的格子**算没看见**(W29 外审 4):那一格打到了地面也不能当空 —— 可能是稀疏的真东西
+        # (细杆子)。雨滴一闪就没,代理的滚动记忆往回找得到前几帧看见过的;真东西每帧都这样,一直是未知
+        known[lone & (occ == 0)] = 0
+    sus = (lone & (occ == 0)).astype(np.uint8) if lone is not None else np.zeros(n * n, np.uint8)
+    return occ.tobytes(), known.tobytes(), sus.tobytes()
+
+
+def clear_distance(occ: bytes, known: bytes, cfg: Config = DEFAULT, *,
+                   end: str = "head") -> float:
+    """机身前沿往前、机身宽 + 每边余量的走廊里,第一个「挡 / 未知」离机身前沿多远(米)。
+    ``end="tail"``:狗尾那头(栅格转 180°:第 ``i`` 格换成第 ``size² − 1 − i`` 格)。"""
+    if end == "tail":
+        occ, known = occ[::-1], known[::-1]
+    n = cfg.size
+    front = cfg.body_len / 2
+    half = cfg.body_wid / 2 + cfg.margin
+    blind = cfg.near_blind if end == "head" else 0.0     # 贴身那段只认前雷达那头(狗尾照旧)
+    best = (n / 2) * cfg.res - front
+    for r in range(n // 2, n):
+        x0 = (r - n / 2) * cfg.res                       # 这一行格子的后沿
+        if x0 < front - 1e-9:
+            continue                                     # 跨着机身前沿的那一格:机身自己的点滤掉了
+        for c in range(n):
+            y0 = (c - n / 2) * cfg.res
+            if y0 + cfg.res <= -half or y0 >= half:
+                continue
+            i = r * n + c
+            if occ[i] or (not known[i] and x0 >= front + blind - 1e-9):
+                return max(0.0, x0 - front)
+    return best
+
+
+def clear_why(occ: bytes, known: bytes, cfg: Config = DEFAULT) -> str:
+    """许可走廊(狗头那头)里第一格挡 / 看不见的是哪一格。
+
+    看日志用;跟 :func:`clear_distance` 一个走法。"""
+    n = cfg.size
+    front, half = cfg.body_len / 2, cfg.body_wid / 2 + cfg.margin
+    for r in range(n // 2, n):
+        x0 = (r - n / 2) * cfg.res
+        if x0 < front - 1e-9:
+            continue
+        for c in range(n):
+            y0 = (c - n / 2) * cfg.res
+            if y0 + cfg.res <= -half or y0 >= half:
+                continue
+            i = r * n + c
+            if occ[i] or (not known[i] and x0 >= front + cfg.near_blind - 1e-9):
+                what = "挡" if occ[i] else "看不见"
+                return f"{what} 前 {x0:.1f} m、左 {y0 + cfg.res / 2:+.2f} m"
+    return "走廊全空"
+
+
+#: 每隔这么久(秒)记一行许可的情况(11-04 现场:感知连着旁路却一条不发,只能抓包查)。
+PERMIT_LOG_S = 10.0
+
+
+def _need(v: float, cfg: Config) -> float:
+    """按 ``v`` 走要前面空多远:许可有效期里走的 + 这一帧的帧龄里走的 + 刹停 + 0.3 m(内审应修 2)。"""
+    return v * (PERMIT_MS / 1000.0 + cfg.frame_age) + cfg.stop_dist(v) + 0.3
+
+
+def permit(dist: float, cfg: Config = DEFAULT) -> int:
+    """老许可(给 < :data:`GRADED_CLEAR_PROTO` 的旁路进程):按 :data:`LEGACY_PERMIT_V` 都够才给(毫秒),
+    不够 0。"""
+    return PERMIT_MS if dist >= _need(LEGACY_PERMIT_V, cfg) else 0
+
+
+def permit_vmax(dist: float, cfg: Config = DEFAULT) -> float:
+    """分档许可(W47):前面空 ``dist`` 米最多许多快(m/s,封顶 ``cfg.max_v``;一点都许不了 0)。
+    ``_need`` 是 v 的二次式 a v² + b v + 0.3,解出来往下取。"""
+    a = 1.0 / (2.0 * cfg.decel)
+    b = PERMIT_MS / 1000.0 + cfg.frame_age + cfg.latency
+    c = 0.3 - dist
+    if c >= 0:
+        return 0.0
+    v = (-b + math.sqrt(b * b - 4.0 * a * c)) / (2.0 * a)
+    return max(0.0, min(v, cfg.max_v))
+
+
+# ------------------------------------------------------------ 发出去
+
+class LineClient:
+    """一行一个 JSON 的小客户端(阻塞套接字、发不出去就断开、下次再连)。``hello`` 是连上后的
+    第一行。"""
+
+    def __init__(self, connect: Any, hello: dict | None, *, reconnect_s: float = 1.0,
+                 on_line: Any = None) -> None:
+        self._connect = connect
+        #: 对面回的每一行(JSON 解开的)交给它;``None`` = 读掉丢弃。
+        self.on_line = on_line
+        self._buf = b""
+        self._hello = hello
+        self._sock: socket.socket | None = None
+        self._next_try = 0.0
+        self.reconnect_s = reconnect_s
+        self.sent = 0
+
+    def send(self, obj: dict) -> bool:
+        now = time.monotonic()
+        if self._sock is None:
+            if now < self._next_try:
+                return False
+            self._next_try = now + self.reconnect_s
+            try:
+                self._sock = self._connect()
+                self._sock.setblocking(False)
+                if self._hello is not None:
+                    self._sock.sendall(_line(self._hello))
+            except OSError as exc:
+                log.debug("连不上:%s", exc)
+                self._close()
+                return False
+        try:
+            self._sock.sendall(_line(obj))
+            self._drain()
+        except OSError as exc:
+            log.warning("发不出去,断开重连:%s", exc)
+            self._close()
+            return False
+        self.sent += 1
+        return True
+
+    def poll(self) -> None:
+        """连着就把对面发来的读空(内审阻断 3:旁路进程每秒给所有客户端广播几十条遥测,不读的话它那头
+        的发送阻塞、攥着锁,所有客户端一起卡死)。**每帧都调**,不管这一帧发没发东西。"""
+        if self._sock is None:
+            return
+        try:
+            self._drain()
+        except OSError as exc:
+            log.warning("读不了,断开重连:%s", exc)
+            self._close()
+
+    def _drain(self) -> None:
+        """对面回的(hello、回执、遥测)读掉;``on_line`` 给了就一行一行交给它。对面关了就断开。"""
+        assert self._sock is not None
+        try:
+            while True:
+                chunk = self._sock.recv(65536)
+                if not chunk:
+                    self._close()                        # 对面关了
+                    return
+                if self.on_line is None:
+                    continue
+                self._buf += chunk
+                *lines, self._buf = self._buf.split(b"\n")
+                self._buf = self._buf[-65536:]
+                for ln in lines:
+                    try:
+                        self.on_line(json.loads(ln))
+                    except ValueError:
+                        continue
+        except (BlockingIOError, InterruptedError):
+            return
+
+    def _close(self) -> None:
+        if self._sock is not None:
+            try:
+                self._sock.close()
+            except OSError:
+                pass
+        self._sock = None
+
+    def close(self) -> None:
+        self._close()
+
+
+def _line(obj: dict) -> bytes:
+    return json.dumps(obj, ensure_ascii=False, separators=(",", ":")).encode() + b"\n"
+
+
+class Perception:
+    """一帧一帧喂进来(前雷达;后雷达可选)→ 发栅格、发许可。不碰 ROS,测试直接喂。"""
+
+    def __init__(self, front: Mount, *, rear: Mount | RearMount | None = None,
+                 cfg: Config = DEFAULT,
+                 obs: LineClient | None = None, sidecar: LineClient | None = None,
+                 rear_max_age_s: float = 0.3, clock: Any = time.monotonic) -> None:
+        self.front, self.rear, self.cfg = front, rear, cfg
+        self.obs, self.sidecar = obs, sidecar
+        self.check = SelfCheck()
+        self.seq = 0
+        self._cmd = 0
+        self._rear_pts: Any = None
+        self._rear_at = -math.inf
+        self.rear_max_age_s = rear_max_age_s
+        self._clock = clock
+        self.last_clear = 0.0
+        self.last_clear_tail = 0.0
+        self.sidecar_proto: int | None = None
+        #: 这个感知进程发的许可的来源(启动时刻,毫秒;#208 首审 G1)。
+        self.permit_src = max(1, int(time.time() * 1000))
+        self._rej_logged = -math.inf
+        #: 墙那一层攒着的格子、攒了几帧、从什么时候开始攒(W41)。
+        self._wall: Any = None
+        self._wall_frames = 0
+        self._wall_since = -math.inf
+        self.wall_seq = 0
+        #: W71 这一帧用的地面(法向, 离地高度)、上一个认过的隔了几帧、一共几帧没认(看日志用)。
+        self.plane: tuple[tuple[float, float, float], float] | None = None
+        self._plane_age = 0
+        self.plane_misses = 0
+        if sidecar is not None and sidecar.on_line is None:
+            sidecar.on_line = self.on_sidecar
+        self._permits = 0
+        self._why_no = ""
+        self._note_at = clock()
+
+    @property
+    def rear_cal(self) -> bool:
+        """后雷达外参真标过(``lidars.json`` 的 ``calibrated``)。"""
+        return bool(getattr(self.rear, "calibrated", False))
+
+    def set_mount(self, front: Mount, rear: Mount | RearMount | None) -> None:
+        """换了图(外参跟着图走):换外参、重新自检。"""
+        self.front, self.rear = front, rear
+        self.check = SelfCheck()
+        self._rear_pts = None
+        self._wall = None
+
+    def _feed_wall(self, front: Any, rear: Any) -> None:
+        """墙那一层攒进来;攒够 :data:`WALL_EVERY_S` 就发一条 ``wall``(W41 全局重定位)。
+        后雷达标过才用。"""
+        import base64
+
+        import numpy as np
+        now = self._clock()
+        cells = wall_cells(front, self.check.height)
+        if rear is not None:
+            cells |= wall_cells(rear, self.check.height)
+        if self._wall is None:
+            self._wall, self._wall_frames, self._wall_since = cells, 0, now
+        else:
+            self._wall |= cells
+        self._wall_frames += 1
+        if now - self._wall_since < WALL_EVERY_S:
+            return
+        self.wall_seq += 1
+        msg = {"t": "wall", "seq": self.wall_seq, "res": WALL_RES, "size": WALL_SIZE,
+               "bits": base64.b64encode(np.packbits(self._wall).tobytes()).decode("ascii"),
+               "frames": self._wall_frames}
+        self._wall = None
+        if self.obs is not None:
+            self.obs.send(msg)
+
+    def on_rear(self, pts_sensor: Any) -> None:
+        if self.rear is not None:
+            self._rear_pts = self.rear.to_base(pts_sensor)
+            self._rear_at = self._clock()
+
+    def on_sidecar(self, msg: Any) -> None:
+        """旁路进程回的:``hello`` 核协议版本(要 ≥ 4 才认 ``clear``)、``clear`` 被拒记日志(限频)。
+        内审应修 1:原来不读、不看,版本对不上、许可全被拒也一声不响。"""
+        if not isinstance(msg, dict):
+            return
+        if msg.get("t") == "hello":
+            proto = msg.get("proto")
+            self.sidecar_proto = proto if isinstance(proto, int) else None
+            if not isinstance(proto, int) or proto < CLEAR_PROTO:
+                log.error("旁路进程的协议是 %r,不认 clear(要 ≥ %d):净空许可发了也没用,重编 "
+                          "motion/patrol_agent", proto, CLEAR_PROTO)
+        elif msg.get("t") == "ack" and msg.get("ok") is False:
+            now = self._clock()
+            if now - self._rej_logged > 60.0:
+                self._rej_logged = now
+                log.warning("旁路进程拒了净空许可:%s", msg.get("error", ""))
+
+    def on_front(self, pts_sensor: Any, stamp_ns: int) -> dict | None:
+
+        from nexwar_contract.obsbridge import pack_bits
+        if self.sidecar is not None:
+            self.sidecar.poll()                          # 每帧都读空(内审阻断 3)
+        p = self.front.to_base(pts_sensor)
+        self.check.feed(p)
+        n = self.cfg.size
+        if self.check.height is None:
+            why = f":{self.check.reason[:80]}" if self.check.reason else ""
+            self._why_no = f"自检 {self.check.check}{why}"
+            self._note()
+            # 还在自检、自检没过:照样发一帧(全是未知)让代理知道是什么状态(内审应修 6)
+            empty = pack_bits(bytes(n * n), n)
+            self.seq += 1
+            grid = {"t": "grid", "seq": self.seq, "stamp_ns": max(0, int(stamp_ns)),
+                    "res": self.cfg.res, "size": n, "occ": empty, "known": empty, "rear": False,
+                    "rear_cal": self.rear_cal, "check": self.check.check,
+                    "reason": self.check.reason[:200]}
+            if self.obs is not None:
+                self.obs.send(grid)
+            return grid
+        rear = (self._rear_pts is not None
+                and self._clock() - self._rear_at <= self.rear_max_age_s)
+        nrm, height = self._local_ground(p)
+        occ, known, sus = classify_full(p, height, self.cfg, nrm)
+        if rear:
+            # 没标定(几何初值):只用它的「挡」,不用它的「空」放行;标过(W09i)两样都用
+            occ_r, known_r, sus_r = classify_full(self._rear_pts, height, self.cfg, nrm)
+            occ = bytes(a | b for a, b in zip(occ, occ_r, strict=True))
+            seen = known_r if self.rear_cal else occ_r
+            known = bytes(a | b for a, b in zip(known, seen, strict=True))
+            sus = bytes(a | b for a, b in zip(sus, sus_r, strict=True))
+        sus = bytes(s & (1 - o) for s, o in zip(sus, occ, strict=True))   # 已经挡的不用再标
+        self._feed_wall(p, self._rear_pts if rear and self.rear_cal else None)
+        self.seq += 1
+        grid = {"t": "grid", "seq": self.seq, "stamp_ns": max(0, int(stamp_ns)),
+                "res": self.cfg.res, "size": n, "occ": pack_bits(occ, n),
+                "known": pack_bits(known, n), "rear": bool(rear), "rear_cal": self.rear_cal,
+                "check": self.check.check, "reason": self.check.reason[:200]}
+        if any(sus):
+            grid["suspect"] = pack_bits(sus, n)
+        if self.obs is not None:
+            self.obs.send(grid)
+        self.last_clear = clear_distance(occ, known, self.cfg)
+        self.last_clear_tail = clear_distance(occ, known, self.cfg, end="tail")
+        ok = self.check.check == "ok"
+        if ok:
+            self._send_permit(self.last_clear, None, occ, known)
+        else:
+            self._why_no = f"自检 {self.check.check}:{self.check.reason[:80]}"
+        # 狗尾那头:后雷达标过、这一帧用上了、旁路进程认 end(5 号会把它当成狗头的许可)
+        if (ok and rear and self.rear_cal and self.sidecar_proto is not None
+                and self.sidecar_proto >= TAIL_CLEAR_PROTO):
+            self._send_permit(self.last_clear_tail, "tail")
+        self._note()
+        return grid
+
+    def _note(self) -> None:
+        """每 :data:`PERMIT_LOG_S` 记一行:发了几条、最近一次没发是为什么、旁路连着没有。"""
+        if self.sidecar is None:
+            return
+        now = self._clock()
+        if now - self._note_at < PERMIT_LOG_S:
+            return
+        side = "没连上" if getattr(self.sidecar, "_sock", None) is None else \
+            f"连着(协议 {self.sidecar_proto})"
+        log.info("许可:近 %.0f s 发了 %d 条;最近没发:%s;前方空 %.2f m(vmax %.2f);旁路%s",
+                 now - self._note_at, self._permits, self._why_no or "—", self.last_clear,
+                 permit_vmax(self.last_clear, self.cfg), side)
+        self._note_at, self._permits, self._why_no = now, 0, ""
+
+    def _local_ground(self, p: Any) -> tuple[tuple[float, float, float], float]:
+        """这一帧的地面(法向, 离地高度):见 :data:`LOCAL_GROUND_R_M`。"""
+        base_h = float(self.check.height)
+        got = fit_ground(p, iters=LOCAL_ITERS, seed=self.seq, max_pts=LOCAL_MAX_PTS,
+                         r_max=LOCAL_GROUND_R_M)
+        if got is not None:
+            n, h, frac = got
+            tilt = math.degrees(math.acos(max(-1.0, min(1.0, n[2]))))
+            if (tilt <= LOCAL_TILT_MAX_DEG and abs(h - base_h) <= LOCAL_HEIGHT_TOL_M
+                    and frac >= MIN_GROUND_FRAC):
+                self.plane, self._plane_age = (n, h), 0
+                return n, h
+        self.plane_misses += 1
+        self._plane_age += 1
+        if self.plane is not None and self._plane_age <= LOCAL_HOLD_FRAMES:
+            return self.plane
+        return (0.0, 0.0, 1.0), base_h
+
+    def _send_permit(self, dist: float, end: str | None, occ: bytes | None = None,
+                     known: bytes | None = None) -> None:
+        """发一条净空许可。旁路进程 ≥ 10:分档(带 ``vmax``,近处也许慢慢走);更老的:老规矩。"""
+        if self.sidecar is None:
+            return
+        msg: dict[str, Any] = {"cmd": "clear", "ms": PERMIT_MS, "dist": round(dist, 2)}
+        if self.sidecar_proto is not None and self.sidecar_proto >= GRADED_CLEAR_PROTO:
+            v = permit_vmax(dist, self.cfg)
+            if v < MIN_PERMIT_V:
+                if end is None and occ is not None and known is not None:
+                    self._why_no = f"前方空 {dist:.2f} m 太近({clear_why(occ, known, self.cfg)})"
+                return
+            msg["vmax"] = math.floor(v * 100.0) / 100.0      # 往下取,不许多给
+            # #208 首审 G1:来源(这个感知进程的启动时刻)、帧序号 —— 旁路不认晚到的旧许可
+            msg["src"], msg["seq"] = self.permit_src, self.seq
+        elif not permit(dist, self.cfg):
+            if end is None and occ is not None and known is not None:
+                self._why_no = f"前方空 {dist:.2f} m 不够老许可({clear_why(occ, known, self.cfg)})"
+            return
+        if end is not None:
+            msg["end"] = end
+        self._cmd += 1
+        if self.sidecar.send({"id": self._cmd, **msg}):
+            self._permits += 1
+        elif end is None:
+            self._why_no = "发不出去(旁路连不上)"
+
+
+def _bounded(lo: float, hi: float) -> Any:
+    def conv(v: str) -> float:
+        x = float(v)
+        if not (lo <= x <= hi):                          # NaN 也过不去
+            raise argparse.ArgumentTypeError(f"要在 [{lo}, {hi}] 内")
+        return x
+    return conv
+
+
+def config_from_args(argv: Sequence[str]) -> Config:
+    """许可算法里真机量的几个数(3aj.9 量刹车距离后填 ``NEXWAR_OBS_ARGS``);不给 = 默认(保守占位)。"""
+    ap = argparse.ArgumentParser(add_help=False)
+    ap.add_argument("--decel", type=_bounded(0.2, 5.0), default=DEFAULT.decel,
+                    help="刹车减速度 m/s²(真机量)")
+    ap.add_argument("--latency", type=_bounded(0.0, 1.0), default=DEFAULT.latency,
+                    help="发令到开始减速的延迟(秒)")
+    ap.add_argument("--frame-age", type=_bounded(0.0, 1.0), default=DEFAULT.frame_age,
+                    help="一帧点云从扫到到算完(秒)")
+    a = ap.parse_args(list(argv))
+    return Config(decel=a.decel, latency=a.latency, frame_age=a.frame_age)
+
+
+def active_frames(maps_dir: Path) -> tuple[str, Path] | None:
+    """狗上正在用的那张图的 ``frames.json``:``<maps>/active.json`` 声明的
+    ``<地图号>/<版本>/frames.json``。没有、读不了、名字不规矩都回 ``None``(感知就不出栅格 ——
+    代理看见「断了」,不宣告能自主走)。"""
+    try:
+        d = json.loads((maps_dir / "active.json").read_text("utf-8"))
+        mid, ver = d["map_id"], d["version"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    if not all(isinstance(v, str) and v and "/" not in v and ".." not in v for v in (mid, ver)):
+        return None
+    path = maps_dir / mid / ver / "frames.json"
+    return (f"{mid}:{ver}", path) if path.is_file() else None
+
+
+# ------------------------------------------------------------ ROS 节点
+
+def main(argv: Sequence[str] | None = None) -> int:
+    """ROS 节点(系统 Python;``nexwar_obstacles.service``)。"""
+    ap = argparse.ArgumentParser(prog="nexwar_obstacles")
+    ap.add_argument("--frames", type=Path, default=None,
+                    help="前雷达外参(frames.json);不给就跟着代理正在用的图(--maps-dir)走")
+    ap.add_argument("--maps-dir", type=Path, default=Path("/var/lib/nexwar/agent/maps"),
+                    help="代理的地图目录(active.json 在这里);换了图外参跟着换、重新自检")
+    ap.add_argument("--socket", type=Path, default=Path("/var/lib/nexwar/agent/obs.sock"))
+    ap.add_argument("--front-topic", default="/front_lidar")
+    ap.add_argument("--rear-topic", default="",
+                    help="后雷达(空 = 不用;未标定只用它的「挡」,标过「空」也用)")
+    ap.add_argument("--lidars", type=Path, default=None,
+                    help="后雷达外参 lidars.json(默认 /etc/nexwar/lidars.json;没有 = 几何初值)")
+    ap.add_argument("--sidecar", default="", help="旁路进程 host:port(发净空许可;空 = 不发)")
+    a, rest = ap.parse_known_args(argv)
+    cfg = config_from_args(rest)
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    # W55:工程师远程打开「详细日志」时调到 DEBUG,到点自动恢复
+    from nexwar_contract.debuglog import DebugWatch
+    DebugWatch().start()
+
+    import rclpy
+    from rclpy.executors import SingleThreadedExecutor
+    from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
+    from rclpy.serialization import deserialize_message
+    from sensor_msgs.msg import PointCloud2
+
+    from nexwar_contract.obsbridge import PROTO
+    from nexwar_localizer.build import cloud_xyz
+    from nexwar_localizer.frames import Frames
+
+    def mounts(f: Frames) -> tuple[Mount, RearMount | None]:
+        front = Mount.from_frames(f)
+        if not a.rear_topic:
+            return front, None
+        rear = RearMount.from_lidars(front, f, a.lidars)
+        log.info("后雷达外参:%s", "标过" if rear.calibrated else "几何初值(没标定:只用它的「挡」)")
+        return front, rear
+
+    def load() -> tuple[str, tuple[Mount, RearMount | None]] | None:
+        if a.frames is not None:
+            return str(a.frames), mounts(Frames.load(a.frames))
+        got = active_frames(a.maps_dir)
+        if got is None:
+            return None
+        try:
+            return got[0], mounts(Frames.load(got[1]))
+        except Exception as exc:                         # noqa: BLE001 —— 坏的外参:等换图
+            log.error("外参读不了(%s):%s", got[1], exc)
+            return None
+
+    cur = load()
+    while cur is None:
+        log.warning("还没有正在用的图的外参(%s),5 s 后再看", a.maps_dir)
+        time.sleep(5.0)
+        cur = load()
+    front, rear = cur[1]
+    obs = LineClient(lambda: _unix(a.socket), {"t": "hello", "proto": PROTO,
+                                               "name": "nexwar_obstacles"})
+    side = None
+    if a.sidecar:
+        host, port = a.sidecar.rsplit(":", 1)
+        side = LineClient(lambda: socket.create_connection((host, int(port)), timeout=1.0), None)
+    per = Perception(front, rear=rear, cfg=cfg, obs=obs, sidecar=side)
+    log.info("许可参数:刹车减速度 %.2f m/s²、延迟 %.2f s、帧龄 %.2f s", cfg.decel, cfg.latency,
+             cfg.frame_age)
+    from nexwar_localizer import rosinit
+    rosinit.init(rclpy)
+    stop = rosinit.stop_flag()                           # W41:正常停止退出码 0
+    node = rclpy.create_node("nexwar_obstacles")
+    qos = QoSProfile(depth=2, history=HistoryPolicy.KEEP_LAST,
+                     reliability=ReliabilityPolicy.BEST_EFFORT)
+
+    def on_front(raw: bytes) -> None:
+        try:
+            msg = deserialize_message(raw, PointCloud2)
+            st = msg.header.stamp
+            per.on_front(cloud_xyz(msg), st.sec * 1_000_000_000 + st.nanosec)
+        except Exception:
+            log.exception("这一帧处理不了")
+
+    def on_rear(raw: bytes) -> None:
+        try:
+            per.on_rear(cloud_xyz(deserialize_message(raw, PointCloud2)))
+        except Exception:
+            log.exception("后雷达这一帧处理不了")
+
+    node.create_subscription(PointCloud2, a.front_topic, on_front, qos, raw=True)
+    if a.rear_topic:
+        node.create_subscription(PointCloud2, a.rear_topic, on_rear, qos, raw=True)
+    ex = SingleThreadedExecutor()
+    ex.add_node(node)
+    log.info("感知:订 %s%s → %s%s", a.front_topic, f" + {a.rear_topic}" if a.rear_topic else "",
+             a.socket, f",许可 → {a.sidecar}" if a.sidecar else "")
+    hb = look = time.monotonic()
+    try:
+        while rclpy.ok() and not stop.is_set():
+            ex.spin_once(timeout_sec=0.2)
+            if time.monotonic() - hb >= 1.0:
+                hb = time.monotonic()
+                obs.send({"t": "hb", "seq": max(1, per.seq)})
+            if a.frames is None and time.monotonic() - look >= 5.0:
+                look = time.monotonic()
+                nxt = load()
+                if nxt is not None and nxt[0] != cur[0]:
+                    log.info("换图了(%s → %s):换外参、重新自检", cur[0], nxt[0])
+                    cur = nxt
+                    per.set_mount(*nxt[1])
+    except rosinit.shutdown_errors():
+        log.info("ROS 关了:停")
+    finally:
+        ex.shutdown()
+        node.destroy_node()
+        rclpy.try_shutdown()
+    return 0
+
+
+def _unix(path: Path) -> socket.socket:
+    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    s.settimeout(1.0)
+    s.connect(os.fspath(path))
+    return s
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from d1max_contract.errors import ContractError
-from d1max_contract.releases import ReleaseRef, check_release_name
+from nexwar_contract.errors import ContractError
+from nexwar_contract.releases import ReleaseRef, check_release_name
 
 
 def test_往返与坏载荷():

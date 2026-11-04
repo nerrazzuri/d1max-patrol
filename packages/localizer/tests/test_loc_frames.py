@@ -7,9 +7,9 @@ import json
 import math
 
 import pytest
-from d1max_localizer.frames import Frames, calibrate, mat_to_quat, quat_to_mat
+from nexwar_localizer.frames import Frames, calibrate, mat_to_quat, quat_to_mat
 
-from d1max_contract.errors import ContractError
+from nexwar_contract.errors import ContractError
 
 UP_MAP = (0.998, -0.027, 0.053)          # 探路时 coverage2 的先验里估出来的「上」
 

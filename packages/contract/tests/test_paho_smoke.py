@@ -1,4 +1,4 @@
-"""对真 broker 的冒烟(决定 2):``D1MAX_MQTT_TEST_URL=mqtt://host:1883`` 设了才跑。
+"""对真 broker 的冒烟(决定 2):``NEXWAR_MQTT_TEST_URL=mqtt://host:1883`` 设了才跑。
 本机没装 mosquitto 就跳过 —— 全量测试不依赖外部进程。"""
 
 from __future__ import annotations
@@ -9,15 +9,15 @@ import uuid
 
 import pytest
 
-URL = os.environ.get("D1MAX_MQTT_TEST_URL")
-pytestmark = pytest.mark.skipif(not URL, reason="没设 D1MAX_MQTT_TEST_URL,跳过真 broker 冒烟")
+URL = os.environ.get("NEXWAR_MQTT_TEST_URL")
+pytestmark = pytest.mark.skipif(not URL, reason="没设 NEXWAR_MQTT_TEST_URL,跳过真 broker 冒烟")
 
 
 async def test_pub_sub_retained_lwt_qos1():
-    from d1max_contract.paho_transport import PahoTransport
+    from nexwar_contract.paho_transport import PahoTransport
 
     tag = uuid.uuid4().hex[:8]
-    topic = f"d1max-test/{tag}/status"
+    topic = f"nexwar_test/{tag}/status"
     got: list[bytes] = []
 
     async def 收(m):
@@ -43,10 +43,10 @@ async def test_pub_sub_retained_lwt_qos1():
 
 
 async def test_同一client_id跨进程恢复_离线命令不丢():
-    from d1max_contract.paho_transport import PahoTransport
+    from nexwar_contract.paho_transport import PahoTransport
 
     tag = uuid.uuid4().hex[:8]
-    topic = f"d1max-test/{tag}/cmd"
+    topic = f"nexwar_test/{tag}/cmd"
     got_old: list[bytes] = []
     got_new: list[bytes] = []
 

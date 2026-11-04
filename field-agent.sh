@@ -20,17 +20,17 @@
 #     想恢复监督，重跑本脚本即可 —— 它会认出还在跑的 agent 并直接接管。
 #
 #   发命令（另开终端）—— FIFO 是空格分隔（hold02 风格），一行一条：
-#     echo 'stand'        > runs/d1max-agent.fifo
-#     echo 'walk 1 0.4'   > runs/d1max-agent.fifo    # 走 1 秒、前进量 0.4
-#     echo 'lie'          > runs/d1max-agent.fifo
-#     echo 'estop'        > runs/d1max-agent.fifo     # 软急停开；clear 关
-#     echo 'status'       > runs/d1max-agent.fifo
-#     echo 'shutdown'     > runs/d1max-agent.fifo     # 真释放+退出(不可逆，之后要重启 RK3588)
+#     echo 'stand'        > runs/nexwar_agent.fifo
+#     echo 'walk 1 0.4'   > runs/nexwar_agent.fifo    # 走 1 秒、前进量 0.4
+#     echo 'lie'          > runs/nexwar_agent.fifo
+#     echo 'estop'        > runs/nexwar_agent.fifo     # 软急停开；clear 关
+#     echo 'status'       > runs/nexwar_agent.fifo
+#     echo 'shutdown'     > runs/nexwar_agent.fifo     # 真释放+退出(不可逆，之后要重启 RK3588)
 #   （TCP 口 127.0.0.1:8090 才是 JSONL 协议，给 Python 客户端 SidecarDeviceBackend 用。）
 #
 #   只收代理的运动命令（S11，协议 9）：patrol_agent 每次起来生成一个令牌，写进 $TOKEN
-#   （缺省 ~/.d1max/sidecar.token，0600）。TCP 连接先认证才能开车，停车、急停谁都能发。
-#   代理（d1max-agent --hal d1max）缺省读同一个文件 —— **代理要跟这个脚本同一个账号跑**。
+#   （缺省 ~/.nexwar/sidecar.token，0600）。TCP 连接先认证才能开车，停车、急停谁都能发。
+#   代理（nexwar_agent --hal d1max）缺省读同一个文件 —— **代理要跟这个脚本同一个账号跑**。
 #   现场工具（w00d_motion_check、calibrate_drive）要开车得显式给 --token-file。
 #   FIFO 建成 0600（只有这个账号能写）；组或别人能写的 FIFO，patrol_agent 只收 halt/estop/status。
 #
@@ -41,10 +41,10 @@ cd "$(dirname "$0")"
 DOG=192.168.234.1; PORT=8082; SSID=XG2WIFI_C40221; PASS=12345678
 BIN=./motion/patrol_agent
 LISTEN=127.0.0.1:8090
-FIFO=runs/d1max-agent.fifo
-PIDFILE=runs/d1max-agent.pid
+FIFO=runs/nexwar_agent.fifo
+PIDFILE=runs/nexwar_agent.pid
 # 旁路进程的令牌(S11):每次起来重写。代理的 --sidecar-token-file 缺省同一个路径
-TOKEN="${D1MAX_SIDECAR_TOKEN:-$HOME/.d1max/sidecar.token}"
+TOKEN="${NEXWAR_SIDECAR_TOKEN:-$HOME/.nexwar/sidecar.token}"
 mkdir -p runs/field-logs
 
 # 缺二进制就编（Makefile 已修好带空格路径的 rpath）

@@ -7,13 +7,13 @@ import asyncio
 
 import pytest
 
-from d1max_adapter_sim.robot import SimRobot
-from d1max_agent.assembly import build_engine
-from d1max_agent.events import EventBook
-from d1max_agent.tasks.patrol import PatrolTask
-from d1max_contract.geometry import Pose
-from d1max_contract.messages import TaskState
-from d1max_contract.mission import Action, Mission, MissionWaypoint, Policy
+from nexwar_adapter_sim.robot import SimRobot
+from nexwar_agent.assembly import build_engine
+from nexwar_agent.events import EventBook
+from nexwar_agent.tasks.patrol import PatrolTask
+from nexwar_contract.geometry import Pose
+from nexwar_contract.messages import TaskState
+from nexwar_contract.mission import Action, Mission, MissionWaypoint, Policy
 
 
 class 钟:
@@ -96,7 +96,7 @@ async def test_中途abort_aborted_停下(台子):
 async def test_到不了的点被跳过_完成_带跳过几个点并列出点名(台子, monkeypatch, tmp_path):
     """引擎的航点超时按真实时间算,测试的假钟推不动它;改让 HAL 对去 p1 的速度命令一律
     拒收(导航 Failed),引擎按 retry_then_skip 跳过 p1、接着走 p2。"""
-    from d1max_contract.hal import VelocityResult
+    from nexwar_contract.hal import VelocityResult
     c, r, parts, book = 台子
     real = r.set_velocity
 
@@ -123,7 +123,7 @@ async def test_到不了的点被跳过_完成_带跳过几个点并列出点名
 
 
 async def test_W71_一个点都没到_还是failed(台子, monkeypatch):
-    from d1max_contract.hal import VelocityResult
+    from nexwar_contract.hal import VelocityResult
     c, r, parts, book = 台子
 
     async def 全拒(cmd):
@@ -140,7 +140,7 @@ async def test_W71_一个点都没到_还是failed(台子, monkeypatch):
 
 async def test_sim相机_带拍照动作的任务走得完_照片进归档(tmp_path):
     """任务包里常有拍照动作;sim 没有相机的话每个拍照点都失败,整趟必 failed。"""
-    from d1max_agent.bridges.sim_media import PLACEHOLDER_JPEG, sim_media
+    from nexwar_agent.bridges.sim_media import PLACEHOLDER_JPEG, sim_media
     c = 钟()
     r = SimRobot(now_ms=c, max_vx=1.0, max_wz=1.5, stop_latency_s=0.2)
     await r.connect()
@@ -163,7 +163,7 @@ async def test_工单20_点没到_证据清单里写结果failed_站点才不当
     ``state: done``(「这趟跑到头了」),站点读的 ``result`` 没写 —— 现场看着像回去了。"""
     import json
 
-    from d1max_patrol.backends.base import NavRequestError
+    from nexwar_patrol.backends.base import NavRequestError
     c, r, parts, book = 台子
 
     async def 拒(pose):

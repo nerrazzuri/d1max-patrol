@@ -9,8 +9,8 @@ import pytest
 
 np = pytest.importorskip("numpy")
 
-from d1max_localizer import grid as G  # noqa: E402
-from d1max_localizer.frames import Frames  # noqa: E402
+from nexwar_localizer import grid as G  # noqa: E402
+from nexwar_localizer.frames import Frames  # noqa: E402
 
 # 雷达 X 朝上(MOLA 系里的「上」略歪)、Z 朝前
 UP = (0.998, -0.027, 0.053)
@@ -399,8 +399,8 @@ def test_墙面前的零星噪点清掉():
 def _plan(g, tmp_path, a, b):
     """拿狗上同一份规划(代价图 + A*)在这张栅格上从 ``a`` 规划到 ``b``,回路过的格子心
     [(x, y)](连线加密过)。"""
-    from d1max_contract.planning import astar
-    from d1max_contract.planning import costmap as cm
+    from nexwar_contract.planning import astar
+    from nexwar_contract.planning import costmap as cm
     G.write(g, tmp_path / "floor")
     c = cm.from_map_dir(tmp_path, robot_radius_m=cm.ROBOT_RADIUS_M + cm.INFLATE_MARGIN_M)
     h, w = c.shape
@@ -601,7 +601,7 @@ def _glass_room(frames, *, outside_wall=True):
 def _reachable(g, tmp_path, start):
     """跟狗同一份代价图(膨胀到外接圆半径 + 余量)上,从 ``start`` 出发不碰致命格走得到的格心
     [(x, y)]。"""
-    from d1max_contract.planning import costmap as cm
+    from nexwar_contract.planning import costmap as cm
     tmp_path.mkdir(parents=True, exist_ok=True)
     G.write(g, tmp_path / "floor")
     c = cm.from_map_dir(tmp_path, robot_radius_m=cm.ROBOT_RADIUS_M + cm.INFLATE_MARGIN_M)

@@ -9,8 +9,8 @@ import os
 import pytest
 from test_maps_keeper import 站点
 
-from d1max_agent import maps as M
-from d1max_agent.maps import MapInstallError, MapIntegrityError, MapKeeper
+from nexwar_agent import maps as M
+from nexwar_agent.maps import MapInstallError, MapIntegrityError, MapKeeper
 
 FILES = {"prior.mm": bytes(range(256)) * 8, "frames.json": b'{"up":[0,0,1]}', "x.pgm": b"P5 map"}
 

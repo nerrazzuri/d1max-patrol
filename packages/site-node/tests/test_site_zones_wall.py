@@ -6,9 +6,9 @@ from __future__ import annotations
 import pytest
 from test_site_api import MAP, PW, _等, 站
 
-from d1max_contract.zones import point_in_polygon, wall_polygon
-from d1max_site.db import SiteDB
-from d1max_site.nav_zones import NavZones, ZonesError
+from nexwar_contract.zones import point_in_polygon, wall_polygon
+from nexwar_site.db import SiteDB
+from nexwar_site.nav_zones import NavZones, ZonesError
 
 LINE = [[1, 1], [4, 1], [4, 3]]
 

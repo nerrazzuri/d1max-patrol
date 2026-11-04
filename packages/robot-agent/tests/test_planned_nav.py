@@ -9,12 +9,12 @@ import math
 import numpy as np
 import pytest
 
-from d1max_adapter_sim.robot import SimRobot
-from d1max_agent.bridges.planned_nav import PlannedNavBackend
-from d1max_agent.planning.planner import Planner
-from d1max_contract.zones import ZoneSet, distance_to_polygon
-from d1max_patrol.backends.base import NavRequestError, NavStatusEvent
-from d1max_patrol.protocol.nav_types import NavStatus, Pose
+from nexwar_adapter_sim.robot import SimRobot
+from nexwar_agent.bridges.planned_nav import PlannedNavBackend
+from nexwar_agent.planning.planner import Planner
+from nexwar_contract.zones import ZoneSet, distance_to_polygon
+from nexwar_patrol.backends.base import NavRequestError, NavStatusEvent
+from nexwar_patrol.protocol.nav_types import NavStatus, Pose
 
 RES = 0.05
 W_M, H_M = 12.0, 8.0
@@ -383,7 +383,7 @@ async def test_规划期间区域换了_按新的重算(tmp_path):
 
 
 def test_定位不确定度加宽禁行区(tmp_path):
-    from d1max_agent.localization import OdomAnchor
+    from nexwar_agent.localization import OdomAnchor
 
     class E:
         def __init__(self, s, x=0.0, y=0.0):
@@ -513,7 +513,7 @@ async def test_重规划的结果是旧区域上的_不装(tmp_path):
         await t.一拍()
     assert t.nav._status is NavStatus.ACTIVE
     old = t.nav._path
-    from d1max_agent.planning.planner import PlannedPath
+    from nexwar_agent.planning.planner import PlannedPath
     bogus = PlannedPath(((2.0, 4.0), (2.0, 7.9)))
     t.nav._replan_out = ("ok", (bogus, t.nav._cm), t.nav._epoch - 1)
     await t.一拍()
@@ -555,7 +555,7 @@ async def test_窄限速带_两端都在外面也减速_进带之前已经降下
 
 
 async def test_到了拐点就换下一段_不追着拐点本身走(tmp_path):
-    from d1max_agent.planning.planner import PlannedPath
+    from nexwar_agent.planning.planner import PlannedPath
     t = 台子(tmp_path)
     await t.start(2.0, 2.0)
     await t.nav.goto(Pose.from_xy_yaw(5.0, 5.0))
@@ -636,7 +636,7 @@ class σ锚:
     """仿真里程就是位姿,σ 固定(测正常走会不会被回退检查误停)。"""
 
     def __new__(cls, sigma):
-        from d1max_agent.localization import OdomAnchor
+        from nexwar_agent.localization import OdomAnchor
 
         class _A(OdomAnchor):
             @property
@@ -684,7 +684,7 @@ async def test_S7_正常规划的路_几种σ_不被回退检查误停(tmp_path,
     async def 量(dt=0.1):
         await step(dt)
         o = await t.在()
-        from d1max_agent.zone_guard import footprint, rect_poly_distance
+        from nexwar_agent.zone_guard import footprint, rect_poly_distance
         for z in t.nav.zones.nogo():
             worst[0] = min(worst[0], rect_poly_distance(footprint(o.x, o.y, o.yaw), z.polygon))
     t.一拍 = 量
