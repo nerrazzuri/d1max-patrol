@@ -23,7 +23,12 @@ from d1max_agent.engine.machine import EngineBusy, RunState
 from d1max_agent.engine.mission import Action, Mission, MissionWaypoint, Policy
 from d1max_agent.events import EventBook
 from d1max_agent.tasks.base import Task
-from d1max_contract.charging import ALARM_FLOOR_PCT, ALARM_PRIORITY, TRIP_ABORT_PCT
+from d1max_contract.charging import (
+    ALARM_FLOOR_PCT,
+    ALARM_PRIORITY,
+    HOMING_FLOOR_PCT,
+    TRIP_ABORT_PCT,
+)
 from d1max_contract.messages import MapPose, TaskState
 from d1max_patrol.protocol.nav_types import NavStatus, Pose
 
@@ -228,7 +233,8 @@ class EngineGotoTask(EngineMissionTask):
 
     def __init__(self, *, task_id: str, target: MapPose, max_speed_mps: float | None,
                  parts: EngineParts, events: EventBook, now_ms: Callable[[], int],
-                 priority: int = 0, photo: str | None = None, charge: bool = False) -> None:
+                 priority: int = 0, photo: str | None = None, charge: bool = False,
+                 homing: bool = False) -> None:
         super().__init__(task_id=task_id, kind="goto", max_speed_mps=max_speed_mps,
                          parts=parts, events=events, now_ms=now_ms, priority=priority)
         self.target = target
@@ -236,6 +242,8 @@ class EngineGotoTask(EngineMissionTask):
         #: 去充电桩的这一趟(W13):本身就是「回原点的路」—— 低电量不掉头回原点、接着走,到中止线才停;
         #: 出发线也不算回来那一段(同站点的回程巡检,``on_battery_low: continue``)。
         self.charge = charge
+        #: 回待命点(W73 外审 r3 #4):回家的路,低电不掉头;停止线 15%、出发线按去那儿的路程算。
+        self.homing = homing and not charge
         self._last_reported_m: float | None = None
 
     def _mission(self) -> Mission:
@@ -248,11 +256,15 @@ class EngineGotoTask(EngineMissionTask):
                                                      self.target.yaw),
                 actions=((Action(type="photo", camera=self.photo),) if self.photo else ())),),
             policy=Policy(photo_optional=True, charging_trip=self.charge,
-                          on_battery_low="continue" if self.charge else "return_home",
+                          on_battery_low="continue" if self.charge or self.homing
+                          else "return_home",
                           # W28:别的狗在充时这台守到 20% 才去,中止线得在那下面
                           **({"battery_abort_pct": TRIP_ABORT_PCT} if self.charge else {}),
                           **({"battery_return_pct": ALARM_FLOOR_PCT,
-                              "battery_abort_pct": ALARM_FLOOR_PCT} if alarm else {})))
+                              "battery_abort_pct": ALARM_FLOOR_PCT} if alarm else {}),
+                          **({"battery_return_pct": HOMING_FLOOR_PCT,
+                              "battery_abort_pct": HOMING_FLOOR_PCT}
+                             if self.homing and not alarm else {})))
 
     async def _progress(self) -> dict:
         # 按地图位姿算(W00c6e 内审:以前按原始里程,锚在 (10, 5) 时报 12 m、真距离 2 m)。

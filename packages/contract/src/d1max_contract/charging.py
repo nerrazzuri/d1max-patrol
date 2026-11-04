@@ -38,6 +38,9 @@ CHARGE_PRIORITY = 50
 #: 不然站点按距离派出去、狗按普通 25% 底拒掉,报警没人去。
 ALARM_PRIORITY = 80
 ALARM_FLOOR_PCT = 15.0
+#: W73 外审 r3 #4:回待命点那一趟(``goto`` 带 ``homing``)—— 回家的路,低电不掉头,但不是去补能:
+#: 停止线留 15%(停止线),出发线按去那儿的路程算;去充电桩 / 换电位那趟才放到 :data:`TRIP_ABORT_PCT`。
+HOMING_FLOOR_PCT = 15.0
 TASK_PREFIX = "charge-"
 DOCK_TIMEOUT_S = 180
 UNDOCK_TIMEOUT_S = 120

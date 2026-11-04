@@ -889,3 +889,34 @@ async def test_外审r2_9_低电报警到场后_回待命点走得了(站):
         "SELECT kind, data FROM events WHERE kind IN ('task_done','task_failed') ORDER BY rowid")]
     assert not any(x["kind"] == "task_failed" and "standby-" in x["data"] for x in evs), evs
     assert abs((await t.dog.odometry()).x) < 0.2, "回到待命点 (0,0)"
+
+
+def _在跑(t):
+    c = t.site.clients["A"]
+    return c.status.task.task_id if c.status and c.status.task else ""
+
+
+async def test_外审r3_4_普通回待命点_低到15就停_不像去充电那样走到10(站):
+    from test_site_dispatcher import target
+    t = 站
+    await t.run(12)
+    s = StandbyManager(t.db, t.site, now_ms=t.clock)
+    s.set("A", "far", map_id="estate-1", map_version="7", x=100.0, y=0.0, yaw=0.0, default=True)
+    await t.send(t.site.goto("A", target(1), 0.8, issued_by="alice", priority=60,
+                             task_id="ordinary"))
+    for _ in range(100):
+        await t.run(10)
+        if _在跑(t).startswith("standby-") and t.dog.x > 2:
+            break
+    assert _在跑(t).startswith("standby-") and t.dog.x > 2, "普通任务完了自动回待命点"
+    cmd = next(c for c in t.site.commands("A", 50) if c["task_id"].startswith("standby-"))
+    p = cmd["payload"]
+    p = json.loads(p) if isinstance(p, str) else p
+    assert p.get("homing") is True and "charge" not in p
+    t.dog.inject_battery(14.0)
+    before = t.dog.x
+    await t.run(40)
+    assert abs(t.dog.x - before) < 0.5, "回待命点也保留 15% 停止线(刹车那一点距离)"
+    stopped = t.dog.x
+    await t.run(40)
+    assert abs(t.dog.x - stopped) < 0.01, "停下了就不再走"

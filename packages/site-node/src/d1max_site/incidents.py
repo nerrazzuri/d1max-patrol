@@ -294,7 +294,9 @@ class IncidentDesk:
         dev = self.devices.by_source(source) if self.devices is not None else None
         if dev is None or not isinstance(body, dict):
             return body
-        return {**body, "zone": dev["zone"] or body.get("zone") or dev["source"]}
+        # 外审 r3 #5:防区按设备现在的位置算(``by_source`` 已经按圈好的防区算过);算出来不在任何防区
+        # 就按全站(``dev["source"]``)—— 不再退回事件里带的(摄像头登记时的)旧防区
+        return {**body, "zone": dev["zone"] or dev["source"]}
 
     # ------------------------------------------------------------ 验签
 

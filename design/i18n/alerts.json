@@ -340,6 +340,10 @@
     "en": "Battery swap overdue",
     "zh": "换电超时未处理"
   },
+  "swap_stuck": {
+    "en": "Battery out but robot still moving",
+    "zh": "拔着电池机器人还在走"
+  },
   "guard_prep": {
     "en": "Charge before arming",
     "zh": "布防前先补能"

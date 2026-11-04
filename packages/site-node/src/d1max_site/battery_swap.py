@@ -41,6 +41,9 @@ MANAGER_MIN = 20
 RESEND_S = 60
 #: 离换电位这么近、手上没任务 = 到了。
 AT_HOME_M = 1.5
+#: 拔着一块时机器人还在跑任务(外审 r3 #1):每隔这么久(秒)再发一次中止,发够这么多次报警。
+HALT_RETRY_S = 5
+HALT_ALERT = 3
 
 
 class SwapDesk:
@@ -177,6 +180,8 @@ class SwapDesk:
             if self.missing(rid) is not None:
                 st["arrived_ms"] = now                   # 已经在换了:不用回换电位
                 st["step"] = "resumed"
+        if await self._halt_if_moving(rid, st, now):
+            return
         step = st["step"]
         if step == "going":
             # 外审 r2 #1:拔着一块 → 不再派它回换电位,就地引导装回(另一块是唯一的电)
@@ -211,6 +216,37 @@ class SwapDesk:
                         f"{rid} 在换电位等了 {MANAGER_MIN} 分钟,电池还没换好(现在:"
                         f"{self._text(st)}),请安排人去")
             st["managed"] = True
+
+    def _running(self, rid: str) -> str:
+        c = self._client(rid)
+        return c.status.task.task_id if c is not None and c.status is not None \
+            and c.status.task is not None else ""
+
+    async def _halt_if_moving(self, rid: str, st: dict[str, Any], now: int) -> bool:
+        """外审 r3 #1:有一块拔着、机器人手上还有任务(回换电位那一趟、人派的…)→ 先让它停:发中止,
+        没停每 :data:`HALT_RETRY_S` 秒再发,发够 :data:`HALT_ALERT` 次报警。停下之前不叫人过来装电池
+        (人蹲在一台还在走的机器人旁边)。→ ``True`` = 还在停,这一拍别的不办。"""
+        if self.missing(rid) is None:
+            st.pop("halt_tries", None)
+            return False
+        tid = self._running(rid)
+        if not tid:
+            st.pop("halt_tries", None)
+            return False
+        if now - st.get("halt_ms", -10**12) < HALT_RETRY_S * 1000:
+            return True
+        st["halt_ms"] = now
+        st["halt_tries"] = tries = st.get("halt_tries", 0) + 1
+        log.warning("%s 拔着一块电池还在跑 %s:发中止(第 %d 次)", rid, tid, tries)
+        try:
+            await self.dispatcher.abort(rid, tid, issued_by="site:swap")
+        except Exception as exc:  # noqa: BLE001 - 没发成:下个周期再发
+            log.warning("%s 换电时停不下 %s:%s", rid, tid, exc)
+        if tries == HALT_ALERT:
+            self._raise("swap_stuck", rid, f"{rid} 拔着电池还在走,停不下来",
+                        f"{rid} 有一块电池拔着,站点发了 {tries} 次中止,{tid} 还在跑;"
+                        "先别靠近,用遥控器或急停让它停下")
+        return True
 
     async def _send_back(self, rid: str, st: dict[str, Any], now: int) -> None:
         """低电判出来时不在换电位、手上没任务:派它回待命点(= 换电位);没走成过一阵再派。"""
