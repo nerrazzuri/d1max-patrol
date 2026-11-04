@@ -458,11 +458,14 @@ class GuardDuty:
             return None
         return (float(p["x"]), float(p["y"])) if p else None
 
-    def _lap_need(self, e: dict[str, Any] | None, info: dict[str, Any],
-                  rid: str) -> tuple[float, float]:
+    def _lap_need(self, e: dict[str, Any] | None, info: dict[str, Any], rid: str,
+                  pts: list[dict[str, Any]] | None = None) -> tuple[float, float]:
         """跑一圈要的电 → ``(线, 一圈秒数)``。外审 r3 #6:一圈算上回待命点那段;再按狗上出发线的式子
-        算一遍(从现在的位置走完各点、到待命点、回原点),取大的 —— 站点放行的,狗上也接。"""
-        tail = self._tail_xy(e, info, rid)
+        算一遍(从现在的位置走完各点、到待命点、回原点),取大的 —— 站点放行的,狗上也接。
+        ``pts``:这一圈实际要派的点(外审 r4 #3,按它的顺序算、到上限不接待命点);不给按路线原样。"""
+        from d1max_site.dispatcher import MAX_PATROL_WAYPOINTS
+        pts = info["points"] if pts is None else pts
+        tail = self._tail_xy(e, info, rid) if len(pts) < MAX_PATROL_WAYPOINTS else None
         lap_s = self._lap_s(info, tail) or 0.0
         line = max(self.min_pct, energy.lap_line(lap_s))
         home_fn = getattr(self.standby, "home", None) if self.standby is not None else None
@@ -470,11 +473,13 @@ class GuardDuty:
             home = home_fn(rid, info["map_id"], info["map_version"]) if callable(home_fn) else None
         except Exception:  # noqa: BLE001 - 原点查不到:只按站点那条
             home = None
-        h = (float(home["x"]), float(home["y"])) if home is not None else tail
-        if h is not None and info["points"]:             # 原点不知道:按回待命点算
+        # 外审 r4 #4:站点不知道狗上的原点就不按狗上的式子算(以前拿待命点当原点,远的待命点
+        # 满电都不够),只按站点那条线;狗上真拒了,原因进值守记录
+        h = (float(home["x"]), float(home["y"])) if home is not None else None
+        if h is not None and pts:
             c = self._client(rid)
             pose = c.telemetry.pose if c is not None and c.telemetry is not None else None
-            wps = [(float(p["x"]), float(p["y"])) for p in info["points"]]
+            wps = [(float(p["x"]), float(p["y"])) for p in pts]
             if tail is not None:
                 wps.append(tail)
             start = (pose.x, pose.y) if pose is not None and pose.map_id == info["map_id"] else h
@@ -909,6 +914,12 @@ class GuardDuty:
         if not pts:
             self._wait(e, rid, f"防区路线 {info['id']} 上布防着的防区里没有点")
             return
+        pct = self._battery(rid)
+        line, lap_s = self._lap_need(e, info, rid, pts)  # 外审 r4 #3:按这一圈实际的点序再算一遍
+        if pct is not None and pct < line:
+            self.low[rid] = (line, lap_s, now)
+            self._wait(e, rid, f"{rid} 电量 {pct:.0f}%,不够跑这一圈(要 ≥ {line:.0f}%),先补能")
+            return
         self._waiting.pop(eid, None)
         self._retry_at[eid] = now + RETRY_MS              # 派成了再清
         names = [p["name"] for p in pts]
@@ -1054,14 +1065,24 @@ class GuardDuty:
                 run = {**run, "state": "standdown", "until_ms": 0}
             await self._retry_stop(eid, run, now)
             return
+        # 停了。外审 r4 #2:结果事件可能比「手上没任务」的状态先到 —— 等状态跟上(连着听得见够久、
+        # 手上已经空了)再回待命点、删进度;别的任务接手了(人派的、报警)就不回,直接收
+        if running == tid and self._terminal(rid, tid) is not None:
+            running = ""                                 # 有结果了:状态里还挂着它是旧的
+        taken = bool(running) and running != tid
+        if not taken and (running or not self._settled(rid, now)):
+            if run["state"] != "standdown":
+                self._log("stand_down", robot=rid, entry=eid, detail=f"{why}:等它空下来再回待命点")
+                self._retry_at.pop(eid, None)
+                self._set_run(eid, state="standdown", until_ms=0)
+            return
         self._drop_run(eid)
         self._retry_at.pop(eid, None)
         self._stop_tries.pop(eid, None)
         self._stop_then.pop(eid, None)
         if run["state"] != "standdown":
             self._log("stand_down", robot=rid, entry=eid, detail=why)
-        if running or self.standby is None \
-                or run["state"] not in ("post", "wait", "standdown"):
+        if taken or self.standby is None:
             return
         try:
             await self.standby.return_to(rid, issued_by="guard", homing=True)
@@ -1167,6 +1188,7 @@ class GuardDuty:
     def forecast(self, plan: dict[str, Any] | None = None) -> dict[str, Any]:
         from d1max_site.guard_forecast import forecast
         plan = plan or self.plan()
+        runs = self._runs()
         lap_s: dict[str, float | None] = {}
         zones_of: dict[str, list[str]] = {}
         maps: set[tuple[str, str]] = set()
@@ -1174,8 +1196,13 @@ class GuardDuty:
             info = self._route(e["route"])
             if info is None:
                 continue
-            # 外审 r3 #6:一圈算上回待命点那段(指定了机器人才知道是哪个待命点);同一路线取最长的
-            got = self._lap_s(info, self._tail_xy(e, info, e["robot"]))
+            # 外审 r3 #6 / r4 #5:一圈算上回待命点那段;「任意一台」挑中了按它,没挑中按能挑的里最远的;
+            # 同一路线取最长的
+            run = runs.get(e["id"])
+            cands = [e["robot"]] if e["robot"] else [run["robot_id"]] if run else \
+                sorted(self.dispatcher.clients)
+            laps = [self._lap_s(info, self._tail_xy(e, info, r)) for r in cands] or [None]
+            got = max((x for x in laps if x is not None), default=None)
             prev = lap_s.get(e["route"])
             lap_s[e["route"]] = got if prev is None or (got is not None and got > prev) else prev
             zones_of[e["route"]] = info["zones"]

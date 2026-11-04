@@ -184,7 +184,7 @@ async def test_留守撤掉一个防区_下一圈跳过_全撤了收队(站):
     assert _names(_patrols(t)[0]) == ["A", "B"], "西区撤防:那两个点不去"
     t.arming.set_zone_home("东区", False)
     t.arming.set_mode("home", by="olga")
-    await _跑(t, 3)
+    await _跑(t, 8)                                     # 停下、连着听得见 5 秒没任务才收
     aborts = [c for c in t.site.commands("A", 500) if c["kind"] == "abort"]
     assert aborts, "整条路线都撤防了:这一趟停下(回待命点交给待命点管理器)"
     assert t.duty.status()["runs"] == [] and t.duty.status()["duty"] is None
@@ -953,7 +953,8 @@ async def test_外审r3_3_全撤防_中止被拒_接着重发_停下了才收队
 
 async def test_外审r3_6_每圈回待命点那段算进一圈的电_不够就先补能(站):
     t = 站
-    t.duty.standby = _待命点({"x": 400.0, "y": 0.0, "yaw": 0.0})
+    t.duty.standby = stb = _待命点({"x": 400.0, "y": 0.0, "yaw": 0.0})
+    stb.home = lambda rid, m, v: {"x": 0.0, "y": 0.0}       # 站点知道狗上的原点
     _方案(t)
     t.dog.inject_battery(40.0)
     await _跑(t, 8)

@@ -44,6 +44,9 @@ AT_HOME_M = 1.5
 #: 拔着一块时机器人还在跑任务(外审 r3 #1):每隔这么久(秒)再发一次中止,发够这么多次报警。
 HALT_RETRY_S = 5
 HALT_ALERT = 3
+#: 发过中止以后,连着听得见这么久(毫秒)、手上不是它才算停了(外审 r4 #1:断线时离线状态里「没任务」、
+#: 刚连回来那几拍的空状态都不算;跟值守的 ``SETTLE_HEARD_MS`` 一样)。
+HALT_SETTLE_MS = 5_000
 
 
 class SwapDesk:
@@ -61,6 +64,7 @@ class SwapDesk:
         self._soon_told: set[str] = set()
         #: 进度变化(给值守记录、测试):``{"robot_id", "step", "at_ms"}``,只留最近 200 条。
         self.events: list[dict[str, Any]] = []
+        self._heard_since: dict[str, int] = {}
 
     # ------------------------------------------------------------ 读
 
@@ -222,17 +226,61 @@ class SwapDesk:
         return c.status.task.task_id if c is not None and c.status is not None \
             and c.status.task is not None else ""
 
+    def _heard(self, rid: str) -> bool:
+        c = self._client(rid)
+        if c is None or c.status is None or not c.status.online:
+            return False
+        fresh = getattr(self.dispatcher, "_fresh", None)
+        return not callable(fresh) or bool(fresh(c))
+
+    def _terminal(self, rid: str, tid: str) -> bool:
+        db = getattr(self.dispatcher, "db", None)
+        if db is None or not tid:
+            return False
+        return bool(db.query(
+            "SELECT 1 FROM events WHERE robot_id=? AND kind IN "
+            "('task_done','task_failed','task_aborted','task_preempted') "
+            "AND json_extract(data, '$.task_id')=? LIMIT 1", (rid, tid)))
+
+    def _halted(self, rid: str, tid: str, now: int) -> bool:
+        """发过中止的那一趟停了:有它的结果事件;或连着听得见够 :data:`HALT_SETTLE_MS`、
+        手上不是它。"""
+        if self._terminal(rid, tid):
+            return True
+        if not self._heard(rid):
+            self._heard_since.pop(rid, None)
+            return False
+        since = self._heard_since.setdefault(rid, now)
+        return now - since >= HALT_SETTLE_MS and self._running(rid) != tid
+
     async def _halt_if_moving(self, rid: str, st: dict[str, Any], now: int) -> bool:
         """外审 r3 #1:有一块拔着、机器人手上还有任务(回换电位那一趟、人派的…)→ 先让它停:发中止,
         没停每 :data:`HALT_RETRY_S` 秒再发,发够 :data:`HALT_ALERT` 次报警。停下之前不叫人过来装电池
-        (人蹲在一台还在走的机器人旁边)。→ ``True`` = 还在停,这一拍别的不办。"""
+        (人蹲在一台还在走的机器人旁边)。→ ``True`` = 还在停,这一拍别的不办。
+
+        外审 r4 #1:记住要停的那一趟;之后手上「没任务」(断线的离线状态、刚连回来的空状态)不算停了,
+        要有 :meth:`_halted` 的证据。"""
         if self.missing(rid) is None:
-            st.pop("halt_tries", None)
+            for k in ("halt_tries", "halt_tid"):
+                st.pop(k, None)
             return False
-        tid = self._running(rid)
-        if not tid:
-            st.pop("halt_tries", None)
-            return False
+        if self._heard(rid):
+            self._heard_since.setdefault(rid, now)
+        else:
+            self._heard_since.pop(rid, None)
+        tid = self._running(rid) if self._heard(rid) else ""
+        pending = st.get("halt_tid")
+        if tid and tid != pending:
+            st["halt_tid"], st["halt_tries"] = tid, 0
+        elif not tid:
+            if not pending:
+                return False
+            if self._halted(rid, pending, now):
+                log.info("%s 拔着电池时那一趟 %s 停下了", rid, pending)
+                for k in ("halt_tries", "halt_tid"):
+                    st.pop(k, None)
+                return False
+            tid = pending
         if now - st.get("halt_ms", -10**12) < HALT_RETRY_S * 1000:
             return True
         st["halt_ms"] = now
