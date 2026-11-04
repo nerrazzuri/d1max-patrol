@@ -12,6 +12,8 @@
 #   D1MAX_NAV2_PARAMS=<路径>         换一份参数(空着 = 这一版带的 deploy/nav2/params.yaml)
 set -eu
 here=$(cd "$(dirname "$0")/.." && pwd -P)
+# 11-04:钟对了再起(开机 1970、Nav2 先起来再跳钟,一直不认 odom)
+"$here/deploy/d1max-wait-clock"
 set +u
 . /opt/ros/humble/setup.sh
 set -u

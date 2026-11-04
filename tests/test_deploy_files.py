@@ -1947,3 +1947,33 @@ def test_W48_经点行为树也不原地转_去掉路过的点_启动文件换�
     p = d["bt_navigator"]["ros__parameters"]
     assert p["default_nav_through_poses_bt_xml"] == "navigate_through_poses_d1max.xml"
     assert "nav2_remove_passed_goals_action_bt_node" in p["plugin_lib_names"]
+
+
+def test_现场1104_Nav2等机器人的钟对了再起_1970开机不先起(tmp_path):
+    """C40221 没有能保钟的电池,开机是 1970;Nav2 用仿真钟,先起来、钟再往前跳 56 年,两次都一直不认
+    odom(重启 d1max-nav2 才好)。启动脚本先等钟过了下限再起。"""
+    import os
+    import subprocess
+    wait = DEPLOY / "d1max-wait-clock"
+    assert os.access(wait, os.X_OK)
+    start = (DEPLOY / "d1max-nav2-start").read_text(encoding="utf-8")
+    assert '"$here/deploy/d1max-wait-clock"' in start
+    assert start.index("d1max-wait-clock") < start.index("exec ros2 launch")
+    fake = tmp_path / "bin"
+    fake.mkdir()
+    n = tmp_path / "n"
+    n.write_text("0")
+    # 假 date:前两次 1970,之后 2026;假 sleep 不睡
+    (fake / "date").write_text(f"""#!/bin/sh
+k=$(cat {n}); echo $((k+1)) > {n}
+case "$1" in +%s) if [ "$k" -lt 2 ]; then echo 5; else echo 1793760000; fi;; *) echo T;; esac
+""")
+    (fake / "sleep").write_text("#!/bin/sh\nexit 0\n")
+    for f in fake.iterdir():
+        f.chmod(0o755)
+    env = {**os.environ, "PATH": f"{fake}:{os.environ['PATH']}"}
+    r = subprocess.run(["sh", str(wait)], env=env, capture_output=True, text=True, timeout=10)
+    assert r.returncode == 0 and "钟还不对" in r.stdout and "钟对了" in r.stdout, r.stdout
+    n.write_text("9")                                    # 钟本来就对:一声不吭直接过
+    r = subprocess.run(["sh", str(wait)], env=env, capture_output=True, text=True, timeout=10)
+    assert r.returncode == 0 and r.stdout == ""

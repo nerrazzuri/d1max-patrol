@@ -1,0 +1,15 @@
+#!/bin/sh
+# 等机器人的钟可信了再往下走(11-04 现场)。C40221 没有保钟的电池,开机是 1970;Nav2 用仿真钟(时钟由
+# 代理按墙钟送),先起来、钟再往前跳 56 年,两次都一直不认 odom、不就绪,要重启 d1max-nav2 才好。
+# 钟过了下限(D1MAX_CLOCK_FLOOR,默认 2026-01-01)才返回;钟本来就对一声不吭。
+floor="${D1MAX_CLOCK_FLOOR:-1767225600}"
+told=0
+while [ "$(date +%s)" -lt "$floor" ]; do
+  if [ "$told" = 0 ]; then
+    echo "d1max-wait-clock: 钟还不对($(date -u +%Y-%m-%dT%H:%M:%SZ)),等对时以后再起"
+    told=1
+  fi
+  sleep "${D1MAX_CLOCK_POLL_S:-2}"
+done
+[ "$told" = 0 ] || echo "d1max-wait-clock: 钟对了($(date -u +%Y-%m-%dT%H:%M:%SZ)),接着起"
+exit 0
