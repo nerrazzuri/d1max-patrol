@@ -12,18 +12,18 @@ import math
 
 import pytest
 
-from d1max_adapter_sim.robot import SimRobot
-from d1max_agent.runtime import AgentRuntime
-from d1max_contract.dispatch import DispatchClient
-from d1max_contract.memory_broker import MemoryBroker, MemoryTransport
-from d1max_contract.messages import AckResult, MapPose, Precondition, TaskState
-from d1max_contract.registration import Registration
-from d1max_contract.topics import Topics
-from d1max_patrol.protocol.nav_types import Pose
+from nexwar_adapter_sim.robot import SimRobot
+from nexwar_agent.runtime import AgentRuntime
+from nexwar_contract.dispatch import DispatchClient
+from nexwar_contract.memory_broker import MemoryBroker, MemoryTransport
+from nexwar_contract.messages import AckResult, MapPose, Precondition, TaskState
+from nexwar_contract.registration import Registration
+from nexwar_contract.topics import Topics
+from nexwar_patrol.protocol.nav_types import Pose
 
-REG = Registration(site_id="penang-1", robot_id="D1MAX-C40011", credential_fingerprint="sha256:x",
+REG = Registration(site_id="penang-1", robot_id="NEXWAR-C40011", credential_fingerprint="sha256:x",
                    issued_at=0, expires_at=10**13)
-T = Topics(site_id="penang-1", robot_id="D1MAX-C40011")
+T = Topics(site_id="penang-1", robot_id="NEXWAR-C40011")
 MAP = ("estate-1", "7")
 
 

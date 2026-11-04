@@ -1,6 +1,6 @@
 // 天气（W29）：首页一行说人话、点进去手动切（带时长）、回到自动、站点推了当场换；横屏 800x360。
-import 'package:d1max_patrol/ui/site_duty_page.dart';
-import 'package:d1max_patrol/ui/site_weather.dart';
+import 'package:nexwar_patrol/ui/site_duty_page.dart';
+import 'package:nexwar_patrol/ui/site_weather.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 

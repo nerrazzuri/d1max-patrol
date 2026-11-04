@@ -5,8 +5,8 @@ from __future__ import annotations
 import base64
 import json
 
-from d1max_patrol import provision as pv
-from d1max_patrol.bind.sitelink import LinkError, SiteLink
+from nexwar_patrol import provision as pv
+from nexwar_patrol.bind.sitelink import LinkError, SiteLink
 
 CODE = {"api": "https://10.0.0.2:8443", "fp": "a" * 64, "mqtt": "mqtts://10.0.0.2:8883",
         "id": "D1M-1", "t": "tok"}

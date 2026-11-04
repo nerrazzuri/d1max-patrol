@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from d1max_agent.idempotency import IdempotencyStore
-from d1max_contract.messages import Ack, AckResult
+from nexwar_agent.idempotency import IdempotencyStore
+from nexwar_contract.messages import Ack, AckResult
 
 A = Ack(command_id="c1", task_id="t1", result=AckResult.ACCEPTED)
 R = Ack(command_id="c2", task_id="t2", result=AckResult.REJECTED, reason="busy")

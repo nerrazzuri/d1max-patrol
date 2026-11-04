@@ -2,7 +2,7 @@
 
 1. VPN:站点给不了命令钩子 —— 执行器只收结构化数据,自己生成配置和防火墙规则;
    站点生成器跟执行器连得上(第 9 条)。
-2. root 跑、代码在机器人可写目录里的 ``d1max-bind`` 不在重启白名单里。
+2. root 跑、代码在机器人可写目录里的 ``nexwar_bind`` 不在重启白名单里。
 3. 站点升级:签名范围以外的(``build/``)装之前删掉。
 4. 站点升级回退:库被换成符号链接也不沿着它写。
 5. 服务单元:装的就是算指纹的那一份;多出来的没签名的单元拒。
@@ -21,8 +21,8 @@ from pathlib import Path
 
 import pytest
 
-from d1max_contract import relsign
-from d1max_contract.digest import tree_sha256
+from nexwar_contract import relsign
+from nexwar_contract.digest import tree_sha256
 from tests.test_ops_runner import R, Rec, _cfg, _release
 
 ME = pwd.getpwuid(os.getuid())
@@ -65,24 +65,24 @@ def test_VPN_站点给不了命令钩子_格式不对一律拒(tmp_path, 改, �
     rec = Rec()
     with pytest.raises(R.OpError, match=说):
         R.Ops(cfg, run=rec, etc=etc).do("vpn_apply", {})
-    assert not (etc / "wireguard" / "d1max.conf").exists() and rec.calls == []
+    assert not (etc / "wireguard" / "nexwar.conf").exists() and rec.calls == []
 
 
 def test_VPN_执行器自己生成配置_规则固定_只放行工程师到22(tmp_path):
     cfg, etc = _site_vpn(tmp_path, _doc())
     rec = Rec()
     R.Ops(cfg, run=rec, etc=etc).do("vpn_apply", {})
-    conf = (etc / "wireguard" / "d1max.conf").read_text()
+    conf = (etc / "wireguard" / "nexwar.conf").read_text()
     hooks = [line for line in conf.splitlines() if line.startswith(("PostUp", "PostDown", "PreUp",
                                                                      "PreDown"))]
     assert all(h.split(" = ", 1)[1].startswith(("sysctl -q", "iptables ")) for h in hooks)
     assert "-s 172.29.70.200/32 -p tcp --dport 22 -j ACCEPT" in conf
     assert "172.29.70.10/32 -p tcp" not in conf, "机器人、手机不放行转发"
-    assert ["systemctl", "restart", "wg-quick@d1max.service"] in rec.calls
+    assert ["systemctl", "restart", "wg-quick@nexwar.service"] in rec.calls
 
 
 def test_VPN_站点的生成器跟执行器连得上_规则两边一样(tmp_path):
-    from d1max_site.vpn import VpnState
+    from nexwar_site.vpn import VpnState
     v = VpnState(tmp_path / "site" / "vpn")
     v.init(endpoint="vpn.example.com")
     v.add("robot", "A")
@@ -90,11 +90,11 @@ def test_VPN_站点的生成器跟执行器连得上_规则两边一样(tmp_path
     v.write_apply()
     cfg = _cfg(tmp_path, "site")
     R.Ops(cfg, run=Rec(), etc=tmp_path / "etc").do("vpn_apply", {})
-    ours = (tmp_path / "etc" / "wireguard" / "d1max.conf").read_text()
+    ours = (tmp_path / "etc" / "wireguard" / "nexwar.conf").read_text()
     theirs = v.server_conf()
     rules = [x for x in theirs.splitlines() if x.startswith(("PostUp", "PostDown"))]
     assert rules and rules == [x for x in ours.splitlines() if x.startswith(("PostUp", "PostDown"))]
-    assert R.VPN_NET == str(__import__("d1max_site.vpn", fromlist=["SUBNET"]).SUBNET
+    assert R.VPN_NET == str(__import__("nexwar_site.vpn", fromlist=["SUBNET"]).SUBNET
                             .network_address).rsplit(".", 1)[0]
 
 
@@ -108,16 +108,16 @@ def test_VPN_数据被换成链接_不跟(tmp_path):
         R.Ops(cfg, run=Rec(), etc=etc).do("vpn_apply", {})
 
 
-# ------------------------------------------------------------------ 2 d1max-bind
+# ------------------------------------------------------------------ 2 nexwar_bind
 
 def test_配网服务的代码在root目录里_重启它不是提权(tmp_path):
     """第 2 条先是把它移出白名单;后来把它的代码挪进 root 独占目录(test_bind_rootonly.py),
     又放回来。"""
-    unit = (Path(__file__).resolve().parents[1] / "deploy" / "d1max-bind.service").read_text()
-    assert "/opt/d1max" not in unit.split("[Service]", 1)[1]
+    unit = (Path(__file__).resolve().parents[1] / "deploy" / "nexwar_bind.service").read_text()
+    assert "/opt/nexwar" not in unit.split("[Service]", 1)[1]
     rec = Rec()
-    R.Ops(_cfg(tmp_path), run=rec).do("restart", {"unit": "d1max-bind"})
-    assert rec.calls == [["systemctl", "restart", "d1max-bind.service"]]
+    R.Ops(_cfg(tmp_path), run=rec).do("restart", {"unit": "nexwar_bind"})
+    assert rec.calls == [["systemctl", "restart", "nexwar_bind.service"]]
 
 
 # ------------------------------------------------------------------ 5 服务单元
@@ -125,7 +125,7 @@ def test_配网服务的代码在root目录里_重启它不是提权(tmp_path):
 def test_服务单元_多出来没签名的单元_拒(tmp_path):
     cfg = _cfg(tmp_path)
     root, _ = _release(tmp_path, "[Unit]\nDescription=new\n")
-    (root / "deploy" / "d1max-nav2.service").write_text("[Service]\nUser=root\nExecStart=/x\n")
+    (root / "deploy" / "nexwar_nav2.service").write_text("[Service]\nUser=root\nExecStart=/x\n")
     sysd = tmp_path / "systemd"
     sysd.mkdir()
     with pytest.raises(R.OpError, match="不匹配"):
@@ -147,7 +147,7 @@ def test_服务单元_装的就是算指纹的那一份(tmp_path, monkeypatch):
         return real(path, **kw)
     monkeypatch.setattr(R, "read_nofollow", spy)
     R.Ops(cfg, run=Rec(), systemd_dir=sysd).do("units_apply", {"release": root.name})
-    assert reads.count("d1max-localizer.service") == 1
+    assert reads.count("nexwar_localizer.service") == 1
 
 
 # ------------------------------------------------------------------ 3、4、11 站点升级
@@ -160,7 +160,7 @@ def _site_pkg(tmp_path, *, evil_build=True) -> tuple[dict, Path]:
     (src / "deploy" / "site" / "install-site.sh").write_text("echo install\n")
     (src / "packages" / "contract" / "src").mkdir(parents=True)
     (src / "packages" / "contract" / "src" / "a.py").write_text("x = 1\n")
-    from d1max_agent.engine.release import _packed
+    from nexwar_agent.engine.release import _packed
     man = {"name": "site-1.2.0", "version": "1.2.0", "requires_mission_schema": 1,
            "content_sha256": tree_sha256(src, skip="release.json", keep=_packed)}
     man["signature"] = relsign.sign(man, keys / "priv.pem")
@@ -181,7 +181,7 @@ def _site_pkg(tmp_path, *, evil_build=True) -> tuple[dict, Path]:
     (venv / "bin" / "py").write_text("old")
     sysd = tmp_path / "systemd"
     sysd.mkdir()
-    (sysd / "d1max-site.service").write_text("old unit")
+    (sysd / "nexwar_site.service").write_text("old unit")
     lib = tmp_path / "lib"
     lib.mkdir()
     (lib / "ops-runner").write_text("old runner")
@@ -204,7 +204,7 @@ class SiteRun(Rec):
             pkg = Path(argv[1]).parents[2]
             self.saw_build = (pkg / "packages" / "contract" / "build").exists()
             (self.tmp / "venv" / "bin" / "py").write_text("new")
-            (self.tmp / "systemd" / "d1max-site.service").write_text("new unit")
+            (self.tmp / "systemd" / "nexwar_site.service").write_text("new unit")
             (self.tmp / "lib" / "ops-runner").write_text("new runner")
         return 0, ""
 
@@ -253,7 +253,7 @@ def test_站点升级回退_系统文件一起换回去_库是链接也不沿着
             "update", {"package": "site-1.2.0.tar.gz"})
     assert (home / "site.db").read_bytes() == b"OLD-DB" and not (home / "site.db").is_symlink()
     assert victim.read_text() == "ROOT FILE", "不沿着链接读写"
-    assert (sysd / "d1max-site.service").read_text() == "old unit"
+    assert (sysd / "nexwar_site.service").read_text() == "old unit"
     assert (tmp_path / "lib" / "ops-runner").read_text() == "old runner"
     assert (tmp_path / "venv" / "bin" / "py").read_text() == "old"
 
@@ -353,12 +353,12 @@ def test_外审W55_2_C1_同一个文件出现两次_拒(tmp_path):
 
 
 @pytest.mark.parametrize("name, unit, ok", [
-    ("d1max-localizer.service", "[Service]\nUser=robot\nExecStart=/x\n", True),
-    ("d1max-localizer.service", "[Service]\nExecStart=/x\n", False),
-    ("d1max-localizer.service", "[Service]\nUser=root\nExecStart=/x\n", False),
-    ("d1max-bind.service", "[Service]\nUser=root\n" + R.BIND_EXEC + "\n", True),
-    ("d1max-bind.service",
-     "[Service]\nUser=root\nExecStart=/opt/d1max/current/deploy/d1max-bind-start\n", False),
+    ("nexwar_localizer.service", "[Service]\nUser=robot\nExecStart=/x\n", True),
+    ("nexwar_localizer.service", "[Service]\nExecStart=/x\n", False),
+    ("nexwar_localizer.service", "[Service]\nUser=root\nExecStart=/x\n", False),
+    ("nexwar_bind.service", "[Service]\nUser=root\n" + R.BIND_EXEC + "\n", True),
+    ("nexwar_bind.service",
+     "[Service]\nUser=root\nExecStart=/opt/nexwar/current/deploy/nexwar_bind_start\n", False),
 ])
 def test_外审W55_2_C2_服务单元_只装非root的和从root目录跑的配网(name, unit, ok):
     assert (R.unit_problem(name, unit.encode(), bind_ok=True) == "") is ok
@@ -366,10 +366,10 @@ def test_外审W55_2_C2_服务单元_只装非root的和从root目录跑的配�
 
 def test_外审W55_2_C2_老签名包装不回老的配网单元(tmp_path):
     cfg = _cfg(tmp_path)
-    old = "[Service]\nUser=root\nExecStart=/opt/d1max/current/deploy/d1max-bind-start\n"
+    old = "[Service]\nUser=root\nExecStart=/opt/nexwar/current/deploy/nexwar_bind_start\n"
     root, _ = _release(tmp_path, "[Service]\nUser=robot\n")
-    (root / "deploy" / "d1max-bind.service").write_text(old)
-    from d1max_agent.engine.release import _packed
+    (root / "deploy" / "nexwar_bind.service").write_text(old)
+    from nexwar_agent.engine.release import _packed
     man = json.loads((root / "release.json").read_text())
     man.pop("signature")
     man["content_sha256"] = tree_sha256(root, skip="release.json", keep=_packed)
@@ -377,10 +377,10 @@ def test_外审W55_2_C2_老签名包装不回老的配网单元(tmp_path):
     (root / "release.json").write_text(json.dumps(man))
     sysd = tmp_path / "systemd"
     sysd.mkdir()
-    (sysd / "d1max-bind.service").write_text("SAFE")
+    (sysd / "nexwar_bind.service").write_text("SAFE")
     got = R.Ops(cfg, run=Rec(), systemd_dir=sysd).do("units_apply", {"release": root.name})
-    assert (sysd / "d1max-bind.service").read_text() == "SAFE"
-    assert any("d1max-bind.service" in x for x in got["skipped"])
+    assert (sysd / "nexwar_bind.service").read_text() == "SAFE"
+    assert any("nexwar_bind.service" in x for x in got["skipped"])
 
 
 def test_外审W55_2_C5_换证书_旧证书留底不跟链接(tmp_path):
@@ -391,7 +391,7 @@ def test_外审W55_2_C5_换证书_旧证书留底不跟链接(tmp_path):
     (new / "robot.key").write_text("-----BEGIN PRIVATE KEY-----\nNEW\n")
     (new / "registration.json").write_text("{}")
     etc = tmp_path / "etc"
-    tls = etc / "d1max" / "tls"
+    tls = etc / "nexwar" / "tls"
     tls.mkdir(parents=True)
     (tls / "robot.crt").write_text("OLD")
     victim = tmp_path / "victim"
@@ -420,16 +420,16 @@ def test_外审W55_2_C4_恢复VPN_目标目录被换成链接_不写过去(tmp_p
 
 
 def test_外审W55_2_I4_全部重启_有服务起不来就说_不重启代理(tmp_path):
-    rec = Rec({"systemctl restart d1max-localizer.service": 1})
-    with pytest.raises(R.OpError, match="d1max-localizer"):
+    rec = Rec({"systemctl restart nexwar_localizer.service": 1})
+    with pytest.raises(R.OpError, match="nexwar_localizer"):
         R.Ops(_cfg(tmp_path), run=rec).do("restart_all", {})
-    assert ["systemctl", "--no-block", "restart", "d1max-agent.service"] not in rec.calls
+    assert ["systemctl", "--no-block", "restart", "nexwar_agent.service"] not in rec.calls
 
 
 def test_外审W63_2_第4条_站点升级回退_出厂公钥和作废名单也一起换回去(tmp_path, monkeypatch):
     cfg, sysd = _site_pkg(tmp_path, evil_build=False)
     etc = tmp_path / "etc"
-    es = etc / "d1max-site"
+    es = etc / "nexwar_site"
     (es / "factory-pub.d").mkdir(parents=True)
     (es / "factory-pub.pem").write_text("OLD-FACTORY")
     (es / "factory-pub.d" / "a.pem").write_text("OLD-A")

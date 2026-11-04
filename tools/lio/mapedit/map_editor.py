@@ -344,7 +344,7 @@ def selftest(pgm):
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("pgm", nargs="?",
-                    default="/home/liang/Projects/d1max-patrol/runs/mola/coverage2/floor.pgm")
+                    default="/home/liang/Projects/nexwar_patrol/runs/mola/coverage2/floor.pgm")
     ap.add_argument("--selftest", action="store_true")
     args = ap.parse_args()
     if args.selftest:

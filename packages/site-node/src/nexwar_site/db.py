@@ -1,0 +1,1211 @@
+"""站点状态的唯一落盘处:一个 SQLite 文件(W00c 设计 §4)。
+
+一个连接 + 一把锁:站点 API 是多线程的(``ThreadingHTTPServer``),派遣器在事件循环线程里写;
+SQLite 自己的线程检查关掉,串行化由这把锁负责。WAL 模式:读不挡写。
+"""
+
+from __future__ import annotations
+
+import os
+import sqlite3
+import threading
+from collections.abc import Iterator
+from contextlib import contextmanager
+from pathlib import Path
+from typing import Any
+
+#: 58 路线库(站点存的路线、排程是唯一真理源);59 运营可视化:定位历史 loc_episodes(只加表);
+#: 60 区域「在生效的那一份」nav_zones.effective_body(外审 R1,2026-10-15);
+#: 61 W44:告警结论 alerts.verdict、交班留言 shift_notes、位置轨迹 pose_track(只加列、加表)。
+#: 71 W73 第一期:路线分类 routes.kind(patrol 巡逻 / guard 防区路线)、
+#:    防区的查看点与值守位 zone_posts。
+#: 72 W73 第二期:布防值守 —— 值守方案 guard_plan、各防区超时线 guard_zone_limits、每条方案的进度
+#:    guard_runs、每一段布防 guard_duties、防区最后看过 zone_seen、值守记录 guard_log(只加表)。
+#: 73 W73 第五期:外部设备按位置绑定 ext_devices(只加表)。
+SCHEMA_VERSION = 73
+
+_DDL = """
+CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS robots (
+    robot_id      TEXT PRIMARY KEY,
+    fingerprint   TEXT NOT NULL,
+    issued_at     INTEGER NOT NULL,
+    expires_at    INTEGER NOT NULL,
+    revoked       INTEGER NOT NULL DEFAULT 0,
+    control_epoch INTEGER NOT NULL DEFAULT 1,
+    enrolled_at   INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS accounts (
+    name       TEXT PRIMARY KEY,
+    role       TEXT NOT NULL,
+    salt       BLOB NOT NULL,
+    pw_hash    BLOB NOT NULL,
+    created_at INTEGER NOT NULL,
+    disabled   INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS audit (
+    id      INTEGER PRIMARY KEY AUTOINCREMENT,
+    at      INTEGER NOT NULL,
+    actor   TEXT NOT NULL,
+    action  TEXT NOT NULL,
+    target  TEXT NOT NULL DEFAULT '',
+    status  INTEGER NOT NULL DEFAULT 0,
+    detail  TEXT NOT NULL DEFAULT '{}',
+    remote  TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS sessions (
+    token_hash TEXT PRIMARY KEY,
+    name       TEXT NOT NULL REFERENCES accounts(name),
+    created_at INTEGER NOT NULL,
+    last_used  INTEGER NOT NULL,
+    scope      TEXT NOT NULL DEFAULT '',
+    client     TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS commands (
+    command_id  TEXT PRIMARY KEY,
+    task_id     TEXT NOT NULL,
+    robot_id    TEXT NOT NULL,
+    kind        TEXT NOT NULL,
+    payload     TEXT NOT NULL,
+    issued_by   TEXT NOT NULL,
+    issued_at   INTEGER NOT NULL,
+    priority    INTEGER NOT NULL DEFAULT 0,
+    ack_result  TEXT,
+    ack_reason  TEXT
+);
+CREATE INDEX IF NOT EXISTS commands_robot ON commands(robot_id, issued_at);
+CREATE TABLE IF NOT EXISTS events (
+    robot_id    TEXT NOT NULL,
+    boot_id     TEXT NOT NULL,
+    seq         INTEGER NOT NULL,
+    event_id    TEXT NOT NULL,
+    kind        TEXT NOT NULL,
+    data        TEXT NOT NULL,
+    stamp       INTEGER NOT NULL,
+    received_at INTEGER NOT NULL,
+    PRIMARY KEY (robot_id, boot_id, seq)
+);
+CREATE TABLE IF NOT EXISTS bundles (
+    bundle_id      TEXT NOT NULL,
+    version        INTEGER NOT NULL,
+    content_sha256 TEXT NOT NULL,
+    timezone       TEXT NOT NULL,
+    schedule       TEXT NOT NULL,
+    imported_at    INTEGER NOT NULL,
+    imported_by    TEXT NOT NULL,
+    active         INTEGER NOT NULL DEFAULT 0,
+    schema         INTEGER NOT NULL DEFAULT 1,
+    PRIMARY KEY (bundle_id, version)
+);
+CREATE TABLE IF NOT EXISTS missions (
+    bundle_id  TEXT NOT NULL,
+    version    INTEGER NOT NULL,
+    mission_id TEXT NOT NULL,
+    definition TEXT NOT NULL,
+    PRIMARY KEY (bundle_id, version, mission_id)
+);
+CREATE TABLE IF NOT EXISTS schedule_state (
+    entry_id        TEXT PRIMARY KEY,
+    last_started_ms INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS schedule_runs (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    entry_id     TEXT NOT NULL,
+    scheduled_ms INTEGER NOT NULL,
+    outcome      TEXT NOT NULL,
+    robot_id     TEXT,
+    task_id      TEXT,
+    result       TEXT,
+    note         TEXT NOT NULL DEFAULT '',
+    decided_at   INTEGER NOT NULL,
+    told_ms      INTEGER DEFAULT 0,
+    UNIQUE (entry_id, scheduled_ms, outcome)
+);
+CREATE INDEX IF NOT EXISTS schedule_runs_task ON schedule_runs(task_id);
+CREATE TABLE IF NOT EXISTS standby_points (
+    robot_id   TEXT NOT NULL,
+    name       TEXT NOT NULL,
+    map_id     TEXT NOT NULL,
+    map_version TEXT NOT NULL DEFAULT '',
+    x          REAL NOT NULL,
+    y          REAL NOT NULL,
+    yaw        REAL NOT NULL,
+    is_default INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (robot_id, name)
+);
+-- 原点(W13a,决策 16):安全返航、回充的语义,每台机器人每张图的每个版本一个;待命点(上面那张表)
+-- 是运营调度
+-- 的语义,可以多个。站点下发地图时把原点发给机器人(``map_activate.home``)。
+CREATE TABLE IF NOT EXISTS homes (
+    robot_id     TEXT NOT NULL,
+    map_id       TEXT NOT NULL,
+    map_version  TEXT NOT NULL,
+    name         TEXT NOT NULL,
+    x            REAL NOT NULL,
+    y            REAL NOT NULL,
+    yaw          REAL NOT NULL,
+    marked_at_ms INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (robot_id, map_id, map_version)
+);
+CREATE TABLE IF NOT EXISTS incident_sources (
+    name       TEXT PRIMARY KEY,
+    secret     TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS intercepts (
+    name   TEXT PRIMARY KEY,
+    map_id TEXT NOT NULL,
+    map_version TEXT NOT NULL,
+    x      REAL NOT NULL,
+    y      REAL NOT NULL,
+    yaw    REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS zones (
+    zone      TEXT PRIMARY KEY,
+    intercept TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS incidents (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    source       TEXT NOT NULL,
+    event_id     TEXT NOT NULL,
+    type         TEXT NOT NULL,
+    zone         TEXT NOT NULL,
+    intercept    TEXT,
+    received_at  INTEGER NOT NULL,
+    occurred_at  INTEGER,
+    outcome      TEXT NOT NULL,
+    robot_id     TEXT,
+    task_id      TEXT,
+    result       TEXT,
+    merged_into  INTEGER,
+    note         TEXT NOT NULL DEFAULT '',
+    detail       TEXT NOT NULL DEFAULT '{}',
+    told_ms      INTEGER DEFAULT 0,
+    UNIQUE (source, event_id)
+);
+CREATE INDEX IF NOT EXISTS incidents_task ON incidents(task_id);
+CREATE TABLE IF NOT EXISTS cameras (
+    name       TEXT PRIMARY KEY,
+    onvif_url  TEXT NOT NULL,
+    username   TEXT NOT NULL DEFAULT '',
+    password   TEXT NOT NULL DEFAULT '',
+    zone       TEXT NOT NULL,
+    rtsp_url   TEXT NOT NULL DEFAULT '',
+    motion     INTEGER NOT NULL DEFAULT 0,
+    added_ms   INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS recordings (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    robot_id    TEXT NOT NULL,
+    camera      TEXT NOT NULL,
+    stamp       TEXT NOT NULL,
+    start_ms    INTEGER NOT NULL,
+    bytes       INTEGER NOT NULL,
+    sha256      TEXT NOT NULL,
+    received_ms INTEGER NOT NULL,
+    keep        INTEGER NOT NULL DEFAULT 0,
+    sealed      INTEGER NOT NULL DEFAULT 0,
+    UNIQUE (robot_id, camera, stamp)
+);
+CREATE INDEX IF NOT EXISTS recordings_start ON recordings(start_ms);
+CREATE TABLE IF NOT EXISTS alerts (
+    key          TEXT PRIMARY KEY,
+    level        TEXT NOT NULL,
+    kind         TEXT NOT NULL,
+    robot        TEXT NOT NULL,
+    title        TEXT NOT NULL,
+    detail       TEXT NOT NULL,
+    first_ms     INTEGER NOT NULL,
+    last_ms      INTEGER NOT NULL,
+    count        INTEGER NOT NULL,
+    acked_by     TEXT NOT NULL,
+    acked_ms     INTEGER,
+    resolved_by  TEXT NOT NULL,
+    resolved_ms  INTEGER,
+    escalated    INTEGER NOT NULL,
+    context      TEXT NOT NULL DEFAULT '{}',
+    shelved_by   TEXT NOT NULL DEFAULT '',
+    shelved_ms   INTEGER,
+    shelved_until_ms INTEGER,
+    shelved_reason TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS alerts_last ON alerts(last_ms);
+-- W21 复查:站点起来时按种类取每台机器人最近一条事件(上装故障的全集),不扫整张事件表。
+CREATE INDEX IF NOT EXISTS events_kind ON events(kind, robot_id, received_at);
+CREATE TABLE IF NOT EXISTS teleop_leases (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    robot_id        TEXT NOT NULL,
+    epoch           INTEGER NOT NULL,
+    operator        TEXT NOT NULL,
+    started_at      INTEGER NOT NULL,
+    ended_at        INTEGER,
+    end_reason      TEXT,
+    takeover_by     TEXT,
+    takeover_reason TEXT,
+    UNIQUE (robot_id, epoch)
+);
+-- W00c5d(决策 8):机器人传上来的运行记录。文件在 <站点目录>/evidence/<机器人>/<任务>/<时刻>/ 下。
+CREATE TABLE IF NOT EXISTS runs (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    robot_id   TEXT NOT NULL,
+    mission    TEXT NOT NULL,
+    stamp      TEXT NOT NULL,
+    first_ms   INTEGER NOT NULL,
+    last_ms    INTEGER NOT NULL,
+    finished   INTEGER NOT NULL DEFAULT 0,
+    result     TEXT NOT NULL DEFAULT '',
+    photos     INTEGER NOT NULL DEFAULT 0,
+    bytes      INTEGER NOT NULL DEFAULT 0,
+    judged_ms  INTEGER,
+    verdicts   TEXT NOT NULL DEFAULT '{}',
+    reviewed   INTEGER NOT NULL DEFAULT 0,
+    UNIQUE (robot_id, mission, stamp)
+);
+CREATE INDEX IF NOT EXISTS runs_by_robot ON runs (robot_id, stamp);
+-- W00c5d 内部评审:收齐了的照片(还在传的不算,不判读、不当基线)。
+CREATE TABLE IF NOT EXISTS run_photos (
+    run_id  INTEGER NOT NULL,
+    name    TEXT NOT NULL,
+    done_ms INTEGER NOT NULL,
+    PRIMARY KEY (run_id, name)
+);
+-- W00c5d 第二部分:站点的地图目录与建图录包。文件在 <站点目录>/maps/、bags/ 下。
+CREATE TABLE IF NOT EXISTS maps (
+    map_id     TEXT NOT NULL,
+    version    TEXT NOT NULL,
+    source     TEXT NOT NULL,
+    created_ms INTEGER NOT NULL,
+    files      TEXT NOT NULL,
+    note       TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (map_id, version)
+);
+-- W00c5d 第三部分:站点的发布目录。包在 <站点目录>/releases/<版本名>.tar.gz。
+CREATE TABLE IF NOT EXISTS robot_holds (
+    robot_id TEXT PRIMARY KEY,
+    by       TEXT NOT NULL,
+    at_ms    INTEGER NOT NULL,
+    reason   TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS releases (
+    name       TEXT PRIMARY KEY,
+    version    TEXT NOT NULL,
+    sha256     TEXT NOT NULL,
+    size       INTEGER NOT NULL,
+    created_ms INTEGER NOT NULL,
+    note       TEXT NOT NULL DEFAULT '',
+    requires_mission_schema INTEGER NOT NULL DEFAULT 1
+);
+CREATE TABLE IF NOT EXISTS bags (
+    robot_id TEXT NOT NULL,
+    name     TEXT NOT NULL,
+    first_ms INTEGER NOT NULL,
+    last_ms  INTEGER NOT NULL,
+    bytes    INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (robot_id, name)
+);
+-- W10:禁行区、限速区,挂在几何版本上;修订号每改 +1;发布前人工确认(确认的是哪一版修订)。
+CREATE TABLE IF NOT EXISTS nav_zones (
+    map_id        TEXT NOT NULL,
+    map_version   TEXT NOT NULL,
+    revision      INTEGER NOT NULL,
+    body          TEXT NOT NULL,
+    updated_by    TEXT NOT NULL,
+    updated_ms    INTEGER NOT NULL,
+    confirmed_rev INTEGER,
+    confirmed_by  TEXT,
+    confirmed_ms  INTEGER,
+    confirmed_body TEXT,
+    confirmed_how TEXT NOT NULL DEFAULT '',
+    effective_body TEXT,
+    PRIMARY KEY (map_id, map_version)
+);
+-- R2(2026-10-14):新版本把上一版的区域、待命点、拦截点带过来**给人核**(不生效);
+-- state:open(等人核)、adopted(采纳过)、discarded(丢掉了)。一个版本只生成一次。
+CREATE TABLE IF NOT EXISTS nav_zone_proposals (
+    map_id       TEXT NOT NULL,
+    map_version  TEXT NOT NULL,
+    from_version TEXT NOT NULL,
+    body         TEXT NOT NULL,
+    state        TEXT NOT NULL DEFAULT 'open',
+    created_ms   INTEGER NOT NULL,
+    closed_by    TEXT NOT NULL DEFAULT '',
+    closed_ms    INTEGER,
+    PRIMARY KEY (map_id, map_version)
+);
+-- W20:全站一个当前模式(一行);留守时撤防的防区(没有这一行的防区一律布防)。
+CREATE TABLE IF NOT EXISTS site_mode (
+    id            INTEGER PRIMARY KEY CHECK (id = 1),
+    mode          TEXT NOT NULL,
+    prev_mode     TEXT NOT NULL DEFAULT '',
+    visitor_zones TEXT NOT NULL DEFAULT '[]',
+    until_ms      INTEGER,
+    set_by        TEXT NOT NULL DEFAULT '',
+    set_ms        INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS zone_arming (
+    zone       TEXT PRIMARY KEY,
+    home_armed INTEGER NOT NULL
+);
+-- W22:正在进行的驱离(一台机器人一场)。站点重启接着管;结束就删。
+CREATE TABLE IF NOT EXISTS deter_sessions (
+    robot_id    TEXT PRIMARY KEY,
+    incident_id INTEGER NOT NULL,
+    zone        TEXT NOT NULL,
+    task_id     TEXT NOT NULL,
+    level       INTEGER NOT NULL,
+    started_ms  INTEGER NOT NULL,
+    level_ms    INTEGER NOT NULL,
+    human_ms    INTEGER NOT NULL DEFAULT 0,
+    auto        INTEGER NOT NULL DEFAULT 1,
+    by          TEXT NOT NULL DEFAULT ''
+);
+-- W29:天气(一行)。手动切的(带到点时刻)、联网查的(带查的时刻、原因)。
+CREATE TABLE IF NOT EXISTS weather (
+    id              INTEGER PRIMARY KEY CHECK (id = 1),
+    manual          TEXT NOT NULL DEFAULT '',
+    manual_until_ms INTEGER,
+    manual_by       TEXT NOT NULL DEFAULT '',
+    manual_ms       INTEGER,
+    auto            TEXT NOT NULL DEFAULT '',
+    auto_ms         INTEGER,
+    auto_detail     TEXT NOT NULL DEFAULT '',
+    auto_error      TEXT NOT NULL DEFAULT ''
+);
+-- W29 外审:雷暴撤了巡检、要派回待命点的机器人(派成了才删;机器人在跑别的了就作废)。
+CREATE TABLE IF NOT EXISTS weather_returns (
+    robot_id   TEXT PRIMARY KEY,
+    task_id    TEXT NOT NULL,
+    created_ms INTEGER NOT NULL
+);
+-- W13:每台机器人的桩前对准点(桩前约 1.5 m、正对桩)。
+CREATE TABLE IF NOT EXISTS chargers (
+    robot_id    TEXT PRIMARY KEY,
+    map_id      TEXT NOT NULL,
+    map_version TEXT NOT NULL,
+    x           REAL NOT NULL,
+    y           REAL NOT NULL,
+    yaw         REAL NOT NULL,
+    set_ms      INTEGER NOT NULL,
+    set_by      TEXT NOT NULL DEFAULT ''
+);
+-- W13:每台机器人这一轮回充走到哪一步了(goto / dock / resume 被打断 / cooldown 失败或人中止之后歇着)
+-- 。
+-- 
+CREATE TABLE IF NOT EXISTS charge_cycles (
+    robot_id   TEXT PRIMARY KEY,
+    state      TEXT NOT NULL,
+    task_id    TEXT NOT NULL DEFAULT '',
+    sent_ms    INTEGER NOT NULL DEFAULT 0,
+    started_ms INTEGER NOT NULL,
+    until_ms   INTEGER
+);
+-- W13 外审:机器人报「桩上危险」(运动锁住)报过 P1 的(一次挂一次;机器人上摘了就删)。
+-- W30b(决策 51):机器人报证据没封(没装站点公钥)报过 P2 的(装好了删)。
+CREATE TABLE IF NOT EXISTS evidence_plain (
+    robot_id   TEXT PRIMARY KEY,
+    created_ms INTEGER NOT NULL
+);
+-- W30b 复查 Minor:这一回「机器人上证据封不上」已经报过的机器人(人手动解决了、站点重启了都不重报;
+-- 机器人报件数回到 0 才删)。
+CREATE TABLE IF NOT EXISTS evidence_unsealed (
+    robot_id   TEXT PRIMARY KEY,
+    created_ms INTEGER NOT NULL
+);
+-- W26(决策 52):机器人翻倒、被抱起来的这一回(报过 P1 了;机器人报回 ok 删)。siren:
+-- 1 = 布防中被抱起来、
+-- 
+-- 警笛警灯还没开成(下一拍再发),2 = 开成了(45 秒内这几路归它,驱离不许关),0 = 不响、过点了。
+CREATE TABLE IF NOT EXISTS force_episodes (
+    robot_id   TEXT PRIMARY KEY,
+    state      TEXT NOT NULL,
+    started_ms INTEGER NOT NULL,
+    siren      INTEGER NOT NULL DEFAULT 0,
+    siren_ms   INTEGER NOT NULL DEFAULT 0
+);
+-- 系统审查 S07:删过的证据(kind:run 一趟 <任务>/<时刻>、rec 一段录像 <相机>/<时刻>)。跟删除同一个
+-- 事务落库;再传上来照收照回执、收齐就扔,不登记(回执丢了、断网攒着的、跟删除交错的都不复活)。
+CREATE TABLE IF NOT EXISTS purged (
+    kind      TEXT NOT NULL,
+    robot_id  TEXT NOT NULL,
+    key       TEXT NOT NULL,
+    purged_ms INTEGER NOT NULL,
+    PRIMARY KEY (kind, robot_id, key)
+);
+-- 商业化 A6(决策 53):收推送的手机(极光的推送号)、要推的 P1(告警写库的同一个事务里排上;同一条
+-- 同一档只排一次)。
+CREATE TABLE IF NOT EXISTS push_devices (
+    reg_id     TEXT PRIMARY KEY,
+    account    TEXT NOT NULL,
+    platform   TEXT NOT NULL,
+    updated_ms INTEGER NOT NULL,
+    session    TEXT NOT NULL DEFAULT '',
+    provider   TEXT NOT NULL DEFAULT 'jpush'
+);
+CREATE TABLE IF NOT EXISTS push_outbox (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    alert_key  TEXT NOT NULL,
+    tier       INTEGER NOT NULL,
+    robot      TEXT NOT NULL,
+    title      TEXT NOT NULL,
+    created_ms INTEGER NOT NULL,
+    next_ms    INTEGER NOT NULL,
+    attempts   INTEGER NOT NULL DEFAULT 0,
+    sent_ms    INTEGER,
+    dropped    TEXT NOT NULL DEFAULT '',
+    error      TEXT NOT NULL DEFAULT '',
+    done       TEXT NOT NULL DEFAULT '',
+    UNIQUE (alert_key, tier)
+);
+-- RC 加固外审 I2:哪一条(push_outbox.id)给哪个推送号发成功过。重试只补没发成功的;站点重启也在。
+CREATE TABLE IF NOT EXISTS push_sent (
+    outbox_id  INTEGER NOT NULL,
+    reg_id     TEXT NOT NULL,
+    sent_ms    INTEGER NOT NULL,
+    PRIMARY KEY (outbox_id, reg_id)
+);
+-- 商业化 A1:指标历史(每 5 分钟一笔,留 30 天):盘、机器人在线、开着的告警、机器人上待传的、
+-- 事件循环延迟。
+-- 
+CREATE TABLE IF NOT EXISTS metrics (
+    ts    INTEGER NOT NULL,
+    key   TEXT NOT NULL,
+    value REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS metrics_ts ON metrics(ts);
+-- 商业化 B1c:防区画在地图上(每张图每个版本,一个防区一个多边形,地图坐标)。
+CREATE TABLE IF NOT EXISTS zone_areas (
+    map_id      TEXT NOT NULL,
+    map_version TEXT NOT NULL,
+    zone        TEXT NOT NULL,
+    points      TEXT NOT NULL,
+    updated_by  TEXT NOT NULL DEFAULT '',
+    updated_ms  INTEGER NOT NULL,
+    PRIMARY KEY (map_id, map_version, zone)
+);
+-- 商业化 B1c:名单第一版 —— 时段 / 人员授权。
+CREATE TABLE IF NOT EXISTS authorizations (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    name       TEXT NOT NULL,
+    zones      TEXT NOT NULL DEFAULT '[]',
+    days       INTEGER NOT NULL,
+    start_min  INTEGER NOT NULL,
+    end_min    INTEGER NOT NULL,
+    until_ms   INTEGER,
+    note       TEXT NOT NULL DEFAULT '',
+    created_by TEXT NOT NULL DEFAULT '',
+    created_ms INTEGER NOT NULL
+);
+-- 商业化 A4:机器人的开通码(一台机器人一个;只记令牌的哈希;领过一次就作废)。
+CREATE TABLE IF NOT EXISTS enroll_claims (
+    robot_id   TEXT PRIMARY KEY,
+    token_hash TEXT NOT NULL,
+    created_ms INTEGER NOT NULL,
+    expires_ms INTEGER NOT NULL,
+    used_ms    INTEGER,
+    -- A 阶段外审 I1:出码时这台机器人证书的指纹(这一代)。领的时候登记表和读到的证书都得是这一代。
+    cert_fp    TEXT NOT NULL DEFAULT ''
+);
+-- W33(决策 48):布防中机器人没在驱离时看见人,这一回报过 P1 了(机器人确认人走了删,再看见再报)。
+CREATE TABLE IF NOT EXISTS person_sightings (
+    robot_id   TEXT PRIMARY KEY,
+    started_ms INTEGER NOT NULL,
+    -- B 阶段外审 I1:这一回记成了什么。'p1' = 报过 P1;'authorized' = 授权在场只记了 P3
+    -- (授权失效、机器人走出授权区、位置说不清了而人还在,要补报一次 P1)。
+    kind       TEXT NOT NULL DEFAULT 'p1'
+);
+-- W42(库 67):机器人自己来挂的绑定申请(手机扫贴纸配网后,机器人连上站点挂一条,等人批准)。
+-- state:pending 等批 / approved 批了(机器人轮询拿开通码) / rejected 拒了 /
+-- replaced 同一序列号又来了一条 / expired 没人批作废了。
+CREATE TABLE IF NOT EXISTS bind_requests (
+    id          TEXT PRIMARY KEY,
+    serial      TEXT NOT NULL,
+    nonce       TEXT NOT NULL,
+    model       TEXT NOT NULL DEFAULT '',
+    version     TEXT NOT NULL DEFAULT '',
+    source      TEXT NOT NULL DEFAULT '',
+    host        TEXT NOT NULL DEFAULT '',
+    secret_hash TEXT NOT NULL,
+    created_ms  INTEGER NOT NULL,
+    expires_ms  INTEGER NOT NULL,
+    state       TEXT NOT NULL DEFAULT 'pending',
+    decided_by  TEXT NOT NULL DEFAULT '',
+    decided_ms  INTEGER,
+    -- 外审 C1:批准时签的那一代证书的指纹。只给这一代出开通码(吊销、重新登记以后旧申请领不到新私钥)
+    cert_fp     TEXT NOT NULL DEFAULT ''
+);
+-- W33(C40221 真机):只许手动派的机器人。站点自己发起的动作(排程、入侵派遣、回充、
+-- 任务完了自动回待命点)
+-- 
+-- 一律不派;人手动派的照常。新登记的机器人默认在这里(管理员确认后才接自动派遣);没有这一行 = 接。
+CREATE TABLE IF NOT EXISTS robot_service (
+    robot_id TEXT PRIMARY KEY,
+    by       TEXT NOT NULL,
+    at_ms    INTEGER NOT NULL,
+    note     TEXT NOT NULL DEFAULT ''
+);
+-- W28 外审:这一回低电已经报过「两台同时在充」的(重派、重启不再报;电量回到 30% 以上删)。
+CREATE TABLE IF NOT EXISTS charge_overlaps (
+    robot_id   TEXT PRIMARY KEY,
+    created_ms INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS dock_hazards (
+    robot_id   TEXT PRIMARY KEY,
+    reason     TEXT NOT NULL,
+    created_ms INTEGER NOT NULL
+);
+-- W30 复查:删了运行记录、导出还没删成的(删导出成了才清;下一次删除、定时清理、重启都接着删)。
+CREATE TABLE IF NOT EXISTS export_purges (
+    run_id     INTEGER PRIMARY KEY,
+    created_ms INTEGER NOT NULL
+);
+-- W24 复查:要报、还没报成的告警(连内容一起)。报成才删;人走了、驱离结束都不动它。
+CREATE TABLE IF NOT EXISTS pending_alerts (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind       TEXT NOT NULL,
+    robot      TEXT NOT NULL,
+    title      TEXT NOT NULL,
+    detail     TEXT NOT NULL DEFAULT '',
+    context    TEXT NOT NULL DEFAULT '{}',
+    created_ms INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS robot_state (
+    robot_id     TEXT PRIMARY KEY,
+    status       TEXT,
+    capabilities TEXT,
+    updated_at   INTEGER NOT NULL
+);
+-- 巡检路线库(2026-10-14 用户定:站点存的路线是唯一真理源;网页、手机都能改;任务包导进来也落这里)。
+-- 一条路线 = 一份任务定义(契约 ``mission`` 的线格式,绑地图号 + 版本);
+-- 修订号每改 +1(乐观并发,同区域)。
+CREATE TABLE IF NOT EXISTS routes (
+    route_id    TEXT PRIMARY KEY,
+    map_id      TEXT NOT NULL,
+    map_version TEXT NOT NULL DEFAULT '',
+    definition  TEXT NOT NULL,
+    revision    INTEGER NOT NULL,
+    updated_ms  INTEGER NOT NULL,
+    updated_by  TEXT NOT NULL DEFAULT '',
+    source      TEXT NOT NULL DEFAULT ''
+);
+-- 排程(契约 ``schedule`` 一条 entry 的线格式)。``active_from_ms``:这一条从什么时候起算数 ——
+-- 新加、改了钟点的
+-- 那一刻;那之前到点的轮次不跑、不补记(原来是「任务包导入之前到点的不算」,按包整体算)。
+CREATE TABLE IF NOT EXISTS route_schedules (
+    entry_id       TEXT PRIMARY KEY,
+    definition     TEXT NOT NULL,
+    revision       INTEGER NOT NULL,
+    active_from_ms INTEGER NOT NULL,
+    updated_ms     INTEGER NOT NULL,
+    updated_by     TEXT NOT NULL DEFAULT '',
+    source         TEXT NOT NULL DEFAULT ''
+);
+-- 路线库整体:一行。``revision`` 每次改动 +1(导出成任务包时当版本号);
+-- ``timezone`` 排程的时区(没设 NULL);
+-- ``last_import`` 最近一次导入的任务包(JSON,没有是空串)。
+CREATE TABLE IF NOT EXISTS route_store (
+    id          INTEGER PRIMARY KEY CHECK (id = 1),
+    revision    INTEGER NOT NULL DEFAULT 0,
+    timezone    TEXT,
+    updated_ms  INTEGER NOT NULL DEFAULT 0,
+    updated_by  TEXT NOT NULL DEFAULT '',
+    last_import TEXT NOT NULL DEFAULT ''
+);
+-- 运营可视化(库 59):定位丢了 / 变差的每一段(loc_history.py)。有界:每台机器人 500 段、全站 5000 段、
+-- 90 天。end_ms 空 = 还没结束;end_how:recovered / became_* / offline / no_data / site_restart。
+CREATE TABLE IF NOT EXISTS loc_episodes (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    robot_id    TEXT NOT NULL,
+    kind        TEXT NOT NULL,
+    start_ms    INTEGER NOT NULL,
+    end_ms      INTEGER,
+    end_how     TEXT NOT NULL DEFAULT '',
+    map_id      TEXT NOT NULL DEFAULT '',
+    map_version TEXT NOT NULL DEFAULT '',
+    x           REAL,
+    y           REAL,
+    cause       TEXT NOT NULL DEFAULT '',
+    source      TEXT NOT NULL DEFAULT '',
+    sigma_m     REAL,
+    task_id     TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS loc_episodes_robot ON loc_episodes(robot_id, start_ms);
+-- W44(库 61):交班留言(报警记录页显示最近一条;作者是登录账号)。
+CREATE TABLE IF NOT EXISTS shift_notes (
+    id     INTEGER PRIMARY KEY AUTOINCREMENT,
+    at_ms  INTEGER NOT NULL,
+    author TEXT NOT NULL,
+    text   TEXT NOT NULL
+);
+-- W44(库 61):位置轨迹(录像页那一刻在哪、地图页多久没巡过)。stamp_ms 是机器人的钟(跟录像同一个钟);
+-- 挪了 1 米或过了 10 秒记一个,留 30 天(pose_track.py)。
+CREATE TABLE IF NOT EXISTS pose_track (
+    robot_id    TEXT NOT NULL,
+    stamp_ms    INTEGER NOT NULL,
+    map_id      TEXT NOT NULL,
+    map_version TEXT NOT NULL,
+    x           REAL NOT NULL,
+    y           REAL NOT NULL,
+    PRIMARY KEY (robot_id, stamp_ms)
+);
+CREATE INDEX IF NOT EXISTS pose_track_map ON pose_track(map_id, map_version, stamp_ms);
+-- W44 第二期(库 62):布防时间表。zone='' 是「全部防区一样」那一份;day 0=星期一 … 6=星期日;
+-- 0 <= start_min < end_min <= 1440(到 24:00)。arming_schedule.py。
+CREATE TABLE IF NOT EXISTS arming_slots (
+    zone      TEXT NOT NULL,
+    day       INTEGER NOT NULL,
+    start_min INTEGER NOT NULL,
+    end_min   INTEGER NOT NULL,
+    PRIMARY KEY (zone, day, start_min)
+);
+-- 例外日期(节假日、出远门):first_day..last_day(站点时区的日子,两头都算)全天全站 armed / disarmed。
+CREATE TABLE IF NOT EXISTS arming_exceptions (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    first_day  TEXT NOT NULL,
+    last_day   TEXT NOT NULL,
+    state      TEXT NOT NULL,
+    note       TEXT NOT NULL DEFAULT '',
+    created_by TEXT NOT NULL,
+    created_ms INTEGER NOT NULL
+);
+-- 站点的零散设置(值是 JSON):交班时间、多久没巡过、时间表开没开……site_settings.py。
+CREATE TABLE IF NOT EXISTS site_settings (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+-- W44 第三期(库 63):「布置」的历史版本。kind:zones / nogo / route / standby / cameras;item:路线名、
+-- 机器人(待命点),别的空串;body 是那一刻的快照(JSON;路线删了是 NULL;摄像头不带口令)。
+-- layout_history.py。
+CREATE TABLE IF NOT EXISTS layout_history (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind        TEXT NOT NULL,
+    map_id      TEXT NOT NULL,
+    map_version TEXT NOT NULL,
+    item        TEXT NOT NULL DEFAULT '',
+    body        TEXT,
+    note        TEXT NOT NULL DEFAULT '',
+    by          TEXT NOT NULL,
+    at_ms       INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS layout_history_key
+    ON layout_history(kind, map_id, map_version, item, id);
+-- W44 第四期(库 64):等充完电、空闲时再换的升级(一台一条;换出去了删)。release_queue.py。
+-- 库 65(外审 R7):每次排队一个不复用的编号(AUTOINCREMENT),旧的回执只删它自己那一条。
+CREATE TABLE IF NOT EXISTS release_queue (
+    id       INTEGER PRIMARY KEY AUTOINCREMENT,
+    robot_id TEXT NOT NULL UNIQUE,
+    name     TEXT NOT NULL,
+    by       TEXT NOT NULL,
+    at_ms    INTEGER NOT NULL
+);
+-- W48(库 66):路网 —— 每个几何版本一份(点、双向连线),整份换、修订号加一。route_nets.py。
+CREATE TABLE IF NOT EXISTS route_nets (
+    map_id      TEXT NOT NULL,
+    map_version TEXT NOT NULL,
+    body        TEXT NOT NULL,
+    revision    INTEGER NOT NULL,
+    updated_ms  INTEGER NOT NULL,
+    updated_by  TEXT NOT NULL,
+    PRIMARY KEY (map_id, map_version)
+);
+-- 地图的显示设置(转角、底图、区域名、特殊地面),跟着版本走。map_display.py。
+CREATE TABLE IF NOT EXISTS map_display (
+    map_id      TEXT NOT NULL,
+    map_version TEXT NOT NULL,
+    body        TEXT NOT NULL,
+    updated_by  TEXT NOT NULL,
+    updated_ms  INTEGER NOT NULL,
+    PRIMARY KEY (map_id, map_version)
+);
+-- W53:临时巡逻(保安、经理手动派的,不进日程;撞日程就排在后面)。adhoc.py。
+CREATE TABLE IF NOT EXISTS adhoc_queue (
+    id            TEXT PRIMARY KEY,
+    robot         TEXT NOT NULL,
+    mission       TEXT NOT NULL,
+    label         TEXT NOT NULL,
+    by            TEXT NOT NULL,
+    created_ms    INTEGER NOT NULL,
+    not_before_ms INTEGER NOT NULL,
+    estimate_s    INTEGER NOT NULL,
+    state         TEXT NOT NULL,
+    task_id       TEXT NOT NULL DEFAULT '',
+    started_ms    INTEGER,
+    ended_ms      INTEGER,
+    note          TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS adhoc_queue_state ON adhoc_queue(state, not_before_ms);
+CREATE INDEX IF NOT EXISTS adhoc_queue_task ON adhoc_queue(task_id);
+-- W52:App 上申请账号(不用登录),管理员批准时选权限。account_requests.py。
+CREATE TABLE IF NOT EXISTS account_requests (
+    id          TEXT PRIMARY KEY,
+    name        TEXT NOT NULL,
+    display     TEXT NOT NULL,
+    salt        BLOB NOT NULL,
+    pw_hash     BLOB NOT NULL,
+    source      TEXT NOT NULL DEFAULT '',
+    created_ms  INTEGER NOT NULL,
+    expires_ms  INTEGER NOT NULL,
+    state       TEXT NOT NULL DEFAULT 'pending',
+    role        TEXT NOT NULL DEFAULT '',
+    decided_by  TEXT NOT NULL DEFAULT '',
+    decided_ms  INTEGER
+);
+-- W55(库 69):App、网页报上来的错误(远程运维看得见)。留 14 天。remote_ops.py。
+CREATE TABLE IF NOT EXISTS client_errors (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    at_ms       INTEGER NOT NULL,
+    account     TEXT NOT NULL,
+    client      TEXT NOT NULL,
+    kind        TEXT NOT NULL DEFAULT '',
+    page        TEXT NOT NULL DEFAULT '',
+    message     TEXT NOT NULL DEFAULT '',
+    detail      TEXT NOT NULL DEFAULT '',
+    app_version TEXT NOT NULL DEFAULT '',
+    platform    TEXT NOT NULL DEFAULT '',
+    received_ms INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS client_errors_at ON client_errors(at_ms);
+-- W55(库 69,外审 W55-1 第 6 条):自动续签签好、机器人还没确认换上的新证书。旧证书照常认;
+-- 机器人确认换上了、或者拿新证书连上来了,才把登记表换成新的。remote_ops.py、intake.py。
+CREATE TABLE IF NOT EXISTS cert_pending (
+    robot_id    TEXT PRIMARY KEY,
+    fingerprint TEXT NOT NULL,
+    -- 发起续签时登记表里的那张(外审 W55-2 I2:解绑、重新登记以后,迟到的转正不许覆盖新身份)
+    old_fingerprint TEXT NOT NULL DEFAULT '',
+    issued_at   INTEGER NOT NULL,
+    expires_at  INTEGER NOT NULL,
+    created_ms  INTEGER NOT NULL
+);
+-- W73 第一期(库 71):防区的查看点(出事去哪看)和值守位(空档站哪儿盯,带朝向)。没有这一行 = 站点
+-- 自动算(guard_plan.py);有 = 人挪过,按人的。
+CREATE TABLE IF NOT EXISTS zone_posts (
+    map_id      TEXT NOT NULL,
+    map_version TEXT NOT NULL,
+    zone        TEXT NOT NULL,
+    view_x      REAL NOT NULL,
+    view_y      REAL NOT NULL,
+    watch_x     REAL NOT NULL,
+    watch_y     REAL NOT NULL,
+    watch_yaw   REAL NOT NULL,
+    updated_by  TEXT NOT NULL DEFAULT '',
+    updated_ms  INTEGER NOT NULL,
+    PRIMARY KEY (map_id, map_version, zone)
+);
+-- W73 第二期(库 72):布防值守(guard_duty.py)。值守方案:布防时哪条防区路线给哪台机器人
+-- (robot='' = 任意一台)、每圈之间隔多久(gap_min=0:跑完马上下一圈)、要不要打乱起点和方向。
+CREATE TABLE IF NOT EXISTS guard_plan (
+    id          INTEGER PRIMARY KEY,
+    route       TEXT NOT NULL,
+    robot       TEXT NOT NULL DEFAULT '',
+    gap_min     INTEGER NOT NULL DEFAULT 0,
+    shuffle     INTEGER NOT NULL DEFAULT 0,
+    -- 11-04 用户:每圈结束回待命点(接在这一圈路线最后;默认开)
+    end_standby INTEGER NOT NULL DEFAULT 1
+);
+-- 防区多久没看就报警(分钟);没有这一行按预报算(间隔 × 1.5,最少 15 分钟)。
+CREATE TABLE IF NOT EXISTS guard_zone_limits (
+    zone        TEXT PRIMARY KEY,
+    max_gap_min INTEGER NOT NULL
+);
+-- 每条值守方案此刻的进度(站点重启接着办):哪台机器人、在跑圈 / 去值守位 / 站着盯 / 等着接着跑。
+-- plan:这一圈的点 [{name, zone}](把到点事件对到防区上);watch_zone:值守位是哪个防区的。
+CREATE TABLE IF NOT EXISTS guard_runs (
+    entry       INTEGER PRIMARY KEY,
+    robot_id    TEXT NOT NULL,
+    state       TEXT NOT NULL,
+    task_id     TEXT NOT NULL DEFAULT '',
+    sent_ms     INTEGER NOT NULL DEFAULT 0,
+    lap         INTEGER NOT NULL DEFAULT 0,
+    lap_started_ms INTEGER NOT NULL DEFAULT 0,
+    next_lap_ms INTEGER NOT NULL DEFAULT 0,
+    until_ms    INTEGER NOT NULL DEFAULT 0,
+    plan        TEXT NOT NULL DEFAULT '[]',
+    watch_zone  TEXT NOT NULL DEFAULT '',
+    fails       INTEGER NOT NULL DEFAULT 0
+);
+-- 一段布防(有方案的防区布防着的这一段):值守记录按段翻。
+CREATE TABLE IF NOT EXISTS guard_duties (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    started_ms  INTEGER NOT NULL,
+    ended_ms    INTEGER
+);
+-- 防区最后一次被看(值守的机器人走过防区里的点、或站在这个防区的值守位上)。
+CREATE TABLE IF NOT EXISTS zone_seen (
+    map_id      TEXT NOT NULL,
+    map_version TEXT NOT NULL,
+    zone        TEXT NOT NULL,
+    last_ms     INTEGER NOT NULL,
+    robot_id    TEXT NOT NULL DEFAULT '',
+    how         TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (map_id, map_version, zone)
+);
+-- 值守记录:每一段布防里的每一件事(一圈开始 / 跑完、到了哪个点、没到、被打断、接着跑、去值守位……)。
+CREATE TABLE IF NOT EXISTS guard_log (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    duty_id     INTEGER NOT NULL,
+    at_ms       INTEGER NOT NULL,
+    robot_id    TEXT NOT NULL DEFAULT '',
+    entry       INTEGER,
+    kind        TEXT NOT NULL,
+    zone        TEXT NOT NULL DEFAULT '',
+    point       TEXT NOT NULL DEFAULT '',
+    detail      TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS guard_log_duty ON guard_log(duty_id, at_ms);
+-- W73 第五期(库 73):外部设备(摄像头、报警主机、门磁)登记在图上(devices.py)。查看点、所在防区
+-- 是站点按位置算的;回调用自己的事件源 dev-<id>(incident_sources),拦截点 dev-<id>(intercepts)。
+CREATE TABLE IF NOT EXISTS ext_devices (
+    id          TEXT PRIMARY KEY,
+    kind        TEXT NOT NULL,
+    map_id      TEXT NOT NULL,
+    map_version TEXT NOT NULL,
+    x           REAL NOT NULL,
+    y           REAL NOT NULL,
+    yaw         REAL NOT NULL DEFAULT 0,
+    fov_deg     REAL NOT NULL DEFAULT 90,
+    range_m     REAL NOT NULL DEFAULT 10,
+    view_x      REAL NOT NULL,
+    view_y      REAL NOT NULL,
+    zone        TEXT NOT NULL DEFAULT '',
+    note        TEXT NOT NULL DEFAULT '',
+    updated_ms  INTEGER NOT NULL,
+    updated_by  TEXT NOT NULL DEFAULT ''
+);
+-- W63(库 70):设备身份。每个序列号第一次核过时的设备公钥(以后换了钥匙 = 仿冒,拒)。attest.py。
+CREATE TABLE IF NOT EXISTS device_ids (
+    serial      TEXT PRIMARY KEY,
+    device_pub  TEXT NOT NULL,
+    hw_id       TEXT NOT NULL,
+    model       TEXT NOT NULL DEFAULT '',
+    first_ms    INTEGER NOT NULL,
+    last_ms     INTEGER NOT NULL
+);
+-- W63:给公司的记录(没过设备身份核对的尝试等)。网页、手机不显示;公司后台(W43)做好后上传
+-- (sent_ms),在那之前 nexwar_site company-reports 导出。
+CREATE TABLE IF NOT EXISTS company_reports (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    at_ms       INTEGER NOT NULL,
+    kind        TEXT NOT NULL,
+    source      TEXT NOT NULL DEFAULT '',
+    serial      TEXT NOT NULL DEFAULT '',
+    detail      TEXT NOT NULL DEFAULT '{}',
+    sent_ms     INTEGER
+);
+"""
+
+
+#: 建表之后才加的列:(表, 列, 声明)。老库打开时补上。
+_ADDED_COLUMNS = (
+    ("guard_plan", "end_standby", "INTEGER NOT NULL DEFAULT 1"),      # 11-04 每圈回待命点
+    ("commands", "priority", "INTEGER NOT NULL DEFAULT 0"),          # W00c2b
+    ("standby_points", "map_version", "TEXT NOT NULL DEFAULT ''"),   # W00c2b 内部评审
+    ("intercepts", "map_version", "TEXT NOT NULL DEFAULT ''"),       # W00c2c
+    ("accounts", "disabled", "INTEGER NOT NULL DEFAULT 0"),          # W00c3
+    ("runs", "judge_tries", "INTEGER NOT NULL DEFAULT 0"),           # W00c5d 内部评审
+    # W00c6d 升级前检查:新版要的任务包 schema、每个任务包自己的 schema(老的都是 1)。
+    ("releases", "requires_mission_schema", "INTEGER NOT NULL DEFAULT 1"),
+    ("bundles", "schema", "INTEGER NOT NULL DEFAULT 1"),
+    # W00c6c 内审:这一轮的「没跑」说过没有。老库里的行当说过了(0),新记的行写 NULL。
+    ("schedule_runs", "told_ms", "INTEGER DEFAULT 0"),
+    # W14 外审:这一趟跑完回哪个待命点,派单时定下(空 = 默认的);老行没有,回默认的。
+    ("schedule_runs", "standby_name", "TEXT NOT NULL DEFAULT ''"),
+    # W16 外审:这条入侵的告警报成了没有。老库里的行当说过了(0,升级不把历史入侵全报一遍),新记的行写
+    # NULL。
+    ("incidents", "told_ms", "INTEGER DEFAULT 0"),
+    # W17:告警带现场(狗在哪、哪一趟、拦截点),JSON。老行没有。
+    ("alerts", "context", "TEXT NOT NULL DEFAULT '{}'"),
+    # W17:会话的用途,'' 普通、'watch' 值守令牌(只能看告警、30 天)。老行都是普通会话。
+    ("sessions", "scope", "TEXT NOT NULL DEFAULT ''"),
+    # W20:操作人实名。账号名是登录用的,显示名是给人看的(「张三」);老账号空着,显示账号名。
+    ("accounts", "display_name", "TEXT NOT NULL DEFAULT ''"),
+    # W22 复查:这一场要收尾了(原因);空 = 没在收尾。站点重启读到就只接着收尾,不再开任何东西。
+    ("deter_sessions", "ending", "TEXT NOT NULL DEFAULT ''"),
+    ("deter_sessions", "ending_back", "INTEGER NOT NULL DEFAULT 0"),
+    # W23:拦截点走不走得到。reach 非空 = 走不到(派单不派);reach_note = 查不了的那几样;reach_key =
+    # 查的时候的指纹(点、区域修订、待命点、图),变了站点重查。老行空着:下一拍对账时查。
+    ("intercepts", "reach", "TEXT NOT NULL DEFAULT ''"),
+    ("intercepts", "reach_note", "TEXT NOT NULL DEFAULT ''"),
+    ("intercepts", "reach_key", "TEXT NOT NULL DEFAULT ''"),
+    # W24 外审:这一场看到过人没有、人员告警报成了没有(站点重启后接着对账、接着报)
+    ("deter_sessions", "person_seen", "INTEGER NOT NULL DEFAULT 0"),
+    ("deter_sessions", "person_alerted", "INTEGER NOT NULL DEFAULT 0"),
+    # W25:这一场无路可退过没有(报过 P1 意图)
+    ("deter_sessions", "cornered", "INTEGER NOT NULL DEFAULT 0"),
+    # W25 外审:这一场的拦截点(保持距离的拴绳中心,补派、重启都按它)
+    ("deter_sessions", "standoff_center", "TEXT NOT NULL DEFAULT ''"),
+    # W33 外审:就地驱离开场时狗在跑的那一趟,还没确认撤掉(每拍再撤,结束了才清;重启接着撤)
+    ("deter_sessions", "withdraw", "TEXT NOT NULL DEFAULT ''"),
+    # W30:运行记录标了「留着」(要留作证据):过了留存期也不删,按时间段删时也不删
+    ("runs", "keep", "INTEGER NOT NULL DEFAULT 0"),
+    # W30b 外审 3:这一段还封着(解不开):照样登记,留存、腾盘、删除请求都管得到;列表、回放不给
+    ("recordings", "sealed", "INTEGER NOT NULL DEFAULT 0"),
+    # PR #87 复查 R4:受力警报上次发「开」的时刻(定时续:狗重启、上装全关了也补回来)
+    ("force_episodes", "siren_ms", "INTEGER NOT NULL DEFAULT 0"),
+    # A6 外审 F3:登记推送号的那次登录(令牌哈希);那次登录退出、过期了就不推
+    ("push_devices", "session", "TEXT NOT NULL DEFAULT ''"),
+    # RC 加固 H9:这个推送号是哪个通道的(极光 / FCM);这一条已经发完了的通道(逗号隔开),重试不重发
+    ("push_devices", "provider", "TEXT NOT NULL DEFAULT 'jpush'"),
+    ("push_outbox", "done", "TEXT NOT NULL DEFAULT ''"),
+    ("enroll_claims", "cert_fp", "TEXT NOT NULL DEFAULT ''"),          # A 阶段外审 I1
+    ("alerts", "shelved_by", "TEXT NOT NULL DEFAULT ''"),               # B1 搁置
+    ("alerts", "shelved_ms", "INTEGER"),
+    ("alerts", "shelved_until_ms", "INTEGER"),
+    ("alerts", "shelved_reason", "TEXT NOT NULL DEFAULT ''"),
+    ("person_sightings", "kind", "TEXT NOT NULL DEFAULT 'p1'"),        # B 阶段外审 I1
+    ("sessions", "client", "TEXT NOT NULL DEFAULT ''"),               # C-B4:App 版本号上报
+    # 决策 66:最后确认过的那一份区域(收紧跟它比)、怎么确认的(confirm / tighten / expiry)
+    ("nav_zones", "confirmed_body", "TEXT"),
+    ("nav_zones", "confirmed_how", "TEXT NOT NULL DEFAULT ''"),
+    # 外审 R1(2026-10-15 下午):狗上**在生效的**那一份(没确认的放宽不生效、上一轮生效的收紧不丢);
+    # 升上来时留空 = 按原来的算法(当前这一份 + 确认过的那一份里没被盖住的),下一次改动起存下来
+    ("nav_zones", "effective_body", "TEXT"),
+    # W44(库 61):告警结论 —— intruder 确认有人 / false_alarm 误报 / handled 处理好了;
+    # 空 = 没说(老的、自动解决的)。
+    ("alerts", "verdict", "TEXT NOT NULL DEFAULT ''"),
+    # W44 第二期(库 62):工程师临时账号到期时刻(空 = 不到期)、最后一次登录。
+    ("accounts", "expires_ms", "INTEGER"),
+    ("accounts", "last_login_ms", "INTEGER"),
+    # 时间表开着时手动切的模式管到几点(空 = 不在手动期,按时间表)。
+    ("site_mode", "manual_until_ms", "INTEGER"),
+    # 管理员给机器人起的名字(空 = 用编号)。
+    ("robots", "display_name", "TEXT NOT NULL DEFAULT ''"),
+    # 授权提前结束:这个时刻之前不算生效(这一段结束时刻;下一段照常)。
+    ("authorizations", "ended_until_ms", "INTEGER"),
+    # W44 第三期(库 63):摄像头放在哪张图的哪儿、朝哪、张角(没放 = map_id 空)。
+    ("cameras", "map_id", "TEXT NOT NULL DEFAULT ''"),
+    ("cameras", "map_version", "TEXT NOT NULL DEFAULT ''"),
+    ("cameras", "x", "REAL"),
+    ("cameras", "y", "REAL"),
+    ("cameras", "yaw", "REAL"),
+    ("cameras", "fov_deg", "REAL"),
+    # W42 外审 2-B:绑定申请批准时那一代证书(早一点的开发版建的表没有这一列)
+    ("bind_requests", "cert_fp", "TEXT NOT NULL DEFAULT ''"),
+    # W53:上手向导看过哪一版、开站清单收没收起来(JSON);老账号空着 = 没看过
+    ("accounts", "guide", "TEXT NOT NULL DEFAULT '{}'"),
+    ("cert_pending", "old_fingerprint", "TEXT NOT NULL DEFAULT ''"),  # W55 外审 3 N2
+    # W73 第一期(库 71):patrol 巡逻路线 / guard 防区路线(只给布防值守用,巡逻、排程看不见)
+    ("routes", "kind", "TEXT NOT NULL DEFAULT 'patrol'"),
+)
+
+
+
+#: 库 65 的升级队列(同 ``_DDL`` 里那张;迁移在事务里建它,不能走 ``executescript``)。
+_RELEASE_QUEUE_DDL = """CREATE TABLE release_queue (
+    id       INTEGER PRIMARY KEY AUTOINCREMENT,
+    robot_id TEXT NOT NULL UNIQUE,
+    name     TEXT NOT NULL,
+    by       TEXT NOT NULL,
+    at_ms    INTEGER NOT NULL
+)"""
+
+
+class SchemaTooNew(RuntimeError):
+    """站点库是更新的站点程序写的(商业化 A7):老程序不开它。"""
+
+class SiteDB:
+    def __init__(self, path: Path) -> None:
+        self.path = Path(path)
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._lock = threading.RLock()
+        #: 口令加密(W30,``sealbox.SealBox``):站点接上;``None`` = 口令明文(开发、老站点)。
+        self.sealbox: Any = None
+        fresh = not self.path.exists()
+        self._conn = sqlite3.connect(str(self.path), check_same_thread=False,
+                                     isolation_level=None)
+        # 库里有事件源的共享密钥与会话令牌的哈希:只许站点用户自己读。
+        if fresh or self.path.stat().st_mode & 0o077:
+            os.chmod(self.path, 0o600)
+        self._conn.row_factory = sqlite3.Row
+        with self._lock:
+            self._conn.execute("PRAGMA journal_mode=WAL")
+            self._conn.execute("PRAGMA foreign_keys=ON")
+            # 商业化 A7:库比程序新(站点回滚到老版本、拿新库给老程序用),不开 —— 开了会把版本号
+            # 改回去,新版加的表和列老程序不认,下次再升就对不上了。
+            has_meta = self._conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='meta'").fetchone()
+            row = self._conn.execute("SELECT value FROM meta WHERE key='schema'").fetchone() \
+                if has_meta else None
+            if row is not None and str(row[0]).isdigit() and int(row[0]) > SCHEMA_VERSION:
+                self._conn.close()
+                raise SchemaTooNew(f"站点库是第 {row[0]} 版结构,这个站点程序只认到第 "
+                                   f"{SCHEMA_VERSION} 版:库是新版程序写的。装回新版程序,或者"
+                                   "用老版本时候的备份恢复(docs/版本兼容与升级顺序.md)")
+            had_homes = self._conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='homes'").fetchone()
+            self._conn.executescript(_DDL)
+            # 老库补列(CREATE TABLE IF NOT EXISTS 不会给已有的表加列)。
+            for table, col, decl in _ADDED_COLUMNS:
+                cols = {r[1] for r in self._conn.execute(f"PRAGMA table_info({table})")}
+                if (table, col) == ("person_sightings", "kind"):
+                    stored = int(row[0]) if row is not None and str(row[0]).isdigit() else None
+                    self._migrate_sighting_kind(decl, add_column=col not in cols, stored=stored)
+                elif col not in cols:
+                    self._conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
+                    if (table, col) == ("cert_pending", "old_fingerprint"):
+                        # 外审 W55-4 N2:老库里已挂起的那几张,是在登记表还是现在这张时签的 ——
+                        # 补上它,机器人拿新证书连上来照样能转正
+                        self._conn.execute(
+                            "UPDATE cert_pending SET old_fingerprint=(SELECT r.fingerprint FROM "
+                            "robots r WHERE r.robot_id=cert_pending.robot_id AND r.revoked=0) "
+                            "WHERE old_fingerprint='' AND EXISTS (SELECT 1 FROM robots r WHERE "
+                            "r.robot_id=cert_pending.robot_id AND r.revoked=0)")
+            if not had_homes:
+                # W13a 迁移:以前没有原点表,下发地图时拿「这张图上的待命点(默认的优先、再按名字)
+                # 」当原点。
+                # 照同样的挑法把每台狗每张图每个版本的那一个抄成原点;
+                # 待命点原样留着(默认待命点还是它)。
+                self._conn.execute(
+                    "INSERT OR IGNORE INTO homes(robot_id, map_id, map_version, name, x, y, yaw) "
+                    "SELECT robot_id, map_id, map_version, name, x, y, yaw FROM standby_points "
+                    "WHERE map_version != '' ORDER BY is_default DESC, name")
+            if row is not None and str(row[0]).isdigit() and int(row[0]) < 56:
+                # 升到 56 之前发了一半的推送:那时候只记「哪个通道发完了」(done),没有逐台的账。
+                # 56 起只认逐台的账:把发完了的通道名下现在的推送号补记成发过,不然升级后重发一遍。
+                self._conn.execute(
+                    "INSERT OR IGNORE INTO push_sent(outbox_id, reg_id, sent_ms) "
+                    "SELECT o.id, d.reg_id, o.created_ms FROM push_outbox o JOIN push_devices d "
+                    "ON (',' || o.done || ',') LIKE ('%,' || d.provider || ',%') "
+                    "WHERE o.sent_ms IS NULL AND o.dropped = '' AND o.done != ''")
+            if row is not None and str(row[0]).isdigit() and int(row[0]) < 57:
+                # 决策 66:收紧免确认要跟「最后确认过的那一份」比。升上来时当前这一版确认过的,那一份
+                # 就是它;确认的是旧修订(改过没再确认)的,那一份不知道 —— 留空,之后的改动一律要人
+                # 确认(往保守那边)。
+                self._conn.execute(
+                    "UPDATE nav_zones SET confirmed_body=body, confirmed_how='confirm' "
+                    "WHERE confirmed_rev = revision AND confirmed_body IS NULL")
+            if row is not None and str(row[0]).isdigit() and int(row[0]) < 58:
+                self._migrate_routes()
+            self._migrate_release_queue()
+            self._conn.execute("INSERT OR REPLACE INTO meta VALUES ('schema', ?)",
+                               (str(SCHEMA_VERSION),))
+
+    def _migrate_release_queue(self) -> None:
+        """库 64 → 65(外审 R7):升级队列加不复用的编号,换一张表、排着的原样搬过去。
+
+        W44 复查 R3:改名、建表、搬、删旧表放在**一个事务**里(不用 ``executescript``:它先自己提交),
+        中途进程没了整个回滚,下次打开重来。复查之前的版本可能留下半截(新表建好、记成 65、旧行还在
+        ``release_queue_64``):打开时补搬过去(同一台已经有新的排队就留新的)再删旧表。"""
+        c = self._conn
+        rq = {r[1] for r in c.execute("PRAGMA table_info(release_queue)")}
+        old = c.execute("SELECT 1 FROM sqlite_master WHERE type='table' "
+                        "AND name='release_queue_64'").fetchone() is not None
+        if "id" in rq and not old:
+            return
+        c.execute("BEGIN IMMEDIATE")
+        try:
+            if "id" not in rq:
+                c.execute("ALTER TABLE release_queue RENAME TO release_queue_64")
+                c.execute(_RELEASE_QUEUE_DDL)
+            c.execute("INSERT OR IGNORE INTO release_queue(robot_id, name, by, at_ms) "
+                      "SELECT robot_id, name, by, at_ms FROM release_queue_64 ORDER BY at_ms")
+            c.execute("DROP TABLE release_queue_64")
+            c.execute("COMMIT")
+        except BaseException:
+            c.execute("ROLLBACK")
+            raise
+
+    def _migrate_routes(self) -> None:
+        """58:路线库成为唯一真理源。升上来时把**当前任务包**(``bundles.active = 1``)的任务、
+        排程原样抄成
+        路线库的行 —— 派遣、排程照旧(不改行为):每条排程从**那次导入**起算数(跟原来「导入之前到点的
+        不算」一样),时区照抄。别的(不是当前的)包只留在导入记录里,原来就不用。没有当前包 = 空库。
+        没绑地图版本的老任务(R1 之前导入的)照抄:读得出来、不派,路线页上标出来要人核。"""
+        import json
+        b = self._conn.execute("SELECT * FROM bundles WHERE active=1").fetchone()
+        if b is None:
+            return
+        src = f"bundle {b['bundle_id']} v{b['version']}"
+        at, by = int(b["imported_at"]), str(b["imported_by"])
+        for r in self._conn.execute("SELECT mission_id, definition FROM missions "
+                                    "WHERE bundle_id=? AND version=?",
+                                    (b["bundle_id"], b["version"])).fetchall():
+            d = json.loads(r["definition"])
+            self._conn.execute(
+                "INSERT OR IGNORE INTO routes(route_id, map_id, map_version, definition, revision, "
+                "updated_ms, updated_by, source) VALUES (?,?,?,?,1,?,?,?)",
+                (r["mission_id"], str(d.get("map_id", "")), str(d.get("map_version", "")),
+                 r["definition"], at, by, src))
+        sched = json.loads(b["schedule"])
+        entries = sched.get("entries") or []
+        for e in entries:
+            self._conn.execute(
+                "INSERT OR IGNORE INTO route_schedules(entry_id, definition, revision, "
+                "active_from_ms, updated_ms, updated_by, source) VALUES (?,?,1,?,?,?,?)",
+                (str(e["id"]), json.dumps(e, ensure_ascii=False), at, at, by, src))
+        # 包里没有 schedule.yaml 时导入记的是占位的 UTC、没有排程:那不是人定的时区,不抄
+        tz = sched.get("timezone") if entries or sched.get("timezone") != "UTC" else None
+        imp = json.dumps({"bundle_id": b["bundle_id"], "version": b["version"], "at_ms": at,
+                          "by": by}, ensure_ascii=False)
+        self._conn.execute(
+            "INSERT OR REPLACE INTO route_store(id, revision, timezone, updated_ms, updated_by, "
+            "last_import) VALUES (1, 1, ?, ?, ?, ?)", (tz, at, by, imp))
+
+    def _migrate_sighting_kind(self, decl: str, *, add_column: bool, stored: int | None) -> None:
+        """在场记录的 ``kind`` 一次性修复(B 阶段外审复查 R1)。``stored``:库里记的结构版本
+        (新库是 ``None``)。
+
+        老版本(≤51)里「报过 P1」和「只记了授权 P3」写的是同样的两列;PR #105(52 版)补列时一律
+        缺省成 ``'p1'`` —— 已经升到 52 版的库里,只记过授权 P3 的那一回也被标成了报过 P1,授权没了、
+        人还在,永远不补报。所以**库是 53 版以前的,不管列在不在**,都把标成 ``'p1'`` 的按证据核一遍:
+
+        - 这一回有 ``dog_sees_person``(告警表里这只狗的、最后一次触发不早于这一回开始;或者还在
+          待报表里)→ 留着 ``'p1'``;
+        - **没有证据的 → ``'authorized'``**,下一拍按当前的授权重核(授权还在不动,不在了补报一次
+          P1)。判错的代价是多报一条(会被聚合吸收),不是漏报。
+
+        补列、分类、把版本写成 53 在同一个事务里:只跑一次(以后启动看到 ≥53 就不再重判),中途断了
+        不留半截。后面那些迁移都是幂等的,版本提前写上不碍事。"""
+        if not add_column and (stored is None or stored >= 53):
+            return
+        self._conn.execute("BEGIN IMMEDIATE")
+        try:
+            if add_column:
+                self._conn.execute(f"ALTER TABLE person_sightings ADD COLUMN kind {decl}")
+            self._conn.execute(
+                "UPDATE person_sightings SET kind='authorized' WHERE kind='p1' AND NOT EXISTS ("
+                "SELECT 1 FROM alerts a WHERE a.kind='dog_sees_person' "
+                "AND a.robot=person_sightings.robot_id AND a.last_ms>=person_sightings.started_ms) "
+                "AND NOT EXISTS (SELECT 1 FROM pending_alerts p WHERE p.kind='dog_sees_person' "
+                "AND p.robot=person_sightings.robot_id "
+                "AND p.created_ms>=person_sightings.started_ms)")
+            self._conn.execute("INSERT OR REPLACE INTO meta VALUES ('schema', '53')")
+            self._conn.execute("COMMIT")
+        except BaseException:
+            self._conn.execute("ROLLBACK")
+            raise
+
+    @contextmanager
+    def tx(self) -> Iterator[sqlite3.Connection]:
+        """一次事务:锁住、BEGIN、出错回滚。"""
+        with self._lock:
+            self._conn.execute("BEGIN IMMEDIATE")
+            try:
+                yield self._conn
+            except BaseException:
+                self._conn.execute("ROLLBACK")
+                raise
+            self._conn.execute("COMMIT")
+
+    @contextmanager
+    def snapshot(self) -> Iterator[sqlite3.Connection]:
+        """连着读几次、看到同一个样子:拿着库锁读(写都走这把锁,读的中间插不进别的提交)。只读,别在里面写。"""
+        with self._lock:
+            yield self._conn
+
+    def query(self, sql: str, args: tuple = ()) -> list[sqlite3.Row]:
+        with self._lock:
+            return list(self._conn.execute(sql, args))
+
+    def backup_to(self, path: Path) -> None:
+        """整库在线备份到 ``path``(sqlite 的 backup 接口,拿着库锁做:备份出来的是一个一致的快照)。"""
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        dst = sqlite3.connect(str(path))
+        try:
+            with self._lock:
+                self._conn.backup(dst)
+        finally:
+            dst.close()
+
+    def close(self) -> None:
+        with self._lock:
+            self._conn.close()

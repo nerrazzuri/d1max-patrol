@@ -5,11 +5,11 @@ from __future__ import annotations
 
 import pytest
 
-from d1max_adapter_sim.robot import SimRobot
-from d1max_agent.events import EventBook
-from d1max_agent.tasks.teleop import TeleopTask
-from d1max_contract.messages import TaskState
-from d1max_contract.teleop import TeleopFrame
+from nexwar_adapter_sim.robot import SimRobot
+from nexwar_agent.events import EventBook
+from nexwar_agent.tasks.teleop import TeleopTask
+from nexwar_contract.messages import TaskState
+from nexwar_contract.teleop import TeleopFrame
 
 
 class 钟:

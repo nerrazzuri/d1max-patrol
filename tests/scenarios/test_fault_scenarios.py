@@ -4,7 +4,7 @@ import asyncio
 
 import pytest
 
-from d1max_patrol.backends.base import (
+from nexwar_patrol.backends.base import (
     AlgErrorEvent,
     BackendDisconnected,
     BackendReconnected,
@@ -14,7 +14,7 @@ from d1max_patrol.backends.base import (
     NavStatusEvent,
     NavTimeoutError,
 )
-from d1max_patrol.protocol.nav_types import (
+from nexwar_patrol.protocol.nav_types import (
     ALG_LIDAR_DISCONNECTED,
     ALG_NAV_BLOCKED,
     LocStatus,

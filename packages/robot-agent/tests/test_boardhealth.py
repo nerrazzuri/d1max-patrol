@@ -7,7 +7,7 @@ import json
 
 import pytest
 
-from d1max_agent.boardhealth import (
+from nexwar_agent.boardhealth import (
     BoardConfig,
     BoardMonitor,
     Limits,
@@ -224,7 +224,7 @@ def _假频率(tmp_path, *, cool=0):
 
 
 def test_C2_读频率_CPU各簇_GPU_NPU_内存_单位MHz(tmp_path):
-    from d1max_agent.boardhealth import read_cooling, read_freqs
+    from nexwar_agent.boardhealth import read_cooling, read_freqs
     cpu, dev, th = _假频率(tmp_path, cool=2)
     assert read_freqs(cpu, dev) == {"cpu0": 1800, "cpu4": 2256, "cpu6": 2304, "gpu": 1000,
                                     "npu": 800, "dmc": 2112}
@@ -234,7 +234,7 @@ def test_C2_读频率_CPU各簇_GPU_NPU_内存_单位MHz(tmp_path):
 
 
 def test_C2_日志每行带频率和降频_降频了健康里写出来(tmp_path):
-    from d1max_agent.boardhealth import read_cooling, read_freqs
+    from nexwar_agent.boardhealth import read_cooling, read_freqs
     cpu, dev, th = _假频率(tmp_path, cool=0)
     m, t, temps, events, counters = _mon(tmp_path)
     m._read_freqs = lambda: read_freqs(cpu, dev)

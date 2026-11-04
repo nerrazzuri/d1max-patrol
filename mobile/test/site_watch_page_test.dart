@@ -1,12 +1,12 @@
 // 站点模式的值守屏（W00c5a）：告警与汇总从站点来（夹具是 Python 从真站点 API 取的）。
 import 'dart:async';
 
-import 'package:d1max_patrol/model/alert.dart';
-import 'package:d1max_patrol/model/site_watch.dart';
-import 'package:d1max_patrol/net/site_client.dart' show SiteError;
-import 'package:d1max_patrol/ui/site_duty_page.dart';
-import 'package:d1max_patrol/ui/site_page.dart';
-import 'package:d1max_patrol/ui/site_watch_page.dart';
+import 'package:nexwar_patrol/model/alert.dart';
+import 'package:nexwar_patrol/model/site_watch.dart';
+import 'package:nexwar_patrol/net/site_client.dart' show SiteError;
+import 'package:nexwar_patrol/ui/site_duty_page.dart';
+import 'package:nexwar_patrol/ui/site_page.dart';
+import 'package:nexwar_patrol/ui/site_watch_page.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 

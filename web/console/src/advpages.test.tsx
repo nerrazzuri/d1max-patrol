@@ -23,7 +23,7 @@ beforeEach(() => {
       const h = (init.headers ?? {}) as Record<string, string>;
       if (url === "/api/releases/upload") {
         uploads.push({ url, headers: h });
-        return Promise.resolve(h["X-D1Max-Confirm"] === "my-own-password" ? json({ release: { name: "v1.5.0" } }) : json({ error: "密码不对" }, 403));
+        return Promise.resolve(h["X-Nexwar-Confirm"] === "my-own-password" ? json({ release: { name: "v1.5.0" } }) : json({ error: "密码不对" }, 403));
       }
       posted.push({ url, body: JSON.parse(String(init.body ?? "{}")) });
       return Promise.resolve(json({}));
@@ -79,7 +79,7 @@ describe("软件升级", () => {
     fireEvent.input(document.querySelector('form.confirm-pw input[type="password"]')!, { target: { value: "my-own-password" } });
     fireEvent.submit(document.querySelector("form.confirm-pw")!);
     await waitFor(() => expect(uploads.length).toBe(1));
-    expect(uploads[0].headers["X-D1Max-Confirm"]).toBe("my-own-password");
+    expect(uploads[0].headers["X-Nexwar-Confirm"]).toBe("my-own-password");
   });
   it("充电且空闲时切换", async () => {
     const { container: c } = render(<UpgradePage say={() => {}} />);

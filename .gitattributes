@@ -15,7 +15,7 @@ Makefile text eol=lf
 # Windows 机器重新 clone 出来就会是 CRLF，那时候才发现就晚了。
 *.service text eol=lf
 # 代理的启动脚本没有 .sh 后缀(单元直接 exec 它):同样是 `#!/bin/sh` 的脚本,一个 \r 就起不来。
-deploy/d1max-agent-start text eol=lf
+deploy/nexwar_agent_start text eol=lf
 
 # SDK 的二进制件和硬件文档不许被当成文本改行尾
 *.so     binary

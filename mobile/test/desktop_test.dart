@@ -1,12 +1,12 @@
 // 桌面版（W15）：跟手机同一套代码，窗口大得多、用鼠标键盘。常见的两种窗口大小（1280×720、1920×1080）
 // 里主要几页都不溢出；值守屏宽了分两栏（告警一栏、每台狗一栏）。
-import 'package:d1max_patrol/main.dart' show PatrolApp;
-import 'package:d1max_patrol/store/site_store.dart';
-import 'package:d1max_patrol/ui/site_maps.dart';
-import 'package:d1max_patrol/ui/site_page.dart';
-import 'package:d1max_patrol/ui/site_standby.dart';
-import 'package:d1max_patrol/ui/site_teleop.dart';
-import 'package:d1max_patrol/ui/site_watch_page.dart';
+import 'package:nexwar_patrol/main.dart' show PatrolApp;
+import 'package:nexwar_patrol/store/site_store.dart';
+import 'package:nexwar_patrol/ui/site_maps.dart';
+import 'package:nexwar_patrol/ui/site_page.dart';
+import 'package:nexwar_patrol/ui/site_standby.dart';
+import 'package:nexwar_patrol/ui/site_teleop.dart';
+import 'package:nexwar_patrol/ui/site_watch_page.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';

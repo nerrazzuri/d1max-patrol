@@ -37,30 +37,30 @@ from tests.test_deploy_files import DEPLOY
 # uninstall.sh 里写死的那几个常量。测试自己不假设它们的值,
 # 下面 test_卸载脚本的根目录常量是写死的 会回去核对一遍,核对过了才拿来做展开。
 卸载常量 = {
-    "ROOT": "/opt/d1max",
-    "ETC_DIR": "/etc/d1max",
+    "ROOT": "/opt/nexwar",
+    "ETC_DIR": "/etc/nexwar",
     "UNIT_DIR": "/etc/systemd/system",
-    "MAIN_UNIT": "d1max-agent.service",
-    "OLD_UNIT": "d1max-bootguard.service",
-    "LEGACY_UNIT": "d1max-patrol.service",
-    "WANTS_LINK": "/etc/systemd/system/multi-user.target.wants/d1max-agent.service",
-    "LEGACY_WANTS_LINK": "/etc/systemd/system/multi-user.target.wants/d1max-patrol.service",
-    "LOC_UNIT": "d1max-localizer.service",
-    "LOC_WANTS_LINK": "/etc/systemd/system/multi-user.target.wants/d1max-localizer.service",
-    "OBS_UNIT": "d1max-obstacles.service",
-    "OBS_WANTS_LINK": "/etc/systemd/system/multi-user.target.wants/d1max-obstacles.service",
-    "PERS_UNIT": "d1max-persons.service",
-    "PERS_WANTS_LINK": "/etc/systemd/system/multi-user.target.wants/d1max-persons.service",
-    "NAV2_UNIT": "d1max-nav2.service",
-    "NAV2_WANTS_LINK": "/etc/systemd/system/multi-user.target.wants/d1max-nav2.service",
-    "MERGE_UNIT": "d1max-lidar-merge.service",
-    "MERGE_WANTS_LINK": "/etc/systemd/system/multi-user.target.wants/d1max-lidar-merge.service",
-    "SIDE_UNIT": "d1max-sidecar.service",
-    "SIDE_WANTS_LINK": "/etc/systemd/system/multi-user.target.wants/d1max-sidecar.service",
-    "ZENOH_UNIT": "d1max-zenohd.service",
-    "ZENOH_WANTS_LINK": "/etc/systemd/system/multi-user.target.wants/d1max-zenohd.service",
-    "BIND_UNIT": "d1max-bind.service",
-    "BIND_WANTS_LINK": "/etc/systemd/system/multi-user.target.wants/d1max-bind.service",
+    "MAIN_UNIT": "nexwar_agent.service",
+    "OLD_UNIT": "nexwar_bootguard.service",
+    "LEGACY_UNIT": "nexwar_patrol.service",
+    "WANTS_LINK": "/etc/systemd/system/multi-user.target.wants/nexwar_agent.service",
+    "LEGACY_WANTS_LINK": "/etc/systemd/system/multi-user.target.wants/nexwar_patrol.service",
+    "LOC_UNIT": "nexwar_localizer.service",
+    "LOC_WANTS_LINK": "/etc/systemd/system/multi-user.target.wants/nexwar_localizer.service",
+    "OBS_UNIT": "nexwar_obstacles.service",
+    "OBS_WANTS_LINK": "/etc/systemd/system/multi-user.target.wants/nexwar_obstacles.service",
+    "PERS_UNIT": "nexwar_persons.service",
+    "PERS_WANTS_LINK": "/etc/systemd/system/multi-user.target.wants/nexwar_persons.service",
+    "NAV2_UNIT": "nexwar_nav2.service",
+    "NAV2_WANTS_LINK": "/etc/systemd/system/multi-user.target.wants/nexwar_nav2.service",
+    "MERGE_UNIT": "nexwar_lidar_merge.service",
+    "MERGE_WANTS_LINK": "/etc/systemd/system/multi-user.target.wants/nexwar_lidar_merge.service",
+    "SIDE_UNIT": "nexwar_sidecar.service",
+    "SIDE_WANTS_LINK": "/etc/systemd/system/multi-user.target.wants/nexwar_sidecar.service",
+    "ZENOH_UNIT": "nexwar_zenohd.service",
+    "ZENOH_WANTS_LINK": "/etc/systemd/system/multi-user.target.wants/nexwar_zenohd.service",
+    "BIND_UNIT": "nexwar_bind.service",
+    "BIND_WANTS_LINK": "/etc/systemd/system/multi-user.target.wants/nexwar_bind.service",
 }
 
 
@@ -158,7 +158,7 @@ def test_每一处声明在卸载脚本的代码里真的出现过():
     assert not 缺, f"这几条只在声明块里,代码里根本没删:{缺}"
     # **光出现过不够,要真交给 rm_sys。** 常量的赋值行(``WANTS_LINK=/etc/...``)也是一行代码,
     # 只查「出现过」的话,删掉那条 rm_sys 这里照样绿(W00c5e 突变)。每一条要么自己被 rm_sys,
-    # 要么它的某一级上级目录被 rm_sys(默认模式最后整个删 /opt/d1max、/etc/d1max)。
+    # 要么它的某一级上级目录被 rm_sys(默认模式最后整个删 /opt/nexwar、/etc/nexwar)。
     删的 = set()
     for 行 in 正文.splitlines():
         m = re.match(r'\s*rm_sys\s+"([^"]+)"', 行)
@@ -207,8 +207,8 @@ def test_装机脚本里的写盘动作都记在声明块上():
             if not 被覆盖(路径):
                 野的.add(路径)
         for 段 in re.findall(r"\$ROOT/([A-Za-z0-9_.-]+)", 行):
-            if not 被覆盖("/opt/d1max/" + 段):
-                野的.add("/opt/d1max/" + 段)
+            if not 被覆盖("/opt/nexwar/" + 段):
+                野的.add("/opt/nexwar/" + 段)
     assert not 野的, (
         f"install.sh 碰了这几处而声明块上没有:{sorted(野的)} —— "
         "去 deploy/install.sh 顶上的对账声明块补 @写盘,再去 uninstall.sh 补 @删除")
@@ -322,7 +322,7 @@ def test_默认是全清而不是保守清():
     assert "--agent-root" in 文本
     assert "--purge-agent-binary" in 文本
     assert not re.search(r"--purge(?![-a-z])", 文本), "--purge 已经作废,不该再出现"
-    assert "D1MAX_PURGE_CONFIRM" not in 文本, "项目主人要的是一键,不要二次确认"
+    assert "NEXWAR_PURGE_CONFIRM" not in 文本, "项目主人要的是一键,不要二次确认"
 
 
 def test_二进制默认不删():
@@ -378,45 +378,45 @@ def test_删之前有空值检查和范围检查():
 def test_范围只盖我们自己的东西():
     """``rm_sys`` 的白名单里不许出现能匹配到别人东西的形状。
 
-    W01 之后巡检数据根挪到了 ``/var/lib/d1max``(版本槽外面,理由见
-    ``deploy/d1max-patrol.service`` 里 ``D1MAX_DATA_ROOT`` 那段注释),
+    W01 之后巡检数据根挪到了 ``/var/lib/nexwar``(版本槽外面,理由见
+    ``deploy/nexwar_patrol.service`` 里 ``NEXWAR_DATA_ROOT`` 那段注释),
     所以白名单多了这一条 —— 仍然是我们自己专用、不跟别家共用的路径。
     """
     体 = 取函数体(读(卸载脚本), "rm_sys")
     形状 = re.findall(r"(?m)^\s*(/[^)\s|]+(?:\|/[^)\s|]+)*)\)\s*;;", 体)
     assert 形状, "rm_sys 里读不出白名单"
-    # W01b 的两处在 /opt、/etc/d1max 之外,但都是**精确路径、不带通配**,
-    # 而且名字里带 d1max —— 匹配不到别人的东西。
-    # W09d 的对时配置同样:精确路径、名字带 d1max。
-    # 决策 61 的 chrony 对时片段也是:精确路径、名字带 d1max(厂家的 chrony.conf 不在里面)。
-    精确的 = {"/usr/local/sbin/d1max-privileged", "/usr/local/sbin/d1max-restart-now",
-           "/etc/sudoers.d/d1max", "/etc/systemd/timesyncd.conf.d/d1max.conf",
-           "/etc/chrony/conf.d/d1max.conf",
-           # W55:特权执行器的目录、日志留盘设置 —— 同样精确、名字带 d1max
-           "/usr/local/lib/d1max", "/etc/systemd/journald.conf.d/d1max.conf"}
+    # W01b 的两处在 /opt、/etc/nexwar 之外,但都是**精确路径、不带通配**,
+    # 而且名字里带 nexwar —— 匹配不到别人的东西。
+    # W09d 的对时配置同样:精确路径、名字带 nexwar。
+    # 决策 61 的 chrony 对时片段也是:精确路径、名字带 nexwar(厂家的 chrony.conf 不在里面)。
+    精确的 = {"/usr/local/sbin/nexwar_privileged", "/usr/local/sbin/nexwar_restart_now",
+           "/etc/sudoers.d/nexwar", "/etc/systemd/timesyncd.conf.d/nexwar.conf",
+           "/etc/chrony/conf.d/nexwar.conf",
+           # W55:特权执行器的目录、日志留盘设置 —— 同样精确、名字带 nexwar
+           "/usr/local/lib/nexwar", "/etc/systemd/journald.conf.d/nexwar.conf"}
     for 一组 in 形状:
         for 一条 in 一组.split("|"):
             if 一条 in 精确的:
-                assert "*" not in 一条 and "d1max" in 一条
+                assert "*" not in 一条 and "nexwar" in 一条
                 continue
-            if 一条 == "/usr/local/lib/d1max/*":         # W55:只是上面那个目录底下
+            if 一条 == "/usr/local/lib/nexwar/*":         # W55:只是上面那个目录底下
                 continue
-            assert 一条.startswith("/opt/d1max") or 一条.startswith("/etc/d1max") \
-                or 一条.startswith("/var/lib/d1max") \
+            assert 一条.startswith("/opt/nexwar") or 一条.startswith("/etc/nexwar") \
+                or 一条.startswith("/var/lib/nexwar") \
                 or 一条.startswith("/etc/systemd/system/"), f"白名单里有越界的形状:{一条}"
             if 一条.startswith("/etc/systemd/system/"):
-                assert "d1max-" in 一条, f"systemd 那一条没有限定 d1max-:{一条}"
+                assert "nexwar_" in 一条, f"systemd 那一条没有限定 nexwar_:{一条}"
 
 
 def test_碰都不许碰别人的目录():
-    """ROS、别家的栈、不叫 d1max-* 的单元 —— 一个字节都不动。"""
+    """ROS、别家的栈、不叫 nexwar_* 的单元 —— 一个字节都不动。"""
     文本 = 读(卸载脚本)
     for 禁 in ("/opt/release", "/opt/ros", "/opt/ROS"):
         assert 禁 not in 文本, f"uninstall.sh 里出现了 {禁}"
     单元们 = set(re.findall(r"[A-Za-z0-9_.*-]+\.service", 文本))
     assert 单元们, "读不出任何 systemd 单元名"
     for 单元 in 单元们:
-        assert 单元.startswith("d1max-"), f"这个单元不叫 d1max-*,不该被这个脚本碰:{单元}"
+        assert 单元.startswith("nexwar_"), f"这个单元不叫 nexwar_*,不该被这个脚本碰:{单元}"
 
 
 # ---------------------------------------------------------- footprint 只读
@@ -473,7 +473,7 @@ def test_足迹脚本的输出落在runs底下():
 def test_bash的标识符只能用ASCII(脚本: Path):
     """**bash 的标识符只认 ASCII 字母和下划线。**
 
-    ``根=/opt/d1max`` 这种写法不是赋值,而是一条"找不到的命令" ——
+    ``根=/opt/nexwar`` 这种写法不是赋值,而是一条"找不到的命令" ——
     配上 ``set -euo pipefail``,脚本会停在那一行,``bash -n`` 还查不出来
     (语法是合法的,只是语义完全不是作者想的那样)。
     注释和屏幕上打的中文不受影响,受影响的只有变量名和函数名。
@@ -543,7 +543,7 @@ def test_语法过得去(脚本: Path):
 def test_卸载脚本真的能跑一遍dry_run(tmp_path: Path):
     """**只跑 dry-run。**
 
-    真跑一遍会去动 ``/opt/d1max`` 和 ``/etc/d1max`` —— 在开发机或者 CI 上
+    真跑一遍会去动 ``/opt/nexwar`` 和 ``/etc/nexwar`` —— 在开发机或者 CI 上
     那可能是别人正在用的东西。想验证真删,去一台一次性的机器上手工跑。
     """
     bash = 有bash()
@@ -551,7 +551,7 @@ def test_卸载脚本真的能跑一遍dry_run(tmp_path: Path):
         pytest.skip("这台机器上没有 bash")
     (tmp_path / "runs" / "field-logs").mkdir(parents=True)
     (tmp_path / "motion").mkdir()
-    留着的 = tmp_path / "runs" / "d1max-agent.pid"
+    留着的 = tmp_path / "runs" / "nexwar_agent.pid"
     留着的.write_text("999999\n", encoding="utf-8")
     二进制 = tmp_path / "motion" / "patrol_agent"
     二进制.write_text("", encoding="utf-8")
@@ -595,7 +595,7 @@ def test_不认识的参数要挡住(tmp_path: Path):
 def test_足迹脚本能采能比(tmp_path: Path):
     """装机前采一次、装机后比一次 —— 把这条路真的走一遍。
 
-    被查的目录用 ``D1MAX_FOOTPRINT_DIRS`` 指到临时目录上,
+    被查的目录用 ``NEXWAR_FOOTPRINT_DIRS`` 指到临时目录上,
     免得在开发机上去翻 ``/etc`` 和 ``/opt``。
     """
     bash = 有bash()
@@ -606,7 +606,7 @@ def test_足迹脚本能采能比(tmp_path: Path):
     (场地 / "vendor-a.conf").write_text("vendor\n", encoding="utf-8")
     # 目录名用 ASCII —— 中文经环境变量过一遍 Windows 上的 bash 会变样,
     # 那就变成在验 Windows 的编码, 不是在验这个脚本
-    环境 = {**os.environ, "D1MAX_FOOTPRINT_DIRS": "site:2"}
+    环境 = {**os.environ, "NEXWAR_FOOTPRINT_DIRS": "site:2"}
 
     采 = subprocess.run(
         [bash, 足迹脚本.as_posix(), "snapshot", "before.txt"],

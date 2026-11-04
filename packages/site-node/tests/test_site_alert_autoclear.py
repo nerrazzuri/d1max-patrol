@@ -10,10 +10,10 @@ from __future__ import annotations
 
 import pytest
 
-from d1max_contract.messages import Event, Ready, Status, TaskState, TaskSummary
-from d1max_site.alert_sources import OFFLINE_ALERT_S, WAYPOINT_MISS_RUNS, SiteAlertSources
-from d1max_site.alert_store import AlertDesk
-from d1max_site.db import SiteDB
+from nexwar_contract.messages import Event, Ready, Status, TaskState, TaskSummary
+from nexwar_site.alert_sources import OFFLINE_ALERT_S, WAYPOINT_MISS_RUNS, SiteAlertSources
+from nexwar_site.alert_store import AlertDesk
+from nexwar_site.db import SiteDB
 
 
 class 钟:

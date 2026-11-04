@@ -7,8 +7,8 @@ from __future__ import annotations
 import pytest
 from test_site_dispatcher import MAP, target, 台子
 
-from d1max_adapter_sim.robot import SimRobot
-from d1max_site.charging import ChargeDesk, ChargeError
+from nexwar_adapter_sim.robot import SimRobot
+from nexwar_site.charging import ChargeDesk, ChargeError
 
 CHARGER = (2.0, 0.0, 0.0)
 
@@ -113,7 +113,7 @@ async def test_充电中来了入侵_电量够就出桩去_回来接着充_不�
 
 async def test_对不上桩_报P1_歇10分钟再试(站, monkeypatch):
     t = 站
-    import d1max_agent.tasks.dock as dock_mod  # noqa: F401 - 狗上的超时用请求里的
+    import nexwar_agent.tasks.dock as dock_mod  # noqa: F401 - 狗上的超时用请求里的
     t.charge.resume_pct = 90
 
     async def 对不上():
@@ -154,7 +154,7 @@ async def test_站点重启_接着办(站):
 
 
 def test_登记桩不成形就拒(tmp_path):
-    from d1max_site.db import SiteDB
+    from nexwar_site.db import SiteDB
     db = SiteDB(tmp_path / "s.db")
     desk = ChargeDesk(db, None, now_ms=lambda: 1)
     with pytest.raises(ChargeError):
@@ -166,7 +166,7 @@ def test_登记桩不成形就拒(tmp_path):
 
 
 async def test_入侵派遣挑狗_在充电电量不够就不挑_够了照挑(站):
-    from d1max_site.incidents import IncidentDesk
+    from nexwar_site.incidents import IncidentDesk
     t = 站
     await _跑(t, 30)
     assert t.dog.docked
@@ -232,7 +232,7 @@ async def test_派了的回充丢了_狗上没在跑也没终态_过一阵当被
 
 
 def test_回充那几趟结束_待命点管理器不派回程(tmp_path):
-    from d1max_site.db import SiteDB
+    from nexwar_site.db import SiteDB
     db = SiteDB(tmp_path / "s.db")
     desk = ChargeDesk(db, None, now_ms=lambda: 1)
     assert desk.holds("A", "charge-dock-1") and desk.holds("A", "charge-goto-1")
@@ -382,7 +382,7 @@ async def test_W73_回充起线默认按回撤线_25(站):
 
 
 async def test_W73_报警出动_按去了看五分钟再回来的电判_不够不派_说清楚(站):
-    from d1max_site.incidents import IncidentDesk
+    from nexwar_site.incidents import IncidentDesk
     t = 站
     t.charge.remove_charger("A")
     desk = IncidentDesk(t.db, t.site, now_ms=t.clock)

@@ -6,11 +6,11 @@ from __future__ import annotations
 import pytest
 from test_site_alerts import _status
 
-from d1max_contract.messages import Event, MapPose, Telemetry
-from d1max_contract.zones import ZoneSet
-from d1max_site.alert_sources import NOGO_CLEAR_S, SiteAlertSources
-from d1max_site.alert_store import AlertDesk
-from d1max_site.db import SiteDB
+from nexwar_contract.messages import Event, MapPose, Telemetry
+from nexwar_contract.zones import ZoneSet
+from nexwar_site.alert_sources import NOGO_CLEAR_S, SiteAlertSources
+from nexwar_site.alert_store import AlertDesk
+from nexwar_site.db import SiteDB
 
 
 def _台(tmp_path):
@@ -72,8 +72,8 @@ def test_外审R8_站点重启后_库里挂着的禁行区P1照样自动解决(t
 @pytest.mark.parametrize("res, 当噪点", [(0.2, True), (0.25, False), (0.5, False)])
 def test_外审R7_粗分辨率的图_一格就超过005平方米的不当噪点(res, 当噪点):
     """原来 ``max(1, int(0.05 / res²))`` 至少放一格:0.5 m 一格(0.25 m²)的孤立障碍也被当噪点清掉。"""
-    from d1max_site.map_denoise import find_specks
-    from d1max_site.map_preview import parse_map_yaml
+    from nexwar_site.map_denoise import find_specks
+    from nexwar_site.map_preview import parse_map_yaml
     px = bytearray([254]) * 400
     px[10 * 20 + 10] = 0
     pgm = b"P5\n20 20\n255\n" + bytes(px)

@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import pytest
 
-from d1max_contract import SCHEMA
-from d1max_contract.errors import ContractError, SchemaMismatch
-from d1max_contract.messages import (
+from nexwar_contract import SCHEMA
+from nexwar_contract.errors import ContractError, SchemaMismatch
+from nexwar_contract.messages import (
     Ack,
     AckResult,
     Capabilities,
@@ -33,7 +33,7 @@ EVT = Event(event_id="e-1", seq=1, boot_id="b-1", stamp=1_500, kind="task_progre
 READY = Ready(control=True, motion=True, estop_clear=True, loc_ok=True)
 STATUS = Status(online=True, boot_id="b-1", ready=READY, control_epoch=3, last_seen=2_000,
                 task=TaskSummary(task_id="t-1", kind="goto", state=TaskState.RUNNING))
-CAPS = Capabilities(robot_id="D1MAX-C40011", agent="0.1.0", adapter="sim/0.1.0",
+CAPS = Capabilities(robot_id="NEXWAR-C40011", agent="0.1.0", adapter="sim/0.1.0",
                     tasks={"goto": {"max_speed_mps": 1.0}},
                     actuators={"light": [], "strobe": False, "siren": False, "speaker": False,
                                "spotlight": False},
@@ -149,8 +149,8 @@ def test_非有限数一律拒():
 
 def test_robot_fault事件的数据往返_坏的不收():
     """W00c5a:代理只报故障事实(故障集合变了才发),判定在站点。"""
-    from d1max_contract.hal import Fault
-    from d1max_contract.messages import EVENT_KINDS, fault_event_data, parse_fault_event_data
+    from nexwar_contract.hal import Fault
+    from nexwar_contract.messages import EVENT_KINDS, fault_event_data, parse_fault_event_data
 
     assert "robot_fault" in EVENT_KINDS and "patrol_waypoint" in EVENT_KINDS
     fs = (Fault(code="7", fatal=True, text="左前腿过流"), Fault(code="9", fatal=False, text=""))

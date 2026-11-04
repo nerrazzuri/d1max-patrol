@@ -7,8 +7,8 @@ import math
 
 import pytest
 
-from d1max_contract.errors import ContractError
-from d1max_contract.teleop import (
+from nexwar_contract.errors import ContractError
+from nexwar_contract.teleop import (
     FRAME_TTL_MAX_MS,
     TeleopFrame,
     TeleopLease,
@@ -16,7 +16,7 @@ from d1max_contract.teleop import (
     parse_teleop_lease,
     teleop_grant_payload,
 )
-from d1max_contract.topics import PUBLISH_KINDS, TopicAcl, Topics
+from nexwar_contract.topics import PUBLISH_KINDS, TopicAcl, Topics
 
 T = Topics(site_id="s", robot_id="r")
 
@@ -64,8 +64,8 @@ def test_授予与续租放租的载荷():
 
 
 def test_遥控任务登记了资源与断线策略():
-    from d1max_contract.policy import policy_for
-    from d1max_contract.resources import conflicts, resources_for
+    from nexwar_contract.policy import policy_for
+    from nexwar_contract.resources import conflicts, resources_for
     assert resources_for("teleop") == frozenset({"motion"})
     assert conflicts("teleop", "patrol") and conflicts("teleop", "goto")
     assert policy_for("teleop").on_disconnect == "stop_and_wait"
@@ -73,7 +73,7 @@ def test_遥控任务登记了资源与断线策略():
 
 
 def test_遥控帧_横移_零不上线_非零来回一样_老帧没有当零():
-    from d1max_contract.teleop import TeleopFrame
+    from nexwar_contract.teleop import TeleopFrame
     f = TeleopFrame(lease_epoch=1, seq=2, sent_at=3, ttl_ms=300, vx=0.0, wz=0.0, vy=0.2)
     assert TeleopFrame.from_wire(f.to_wire()) == f
     z = TeleopFrame(lease_epoch=1, seq=2, sent_at=3, ttl_ms=300, vx=0.1, wz=0.0)
@@ -84,7 +84,7 @@ def test_遥控帧_横移_零不上线_非零来回一样_老帧没有当零():
 
 
 def test_硬件能力_横移最快_能横移才上线_老的没有当零():
-    from d1max_contract.hal import HalCapabilities
+    from nexwar_contract.hal import HalCapabilities
     base = {"max_vx": 1.0, "max_wz": 1.5, "deadband_vx": 0.05, "control_releasable": True,
             "recharge_mode": "none",
             "sensing": {"lidar": False, "depth": False, "thermal": False, "imu": False,

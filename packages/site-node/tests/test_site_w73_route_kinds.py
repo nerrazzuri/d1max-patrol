@@ -17,10 +17,10 @@ from test_site_routes import (
 )
 from test_site_schedule import 任务
 
-from d1max_contract.mission import parse_mission
-from d1max_contract.schedule import parse_schedule
-from d1max_site.catalog import CatalogError, active_bundle
-from d1max_site.routes import MAX_SEGMENT_CHECKS, MAX_WAYPOINTS, RouteError
+from nexwar_contract.mission import parse_mission
+from nexwar_contract.schedule import parse_schedule
+from nexwar_site.catalog import CatalogError, active_bundle
+from nexwar_site.routes import MAX_SEGMENT_CHECKS, MAX_WAYPOINTS, RouteError
 
 
 def _时区(台):
@@ -79,7 +79,7 @@ def test_有排程的巡逻路线不许改成防区路线(台):
 
 
 def test_任务包导入不许盖掉同名的防区路线(台):
-    from d1max_site.routes import import_into_store
+    from nexwar_site.routes import import_into_store
     台.store.put_route("east", body(kind="guard"), by="a")
     def m(name):
         return parse_mission({**任务, "mission": name})

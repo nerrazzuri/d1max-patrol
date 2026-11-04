@@ -70,7 +70,7 @@ def test_RC0_产品名和包名_决策55():
     gradle = (REPO / "mobile/android/app/build.gradle.kts").read_text(encoding="utf-8")
     assert 'applicationId = "com.nexusdynamic.warden"' in gradle
     assert '"JPUSH_PKGNAME" to "com.nexusdynamic.warden"' in gradle, "极光按包名认 App,要跟上面一样"
-    assert 'namespace = "com.d1max.d1max_patrol"' in gradle, "代码里的包路径是内部的,不跟着改"
+    assert 'namespace = "com.nexwar.nexwar_patrol"' in gradle, "代码里的包路径是内部的,不跟着改"
 
 
 def test_W55_从站点更新App_装包权限与回执():
@@ -82,7 +82,7 @@ def test_W55_从站点更新App_装包权限与回执():
            if r.get(f"{ANDROID}name") == ".InstallResultReceiver"]
     assert rcv and rcv[0].get(f"{ANDROID}exported") == "false"
     assert not root.findall("application/provider"), "不用 FileProvider"
-    kt = (MAIN_MANIFEST.parent / "kotlin/com/d1max/d1max_patrol/ApkInstaller.kt").read_text()
+    kt = (MAIN_MANIFEST.parent / "kotlin/com/nexwar/nexwar_patrol/ApkInstaller.kt").read_text()
     assert "setAppPackageName(act.packageName)" in kt, "只装我们自己的新版"
-    assert '"d1max/install"' in (MAIN_MANIFEST.parent
-                                 / "kotlin/com/d1max/d1max_patrol/MainActivity.kt").read_text()
+    assert '"nexwar/install"' in (MAIN_MANIFEST.parent
+                                 / "kotlin/com/nexwar/nexwar_patrol/MainActivity.kt").read_text()

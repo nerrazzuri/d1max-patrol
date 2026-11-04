@@ -5,19 +5,19 @@ from __future__ import annotations
 
 import pytest
 
-from d1max_agent.commands import CommandProcessor
-from d1max_agent.events import EventBook
-from d1max_agent.idempotency import IdempotencyStore
-from d1max_agent.resources import ResourceLedger
-from d1max_agent.tasks.base import Task
-from d1max_contract.messages import (
+from nexwar_agent.commands import CommandProcessor
+from nexwar_agent.events import EventBook
+from nexwar_agent.idempotency import IdempotencyStore
+from nexwar_agent.resources import ResourceLedger
+from nexwar_agent.tasks.base import Task
+from nexwar_contract.messages import (
     AckResult,
     Command,
     MapPose,
     Precondition,
     TaskState,
 )
-from d1max_contract.registration import Registration
+from nexwar_contract.registration import Registration
 
 REG = Registration(site_id="s", robot_id="r", credential_fingerprint="f", issued_at=0,
                    expires_at=10**12)
@@ -310,7 +310,7 @@ async def test_pending按优先级排_起跑前查过期(cp):
 def test_代次落盘是原子写(tmp_path):
     import inspect
 
-    from d1max_agent import commands
+    from nexwar_agent import commands
     src = inspect.getsource(commands.CommandProcessor._save_epoch)
     assert "os.replace" in src, "写一半掉电会让代次倒退成 0"
 
@@ -450,7 +450,7 @@ def tcp(tmp_path):
 
 
 def _teleop(epoch=2, *, cid=None, priority=0, **kw):
-    from d1max_contract.teleop import teleop_grant_payload
+    from nexwar_contract.teleop import teleop_grant_payload
     p = teleop_grant_payload(lease_epoch=epoch, operator="gina", lease_ttl_ms=5000) | kw
     return _cmd("teleop", cid=cid or f"t{epoch}", tid=f"teleop-{epoch}", payload=p,
                 priority=priority)
@@ -481,7 +481,7 @@ async def test_遥控期间自动任务回busy_站点给多高都抢不走(tcp):
 
 
 async def test_续租放租找得到这一代才收_不进幂等记录(tcp):
-    from d1max_contract.teleop import TeleopLease
+    from nexwar_contract.teleop import TeleopLease
     await tcp.handle(_teleop().to_wire(), TOPIC)
     await tcp.step(0.1)
     t = tcp.current
@@ -522,7 +522,7 @@ async def test_halt时停车失败_任务照样中止_回执说停车没成(tcp)
 
 
 async def test_遥控帧只交给当前这一趟遥控(tcp):
-    from d1max_contract.teleop import TeleopFrame
+    from nexwar_contract.teleop import TeleopFrame
     f = TeleopFrame(lease_epoch=2, seq=1, sent_at=NOW, ttl_ms=300, vx=0.1, wz=0.0)
     assert tcp.on_teleop_frame(f, rx_ms=NOW) == "no_teleop"
     await tcp.handle(_teleop().to_wire(), TOPIC)
@@ -537,7 +537,7 @@ async def test_遥控载荷坏的拒(tcp):
 
 
 async def test_halt也中止排队中的遥控_帧不交给还在排队的遥控(tcp):
-    from d1max_contract.teleop import TeleopFrame
+    from nexwar_contract.teleop import TeleopFrame
     await tcp.handle(_cmd(cid="g1", tid="goto-1").to_wire(), TOPIC)
     await tcp.step(0.1)
     goto = tcp.current

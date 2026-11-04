@@ -6,8 +6,8 @@ import hashlib
 
 import pytest
 
-from d1max_agent.maps import MapInstallError, MapKeeper
-from d1max_contract.maps import MapRef, map_digest
+from nexwar_agent.maps import MapInstallError, MapKeeper
+from nexwar_contract.maps import MapRef, map_digest
 
 
 def _ref(map_id, version, files):

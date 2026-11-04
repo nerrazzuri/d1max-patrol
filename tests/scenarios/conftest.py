@@ -10,11 +10,11 @@ from dataclasses import dataclass
 
 import pytest
 
-from d1max_patrol.backends.vendor_nav import VendorNavBackend
-from d1max_patrol.config.models import NavConfig
-from d1max_patrol.protocol.nav_types import LocStatus, MappingStatus
-from d1max_sim.inject import apply_command
-from d1max_sim.nav_server import SimNavServer
+from nexwar_patrol.backends.vendor_nav import VendorNavBackend
+from nexwar_patrol.config.models import NavConfig
+from nexwar_patrol.protocol.nav_types import LocStatus, MappingStatus
+from nexwar_sim.inject import apply_command
+from nexwar_sim.nav_server import SimNavServer
 
 
 @dataclass

@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from d1max_agent.engine.archive import (
+from nexwar_agent.engine.archive import (
     RunArchive,
     list_runs,
     read_events,
@@ -203,7 +203,7 @@ def test_事件流写失败_不抛_这一趟这条流停写_记下第一条错�
 
 
 def test_状态文件与清单写失败_不抛_不留临时文件_下一次照试(archive, monkeypatch):
-    from d1max_agent.engine import archive as arc
+    from nexwar_agent.engine import archive as arc
     real = arc.os.replace
 
     def 换名失败(src, dst):
@@ -243,7 +243,7 @@ def test_关一个写坏了的句柄不抛(archive):
 
 def test_开跑时清单写不进去_收尾时盘好了_指纹不丢(archive, monkeypatch):
     """W00c6a 内审 S4:``finish`` 以前从盘上重读指纹,开跑时没写进去的话最终清单里指纹是空的。"""
-    from d1max_agent.engine import archive as arc
+    from nexwar_agent.engine import archive as arc
     real = arc.os.replace
 
     def 换名失败(src, dst):

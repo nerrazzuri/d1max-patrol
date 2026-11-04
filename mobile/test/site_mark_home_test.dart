@@ -1,7 +1,7 @@
 // 在当前位置标原点（W00c6f）：管理员在单狗页点「在这儿标原点」，确认之后狗用它此刻的位置当原点，
 // 站点登记成默认待命点；定位不好狗会拒。
-import 'package:d1max_patrol/net/site_client.dart';
-import 'package:d1max_patrol/ui/site_page.dart';
+import 'package:nexwar_patrol/net/site_client.dart';
+import 'package:nexwar_patrol/ui/site_page.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 

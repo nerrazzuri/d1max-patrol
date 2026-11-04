@@ -10,11 +10,11 @@ import asyncio
 
 import pytest
 
-from d1max_agent.engine.archive import read_events, read_manifest, read_state
-from d1max_agent.engine.homing import HomePoint, ReturnParams
-from d1max_agent.engine.machine import MissionEngine, RunState
-from d1max_agent.engine.mission import Action, MissionWaypoint, Policy
-from d1max_patrol.backends.base import (
+from nexwar_agent.engine.archive import read_events, read_manifest, read_state
+from nexwar_agent.engine.homing import HomePoint, ReturnParams
+from nexwar_agent.engine.machine import MissionEngine, RunState
+from nexwar_agent.engine.mission import Action, MissionWaypoint, Policy
+from nexwar_patrol.backends.base import (
     AlgErrorEvent,
     BatteryEvent,
     ControlLostEvent,
@@ -22,8 +22,8 @@ from d1max_patrol.backends.base import (
     LocStatusEvent,
     NavStatusEvent,
 )
-from d1max_patrol.protocol.nav_frames import AlgErrorItem
-from d1max_patrol.protocol.nav_types import (
+from nexwar_patrol.protocol.nav_frames import AlgErrorItem
+from nexwar_patrol.protocol.nav_types import (
     ALG_LIDAR_DISCONNECTED,
     ALG_NAV_BLOCKED,
     LocStatus,
@@ -163,7 +163,7 @@ async def test_扫盘炸了不掀翻整份报告(make_engine, sample_mission):
 
 
 async def test_定位没收敛就等等不到就中止(make_engine, nav, monkeypatch):
-    import d1max_agent.engine.machine as machine
+    import nexwar_agent.engine.machine as machine
 
     monkeypatch.setattr(machine, "LOCALIZE_TIMEOUT_S", 0.2)
     # 起飞检查那一刻定位是好的,进了 LOCALIZING 就掉了,而且再没收敛回来。
@@ -502,7 +502,7 @@ async def test_定位丢了会重置并重发当前点(make_engine, nav):
 
 
 async def test_定位重置到上限就中止(make_engine, nav):
-    from d1max_agent.engine.safety import MAX_LOC_RESET
+    from nexwar_agent.engine.safety import MAX_LOC_RESET
 
     nav.on_goto = [LocStatusEvent(LocStatus.LOC_LOST)]
     engine = make_engine()
@@ -516,7 +516,7 @@ async def test_定位重置到上限就中止(make_engine, nav):
 async def test_隔得开的几次丢定位不累计到中止_工单16(make_engine, nav, clock):
     """11-02 现场工单 16:定位器每次转身自动重定位一次,以前整趟累计,转 3 个弯就中止。现在只数
     :data:`LOC_RESET_WINDOW_S` 内的:隔得开的(各自都恢复了)不算来回跳。"""
-    from d1max_agent.engine.safety import LOC_RESET_WINDOW_S, MAX_LOC_RESET
+    from nexwar_agent.engine.safety import LOC_RESET_WINDOW_S, MAX_LOC_RESET
 
     real = nav.reset_localization
 
@@ -535,7 +535,7 @@ async def test_隔得开的几次丢定位不累计到中止_工单16(make_engin
 
 
 async def test_重置之后收不敛就中止而不是干等(make_engine, nav, monkeypatch):
-    import d1max_agent.engine.machine as machine
+    import nexwar_agent.engine.machine as machine
 
     monkeypatch.setattr(machine, "LOCALIZE_TIMEOUT_S", 0.2)
     nav.reset_recovers = False
@@ -654,7 +654,7 @@ async def test_已经在跑的时候再开一趟被拒(make_engine, nav, sample_
     nav.on_goto = NEVER
     engine = make_engine()
     await engine.start(sample_mission, home=_HOME)
-    from d1max_agent.engine.machine import EngineBusy
+    from nexwar_agent.engine.machine import EngineBusy
 
     with pytest.raises(EngineBusy):
         await engine.start(sample_mission, home=_HOME)
@@ -674,7 +674,7 @@ async def test_已经在跑的时候再开一趟被拒也不动正在飞的原�
 
     other_home = HomePoint(map_id="map_test", pose=Pose.from_xy_yaw(9.0, 9.0),
                            marked_at_ms=2)
-    from d1max_agent.engine.machine import EngineBusy
+    from nexwar_agent.engine.machine import EngineBusy
 
     with pytest.raises(EngineBusy):
         await engine.start(sample_mission, home=other_home)
@@ -711,7 +711,7 @@ async def test_引擎不认识HTTP(make_engine):
     """它必须能脱离 app 单独用 —— 装了 web 框架的依赖就说明耦合进去了。"""
     import inspect
 
-    import d1max_agent.engine.machine as machine
+    import nexwar_agent.engine.machine as machine
 
     src = inspect.getsource(machine)
     for banned in ("aiohttp", "fastapi", "starlette", "uvicorn", "flask",
@@ -727,7 +727,7 @@ async def test_后端不支持返航_引擎沿来路倒着回原点(make_engine,
     时序:P1 到了(index→1),P2 走不到(卡住),电量掉到返航线 → 引擎该发
     ``goto(P1)`` 再 ``goto(原点)``,而不是 ``return_home()``。
     """
-    from d1max_patrol.backends.base import NavRequestError
+    from nexwar_patrol.backends.base import NavRequestError
 
     async def 不支持() -> None:
         raise NavRequestError("return_home", "该后端不支持返航")
@@ -755,7 +755,7 @@ async def test_后端不支持返航_引擎沿来路倒着回原点(make_engine,
 
 
 async def test_后端不支持返航_一个点都没到过就直接回原点(make_engine, nav, device):
-    from d1max_patrol.backends.base import NavRequestError
+    from nexwar_patrol.backends.base import NavRequestError
 
     async def 不支持() -> None:
         raise NavRequestError("return_home", "该后端不支持返航")
@@ -781,7 +781,7 @@ async def test_后端不支持返航_一个点都没到过就直接回原点(mak
 async def test_后端不支持返航_到过两个点就倒着走两段再回原点(make_engine, nav, device):
     """真正钉住「倒序」的那一条:到过 P1、P2,正往 P3 走时返航,回程必须是
     P2 → P1 → 原点。上面那条只到过一个点,倒不倒序看不出来(评审抓的)。"""
-    from d1max_patrol.backends.base import NavRequestError
+    from nexwar_patrol.backends.base import NavRequestError
 
     async def 不支持() -> None:
         raise NavRequestError("return_home", "该后端不支持返航")
@@ -815,7 +815,7 @@ async def test_后端不支持返航_到过两个点就倒着走两段再回原�
 
 
 async def test_上装严重过热_结束这一趟回原点(make_engine, nav, device):
-    from d1max_patrol.backends.base import OverheatEvent
+    from nexwar_patrol.backends.base import OverheatEvent
     nav.on_goto = NEVER
     engine = make_engine()
     await engine.start(make_mission(), home=_HOME)
@@ -835,6 +835,6 @@ async def test_W70_这一趟中止_代理日志里有一行原因(make_engine, n
     nav.on_goto = [NavStatusEvent(NavStatus.FAILED)]
     engine = make_engine()
     mission = make_mission(policy=policy(on_waypoint_failed="abort"))
-    with caplog.at_level(logging.INFO, logger="d1max_agent.engine.machine"):
+    with caplog.at_level(logging.INFO, logger="nexwar_agent.engine.machine"):
         await run_to_end(engine, mission)
     assert any("这一趟中止" in r.getMessage() for r in caplog.records)

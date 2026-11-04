@@ -10,7 +10,7 @@ import time
 
 import pytest
 
-from d1max_site.video_mux import MAX_FPS, MAX_STREAMS, Refused, VideoMux, frame_message
+from nexwar_site.video_mux import MAX_FPS, MAX_STREAMS, Refused, VideoMux, frame_message
 
 
 class 源:
@@ -204,7 +204,7 @@ class 网页:
         host, port = s.api.httpd.server_address[:2]
         self.sock = socket.create_connection((host, port), timeout=10)
         key = base64.b64encode(os.urandom(16)).decode()
-        auth = f"Cookie: d1max_session={tok}\r\n" if cookie else f"Authorization: Bearer {tok}\r\n"
+        auth = f"Cookie: nexwar_session={tok}\r\n" if cookie else f"Authorization: Bearer {tok}\r\n"
         if origin is not None:
             auth += f"Origin: {origin}\r\n"
         self.sock.sendall((f"GET /api/video/ws HTTP/1.1\r\nHost: site.local:8443\r\n"
@@ -221,7 +221,7 @@ class 网页:
         self.buf = b""
 
     def sub(self, *ids, fps=10) -> None:
-        from d1max_site.ws import client_mask_frame
+        from nexwar_site.ws import client_mask_frame
         self.sock.sendall(client_mask_frame(json.dumps(
             {"sub": [{"id": i, "fps": fps} for i in ids]}).encode()))
 
@@ -229,7 +229,7 @@ class 网页:
         """下一条消息:二进制 → (id, jpeg),文本 → dict;ping 回 pong。"""
         import struct
 
-        from d1max_site.ws import client_mask_frame
+        from nexwar_site.ws import client_mask_frame
         end = time.monotonic() + timeout
         while time.monotonic() < end:
             while len(self.buf) >= 2:

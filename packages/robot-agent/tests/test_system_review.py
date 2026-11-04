@@ -9,13 +9,13 @@ import json
 import pytest
 from test_runtime import REG, T, 钟
 
-from d1max_adapter_sim.robot import SimRobot
-from d1max_agent.force import ForceWatch
-from d1max_agent.runtime import AgentRuntime
-from d1max_contract.memory_broker import MemoryBroker, MemoryTransport
-from d1max_contract.messages import Command
-from d1max_contract.transport import Message
-from d1max_patrol.protocol.nav_types import Pose
+from nexwar_adapter_sim.robot import SimRobot
+from nexwar_agent.force import ForceWatch
+from nexwar_agent.runtime import AgentRuntime
+from nexwar_contract.memory_broker import MemoryBroker, MemoryTransport
+from nexwar_contract.messages import Command
+from nexwar_contract.transport import Message
+from nexwar_patrol.protocol.nav_types import Pose
 
 
 @pytest.fixture
@@ -47,7 +47,7 @@ async def 台(tmp_path, monkeypatch):
         await rt._on_cmd(Message(T.cmd, json.dumps(cmd.to_wire()).encode(), 1, False))
 
     async def 遥控(vx, n=1):
-        from d1max_contract.teleop import teleop_grant_payload
+        from nexwar_contract.teleop import teleop_grant_payload
         await 命令("teleop", teleop_grant_payload(lease_epoch=n, operator="gina",
                                                   lease_ttl_ms=5000), f"t{n}")
         await 走(0.3)

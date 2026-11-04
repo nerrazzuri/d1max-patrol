@@ -12,9 +12,9 @@ from zoneinfo import ZoneInfo
 import pytest
 from test_site_api import PW, 站
 
-from d1max_site.arming_schedule import ArmingSchedule, ScheduleError
-from d1max_site.db import SiteDB
-from d1max_site.modes import ArmingDesk
+from nexwar_site.arming_schedule import ArmingSchedule, ScheduleError
+from nexwar_site.db import SiteDB
+from nexwar_site.modes import ArmingDesk
 
 KL = ZoneInfo("Asia/Kuala_Lumpur")
 
@@ -319,7 +319,7 @@ def test_外审R1_关时间表写一半失败_整份还是旧的(台, tmp_path, 
     s = 台.schedule
     s.put({"enabled": True, "slots": [slot(0, "00:00", "24:00")]}, by="alice")
     assert 台.armed("gate")[0] is True
-    import d1max_site.site_settings as ss
+    import nexwar_site.site_settings as ss
 
     def 坏(*a, **k):
         raise OSError("写设置失败")

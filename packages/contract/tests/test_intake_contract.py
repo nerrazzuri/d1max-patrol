@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from d1max_contract.intake import dog_may_upload, split_run
+from nexwar_contract.intake import dog_may_upload, split_run
 
 
 def test_狗只能传清单事件遥测照片():

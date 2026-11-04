@@ -20,7 +20,7 @@
   "siren": {"clip": "siren"},
   "audio": {
     "device": "plughw:1,0",
-    "clips_dir": "/var/lib/d1max/clips",
+    "clips_dir": "/var/lib/nexwar/clips",
     "amp": "amp",
     "amp_idle_s": 15
   }

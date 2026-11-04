@@ -9,8 +9,8 @@ from pathlib import Path
 
 import pytest
 
-from d1max_site import keyvault
-from d1max_site import main as site_main
+from nexwar_site import keyvault
+from nexwar_site import main as site_main
 
 PASS = "correct horse battery"
 
@@ -97,7 +97,7 @@ def test_命令行_自检_导出_导回(tmp_path, monkeypatch, capsys):
     cfg = json.loads((home / "site.json").read_text())
     cfg.update(_钥(tmp_path / "etc"))
     (home / "site.json").write_text(json.dumps(cfg))
-    monkeypatch.setenv("D1MAX_KEYS_PASSPHRASE", PASS)
+    monkeypatch.setenv("NEXWAR_KEYS_PASSPHRASE", PASS)
     assert site_main.main(["--home", str(home), "keys-status"]) == 0
     out = tmp_path / "k.d1keys"
     assert site_main.main(["--home", str(home), "keys-export", "--out", str(out)]) == 0
@@ -109,8 +109,8 @@ def test_命令行_自检_导出_导回(tmp_path, monkeypatch, capsys):
 
 
 def test_体检里有密钥一项(tmp_path):
-    from d1max_site.db import SiteDB
-    from d1max_site.health import HealthDesk
+    from nexwar_site.db import SiteDB
+    from nexwar_site.health import HealthDesk
     cfg = _钥(tmp_path / "etc")
     db = SiteDB(tmp_path / "s.db")
     try:
@@ -124,7 +124,7 @@ def test_体检里有密钥一项(tmp_path):
 
 
 def test_发行钥匙_换钥匙_新钥匙放进点d目录就认_删掉就是吊销(tmp_path):
-    from d1max_contract import relsign
+    from nexwar_contract import relsign
     etc = tmp_path / "etc"
     relsign.keygen(tmp_path / "old.key", etc / "release-pub.pem")
     relsign.keygen(tmp_path / "new.key", tmp_path / "new.pem")

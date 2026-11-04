@@ -15,11 +15,11 @@ from pathlib import Path
 
 import pytest
 
-from d1max_patrol.backends.base import DeviceBackendError
-from d1max_patrol.backends.sidecar_device import SidecarDeviceBackend, read_token
-from d1max_patrol.protocol.agent_frames import NOT_AUTHORIZED, PROTO_VERSION
-from d1max_sim import agent_server
-from d1max_sim.agent_server import SimAgentServer, open_command
+from nexwar_patrol.backends.base import DeviceBackendError
+from nexwar_patrol.backends.sidecar_device import SidecarDeviceBackend, read_token
+from nexwar_patrol.protocol.agent_frames import NOT_AUTHORIZED, PROTO_VERSION
+from nexwar_sim import agent_server
+from nexwar_sim.agent_server import SimAgentServer, open_command
 
 ROOT = Path(__file__).resolve().parents[2]
 TOKEN = "ab" * 32
@@ -177,7 +177,7 @@ async def test_老旁路进程不核令牌_代理照样能开车_记一条警告
 
 async def test_老代理认3到8_连9号旁路进程握手就拒(monkeypatch):
     """老代理不发 auth,连上了也开不了车 —— 握手时就拒(版本规矩不变:改了协议一起加号)。"""
-    from d1max_patrol.backends import sidecar_device
+    from nexwar_patrol.backends import sidecar_device
     monkeypatch.setattr(sidecar_device, "PROTO_VERSION", 8)
     async with _sim() as sim:
         b = SidecarDeviceBackend("127.0.0.1", sim.port, ack_timeout_s=2.0)
@@ -186,8 +186,8 @@ async def test_老代理认3到8_连9号旁路进程握手就拒(monkeypatch):
 
 
 async def test_HAL带令牌能开车_没令牌速度命令被拒(tmp_path):
-    from d1max_adapter_d1max.hal import D1MaxHal
-    from d1max_contract.hal import VelocityCommand
+    from nexwar_adapter_d1max.hal import D1MaxHal
+    from nexwar_contract.hal import VelocityCommand
 
     def _v():
         return VelocityCommand(seq=1, ttl_ms=300, frame="base", vx=0.3, vy=0.0, wz=0.0)

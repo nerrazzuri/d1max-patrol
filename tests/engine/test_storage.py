@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from d1max_agent.engine.storage import (
+from nexwar_agent.engine.storage import (
     STOP_USED_RATIO,
     WARN_USED_RATIO,
     storage_verdict,

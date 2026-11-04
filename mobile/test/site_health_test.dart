@@ -3,12 +3,12 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 
-import 'package:d1max_patrol/net/site_client.dart';
-import 'package:d1max_patrol/ui/site_health.dart';
-import 'package:d1max_patrol/ui/site_page.dart';
-import 'package:d1max_patrol/ui/nw/nw_theme.dart';
-import 'package:d1max_patrol/ui/widget/alarm_widgets.dart';
-import 'package:d1max_patrol/ui/site_tabs.dart';
+import 'package:nexwar_patrol/net/site_client.dart';
+import 'package:nexwar_patrol/ui/site_health.dart';
+import 'package:nexwar_patrol/ui/site_page.dart';
+import 'package:nexwar_patrol/ui/nw/nw_theme.dart';
+import 'package:nexwar_patrol/ui/widget/alarm_widgets.dart';
+import 'package:nexwar_patrol/ui/site_tabs.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show MissingPluginException;
 import 'package:flutter_test/flutter_test.dart';
@@ -53,8 +53,8 @@ void main() {
   });
 
   test('诊断包的文件名带当地时间', () {
-    expect(bundleName(DateTime(2026, 10, 11, 2, 4, 9)), 'd1max-support-20261011-020409.tar.gz');
-    expect(bundleName(DateTime(2026, 1, 2, 13, 14, 15)), 'd1max-support-20260102-131415.tar.gz');
+    expect(bundleName(DateTime(2026, 10, 11, 2, 4, 9)), 'nexwar_support-20261011-020409.tar.gz');
+    expect(bundleName(DateTime(2026, 1, 2, 13, 14, 15)), 'nexwar_support-20260102-131415.tar.gz');
   });
 
   testWidgets('都正常：说各项都正常、站点版本；每一项写着正常，不上报警的形状；机器人和登录着的 App 列出来', (t) async {
@@ -169,10 +169,10 @@ void main() {
     await t.tap(find.byKey(SiteHealthPage.bundleKey));
     await t.pumpAndSettle();
     expect(api.calls, contains('support-bundle'));
-    expect(saved.single.$1, 'd1max-support-20261011-020409.tar.gz');
+    expect(saved.single.$1, 'nexwar_support-20261011-020409.tar.gz');
     expect(saved.single.$2.length, 3000);
     expect(t.widget<SelectableText>(find.byKey(SiteHealthPage.msgKey)).data,
-        '已保存（3 KB）：/downloads/d1max-support-20261011-020409.tar.gz');
+        '已保存（3 KB）：/downloads/nexwar_support-20261011-020409.tar.gz');
     expect(t.widget<OutlinedButton>(find.byKey(SiteHealthPage.bundleKey)).onPressed, isNotNull);
   });
 
@@ -375,8 +375,8 @@ void main() {
     });
     await press(t, SiteHealthPage.shareKey);
     expect(api.calls, contains('support-bundle'));
-    expect(shared, [('d1max-support-20261011-020409.tar.gz', 3000)]);
-    expect(msg(t), '已分享（3 KB）：d1max-support-20261011-020409.tar.gz');
+    expect(shared, [('nexwar_support-20261011-020409.tar.gz', 3000)]);
+    expect(msg(t), '已分享（3 KB）：nexwar_support-20261011-020409.tar.gz');
     expect(enabled(t, SiteHealthPage.shareKey) && enabled(t, SiteHealthPage.bundleKey), isTrue);
   });
 

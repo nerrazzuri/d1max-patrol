@@ -85,9 +85,9 @@
    老的 `dist/app-release.apk`（直连模式那一版）2026-10-12 已经从仓库删了；出发前重编站点模式的包，或者从 CI 的 `android` 作业下。
 
 3. **手机登录要的东西从站点来，狗上已经没有 PIN。** 站点主机上
-   `d1max-site add-account <名字> --role guard|owner|admin` 建账号（口令当场输），
-   `d1max-site fingerprint` 打出站点证书指纹；手机「添加站点」填站点地址、这串指纹和账号。
-   狗要先由站点签发证书包（`d1max-site enroll <编号>`，见 `docs/真机验证.md` 3a.5）
+   `nexwar_site add-account <名字> --role guard|owner|admin` 建账号（口令当场输），
+   `nexwar_site fingerprint` 打出站点证书指纹；手机「添加站点」填站点地址、这串指纹和账号。
+   狗要先由站点签发证书包（`nexwar_site enroll <编号>`，见 `docs/真机验证.md` 3a.5）
    才连得上站点。**口令抄进现场登记表，别抄进任何文档或工单。**
 
 ---

@@ -13,13 +13,13 @@ from types import SimpleNamespace
 import pytest
 from test_site_maps import _files
 
-from d1max_site.areas import AreaBook
-from d1max_site.db import SiteDB
-from d1max_site.guard_plan import GuardPlanError, ZonePosts, generate
-from d1max_site.intercept_reach import InterceptReach
-from d1max_site.maps import MapCatalog
-from d1max_site.nav_zones import NavZones
-from d1max_site.routes import RouteStore
+from nexwar_site.areas import AreaBook
+from nexwar_site.db import SiteDB
+from nexwar_site.guard_plan import GuardPlanError, ZonePosts, generate
+from nexwar_site.intercept_reach import InterceptReach
+from nexwar_site.maps import MapCatalog
+from nexwar_site.nav_zones import NavZones
+from nexwar_site.routes import RouteStore
 
 RES = 0.1
 W_M, H_M = 20.0, 10.0
@@ -220,9 +220,9 @@ def test_只在斜角碰着的两块不算连通_跟规划一样不切墙角():
     放点用的连通区域也得这么算。"""
     import numpy as np
 
-    from d1max_contract.planning.astar import plan
-    from d1max_contract.planning.costmap import LETHAL, Costmap
-    from d1max_site.guard_plan import _Ground
+    from nexwar_contract.planning.astar import plan
+    from nexwar_contract.planning.costmap import LETHAL, Costmap
+    from nexwar_site.guard_plan import _Ground
     lethal = np.array([[0, 0, 1, 1],
                        [0, 0, 1, 1],
                        [1, 1, 0, 0],
@@ -231,7 +231,7 @@ def test_只在斜角碰着的两块不算连通_跟规划一样不切墙角():
     cm = Costmap(res=1.0, origin=(0.0, 0.0), hard=hard, lethal=lethal,
                  cost=np.where(lethal, np.uint8(LETHAL), np.uint8(0)).astype(np.uint8),
                  speed=np.full(lethal.shape, np.inf, dtype=np.float32))
-    from d1max_contract.planning.astar import PlanError
+    from nexwar_contract.planning.astar import PlanError
     with pytest.raises(PlanError):
         plan(cm.cost.tobytes(), hard.astype("uint8").tobytes(), 4, 4, (0, 0), (3, 3))
     g = _Ground(cm, [(0.5, 0.5)])
@@ -242,8 +242,8 @@ def test_没有待命点_按最大的一片连通区域放点_不放进封死的
     """演示站点商场图实测(11-04):没设待命点时把点放进了门关着的铺面里,点和点之间走不通。"""
     import numpy as np
 
-    from d1max_contract.planning.costmap import LETHAL, Costmap
-    from d1max_site.guard_plan import _Ground
+    from nexwar_contract.planning.costmap import LETHAL, Costmap
+    from nexwar_site.guard_plan import _Ground
     lethal = np.ones((6, 8), dtype=bool)
     lethal[1:5, 1:5] = False                     # 大厅 4×4
     lethal[2:4, 6:7] = False                     # 封死的小间(中间隔一列墙)
@@ -258,7 +258,7 @@ def test_没有待命点_按最大的一片连通区域放点_不放进封死的
 def test_生成的点和查看点_按机器人自己的膨胀圈也站得下(台):
     """演示站点 11-04:站点按 0.40 m 挑点,机器人规划按自己的外接圆 0.52 m + 0.05 m 膨胀,贴墙的点到了
     机器人那边就是「终点贴得太近」(goal_blocked)。有宽敞的地方就挑宽敞的。"""
-    from d1max_contract.planning import costmap as cmod
+    from nexwar_contract.planning import costmap as cmod
     d = 台.cat.file_path("shop", "1", "floor.pgm").parent
     cm = cmod.from_map_dir(d, robot_radius_m=cmod.ROBOT_RADIUS_M + cmod.INFLATE_MARGIN_M)
     wall_to_wall = [[0.1, 0.1], [9.9, 0.1], [9.9, 9.9], [0.1, 9.9]]     # 防区一直画到墙根

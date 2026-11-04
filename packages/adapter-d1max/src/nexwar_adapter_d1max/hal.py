@@ -1,0 +1,533 @@
+"""D1MaxHal:真狗 D1 Max 的 RobotHAL(W00d 设计稿 ``2026-09-25-W00d-adapter-d1max-design.md``)。
+
+运动走**常驻旁路进程** ``motion/patrol_agent.cpp``(握着厂商 SDK 会话),这里经 TCP 行协议接上去,
+复用根包的 :class:`SidecarDeviceBackend`(连接、回执、状态与里程帧、「故意不释放控制权」都在那)。
+
+三件事是这一层自己的:
+
+- **单位**(决定三 A):HAL 说 m/s 与 rad/s,SDK 的 ``Move`` 收比例值。``mps_per_unit`` /
+  ``radps_per_unit`` 是比例 1.0 对应的速度,``max_fraction`` 是比例上限,``deadband_mps`` 以下拒。
+  默认值按 **SDK 文档的低速档**(W12:比例 1.0 = 1.0 m/s、1.5 rad/s;#38 粗测每单位约 1.1 m/s),死区按
+  #37(0.11 几乎不动、0.3 明显走)取 0.2 m/s。比例上限 0.5 不变:实际最快仍约 0.5 m/s。真机用
+  ``tools/w00d_motion_check.py`` 量过后改配置。**前进带死区**(2026-10-08 C40221 实测:比例 0.3 走
+  0.22 m/s、0.2 走 0.11 m/s、0.1 不动,v ≈ 1.09 ×(比例 − 0.10)):``fwd_offset`` 是前进的比例死区,
+  换算成 ``比例 = fwd_offset + |vx| ÷ mps_per_unit``(带符号;vx 为 0 照发 0),这时 ``mps_per_unit``
+  是那条直线的斜率。缺省 0 = 纯比例(老行为)。转向实测接近纯比例,不加。
+- **档位**(W12):换算只对旁路进程要的那一档成立。7 号旁路进程报此刻的档位与要的档位,对不上就拒速度
+  命令(``speed_level``;旁路进程自己会设回去);老旁路进程不报,不核。
+- **控制权**(决定二 A):``control_releasable = false``,``release_control()`` 抛
+  :class:`HalUnsupported`。放一次 SDK 控制权就得重启整台 RK3588。
+- **停没停**:看旁路进程报上来的里程速度;刚发出的速度还在有效期里、或里程不新鲜,都不算停。
+- **上装**(W21,决策 36):警灯、警笛、聚光灯走 RS485 Modbus 继电器板,喇叭走 USB 声卡(``payload.py``)。
+  没给 ``payload``(没有 ``/etc/nexwar/payload.json``)就是没装,能力全报 false、入口抛
+  :class:`HalUnsupported`。连上时先全关一遍,断开时全关。
+- **机身系**(W09i 设计稿 §1):HAL 的里程、速度一律按机身(x 朝狗头、装前雷达那头),不随调头变。
+  狗尾为前、旁路进程报 ``follows_head``(SDK 的「往前」跟着变成狗尾那头)时,里程朝向加 π、前进速度
+  反号,发出去的前进速度也反号。SDK 调头时到底怎么变是真机项。
+- **横移**(2026-10-30,遥控左杆左右):``lateral_mps_per_unit`` 是横向比例 1.0 对应的 m/s,0 = 不横移
+  (照旧拒 ``no_lateral``)。缺省按跟前进差不多的 1.0 算:真的慢一些也只是走得慢,不会超速。横向正负
+  (机身系左为正)跟 SDK 的 ``Move(lat, …)`` 是不是一个方向、调头时跟不跟着反,都是真机项
+  (``invert_lateral`` 翻过来)。横移没有雷达净空许可门(那只管头尾),只在有人看着画面遥控时用。
+"""
+
+from __future__ import annotations
+
+import asyncio
+import math
+import time
+from collections.abc import Callable
+from typing import Any
+
+from nexwar_adapter_d1max.payload import Payload
+from nexwar_contract.hal import (
+    Battery,
+    ControlStatus,
+    Fault,
+    HalCapabilities,
+    HalUnsupported,
+    Health,
+    ImuSample,
+    MotionStatus,
+    Odometry,
+    VelocityCommand,
+    VelocityResult,
+)
+from nexwar_patrol.backends.base import DeviceBackendError
+from nexwar_patrol.backends.sidecar_device import (
+    DEFAULT_AGENT_HOST,
+    DEFAULT_AGENT_PORT,
+    MAX_WALK_SPEED,
+    VEL_TTL_MAX_MS,
+    VEL_TTL_MIN_MS,
+    SidecarDeviceBackend,
+)
+from nexwar_patrol.protocol.agent_frames import MAX_FORWARD_FRACTION, EmergencyStatus
+from nexwar_patrol.protocol.agent_frames import MotionStatus as SdkMotion
+
+ADAPTER_ID = "nexwar/0.1.0"
+
+#: 能收速度命令的 SDK 运动状态。**保守**:只认站着待命(``General``)与在走(``Gait``);其余
+#: 站姿(``InPlace``/``Stair``/…)报 STANDING,不派速度。真狗待命时到底报哪个,探针会看。
+_READY_MOTIONS = frozenset({SdkMotion.GENERAL, SdkMotion.GAIT})
+#: 算「趴着」的。``Locked``(关节锁死)也算:那时候不能走。
+_LYING_MOTIONS = frozenset({SdkMotion.LIE_DOWN, SdkMotion.LOCKED})
+
+#: 里程多久没来算不新鲜(秒)。旁路进程 50 Hz 转发 ``OnMcData``,1 s 没来就是链路出事了。
+ODOM_STALE_S = 1.0
+#: 旁路进程发姿态帧的频率(W26;W41:能力里的 ``sensing.imu_hz`` 报它,原来写死 0)。
+IMU_HZ = 20
+#: 姿态帧(W26,20 Hz)多久没来算过期。
+IMU_STALE_S = 0.5
+#: 状态帧多久没来,就不拿它确认软急停(W26 复查)。
+STATE_STALE_S = 3.0
+#: 里程速度绝对值低于这个算停了(m/s、rad/s)。**待测**:四足站着不动时里程速度的噪声没量过,
+#: 探针会记下观察窗口里的最大值;太小的话 ``stopped()`` 永远不成立(代理那头有兜底超时)。
+STOPPED_EPS = 0.02
+#: ``vel`` 等回执的上限(秒)。速度环 10 Hz,回执卡住就把整个代理的一拍冻住;超时按拒绝算,
+#: 狗那头最多再走一个 ``ttl`` 就自己停。
+VEL_ACK_TIMEOUT_S = 0.5
+#: 一条故障多久没再报就算消了(秒)。**待真机**:SDK 报故障的节奏没量过。
+FAULT_FRESH_S = 10.0
+#: 连上之后等第一帧状态与里程多久。等不到就是旁路进程不对劲,不接。
+FIRST_FRAME_TIMEOUT_S = 3.0
+#: 站起/趴下之后等状态帧跟上的上限。站起实测约 6 s(清单 #36)。
+POSTURE_TIMEOUT_S = 10.0
+
+
+def _clamp(v: float, lim: float) -> float:
+    return max(-lim, min(lim, v))
+
+
+def wall_ms() -> int:
+    return int(time.time() * 1000)
+
+
+class D1MaxHal:
+    """``host:port`` 是旁路进程(默认只绑回环 127.0.0.1:8090)。"""
+
+    adapter_id = ADAPTER_ID
+
+    def __init__(self, host: str = DEFAULT_AGENT_HOST, port: int = DEFAULT_AGENT_PORT, *,
+                 mps_per_unit: float = 1.0, radps_per_unit: float = 1.5,
+                 deadband_mps: float = 0.2, max_fraction: float = 0.5, fwd_offset: float = 0.0,
+                 invert_yaw: bool = False, stopped_eps: float = STOPPED_EPS,
+                 lateral_mps_per_unit: float = 0.0, invert_lateral: bool = False,
+                 frame_id: str = "odom",
+                 now_ms: Callable[[], int] = wall_ms,
+                 backend: SidecarDeviceBackend | None = None,
+                 payload: Payload | None = None,
+                 token_file: str | None = None) -> None:
+        """``token_file``:旁路进程的令牌(协议 9,S11)。代理给缺省的 ``~/.nexwar/sidecar.token``;
+        旁路进程要令牌而读不了、不对,``connect`` 就抛(开不了车的代理不该假装能开)。"""
+        for name, v in (("mps_per_unit", mps_per_unit), ("radps_per_unit", radps_per_unit)):
+            if not (math.isfinite(v) and v > 0):
+                raise ValueError(f"{name} 要是正数,收到 {v}")
+        if not (math.isfinite(deadband_mps) and deadband_mps >= 0):
+            raise ValueError(f"deadband_mps 不能是负数,收到 {deadband_mps}")
+        if not (math.isfinite(max_fraction) and 0 < max_fraction <= MAX_FORWARD_FRACTION):
+            raise ValueError(f"max_fraction 要在 (0, {MAX_FORWARD_FRACTION}],收到 {max_fraction}")
+        if not (math.isfinite(fwd_offset) and 0 <= fwd_offset < min(max_fraction, MAX_WALK_SPEED)):
+            raise ValueError(f"fwd_offset 要在 [0, min(max_fraction, {MAX_WALK_SPEED})),"
+                             f"收到 {fwd_offset}")
+        self._b = backend or SidecarDeviceBackend(host, port, token_file=token_file)
+        self._payload = payload
+        self._payload_up = False
+        self._mps, self._radps = mps_per_unit, radps_per_unit
+        self._deadband = deadband_mps
+        self._frac = max_fraction
+        self._fwd0 = fwd_offset
+        self._yaw_sign = -1.0 if invert_yaw else 1.0
+        if not (math.isfinite(lateral_mps_per_unit) and lateral_mps_per_unit >= 0):
+            raise ValueError(f"lateral_mps_per_unit 不能是负数,收到 {lateral_mps_per_unit}")
+        self._lat_mps = lateral_mps_per_unit
+        self._lat_sign = -1.0 if invert_lateral else 1.0
+        if not (math.isfinite(stopped_eps) and stopped_eps > 0):
+            raise ValueError(f"stopped_eps 要是正数,收到 {stopped_eps}")
+        self._stopped_eps = stopped_eps
+        self._frame = frame_id
+        self._now = now_ms
+        self._monotonic: Callable[[], float] = time.monotonic
+        #: 最近一条被接受的速度到什么时候(monotonic)还有效。有效期里不算停。
+        self._vel_until: float | None = None
+
+    def _sdk_caps(self) -> tuple[float, float]:
+        """SDK 比例的(往前, 往后)上限。往前:自己配的 ``max_fraction`` 和旁路进程 ``--max-fraction``
+        (hello 报,W47 协议 10;老旁路 0.5)取小;往后、转向一直不过 0.5。"""
+        back = min(self._frac, MAX_WALK_SPEED)
+        top = getattr(self._b, "max_forward_fraction", MAX_WALK_SPEED)   # 没连上、测试替身:老上限
+        return min(self._frac, top), back
+
+    def _vx_range(self) -> tuple[float, float]:
+        """机身系前进速度(m/s)的(下限, 上限)。狗尾为前且 SDK 跟着调头时,机身往前是 SDK 的往后。"""
+        fwd, back = self._sdk_caps()
+        if self._sdk_sign() < 0:
+            fwd, back = back, fwd
+        return -(back - self._fwd0) * self._mps, (fwd - self._fwd0) * self._mps
+
+    @property
+    def max_vx(self) -> float:
+        return self._vx_range()[1]
+
+    @property
+    def max_vy(self) -> float:
+        """横移最快(m/s);0 = 不横移。比例上限跟往后一样(不过 0.5)。"""
+        return min(self._frac, MAX_WALK_SPEED) * self._lat_mps
+
+    @property
+    def max_wz(self) -> float:
+        return min(self._frac, MAX_WALK_SPEED) * self._radps
+
+    # ------------------------------------------------------------ 生命周期
+
+    async def connect(self) -> None:
+        if self._payload is not None and not self._payload_up:
+            self._payload_up = True                # 幂等:只在第一次连上时全关一遍
+            await self._payload.start()
+        await self._b.connect()
+        deadline = self._monotonic() + FIRST_FRAME_TIMEOUT_S
+        while self._b.last_state is None or self._b.last_odom is None:
+            if self._monotonic() >= deadline:
+                await self._b.close()
+                raise DeviceBackendError(
+                    f"连上旁路进程 {FIRST_FRAME_TIMEOUT_S}s 尚未收到状态帧与里程帧")
+            await asyncio.sleep(0.02)
+
+    async def close(self) -> None:
+        """只断 Python 这头。SDK 会话与控制权留在旁路进程里(清单 #47)。"""
+        self._vel_until = None
+        if self._payload is not None and self._payload_up:
+            self._payload_up = False
+            await self._payload.close()            # 断开:声光全关(不许一直响)
+        await self._b.close()
+
+    async def health(self) -> Health:
+        return Health(link_ok=self._b.connected, control=await self._b.has_control(),
+                      estop=self._estop_now(),
+                      faults=tuple(str(f.code) for f in self._b.current_faults(FAULT_FRESH_S)),
+                      loc_quality=1.0 if self._odom_fresh() else 0.0,
+                      head=self._b.last_state.head if self._b.last_state is not None else "unknown")
+
+    # ------------------------------------------------------------ 控制权
+
+    async def acquire_control(self) -> None:
+        """只**核对**旁路进程握着控制权(它开机时抢)。拿不到就抛。"""
+        await self._b.acquire_control()
+
+    async def release_control(self) -> None:
+        raise HalUnsupported("D1 Max 的 SDK 控制权放了就得重启 RK3588 才能再抢;不放")
+
+    async def control_status(self) -> ControlStatus:
+        return ControlStatus(held=await self._b.has_control(), releasable=False,
+                             detail="旁路进程常驻握着 SDK 控制权")
+
+    # ------------------------------------------------------------ 运动
+
+    async def motion_status(self) -> MotionStatus:
+        st = self._b.last_state
+        if not self._b.connected or st is None or st.motion is SdkMotion.UNKNOWN:
+            return MotionStatus.UNKNOWN
+        if st.motion in _LYING_MOTIONS:
+            return MotionStatus.LYING
+        if st.motion in _READY_MOTIONS and await self._b.has_control() and not st.emergency:
+            return MotionStatus.READY
+        return MotionStatus.STANDING
+
+    async def set_motion_mode(self, mode: str) -> None:
+        """``stand`` / ``lie``。旁路进程做完才回执,这里再等状态帧跟上。"""
+        if mode == "stand":
+            await self._b.stand()
+            await self._wait_motion(_READY_MOTIONS)
+        elif mode == "lie":
+            await self._b.lie()
+            await self._wait_motion(frozenset({SdkMotion.LIE_DOWN}))
+        else:
+            raise HalUnsupported(f"D1 Max 适配器只做 stand/lie,不认 {mode!r}")
+
+    async def _wait_motion(self, want: frozenset[SdkMotion]) -> None:
+        deadline = self._monotonic() + POSTURE_TIMEOUT_S
+        while True:
+            st = self._b.last_state
+            if st is not None and st.motion in want:
+                return
+            if self._monotonic() >= deadline:
+                now = st.motion.value if st is not None else "(无状态帧)"
+                raise DeviceBackendError(f"等姿态超过 {POSTURE_TIMEOUT_S}s,当前 {now}")
+            await asyncio.sleep(0.02)
+
+    async def set_velocity(self, cmd: VelocityCommand) -> VelocityResult:
+        def _reject(reason: str) -> VelocityResult:
+            return VelocityResult(0.0, 0.0, clamped=False, rejected=True, reason=reason)
+
+        if not await self._b.has_control():
+            return _reject("no_control")
+        if self._estop_now():
+            return _reject("estop")
+        if await self.motion_status() is not MotionStatus.READY:
+            return _reject("not_ready")          # 趴着、锁死、姿态未知、非待命站姿:不下发
+        if self.speed_level_wrong():
+            return _reject("speed_level")        # 换算只对要的那一档成立(W12)
+        if not all(math.isfinite(v) for v in (cmd.vx, cmd.vy, cmd.wz)):
+            return _reject("not_finite")
+        if abs(cmd.vy) > 1e-9 and self._lat_mps <= 0:
+            return _reject("no_lateral")
+        if 0.0 < abs(cmd.vx) < self._deadband:
+            return _reject("deadband")
+        lo, hi = self._vx_range()
+        vx, wz = min(max(cmd.vx, lo), hi), _clamp(cmd.wz, self.max_wz)
+        vy = _clamp(cmd.vy, self.max_vy) if self._lat_mps > 0 else 0.0
+        clamped = (vx != cmd.vx) or (wz != cmd.wz) or (vy != cmd.vy)
+        # 换算后再夹一次:浮点误差也不许越过旁路进程的上限(它越界就拒)。
+        cap_fwd, cap_back = self._sdk_caps()
+        fwd = min(max(self._sdk_sign() * self._fwd_fraction(vx), -cap_back), cap_fwd)
+        yaw = _clamp(self._yaw_sign * wz / self._radps, min(self._frac, MAX_WALK_SPEED))
+        # 横移:SDK 跟着调头时左右也反(同前进);比例上限同往后
+        lat = (_clamp(self._sdk_sign() * self._lat_sign * vy / self._lat_mps,
+                      min(self._frac, MAX_WALK_SPEED)) if vy else 0.0)
+        ttl = min(max(int(cmd.ttl_ms), VEL_TTL_MIN_MS), VEL_TTL_MAX_MS)
+        try:
+            await self._b.vel(fwd, lat, yaw, ttl, timeout_s=VEL_ACK_TIMEOUT_S)
+        except DeviceBackendError as exc:
+            return _reject(f"sidecar: {exc}")
+        self._vel_until = self._monotonic() + ttl / 1000.0
+        return VelocityResult(vx, wz, clamped=clamped, rejected=False)
+
+    def _fwd_fraction(self, vx: float) -> float:
+        """前进 m/s → 比例:死区加上直线那一段;0 就是 0(不许把死区当成一条命令发出去)。"""
+        if vx == 0.0:
+            return 0.0
+        return math.copysign(self._fwd0 + abs(vx) / self._mps, vx)
+
+    # ------------------------------------------------------------ 停止与急停
+
+    async def stop(self) -> None:
+        """停止**请求**:``halt`` 插队,作废有效期里的速度。确认看 :meth:`stopped`。"""
+        self._vel_until = None
+        await self._b.halt()
+
+    async def stopped(self) -> bool:
+        if self._vel_until is not None and self._monotonic() < self._vel_until:
+            return False                              # 刚发的速度还在有效期里,可能正在起步
+        o = self._b.last_odom
+        if o is None or not self._odom_fresh():
+            return False                              # 不知道,就不说停了
+        return max(abs(o.vx), abs(o.vy), abs(o.vyaw)) < self._stopped_eps
+
+    async def emergency_stop(self, on: bool) -> None:
+        if on:
+            self._vel_until = None
+        await self._b.emergency_stop(on)
+
+    async def estop_status(self) -> bool:
+        return self._estop_now()
+
+    async def estop_reset(self) -> None:
+        await self._b.emergency_stop(False)
+
+    async def soft_estop_confirmed(self) -> bool:
+        """新鲜的状态帧(:data:`STATE_STALE_S` 以内)明确报软急停 ``STOP`` 才回真(W26 复查):
+        没状态帧、过期了、``Unknown`` 都不算确认 —— :meth:`estop_status` 那种「不知道按急停算」
+        不能拿来当证明。"""
+        st, at = self._b.last_state, getattr(self._b, "last_state_at", None)
+        if st is None or at is None or not self._b.connected \
+                or self._monotonic() - at > STATE_STALE_S:
+            return False
+        return st.estop_software is EmergencyStatus.STOP
+
+    def _estop_now(self) -> bool:
+        """软、硬两路**都**报「已解除」才算没急停。没状态帧、任一路 ``Unknown``(旁路进程在
+        客户端刚连上时会先补一帧全零的占位状态)都按急停算:不知道,放行等于赌运气。"""
+        st = self._b.last_state
+        if st is None:
+            return True
+        return not (st.estop_software is EmergencyStatus.RECOVER
+                    and st.estop_hardware is EmergencyStatus.RECOVER)
+
+    # ------------------------------------------------------------ 感知
+
+    def speed_level_wrong(self) -> bool:
+        """旁路进程要了档位(7 号起)而此刻的档位不是它(或还不知道)。"""
+        hello, st = self._b.hello, self._b.last_state
+        want = hello.speed_level_want if hello is not None else None
+        if not want:
+            return False                          # 老旁路进程不报、或旁路进程不管档位
+        return st is None or st.speed_level != want
+
+    def _sdk_sign(self) -> float:
+        """SDK 的「往前」是机身的哪个方向:+1 狗头、-1 狗尾(狗尾为前且 SDK 跟着调头)。"""
+        st, hello = getattr(self._b, "last_state", None), getattr(self._b, "hello", None)
+        follows = hello.follows_head if hello is not None else True
+        return -1.0 if st is not None and st.head == "tail" and follows else 1.0
+
+    def _odom_fresh(self) -> bool:
+        at = self._b.last_odom_at
+        return self._b.connected and at is not None and self._monotonic() - at <= ODOM_STALE_S
+
+    async def odometry(self) -> Odometry:
+        """运控自己的里程(``OnMcData``),**不是**地图上的定位。"""
+        o = self._b.last_odom
+        if o is None:
+            return Odometry(stamp_ms=self._now(), frame_id=self._frame, x=0.0, y=0.0, yaw=0.0,
+                            vx=0.0, wz=0.0, valid=False)
+        s = self._sdk_sign()
+        yaw = o.yaw if s > 0 else math.remainder(o.yaw + math.pi, 2 * math.pi)
+        return Odometry(stamp_ms=self._now(), frame_id=self._frame, x=o.x, y=o.y, yaw=yaw,
+                        vx=s * o.vx, wz=o.vyaw, valid=self._odom_fresh())
+
+    async def imu(self) -> Any:
+        """姿态与受力(W26):旁路进程 8 号起 20 Hz 发 ``imu`` 帧。撞击是上次读以来的峰值。
+        没收到过、过期了(:data:`IMU_STALE_S`)回 ``valid=False``(老旁路进程一直是这样:代理不判)。"""
+        f, at = self._b.last_imu, self._b.last_imu_at
+        fresh = self._b.connected and at is not None and self._monotonic() - at <= IMU_STALE_S
+        shock = self._b.take_shock()
+        if f is None:
+            return ImuSample(stamp_ms=self._now(), roll=0.0, pitch=0.0, shock_g=0.0, load=None,
+                             valid=False)
+        return ImuSample(stamp_ms=self._now(), roll=f.roll, pitch=f.pitch, shock_g=shock,
+                         load=f.load, valid=fresh)
+
+    async def lidar(self) -> Any:
+        raise HalUnsupported("W00d 不接 lidar(走 ROS,归后面的工单)")
+
+    async def ultrasonic(self) -> Any:
+        raise HalUnsupported("W00d 不接超声")
+
+    async def joints(self) -> Any:
+        raise HalUnsupported("W00d 不接关节流")
+
+    async def contacts(self) -> Any:
+        raise HalUnsupported("W00d 不接触地")
+
+    # ------------------------------------------------------------ 电池与故障
+
+    async def battery(self) -> Battery:
+        """两块电池里低的那块;``packs`` 两块各自(没插的旁路发 0 → ``None``,W73 第四期)。
+        充没充电旁路进程不报,按没充。"""
+        st = self._b.last_state
+        if st is None:
+            raise DeviceBackendError("尚未收到过状态帧,无法读取电量")
+        packs = tuple(float(v) if v > 0.0 else None
+                      for v in (getattr(st, "battery1", 0.0), getattr(st, "battery2", 0.0)))
+        return Battery(percent=float(st.battery), charging=False, packs=packs)
+
+    async def faults(self) -> tuple[Fault, ...]:
+        """**当前**故障:最近 ``FAULT_FRESH_S`` 秒内旁路进程还报过的(见旁路客户端
+        ``current_faults``)。不是历史 —— 历史里跌倒过一次就永远挂着,站点认不出下一次。"""
+        # 厂商没说哪些 level 算致命;取 level>=2 是假设(待真机验证),同旁路客户端。
+        sdk = tuple(Fault(code=str(f.code), fatal=f.level >= 2, text=f.message)
+                    for f in self._b.current_faults(FAULT_FRESH_S))
+        # 上装(W21 外审):状态不明、关不上的几路当故障报(站点出告警);看护循环还在接着关
+        # W40:线圈按路合起来报(``payload_<strobe|siren|spotlight|amp>``,站点按路出告警),说明由上装给
+        p = self._payload
+        up = tuple(Fault(code=f"payload_{o}", fatal=False, text=t)
+                   for o, t in sorted((p.faults() if p is not None else {}).items()))
+        return sdk + up
+
+    # ------------------------------------------------------------ 执行器与媒体
+
+    async def light(self, channel: str, on: bool) -> None:
+        setter = {"front": self._b.set_front_light, "back": self._b.set_back_light,
+                  "both": self._b.set_light}.get(channel)
+        if setter is None:
+            raise ValueError(f"灯只有 front/back/both,收到 {channel!r}")
+        await setter(on)
+
+    def _up(self, output: str) -> Payload:
+        if self._payload is None or not self._payload.has(output):
+            raise HalUnsupported(f"未安装上装的 {output}")
+        return self._payload
+
+    async def strobe(self, channel: str, pattern: str, max_s: float) -> None:
+        """上装警灯(只有一盏)。``channel`` 是颜色名(W40);``warn`` 或空 = 配置里的缺省颜色。
+        闪法:配了 ``blink_s`` 软件打闪,不然由灯自己定。"""
+        on = pattern != "off" and max_s > 0
+        color = "" if channel in ("", "warn") else channel
+        await self._up("strobe").set("strobe", on, max_s, color=color if on else "")
+
+    async def siren(self, on: bool, max_s: float) -> None:
+        await self._up("siren").set("siren", on and max_s > 0, max_s)
+
+    async def sound(self, clip_or_tts: str, max_s: float) -> None:
+        p = self._up("speaker")
+        if not clip_or_tts or max_s <= 0:
+            await p.stop_sound()
+            return
+        await p.sound(clip_or_tts, max_s)
+
+    def sound_clips(self) -> tuple[str, ...]:
+        """喇叭能放的话术(``clips_dir`` 下的 ``*.wav``,不带后缀)。没接喇叭就是空。"""
+        if self._payload is None or not self._payload.has("speaker"):
+            return ()
+        from pathlib import Path
+        d = Path(self._payload.cfg.clips_dir)
+        return tuple(sorted(p.stem for p in d.glob("*.wav"))) if d.is_dir() else ()
+
+    def set_sound_listener(self, fn: Callable[[bool, str], Any]) -> None:
+        """喇叭放完、放坏了、到点了回调 ``fn(ok, 原因)``(代理据此放开优先级、记事件)。"""
+        if self._payload is not None:
+            self._payload.on_sound_end = fn
+
+    def sound_tts(self) -> bool:
+        return self._payload is not None and bool(self._payload.cfg.tts_command)
+
+    async def spotlight(self, on: bool, max_s: float) -> None:
+        await self._up("spotlight").set("spotlight", on and max_s > 0, max_s)
+
+    async def spotlight_side(self, side: str, on: bool, max_s: float) -> None:
+        """只开、关一边(W40,``left``/``right``);聚光灯不分左右的狗报错。"""
+        await self._up("spotlight").set("spotlight", on and max_s > 0, max_s, side=side)
+
+    def device_health(self) -> list[dict[str, Any]]:
+        """设备健康(W40):上装那几样(继电器板、喇叭、喇叭警笛)。没装上装是空的。"""
+        return self._payload.health() if self._payload is not None else []
+
+    def deter_options(self) -> dict[str, Any]:
+        """能力里多报的(W40):``spotlight_sides``、``strobe_colors``、``siren_via``。"""
+        return self._payload.options() if self._payload is not None else {}
+
+    async def head(self, pan: float, tilt: float) -> None:
+        raise HalUnsupported("ControlHead 的单位与方向未验过,先不开")
+
+    async def camera_sources(self) -> tuple[str, ...]:
+        return ()                                     # RTSP 归媒体那一层,不在 HAL 里
+
+    async def snapshot(self, source: str) -> bytes:
+        raise HalUnsupported("SDK 没有拍照接口,取图走 RTSP")
+
+    async def stream_url(self, source: str) -> str:
+        raise HalUnsupported("W00d 不报视频地址")
+
+    async def depth(self) -> Any:
+        raise HalUnsupported("W00d 不接深度相机")
+
+    async def thermal(self) -> Any:
+        raise HalUnsupported("D1 Max 没有热像")
+
+    async def audio_session(self) -> Any:
+        raise HalUnsupported("W00d 不接音频")
+
+    # ------------------------------------------------------------ 回充(没有)
+
+    async def recharge_start(self) -> None:
+        raise HalUnsupported("W00d 不做回充")
+
+    async def recharge_stop(self) -> None:
+        raise HalUnsupported("W00d 不做回充")
+
+    async def undock(self) -> None:
+        raise HalUnsupported("W00d 不做回充")
+
+    async def recharge_status(self) -> str:
+        raise HalUnsupported("W00d 不做回充")
+
+    # ------------------------------------------------------------ 能力
+
+    def hal_capabilities(self) -> HalCapabilities:
+        return HalCapabilities(
+            max_vx=self.max_vx, max_wz=self.max_wz, deadband_vx=self._deadband,
+            lateral=self._lat_mps > 0, max_vy=self.max_vy,
+            control_releasable=False, recharge_mode="none",
+            sensing={"lidar": False, "depth": False, "thermal": False, "imu": True,
+                     "imu_hz": IMU_HZ, "joint_effort": False, "foot_force": False},
+            actuators={"light": True, "head": False} | {
+                k: self._payload is not None and self._payload.has(k)
+                for k in ("strobe", "siren", "speaker", "spotlight")})

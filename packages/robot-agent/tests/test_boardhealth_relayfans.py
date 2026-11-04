@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from d1max_agent.boardhealth import BoardConfig, BoardConfigError, BoardMonitor
+from nexwar_agent.boardhealth import BoardConfig, BoardConfigError, BoardMonitor
 
 ROOT = Path(__file__).resolve().parents[3]
 FANS = [{"name": "exhaust_l", "relay_input": 0, "alarm_active": "high"},

@@ -13,7 +13,7 @@
   "siren": {"coil": "siren", "clip": "siren"},
   "audio": {
     "device": "plughw:CARD=rockchipes8388",
-    "clips_dir": "/var/lib/d1max/clips",
+    "clips_dir": "/var/lib/nexwar/clips",
     "mute": {"mixer": {"card": "rockchipes8388", "control": "Headphone"}},
     "amp_idle_s": 15
   }

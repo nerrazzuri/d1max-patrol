@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from d1max_agent.engine.removable import (
+from nexwar_agent.engine.removable import (
     MARKER_REL,
     NO_IDENTITY,
     DiskRole,
@@ -16,7 +16,7 @@ from d1max_agent.engine.removable import (
 )
 
 
-def _mark(mount: Path, role: str, sn: str = "D1MAX-0001") -> None:
+def _mark(mount: Path, role: str, sn: str = "NEXWAR-0001") -> None:
     marker = mount / MARKER_REL
     marker.parent.mkdir(parents=True, exist_ok=True)
     marker.write_text(json.dumps({"role": role, "sn": sn}, ensure_ascii=False),
@@ -29,7 +29,7 @@ def test_没有标记文件的盘角色是认不出来(tmp_path):
 
 def test_标记文件说是镜像盘就认镜像盘(tmp_path):
     _mark(tmp_path, "mirror")
-    assert read_role(tmp_path) == (DiskRole.MIRROR, "D1MAX-0001")
+    assert read_role(tmp_path) == (DiskRole.MIRROR, "NEXWAR-0001")
 
 
 def test_标记文件说是取走盘就认取走盘(tmp_path):
@@ -92,27 +92,27 @@ def _mirror(sn: str = "") -> list[Removable]:
 def test_别的狗的镜像盘拦起飞():
     """SN 记下来就是为了这一条 —— 只看 role 的话,A 狗的备份盘插到 B 狗上
     一路绿灯,而写进去的数据从此串了台。"""
-    assert len(blocks_takeoff(_mirror("D1MAX-0002"),
-                              robot_sn="D1MAX-0001")) == 1
+    assert len(blocks_takeoff(_mirror("NEXWAR-0002"),
+                              robot_sn="NEXWAR-0001")) == 1
 
 
 def test_自己的镜像盘照样不拦():
-    assert blocks_takeoff(_mirror("D1MAX-0001"), robot_sn="D1MAX-0001") == ()
+    assert blocks_takeoff(_mirror("NEXWAR-0001"), robot_sn="NEXWAR-0001") == ()
 
 
 def test_盘上没写SN的镜像盘放行():
     """没写 SN 的那块盘不属于任何一只狗 —— 拦它防不住数据串台。"""
-    assert blocks_takeoff(_mirror(""), robot_sn="D1MAX-0001") == ()
+    assert blocks_takeoff(_mirror(""), robot_sn="NEXWAR-0001") == ()
 
 
 def test_本机没有身份时镜像盘一律放行():
     """``fingerprint`` 读不出 SN 是合法工况(见 app/identity.py)。把这种狗
     连自己的镜像盘都拦掉,是凭空造出来的一个新故障模式。"""
-    assert blocks_takeoff(_mirror("D1MAX-0002"), robot_sn="") == ()
+    assert blocks_takeoff(_mirror("NEXWAR-0002"), robot_sn="") == ()
 
 
 def test_不传robot_sn时跟以前一样只看角色():
-    assert blocks_takeoff(_mirror("D1MAX-0002")) == ()
+    assert blocks_takeoff(_mirror("NEXWAR-0002")) == ()
 
 
 async def test_扫的是挂载点不是目录(tmp_path):
@@ -133,7 +133,7 @@ async def test_扫的时候顺手把角色读出来(tmp_path):
     probe = MountRootProbe(roots=(root,), is_mount=lambda p: True)
     got = await probe.scan()
     assert got[0].role is DiskRole.MIRROR
-    assert got[0].sn == "D1MAX-0001"
+    assert got[0].sn == "NEXWAR-0001"
 
 
 async def test_挂载根目录压根不存在不算错(tmp_path):
@@ -158,18 +158,18 @@ def test_读不出身份的狗报的是unknown不是空串():
     所以上面那条"本机没有身份就放行"只认空串的话,在真机上是一句死话:
     真正会出现的那个值(``"unknown"``)照样被当成一个正经 SN 去比对。
     """
-    from d1max_patrol.app.identity import UNKNOWN_SN
+    from nexwar_patrol.app.identity import UNKNOWN_SN
 
     assert UNKNOWN_SN in NO_IDENTITY
-    assert blocks_takeoff(_mirror("D1MAX-0002"), robot_sn=UNKNOWN_SN) == ()
+    assert blocks_takeoff(_mirror("NEXWAR-0002"), robot_sn=UNKNOWN_SN) == ()
 
 
 def test_盘上写着unknown的镜像盘也放行():
     """那块盘是一只读不出身份的狗备份出来的,它同样不属于任何一只狗。"""
-    assert blocks_takeoff(_mirror("unknown"), robot_sn="D1MAX-0001") == ()
+    assert blocks_takeoff(_mirror("unknown"), robot_sn="NEXWAR-0001") == ()
 
 
 def test_两边都知道且不同还是照拦():
     """放宽的只是"不知道"那一侧 —— 真串台的那条线一步没让。"""
-    assert len(blocks_takeoff(_mirror("D1MAX-0002"),
-                              robot_sn="D1MAX-0001")) == 1
+    assert len(blocks_takeoff(_mirror("NEXWAR-0002"),
+                              robot_sn="NEXWAR-0001")) == 1

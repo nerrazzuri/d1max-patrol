@@ -97,10 +97,10 @@ Future<bool> shareBundle(String name, Uint8List bytes) async {
   return r.status != ShareResultStatus.dismissed;
 }
 
-/// 诊断包的文件名：`d1max-support-20261011-021436.tar.gz`（当地时间）。
+/// 诊断包的文件名：`nexwar_support-20261011-021436.tar.gz`（当地时间）。
 String bundleName(DateTime now) {
   String two(int n) => n.toString().padLeft(2, '0');
-  return 'd1max-support-${now.year}${two(now.month)}${two(now.day)}-'
+  return 'nexwar_support-${now.year}${two(now.month)}${two(now.day)}-'
       '${two(now.hour)}${two(now.minute)}${two(now.second)}.tar.gz';
 }
 

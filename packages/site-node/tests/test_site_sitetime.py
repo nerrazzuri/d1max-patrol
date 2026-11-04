@@ -8,9 +8,9 @@ from zoneinfo import ZoneInfo
 import pytest
 from test_site_api import PW, 站
 
-from d1max_site.db import SiteDB
-from d1max_site.site_settings import SettingsError, SiteSettings
-from d1max_site.sitetime import day_text, local_day_start, site_tz
+from nexwar_site.db import SiteDB
+from nexwar_site.site_settings import SettingsError, SiteSettings
+from nexwar_site.sitetime import day_text, local_day_start, site_tz
 
 KL = ZoneInfo("Asia/Kuala_Lumpur")
 

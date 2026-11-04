@@ -15,7 +15,7 @@ import contextlib
 import pytest
 from websockets.asyncio.server import serve
 
-from d1max_patrol.backends.base import (
+from nexwar_patrol.backends.base import (
     BackendDisconnected,
     BackendReconnected,
     LocStatusEvent,
@@ -25,17 +25,17 @@ from d1max_patrol.backends.base import (
     NavStatusEvent,
     NavTimeoutError,
 )
-from d1max_patrol.backends.vendor_nav import VendorNavBackend
-from d1max_patrol.config.models import NavConfig
-from d1max_patrol.protocol import nav_requests as R
-from d1max_patrol.protocol.nav_frames import Response
-from d1max_patrol.protocol.nav_types import (
+from nexwar_patrol.backends.vendor_nav import VendorNavBackend
+from nexwar_patrol.config.models import NavConfig
+from nexwar_patrol.protocol import nav_requests as R
+from nexwar_patrol.protocol.nav_frames import Response
+from nexwar_patrol.protocol.nav_types import (
     LocStatus,
     MappingStatus,
     NavStatus,
     Pose,
 )
-from d1max_sim.nav_server import SimNavServer
+from nexwar_sim.nav_server import SimNavServer
 
 FAST = dict(request_timeout_s=3.0, status_poll_interval_s=0.05,
             connect_timeout_s=2.0, reconnect_min_s=0.05, reconnect_max_s=0.2)

@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from d1max_patrol.protocol.nav_frames import (
+from nexwar_patrol.protocol.nav_frames import (
     FRAME_TYPE_ALG_ERROR,
     FRAME_TYPE_REQUEST,
     FRAME_TYPE_RESPONSE,

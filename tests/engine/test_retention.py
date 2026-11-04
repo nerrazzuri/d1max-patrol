@@ -11,7 +11,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from d1max_agent.engine.retention import SETTLE_HOURS, is_settled
+from nexwar_agent.engine.retention import SETTLE_HOURS, is_settled
 
 NOW = datetime(2026, 9, 1, 12, 0, 0, tzinfo=timezone.utc)
 

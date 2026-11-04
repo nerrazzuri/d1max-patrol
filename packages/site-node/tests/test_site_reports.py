@@ -4,9 +4,9 @@ from __future__ import annotations
 import pytest
 from test_site_api import PW, 站
 
-from d1max_site import reports
-from d1max_site.db import SiteDB
-from d1max_site.reports import ReportError, daily
+from nexwar_site import reports
+from nexwar_site.db import SiteDB
+from nexwar_site.reports import ReportError, daily
 
 T0 = 1_800_000_000_000
 H = 3_600_000

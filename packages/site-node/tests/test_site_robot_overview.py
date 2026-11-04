@@ -10,9 +10,9 @@ from zoneinfo import ZoneInfo
 import pytest
 from test_site_api import PW, 站
 
-from d1max_site.db import SiteDB
-from d1max_site.registry import Registry, RegistryError
-from d1max_site.robot_overview import overview
+from nexwar_site.db import SiteDB
+from nexwar_site.registry import Registry, RegistryError
+from nexwar_site.robot_overview import overview
 
 KL = ZoneInfo("Asia/Kuala_Lumpur")
 

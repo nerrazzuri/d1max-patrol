@@ -1,8 +1,8 @@
 // 狗列表的电量从值守汇总里取（2026-10-14 重做，四批合到一起时补的）：狗的视图里没有电量，汇总里有。
 import 'dart:async';
 
-import 'package:d1max_patrol/ui/nw/nw_cards.dart';
-import 'package:d1max_patrol/ui/nw/nw_p3_robots.dart';
+import 'package:nexwar_patrol/ui/nw/nw_cards.dart';
+import 'package:nexwar_patrol/ui/nw/nw_p3_robots.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 

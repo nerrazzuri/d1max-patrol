@@ -13,9 +13,9 @@ from test_site_api import MAP, PW, 站
 from test_site_intercept_reach import _屋子
 from test_site_maps import _files
 
-from d1max_site.areas import AreaBook
-from d1max_site.db import SiteDB
-from d1max_site.layout_history import KEEP, LayoutHistory
+from nexwar_site.areas import AreaBook
+from nexwar_site.db import SiteDB
+from nexwar_site.layout_history import KEEP, LayoutHistory
 
 POND = {"id": "pond", "kind": "nogo", "label": "池子",
         "polygon": [[5, 5], [6, 5], [6, 6], [5, 6]]}

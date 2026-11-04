@@ -4,9 +4,9 @@ import math
 
 import pytest
 
-from d1max_patrol.protocol.nav_types import LocStatus, MappingStatus, NavStatus, Pose
-from d1max_sim.kinematics import Planar2DModel
-from d1max_sim.nav_state import (
+from nexwar_patrol.protocol.nav_types import LocStatus, MappingStatus, NavStatus, Pose
+from nexwar_sim.kinematics import Planar2DModel
+from nexwar_sim.nav_state import (
     LocStateMachine,
     MappingStateMachine,
     NavStateMachine,

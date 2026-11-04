@@ -6,14 +6,14 @@ from __future__ import annotations
 import asyncio
 import json
 
-from d1max_adapter_sim.robot import SimRobot
-from d1max_agent.runtime import AgentRuntime
-from d1max_contract.memory_broker import MemoryBroker, MemoryTransport
-from d1max_contract.messages import Capabilities, Command
-from d1max_contract.registration import Registration
-from d1max_contract.topics import Topics
-from d1max_contract.transport import Message
-from d1max_patrol.protocol.nav_types import Pose
+from nexwar_adapter_sim.robot import SimRobot
+from nexwar_agent.runtime import AgentRuntime
+from nexwar_contract.memory_broker import MemoryBroker, MemoryTransport
+from nexwar_contract.messages import Capabilities, Command
+from nexwar_contract.registration import Registration
+from nexwar_contract.topics import Topics
+from nexwar_contract.transport import Message
+from nexwar_patrol.protocol.nav_types import Pose
 
 REG = Registration(site_id="s", robot_id="r", credential_fingerprint="f", issued_at=0,
                    expires_at=10**13)
@@ -112,8 +112,8 @@ async def test_跑着的时候调过头尾_当场中止_狗停_发事件_调回�
 
 
 async def test_导航桥自己也停_不等运行时(tmp_path):
-    from d1max_agent.assembly import build_engine
-    from d1max_patrol.protocol.nav_types import NavStatus
+    from nexwar_agent.assembly import build_engine
+    from nexwar_patrol.protocol.nav_types import NavStatus
     c = 钟()
     r = SimRobot(now_ms=c)
     await r.connect()

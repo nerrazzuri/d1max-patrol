@@ -19,14 +19,14 @@ DEPLOY = ROOT / "deploy"
 
 @pytest.fixture
 def 服务单元() -> str:
-    """狗上唯一的单元(W00c5e:老服务 d1max-patrol.service 退役)。"""
-    return (DEPLOY / "d1max-agent.service").read_text(encoding="utf-8")
+    """狗上唯一的单元(W00c5e:老服务 nexwar_patrol.service 退役)。"""
+    return (DEPLOY / "nexwar_agent.service").read_text(encoding="utf-8")
 
 
 #: 守卫那一行的完整形状。前缀的 '-'、根下(不是 current 下)的解释器、
 #: 子命令三样缺一不可 —— 分开断言各自的理由见下面几条用例。
-GUARD_LINE = ("ExecStartPre=-/opt/d1max/bin/python "
-              "-m d1max_patrol.cli release boot-guard")
+GUARD_LINE = ("ExecStartPre=-/opt/nexwar/bin/python "
+              "-m nexwar_patrol.cli release boot-guard")
 
 
 
@@ -36,15 +36,15 @@ def 装机脚本() -> str:
 
 
 def test_狗上只有代理一个单元(服务单元, 装机脚本):
-    """W00c5e:狗上只有 d1max-agent.service。老服务、老守卫单元、特权助手都不在仓里了。
+    """W00c5e:狗上只有 nexwar_agent.service。老服务、老守卫单元、特权助手都不在仓里了。
 
     两个服务同时开着的话,两个进程抢同一个旁路进程的控制权;两份守卫还会把在途标记数两次
     (一次开机加二),第二次开机就把一版本来健康的退掉。
     """
     assert (DEPLOY / "install.sh").exists()
-    assert (DEPLOY / "d1max-agent.service").exists()
-    for 老 in ("d1max-patrol.service", "d1max-bootguard.service", "d1max-privileged",
-              "d1max-restart-now", "sudoers-d1max"):
+    assert (DEPLOY / "nexwar_agent.service").exists()
+    for 老 in ("nexwar_patrol.service", "nexwar_bootguard.service", "nexwar_privileged",
+              "nexwar_restart_now", "sudoers-nexwar"):
         assert not (DEPLOY / 老).exists(), f"deploy/{老} 应该随 W00c5e 退役"
     assert 服务单元
     assert 装机脚本
@@ -52,14 +52,14 @@ def test_狗上只有代理一个单元(服务单元, 装机脚本):
 
 def test_服务指着符号链接而不是某一版(服务单元):
     """指死某一版的话,换版本就换不动,回滚也回不去 —— 双槽整个白做。"""
-    assert "/opt/d1max/current/" in 服务单元
-    assert "/opt/d1max/releases/" not in 服务单元
+    assert "/opt/nexwar/current/" in 服务单元
+    assert "/opt/nexwar/releases/" not in 服务单元
 
 
 def test_守卫在每一次服务启动之前跑一遍(服务单元):
     """顺序反了,守卫就永远在坏版本已经失败之后才跑,救不了任何东西。
 
-    原来这条靠守卫单元的 ``Before=d1max-patrol.service`` + 服务单元的
+    原来这条靠守卫单元的 ``Before=nexwar_patrol.service`` + 服务单元的
     ``After=`` 保证。**换成 ``ExecStartPre=`` 之后顺序是 systemd 的语义
     保证的**(ExecStartPre 全部跑完才轮到 ExecStart),而且顺带把原来那个
     洞补上了:守卫现在每一次服务启动都数一遍,不只是真开机那一次 ——
@@ -69,14 +69,14 @@ def test_守卫在每一次服务启动之前跑一遍(服务单元):
     # ExecStartPre 排在 ExecStart 之前 —— 顺序在文件里也看得见。
     assert 服务单元.index("ExecStartPre=") < 服务单元.index("\nExecStart=")
     # 守卫用的是根下那个跟版本无关的解释器,不是 current 下那一版自己的。
-    assert "/opt/d1max/bin/python -m d1max_patrol.cli release boot-guard" in 服务单元
+    assert "/opt/nexwar/bin/python -m nexwar_patrol.cli release boot-guard" in 服务单元
 
 
 def test_守卫自己挂了也不拦服务启动(服务单元):
     """原来这层保证由守卫单元的 ``SuccessExitStatus=0 1`` 兜着。
 
     守卫改成 ``ExecStartPre=`` 之后,**那条兜底的活归行首那个 ``-``**:
-    没有它的话,``/opt/d1max/bin/python`` 缺失或损坏 —— 正是守卫本该兜底
+    没有它的话,``/opt/nexwar/bin/python`` 缺失或损坏 —— 正是守卫本该兜底
     的那种坏法 —— 会让 ExecStartPre 失败并中止整个服务启动,机器连网页都
     开不出来。那就是我们刚用 ``Wants=`` 替掉 ``Requires=`` 修掉的那个陷阱
     换个地方重犯。安全网不该比它防的问题更危险。
@@ -88,8 +88,8 @@ def test_守卫自己挂了也不拦服务启动(服务单元):
     两条分别断言,不用 or 兜底:写成二选一的 or 时,删掉真正兜住这层保证
     的那一样,测试照样绿。
     """
-    assert "ExecStartPre=-/opt/d1max/bin/python" in 服务单元
-    assert "WorkingDirectory=-/opt/d1max/current" in 服务单元
+    assert "ExecStartPre=-/opt/nexwar/bin/python" in 服务单元
+    assert "WorkingDirectory=-/opt/nexwar/current" in 服务单元
 
 
 def test_服务会自己重启但不无限刷屏(服务单元):
@@ -99,8 +99,8 @@ def test_服务会自己重启但不无限刷屏(服务单元):
 
 def test_服务把巡检数据指到版本槽外面(服务单元):
     """W01:没有这一行,--runs-root 默认相对路径 runs,落在
-    WorkingDirectory=/opt/d1max/current 也就是版本槽里,升两次级就被 prune 删掉。"""
-    assert "Environment=D1MAX_DATA_ROOT=/var/lib/d1max" in 服务单元
+    WorkingDirectory=/opt/nexwar/current 也就是版本槽里,升两次级就被 prune 删掉。"""
+    assert "Environment=NEXWAR_DATA_ROOT=/var/lib/nexwar" in 服务单元
 
 
 def test_脚本能重跑():
@@ -149,34 +149,34 @@ def test_装机脚本会给这一版建自己的venv(装机脚本):
     assert '[[ ! -e "$SENTINEL" ]]' in 装机脚本
 
 
-# ------------------------------------------------------------- 裁定 3: D1MAX_SN
+# ------------------------------------------------------------- 裁定 3: NEXWAR_SN
 
 def test_单元读EnvironmentFile(服务单元):
-    """D1MAX_SN 的来源必须唯一 —— 命令行 release activate 记进 pending.json 的
+    """NEXWAR_SN 的来源必须唯一 —— 命令行 release activate 记进 pending.json 的
 
     SN,跟 HTTP 服务侧解析出来的 SN 得是同一个来源,否则重启后自检第四项
     (identity)会假失败,把一版好的自动回滚掉。前缀的 '-' 是"文件不在也别
     拦启动",不能省。
 
-    守卫那一侧原来靠 d1max-bootguard.service 上同名的一行读同一份文件;
+    守卫那一侧原来靠 nexwar_bootguard.service 上同名的一行读同一份文件;
     守卫挪成本单元的 ExecStartPre 之后,它跟服务共用这一行 ——"同一个来源"
     这条约束从"两处写得一样"变成了结构上的。
     """
-    assert "EnvironmentFile=-/etc/d1max/env" in 服务单元
+    assert "EnvironmentFile=-/etc/nexwar/env" in 服务单元
 
 
 def test_装机脚本播种env文件但不覆盖已有的(装机脚本):
-    """现场填过的 D1MAX_SN 不能被重跑抹掉。"""
-    assert "/etc/d1max/env" in 装机脚本
+    """现场填过的 NEXWAR_SN 不能被重跑抹掉。"""
+    assert "/etc/nexwar/env" in 装机脚本
     # 幂等的证据:先判文件在不在,不在才写。
-    assert "-e /etc/d1max/env" in 装机脚本 or "-f /etc/d1max/env" in 装机脚本
-    assert "D1MAX_SN" in 装机脚本
+    assert "-e /etc/nexwar/env" in 装机脚本 or "-f /etc/nexwar/env" in 装机脚本
+    assert "NEXWAR_SN" in 装机脚本
 
 
 def test_装机清单里SN要在activate之前填():
     text = (ROOT / "docs" / "装机清单.md").read_text(encoding="utf-8")
-    assert "/etc/d1max/env" in text
-    assert "D1MAX_SN" in text
+    assert "/etc/nexwar/env" in text
+    assert "NEXWAR_SN" in text
     assert "release activate" in text
 
 
@@ -201,15 +201,15 @@ def test_单元里不再有对守卫单元的任何依赖(服务单元, 装机�
     # 从独立单元挪成 ExecStartPre 的注释,恰恰是这次改动最该留下的东西。
     指令行 = [ln for ln in 服务单元.splitlines()
              if ln.strip() and not ln.lstrip().startswith("#")]
-    assert not [ln for ln in 指令行 if "d1max-bootguard" in ln]
+    assert not [ln for ln in 指令行 if "nexwar_bootguard" in ln]
     assert "After=network-online.target" in 服务单元
     assert "Wants=network-online.target" in 服务单元
-    assert "systemctl disable --now d1max-bootguard.service" in 装机脚本
-    assert "rm -f /etc/systemd/system/d1max-bootguard.service" in 装机脚本
+    assert "systemctl disable --now nexwar_bootguard.service" in 装机脚本
+    assert "rm -f /etc/systemd/system/nexwar_bootguard.service" in 装机脚本
     # 清老单元要排在 daemon-reload 之前,不然这一次 reload 读到的还是它。
-    assert (装机脚本.index("rm -f /etc/systemd/system/d1max-bootguard.service")
+    assert (装机脚本.index("rm -f /etc/systemd/system/nexwar_bootguard.service")
             < 装机脚本.index("systemctl daemon-reload"))
-    assert "systemctl enable d1max-agent.service" in 装机脚本
+    assert "systemctl enable nexwar_agent.service" in 装机脚本
 
 
 def test_脚本重跑到已经是这一版时跳过切换但仍然重启(装机脚本):
@@ -217,7 +217,7 @@ def test_脚本重跑到已经是这一版时跳过切换但仍然重启(装机�
 
     ReleaseError 变成 exit 2,install.sh 有 set -euo pipefail),脚本会
     就地中止,stop/start 走不到——而它们正是"填完 SN 让它生效"的唯一
-    手段(W01 之后,重跑顺带把老槽的数据搬到 /var/lib/d1max,所以中间多了
+    手段(W01 之后,重跑顺带把老槽的数据搬到 /var/lib/nexwar,所以中间多了
     一步 migrate-data,不再是单条 restart)。这里断言的是跳过切换那个具体
     分支的形状,不是裸查 "readlink" 这种在别处也可能出现的字符串。
     """
@@ -226,8 +226,8 @@ def test_脚本重跑到已经是这一版时跳过切换但仍然重启(装机�
     assert "已经是在跑的那一版了,跳过切换" in 装机脚本
     # stop 和 start 都不能被套进上面那个分支里 —— 顶格(不缩进)才说明它们在
     # if/else 的 fi 之后,两条路都会走到,不是只有切换成功那一路才走。
-    assert "\nsystemctl stop d1max-agent.service || true" in 装机脚本
-    assert "systemctl start d1max-agent.service" in 装机脚本
+    assert "\nsystemctl stop nexwar_agent.service || true" in 装机脚本
+    assert "systemctl start nexwar_agent.service" in 装机脚本
 
 
 # --------------------------------------------------- fix2: 第 4 卷终评 A 组
@@ -243,8 +243,8 @@ def 交付文件() -> tuple[Path, ...]:
     """会被发到客户现场那几份。**护栏都按这一份名单铺。**"""
     return (
         DEPLOY / "install.sh",
-        DEPLOY / "d1max-agent.service",
-        DEPLOY / "d1max-agent-start",
+        DEPLOY / "nexwar_agent.service",
+        DEPLOY / "nexwar_agent_start",
         # 共存这一组也要发到现场:装机前后各跑一次 footprint.sh 留证据,
         # 撤场时跑 uninstall.sh。挂在同一份名单上,护栏(口令、端口、
         # PIN 字面量、厂商协议特征、骨架下界)就自动全都罩到它们头上。
@@ -276,9 +276,9 @@ def test_交付文件里不许出现厂商导航端口():
 
 
 def test_装机脚本把填好的SN透传给activate(装机脚本):
-    """``sudo`` 默认 ``env_reset``,``D1MAX_SN`` 不在 ``env_keep`` 里。
+    """``sudo`` 默认 ``env_reset``,``NEXWAR_SN`` 不在 ``env_keep`` 里。
 
-    脚本自己不读 ``/etc/d1max/env`` 的话,``release activate`` 拿到的是
+    脚本自己不读 ``/etc/nexwar/env`` 的话,``release activate`` 拿到的是
     空值,``cli.py`` 的 ``resolve()`` 落到设备树/MAC 兜底;而服务侧经
     ``EnvironmentFile=`` 拿到的是人填的真值 —— 重启后自检第四项恒红,
     ``postcheck_verdict`` 判 ROLLBACK,一版好的被退回去。首次装机因
@@ -287,11 +287,11 @@ def test_装机脚本把填好的SN透传给activate(装机脚本):
     **读法是照 systemd 的字面量解析抄的,不是 source。** 理由见
     ``test_装机脚本绝不source那份给systemd用的env``。
     """
-    assert "read_env_value D1MAX_SN" in 装机脚本            # 读进脚本自己的变量
+    assert "read_env_value NEXWAR_SN" in 装机脚本            # 读进脚本自己的变量
     # 光读出来不够:sudo 那一行必须显式把它带过去。
-    assert 'D1MAX_SN="${D1MAX_SN:-}"' in 装机脚本
-    assert (装机脚本.index("read_env_value D1MAX_SN")
-            < 装机脚本.index('D1MAX_SN="${D1MAX_SN:-}"'))
+    assert 'NEXWAR_SN="${NEXWAR_SN:-}"' in 装机脚本
+    assert (装机脚本.index("read_env_value NEXWAR_SN")
+            < 装机脚本.index('NEXWAR_SN="${NEXWAR_SN:-}"'))
 
 
 def test_装机清单里有故意做坏的包那次演练():
@@ -323,24 +323,24 @@ def test_装机脚本从临时副本装不污染待哈希的包目录(装机脚�
 
 
 def test_根目录写死不给环境变量覆盖(装机脚本, 服务单元):
-    """单元里 ``/opt/d1max`` 是逐字写死的,``AppContext.release_root`` 的默认
+    """单元里 ``/opt/nexwar`` 是逐字写死的,``AppContext.release_root`` 的默认
 
-    值也是它。允许脚本被 ``D1MAX_ROOT`` 改而单元不跟着改,装出来的是一台
+    值也是它。允许脚本被 ``NEXWAR_ROOT`` 改而单元不跟着改,装出来的是一台
     脚本和服务各说各话的机器:包落在一个根下,服务读的是另一个根。
     """
     # 断言的是**那个展开**没了,不是"这三个字不许出现" —— 脚本里那段
     # 说明为什么去掉它的注释,恰恰是这条改动最该留下的东西。
-    assert "${D1MAX_ROOT" not in 装机脚本
+    assert "${NEXWAR_ROOT" not in 装机脚本
     # **顶格整行匹配,不许用裸子串。** 变量名从 `根` 换成 `ROOT` 之后,裸的
-    # "ROOT=/opt/d1max" 同时是脚本里 /etc/d1max/env 模板那行
-    # "D1MAX_RELEASE_ROOT=/opt/d1max" 的子串 —— 拿子串断言的话,真把这一行
+    # "ROOT=/opt/nexwar" 同时是脚本里 /etc/nexwar/env 模板那行
+    # "NEXWAR_RELEASE_ROOT=/opt/nexwar" 的子串 —— 拿子串断言的话,真把这一行
     # 赋值删掉,这条护栏照样绿。
-    assert re.search(r"(?m)^ROOT=/opt/d1max$", 装机脚本), \
-        "install.sh 里那行写死的 ROOT=/opt/d1max 不见了"
+    assert re.search(r"(?m)^ROOT=/opt/nexwar$", 装机脚本), \
+        "install.sh 里那行写死的 ROOT=/opt/nexwar 不见了"
     # 单元那边是写死的,这条断言是上面那句"两边要一起改"的凭据。
-    assert "/opt/d1max" in 服务单元
+    assert "/opt/nexwar" in 服务单元
     # User= 那个覆盖保留了,但单元里同样是写死的 —— 注明过才算数。
-    assert "D1MAX_USER" in 装机脚本
+    assert "NEXWAR_USER" in 装机脚本
     assert "User=robot" in 服务单元
 
 
@@ -349,7 +349,7 @@ def test_根目录写死不给环境变量覆盖(装机脚本, 服务单元):
 #: 装机脚本会当场随机生成 PIN,所以任何**字面量** PIN 出现在交付文件里都是
 #: 错的 —— 不是「示例」,是一台真机器的钥匙被印在了发给客户的纸上。
 PIN_字面量 = (
-    re.compile(r"D1MAX_PIN\s*=\s*\d"),
+    re.compile(r"NEXWAR_PIN\s*=\s*\d"),
     re.compile(r'"pin"\s*:\s*"\d'),
     re.compile(r"--pin\s+\d"),
     re.compile(r"设备 ?PIN 是 \d"),
@@ -382,8 +382,8 @@ def test_交付文件里不许出现PIN字面量():
     """这一卷开始,交付文档里会出现取 token 的命令。
 
     照抄一条带着真 PIN 的命令进文档,等于把一台机器的钥匙印在发给客户的纸
-    上 —— 而这份文档会被复制到每一个站点。命令里只许出现 ``$D1MAX_PIN``
-    这种从 ``/etc/d1max/env`` 取值的写法。
+    上 —— 而这份文档会被复制到每一个站点。命令里只许出现 ``$NEXWAR_PIN``
+    这种从 ``/etc/nexwar/env`` 取值的写法。
     """
     for 文件 in 交付文件():
         text = 文件.read_text(encoding="utf-8")
@@ -551,8 +551,8 @@ def test_离线pip参数每一处pip都带上了(装机脚本):
     **只带一半比一处都不带更坏**:现场看到的是「装到一半不动了」,而不动的
     是没带参数的那一处,最难查的那种。
     """
-    assert "D1MAX_PIP_ARGS" in 装机脚本
-    assert "PIP_ARGS=${D1MAX_PIP_ARGS:-}" in 装机脚本
+    assert "NEXWAR_PIP_ARGS" in 装机脚本
+    assert "PIP_ARGS=${NEXWAR_PIP_ARGS:-}" in 装机脚本
     # **只数可执行行, 注释里提到 pip install 的不算。** 2/7 步那段解释「软链会
     # 让 pip 装进系统 site-packages」的注释里就原样写着这五个字, 它不是一条要
     # 带离线参数的命令。判据是行首第一个非空字符是不是 ``#``。
@@ -564,7 +564,7 @@ def test_离线pip参数每一处pip都带上了(装机脚本):
         assert "$PIP_ARGS" in 行, f"这一条 pip 没带离线参数:{行.strip()}"
     # 清单那一侧要写清楚怎么用,否则现场不知道有这个口子。
     清单 = (ROOT / "docs" / "装机清单.md").read_text(encoding="utf-8")
-    assert "D1MAX_PIP_ARGS" in 清单
+    assert "NEXWAR_PIP_ARGS" in 清单
     assert "--find-links" in 清单 and "--no-index" in 清单
 
 
@@ -590,29 +590,29 @@ def test_装机清单说清了装完放证书包_填现场值_再起代理(装�
     二 = 清单.split("## 二、")[1].split("## 三、")[0]
     放 = 二.index("**开通**")                      # 商业化 A4:放证书包改成一条开通命令
     填 = 二.index("**填现场值**")
-    起 = 二.index("sudo systemctl restart d1max-agent")
+    起 = 二.index("sudo systemctl restart nexwar_agent")
     assert 放 < 填 < 起
-    for 词 in ("/etc/d1max/tls", "registration.json", "D1MAX_SITE_MQTT", "D1MAX_MAP", "D1MAX_HOME"):
+    for 词 in ("/etc/nexwar/tls", "registration.json", "NEXWAR_SITE_MQTT", "NEXWAR_MAP", "NEXWAR_HOME"):  # noqa: E501
         assert 词 in 二, f"装机清单二、里没说 {词}"
-    assert "D1MAX_HAL" in 二 and "sim" in 二 and "§3b" in 二, "适配器先留仿真、验收过了才改"
+    assert "NEXWAR_HAL" in 二 and "sim" in 二 and "§3b" in 二, "适配器先留仿真、验收过了才改"
     # 清单一里要先在站点上登记这只狗(enroll),不然二、里没有证书包可放。
     assert "enroll" in 清单.split("## 二、")[0]
     assert "provision --code" in 二 and "selfcheck" in 清单.split("## 三、")[1]   # A4
     # 脚本那一侧:6/7 看证书包、7/7 站点值空着不起。
-    assert "/etc/d1max/registration.json" in 装机脚本
+    assert "/etc/nexwar/registration.json" in 装机脚本
     assert "已经是在跑的那一版了,跳过切换" in 装机脚本
 
 
 def test_装机清单的验收看代理与站点_不再有PIN与8095():
     清单 = (ROOT / "docs" / "装机清单.md").read_text(encoding="utf-8")
     三 = 清单.split("## 三、")[1].split("## 四、")[0]
-    assert "systemctl is-active d1max-agent" in 三
-    assert "journalctl -u d1max-agent" in 三
+    assert "systemctl is-active nexwar_agent" in 三
+    assert "journalctl -u nexwar_agent" in 三
     assert "站点" in 三
-    for 老 in ("8095", "D1MAX_PIN", "/api/auth", "provisional", "payload"):
+    for 老 in ("8095", "NEXWAR_PIN", "/api/auth", "provisional", "payload"):
         assert 老 not in 清单, f"装机清单里还有老服务的 {老}"
     # 老服务只许在「清掉老服务」「验收它没了」这两处被提到。
-    assert "systemctl status d1max-patrol` 说找不到" in 三
+    assert "systemctl status nexwar_patrol` 说找不到" in 三
 
 
 
@@ -822,27 +822,27 @@ def test_装机脚本建数据根并在停服务后起新版前把老槽的数�
     正往槽里的 queue.jsonl / runs/ 追加,搬到一半的文件会被当成已完整拷走。
     所以顺序是 stop → is-active 判着确实停了 → migrate-data → start,
     停不掉就跳过搬迁,不是 migrate → restart。"""
-    assert re.search(r'mkdir -p .*"/var/lib/d1max"', 装机脚本)
-    assert 'chown "$RUN_USER":"$RUN_USER" "/var/lib/d1max"' in 装机脚本
-    stop = 装机脚本.index("systemctl stop d1max-agent.service")
-    is_active = 装机脚本.index("systemctl is-active --quiet d1max-agent.service")
+    assert re.search(r'mkdir -p .*"/var/lib/nexwar"', 装机脚本)
+    assert 'chown "$RUN_USER":"$RUN_USER" "/var/lib/nexwar"' in 装机脚本
+    stop = 装机脚本.index("systemctl stop nexwar_agent.service")
+    is_active = 装机脚本.index("systemctl is-active --quiet nexwar_agent.service")
     mig = 装机脚本.index("release migrate-data")
-    start = 装机脚本.index("systemctl start d1max-agent.service")
+    start = 装机脚本.index("systemctl start nexwar_agent.service")
     assert stop < is_active < mig < start
-    assert ('\n    "$ROOT/bin/python" -m d1max_patrol.cli release migrate-data'
+    assert ('\n    "$ROOT/bin/python" -m nexwar_patrol.cli release migrate-data'
            in 装机脚本)
     代码 = [行 for 行 in 装机脚本.splitlines()
           if 行.strip() and not 行.lstrip().startswith("#")
           and not 行.lstrip().startswith("echo")]
-    assert not any("systemctl restart d1max-agent" in 行 for 行 in 代码)
+    assert not any("systemctl restart nexwar_agent" in 行 for 行 in 代码)
 
 
 def test_卸载脚本默认删数据根而keep_data留着():
     text = (DEPLOY / "uninstall.sh").read_text(encoding="utf-8")
-    assert "# @删除 /var/lib/d1max" in text
-    assert "# @保留 /var/lib/d1max" in text
-    assert 'rm_sys "/var/lib/d1max"' in text
-    assert "/var/lib/d1max|/var/lib/d1max/*)" in text
+    assert "# @删除 /var/lib/nexwar" in text
+    assert "# @保留 /var/lib/nexwar" in text
+    assert 'rm_sys "/var/lib/nexwar"' in text
+    assert "/var/lib/nexwar|/var/lib/nexwar/*)" in text
 
 
 def test_卸载脚本keep_data时releases里还有migrated就不删():
@@ -889,8 +889,8 @@ def test_起动次数上限那一行写在Unit段而不是Service段(服务单�
 
 def test_单元优先取包内deploy(装机脚本):
     """``deploy/`` 在包里;老包没带就退回脚本自己所在的目录。"""
-    assert 'AGENT_UNIT_SRC="$PKG/deploy/d1max-agent.service"' in 装机脚本
-    assert '$(dirname "$0")/d1max-agent.service' in 装机脚本, "老包的退路不能删"
+    assert 'AGENT_UNIT_SRC="$PKG/deploy/nexwar_agent.service"' in 装机脚本
+    assert '$(dirname "$0")/nexwar_agent.service' in 装机脚本, "老包的退路不能删"
     assert 'install -m 0644 "$AGENT_UNIT_SRC" /etc/systemd/system/' in 装机脚本
 
 
@@ -900,73 +900,73 @@ def test_装机脚本清掉老服务与特权助手_先停老服务再删sudoers
     顺序:先停老服务(两个进程不许同时抢旁路进程);sudoers 先于助手删 —— 反过来的话中间有一瞬
     白名单指着一个不存在的路径,谁在那一刻建出同名文件谁就是 root。
     """
-    停 = 装机脚本.index("systemctl disable --now d1max-patrol.service")
-    删单元 = 装机脚本.index("rm -f /etc/systemd/system/d1max-patrol.service")
-    删白名单 = 装机脚本.index("rm -f /etc/sudoers.d/d1max")
-    删助手 = 装机脚本.index("rm -f /usr/local/sbin/d1max-privileged")
+    停 = 装机脚本.index("systemctl disable --now nexwar_patrol.service")
+    删单元 = 装机脚本.index("rm -f /etc/systemd/system/nexwar_patrol.service")
+    删白名单 = 装机脚本.index("rm -f /etc/sudoers.d/nexwar")
+    删助手 = 装机脚本.index("rm -f /usr/local/sbin/nexwar_privileged")
     assert 停 < 删单元 < 删白名单 < 删助手
     assert 'rm -rf "$ROOT/bundles"' in 装机脚本
     # 清老东西要在 daemon-reload 之前,不然这一次 reload 读到的还是它。
     assert 删单元 < 装机脚本.index("systemctl daemon-reload")
     代码 = [行 for 行 in 装机脚本.splitlines() if 行.strip() and not 行.lstrip().startswith("#")]
-    # W55 起装的是新的特权执行器(d1max-ops-runner,systemd 路径单元拉起,不经 sudo);老助手照旧不许装
-    老代码 = [行 for 行 in 代码 if "d1max-ops-runner" not in 行 and "d1max_contract" not in 行]
-    for 老 in ("visudo", "install -m 0755 -o root", "install -m 0440", "d1max-restart-now\" "):
+    # W55 起装的是新的特权执行器(nexwar_ops_runner,systemd 路径单元拉起,不经 sudo);老助手照旧不许装
+    老代码 = [行 for 行 in 代码 if "nexwar_ops_runner" not in 行 and "nexwar_contract" not in 行]
+    for 老 in ("visudo", "install -m 0755 -o root", "install -m 0440", "nexwar_restart_now\" "):
         assert not any(老 in 行 for 行 in 老代码), f"装机脚本还在装老东西:{老}"
 
 
 def test_W55特权执行器_root属主_不经sudo_不从版本目录跑(装机脚本):
-    """W55:执行器拷到 root 属主的 /usr/local/lib/d1max/(版本目录属主是 robot,root 不跑那里的代码);
+    """W55:执行器拷到 root 属主的 /usr/local/lib/nexwar/(版本目录属主是 robot,root 不跑那里的代码);
     请求目录只有代理的账号能写;结果目录 root 写、代理的组能读;不写任何 sudoers。"""
-    assert 'install -m 0755 -o root -g root "$PKG/deploy/d1max-ops-runner" ' \
-           "/usr/local/lib/d1max/ops-runner" in 装机脚本
-    assert 'install -d -m 0700 -o "$RUN_USER" -g "$RUN_USER" /var/lib/d1max-ops/req' in 装机脚本
-    assert 'install -d -m 0750 -o root -g "$RUN_USER" /var/lib/d1max-ops/done' in 装机脚本
-    assert "systemctl enable --now d1max-ops.path" in 装机脚本
+    assert 'install -m 0755 -o root -g root "$PKG/deploy/nexwar_ops_runner" ' \
+           "/usr/local/lib/nexwar/ops-runner" in 装机脚本
+    assert 'install -d -m 0700 -o "$RUN_USER" -g "$RUN_USER" /var/lib/nexwar_ops/req' in 装机脚本
+    assert 'install -d -m 0750 -o root -g "$RUN_USER" /var/lib/nexwar_ops/done' in 装机脚本
+    assert "systemctl enable --now nexwar_ops.path" in 装机脚本
     代码 = [行 for 行 in 装机脚本.splitlines() if 行.strip() and not 行.lstrip().startswith("#")]
     assert not any("sudoers" in 行 and "rm -f" not in 行 for 行 in 代码)
-    单元 = (ROOT / "deploy" / "d1max-ops.service").read_text()
-    assert "ExecStart=/usr/bin/python3 /usr/local/lib/d1max/ops-runner" in 单元
-    assert "/opt/d1max" not in 单元.split("[Service]")[1]
+    单元 = (ROOT / "deploy" / "nexwar_ops.service").read_text()
+    assert "ExecStart=/usr/bin/python3 /usr/local/lib/nexwar/ops-runner" in 单元
+    assert "/opt/nexwar" not in 单元.split("[Service]")[1]
 
 
 def test_装机脚本不再生成PIN_老env里的老行不动只提示(装机脚本):
     """W00c5e:PIN 随老服务退役。新装不生成;老机器 env 里的老行不删(不改人手写的配置文件)。"""
     代码 = [行 for 行 in 装机脚本.splitlines() if 行.strip() and not 行.lstrip().startswith("#")]
-    assert not any("secrets.randbelow" in 行 or "D1MAX_PIN=%s" in 行 for 行 in 代码)
-    assert "D1MAX_(PIN|CONSOLE_URL|CONSOLE_TOKEN)" in 装机脚本
+    assert not any("secrets.randbelow" in 行 or "NEXWAR_PIN=%s" in 行 for 行 in 代码)
+    assert "NEXWAR_(PIN|CONSOLE_URL|CONSOLE_TOKEN)" in 装机脚本
     assert "已经没人读了,可以删" in 装机脚本
-    assert not any(re.search(r"sed -i[^\n]*D1MAX_PIN", 行) for 行 in 代码)
+    assert not any(re.search(r"sed -i[^\n]*NEXWAR_PIN", 行) for 行 in 代码)
 
 
 def test_装机脚本的env模板有站点那几样_适配器缺省仿真(装机脚本):
     模板 = 装机脚本.split("<<'环境模板'")[1].split("环境模板")[0]
-    for 键 in ("D1MAX_SN=", "D1MAX_SITE_MQTT=", "D1MAX_MAP=", "D1MAX_HOME=", "D1MAX_AGENT_ARGS="):
+    for 键 in ("NEXWAR_SN=", "NEXWAR_SITE_MQTT=", "NEXWAR_MAP=", "NEXWAR_HOME=", "NEXWAR_AGENT_ARGS="):  # noqa: E501
         assert f"\n{键}" in 模板, f"env 模板里少了 {键}"
-    assert "\nD1MAX_HAL=sim\n" in 模板, "W00d 真机验收过了之前,适配器缺省是仿真"
-    assert "D1MAX_PIN" not in 模板 and "CONSOLE" not in 模板
+    assert "\nNEXWAR_HAL=sim\n" in 模板, "W00d 真机验收过了之前,适配器缺省是仿真"
+    assert "NEXWAR_PIN" not in 模板 and "CONSOLE" not in 模板
 
 
 def test_注册文件在但站点值空着就先不起代理(装机脚本):
     """启动脚本见到空值就退出,Restart=always 会刷成每 5 秒一条的启动循环。"""
-    for 键 in ("D1MAX_SITE_MQTT", "D1MAX_MAP", "D1MAX_HOME"):
+    for 键 in ("NEXWAR_SITE_MQTT", "NEXWAR_MAP", "NEXWAR_HOME"):
         assert 键 in 装机脚本.split("MISSING=")[1][:400]
-    判 = 'if [[ -f /etc/d1max/registration.json && -n "$MISSING" ]]; then'
+    判 = 'if [[ -f /etc/nexwar/registration.json && -n "$MISSING" ]]; then'
     assert 判 in 装机脚本
     段 = 装机脚本[装机脚本.index(判):]
-    assert 段.index("else") < 段.index("systemctl start d1max-agent.service"), \
+    assert 段.index("else") < 段.index("systemctl start nexwar_agent.service"), \
         "只有站点值都填了才起代理"
 
 
 def test_卸载脚本删助手和sudoers():
     text = (DEPLOY / "uninstall.sh").read_text(encoding="utf-8")
-    assert "# @删除 /usr/local/sbin/d1max-privileged" in text
-    assert "# @删除 /etc/sudoers.d/d1max" in text
-    assert 'rm_sys "/usr/local/sbin/d1max-privileged"' in text
-    assert 'rm_sys "/etc/sudoers.d/d1max"' in text
+    assert "# @删除 /usr/local/sbin/nexwar_privileged" in text
+    assert "# @删除 /etc/sudoers.d/nexwar" in text
+    assert 'rm_sys "/usr/local/sbin/nexwar_privileged"' in text
+    assert 'rm_sys "/etc/sudoers.d/nexwar"' in text
     # rm_sys 的范围锁也要认得这两处,不然声明了也删不掉(它只会打一句「拒绝删除」)。
-    assert "/usr/local/sbin/d1max-privileged) ;;" in text
-    assert "/etc/sudoers.d/d1max) ;;" in text
+    assert "/usr/local/sbin/nexwar_privileged) ;;" in text
+    assert "/etc/sudoers.d/nexwar) ;;" in text
 
 
 def test_足迹勘察覆盖助手和sudoers目录():
@@ -1001,55 +1001,55 @@ def test_agent单元装上并开机自启(装机脚本):
     """W00c5e:狗上只有代理;装机脚本装它、enable 它(没有注册文件时单元的
     ConditionPathExists 让它不起,不会刷日志)。"""
     assert 'install -m 0644 "$AGENT_UNIT_SRC" /etc/systemd/system/' in 装机脚本
-    assert "\nsystemctl enable d1max-agent.service\n" in 装机脚本
-    assert "# @写盘 /etc/systemd/system/d1max-agent.service" in 装机脚本
-    assert "# @写盘 /etc/systemd/system/multi-user.target.wants/d1max-agent.service" in 装机脚本
+    assert "\nsystemctl enable nexwar_agent.service\n" in 装机脚本
+    assert "# @写盘 /etc/systemd/system/nexwar_agent.service" in 装机脚本
+    assert "# @写盘 /etc/systemd/system/multi-user.target.wants/nexwar_agent.service" in 装机脚本
 
 
 def test_agent单元的形状():
-    单元 = (DEPLOY / "d1max-agent.service").read_text(encoding="utf-8")
+    单元 = (DEPLOY / "nexwar_agent.service").read_text(encoding="utf-8")
     段 = _按段(单元)
     assert "User" in 段["[Service]"] and "User=robot" in 单元
     # W00c5d 第三部分内部评审 B1:参数在这一版带的启动脚本里,单元只指着它(退回时参数跟着回来)。
-    assert "\nExecStart=/opt/d1max/current/deploy/d1max-agent-start\n" in 单元
-    脚本 = (DEPLOY / "d1max-agent-start").read_text(encoding="utf-8")
+    assert "\nExecStart=/opt/nexwar/current/deploy/nexwar_agent_start\n" in 单元
+    脚本 = (DEPLOY / "nexwar_agent_start").read_text(encoding="utf-8")
     for f in ("ca.crt", "robot.crt", "robot.key"):            # W00c1:站点 broker 要 mTLS
-        assert f"/etc/d1max/tls/{f}" in 脚本, f
-    assert "Environment=D1MAX_DATA_ROOT=/var/lib/d1max" in 单元
-    assert "EnvironmentFile=-/etc/d1max/env" in 单元
+        assert f"/etc/nexwar/tls/{f}" in 脚本, f
+    assert "Environment=NEXWAR_DATA_ROOT=/var/lib/nexwar" in 单元
+    assert "EnvironmentFile=-/etc/nexwar/env" in 单元
     # W00c5d(决策 8):运行记录落发件箱;缺省在数据根下,env 文件可以改到临时硬盘。
-    assert '--outbox "${D1MAX_OUTBOX:' in 脚本 and "--runs-root" not in 脚本
-    assert 单元.index("Environment=D1MAX_OUTBOX=") < 单元.index("EnvironmentFile=")
+    assert '--outbox "${NEXWAR_OUTBOX:' in 脚本 and "--runs-root" not in 脚本
+    assert 单元.index("Environment=NEXWAR_OUTBOX=") < 单元.index("EnvironmentFile=")
     assert "Restart=always" in 单元 and "RestartSec=" in 单元
     assert "StartLimitIntervalSec" in 段["[Unit]"]
     assert "WantedBy" in 段["[Install]"]
 
 
 def _启动脚本跑一遍(tmp_path, env: dict[str, str]) -> subprocess.CompletedProcess:
-    """假的双槽:releases/<版本>/{deploy/d1max-agent-start, venv/bin/d1max-agent(打出参数)},
+    """假的双槽:releases/<版本>/{deploy/nexwar_agent_start, venv/bin/nexwar_agent(打出参数)},
     current 链指着它;从 current 那条路径起脚本(跟单元一样)。"""
     import os
     import shutil as _sh
     slot = tmp_path / "opt" / "releases" / "2026-09-25-bbbbbb"
     (slot / "deploy").mkdir(parents=True)
     (slot / "venv" / "bin").mkdir(parents=True)
-    _sh.copy2(DEPLOY / "d1max-agent-start", slot / "deploy" / "d1max-agent-start")
-    fake = slot / "venv" / "bin" / "d1max-agent"
+    _sh.copy2(DEPLOY / "nexwar_agent_start", slot / "deploy" / "nexwar_agent_start")
+    fake = slot / "venv" / "bin" / "nexwar_agent"
     fake.write_text('#!/bin/sh\necho "$0"\nfor a in "$@"; do echo "$a"; done\n')
     fake.chmod(0o755)
     (tmp_path / "opt" / "current").symlink_to(slot)
-    return subprocess.run([str(tmp_path / "opt" / "current" / "deploy" / "d1max-agent-start")],
+    return subprocess.run([str(tmp_path / "opt" / "current" / "deploy" / "nexwar_agent_start")],
                           capture_output=True, text=True, timeout=10,
                           env={"PATH": os.environ["PATH"], **env})
 
 
 def test_agent启动脚本_用自己那一版的代码_参数从env来(tmp_path):
-    base = {"D1MAX_SITE_MQTT": "mqtts://site:8883", "D1MAX_OUTBOX": "/var/lib/d1max/outbox",
-            "D1MAX_MAP": "estate:1", "D1MAX_HOME": "0,0,0"}
+    base = {"NEXWAR_SITE_MQTT": "mqtts://site:8883", "NEXWAR_OUTBOX": "/var/lib/nexwar/outbox",
+            "NEXWAR_MAP": "estate:1", "NEXWAR_HOME": "0,0,0"}
     got = _启动脚本跑一遍(tmp_path, base)
     assert got.returncode == 0, got.stderr
     lines = got.stdout.splitlines()
-    assert lines[0].endswith("/releases/2026-09-25-bbbbbb/venv/bin/d1max-agent"), \
+    assert lines[0].endswith("/releases/2026-09-25-bbbbbb/venv/bin/nexwar_agent"), \
         "按脚本自己所在的那一版找代码,不再经过 current 链"
     args = lines[1:]
     assert args[args.index("--transport") + 1] == "mqtts://site:8883"
@@ -1058,7 +1058,7 @@ def test_agent启动脚本_用自己那一版的代码_参数从env来(tmp_path)
     (tmp_path / "opt" / "current").unlink()
     import shutil as _sh
     _sh.rmtree(tmp_path / "opt")
-    more = {"D1MAX_HAL": "d1max", "D1MAX_AGENT_ARGS": "--mapping --sidecar 127.0.0.1:8090"}
+    more = {"NEXWAR_HAL": "d1max", "NEXWAR_AGENT_ARGS": "--mapping --sidecar 127.0.0.1:8090"}
     got = _启动脚本跑一遍(tmp_path, base | more)
     args = got.stdout.splitlines()[1:]
     assert args[args.index("--hal") + 1] == "d1max"
@@ -1068,10 +1068,10 @@ def test_agent启动脚本_用自己那一版的代码_参数从env来(tmp_path)
 
 
 def test_agent启动脚本_自主级别从env来(tmp_path):
-    """W00c6i:D1MAX_AUTONOMY 传成 --autonomy(真狗改 autonomous 要等 W11 真机验收、用户同意)。"""
-    base = {"D1MAX_SITE_MQTT": "mqtts://site:8883", "D1MAX_OUTBOX": "/var/lib/d1max/outbox",
-            "D1MAX_MAP": "estate:1", "D1MAX_HOME": "0,0,0", "D1MAX_HAL": "d1max",
-            "D1MAX_AUTONOMY": "autonomous"}
+    """W00c6i:NEXWAR_AUTONOMY 传成 --autonomy(真狗改 autonomous 要等 W11 真机验收、用户同意)。"""
+    base = {"NEXWAR_SITE_MQTT": "mqtts://site:8883", "NEXWAR_OUTBOX": "/var/lib/nexwar/outbox",
+            "NEXWAR_MAP": "estate:1", "NEXWAR_HOME": "0,0,0", "NEXWAR_HAL": "d1max",
+            "NEXWAR_AUTONOMY": "autonomous"}
     got = _启动脚本跑一遍(tmp_path, base)
     assert got.returncode == 0, got.stderr
     args = got.stdout.splitlines()[1:]
@@ -1079,47 +1079,47 @@ def test_agent启动脚本_自主级别从env来(tmp_path):
 
 
 def test_agent启动脚本_定位来源从env来_没设不带(tmp_path):
-    """W09a:D1MAX_LOCALIZER 传成 --localizer(真狗在 W09b 的定位器验过之前不设)。"""
-    base = {"D1MAX_SITE_MQTT": "mqtts://site:8883", "D1MAX_OUTBOX": "/var/lib/d1max/outbox",
-            "D1MAX_MAP": "estate:1", "D1MAX_HOME": "0,0,0"}
+    """W09a:NEXWAR_LOCALIZER 传成 --localizer(真狗在 W09b 的定位器验过之前不设)。"""
+    base = {"NEXWAR_SITE_MQTT": "mqtts://site:8883", "NEXWAR_OUTBOX": "/var/lib/nexwar/outbox",
+            "NEXWAR_MAP": "estate:1", "NEXWAR_HOME": "0,0,0"}
     got = _启动脚本跑一遍(tmp_path, base)
     assert got.returncode == 0, got.stderr
     assert "--localizer" not in got.stdout.splitlines()[1:]
-    got = _启动脚本跑一遍(tmp_path / "b", {**base, "D1MAX_LOCALIZER": "bridge"})
+    got = _启动脚本跑一遍(tmp_path / "b", {**base, "NEXWAR_LOCALIZER": "bridge"})
     args = got.stdout.splitlines()[1:]
     assert args[args.index("--localizer") + 1] == "bridge"
 
 
 def test_agent启动脚本_导航后端从env来_没设不带(tmp_path):
-    """W10:D1MAX_NAV 传成 --nav(真狗在 W10 真机项验过之前不设)。"""
-    base = {"D1MAX_SITE_MQTT": "mqtts://site:8883", "D1MAX_OUTBOX": "/var/lib/d1max/outbox",
-            "D1MAX_MAP": "estate:1", "D1MAX_HOME": "0,0,0"}
+    """W10:NEXWAR_NAV 传成 --nav(真狗在 W10 真机项验过之前不设)。"""
+    base = {"NEXWAR_SITE_MQTT": "mqtts://site:8883", "NEXWAR_OUTBOX": "/var/lib/nexwar/outbox",
+            "NEXWAR_MAP": "estate:1", "NEXWAR_HOME": "0,0,0"}
     got = _启动脚本跑一遍(tmp_path, base)
     assert got.returncode == 0, got.stderr
     assert "--nav" not in got.stdout.splitlines()[1:]
-    got = _启动脚本跑一遍(tmp_path / "b", {**base, "D1MAX_NAV": "planned"})
+    got = _启动脚本跑一遍(tmp_path / "b", {**base, "NEXWAR_NAV": "planned"})
     args = got.stdout.splitlines()[1:]
     assert args[args.index("--nav") + 1] == "planned"
 
 
 def test_agent启动脚本_少了站点地址说清楚_不起(tmp_path):
-    got = _启动脚本跑一遍(tmp_path, {"D1MAX_OUTBOX": "/x", "D1MAX_MAP": "m:1",
-                                     "D1MAX_HOME": "0,0,0"})
-    assert got.returncode != 0 and "D1MAX_SITE_MQTT" in got.stderr and got.stdout == ""
+    got = _启动脚本跑一遍(tmp_path, {"NEXWAR_OUTBOX": "/x", "NEXWAR_MAP": "m:1",
+                                     "NEXWAR_HOME": "0,0,0"})
+    assert got.returncode != 0 and "NEXWAR_SITE_MQTT" in got.stderr and got.stdout == ""
 
 
 def test_agent启动脚本是可执行的_仓库里记着():
     import os
-    assert os.access(DEPLOY / "d1max-agent-start", os.X_OK)
-    ls = subprocess.run(["git", "ls-files", "-s", "deploy/d1max-agent-start"], cwd=ROOT,
+    assert os.access(DEPLOY / "nexwar_agent_start", os.X_OK)
+    ls = subprocess.run(["git", "ls-files", "-s", "deploy/nexwar_agent_start"], cwd=ROOT,
                         capture_output=True, text=True).stdout
     assert ls.startswith("100755"), "git 里要记成可执行:打包、下发之后还要能直接跑"
 
 
 def test_agent单元没有注册文件就不起_不在那儿每5秒崩一次():
-    单元 = (DEPLOY / "d1max-agent.service").read_text(encoding="utf-8")
+    单元 = (DEPLOY / "nexwar_agent.service").read_text(encoding="utf-8")
     assert "ConditionPathExists" in _按段(单元)["[Unit]"]
-    assert "\nConditionPathExists=/etc/d1max/registration.json\n" in 单元
+    assert "\nConditionPathExists=/etc/nexwar/registration.json\n" in 单元
 
 
 WHEELS = ROOT / "dist" / "wheels-aarch64-py310"
@@ -1138,8 +1138,8 @@ def test_离线轮子覆盖三个包的外部依赖_含contract的mqtt扩展():
         import tomllib
     except ImportError:                  # 3.10:pytest 自己依赖 tomli
         import tomli as tomllib
-    本仓 = {"d1max-patrol", "d1max-contract", "d1max-adapter-sim", "d1max-adapter-d1max",
-          "d1max-robot-agent"}
+    本仓 = {"nexwar_patrol", "nexwar_contract", "nexwar_adapter_sim", "nexwar_adapter_d1max",
+          "nexwar_robot_agent"}
     要的: set[str] = set()
     for 包 in ("contract", "adapter-sim", "adapter-d1max", "robot-agent"):
         proj = tomllib.loads((ROOT / "packages" / 包 / "pyproject.toml").read_text("utf-8"))
@@ -1213,13 +1213,13 @@ def test_狗上代码import的第三方库都声明了依赖_也就都有离线�
 
 def test_agent入口在robot_agent的scripts里():
     toml = (ROOT / "packages" / "robot-agent" / "pyproject.toml").read_text(encoding="utf-8")
-    assert 'd1max-agent = "d1max_agent.main:main"' in toml
+    assert 'nexwar_agent = "nexwar_agent.main:main"' in toml
 
 
 def test_卸载脚本删agent单元():
     text = (DEPLOY / "uninstall.sh").read_text(encoding="utf-8")
-    assert "# @删除 /etc/systemd/system/d1max-agent.service" in text
-    assert "\nMAIN_UNIT=d1max-agent.service\n" in text
+    assert "# @删除 /etc/systemd/system/nexwar_agent.service" in text
+    assert "\nMAIN_UNIT=nexwar_agent.service\n" in text
     assert 'rm_sys "$UNIT_DIR/$MAIN_UNIT"' in text and 'rm_sys "$WANTS_LINK"' in text
     # 没重跑过装机脚本的老机器上老服务还在:卸载照样要停、要删。定位器(W09b)先停,它连着代理。
     # zenoh 路由(A5)在吃话题的几个之后停;配网服务(W42)最先停(它会去停起别的服务)
@@ -1234,28 +1234,28 @@ def test_定位器的启动脚本与单元_只装不启用_卸载删干净():
     自启链一起删。"""
     import os
     import subprocess
-    start = DEPLOY / "d1max-localizer-start"
+    start = DEPLOY / "nexwar_localizer_start"
     assert os.access(start, os.X_OK)
     subprocess.run(["sh", "-n", str(start)], check=True)
     text = start.read_text(encoding="utf-8")
     assert '. /opt/ros/humble/setup.sh' in text
     assert '$here/packages/localizer/src:$here/packages/contract/src' in text
-    assert "--socket /var/lib/d1max/agent/loc.sock" in text, "代理的 --store-dir 下的 loc.sock"
-    assert "exec /usr/bin/python3 -m d1max_localizer.main" in text
-    单元 = (DEPLOY / "d1max-localizer.service").read_text(encoding="utf-8")
-    代理单元 = (DEPLOY / "d1max-agent.service").read_text(encoding="utf-8")
+    assert "--socket /var/lib/nexwar/agent/loc.sock" in text, "代理的 --store-dir 下的 loc.sock"
+    assert "exec /usr/bin/python3 -m nexwar_localizer.main" in text
+    单元 = (DEPLOY / "nexwar_localizer.service").read_text(encoding="utf-8")
+    代理单元 = (DEPLOY / "nexwar_agent.service").read_text(encoding="utf-8")
     assert "User=robot" in 单元 and "User=robot" in 代理单元
-    assert "ExecStart=/opt/d1max/current/deploy/d1max-localizer-start" in 单元
-    assert "EnvironmentFile=-/etc/d1max/env" in 单元
+    assert "ExecStart=/opt/nexwar/current/deploy/nexwar_localizer_start" in 单元
+    assert "EnvironmentFile=-/etc/nexwar/env" in 单元
     assert "KillMode=control-group" in 单元, "MOLA 是它的子进程,停的时候一起停"
     装 = (DEPLOY / "install.sh").read_text(encoding="utf-8")
-    assert "# @写盘 /etc/systemd/system/d1max-localizer.service" in 装
-    assert 'install -m 0644 "$PKG/deploy/d1max-localizer.service" /etc/systemd/system/' in 装
-    assert "D1MAX_LOCALIZER=bridge:d1max-localizer" in 装      # W70:env 写了要用才 enable
+    assert "# @写盘 /etc/systemd/system/nexwar_localizer.service" in 装
+    assert 'install -m 0644 "$PKG/deploy/nexwar_localizer.service" /etc/systemd/system/' in 装
+    assert "NEXWAR_LOCALIZER=bridge:nexwar_localizer" in 装      # W70:env 写了要用才 enable
     # 真机验收时有人手工起过的话,换了版本要跟着重启(没在跑就什么也不做)
-    assert "systemctl try-restart d1max-localizer.service" in 装
+    assert "systemctl try-restart nexwar_localizer.service" in 装
     卸 = (DEPLOY / "uninstall.sh").read_text(encoding="utf-8")
-    assert "# @删除 /etc/systemd/system/d1max-localizer.service" in 卸
+    assert "# @删除 /etc/systemd/system/nexwar_localizer.service" in 卸
     assert 'rm_sys "$UNIT_DIR/$LOC_UNIT"' in 卸 and 'rm_sys "$LOC_WANTS_LINK"' in 卸
 
 
@@ -1265,26 +1265,26 @@ def test_感知节点的启动脚本与单元_只装不启用_卸载删干净():
     自启链一起删。"""
     import os
     import subprocess
-    start = DEPLOY / "d1max-obstacles-start"
+    start = DEPLOY / "nexwar_obstacles_start"
     assert os.access(start, os.X_OK)
     subprocess.run(["sh", "-n", str(start)], check=True)
     text = start.read_text(encoding="utf-8")
     assert '. /opt/ros/humble/setup.sh' in text
     assert '$here/packages/localizer/src:$here/packages/contract/src' in text
-    assert "--socket /var/lib/d1max/agent/obs.sock" in text
-    assert "--maps-dir /var/lib/d1max/agent/maps" in text, "外参跟着代理正在用的图走"
-    assert "exec /usr/bin/python3 -m d1max_localizer.obstacles" in text
-    单元 = (DEPLOY / "d1max-obstacles.service").read_text(encoding="utf-8")
+    assert "--socket /var/lib/nexwar/agent/obs.sock" in text
+    assert "--maps-dir /var/lib/nexwar/agent/maps" in text, "外参跟着代理正在用的图走"
+    assert "exec /usr/bin/python3 -m nexwar_localizer.obstacles" in text
+    单元 = (DEPLOY / "nexwar_obstacles.service").read_text(encoding="utf-8")
     assert "User=robot" in 单元
-    assert "ExecStart=/opt/d1max/current/deploy/d1max-obstacles-start" in 单元
-    assert "EnvironmentFile=-/etc/d1max/env" in 单元
+    assert "ExecStart=/opt/nexwar/current/deploy/nexwar_obstacles_start" in 单元
+    assert "EnvironmentFile=-/etc/nexwar/env" in 单元
     装 = (DEPLOY / "install.sh").read_text(encoding="utf-8")
-    assert "# @写盘 /etc/systemd/system/d1max-obstacles.service" in 装
-    assert 'install -m 0644 "$PKG/deploy/d1max-obstacles.service" /etc/systemd/system/' in 装
-    assert "D1MAX_OBSTACLES=bridge:d1max-obstacles" in 装      # W70:env 写了要用才 enable
-    assert "systemctl try-restart d1max-obstacles.service" in 装
+    assert "# @写盘 /etc/systemd/system/nexwar_obstacles.service" in 装
+    assert 'install -m 0644 "$PKG/deploy/nexwar_obstacles.service" /etc/systemd/system/' in 装
+    assert "NEXWAR_OBSTACLES=bridge:nexwar_obstacles" in 装      # W70:env 写了要用才 enable
+    assert "systemctl try-restart nexwar_obstacles.service" in 装
     卸 = (DEPLOY / "uninstall.sh").read_text(encoding="utf-8")
-    assert "# @删除 /etc/systemd/system/d1max-obstacles.service" in 卸
+    assert "# @删除 /etc/systemd/system/nexwar_obstacles.service" in 卸
     assert 'rm_sys "$UNIT_DIR/$OBS_UNIT"' in 卸 and 'rm_sys "$OBS_WANTS_LINK"' in 卸
 
 
@@ -1293,59 +1293,59 @@ def test_人员检测节点_系统Python_同一账号_只装不起_卸载收干�
     装机只装不 enable;卸载连手工 enable 过的自启链一起删。"""
     import os
     import subprocess
-    start = DEPLOY / "d1max-persons-start"
+    start = DEPLOY / "nexwar_persons_start"
     assert os.access(start, os.X_OK)
     subprocess.run(["sh", "-n", str(start)], check=True)
     text = start.read_text(encoding="utf-8")
     assert '. /opt/ros/humble/setup.sh' in text
     assert '$here/packages/localizer/src:$here/packages/contract/src' in text
-    assert "--socket /var/lib/d1max/agent/persons.sock" in text
-    assert "--snapshots /var/lib/d1max/agent/person-snapshots" in text
-    assert "exec /usr/bin/python3 -m d1max_localizer.persons" in text
-    单元 = (DEPLOY / "d1max-persons.service").read_text(encoding="utf-8")
+    assert "--socket /var/lib/nexwar/agent/persons.sock" in text
+    assert "--snapshots /var/lib/nexwar/agent/person-snapshots" in text
+    assert "exec /usr/bin/python3 -m nexwar_localizer.persons" in text
+    单元 = (DEPLOY / "nexwar_persons.service").read_text(encoding="utf-8")
     assert "User=robot" in 单元
-    assert "ExecStart=/opt/d1max/current/deploy/d1max-persons-start" in 单元
+    assert "ExecStart=/opt/nexwar/current/deploy/nexwar_persons_start" in 单元
     装 = (DEPLOY / "install.sh").read_text(encoding="utf-8")
-    assert "# @写盘 /etc/systemd/system/d1max-persons.service" in 装
-    assert 'install -m 0644 "$PKG/deploy/d1max-persons.service" /etc/systemd/system/' in 装
-    assert "D1MAX_PERSONS=bridge:d1max-persons" in 装          # W70:env 写了要用才 enable
-    assert "systemctl try-restart d1max-persons.service" in 装
+    assert "# @写盘 /etc/systemd/system/nexwar_persons.service" in 装
+    assert 'install -m 0644 "$PKG/deploy/nexwar_persons.service" /etc/systemd/system/' in 装
+    assert "NEXWAR_PERSONS=bridge:nexwar_persons" in 装          # W70:env 写了要用才 enable
+    assert "systemctl try-restart nexwar_persons.service" in 装
     卸 = (DEPLOY / "uninstall.sh").read_text(encoding="utf-8")
-    assert "# @删除 /etc/systemd/system/d1max-persons.service" in 卸
+    assert "# @删除 /etc/systemd/system/nexwar_persons.service" in 卸
     assert 'rm_sys "$UNIT_DIR/$PERS_UNIT"' in 卸 and 'rm_sys "$PERS_WANTS_LINK"' in 卸
     assert '"$OBS_UNIT" "$LOC_UNIT"' in 卸, "先停感知、再停定位器、再停代理"
 
 
 def test_agent启动脚本_避障从env来_没设不带(tmp_path):
-    """W11:D1MAX_OBSTACLES 传成 --obstacles(真狗在 W11 真机项验过之前不设)。"""
-    base = {"D1MAX_SITE_MQTT": "mqtts://site:8883", "D1MAX_OUTBOX": "/var/lib/d1max/outbox",
-            "D1MAX_MAP": "estate:1", "D1MAX_HOME": "0,0,0"}
+    """W11:NEXWAR_OBSTACLES 传成 --obstacles(真狗在 W11 真机项验过之前不设)。"""
+    base = {"NEXWAR_SITE_MQTT": "mqtts://site:8883", "NEXWAR_OUTBOX": "/var/lib/nexwar/outbox",
+            "NEXWAR_MAP": "estate:1", "NEXWAR_HOME": "0,0,0"}
     got = _启动脚本跑一遍(tmp_path, base)
     assert got.returncode == 0, got.stderr
     assert "--obstacles" not in got.stdout.splitlines()[1:]
-    got = _启动脚本跑一遍(tmp_path / "b", {**base, "D1MAX_OBSTACLES": "bridge",
-                                           "D1MAX_NAV": "planned"})
+    got = _启动脚本跑一遍(tmp_path / "b", {**base, "NEXWAR_OBSTACLES": "bridge",
+                                           "NEXWAR_NAV": "planned"})
     args = got.stdout.splitlines()[1:]
     assert args[args.index("--obstacles") + 1] == "bridge"
 
 
 def test_agent启动脚本_人员检测从env来_没设不带(tmp_path):
-    """W24:D1MAX_PERSONS 传成 --persons(真狗在 W24 真机项验过之前不设)。"""
-    base = {"D1MAX_SITE_MQTT": "mqtts://site:8883", "D1MAX_OUTBOX": "/var/lib/d1max/outbox",
-            "D1MAX_MAP": "estate:1", "D1MAX_HOME": "0,0,0"}
+    """W24:NEXWAR_PERSONS 传成 --persons(真狗在 W24 真机项验过之前不设)。"""
+    base = {"NEXWAR_SITE_MQTT": "mqtts://site:8883", "NEXWAR_OUTBOX": "/var/lib/nexwar/outbox",
+            "NEXWAR_MAP": "estate:1", "NEXWAR_HOME": "0,0,0"}
     got = _启动脚本跑一遍(tmp_path, base)
     assert got.returncode == 0, got.stderr
     assert "--persons" not in got.stdout.splitlines()[1:]
-    got = _启动脚本跑一遍(tmp_path / "b", {**base, "D1MAX_PERSONS": "bridge"})
+    got = _启动脚本跑一遍(tmp_path / "b", {**base, "NEXWAR_PERSONS": "bridge"})
     args = got.stdout.splitlines()[1:]
     assert args[args.index("--persons") + 1] == "bridge"
 
 
 def test_根下的解释器venv也装三个包_不然别名壳一import就炸(装机脚本):
-    """W00b 阻断项(自查):根包 import 引擎就要 ``d1max_agent``(W00b 起引擎在 robot-agent,
+    """W00b 阻断项(自查):根包 import 引擎就要 ``nexwar_agent``(W00b 起引擎在 robot-agent,
     W00c4 删了根包里的别名壳)。
     boot-guard、bundle guard、3/7 的 ``release install``、7/7 的 ``release activate`` /
-    ``migrate-data`` 都从 ``/opt/d1max/bin/python``(2/7 建的 bin-venv)跑 —— 那里只装根包的话,
+    ``migrate-data`` 都从 ``/opt/nexwar/bin/python``(2/7 建的 bin-venv)跑 —— 那里只装根包的话,
     装机在 3/7 就炸,开机守卫一次都跑不了。"""
     行们 = 装机脚本.splitlines()
 
@@ -1370,32 +1370,32 @@ SITE_DEPLOY = DEPLOY / "site"
 
 
 def test_站点两个单元的形状():
-    m = (SITE_DEPLOY / "d1max-mosquitto.service").read_text(encoding="utf-8")
-    s = (SITE_DEPLOY / "d1max-site.service").read_text(encoding="utf-8")
+    m = (SITE_DEPLOY / "nexwar_mosquitto.service").read_text(encoding="utf-8")
+    s = (SITE_DEPLOY / "nexwar_site.service").read_text(encoding="utf-8")
     for u in (m, s):
         段 = _按段(u)
         assert "StartLimitIntervalSec" in 段["[Unit]"] and "ConditionPathExists" in 段["[Unit]"]
-        assert "User=d1max-site" in u and "Restart=always" in u
+        assert "User=nexwar_site" in u and "Restart=always" in u
         for k in ("NoNewPrivileges=yes", "ProtectSystem=strict", "ProtectHome=yes",
-                  "PrivateTmp=yes", "ReadWritePaths=/var/lib/d1max-site"):
+                  "PrivateTmp=yes", "ReadWritePaths=/var/lib/nexwar_site"):
             assert k in 段["[Service]"] or k in u, k
-    assert "ExecStart=/usr/sbin/mosquitto -c /var/lib/d1max-site/broker/mosquitto.conf" in m
-    assert "d1max-site --home /var/lib/d1max-site serve" in s
-    assert "After=network-online.target d1max-mosquitto.service" in s
+    assert "ExecStart=/usr/sbin/mosquitto -c /var/lib/nexwar_site/broker/mosquitto.conf" in m
+    assert "nexwar_site --home /var/lib/nexwar_site serve" in s
+    assert "After=network-online.target nexwar_mosquitto.service" in s
 
 
 def test_站点安装脚本不碰狗_狗的安装脚本不碰站点():
     site = (SITE_DEPLOY / "install-site.sh").read_text(encoding="utf-8")
     dog = (DEPLOY / "install.sh").read_text(encoding="utf-8")
-    assert "d1max-site" not in dog and "site-node" not in dog and "mosquitto" not in dog
-    assert "d1max-agent" not in site and "robot-agent" not in site
+    assert "nexwar_site" not in dog and "site-node" not in dog and "mosquitto" not in dog
+    assert "nexwar_agent" not in site and "robot-agent" not in site
     assert "set -euo pipefail" in site
     assert site.index("apt-get update") < site.index("apt-get install"), "新机器不 update 装不上"
-    assert "enable --now d1max-mosquitto.service d1max-site.service" in site
+    assert "enable --now nexwar_mosquitto.service nexwar_site.service" in site
     assert 'if [[ ! -f "$HOME_DIR/site.json" ]]' in site, "重跑不许重建 CA"
-    assert "usermod -aG systemd-journal d1max-site" in site, "诊断包读不到站点日志(A1)"
+    assert "usermod -aG systemd-journal nexwar_site" in site, "诊断包读不到站点日志(A1)"
     assert site.index("useradd --system") < site.index("usermod -aG systemd-journal") \
-        < site.index("enable --now d1max-mosquitto.service"), "先有用户再加组,加完再起服务"
+        < site.index("enable --now nexwar_mosquitto.service"), "先有用户再加组,加完再起服务"
     assert 'packages/contract[mqtt,planning]" "$PKG/packages/site-node"' in site
 
 
@@ -1406,15 +1406,15 @@ def test_站点安装脚本语法():
     assert r.returncode == 0, r.stderr
 
 
-def test_建图脚本_在ROS系统Python里跑这一版的d1max_loc_build():
+def test_建图脚本_在ROS系统Python里跑这一版的nexwar_loc_build():
     """W09c1:代理的建图编排起它(``MappingConfig.map_builder``);MOLA、numpy 在 ROS 的系统 Python 里,
     代码用这个脚本所在那一版带的 packages/localizer 与 packages/contract。"""
     import os
     import subprocess
     from pathlib import Path
 
-    from d1max_patrol.app.mapping import MAP_BUILDER
-    start = DEPLOY / "d1max-map-build"
+    from nexwar_patrol.app.mapping import MAP_BUILDER
+    start = DEPLOY / "nexwar_map_build"
     assert os.access(start, os.X_OK)
     ls = subprocess.run(["git", "ls-files", "-s", str(start)], capture_output=True, text=True,
                         cwd=DEPLOY, check=True).stdout
@@ -1423,8 +1423,8 @@ def test_建图脚本_在ROS系统Python里跑这一版的d1max_loc_build():
     text = start.read_text(encoding="utf-8")
     assert '. /opt/ros/humble/setup.sh' in text
     assert '$here/packages/localizer/src:$here/packages/contract/src' in text
-    assert 'exec /usr/bin/python3 -m d1max_localizer.tools build "$@"' in text
-    assert MAP_BUILDER == Path("/opt/d1max/current/deploy/d1max-map-build")
+    assert 'exec /usr/bin/python3 -m nexwar_localizer.tools build "$@"' in text
+    assert MAP_BUILDER == Path("/opt/nexwar/current/deploy/nexwar_map_build")
     if not Path("/opt/ros/humble/setup.sh").is_file():
         return
     # 开发机上有 ROS:真跑一次(只看帮助),路径里带空格也找得到包
@@ -1441,8 +1441,8 @@ def test_建图预览脚本_在ROS系统Python里跑这一版的_livemap():
     import subprocess
     from pathlib import Path
 
-    from d1max_patrol.app.mapping import LIVE_PREVIEW
-    start = DEPLOY / "d1max-live-preview"
+    from nexwar_patrol.app.mapping import LIVE_PREVIEW
+    start = DEPLOY / "nexwar_live_preview"
     assert os.access(start, os.X_OK)
     ls = subprocess.run(["git", "ls-files", "-s", str(start)], capture_output=True, text=True,
                         cwd=DEPLOY, check=True).stdout
@@ -1451,8 +1451,8 @@ def test_建图预览脚本_在ROS系统Python里跑这一版的_livemap():
     text = start.read_text(encoding="utf-8")
     assert '. /opt/ros/humble/setup.sh' in text
     assert '$here/packages/localizer/src:$here/packages/contract/src' in text
-    assert 'exec nice -n 10 /usr/bin/python3 -m d1max_localizer.livemap "$@"' in text
-    assert LIVE_PREVIEW == Path("/opt/d1max/current/deploy/d1max-live-preview")
+    assert 'exec nice -n 10 /usr/bin/python3 -m nexwar_localizer.livemap "$@"' in text
+    assert LIVE_PREVIEW == Path("/opt/nexwar/current/deploy/nexwar_live_preview")
     if not Path("/opt/ros/humble/setup.sh").is_file():
         return
     # 开发机上有 ROS:真跑一次(只看帮助),rclpy 这些 import 在 main 里,帮助不碰它们
@@ -1466,7 +1466,7 @@ def test_厂家RTK辅助脚本_在ROS系统Python里跑这一版的_rtkvendor():
     """W09e:代理 --rtk vendor 时起它。"""
     import os
     import subprocess
-    start = DEPLOY / "d1max-rtk-vendor"
+    start = DEPLOY / "nexwar_rtk_vendor"
     assert os.access(start, os.X_OK)
     ls = subprocess.run(["git", "ls-files", "-s", str(start)], capture_output=True, text=True,
                         cwd=DEPLOY, check=True).stdout
@@ -1474,10 +1474,10 @@ def test_厂家RTK辅助脚本_在ROS系统Python里跑这一版的_rtkvendor():
     subprocess.run(["sh", "-n", str(start)], check=True)
     text = start.read_text(encoding="utf-8")
     assert '. /opt/ros/humble/setup.sh' in text
-    assert 'exec /usr/bin/python3 -m d1max_localizer.rtkvendor "$@"' in text
-    from d1max_agent.main import build_parser
+    assert 'exec /usr/bin/python3 -m nexwar_localizer.rtkvendor "$@"' in text
+    from nexwar_agent.main import build_parser
     rtk = next(a for a in build_parser()._actions if a.dest == "rtk_vendor_cmd")
-    assert rtk.default == "/opt/d1max/current/deploy/d1max-rtk-vendor"
+    assert rtk.default == "/opt/nexwar/current/deploy/nexwar_rtk_vendor"
 
 
 def test_ROS_包装脚本_source_ROS_再执行后面的命令():
@@ -1487,8 +1487,8 @@ def test_ROS_包装脚本_source_ROS_再执行后面的命令():
     import subprocess
     from pathlib import Path
 
-    from d1max_patrol.app.mapping import ROS_WRAPPER
-    start = DEPLOY / "d1max-ros"
+    from nexwar_patrol.app.mapping import ROS_WRAPPER
+    start = DEPLOY / "nexwar_ros"
     assert os.access(start, os.X_OK)
     ls = subprocess.run(["git", "ls-files", "-s", str(start)], capture_output=True, text=True,
                         cwd=DEPLOY, check=True).stdout
@@ -1496,7 +1496,7 @@ def test_ROS_包装脚本_source_ROS_再执行后面的命令():
     subprocess.run(["sh", "-n", str(start)], check=True)
     text = start.read_text(encoding="utf-8")
     assert '. /opt/ros/humble/setup.sh' in text and 'exec "$@"' in text
-    assert ROS_WRAPPER == Path("/opt/d1max/current/deploy/d1max-ros")
+    assert ROS_WRAPPER == Path("/opt/nexwar/current/deploy/nexwar_ros")
     if not Path("/opt/ros/humble/setup.sh").is_file():
         return
     env = {"PATH": "/usr/bin:/bin", "HOME": os.environ.get("HOME", "/tmp")}   # 像服务里一样干净
@@ -1509,8 +1509,8 @@ def test_代理服务停的时候只给代理发_SIGTERM_子进程由它按各�
     """W09c2 内审应修 1:默认 KillMode=control-group 对整组发 SIGTERM —— 在线建图的 mola-cli 收到
     SIGTERM 不存盘、挂着等被强杀,录包的 mcap 也来不及写索引。mixed:只给代理发,代理按正常停录收
     (在线建图 SIGINT);给足时间。"""
-    from d1max_patrol.app.mapping import LIVE_SAVE_GRACE_S
-    unit = (DEPLOY / "d1max-agent.service").read_text(encoding="utf-8")
+    from nexwar_patrol.app.mapping import LIVE_SAVE_GRACE_S
+    unit = (DEPLOY / "nexwar_agent.service").read_text(encoding="utf-8")
     assert "KillMode=mixed" in unit
     t = [ln for ln in unit.splitlines() if ln.startswith("TimeoutStopSec=")]
     # 外审阻断 2:原来 180 s,在线建图允许存 300 s —— systemd 先把整组强杀。跟存盘时限直接比,
@@ -1519,31 +1519,32 @@ def test_代理服务停的时候只给代理发_SIGTERM_子进程由它按各�
 
 
 def test_对时配置_从env取站点主机_不求值_不干净的不写(tmp_path):
-    """W09d:狗向站点主机对时(systemd-timesyncd)。站点主机优先 D1MAX_SITE_NTP,没有从 D1MAX_SITE_MQTT
+    """W09d:狗向站点主机对时(systemd-timesyncd)。站点主机优先 NEXWAR_SITE_NTP,没有从
+    NEXWAR_SITE_MQTT
     取主机;按 systemd 的规矩读(不 source,同 read_env_value)。"""
     import subprocess
-    conf = DEPLOY / "d1max-timesync-conf"
+    conf = DEPLOY / "nexwar_timesync_conf"
 
     def 跑(env_text):
         f = tmp_path / "env"
         f.write_text(env_text, encoding="utf-8")
         return subprocess.run(["bash", str(conf), str(f)], capture_output=True, text=True,
                               timeout=10)
-    r = 跑("D1MAX_SITE_MQTT=mqtts://site.local:8883\n")
+    r = 跑("NEXWAR_SITE_MQTT=mqtts://site.local:8883\n")
     assert r.returncode == 0 and r.stdout == "[Time]\nNTP=site.local\nFallbackNTP=\n", r.stderr
-    r = 跑("D1MAX_SITE_MQTT=mqtts://192.168.1.10:8883\nD1MAX_SITE_NTP= 10.0.0.2 \n")
-    assert r.returncode == 0 and "NTP=10.0.0.2\n" in r.stdout, "D1MAX_SITE_NTP 优先"
-    r = 跑("D1MAX_SITE_MQTT=\n")
-    assert r.returncode == 3 and r.stdout == "" and "D1MAX_SITE" in r.stderr
-    for bad in ("D1MAX_SITE_NTP=a;reboot\n", "D1MAX_SITE_MQTT=mqtts://$(id):8883\n",
-                "D1MAX_SITE_NTP=\"x\"\n"):
+    r = 跑("NEXWAR_SITE_MQTT=mqtts://192.168.1.10:8883\nNEXWAR_SITE_NTP= 10.0.0.2 \n")
+    assert r.returncode == 0 and "NTP=10.0.0.2\n" in r.stdout, "NEXWAR_SITE_NTP 优先"
+    r = 跑("NEXWAR_SITE_MQTT=\n")
+    assert r.returncode == 3 and r.stdout == "" and "NEXWAR_SITE" in r.stderr
+    for bad in ("NEXWAR_SITE_NTP=a;reboot\n", "NEXWAR_SITE_MQTT=mqtts://$(id):8883\n",
+                "NEXWAR_SITE_NTP=\"x\"\n"):
         r = 跑(bad)
         assert r.returncode == 4 and r.stdout == "", bad
-    # W41(2026-10-26 现场):站点经 SSH 隧道接过来,D1MAX_SITE_MQTT 是本机回环 —— 对时过不了隧道,不配
+    # W41(2026-10-26 现场):站点经 SSH 隧道接过来,NEXWAR_SITE_MQTT 是本机回环 —— 对时过不了隧道,不配
     for loop in ("mqtts://127.0.0.1:8883", "mqtts://localhost:8883"):
-        r = 跑(f"D1MAX_SITE_MQTT={loop}\n")
-        assert r.returncode == 3 and r.stdout == "" and "D1MAX_SITE_NTP" in r.stderr, loop
-    r = 跑("D1MAX_SITE_MQTT=mqtts://127.0.0.1:8883\nD1MAX_SITE_NTP=192.168.234.1\n")
+        r = 跑(f"NEXWAR_SITE_MQTT={loop}\n")
+        assert r.returncode == 3 and r.stdout == "" and "NEXWAR_SITE_NTP" in r.stderr, loop
+    r = 跑("NEXWAR_SITE_MQTT=mqtts://127.0.0.1:8883\nNEXWAR_SITE_NTP=192.168.234.1\n")
     assert r.returncode == 0 and "NTP=192.168.234.1\n" in r.stdout, "单独填了对时地址:照它配"
     subprocess.run(["bash", "-n", str(conf)], check=True)
 
@@ -1551,17 +1552,17 @@ def test_对时配置_从env取站点主机_不求值_不干净的不写(tmp_pat
 def test_装机写对时配置_卸载删掉_站点主机当_NTP_服务器_只给私网(装机脚本):
     """W09d:狗上写 timesyncd 的配置、开 NTP、重启它;卸载删掉。站点主机装 chrony、只给私网发时间、
     自己连不上外网也发(local stratum)。"""
-    assert "d1max-timesync-conf" in 装机脚本
-    assert "/etc/systemd/timesyncd.conf.d/d1max.conf" in 装机脚本
+    assert "nexwar_timesync_conf" in 装机脚本
+    assert "/etc/systemd/timesyncd.conf.d/nexwar.conf" in 装机脚本
     assert "timedatectl set-ntp true" in 装机脚本
     assert "systemctl restart systemd-timesyncd" in 装机脚本
-    assert "# @写盘 /etc/systemd/timesyncd.conf.d/d1max.conf" in 装机脚本
+    assert "# @写盘 /etc/systemd/timesyncd.conf.d/nexwar.conf" in 装机脚本
     卸 = (DEPLOY / "uninstall.sh").read_text(encoding="utf-8")
-    assert "# @删除 /etc/systemd/timesyncd.conf.d/d1max.conf" in 卸
-    assert 'rm_sys "/etc/systemd/timesyncd.conf.d/d1max.conf"' in 卸
+    assert "# @删除 /etc/systemd/timesyncd.conf.d/nexwar.conf" in 卸
+    assert 'rm_sys "/etc/systemd/timesyncd.conf.d/nexwar.conf"' in 卸
     站 = (SITE_DEPLOY / "install-site.sh").read_text(encoding="utf-8")
     assert "chrony" in 站.split("apt-get install -y", 1)[1].splitlines()[0]
-    assert "/etc/chrony/conf.d/d1max-site.conf" in 站
+    assert "/etc/chrony/conf.d/nexwar_site.conf" in 站
     for net in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"):
         assert f"allow {net}" in 站
     assert "local stratum 10" in 站 and "systemctl restart chrony" in 站
@@ -1578,7 +1579,7 @@ def test_卸载清单里每条要删的路径_删除护栏都放行():
     体 = 卸[卸.index("rm_sys() {"):]
     体 = 体[:体.index("\n}\n") + 3]
     paths = re.findall(r"(?m)^# @删除 (\S+)", 卸)
-    assert "/etc/systemd/timesyncd.conf.d/d1max.conf" in paths
+    assert "/etc/systemd/timesyncd.conf.d/nexwar.conf" in paths
     for p in paths:
         r = subprocess.run(["bash", "-c", 'warn() { echo "$*"; }; say() { echo "$*"; }; DO_IT=0\n'
                             + 体 + '\nrm_sys "$1" x', "_", p],
@@ -1588,7 +1589,7 @@ def test_卸载清单里每条要删的路径_删除护栏都放行():
 
 def test_对时配置_边界_env缺了_带引号_IPv6_减号开头_都说清楚(tmp_path):
     import subprocess
-    conf = DEPLOY / "d1max-timesync-conf"
+    conf = DEPLOY / "nexwar_timesync_conf"
     r = subprocess.run(["bash", str(conf), str(tmp_path / "没有")], capture_output=True, text=True)
     assert r.returncode == 3 and "读不了" in r.stderr
 
@@ -1596,10 +1597,10 @@ def test_对时配置_边界_env缺了_带引号_IPv6_减号开头_都说清楚(
         f = tmp_path / "env"
         f.write_text(env_text, encoding="utf-8")
         return subprocess.run(["bash", str(conf), str(f)], capture_output=True, text=True)
-    for bad, why in (('D1MAX_SITE_MQTT="mqtts://h:8883"\n', "引号"),
-                     ("D1MAX_SITE_MQTT=mqtts://[fd00::1]:8883\n", "IPv4"),
-                     ("D1MAX_SITE_MQTT=mqtts://user@h:8883\n", "IPv4"),
-                     ("D1MAX_SITE_NTP=-oops\n", "字母")):
+    for bad, why in (('NEXWAR_SITE_MQTT="mqtts://h:8883"\n', "引号"),
+                     ("NEXWAR_SITE_MQTT=mqtts://[fd00::1]:8883\n", "IPv4"),
+                     ("NEXWAR_SITE_MQTT=mqtts://user@h:8883\n", "IPv4"),
+                     ("NEXWAR_SITE_NTP=-oops\n", "字母")):
         r = 跑(bad)
         assert r.returncode == 4 and why in r.stderr and r.stdout == "", (bad, r.stderr)
 
@@ -1607,7 +1608,7 @@ def test_对时配置_边界_env缺了_带引号_IPv6_减号开头_都说清楚(
 def test_装机脚本对时_先看有没有_timesyncd_没配上就删旧的_成功才说成功(装机脚本):
     """W09d 内审小 8。「有没有」看单元能不能载入:C40221 上包卸了、单元 masked,``systemctl cat``
     照样成功,结果写了一份不生效的配置(2026-10-08,决策 47)。"""
-    段 = 装机脚本[装机脚本.index("TIMESYNC_CONF=/etc/systemd/timesyncd.conf.d/d1max.conf"):]
+    段 = 装机脚本[装机脚本.index("TIMESYNC_CONF=/etc/systemd/timesyncd.conf.d/nexwar.conf"):]
     段 = 段[:段.index('say "7/7')]
     assert "systemctl show -p LoadState --value systemd-timesyncd" in 段
     assert "systemctl cat systemd-timesyncd" not in 段
@@ -1621,48 +1622,48 @@ def test_装机脚本对时_先看有没有_timesyncd_没配上就删旧的_成�
 
 def test_前后雷达合并的启动脚本与单元_只装不启用_卸载删干净():
     """W09i:合并节点跟定位器、感知一样跑在 ROS 的系统 Python 里、用这一版带的包;
-    外参读 /etc/d1max/lidars.json;装机只装不 enable;卸载连手工 enable 过的自启链一起删;
+    外参读 /etc/nexwar/lidars.json;装机只装不 enable;卸载连手工 enable 过的自启链一起删;
     先停定位器再停它。"""
     import os
     import subprocess
-    start = DEPLOY / "d1max-lidar-merge-start"
+    start = DEPLOY / "nexwar_lidar_merge_start"
     assert os.access(start, os.X_OK)
     subprocess.run(["sh", "-n", str(start)], check=True)
     text = start.read_text(encoding="utf-8")
     assert '. /opt/ros/humble/setup.sh' in text
     assert '$here/packages/localizer/src:$here/packages/contract/src' in text
-    assert "exec /usr/bin/python3 -m d1max_localizer.merge" in text
-    assert "--lidars /etc/d1max/lidars.json" in text
-    单元 = (DEPLOY / "d1max-lidar-merge.service").read_text(encoding="utf-8")
-    assert "ExecStart=/opt/d1max/current/deploy/d1max-lidar-merge-start" in 单元
-    assert "EnvironmentFile=-/etc/d1max/env" in 单元
+    assert "exec /usr/bin/python3 -m nexwar_localizer.merge" in text
+    assert "--lidars /etc/nexwar/lidars.json" in text
+    单元 = (DEPLOY / "nexwar_lidar_merge.service").read_text(encoding="utf-8")
+    assert "ExecStart=/opt/nexwar/current/deploy/nexwar_lidar_merge_start" in 单元
+    assert "EnvironmentFile=-/etc/nexwar/env" in 单元
     装 = (DEPLOY / "install.sh").read_text(encoding="utf-8")
-    assert "# @写盘 /etc/systemd/system/d1max-lidar-merge.service" in 装
-    assert 'install -m 0644 "$PKG/deploy/d1max-lidar-merge.service" /etc/systemd/system/' in 装
-    assert "enable d1max-lidar-merge" not in 装 and "systemctl start d1max-lidar-merge" not in 装
-    assert "systemctl try-restart d1max-lidar-merge.service" in 装
+    assert "# @写盘 /etc/systemd/system/nexwar_lidar_merge.service" in 装
+    assert 'install -m 0644 "$PKG/deploy/nexwar_lidar_merge.service" /etc/systemd/system/' in 装
+    assert "enable nexwar_lidar_merge" not in 装 and "systemctl start nexwar_lidar_merge" not in 装
+    assert "systemctl try-restart nexwar_lidar_merge.service" in 装
     卸 = (DEPLOY / "uninstall.sh").read_text(encoding="utf-8")
-    assert "# @删除 /etc/systemd/system/d1max-lidar-merge.service" in 卸
+    assert "# @删除 /etc/systemd/system/nexwar_lidar_merge.service" in 卸
     assert 'rm_sys "$UNIT_DIR/$MERGE_UNIT"' in 卸 and 'rm_sys "$MERGE_WANTS_LINK"' in 卸
     assert '"$OBS_UNIT" "$LOC_UNIT" "$MERGE_UNIT"' in 卸, "先停吃合并话题的定位器,再停合并"
 
 
 def test_工单7_旁路进程的单元与启动脚本_只装不启用_不刷起停上限_卸载删干净(tmp_path):
     """2026-10-28:现场手写的 d1max-field-sidecar.service 缺 runs/ 目录、撞了 systemd 起停次数上限,
-    开机那几秒修好才抢到窗口。旁路程序要链厂商 SDK、在机器上编,包里不带:按 /etc/d1max/env 找。"""
+    开机那几秒修好才抢到窗口。旁路程序要链厂商 SDK、在机器上编,包里不带:按 /etc/nexwar/env 找。"""
     import os
     import subprocess
-    start = DEPLOY / "d1max-sidecar-start"
+    start = DEPLOY / "nexwar_sidecar_start"
     assert os.access(start, os.X_OK)
     subprocess.run(["sh", "-n", str(start)], check=True)
-    单元 = (DEPLOY / "d1max-sidecar.service").read_text(encoding="utf-8")
-    assert "ExecStart=/opt/d1max/current/deploy/d1max-sidecar-start" in 单元
+    单元 = (DEPLOY / "nexwar_sidecar.service").read_text(encoding="utf-8")
+    assert "ExecStart=/opt/nexwar/current/deploy/nexwar_sidecar_start" in 单元
     assert "StartLimitIntervalSec=0" in 单元 and "Restart=always" in 单元
     assert "RestartPreventExitStatus=78" in 单元, "程序没编出来:别一直重启"
-    assert "EnvironmentFile=-/etc/d1max/env" in 单元 and "User=robot" in 单元
+    assert "EnvironmentFile=-/etc/nexwar/env" in 单元 and "User=robot" in 单元
     # 没编出来:一行说清楚、退 78
     r = subprocess.run(["sh", str(start)], env={"PATH": "/usr/bin:/bin", "HOME": str(tmp_path),
-                                                 "D1MAX_SIDECAR_BIN": str(tmp_path / "没有")},
+                                                 "NEXWAR_SIDECAR_BIN": str(tmp_path / "没有")},
                        capture_output=True, text=True, timeout=10)
     assert r.returncode == 78 and "make" in r.stderr
     # 编出来了:建好目录、按 env 拼参数
@@ -1670,8 +1671,8 @@ def test_工单7_旁路进程的单元与启动脚本_只装不启用_不刷起�
     fake.write_text('#!/bin/sh\necho "$@" > "$HOME/args"\n')
     fake.chmod(0o755)
     r = subprocess.run(["sh", str(start)], env={"PATH": "/usr/bin:/bin", "HOME": str(tmp_path),
-                                                 "D1MAX_SIDECAR_BIN": str(fake),
-                                                 "D1MAX_SIDECAR_ROBOT": "192.168.168.168:8082"},
+                                                 "NEXWAR_SIDECAR_BIN": str(fake),
+                                                 "NEXWAR_SIDECAR_ROBOT": "192.168.168.168:8082"},
                        capture_output=True, text=True, timeout=10)
     assert r.returncode == 0, r.stderr
     args = (tmp_path / "args").read_text().split()
@@ -1680,11 +1681,11 @@ def test_工单7_旁路进程的单元与启动脚本_只装不启用_不刷起�
     fifo = Path(args[args.index("--fifo") + 1])
     assert fifo.parent.is_dir(), "runs/ 目录先建好"
     装 = (DEPLOY / "install.sh").read_text(encoding="utf-8")
-    assert "# @写盘 /etc/systemd/system/d1max-sidecar.service" in 装
-    assert 'install -m 0644 "$PKG/deploy/d1max-sidecar.service" /etc/systemd/system/' in 装
-    assert "enable d1max-sidecar" not in 装 and "systemctl start d1max-sidecar" not in 装
+    assert "# @写盘 /etc/systemd/system/nexwar_sidecar.service" in 装
+    assert 'install -m 0644 "$PKG/deploy/nexwar_sidecar.service" /etc/systemd/system/' in 装
+    assert "enable nexwar_sidecar" not in 装 and "systemctl start nexwar_sidecar" not in 装
     卸 = (DEPLOY / "uninstall.sh").read_text(encoding="utf-8")
-    assert "# @删除 /etc/systemd/system/d1max-sidecar.service" in 卸
+    assert "# @删除 /etc/systemd/system/nexwar_sidecar.service" in 卸
     assert 'rm_sys "$UNIT_DIR/$SIDE_UNIT"' in 卸 and 'rm_sys "$SIDE_WANTS_LINK"' in 卸
     assert '"$MAIN_UNIT" "$SIDE_UNIT"' in 卸, "先停代理(它先停车),再停旁路"
 
@@ -1693,36 +1694,36 @@ def _units(tmp_path, text):
     import subprocess
     f = tmp_path / "env"
     f.write_text(text, encoding="utf-8")
-    return subprocess.run(["sh", str(DEPLOY / "d1max-units-check"), str(f)], capture_output=True,
+    return subprocess.run(["sh", str(DEPLOY / "nexwar_units_check"), str(f)], capture_output=True,
                           text=True)
 
 
 def test_换算系数检查_真狗用老模板的猜测值就不行_别的都放(tmp_path):
-    """W12 外审阻断:装机前查 /etc/d1max/env;范围跟代理的 UNIT_RANGES 一致。"""
+    """W12 外审阻断:装机前查 /etc/nexwar/env;范围跟代理的 UNIT_RANGES 一致。"""
     import os
     import subprocess
-    assert os.access(DEPLOY / "d1max-units-check", os.X_OK)
-    subprocess.run(["sh", "-n", str(DEPLOY / "d1max-units-check")], check=True)
-    d1 = "D1MAX_HAL=d1max\n"
+    assert os.access(DEPLOY / "nexwar_units_check", os.X_OK)
+    subprocess.run(["sh", "-n", str(DEPLOY / "nexwar_units_check")], check=True)
+    d1 = "NEXWAR_HAL=d1max\n"
     for args in ("--sidecar 127.0.0.1:8090 --mps-per-unit 0.4 --radps-per-unit 1.0",
                  "--mps-per-unit 0.4", "--radps-per-unit 1.0", "--mps-per-unit=0.4",
                  "--mps-per-unit 2.5", "--mps-per-unit abc"):
-        for line in (f"D1MAX_AGENT_ARGS={args}\n", f'D1MAX_AGENT_ARGS="{args}"\n'):
+        for line in (f"NEXWAR_AGENT_ARGS={args}\n", f'NEXWAR_AGENT_ARGS="{args}"\n'):
             r = _units(tmp_path, d1 + line)
             assert r.returncode == 1, (line, r.stdout, r.stderr)
             assert "不在 SDK 低速档的范围里" in r.stderr
-    for text in (d1 + "D1MAX_AGENT_ARGS=--sidecar 127.0.0.1:8090\n",             # 删掉了:默认值
-                 d1 + "D1MAX_AGENT_ARGS=--mps-per-unit 1.08 --radps-per-unit 1.42\n",  # 实测值
-                 d1 + "D1MAX_AGENT_ARGS=--mps-per-unit 0.4 --units-confirmed\n",   # 人核过
-                 "D1MAX_HAL=sim\nD1MAX_AGENT_ARGS=--mps-per-unit 0.4\n",           # sim 不拦
-                 "D1MAX_HAL=d1max\n",
-                 "# D1MAX_HAL=d1max\nD1MAX_AGENT_ARGS=--mps-per-unit 0.4\n"):     # 注释掉的不算
+    for text in (d1 + "NEXWAR_AGENT_ARGS=--sidecar 127.0.0.1:8090\n",             # 删掉了:默认值
+                 d1 + "NEXWAR_AGENT_ARGS=--mps-per-unit 1.08 --radps-per-unit 1.42\n",  # 实测值
+                 d1 + "NEXWAR_AGENT_ARGS=--mps-per-unit 0.4 --units-confirmed\n",   # 人核过
+                 "NEXWAR_HAL=sim\nNEXWAR_AGENT_ARGS=--mps-per-unit 0.4\n",           # sim 不拦
+                 "NEXWAR_HAL=d1max\n",
+                 "# NEXWAR_HAL=d1max\nNEXWAR_AGENT_ARGS=--mps-per-unit 0.4\n"):     # 注释掉的不算
         r = _units(tmp_path, text)
         assert r.returncode == 0, (text, r.stderr)
-    r = subprocess.run(["sh", str(DEPLOY / "d1max-units-check"), str(tmp_path / "没有")],
+    r = subprocess.run(["sh", str(DEPLOY / "nexwar_units_check"), str(tmp_path / "没有")],
                        capture_output=True, text=True)
     assert r.returncode == 0, "还没有 env(新机器)"
-    text = (DEPLOY / "d1max-units-check").read_text(encoding="utf-8")
+    text = (DEPLOY / "nexwar_units_check").read_text(encoding="utf-8")
     assert 'check --mps-per-unit "$(val --mps-per-unit)" 0.7 1.5' in text
     assert 'check --radps-per-unit "$(val --radps-per-unit)" 1.1 2.0' in text, \
         "跟代理的 UNIT_RANGES 一致"
@@ -1731,7 +1732,7 @@ def test_换算系数检查_真狗用老模板的猜测值就不行_别的都放
 def test_装机脚本_换算系数不对什么都不改就停():
     装 = (DEPLOY / "install.sh").read_text(encoding="utf-8")
     assert "--mps-per-unit 1.0 --radps-per-unit 1.5" in 装
-    i = 装.index('sh "$PKG/deploy/d1max-units-check" /etc/d1max/env')
+    i = 装.index('sh "$PKG/deploy/nexwar_units_check" /etc/nexwar/env')
     assert i < 装.index('say "1/7 建目录'), "在动任何东西之前"
     assert "exit 2" in 装[i:i + 300]
     assert "sed -i" not in 装[i - 400:i + 400], "不改人手写的配置"
@@ -1791,7 +1792,7 @@ def test_系统件缺什么报什么_只提示不装(tmp_path):
 
 def test_人员检测启动脚本不读用户目录的包():
     """C40221:robot 的 ~/.local 里有 numpy 2.x,盖住系统 numpy 1.21,系统 OpenCV 一 import 就挂。"""
-    text = (DEPLOY / "d1max-persons-start").read_text(encoding="utf-8")
+    text = (DEPLOY / "nexwar_persons_start").read_text(encoding="utf-8")
     assert "\nexport PYTHONNOUSERSITE=1\n" in text
     assert text.index("export PYTHONNOUSERSITE=1") < text.index("exec /usr/bin/python3")
 
@@ -1800,11 +1801,11 @@ def test_感知和人员检测的启动脚本限numpy线程():
     """OpenBLAS 缺省开满核的线程池,C40221 上 8 个线程各吃 23–35%,跟定位器抢 CPU(2026-10-08)。"""
     # W71:定位器(Super-LIO 起 Python 主进程自己套图打分)、雷达合并也一样,11-03 商场定位器主进程
     # 8 个线程各 10–14%、峰值 256%;代理也用 numpy(障碍记忆、全局重定位)
-    for 名, run in (("d1max-obstacles-start", "exec /usr/bin/python3"),
-                   ("d1max-persons-start", "exec /usr/bin/python3"),
-                   ("d1max-localizer-start", "exec /usr/bin/python3"),
-                   ("d1max-lidar-merge-start", "exec /usr/bin/python3"),
-                   ("d1max-agent-start", 'exec "$here/venv/bin/d1max-agent"')):
+    for 名, run in (("nexwar_obstacles_start", "exec /usr/bin/python3"),
+                   ("nexwar_persons_start", "exec /usr/bin/python3"),
+                   ("nexwar_localizer_start", "exec /usr/bin/python3"),
+                   ("nexwar_lidar_merge_start", "exec /usr/bin/python3"),
+                   ("nexwar_agent_start", 'exec "$here/venv/bin/nexwar_agent"')):
         text = (DEPLOY / 名).read_text(encoding="utf-8")
         assert "\nexport OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1\n" in text, 名
         assert text.index("OPENBLAS_NUM_THREADS") < text.index(run), 名
@@ -1829,24 +1830,24 @@ def test_W47_Nav2单元_单独ROS域_只装不起_卸载收干净():
     跟代理同一个账号;装机只装不 enable;卸载连自启链一起删、先停 Nav2 再停别的。"""
     import os
     import subprocess
-    start = DEPLOY / "d1max-nav2-start"
+    start = DEPLOY / "nexwar_nav2_start"
     assert os.access(start, os.X_OK)
     subprocess.run(["sh", "-n", str(start)], check=True)
     text = start.read_text(encoding="utf-8")
     assert '. /opt/ros/humble/setup.sh' in text
-    assert 'ROS_DOMAIN_ID="${D1MAX_NAV2_ROS_DOMAIN:-61}"' in text and "ROS_LOCALHOST_ONLY=1" in text
-    assert "socket:=/var/lib/d1max/agent/nav2.sock" in text
-    assert "$here/deploy/nav2/d1max_nav2.launch.py" in text
+    assert 'ROS_DOMAIN_ID="${NEXWAR_NAV2_ROS_DOMAIN:-61}"' in text and "ROS_LOCALHOST_ONLY=1" in text  # noqa: E501
+    assert "socket:=/var/lib/nexwar/agent/nav2.sock" in text
+    assert "$here/deploy/nav2/nexwar_nav2.launch.py" in text
     assert (DEPLOY / "nav2" / "params.yaml").is_file()
-    单元 = (DEPLOY / "d1max-nav2.service").read_text(encoding="utf-8")
-    assert "User=robot" in 单元 and "ExecStart=/opt/d1max/current/deploy/d1max-nav2-start" in 单元
+    单元 = (DEPLOY / "nexwar_nav2.service").read_text(encoding="utf-8")
+    assert "User=robot" in 单元 and "ExecStart=/opt/nexwar/current/deploy/nexwar_nav2_start" in 单元
     装 = (DEPLOY / "install.sh").read_text(encoding="utf-8")
-    assert "# @写盘 /etc/systemd/system/d1max-nav2.service" in 装
-    assert 'install -m 0644 "$PKG/deploy/d1max-nav2.service" /etc/systemd/system/' in 装
-    assert "D1MAX_NAV=nav2:d1max-nav2" in 装                   # W70:env 写了要用才 enable
-    assert "systemctl try-restart d1max-nav2.service" in 装
+    assert "# @写盘 /etc/systemd/system/nexwar_nav2.service" in 装
+    assert 'install -m 0644 "$PKG/deploy/nexwar_nav2.service" /etc/systemd/system/' in 装
+    assert "NEXWAR_NAV=nav2:nexwar_nav2" in 装                   # W70:env 写了要用才 enable
+    assert "systemctl try-restart nexwar_nav2.service" in 装
     卸 = (DEPLOY / "uninstall.sh").read_text(encoding="utf-8")
-    assert "# @删除 /etc/systemd/system/d1max-nav2.service" in 卸
+    assert "# @删除 /etc/systemd/system/nexwar_nav2.service" in 卸
     assert 'rm_sys "$UNIT_DIR/$NAV2_UNIT"' in 卸 and 'rm_sys "$NAV2_WANTS_LINK"' in 卸
     assert '"$NAV2_UNIT" "$PERS_UNIT"' in 卸, "先停 Nav2(它在给代理出速度)"
 
@@ -1884,7 +1885,7 @@ def test_W47_行为树不原地转_启动文件换成绝对路径_转接节点�
     body = xml.split("-->", 1)[1]
     assert "<Spin" not in body, "两侧盲区里原地转一整圈会扫到看不见的东西(决策 76)"
     assert "<BackUp" in body and "<Wait" in body
-    launch = (DEPLOY / "nav2" / "d1max_nav2.launch.py").read_text(encoding="utf-8")
+    launch = (DEPLOY / "nav2" / "nexwar_nav2.launch.py").read_text(encoding="utf-8")
     assert "navigate_to_pose_d1max.xml" in launch and "RewrittenYaml" in launch
     assert 'EnvironmentVariable(\n                           "PYTHONPATH"' in launch, \
         "覆盖掉 ROS 的 PYTHONPATH 就找不到 rclpy"
@@ -1896,31 +1897,31 @@ def test_W47_行为树不原地转_启动文件换成绝对路径_转接节点�
 
 
 def test_agent启动脚本_人员检测跨板从env来_密钥缺省路径_没设不带(tmp_path):
-    """跨板(检测在厂家 Orin、代理在 RK3588):D1MAX_PERSONS_LISTEN / KEY / PEER。"""
-    base = {"D1MAX_SITE_MQTT": "mqtts://site:8883", "D1MAX_OUTBOX": "/var/lib/d1max/outbox",
-            "D1MAX_MAP": "estate:1", "D1MAX_HOME": "0,0,0", "D1MAX_PERSONS": "bridge"}
+    """跨板(检测在厂家 Orin、代理在 RK3588):NEXWAR_PERSONS_LISTEN / KEY / PEER。"""
+    base = {"NEXWAR_SITE_MQTT": "mqtts://site:8883", "NEXWAR_OUTBOX": "/var/lib/nexwar/outbox",
+            "NEXWAR_MAP": "estate:1", "NEXWAR_HOME": "0,0,0", "NEXWAR_PERSONS": "bridge"}
     got = _启动脚本跑一遍(tmp_path, base)
     args = got.stdout.splitlines()[1:]
     assert "--persons-listen" not in args and "--persons-key" not in args
-    got = _启动脚本跑一遍(tmp_path / "b", {**base, "D1MAX_PERSONS_LISTEN": "0.0.0.0:47010",
-                                           "D1MAX_PERSONS_PEER": "192.168.168.100"})
+    got = _启动脚本跑一遍(tmp_path / "b", {**base, "NEXWAR_PERSONS_LISTEN": "0.0.0.0:47010",
+                                           "NEXWAR_PERSONS_PEER": "192.168.168.100"})
     args = got.stdout.splitlines()[1:]
     assert args[args.index("--persons-listen") + 1] == "0.0.0.0:47010"
-    assert args[args.index("--persons-key") + 1] == "/etc/d1max/persons.key"
+    assert args[args.index("--persons-key") + 1] == "/etc/nexwar/persons.key"
     assert args[args.index("--persons-peer") + 1] == "192.168.168.100"
 
 
 def test_persons启动脚本_跨板时带上连谁和密钥():
-    text = (DEPLOY / "d1max-persons-start").read_text(encoding="utf-8")
-    want = '${D1MAX_PERSONS_CONNECT:+--connect} ${D1MAX_PERSONS_CONNECT:+"$D1MAX_PERSONS_CONNECT"}'
+    text = (DEPLOY / "nexwar_persons_start").read_text(encoding="utf-8")
+    want = '${NEXWAR_PERSONS_CONNECT:+--connect} ${NEXWAR_PERSONS_CONNECT:+"$NEXWAR_PERSONS_CONNECT"}'  # noqa: E501
     assert want in text
-    assert '${D1MAX_PERSONS_CONNECT:+"${D1MAX_PERSONS_KEY:-/etc/d1max/persons.key}"}' in text
+    assert '${NEXWAR_PERSONS_CONNECT:+"${NEXWAR_PERSONS_KEY:-/etc/nexwar/persons.key}"}' in text
 
 
 def test_复查三P4_自己起Nav2的节点_控制器和脱困各出一路_不起速度平滑器():
     """bringup 的 navigation_launch.py 里 behavior_server 发 /cmd_vel(跟平滑器同一个话题),转接节点
     订 /cmd_vel_nav 就收不到 BackUp。自己起:控制器 → /cmd_vel_nav,脱困 → /cmd_vel_behavior。"""
-    launch = (DEPLOY / "nav2" / "d1max_nav2.launch.py").read_text(encoding="utf-8")
+    launch = (DEPLOY / "nav2" / "nexwar_nav2.launch.py").read_text(encoding="utf-8")
     code = launch.split('"""', 2)[2]
     assert "navigation_launch.py" not in code and "nav2_bringup" not in code
     assert '("cmd_vel", "cmd_vel_nav")' in launch and '("cmd_vel", "cmd_vel_behavior")' in launch
@@ -1928,7 +1929,7 @@ def test_复查三P4_自己起Nav2的节点_控制器和脱困各出一路_不�
     assert "lifecycle_manager_navigation" in launch
     for n in ("controller_server", "planner_server", "behavior_server", "bt_navigator"):
         assert f'"{n}"' in launch
-    src = (ROOT / "packages" / "localizer" / "src" / "d1max_localizer" / "nav2bridge.py").read_text(
+    src = (ROOT / "packages" / "localizer" / "src" / "nexwar_localizer" / "nav2bridge.py").read_text(  # noqa: E501
         encoding="utf-8")
     assert '"/cmd_vel_behavior"' in src and '"/cmd_vel_nav"' in src
 
@@ -1940,7 +1941,7 @@ def test_W48_经点行为树也不原地转_去掉路过的点_启动文件换�
     assert "<RemovePassedGoals" in body and "<ComputePathThroughPoses" in body
     assert 'backup_speed="0.15"' in body, "真机 0.13 m/s 以下只踏步不走"
     assert 'radius="1.5"' in body, "拐弯切角离路口点 0.7 m 以外就过去了:没去掉会掉头回去找它"
-    launch = (DEPLOY / "nav2" / "d1max_nav2.launch.py").read_text(encoding="utf-8")
+    launch = (DEPLOY / "nav2" / "nexwar_nav2.launch.py").read_text(encoding="utf-8")
     assert "navigate_through_poses_d1max.xml" in launch
     import yaml
     d = yaml.safe_load((DEPLOY / "nav2" / "params.yaml").read_text(encoding="utf-8"))
@@ -1951,14 +1952,14 @@ def test_W48_经点行为树也不原地转_去掉路过的点_启动文件换�
 
 def test_现场1104_Nav2等机器人的钟对了再起_1970开机不先起(tmp_path):
     """C40221 没有能保钟的电池,开机是 1970;Nav2 用仿真钟,先起来、钟再往前跳 56 年,两次都一直不认
-    odom(重启 d1max-nav2 才好)。启动脚本先等钟过了下限再起。"""
+    odom(重启 nexwar_nav2 才好)。启动脚本先等钟过了下限再起。"""
     import os
     import subprocess
-    wait = DEPLOY / "d1max-wait-clock"
+    wait = DEPLOY / "nexwar_wait_clock"
     assert os.access(wait, os.X_OK)
-    start = (DEPLOY / "d1max-nav2-start").read_text(encoding="utf-8")
-    assert '"$here/deploy/d1max-wait-clock"' in start
-    assert start.index("d1max-wait-clock") < start.index("exec ros2 launch")
+    start = (DEPLOY / "nexwar_nav2_start").read_text(encoding="utf-8")
+    assert '"$here/deploy/nexwar_wait_clock"' in start
+    assert start.index("nexwar_wait_clock") < start.index("exec ros2 launch")
     fake = tmp_path / "bin"
     fake.mkdir()
     n = tmp_path / "n"

@@ -1,0 +1,74 @@
+"""自动回充(W13,决策 25、45):两条对桩的路(厂家回充 / 自己认二维码对桩)都要的框架。
+
+流程(站点编排,每一步都是一趟普通任务,优先级 :data:`CHARGE_PRIORITY`):
+1. **走到桩前对准点**(``goto``,点是站点给每台狗登记的:桩前约 1.5 m、正对桩);
+2. **对桩、充电、充满出桩**(``dock``,这一单新加的任务;狗上调 HAL 的 ``recharge_start``,
+   **按电池确认充上了**(厂家回充从不报成功),充到 ``resume_pct`` 调 ``undock``,出了桩才算完)。
+
+电量线(决策 45):空闲时电量 ≤ :data:`LOW_PCT` 就去充,充到 :data:`RESUME_PCT` 出桩;充电中来了入侵,
+电量 ≥ :data:`INTRUSION_MIN_PCT` 就出桩去(入侵 80 抢得走回充 50,``dock`` 被抢时**先出桩再交**),
+不够就不派。被抢断的回充,狗空了接着充。
+
+多台狗**错开充**(W28,决策 46):别的狗正在回充时,到了 :data:`LOW_PCT` 先接着守,守到
+:data:`FLOOR_PCT` 还轮不到就也去充(站点报 P2)。去桩这一趟的中止线是 :data:`TRIP_ABORT_PCT`
+(去充是电量唯一能回来的路;不然 20% 的狗过不了出发检查)。
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Any
+
+from nexwar_contract.errors import ContractError
+
+#: W73 决策 78 §7.2:空闲时去充的线 = 回撤线的下限(原来 30)。
+LOW_PCT = 25.0
+RESUME_PCT = 90.0
+#: 老的「回充中不到 50% 不派」(决策 45)。W73 起站点改按报警出动线判(``nexwar_site.energy``),
+#: 这个数只留给老代码读。
+INTRUSION_MIN_PCT = 50.0
+#: 别的狗在充时,守到这条线还轮不到就也去充(W28,决策 46)。
+FLOOR_PCT = 20.0
+#: 去桩那一趟(``goto`` 带 ``charge``)的中止线:路上到这条线才停。
+TRIP_ABORT_PCT = 10.0
+#: 回充的优先级:比排程巡检(10–49)高,比人手动派的(60)、事件派遣(80)低 —— 人和入侵抢得走。
+CHARGE_PRIORITY = 50
+#: W73 外审 r1 #8:报警出动(事件派遣,优先级 ≥ 这个数)的 ``goto``,狗上出发线、回撤线的底用停止线
+#: (§7.5「报警比布防放宽一档」),跟站点的报警出动线(``nexwar_site.energy.alarm_line``)对得上 ——
+#: 不然站点按距离派出去、狗按普通 25% 底拒掉,报警没人去。
+ALARM_PRIORITY = 80
+ALARM_FLOOR_PCT = 15.0
+#: W73 外审 r3 #4:回待命点那一趟(``goto`` 带 ``homing``)—— 回家的路,低电不掉头,但不是去补能:
+#: 停止线留 15%(停止线),出发线按去那儿的路程算;去充电桩 / 换电位那趟才放到 :data:`TRIP_ABORT_PCT`。
+HOMING_FLOOR_PCT = 15.0
+TASK_PREFIX = "charge-"
+DOCK_TIMEOUT_S = 180
+UNDOCK_TIMEOUT_S = 120
+MAX_CHARGE_S = 6 * 3600
+
+
+@dataclass(frozen=True)
+class DockRequest:
+    resume_pct: float = RESUME_PCT
+    dock_timeout_s: int = DOCK_TIMEOUT_S
+    max_s: int = MAX_CHARGE_S
+
+    def to_payload(self) -> dict[str, Any]:
+        return {"resume_pct": self.resume_pct, "dock_timeout_s": self.dock_timeout_s,
+                "max_s": self.max_s}
+
+
+def parse_dock(payload: Any) -> DockRequest:
+    if not isinstance(payload, dict) or set(payload) - {"resume_pct", "dock_timeout_s", "max_s"}:
+        raise ContractError("dock:payload 只认 resume_pct、dock_timeout_s、max_s")
+    r = payload.get("resume_pct", RESUME_PCT)
+    if isinstance(r, bool) or not isinstance(r, (int, float)) or not 10 <= r <= 100:
+        raise ContractError(f"dock:resume_pct 要在 10–100:{r!r}")
+    out = {}
+    for k, lo, hi, dflt in (("dock_timeout_s", 10, 1800, DOCK_TIMEOUT_S),
+                            ("max_s", 60, 24 * 3600, MAX_CHARGE_S)):
+        v = payload.get(k, dflt)
+        if isinstance(v, bool) or not isinstance(v, int) or not lo <= v <= hi:
+            raise ContractError(f"dock:{k} 要是 {lo}–{hi} 的整数:{v!r}")
+        out[k] = v
+    return DockRequest(resume_pct=float(r), **out)

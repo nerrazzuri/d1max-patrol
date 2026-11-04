@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 from test_site_api import PW, 站
 
-from d1max_site import account_requests as ar
+from nexwar_site import account_requests as ar
 
 
 @pytest.fixture
@@ -97,7 +97,7 @@ def test_同一地址每分钟三次_最多挂二十条(站点, monkeypatch):
 
 
 def test_七天没人批作废_登录说过期了_有提醒批完解决(tmp_path):
-    from d1max_site.db import SiteDB
+    from nexwar_site.db import SiteDB
 
     class 告警:
         def __init__(self):
@@ -109,7 +109,7 @@ def test_七天没人批作废_登录说过期了_有提醒批完解决(tmp_path
         def resolve_all(self, robot, kind, *, who):
             self.resolved.append((robot, kind, who))
 
-    from d1max_site.accounts import Accounts
+    from nexwar_site.accounts import Accounts
     db = SiteDB(tmp_path / "s.db")
     clock = [1_000_000]
     a = 告警()

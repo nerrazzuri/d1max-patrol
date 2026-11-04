@@ -7,8 +7,8 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-from d1max_localizer import slioloc as L
-from d1max_localizer.frames import Frames, quat_to_mat
+from nexwar_localizer import slioloc as L
+from nexwar_localizer.frames import Frames, quat_to_mat
 
 #: C40221 前雷达(Airy):雷达 +X 朝下、+Z 朝前;IMU +Y 朝上、-Z 朝前(11-02 起步加速度核过)。
 #: 外参按 Super-LIO 的读法(列优先):雷达系 → IMU 系。
@@ -208,7 +208,7 @@ def test_W68_外审r2_打分途中换了图_旧图的分不写回():
 
 def _旧的打分(fit, scan, p, q):
     """W71 之前的做法(整帧先乘旋转再筛、再抽):拿来比对,改快以后分数一分不差。"""
-    from d1max_localizer import superlio as S
+    from nexwar_localizer import superlio as S
     a = np.asarray(scan, dtype=np.float64).reshape(-1, 3)
     a = a[np.isfinite(a).all(axis=1)]
     r2 = (a * a).sum(axis=1)

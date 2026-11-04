@@ -84,7 +84,7 @@ fi
 echo "  U=$U"
 
 say "8. 【今天的头号任务】conform 一致性巡检 —— 全程只读，机器不动"
-python -m d1max_patrol.cli --url "$U" -v conform
+python -m nexwar_patrol.cli --url "$U" -v conform
 
 say "跑完了"
 echo "日志：     $LOG"

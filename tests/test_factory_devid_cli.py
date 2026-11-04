@@ -8,10 +8,10 @@ import json
 
 import pytest
 
-from d1max_contract import ed25519
-from d1max_patrol.bind import devid
-from d1max_patrol.bind.cli import add_args, run
-from d1max_patrol.bind.paths import BindPaths
+from nexwar_contract import ed25519
+from nexwar_patrol.bind import devid
+from nexwar_patrol.bind.cli import add_args, run
+from nexwar_patrol.bind.paths import BindPaths
 
 
 def _run(argv):

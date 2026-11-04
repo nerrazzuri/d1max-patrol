@@ -24,7 +24,7 @@ abstract class BackgroundWatch {
 }
 
 class ChannelBackgroundWatch implements BackgroundWatch {
-  static const MethodChannel _ch = MethodChannel('d1max/watch');
+  static const MethodChannel _ch = MethodChannel('nexwar/watch');
   const ChannelBackgroundWatch();
 
   @override

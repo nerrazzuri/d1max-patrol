@@ -1,0 +1,148 @@
+#!/bin/sh
+# nexwar_migrate prepare|finish —— 改名迁移(d1max → nexwar,2026-11):已经装好的机器人 / 站点主机上
+# 把老名字的目录、配置、单元、账号换成新名字。装机脚本(install.sh、install-site.sh)自己调,人不用单独跑。
+#
+#   prepare  装新版之前:老的单元记下哪些开着 → 停掉、禁用、删单元文件;配置先打包备份;
+#            目录原地改名(mv,不复制:证书、私钥、设备 PIN、地图、发件箱原样搬);env 里的键
+#            D1MAX_X 改成 NEXWAR_X、值里的老路径改成新路径(只改不打印);WireGuard 配置改名;
+#            站点账号 d1max-site 改名(uid 不变,文件属主跟着走)。
+#   finish   新版装完之后:prepare 时开着的单元,按新名字再开起来(装机脚本只开它自己定的那几个,
+#            现场手工开过的旁路、雷达合并、WireGuard 不能丢)。
+#
+# 没有老东西 = 什么都不做(新机器、迁过的机器)。可以重跑。新旧两个目录**都有内容**时不猜、停下(退出 2),
+# 让人看一眼。不留老路径的软链接:代码、脚本都只认新路径,软链接还会让卸载、足迹对账多一套名字。
+# 测试用:NEXWAR_MIGRATE_ROOT=<假根目录>(账号不改)、NEXWAR_MIGRATE_SYSTEMCTL=<桩>。
+set -eu
+R=${NEXWAR_MIGRATE_ROOT:-}
+SYSTEMCTL=${NEXWAR_MIGRATE_SYSTEMCTL:-systemctl}
+USERMOD=${NEXWAR_MIGRATE_USERMOD:-usermod}
+GROUPMOD=${NEXWAR_MIGRATE_GROUPMOD:-groupmod}
+RECORD="$R/var/backups/nexwar-migrate.enabled"
+
+DIRS="/etc/d1max-site:/etc/nexwar_site /etc/d1max-ops:/etc/nexwar_ops /etc/d1max-console:/etc/nexwar_console
+/etc/d1max:/etc/nexwar /opt/d1max-site:/opt/nexwar_site /opt/d1max:/opt/nexwar
+/var/lib/d1max-site:/var/lib/nexwar_site /var/lib/d1max-ops:/var/lib/nexwar_ops /var/lib/d1max:/var/lib/nexwar
+/usr/local/lib/d1max:/usr/local/lib/nexwar"
+FILES="/etc/d1max-ops.json:/etc/nexwar_ops.json /etc/wireguard/d1max.conf:/etc/wireguard/nexwar.conf"
+# 新版装机脚本会按新名字重写的:老的直接删
+DROP="/etc/sudoers.d/d1max /etc/systemd/timesyncd.conf.d/d1max.conf /etc/chrony/conf.d/d1max.conf
+/etc/chrony/conf.d/d1max-site.conf /etc/systemd/journald.conf.d/d1max.conf
+/usr/local/sbin/d1max-privileged /usr/local/sbin/d1max-restart-now /usr/local/bin/d1max-site"
+
+say() { printf '  [改名迁移] %s\n' "$*"; }
+# d1max-lidar-merge.service → nexwar_lidar_merge.service;wg-quick@d1max → wg-quick@nexwar。
+# 单元名里只有最后一个点前面是名字:d1max-lidar-merge.service 的名字部分连字符全换下划线
+newunit() {
+  case "$1" in
+    wg-quick@d1max*) printf 'wg-quick@nexwar%s' "${1#wg-quick@d1max}" ;;
+    d1max-*) n=${1#d1max-}; printf 'nexwar_%s.%s' "$(printf '%s' "${n%.*}" | tr '-' '_')" "${n##*.}" ;;
+    *) printf '%s' "$1" ;;
+  esac
+}
+
+old_units() {
+  for f in "$R"/etc/systemd/system/d1max-*.service "$R"/etc/systemd/system/d1max-*.path \
+           "$R"/etc/systemd/system/d1max-*.timer; do
+    [ -e "$f" ] && basename "$f"
+  done
+  [ -e "$R/etc/wireguard/d1max.conf" ] && echo "wg-quick@d1max.service"
+  return 0
+}
+
+anything_old() {
+  for pair in $DIRS $FILES; do [ -e "$R${pair%%:*}" ] && return 0; done
+  for f in $DROP; do [ -e "$R$f" ] && return 0; done
+  [ -n "$(old_units)" ] && return 0
+  return 1
+}
+
+prepare() {
+  anything_old || return 0
+  say "这台机器还有改名前(d1max)的东西:换成 nexwar"
+  for pair in $DIRS; do
+    old="$R${pair%%:*}"; new="$R${pair#*:}"
+    if [ -e "$old" ] && [ -e "$new" ] && [ -n "$(ls -A "$new" 2>/dev/null)" ]; then
+      echo "错误: $old 和 $new 都有内容,不知道该留哪个。看一眼,把不要的那个挪走再装。" >&2
+      exit 2
+    fi
+  done
+  stamp=$(date -u +%Y%m%dT%H%M%SZ)
+  mkdir -p "$R/var/backups"
+  conf=""
+  for p in /etc/d1max /etc/d1max-site /etc/d1max-ops /etc/d1max-console /etc/d1max-ops.json \
+           /etc/wireguard/d1max.conf; do
+    [ -e "$R$p" ] && conf="$conf ${p#/}"
+  done
+  if [ -n "$conf" ]; then
+    bk="$R/var/backups/nexwar-migrate-$stamp.tar.gz"
+    (umask 077; tar -C "$R/" -czf "$bk" $conf)
+    say "配置先备份到 ${bk#"$R"}(只有 root 能读;里面有私钥、PIN)"
+  fi
+  : > "$RECORD.tmp"
+  for u in $(old_units); do
+    if $SYSTEMCTL is-enabled --quiet "$u" 2>/dev/null; then echo "$u" >> "$RECORD.tmp"; fi
+    $SYSTEMCTL disable --now "$u" >/dev/null 2>&1 || true
+  done
+  # 记下的开着的单元并到老记录里(重跑 prepare 不丢上一次记的)
+  { [ -f "$RECORD" ] && cat "$RECORD"; cat "$RECORD.tmp"; } | sort -u > "$RECORD.new"
+  rm -f "$RECORD.tmp"; mv "$RECORD.new" "$RECORD"
+  for f in "$R"/etc/systemd/system/d1max-* "$R"/etc/systemd/system/*.wants/d1max-*; do
+    [ -e "$f" ] || [ -L "$f" ] || continue
+    rm -rf "$f"
+  done
+  for pair in $DIRS $FILES; do
+    old="$R${pair%%:*}"; new="$R${pair#*:}"
+    [ -e "$old" ] || continue
+    [ -d "$new" ] && [ -z "$(ls -A "$new")" ] && rmdir "$new"
+    mkdir -p "$(dirname "$new")"
+    mv "$old" "$new"
+    say "${old#"$R"} → ${new#"$R"}"
+  done
+  for f in $DROP; do rm -f "$R$f"; done
+  # 配置里的键、老路径(env、各种 .conf / .json / .yaml);证书、私钥不碰
+  { for d in /etc/nexwar /etc/nexwar_site /etc/nexwar_ops /etc/nexwar_console; do
+    [ -d "$R$d" ] || continue
+    find "$R$d" -type f \( -name env -o -name '*.env' -o -name '*.conf' -o -name '*.json' \
+        -o -name '*.yaml' -o -name '*.yml' -o -name '*.toml' \)
+  done
+  [ -f "$R/etc/nexwar_ops.json" ] && echo "$R/etc/nexwar_ops.json"
+  } | while read -r f; do
+      grep -qE 'D1MAX_|/d1max' "$f" 2>/dev/null || continue
+      sed -i -e 's/D1MAX_/NEXWAR_/g' \
+             -e 's#/etc/d1max-site#/etc/nexwar_site#g;s#/etc/d1max-ops#/etc/nexwar_ops#g' \
+             -e 's#/etc/d1max-console#/etc/nexwar_console#g;s#/etc/d1max#/etc/nexwar#g' \
+             -e 's#/opt/d1max-site#/opt/nexwar_site#g;s#/opt/d1max#/opt/nexwar#g' \
+             -e 's#/var/lib/d1max-site#/var/lib/nexwar_site#g;s#/var/lib/d1max-ops#/var/lib/nexwar_ops#g' \
+             -e 's#/var/lib/d1max#/var/lib/nexwar#g;s#/usr/local/lib/d1max#/usr/local/lib/nexwar#g' "$f"
+      say "改了 ${f#"$R"} 里的键名、路径(值不打印)"
+  done
+  if [ -z "$R" ] && id -u d1max-site >/dev/null 2>&1 && ! id -u nexwar_site >/dev/null 2>&1; then
+    $USERMOD -l nexwar_site -d /var/lib/nexwar_site d1max-site
+    getent group d1max-site >/dev/null 2>&1 && $GROUPMOD -n nexwar_site d1max-site
+    say "账号 d1max-site → nexwar_site(uid 不变)"
+  fi
+  $SYSTEMCTL daemon-reload >/dev/null 2>&1 || true
+}
+
+finish() {
+  [ -f "$RECORD" ] || return 0
+  while read -r u; do
+    [ -n "$u" ] || continue
+    n=$(newunit "$u")
+    case "$n" in wg-quick@*) f="$R/etc/wireguard/${n#wg-quick@}"; f="${f%.service}.conf" ;;
+                 *) f="$R/etc/systemd/system/$n" ;; esac
+    if [ -e "$f" ]; then
+      $SYSTEMCTL enable --now "$n" >/dev/null 2>&1 && say "改名前开着的 $u → 开 $n" \
+        || say "警告: $n 开不起来,看 journalctl -u $n"
+    else
+      say "改名前开着的 $u 这一版没有对应的 $n(跳过)"
+    fi
+  done < "$RECORD"
+  mv "$RECORD" "$RECORD.done-$(date -u +%Y%m%dT%H%M%SZ)"
+}
+
+case "${1:-}" in
+  prepare) prepare ;;
+  finish) finish ;;
+  *) echo "用法: nexwar_migrate prepare|finish" >&2; exit 64 ;;
+esac

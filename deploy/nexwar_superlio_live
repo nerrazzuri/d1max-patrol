@@ -1,0 +1,13 @@
+#!/bin/bash
+# 边走边建的 Super-LIO 进程(工单 21;建图编排起它,SIGINT 停)。GPL-3.0 的程序单独一个进程跑,
+# 我们只读它发的位姿。装在 ${NEXWAR_SUPERLIO_ROOT:-/opt/nexwar/superlio/current}(deploy/nexwar_superlio_build)。
+# 参数:/etc/nexwar/superlio.yaml 有就用它(现场调参),没有用 deploy/superlio/nexwar.yaml。
+set -eu
+here=$(cd "$(dirname "$0")/.." && pwd -P)
+root="${NEXWAR_SUPERLIO_ROOT:-/opt/nexwar/superlio/current}"
+set +u
+. /opt/ros/humble/setup.bash
+. "$root/install/setup.bash"
+set -u
+export PYTHONPATH="$here/packages/localizer/src:$here/packages/contract/src${PYTHONPATH:+:$PYTHONPATH}"
+exec /usr/bin/python3 -m nexwar_localizer.superlio live

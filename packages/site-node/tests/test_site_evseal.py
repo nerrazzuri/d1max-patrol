@@ -11,10 +11,10 @@ import pytest
 from test_site_charging import 假告警台
 from test_site_intake import NOW, STAMP, _sink, _一趟, _跑, ca, 站点  # noqa: F401
 
-from d1max_agent.outbox import Outbox
-from d1max_contract import evseal as E
-from d1max_site.db import SiteDB
-from d1max_site.evidence import EvidencePlainWatch
+from nexwar_agent.outbox import Outbox
+from nexwar_contract import evseal as E
+from nexwar_site.db import SiteDB
+from nexwar_site.evidence import EvidencePlainWatch
 
 
 @pytest.fixture
@@ -97,8 +97,8 @@ def test_私钥不对_解不开_封好的留着(站点, ca, tmp_path, 钥匙):
 
 
 def test_封好的录像段_收齐了解开登记_登记的是解开的大小和哈希(tmp_path, 钥匙):
-    from d1max_site.evidence import sha256_file
-    from d1max_site.recordings import RecordingStore
+    from nexwar_site.evidence import sha256_file
+    from nexwar_site.recordings import RecordingStore
     rec = RecordingStore(SiteDB(tmp_path / "s.db"), tmp_path / "rec", now_ms=lambda: NOW)
     rec.evidence_key = 钥匙.priv
     seg = tmp_path / "seg.mp4"
@@ -115,7 +115,7 @@ def test_封好的录像段_收齐了解开登记_登记的是解开的大小和
 
 
 def test_没配私钥的录像段_留着_配好了补解(tmp_path, 钥匙):
-    from d1max_site.recordings import RecordingStore
+    from nexwar_site.recordings import RecordingStore
     rec = RecordingStore(SiteDB(tmp_path / "s.db"), tmp_path / "rec", now_ms=lambda: NOW)
     got = []
     rec.on_unopened = lambda *a: got.append(a)
@@ -131,7 +131,7 @@ def test_没配私钥的录像段_留着_配好了补解(tmp_path, 钥匙):
 
 
 def test_封好的名字_只认照片和录像段():
-    from d1max_contract.intake import dog_may_upload
+    from nexwar_contract.intake import dog_may_upload
     assert dog_may_upload("photos/P1__front__x.jpg.d1e")
     assert not dog_may_upload("manifest.json.d1e") and not dog_may_upload("events.jsonl.d1e")
     assert not dog_may_upload("photos/x.exe.d1e")
@@ -162,7 +162,7 @@ def test_狗报证据没封_报P2一台一次_装好了清_老代理不报(tmp_p
 def test_登记狗_证书包带证据公钥_能补解(tmp_path, monkeypatch, 钥匙):
     import json
 
-    from d1max_site import main as site_main
+    from nexwar_site import main as site_main
     home = tmp_path / "site"
     assert site_main.main(["--home", str(home), "init", "--site-id", "estate-1",
                            "--hostname", "localhost"]) == 0
@@ -219,8 +219,8 @@ def test_外审1_补封失败_明文扣着不传_这一趟不删_修好了重封
 
 
 def _封不上台(tmp_path):
-    from d1max_contract.storage import StorageFacts
-    from d1max_site.alert_store import AlertDesk
+    from nexwar_contract.storage import StorageFacts
+    from nexwar_site.alert_store import AlertDesk
     db = SiteDB(tmp_path / "s.db")
     desk = AlertDesk(db, now_ms=lambda: NOW)
     d = SimpleNamespace(clients={}, storage={}, is_stale=lambda rid: False)
@@ -294,7 +294,7 @@ def test_复查_自动解决失败了_下一拍再解决(tmp_path):
 
 
 def test_复查_盘况带封不上的件数_老站点老代理都兼容():
-    from d1max_contract.storage import StorageFacts
+    from nexwar_contract.storage import StorageFacts
     base = dict(disk_used_ratio=0.1, outbox_bytes=0, outbox_cap_bytes=1, backlog_files=0,
                 backlog_bytes=0, oldest_backlog_s=None)
     assert "unsealed" not in StorageFacts(**base).to_wire(), "未配置加密:线上与老的一样"
@@ -337,7 +337,7 @@ def _封段(tmp_path, sealer, n=3000, name="x"):
 
 
 def test_外审2_录像解开了登记失败_封好的留着_补解能登记(tmp_path, 钥匙, monkeypatch):
-    from d1max_site.recordings import RecordingStore
+    from nexwar_site.recordings import RecordingStore
     db = SiteDB(tmp_path / "s.db")
     rec = RecordingStore(db, tmp_path / "rec", now_ms=lambda: NOW)
     data = _封段(tmp_path, 钥匙.sealer)
@@ -354,7 +354,7 @@ def test_外审2_录像解开了登记失败_封好的留着_补解能登记(tmp
 
 
 def test_外审3_解不开的录像段登记成封着_不列不放_过了留存期删(tmp_path, 钥匙):
-    from d1max_site.recordings import RecordingStore
+    from nexwar_site.recordings import RecordingStore
     clock = [NOW]
     db = SiteDB(tmp_path / "s.db")
     rec = RecordingStore(db, tmp_path / "rec", now_ms=lambda: clock[0])
@@ -369,7 +369,7 @@ def test_外审3_解不开的录像段登记成封着_不列不放_过了留存�
 
 
 def test_外审3_盘紧了_解不开的录像段也删得到(tmp_path, 钥匙):
-    from d1max_site.recordings import RecordingStore
+    from nexwar_site.recordings import RecordingStore
     free = [0.01]
     db = SiteDB(tmp_path / "s.db")
     rec = RecordingStore(db, tmp_path / "rec", now_ms=lambda: NOW,
@@ -387,9 +387,9 @@ def test_外审3_盘紧了_解不开的录像段也删得到(tmp_path, 钥匙):
 
 
 def test_外审3_按时间段删除请求_解不开的录像段也删(tmp_path, 钥匙):
-    from d1max_site.evidence import EvidenceStore
-    from d1max_site.privacy import PrivacyDesk
-    from d1max_site.recordings import RecordingStore, stamp_ms
+    from nexwar_site.evidence import EvidenceStore
+    from nexwar_site.privacy import PrivacyDesk
+    from nexwar_site.recordings import RecordingStore, stamp_ms
     db = SiteDB(tmp_path / "s.db")
     rec = RecordingStore(db, tmp_path / "rec", now_ms=lambda: NOW)
     data = _封段(tmp_path, 钥匙.sealer)

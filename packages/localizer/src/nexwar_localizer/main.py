@@ -1,0 +1,171 @@
+"""定位器节点入口(W09b):``nexwar_localizer``,狗上跑在 ROS 的系统 Python 里(启动脚本
+``deploy/nexwar_localizer_start``),跟代理同一个账号(本机桥按账号认)。
+
+接线:ROS 层把点云时刻、定位程序的每帧估计喂给核心 → 客户端发给代理;代理请换先验 → 后端(重)起定位
+程序;代理请重定位 → 后端换位置;每 :data:`TICK_S` 看一次门(卡住重启、重启后自己重定位)并把攒下的
+报文发出去。
+
+定位程序(``--engine``):**Super-LIO**(W68 起默认,用户 2026-11-02 定;它只认一次初值,重定位 = 换初值
+重启,见 :mod:`nexwar_localizer.slioback`);``mola`` 只留给工程师手动切回(W09b 的老路)。
+"""
+
+from __future__ import annotations
+
+import argparse
+import asyncio
+import contextlib
+import logging
+import os
+import signal
+import time
+from collections.abc import Callable, Mapping, Sequence
+from pathlib import Path
+from typing import Any
+
+from nexwar_localizer import superlio as S
+from nexwar_localizer.backend import MolaBackend
+from nexwar_localizer.client import BridgeClient
+from nexwar_localizer.core import MOLA_QUALITY, SLIO_QUALITY, LocalizerCore
+from nexwar_localizer.imu import ImuPrior, parse_ypr
+from nexwar_localizer.slioback import SlioBackend
+from nexwar_localizer.supervisor import MolaSupervisor, mola_command
+
+log = logging.getLogger("nexwar_localizer")
+
+TICK_S = 0.1
+DEFAULT_SOCKET = Path("/var/lib/nexwar/agent/loc.sock")
+
+
+def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
+    p = argparse.ArgumentParser(prog="nexwar_localizer", description="狗上的定位器节点(W09b)")
+    p.add_argument("--socket", type=Path, default=DEFAULT_SOCKET,
+                   help=f"代理的本机定位桥(默认 {DEFAULT_SOCKET})")
+    p.add_argument("--engine", choices=("superlio", "mola"), default="superlio",
+                   help="定位程序(默认 superlio;mola 只留给工程师手动切回)")
+    p.add_argument("--prior-dir", type=Path, default=None,
+                   help="代理没给先验目录时(狗按启动参数载的图)用的先验目录:里面要有 frames.json 和"
+                        "定位程序的地图(Super-LIO:superlio_map.pcd;MOLA:prior.mm)")
+    p.add_argument("--superlio-root", type=Path, default=S.ROOT,
+                   help=f"Super-LIO 装在哪(默认 {S.ROOT})")
+    p.add_argument("--superlio-config", type=Path, default=None,
+                   help="Super-LIO 参数文件(默认 /etc/nexwar/superlio.yaml,没有用随版本带的)")
+    p.add_argument("--run-dir", type=Path,
+                   default=Path(os.environ.get("RUNTIME_DIRECTORY", "/tmp/nexwar_localizer")),
+                   help="写 Super-LIO 重定位参数文件的目录")
+    p.add_argument("--lidar-topic", default="/front_lidar")
+    p.add_argument("--imu-topic", default=None,
+                   help="接 IMU 当 MOLA 的转速先验(工单 27),比如 /front_lidar/imu;"
+                        "要同时给 --imu-ypr")
+    p.add_argument("--imu-ypr", type=parse_ypr, default=None,
+                   help="IMU 在点云系里的安装角 yaw,pitch,roll(度;负数开头写成 --imu-ypr=-90,0,180;"
+                        "用 nexwar_loc imu-axes 从录包核)")
+    p.add_argument("--log-level", default="INFO")
+    a = p.parse_args(argv)
+    if (a.imu_topic is None) != (a.imu_ypr is None):
+        p.error("--imu-topic 和 --imu-ypr 要一起给")
+    a.imu = ImuPrior(a.imu_topic, a.imu_ypr) if a.imu_topic else None
+    return a
+
+
+def mola_env(args: argparse.Namespace, *, base: Mapping[str, str] | None = None
+             ) -> dict[str, str] | None:
+    """看管器起 MOLA 用的环境变量:接了 IMU 就在本进程的环境上加安装角;没接 = None(照抄本进程的)。"""
+    if args.imu is None:
+        return None
+    return {**(os.environ if base is None else base), **args.imu.env()}
+
+
+class Node:
+    """把核心、客户端、后端、看管器、ROS 层接起来;``ros_factory`` 可以换成假的(测试)。"""
+
+    def __init__(self, args: argparse.Namespace, *, ros_factory: Callable[..., Any],
+                 command_for: Callable[[Path], Sequence[str]] | None = None,
+                 reconnect_s: float = 1.0) -> None:
+        self.args = args
+        self.core = LocalizerCore(
+            monotonic=time.monotonic,
+            quality=SLIO_QUALITY if args.engine == "superlio" else MOLA_QUALITY)
+        loop = asyncio.get_running_loop()
+        self.ros = ros_factory(loop, lidar_topic=args.lidar_topic, on_scan=self.core.on_scan,
+                               on_estimate=self._on_estimate)
+        self.backend: MolaBackend
+        if args.engine == "superlio":
+            cfg = args.superlio_config or S.config_path()
+            self.supervisor = MolaSupervisor(
+                command_for=command_for or (lambda prior: self.backend.command(prior)),
+                on_up=lambda: self.backend.on_up(),
+                on_down=lambda why: self.backend.on_down(why))
+            self.backend = SlioBackend(
+                self.core, supervisor=self.supervisor, ext=S.extrinsic(cfg),
+                base_config=cfg.read_text(encoding="utf-8"), root=args.superlio_root,
+                run_dir=args.run_dir, on_map=getattr(self.ros, "set_fit", lambda _fit: None),
+                default_prior_dir=args.prior_dir)
+        else:
+            self.supervisor = MolaSupervisor(
+                command_for=command_for or (lambda prior: mola_command(
+                    prior, lidar_topic=args.lidar_topic, imu=args.imu)),
+                env=mola_env(args),
+                on_up=lambda: self.backend.on_up(), on_down=lambda why: self.backend.on_down(why))
+            self.backend = MolaBackend(self.core, supervisor=self.supervisor,
+                                       reloc_service=self.ros.relocalize,
+                                       default_prior_dir=args.prior_dir)
+        self.client = BridgeClient(args.socket, self.core, self.backend, reconnect_s=reconnect_s)
+        self._stop = asyncio.Event()
+
+    def _on_estimate(self, e: Any) -> None:
+        self.backend.mola_output()
+        self.core.on_estimate(e)
+        self.client.flush()
+
+    async def run(self) -> None:
+        self.ros.start()
+        link = asyncio.get_running_loop().create_task(self.client.run())
+        try:
+            while not self._stop.is_set():
+                await self.backend.check()
+                self.client.flush()
+                with contextlib.suppress(asyncio.TimeoutError):
+                    await asyncio.wait_for(self._stop.wait(), TICK_S)
+        finally:
+            self.client.stop()
+            with contextlib.suppress(asyncio.TimeoutError, asyncio.CancelledError):
+                await asyncio.wait_for(link, 2.0)
+            await self.supervisor.stop()
+            self.ros.shutdown()
+
+    def stop(self) -> None:
+        self._stop.set()
+
+
+async def _main(args: argparse.Namespace) -> None:
+    factory: Callable[..., Any]
+    if args.engine == "superlio":                # 只在这里 import ROS
+        if args.imu is not None:
+            log.warning("--imu-topic/--imu-ypr 只对 MOLA 有用:Super-LIO 不看它们")
+        from nexwar_localizer.slioros import SlioRos
+        ext = S.extrinsic(args.superlio_config or S.config_path())
+
+        def factory(*a: Any, **kw: Any) -> Any:
+            return SlioRos(*a, ext=ext, **kw)
+    else:
+        from nexwar_localizer.mola import MolaRos
+        factory = MolaRos
+    node = Node(args, ros_factory=factory)
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        loop.add_signal_handler(sig, node.stop)
+    await node.run()
+
+
+def main(argv: Sequence[str] | None = None) -> None:
+    args = parse_args(argv)
+    logging.basicConfig(level=args.log_level,
+                        format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    # W55:工程师远程打开「详细日志」时调到 DEBUG,到点自动恢复
+    from nexwar_contract.debuglog import DebugWatch
+    DebugWatch().start()
+    asyncio.run(_main(args))
+
+
+if __name__ == "__main__":
+    main()

@@ -12,14 +12,14 @@ from pathlib import Path
 
 import pytest
 
-from d1max_contract import binding as b
-from d1max_contract import ed25519
-from d1max_patrol.bind import factory as fa
-from d1max_patrol.bind import server as sv
-from d1max_patrol.bind import wipe as wp
-from d1max_patrol.bind.core import BindCore
-from d1max_patrol.bind.paths import BindPaths, read_json, write_json
-from d1max_patrol.bind.router import FakeRouter
+from nexwar_contract import binding as b
+from nexwar_contract import ed25519
+from nexwar_patrol.bind import factory as fa
+from nexwar_patrol.bind import server as sv
+from nexwar_patrol.bind import wipe as wp
+from nexwar_patrol.bind.core import BindCore
+from nexwar_patrol.bind.paths import BindPaths, read_json, write_json
+from nexwar_patrol.bind.router import FakeRouter
 
 
 @pytest.fixture
@@ -42,8 +42,8 @@ def test_烧写_只存哈希_热点写进路由器_检验对得上(出厂, tmp_p
     assert router.hotspot == ("NW-000123", b.HOTSPOT_PSK) and st.hotspot_psk == b.HOTSPOT_PSK
     assert paths.tls_key.stat().st_mode & 0o077 == 0
     env = paths.env.read_text()
-    assert "D1MAX_MAP=unmapped:0" in env and "D1MAX_SITE_MQTT=\n" in env
-    assert "D1MAX_BIND_HOST=192.168.1.2" in env
+    assert "NEXWAR_MAP=unmapped:0" in env and "NEXWAR_SITE_MQTT=\n" in env
+    assert "NEXWAR_BIND_HOST=192.168.1.2" in env
     assert fa.check(paths, st.encode()) == []
     [txt] = fa.label_files(st, tmp_path / "label")
     assert b.pretty_code(st.code) in txt.read_text() and txt.stat().st_mode & 0o077 == 0
@@ -92,10 +92,10 @@ def test_清机_删客户数据_留出厂的_env回出厂值(出厂, tmp_path):
     (paths.etc / "tls" / "robot.key").write_bytes(b"k")
     for n in ("registration.json", "evidence-pub.key", "payload.json", "release-pub.pem"):
         (paths.etc / n).write_text("x")
-    from d1max_patrol.provision import set_env
-    set_env(paths.env, "D1MAX_SITE_MQTT", "mqtts://s:8883")
-    set_env(paths.env, "D1MAX_MAP", "estate:3")
-    set_env(paths.env, "D1MAX_HAL", "d1max")
+    from nexwar_patrol.provision import set_env
+    set_env(paths.env, "NEXWAR_SITE_MQTT", "mqtts://s:8883")
+    set_env(paths.env, "NEXWAR_MAP", "estate:3")
+    set_env(paths.env, "NEXWAR_HAL", "d1max")
     router.connect_wifi("Estate", "12345678")
     ran = []
     p2 = BindPaths(etc=paths.etc, data_root=paths.data_root, extra_data=(outbox,))
@@ -109,10 +109,10 @@ def test_清机_删客户数据_留出厂的_env回出厂值(出厂, tmp_path):
         assert (paths.etc / keep).exists(), keep
     assert paths.tls_key.exists()
     env = paths.env.read_text()
-    assert "D1MAX_SITE_MQTT=\n" in env and "D1MAX_MAP=unmapped:0" in env
-    assert "D1MAX_HAL=d1max" in env, "设备配置留着"
+    assert "NEXWAR_SITE_MQTT=\n" in env and "NEXWAR_MAP=unmapped:0" in env
+    assert "NEXWAR_HAL=d1max" in env, "设备配置留着"
     assert router.ssid == ""
-    assert ["systemctl", "stop", "d1max-agent"] in ran
+    assert ["systemctl", "stop", "nexwar_agent"] in ran
     assert ["journalctl", "--vacuum-time=1s"] in ran
     assert any(c[0] == "fstrim" for c in ran)
 
@@ -230,14 +230,14 @@ def test_外审2C_清机标记挡住所有业务服务():
     deploy = P(__file__).resolve().parents[1] / "deploy"
     for u in wp.UNITS:
         text = (deploy / f"{u}.service").read_text(encoding="utf-8")
-        assert "ConditionPathExists=!/etc/d1max/bind/wiping" in text, u
+        assert "ConditionPathExists=!/etc/nexwar/bind/wiping" in text, u
 
 
 def test_外审2E_重做贴纸_配网服务停不下就不换(出厂, tmp_path, monkeypatch, capsys):
     import argparse
 
-    from d1max_patrol.bind import cli as bc
-    from d1max_patrol.bind import wipe as wpm
+    from nexwar_patrol.bind import cli as bc
+    from nexwar_patrol.bind import wipe as wpm
     paths, router, st, _ = 出厂
     before = read_json(paths.device)["code_hash"]
     calls = []

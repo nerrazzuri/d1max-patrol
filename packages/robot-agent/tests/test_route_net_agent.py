@@ -6,9 +6,9 @@ import math
 
 from test_planned_nav import 台子
 
-from d1max_agent.routebook import RouteBook
-from d1max_contract.routenet import RouteNet
-from d1max_patrol.protocol.nav_types import NavStatus, Pose
+from nexwar_agent.routebook import RouteBook
+from nexwar_contract.routenet import RouteNet
+from nexwar_patrol.protocol.nav_types import NavStatus, Pose
 
 
 def _网(nodes, edges, *, version="v", rev=1):

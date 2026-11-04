@@ -7,10 +7,10 @@ from urllib.parse import quote
 import pytest
 from test_site_api import PW, 站
 
-from d1max_site.alert_store import AlertDesk
-from d1max_site.alerts import VERDICTS, AlertBook, Level
-from d1max_site.db import SiteDB
-from d1max_site.shift_notes import MAX_CHARS, ShiftNotes
+from nexwar_site.alert_store import AlertDesk
+from nexwar_site.alerts import VERDICTS, AlertBook, Level
+from nexwar_site.db import SiteDB
+from nexwar_site.shift_notes import MAX_CHARS, ShiftNotes
 
 
 def test_结论只有三种():

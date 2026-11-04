@@ -15,7 +15,7 @@ import pytest
 
 np = pytest.importorskip("numpy")
 
-from d1max_localizer import livemap as L  # noqa: E402
+from nexwar_localizer import livemap as L  # noqa: E402
 
 H = 0.5                                    # 雷达离地
 I3 = np.eye(3)

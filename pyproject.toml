@@ -3,7 +3,7 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "d1max-patrol"
+name = "nexwar_patrol"
 version = "1.0.0-rc.1"
 description = "Nexus Warden:四足机器人安防巡逻系统(站点、机器人代理、手机与网页)"
 requires-python = ">=3.10"
@@ -29,12 +29,12 @@ dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.24",
     "ruff>=0.6",
-    # W09c:建图打包(d1max_localizer.build)画规划栅格要它;狗上用 ROS 系统 Python 里 apt 装的那份
+    # W09c:建图打包(nexwar_localizer.build)画规划栅格要它;狗上用 ROS 系统 Python 里 apt 装的那份
     "numpy>=1.21",
 ]
 
 [project.scripts]
-d1max = "d1max_patrol.cli:main"
+nexwar = "nexwar_patrol.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -60,7 +60,7 @@ target-version = "py310"
 # MIN-7: BLE 必须在这里启用。启用之前,代码里那 8 处 `# noqa: BLE001`
 # 是**空注解** —— BLE 没进 select,它们一条规则都没抑制,却让读代码的人以为
 # "这处宽捕获已经被 linter 认可过了"。启用后的爆炸半径已实测: 只多出 2 条
-# 命中(都在 d1max_sim/nav_server.py,均为有意的宽捕获且已有日志),已就地补
+# 命中(都在 nexwar_sim/nav_server.py,均为有意的宽捕获且已有日志),已就地补
 # noqa。
 # RUF100 是 MIN-7 的第二半:它禁止"空注解"本身。光把 BLE 打开还不够 ——
 # 实测启用 BLE 之后,原来那 8 处 `# noqa: BLE001` 里仍有 5 处是无效注解
@@ -72,6 +72,6 @@ select = ["E", "F", "I", "UP", "B", "BLE", "RUF100"]
 
 [tool.ruff.lint.isort]
 # W00:packages/ 下三个包也是我们自己的,import 分组要跟根包一样算第一方。
-known-first-party = ["d1max_patrol", "d1max_sim",
-                     "d1max_contract", "d1max_adapter_sim", "d1max_adapter_d1max", "d1max_agent",
-                     "d1max_site"]
+known-first-party = ["nexwar_patrol", "nexwar_sim",
+                     "nexwar_contract", "nexwar_adapter_sim", "nexwar_adapter_d1max", "nexwar_agent",
+                     "nexwar_site"]

@@ -1,7 +1,7 @@
 // 手机上的点位标记跟网页一个样子（2026-10-15 用户：手机还是老图标）：圆底座 + 朝向三角尖，比例同 posemarker.tsx。
 import 'dart:math' as math;
 
-import 'package:d1max_patrol/ui/pose_marker.dart';
+import 'package:nexwar_patrol/ui/pose_marker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 

@@ -9,14 +9,14 @@ import math
 import pytest
 from test_runtime import REG, T, 站点耳朵, 钟
 
-from d1max_adapter_sim.robot import SimRobot
-from d1max_agent.force import ForceConfig, ForceWatch
-from d1max_agent.runtime import AgentRuntime
-from d1max_contract.hal import ImuSample
-from d1max_contract.memory_broker import MemoryBroker, MemoryTransport
-from d1max_contract.messages import Capabilities, Command
-from d1max_contract.transport import Message
-from d1max_patrol.protocol.nav_types import Pose
+from nexwar_adapter_sim.robot import SimRobot
+from nexwar_agent.force import ForceConfig, ForceWatch
+from nexwar_agent.runtime import AgentRuntime
+from nexwar_contract.hal import ImuSample
+from nexwar_contract.memory_broker import MemoryBroker, MemoryTransport
+from nexwar_contract.messages import Capabilities, Command
+from nexwar_contract.transport import Message
+from nexwar_patrol.protocol.nav_types import Pose
 
 
 def _s(roll=0.0, pitch=0.0, shock=0.0, load=100.0, valid=True):
@@ -128,7 +128,7 @@ def test_工单2_过1g的冲击都记一笔_带当时的运控状态(caplog):
     """门槛还没标定(3r.2):每次过 1 g 都写日志,下回上狗就攒下数据,照着定 bump_g。"""
     import logging
     w = ForceWatch()
-    with caplog.at_level(logging.INFO, logger="d1max_agent.force"):
+    with caplog.at_level(logging.INFO, logger="nexwar_agent.force"):
         _喂(w, _s(shock=0.6), 0, 0.1, motion="ready")
         _喂(w, _s(shock=1.2), 100, 0.1, motion="ready")
     lines = [r.getMessage() for r in caplog.records]
@@ -188,7 +188,7 @@ async def 狗(tmp_path):
         await broker.drain()
 
     async def 遥控(n):
-        from d1max_contract.teleop import teleop_grant_payload
+        from nexwar_contract.teleop import teleop_grant_payload
         g = Command(command_id=f"g{n}", task_id=f"teleop-{n}", kind="teleop", issued_at=c.ms,
                     expires_at=c.ms + 60_000, control_epoch=1, priority=100,
                     payload=teleop_grant_payload(lease_epoch=n, operator="gina",
@@ -256,7 +256,7 @@ async def test_代理_撞了一下只报_任务照跑(狗):
 
 
 async def test_工单2_代理_趴着磕一下不报撞_运控状态传给受力检测(狗):
-    from d1max_contract.hal import MotionStatus
+    from nexwar_contract.hal import MotionStatus
     rt, r, 走, 遥控, 事件, 能力 = 狗
     await 走(3)
 
@@ -316,7 +316,7 @@ async def test_外审1_软急停失败了下一拍补_撤任务失败不挡停�
 
 
 async def test_外审1_撤任务抛了_下次还能再请求():
-    from d1max_agent.commands import CommandProcessor
+    from nexwar_agent.commands import CommandProcessor
 
     class 任务:
         task_id, kind, done, aborting = "t1", "goto", False, False
@@ -360,7 +360,7 @@ def test_外审3_状态文件读不懂_当翻倒锁着(tmp_path):
 
 
 async def test_外审3_代理重启_被抱起来的锁还在(tmp_path):
-    from d1max_agent.force import ForceWatch as FW
+    from nexwar_agent.force import ForceWatch as FW
     FW(path=tmp_path / "agent" / "force.json")
     w = FW(path=tmp_path / "agent" / "force.json")
     w.state, w._lift_base, w.owed = "lifted", 100.0, set()
@@ -378,7 +378,7 @@ async def test_外审2_代理_在跑的对桩任务走停对桩不出桩(狗):
     await 走(3)
 
     class 对桩:
-        from d1max_contract.messages import TaskState
+        from nexwar_contract.messages import TaskState
         task_id, kind, done, aborting = "charge-dock-1", "dock", False, False
         state, detail = TaskState.RUNNING, {}
         got: list = []
@@ -495,7 +495,7 @@ async def _真():
 
 
 def test_A7_能力里报兼容级别(tmp_path):
-    from d1max_contract.compat import AGENT_LEVEL
+    from nexwar_contract.compat import AGENT_LEVEL
     rt = AgentRuntime(transport=MemoryTransport(MemoryBroker(), "dog"), registration=REG,
                       hal=SimRobot(now_ms=钟()), store_dir=tmp_path / "a", now_ms=钟(),
                       loaded_map=("m", "1"), boot_id="b", home=Pose.from_xy_yaw(0, 0))

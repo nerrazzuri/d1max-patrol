@@ -14,11 +14,11 @@ import math
 
 import pytest
 
-from d1max_adapter_sim.robot import SimRobot
-from d1max_agent.events import EventBook
-from d1max_agent.localization import LocEstimate
-from d1max_agent.tasks.teleop import TeleopTask
-from d1max_agent.zone_guard import (
+from nexwar_adapter_sim.robot import SimRobot
+from nexwar_agent.events import EventBook
+from nexwar_agent.localization import LocEstimate
+from nexwar_agent.tasks.teleop import TeleopTask
+from nexwar_agent.zone_guard import (
     BODY_HL,
     UNTRUSTED_VX,
     TeleopZoneGuard,
@@ -26,8 +26,8 @@ from d1max_agent.zone_guard import (
     overlap_area,
     rect_poly_distance,
 )
-from d1max_contract.teleop import TeleopFrame
-from d1max_contract.zones import Zone
+from nexwar_contract.teleop import TeleopFrame
+from nexwar_contract.zones import Zone
 
 #: 硬禁区:x ≥ 3 的一大片(「池子」)。
 POOL = ((3.0, -10.0), (10.0, -10.0), (10.0, 10.0), (3.0, 10.0))
@@ -215,7 +215,7 @@ async def test_普通禁行区不管_没有区域照常(tmp_path):
 
 
 async def test_抹掉区_遥控跟普通禁行区一样不守_标了硬的才守(tmp_path):
-    """地图台账 44 的取舍(写在 ``d1max_contract.zones``):抹掉区对自主导航就是禁行区;遥控(人开的)
+    """地图台账 44 的取舍(写在 ``nexwar_contract.zones``):抹掉区对自主导航就是禁行区;遥控(人开的)
     跟普通禁行区一样能进,除非管理员也标了硬禁区。"""
     s = 台(tmp_path, [Zone("junk", "erase", POOL, "抹掉")])
     await s.start()

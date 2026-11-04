@@ -12,22 +12,22 @@ from collections.abc import AsyncIterator
 
 import pytest
 
-from d1max_patrol.backends.base import (
+from nexwar_patrol.backends.base import (
     BatteryEvent,
     ControlLostEvent,
     DeviceBackendError,
     DevicePoseEvent,
     FaultEvent,
 )
-from d1max_patrol.backends.sidecar_device import (
+from nexwar_patrol.backends.sidecar_device import (
     MAX_WALK_SECONDS,
     MAX_WALK_SPEED,
     SidecarDeviceBackend,
     parse_agent_endpoint,
 )
-from d1max_patrol.protocol.agent_frames import PROTO_VERSION, MotionStatus
-from d1max_sim import agent_server
-from d1max_sim.agent_server import SimAgentServer
+from nexwar_patrol.protocol.agent_frames import PROTO_VERSION, MotionStatus
+from nexwar_sim import agent_server
+from nexwar_sim.agent_server import SimAgentServer
 
 
 @contextlib.asynccontextmanager

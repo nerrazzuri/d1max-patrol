@@ -2,10 +2,10 @@
 import 'dart:async';
 import 'dart:convert';
 
-import 'package:d1max_patrol/net/site_client.dart';
+import 'package:nexwar_patrol/net/site_client.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:d1max_patrol/ui/widget/live_video.dart';
+import 'package:nexwar_patrol/ui/widget/live_video.dart';
 
 import 'support/fake_site.dart';
 

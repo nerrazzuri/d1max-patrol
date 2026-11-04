@@ -17,9 +17,9 @@ spec.loader.exec_module(soak)
 
 
 def test_进程名_认得出站点代理和消息服务():
-    assert soak.label([b"/x/.venv/bin/python", b"/x/.venv/bin/d1max-site", b"serve"]) == "site"
-    assert soak.label([b"python", b"d1max-agent", b"--store-dir", b"/d/agent"]) == "agent-A"
-    assert soak.label([b"python", b"d1max-agent", b"--store-dir", b"/d/agent-B"]) == "agent-B"
+    assert soak.label([b"/x/.venv/bin/python", b"/x/.venv/bin/nexwar_site", b"serve"]) == "site"
+    assert soak.label([b"python", b"nexwar_agent", b"--store-dir", b"/d/agent"]) == "agent-A"
+    assert soak.label([b"python", b"nexwar_agent", b"--store-dir", b"/d/agent-B"]) == "agent-B"
     assert soak.label([b"/usr/sbin/mosquitto", b"-c", b"m.conf"]) == "mosquitto"
     assert soak.label([b"python", b"tools/site_demo.py"]) == "demo"
 

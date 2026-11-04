@@ -7,14 +7,14 @@ import asyncio
 
 import pytest
 
-from d1max_adapter_sim.robot import SimRobot
-from d1max_agent.runtime import AgentRuntime
-from d1max_contract.memory_broker import MemoryBroker, MemoryTransport
-from d1max_contract.messages import MapPose, Telemetry
-from d1max_patrol.protocol.nav_types import Pose
-from d1max_site.db import SiteDB
-from d1max_site.dispatcher import Dispatcher, DispatchRefused
-from d1max_site.registry import Registry
+from nexwar_adapter_sim.robot import SimRobot
+from nexwar_agent.runtime import AgentRuntime
+from nexwar_contract.memory_broker import MemoryBroker, MemoryTransport
+from nexwar_contract.messages import MapPose, Telemetry
+from nexwar_patrol.protocol.nav_types import Pose
+from nexwar_site.db import SiteDB
+from nexwar_site.dispatcher import Dispatcher, DispatchRefused
+from nexwar_site.registry import Registry
 
 SITE = "estate-1"
 MAP = ("estate-1", "7")
@@ -56,7 +56,7 @@ class 台子:
 
     async def start(self) -> None:
         await self.site.start()
-        from d1max_contract.registration import Registration
+        from nexwar_contract.registration import Registration
         reg = Registration(site_id=SITE, robot_id="A", credential_fingerprint="sha256:a",
                            issued_at=0, expires_at=10**14)
         self.agent = AgentRuntime(transport=MemoryTransport(self.broker, "dogA"),
@@ -182,7 +182,7 @@ async def test_事件去重落库_订阅者收得到(台):
     # 站点重启后内存里的去重集合没了,broker 又补投同一批(QoS 1 重复):表里不多
     import json as _json
 
-    from d1max_contract.messages import Event
+    from nexwar_contract.messages import Event
     row = t.db.query("SELECT * FROM events LIMIT 1")[0]
     dup = Event(event_id=row["event_id"], seq=row["seq"], boot_id=row["boot_id"],
                 stamp=row["stamp"], kind=row["kind"], data=_json.loads(row["data"]))
@@ -221,7 +221,7 @@ async def test_关了之后到的上行报文不落库也不炸(台):
     回调跑起来,那时库已经关了。直接投一份,确认既不落库也不抛。"""
     import json as _json
 
-    from d1max_contract.messages import Ack, AckResult, Event
+    from nexwar_contract.messages import Ack, AckResult, Event
     t = 台
     await t.run(5)
     st = t.site.clients["A"].status
@@ -244,7 +244,7 @@ async def test_新鲜度看站点收到的时刻_不看狗的钟(tmp_path):
     last_seen 是狗填的,拿站点的钟减它会误判。"""
     t = 台子(tmp_path)
     await t.site.start()
-    from d1max_contract.registration import Registration
+    from nexwar_contract.registration import Registration
     reg = Registration(site_id=SITE, robot_id="A", credential_fingerprint="sha256:a",
                        issued_at=0, expires_at=10**14)
     dog_clock = lambda: t.clock() - 600_000                      # noqa: E731
@@ -265,9 +265,9 @@ async def test_回执超时记timeout_晚到的回执再补上(tmp_path):
     """狗收到了、但回执晚于超时:站点给人回 504,库里不能是空的;回执到了要补上。"""
     import json as _json
 
-    from d1max_contract.dispatch import DispatchTimeout
-    from d1max_contract.messages import Ack, AckResult, Ready, Status
-    from d1max_contract.topics import Topics
+    from nexwar_contract.dispatch import DispatchTimeout
+    from nexwar_contract.messages import Ack, AckResult, Ready, Status
+    from nexwar_contract.topics import Topics
     t = 台子(tmp_path)
     t.site.ack_timeout_s = 0.05
     await t.site.start()
@@ -294,7 +294,7 @@ async def test_重复事件不重复推给订阅者(台):
     t = 台
     import json as _json
 
-    from d1max_contract.messages import Event
+    from nexwar_contract.messages import Event
     await t.send(t.site.goto("A", target(0.3), 0.8, issued_by="alice"))
     await t.run(40)
     row = t.db.query("SELECT * FROM events LIMIT 1")[0]
@@ -327,7 +327,7 @@ async def test_patrol太大_发之前就拒(台):
 async def test_一直只收到过retained状态的狗_挂上超过时限就算过期(台):
     """W00c5a 内部评审:站点连着 broker 整机重启,没人发遗言,retained 里还写着在线 ——
     不能永远不算过期。"""
-    from d1max_site.dispatcher import STALE_MS
+    from nexwar_site.dispatcher import STALE_MS
     t = 台
     t.reg.enroll("B", fingerprint="sha256:b", issued_at=t.clock.ms - 1,
                  expires_at=t.clock.ms + 10**10)
@@ -340,9 +340,9 @@ async def test_一直只收到过retained状态的狗_挂上超过时限就算�
 
 async def test_video命令的有效期跟推流的有效期分开_至少30秒(台, monkeypatch):
     """W00c5b 内部评审:狗用自己的钟判命令过期,狗钟偏十几秒时,只给 10 s 的命令全会 expired。"""
-    from d1max_contract.messages import Ack, AckResult
-    from d1max_contract.video import VideoRequest
-    from d1max_site.dispatcher import VIDEO_COMMAND_TTL_MS
+    from nexwar_contract.messages import Ack, AckResult
+    from nexwar_contract.video import VideoRequest
+    from nexwar_site.dispatcher import VIDEO_COMMAND_TTL_MS
     t = 台
     await t.run(3)
     got = {}
@@ -361,7 +361,7 @@ async def test_video命令的有效期跟推流的有效期分开_至少30秒(�
 
 def test_推送流的同步监听_每条都调_监听炸了不挡订阅者():
     """W00c6b:站点自己的告警源要听推送流(``standby_failed``);监听自己炸了,SSE 订阅者照样收得到。"""
-    from d1max_site.dispatcher import Feed
+    from nexwar_site.dispatcher import Feed
     feed = Feed()
     sub = feed.subscribe()
     got = []
@@ -437,7 +437,7 @@ async def test_图外的点_goto和巡检发之前就拒_按狗加载的那一�
 
     class 读不了:
         def reach_problem(self, *a):
-            from d1max_site.maps import MapError
+            from nexwar_site.maps import MapError
             raise MapError("coverage.json 读不了")
     t.site.maps = 读不了()
     with pytest.raises(DispatchRefused, match="读不了"):
@@ -471,8 +471,8 @@ async def test_钟差不大照派(台):
 
 
 async def test_值守汇总的钟差按一段遥测估_一条憋久了的不拉偏(台, tmp_path):
-    from d1max_site.alert_store import AlertDesk
-    from d1max_site.watch import watch_summary
+    from nexwar_site.alert_store import AlertDesk
+    from nexwar_site.watch import watch_summary
     t = 台
     await t.run(2)
     for _ in range(5):                                   # 狗快 3 s
@@ -511,8 +511,8 @@ async def test_钟差大_换图建图装版本切版本也不发_只读与收尾
 async def test_W25_保持距离_真派遣到真代理_人近就退_撤了就停(tmp_path):
     """派遣器 → 真代理(规划后端 + 障碍桥 + 人员桥)→ 仿真狗:
     派 standoff、能力里报在守、人在 2 m 往后退。"""
-    from d1max_contract.registration import Registration
-    from d1max_contract.standoff import StandoffRequest
+    from nexwar_contract.registration import Registration
+    from nexwar_contract.standoff import StandoffRequest
     t = 台子(tmp_path)
     await t.site.start()
     reg = Registration(site_id=SITE, robot_id="A", credential_fingerprint="sha256:a",
@@ -560,8 +560,8 @@ async def test_W25_保持距离_真派遣到真代理_人近就退_撤了就停(
 async def test_单台视图带电量_跟机器人列表一个口径(台):
     """2026-10-30 走查:列表里 100%、点进详情却是「--」——
     单台视图(``GET /api/robots/{id}``)没带电量。"""
-    from d1max_site.robot_overview import overview
-    from d1max_site.sitetime import site_tz
+    from nexwar_site.robot_overview import overview
+    from nexwar_site.sitetime import site_tz
     t = 台
     await t.run(50)
     view = t.site.robot_view("A")

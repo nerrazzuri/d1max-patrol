@@ -8,10 +8,10 @@ from pathlib import Path
 
 import pytest
 
-from d1max_contract import device_id as di
-from d1max_contract import ed25519
-from d1max_patrol.bind import devid
-from d1max_patrol.bind.paths import BindPaths, write_json
+from nexwar_contract import device_id as di
+from nexwar_contract import ed25519
+from nexwar_patrol.bind import devid
+from nexwar_patrol.bind.paths import BindPaths, write_json
 
 NOW = 1_800_000_000_000
 
@@ -125,7 +125,7 @@ def test_没走过烧写的老机器_只补设备身份_不当成烧写过(tmp_p
     p.etc.mkdir()
     dt = tmp_path / "serial-number"
     dt.write_bytes(b"1424C21A0C3A\x00")
-    req = devid.init_identity(p, serial="C40221", model="d1max-orin", hw_sources=[dt])
+    req = devid.init_identity(p, serial="C40221", model="nexwar_orin", hw_sources=[dt])
     assert req["serial"] == "C40221" and not p.device.exists(), "不写 device.json(配网服务不起)"
     factory = ed25519.new_seed()
     pubs = [ed25519.public_key(factory)]

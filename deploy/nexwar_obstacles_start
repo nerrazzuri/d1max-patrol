@@ -1,0 +1,34 @@
+#!/bin/sh
+# nexwar_obstacles 的启动脚本(W11,感知节点)。跟 nexwar_localizer_start 一个道理:启动参数归版本管,
+# 单元只指着 /opt/nexwar/current/deploy/nexwar_obstacles_start。
+#
+# 感知节点跑在 **ROS 的系统 Python** 里(要 rclpy、sensor_msgs、numpy),代码用这个脚本所在那一版带的
+# packages/localizer 与 packages/contract(按 PYTHONPATH 找,不进 venv)。外参跟着代理正在用的图走
+# (/var/lib/nexwar/agent/maps/active.json 那张图的 frames.json,换了图自己换、重新自检),局部栅格经本机
+# 障碍桥(/var/lib/nexwar/agent/obs.sock)给代理。跟代理同一个账号(桥按账号认)。
+#
+# 现场值从 /etc/nexwar/env 来(单元的 EnvironmentFile):
+#   NEXWAR_LOC_ROS_DOMAIN=24      雷达话题在哪个 ROS domain(跟定位器一样)
+#   NEXWAR_LOC_RMW=rmw_zenoh_cpp  中间件
+#   NEXWAR_OBS_REAR=/rear_lidar   后雷达(空着 = 不用;没标定之前只用它的「挡」、不拿它的「空」放行,标过两样都用)
+#   NEXWAR_OBS_SIDECAR=127.0.0.1:8090  给旁路进程发净空许可(空着 = 不发;旁路进程要带 --require-clearance
+#                                     才按许可管前进,W11 真机验收之前不开)
+#   NEXWAR_OBS_ARGS=其余参数
+set -eu
+here=$(cd "$(dirname "$0")/.." && pwd -P)
+set +u
+. /opt/ros/humble/setup.sh
+set -u
+export ROS_DOMAIN_ID="${NEXWAR_LOC_ROS_DOMAIN:-24}"
+export RMW_IMPLEMENTATION="${NEXWAR_LOC_RMW:-rmw_zenoh_cpp}"
+# numpy 的线性代数库(OpenBLAS)缺省开跟核数一样多的线程:一帧里的小矩阵运算用不着,C40221 上
+# 8 个线程各吃 23–35%,跟定位器抢 CPU(2026-10-08)。
+export OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1
+export PYTHONPATH="$here/packages/localizer/src:$here/packages/contract/src${PYTHONPATH:+:$PYTHONPATH}"
+# shellcheck disable=SC2086  # NEXWAR_OBS_ARGS 要按空白拆成几个参数
+exec /usr/bin/python3 -m nexwar_localizer.obstacles \
+  --socket /var/lib/nexwar/agent/obs.sock \
+  --maps-dir /var/lib/nexwar/agent/maps \
+  ${NEXWAR_OBS_REAR:+--rear-topic} ${NEXWAR_OBS_REAR:+"$NEXWAR_OBS_REAR"} \
+  ${NEXWAR_OBS_SIDECAR:+--sidecar} ${NEXWAR_OBS_SIDECAR:+"$NEXWAR_OBS_SIDECAR"} \
+  ${NEXWAR_OBS_ARGS:-}

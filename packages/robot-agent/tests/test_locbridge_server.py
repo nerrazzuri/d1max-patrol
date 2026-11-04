@@ -12,10 +12,10 @@ from pathlib import Path
 
 import pytest
 
-from d1max_agent.bridge_localizer import LocalizerUnavailable
-from d1max_agent.locbridge import HB_DEAD_S, LocBridgeServer
-from d1max_contract.errors import ContractError
-from d1max_contract.locbridge import (
+from nexwar_agent.bridge_localizer import LocalizerUnavailable
+from nexwar_agent.locbridge import HB_DEAD_S, LocBridgeServer
+from nexwar_contract.errors import ContractError
+from nexwar_contract.locbridge import (
     MAX_LINE,
     PROTO,
     Error,
@@ -214,7 +214,7 @@ async def test_请求等回复_超时_没连上_等的时候断了(桥):
 async def test_定位器不读_心跳不卡住每拍_积多了断开(桥, monkeypatch):
     """内审应修 3:以前每拍的心跳要等发送(drain),定位器只写不读的话,缓冲满了就把整个代理的
     循环卡死。"""
-    import d1max_agent.locbridge as lb
+    import nexwar_agent.locbridge as lb
     srv, c, sink, path = 桥
     monkeypatch.setattr(lb, "HB_EVERY_S", 0.0)
     monkeypatch.setattr(lb, "MAX_WBUF", 1024)
@@ -234,7 +234,7 @@ async def test_定位器不读_心跳不卡住每拍_积多了断开(桥, monkey
 
 async def test_回hello就发不出去_不当它连上(桥, monkeypatch):
     """内审小问题:以前回 hello 失败(已经 on_disconnect 了)之后还接着 on_connect,代理以为连着。"""
-    import d1max_agent.locbridge as lb
+    import nexwar_agent.locbridge as lb
     srv, c, sink, path = 桥
     monkeypatch.setattr(lb, "MAX_WBUF", -1)              # 发什么都算积多了
     r, w = await _连(path)

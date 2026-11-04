@@ -14,73 +14,73 @@ set -euo pipefail
 #
 # 加写盘动作的人请同时加这里的一行。**漏了就是卸载卸不干净。**
 #
-# @写盘 /opt/d1max                                                       根目录(下面那条 mkdir -p 建的)
-# @写盘 /opt/d1max/releases                                              版本槽(只有代码和 venv;巡检数据在 /var/lib/d1max)
-# @写盘 /opt/d1max/bin                                                   跟版本无关的解释器 wrapper
-# @写盘 /opt/d1max/bin-venv                                              上面那个解释器的 venv
-# @写盘 /opt/d1max/current                                               release activate 摆的版本链
-# @写盘 /opt/d1max/pending.json                                          在途升级标记,代理切版本时落在根下
-# @写盘 /opt/d1max/rolled_back.json                                      开机守卫退回上一版时留的条子,代理报给站点后删
-# @写盘 /var/lib/d1max                                                   数据根(代理的发件箱、事件簿、幂等记录),升级回滚都不碰它
-# @写盘 /etc/d1max                                                       配置目录(站点签发的证书包、注册文件也放这儿,由人拷来)
-# @写盘 /etc/d1max/env                                                   现场值:站点地址、地图、原点、适配器、SN
-# @写盘 /etc/d1max/release-pub.pem                                       发行公钥(W30;包里带了才装,验站点下发的版本)
-# @写盘 /etc/d1max/release-pub.d                                         换钥匙时另外认的发行公钥(A3;跟包里的一样)
-# @写盘 /etc/systemd/system/d1max-agent.service                           代理单元(狗上只有它一个服务,W00c5e)
-# @写盘 /etc/systemd/system/multi-user.target.wants/d1max-agent.service  systemctl enable 生成的自启链
-# @写盘 /etc/systemd/system/d1max-localizer.service                       定位器单元(W09b;env 里写了要用才 enable)
-# @写盘 /etc/systemd/system/d1max-obstacles.service                       感知节点单元(W11;env 里写了要用才 enable)
-# @写盘 /etc/systemd/system/d1max-persons.service                         人员检测节点单元(W24;只装不 enable)
-# @写盘 /etc/systemd/system/d1max-nav2.service                            Nav2 + 转接节点单元(W47;env 里写了要用才 enable)
-# @写盘 /etc/systemd/system/d1max-lidar-merge.service                     前后雷达合并单元(W09i;只装不 enable)
-# @写盘 /etc/systemd/system/d1max-sidecar.service                         运动控制旁路单元(工单 7;只装不 enable;程序在机器上编)
-# @写盘 /etc/systemd/system/d1max-zenohd.service                          自带算力板的 zenoh 路由(A5;只装不 enable;没填网关不起)
-# @写盘 /etc/systemd/system/d1max-bind.service                            配网服务(W42;只装,factory burn 才 enable;没烧写不起)
-# @写盘 /etc/systemd/timesyncd.conf.d/d1max.conf                          对时配置:向站点主机对时(W09d)
-# @写盘 /etc/chrony/conf.d/d1max.conf                                     对时归 chrony 管的狗:向站点主机对时(决策 61)
+# @写盘 /opt/nexwar                                                       根目录(下面那条 mkdir -p 建的)
+# @写盘 /opt/nexwar/releases                                              版本槽(只有代码和 venv;巡检数据在 /var/lib/nexwar)
+# @写盘 /opt/nexwar/bin                                                   跟版本无关的解释器 wrapper
+# @写盘 /opt/nexwar/bin-venv                                              上面那个解释器的 venv
+# @写盘 /opt/nexwar/current                                               release activate 摆的版本链
+# @写盘 /opt/nexwar/pending.json                                          在途升级标记,代理切版本时落在根下
+# @写盘 /opt/nexwar/rolled_back.json                                      开机守卫退回上一版时留的条子,代理报给站点后删
+# @写盘 /var/lib/nexwar                                                   数据根(代理的发件箱、事件簿、幂等记录),升级回滚都不碰它
+# @写盘 /etc/nexwar                                                       配置目录(站点签发的证书包、注册文件也放这儿,由人拷来)
+# @写盘 /etc/nexwar/env                                                   现场值:站点地址、地图、原点、适配器、SN
+# @写盘 /etc/nexwar/release-pub.pem                                       发行公钥(W30;包里带了才装,验站点下发的版本)
+# @写盘 /etc/nexwar/release-pub.d                                         换钥匙时另外认的发行公钥(A3;跟包里的一样)
+# @写盘 /etc/systemd/system/nexwar_agent.service                           代理单元(狗上只有它一个服务,W00c5e)
+# @写盘 /etc/systemd/system/multi-user.target.wants/nexwar_agent.service  systemctl enable 生成的自启链
+# @写盘 /etc/systemd/system/nexwar_localizer.service                       定位器单元(W09b;env 里写了要用才 enable)
+# @写盘 /etc/systemd/system/nexwar_obstacles.service                       感知节点单元(W11;env 里写了要用才 enable)
+# @写盘 /etc/systemd/system/nexwar_persons.service                         人员检测节点单元(W24;只装不 enable)
+# @写盘 /etc/systemd/system/nexwar_nav2.service                            Nav2 + 转接节点单元(W47;env 里写了要用才 enable)
+# @写盘 /etc/systemd/system/nexwar_lidar_merge.service                     前后雷达合并单元(W09i;只装不 enable)
+# @写盘 /etc/systemd/system/nexwar_sidecar.service                         运动控制旁路单元(工单 7;只装不 enable;程序在机器上编)
+# @写盘 /etc/systemd/system/nexwar_zenohd.service                          自带算力板的 zenoh 路由(A5;只装不 enable;没填网关不起)
+# @写盘 /etc/systemd/system/nexwar_bind.service                            配网服务(W42;只装,factory burn 才 enable;没烧写不起)
+# @写盘 /etc/systemd/timesyncd.conf.d/nexwar.conf                          对时配置:向站点主机对时(W09d)
+# @写盘 /etc/chrony/conf.d/nexwar.conf                                     对时归 chrony 管的狗:向站点主机对时(决策 61)
 # (另:厂家 /etc/chrony/chrony.conf 里指向厂家板的 server/pool/peer 行注释掉,第一次改之前原文件留在
-#  /etc/d1max/chrony.conf.orig;用户 2026-11-03 同意,W70)
-# @写盘 /usr/local/lib/d1max                                             特权执行器和它验签用的模块(W55;root 属主,不从版本目录跑代码)
-# @写盘 /etc/d1max/unbind-pub.d                                          随发行新增的解绑公钥(W57;换钥匙用)
-# @写盘 /etc/d1max/unbind-revoked.txt                                    作废的解绑公钥编号(W57)
-# @写盘 /etc/d1max/factory-pub.pem                                       出厂公钥(W63;出厂装证书时核对用)
-# @写盘 /etc/d1max/factory-pub.d                                         换钥匙时另外认的出厂公钥(W63)
-# @写盘 /etc/d1max-ops.json                                              特权执行器的配置(W55)
-# @写盘 /var/lib/d1max-ops                                               特权执行器的请求、结果目录(W55)
-# @写盘 /etc/systemd/system/d1max-ops.path                               特权执行器的路径单元(W55)
-# @写盘 /etc/systemd/system/d1max-ops.service                            特权执行器(W55;root、一次性)
-# @写盘 /etc/systemd/system/paths.target.wants/d1max-ops.path            上面路径单元的自启链
-# @写盘 /etc/systemd/journald.conf.d/d1max.conf                          日志留盘 14 天、最多 500 MB(W55:远程取日志、重启不丢)
+#  /etc/nexwar/chrony.conf.orig;用户 2026-11-03 同意,W70)
+# @写盘 /usr/local/lib/nexwar                                             特权执行器和它验签用的模块(W55;root 属主,不从版本目录跑代码)
+# @写盘 /etc/nexwar/unbind-pub.d                                          随发行新增的解绑公钥(W57;换钥匙用)
+# @写盘 /etc/nexwar/unbind-revoked.txt                                    作废的解绑公钥编号(W57)
+# @写盘 /etc/nexwar/factory-pub.pem                                       出厂公钥(W63;出厂装证书时核对用)
+# @写盘 /etc/nexwar/factory-pub.d                                         换钥匙时另外认的出厂公钥(W63)
+# @写盘 /etc/nexwar_ops.json                                              特权执行器的配置(W55)
+# @写盘 /var/lib/nexwar_ops                                               特权执行器的请求、结果目录(W55)
+# @写盘 /etc/systemd/system/nexwar_ops.path                               特权执行器的路径单元(W55)
+# @写盘 /etc/systemd/system/nexwar_ops.service                            特权执行器(W55;root、一次性)
+# @写盘 /etc/systemd/system/paths.target.wants/nexwar_ops.path            上面路径单元的自启链
+# @写盘 /etc/systemd/journald.conf.d/nexwar.conf                          日志留盘 14 天、最多 500 MB(W55:远程取日志、重启不丢)
 #
 # 这份脚本不写、但 uninstall.sh 要负责收掉的(老机器上可能还在;这里只 rm/disable 它们,从来不写):
 #
-# @也删 /etc/systemd/system/multi-user.target.wants/d1max-localizer.service 定位器的自启链(装机只装不 enable;有人手工 enable 过才有)
-# @也删 /etc/systemd/system/multi-user.target.wants/d1max-obstacles.service 感知节点的自启链(同上)
-# @也删 /etc/systemd/system/multi-user.target.wants/d1max-persons.service 人员检测节点的自启链(同上)
-# @也删 /etc/systemd/system/multi-user.target.wants/d1max-nav2.service    Nav2 单元的自启链(同上)
-# @也删 /etc/systemd/system/multi-user.target.wants/d1max-lidar-merge.service 前后雷达合并的自启链(同上)
-# @也删 /etc/systemd/system/multi-user.target.wants/d1max-zenohd.service zenoh 路由的自启链(同上)
-# @也删 /etc/systemd/system/multi-user.target.wants/d1max-bind.service   配网服务的自启链(factory burn 时 enable 的)
-# @也删 /etc/systemd/system/multi-user.target.wants/d1max-sidecar.service 运动控制旁路的自启链(同上)
-# @也删 /etc/systemd/system/d1max-bootguard.service 老的守卫单元
-# @也删 /etc/systemd/system/d1max-patrol.service 老服务(W00c5e 退役)
-# @也删 /etc/systemd/system/multi-user.target.wants/d1max-patrol.service 老服务的自启链
-# @也删 /usr/local/sbin/d1max-privileged 特权助手(W00c5e 退役:代理运行时不需要 root)
-# @也删 /etc/sudoers.d/d1max 助手的 sudo 白名单
-# @也删 /usr/local/sbin/d1max-restart-now 老服务重启的内部入口
-# @也删 /opt/d1max/bundles 老服务的任务包目录(W00c5e:任务随命令从站点来,狗上不落任务包)
+# @也删 /etc/systemd/system/multi-user.target.wants/nexwar_localizer.service 定位器的自启链(装机只装不 enable;有人手工 enable 过才有)
+# @也删 /etc/systemd/system/multi-user.target.wants/nexwar_obstacles.service 感知节点的自启链(同上)
+# @也删 /etc/systemd/system/multi-user.target.wants/nexwar_persons.service 人员检测节点的自启链(同上)
+# @也删 /etc/systemd/system/multi-user.target.wants/nexwar_nav2.service    Nav2 单元的自启链(同上)
+# @也删 /etc/systemd/system/multi-user.target.wants/nexwar_lidar_merge.service 前后雷达合并的自启链(同上)
+# @也删 /etc/systemd/system/multi-user.target.wants/nexwar_zenohd.service zenoh 路由的自启链(同上)
+# @也删 /etc/systemd/system/multi-user.target.wants/nexwar_bind.service   配网服务的自启链(factory burn 时 enable 的)
+# @也删 /etc/systemd/system/multi-user.target.wants/nexwar_sidecar.service 运动控制旁路的自启链(同上)
+# @也删 /etc/systemd/system/nexwar_bootguard.service 老的守卫单元
+# @也删 /etc/systemd/system/nexwar_patrol.service 老服务(W00c5e 退役)
+# @也删 /etc/systemd/system/multi-user.target.wants/nexwar_patrol.service 老服务的自启链
+# @也删 /usr/local/sbin/nexwar_privileged 特权助手(W00c5e 退役:代理运行时不需要 root)
+# @也删 /etc/sudoers.d/nexwar 助手的 sudo 白名单
+# @也删 /usr/local/sbin/nexwar_restart_now 老服务重启的内部入口
+# @也删 /opt/nexwar/bundles 老服务的任务包目录(W00c5e:任务随命令从站点来,狗上不落任务包)
 #
-# **盘上只有以上这些。** 所有 pip install 都落在 /opt/d1max 底下的 venv 里,
+# **盘上只有以上这些。** 所有 pip install 都落在 /opt/nexwar 底下的 venv 里,
 # python3 -m venv 只读系统 python3,不往系统 site-packages 里写东西。
 
-# **写死,不给环境变量覆盖。** systemd 单元里 /opt/d1max 是逐字写死的
-# (WorkingDirectory=、Environment=D1MAX_RELEASE_ROOT=、两条 Exec* 的路径)。允许这里
-# 被 D1MAX_ROOT 改而单元不跟着改,装出来的是一台脚本和服务各说各话的机器:
+# **写死,不给环境变量覆盖。** systemd 单元里 /opt/nexwar 是逐字写死的
+# (WorkingDirectory=、Environment=NEXWAR_RELEASE_ROOT=、两条 Exec* 的路径)。允许这里
+# 被 NEXWAR_ROOT 改而单元不跟着改,装出来的是一台脚本和服务各说各话的机器:
 # 包落在一个根下,服务读的是另一个根。**要换根目录,这里和单元一起改。**
-ROOT=/opt/d1max
+ROOT=/opt/nexwar
 # 单元里的 User=robot 同样是写死的。留这个覆盖是给"客户那边账号不叫 robot"
 # 用的,但**用了就得同时改单元里的 User=**,否则服务起来的身份跟目录属主对不上。
-RUN_USER=${D1MAX_USER:-robot}
+RUN_USER=${NEXWAR_USER:-robot}
 # **只收目录,不收归档。** 下面 cp -a "$PKG/." 、basename "$PKG" 、以及
 # release install "$PKG" 要算的那一遍 tree_sha256,三处都只认目录;给一个
 # .tar.gz 会在第一处就炸。docs/装机清单.md 一节写的也是"只承诺目录",
@@ -89,30 +89,30 @@ RUN_USER=${D1MAX_USER:-robot}
 PKG=${1:-}
 # 离线现场的透传口子。Orin NX 出不了外网时,把 aarch64 轮子拷到 U 盘上,
 # 然后这样跑:
-#   sudo D1MAX_PIP_ARGS='--no-index --find-links=/media/<U盘>/wheels' \
+#   sudo NEXWAR_PIP_ARGS='--no-index --find-links=/media/<U盘>/wheels' \
 #     bash install.sh <包目录>
 # 下面每一处 pip install 都带上它 —— 只带一半的话,离线现场会在没带的
 # 那一处卡住,而现场看到的是"装到一半不动了",最难查的那种。
 # **展开时故意不加引号**:这个变量装的是好几个参数,加引号会被当成一个
 # 带空格的长参数传给 pip。它只从运维手里来,不从网上来。
-PIP_ARGS=${D1MAX_PIP_ARGS:-}
-# 包里带了离线轮子(`release pack --wheels`;站点下发的版本就是只从它装的)而运维没给 D1MAX_PIP_ARGS:
+PIP_ARGS=${NEXWAR_PIP_ARGS:-}
+# 包里带了离线轮子(`release pack --wheels`;站点下发的版本就是只从它装的)而运维没给 NEXWAR_PIP_ARGS:
 # 只从包里的装(W35,2026-10-13 C40221:清单写的 /home/robot/wheels 在那只狗上不存在,包里其实带着)。
 # 给了(哪怕给的是空的)就听给的。路径里有空白的不自动用 —— PIP_ARGS 展开时不加引号,会被拆开。
-if [[ -z "${D1MAX_PIP_ARGS+x}" && -n "$PKG" && -d "$PKG/wheels" ]]; then
+if [[ -z "${NEXWAR_PIP_ARGS+x}" && -n "$PKG" && -d "$PKG/wheels" ]]; then
   PKG_WHEELS="$(cd "$PKG/wheels" && pwd)"
   if [[ "$PKG_WHEELS" =~ [[:space:]] ]]; then
     echo "  提示: 包里带了离线轮子,但路径里有空白($PKG_WHEELS),不自动用;要用就把包挪到没有空白的路径下。"
   else
     PIP_ARGS="--no-index --find-links=$PKG_WHEELS"
-    echo "包里带了离线轮子:依赖只从 $PKG_WHEELS 装(要走别处就自己给 D1MAX_PIP_ARGS)。"
+    echo "包里带了离线轮子:依赖只从 $PKG_WHEELS 装(要走别处就自己给 NEXWAR_PIP_ARGS)。"
   fi
 fi
 
 # **包目录名不是随便起的。** engine/release.py 的 _NAME_RE 只认
 # <日期>-<6 到 12 位十六进制>,verify_package() 还要求这个目录名跟包里
 # release.json 的 name 一字不差 —— 那是包校验的第二关(第一关是整棵树的
-# tree_sha256)。所以例子里**不能**带 d1max- 之类的前缀:带了的话 3/7 的
+# tree_sha256)。所以例子里**不能**带 nexwar_ 之类的前缀:带了的话 3/7 的
 # release install 必拒,而那时候前两步已经白跑了。
 # **要改的是这个例子和 docs/装机清单.md,不是去放宽 _NAME_RE** —— 目录名跟
 # manifest 对齐是故意的,它同时也是防路径穿越的那道闸。
@@ -142,7 +142,7 @@ if [[ -z "$PKG" ]]; then
 fi
 
 # **包目录不在就停在这儿,别往下走。** 原来这里只判空串,一个打错的路径会被
-# 一路带到 2/7 末尾的 cp -a "$PKG/." 才炸 —— 而那时候 /opt/d1max 已经建出来了、
+# 一路带到 2/7 末尾的 cp -a "$PKG/." 才炸 —— 而那时候 /opt/nexwar 已经建出来了、
 # 根下那个跟版本无关的解释器也装完了。现场看到的是一条 cp 的报错,还得回头收拾
 # 半个脚印(footprint.sh 的 diff 里会多出东西)。失败要早、要便宜、要说人话。
 if [[ ! -d "$PKG" ]]; then
@@ -154,12 +154,12 @@ fi
 
 # **账号不在也停在这儿。** 原来是 1/7 的 chown 撞上 chown: invalid user,而那
 # 一行排在 mkdir -p 之后 —— 客户机器上没有 robot 这个账号的话,脚本会在
-# /opt/d1max 已经建出来之后中止,留半个脚印给人收,报错还是 chown 的行话。
+# /opt/nexwar 已经建出来之后中止,留半个脚印给人收,报错还是 chown 的行话。
 # 这个检查排在 mkdir 之前,盘上一个字节都不会动。
 # **包目录名当场核一遍,别拖到 3/7 才拒。** engine/release.py 的 _NAME_RE 只认
 # <日期>-<6 到 12 位十六进制>,verify_package() 还要求这个名字跟包里 release.json
 # 的 name 一字不差。名字不对的话 3/7 的 release install 必拒 —— 而那时候
-# /opt/d1max 已经建出来、根下那个跟版本无关的解释器也装完了(离线现场还为它
+# /opt/nexwar 已经建出来、根下那个跟版本无关的解释器也装完了(离线现场还为它
 # 插过一次 U 盘),现场要回头收拾半个脚印。跟上面两条前置检查同一条理由:
 # 失败要早、要便宜、要说人话。
 # **这个正则要跟 _NAME_RE 一字不差**,放宽它不是这里的事 —— 目录名跟 manifest
@@ -169,7 +169,7 @@ REL_NAME=$(basename "$PKG")
 if [[ ! "$REL_NAME" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9a-f]{6,12}$ ]]; then
   echo "错误: 包目录名不对: $REL_NAME" >&2
   echo "      必须长成 <日期>-<6 到 12 位十六进制>,例如 2026-09-20-77b2de。" >&2
-  echo "      **不能带 d1max- 之类的前缀** —— 目录名要跟包里 release.json 的" >&2
+  echo "      **不能带 nexwar_ 之类的前缀** —— 目录名要跟包里 release.json 的" >&2
   echo "      name 一字不差,那是包校验的第二关(第一关是整棵树的 tree_sha256)。" >&2
   echo "      包是在笔记本上用 release pack 打的,默认就是这个格式;名字不对" >&2
   echo "      多半是拷贝的时候被改过,或者手工建了个目录。" >&2
@@ -180,8 +180,8 @@ fi
 # (老服务那一代)7/7 的 release activate 必拒 —— 而那时候 5/7 已经把老服务清掉了,狗上什么服务都
 # 没有。跟上面几条同一个理由:失败要早,盘上一个字节都还没动。执行位不在这儿查:U 盘(FAT/exFAT)
 # 拷一趟就没了,3/7 落槽时会补上。
-if [[ -L "$PKG/deploy/d1max-agent-start" || ! -f "$PKG/deploy/d1max-agent-start" ]]; then
-  echo "错误: 包里没有代理的启动脚本 deploy/d1max-agent-start(或者它是个链接): $PKG" >&2
+if [[ -L "$PKG/deploy/nexwar_agent_start" || ! -f "$PKG/deploy/nexwar_agent_start" ]]; then
+  echo "错误: 包里没有代理的启动脚本 deploy/nexwar_agent_start(或者它是个链接): $PKG" >&2
   echo "      这个装机脚本装的是代理,代理单元直接执行包里的这个脚本;老服务那一代的包" >&2
   echo "      装不了。在笔记本上用现在的 master 重新 release pack 一个包。" >&2
   exit 2
@@ -190,33 +190,39 @@ fi
 if ! id -u "$RUN_USER" >/dev/null 2>&1; then
   echo "错误: 这台机器上没有账号 $RUN_USER,装不下去。" >&2
   echo "      systemd 单元里的 User= 也是写死 robot 的。客户那边账号不叫 robot" >&2
-  echo "      的话:先把账号建出来,或者 sudo D1MAX_USER=<账号名> bash install.sh," >&2
+  echo "      的话:先把账号建出来,或者 sudo NEXWAR_USER=<账号名> bash install.sh," >&2
   echo "      **并且同时改单元里的 User=** —— 只改一边,服务的身份跟目录属主对不上。" >&2
   exit 2
 fi
 
+# 改名迁移(2026-11,d1max → nexwar):改名前装的机器先把目录、配置、单元换成新名字,下面才按新名字查、装。
+# 没有老东西什么都不做;新旧都有内容时它停下(退出 2),这里跟着停。装完在最后 finish 把原来开着的单元开回来。
+if [[ -f "$PKG/deploy/nexwar_migrate" ]]; then
+  sh "$PKG/deploy/nexwar_migrate" prepare || exit 2
+fi
+
 # W12 外审阻断:真狗的速度换算系数是老模板的猜测值(0.4 / 1.0)的话,限速区限不住。**什么都还没改就停**,
-# 让人先改 /etc/d1max/env(sim 不拦)。代理起来时也按同一个范围拒,这里只是早点说。老包没带这个脚本就跳过。
-if [[ -f "$PKG/deploy/d1max-units-check" ]] && ! sh "$PKG/deploy/d1max-units-check" /etc/d1max/env; then
-  echo "      没装:/etc/d1max/env 改好了再跑一次。" >&2
+# 让人先改 /etc/nexwar/env(sim 不拦)。代理起来时也按同一个范围拒,这里只是早点说。老包没带这个脚本就跳过。
+if [[ -f "$PKG/deploy/nexwar_units_check" ]] && ! sh "$PKG/deploy/nexwar_units_check" /etc/nexwar/env; then
+  echo "      没装:/etc/nexwar/env 改好了再跑一次。" >&2
   exit 2
 fi
 
-say "1/7 建目录 $ROOT 和数据根 /var/lib/d1max"
+say "1/7 建目录 $ROOT 和数据根 /var/lib/nexwar"
 mkdir -p "$ROOT/releases" "$ROOT/bin"
 chown -R "$RUN_USER":"$RUN_USER" "$ROOT"
-# **巡检数据根,在版本槽外面。** 服务单元的 Environment=D1MAX_DATA_ROOT 指着它,
+# **巡检数据根,在版本槽外面。** 服务单元的 Environment=NEXWAR_DATA_ROOT 指着它,
 # uninstall.sh 默认删、--keep-data 留。路径写死,理由跟 $ROOT 一样:单元里是字面量。
 # **chown 只在目录是这一趟新建的时候才做。** 重跑是这份脚本的日常路径(填完
-# SN 让它生效、换一版重装),这时候 /var/lib/d1max 早就在,而且里面正躺着
+# SN 让它生效、换一版重装),这时候 /var/lib/nexwar 早就在,而且里面正躺着
 # 服务自己写出来的 runs/、queue.jsonl —— 服务已经把它们的属主设成了
 # $RUN_USER;这里要是无条件 chown -R 一遍,每次重跑都要把这一整棵越长越大
 # 的数据树递归 chown 一遍,纯粹的浪费,而且万一现场手工改过属主(比如临时
 # 用 root 抢救过一次数据)这一行会把那次手工操作悄悄抹掉。只有目录还不在、
 # 也就是真的第一次建它的时候,才需要把它的属主设成服务要用的那个用户。
-if [ ! -d /var/lib/d1max ]; then
-  mkdir -p "/var/lib/d1max"
-  chown "$RUN_USER":"$RUN_USER" "/var/lib/d1max"
+if [ ! -d /var/lib/nexwar ]; then
+  mkdir -p "/var/lib/nexwar"
+  chown "$RUN_USER":"$RUN_USER" "/var/lib/nexwar"
 fi
 
 say "2/7 装一个跟版本无关的解释器到 $ROOT/bin"
@@ -272,13 +278,13 @@ fi
 # 那一句收进了 if,而 pyproject.toml 用的是 setuptools.build_meta,
 # PEP 517 的构建隔离每一次都要现拉一份 setuptools —— 于是重跑必联网。
 # 而重跑正是现场"填完 SN 让它生效"的唯一路子(见 7/7):离线现场跑第二趟
-# 忘了带 D1MAX_PIP_ARGS=,就会挂死在 2/7(pip 默认 5 次重试、每次 15 秒),
+# 忘了带 NEXWAR_PIP_ARGS=,就会挂死在 2/7(pip 默认 5 次重试、每次 15 秒),
 # 现场看到的是"装到一半不动了",set -e 中止,连 stop/start 都不跑,SN 永远不生效。
 # 所以照 4/7 那个哨兵的形状给根下的 venv 也加一个,讲究完全一样:
 # **哨兵在最后一行才落**,它在就等于这个包的依赖在根 venv 里装齐了。
 # 哨兵里存的是版本名:换一版,内容对不上,照样重装 —— 升级路径不受影响。
 ROOT_SENTINEL="$ROOT/bin-venv/.deps-ok"
-ROOT_SENTINEL_WANT="d1max_patrol $REL_NAME"
+ROOT_SENTINEL_WANT="nexwar_patrol $REL_NAME"
 if [[ "$(cat "$ROOT_SENTINEL" 2>/dev/null)" != "$ROOT_SENTINEL_WANT" ]]; then
   TMP_PKG=$(mktemp -d)
   cp -a "$PKG/." "$TMP_PKG/"
@@ -301,32 +307,32 @@ else
 fi
 
 say "3/7 把包落进槽里"
-# 发行公钥(W30,决策 43):包里带了就装到 /etc/d1max(装机是人在现场、包是人拿来的,可信);
+# 发行公钥(W30,决策 43):包里带了就装到 /etc/nexwar(装机是人在现场、包是人拿来的,可信);
 # 之后站点下发的版本,狗都拿它验签名,验不过不装。包里没带、狗上也没有:这一次照装(--unsigned),
-# 但站点下发的版本都会被拒,除非 /etc/d1max/env 里写 D1MAX_RELEASE_UNSIGNED_OK=1(只许开发、仿真)。
-mkdir -p /etc/d1max
+# 但站点下发的版本都会被拒,除非 /etc/nexwar/env 里写 NEXWAR_RELEASE_UNSIGNED_OK=1(只许开发、仿真)。
+mkdir -p /etc/nexwar
 if [[ -f "$PKG/deploy/release-pub.pem" ]]; then
-  install -m 0644 -o root -g root "$PKG/deploy/release-pub.pem" /etc/d1max/release-pub.pem
-  echo "  装了发行公钥 /etc/d1max/release-pub.pem"
+  install -m 0644 -o root -g root "$PKG/deploy/release-pub.pem" /etc/nexwar/release-pub.pem
+  echo "  装了发行公钥 /etc/nexwar/release-pub.pem"
 fi
 # 换钥匙(A3):包里 deploy/release-pub.d/*.pem 是另外也认的公钥。狗上这个目录**跟包里的一样**:
 # 包里删掉的(吊销了的)狗上也删掉。包里没有这个目录就不动狗上的。
 if [[ -d "$PKG/deploy/release-pub.d" ]]; then
-  install -d -m 0755 -o root -g root /etc/d1max/release-pub.d
-  find /etc/d1max/release-pub.d -maxdepth 1 -type f -name '*.pem' -delete
+  install -d -m 0755 -o root -g root /etc/nexwar/release-pub.d
+  find /etc/nexwar/release-pub.d -maxdepth 1 -type f -name '*.pem' -delete
   for k in "$PKG"/deploy/release-pub.d/*.pem; do
     [[ -f "$k" ]] || continue
-    install -m 0644 -o root -g root "$k" /etc/d1max/release-pub.d/
+    install -m 0644 -o root -g root "$k" /etc/nexwar/release-pub.d/
     echo "  另外也认发行公钥 $(basename "$k")"
   done
 fi
 UNSIGNED=()
-if [[ ! -f /etc/d1max/release-pub.pem ]]; then
+if [[ ! -f /etc/nexwar/release-pub.pem ]]; then
   echo "  注意:没有发行公钥,这一次不验签名;站点下发的版本会被拒(见 docs/W30-完工报告.md)" >&2
   UNSIGNED=(--unsigned)
 fi
-sudo -u "$RUN_USER" env D1MAX_RELEASE_ROOT="$ROOT" \
-  "$ROOT/bin/python" -m d1max_patrol.cli release install ${UNSIGNED[@]+"${UNSIGNED[@]}"} "$PKG"
+sudo -u "$RUN_USER" env NEXWAR_RELEASE_ROOT="$ROOT" \
+  "$ROOT/bin/python" -m nexwar_patrol.cli release install ${UNSIGNED[@]+"${UNSIGNED[@]}"} "$PKG"
 
 say "4/7 给这一版建自己的 venv"
 # **每版一个 venv,不是服务共用根下那个解释器。** 服务单元的 ExecStart
@@ -375,7 +381,7 @@ if [[ ! -e "$SENTINEL" ]]; then
   fi
   # **最后一行才落哨兵。** 上面任何一步断了,set -e 会在这之前就退出,
   # 哨兵不在,下一趟整段重来 —— 这就是"依赖装完没有"这个判据的全部。
-  printf 'd1max_patrol %s\n' "$REL_NAME" | sudo -u "$RUN_USER" tee "$SENTINEL" >/dev/null
+  printf 'nexwar_patrol %s\n' "$REL_NAME" | sudo -u "$RUN_USER" tee "$SENTINEL" >/dev/null
 fi
 
 # W68:Super-LIO 是必装的核心组件(建图和巡逻定位都用它,用户 2026-11-02 定)。源码随包带,在这台机器上
@@ -383,215 +389,215 @@ fi
 # 原来那一版,不留半装的机器人。老包没带编译脚本就跳过(那一版也不用它)。
 # 外审 r1 #7:按文件在不在判、用 bash 跑(经 FAT/exFAT 拷过会丢执行位);用机器人账号编、目录归它 ——
 # 远程升级(代理,同一账号)以后也在这里编新版。包里带了 Super-LIO 源码却没编译脚本 = 包不全,也失败。
-if [[ -f "$PKG/deploy/d1max-superlio-build" ]]; then
+if [[ -f "$PKG/deploy/nexwar_superlio_build" ]]; then
   echo "  编 Super-LIO(定位与建图必需;第一次约 7 分钟)…"
-  install -d -o "$RUN_USER" -g "$RUN_USER" /opt/d1max/superlio
-  chown -R "$RUN_USER":"$RUN_USER" /opt/d1max/superlio
-  if ! sudo -u "$RUN_USER" env D1MAX_SUPERLIO_PREFIX=/opt/d1max/superlio \
-      D1MAX_SUPERLIO_STAMP="$SLOT/venv/superlio-root" bash "$PKG/deploy/d1max-superlio-build"; then
-    echo "装机失败:Super-LIO(定位与建图必需)编不成,日志在 /opt/d1max/superlio/<版本>/build.log。" >&2
+  install -d -o "$RUN_USER" -g "$RUN_USER" /opt/nexwar/superlio
+  chown -R "$RUN_USER":"$RUN_USER" /opt/nexwar/superlio
+  if ! sudo -u "$RUN_USER" env NEXWAR_SUPERLIO_PREFIX=/opt/nexwar/superlio \
+      NEXWAR_SUPERLIO_STAMP="$SLOT/venv/superlio-root" bash "$PKG/deploy/nexwar_superlio_build"; then
+    echo "装机失败:Super-LIO(定位与建图必需)编不成,日志在 /opt/nexwar/superlio/<版本>/build.log。" >&2
     echo "         机器人照旧跑原来那一版;补齐缺的系统包后重跑本脚本。" >&2
     exit 1
   fi
 elif [[ -d "$PKG/packages/localizer/native/superlio" ]]; then
-  echo "装机失败:包不全 —— 带了 Super-LIO 源码却没有 deploy/d1max-superlio-build。机器人照旧跑原来那一版。" >&2
+  echo "装机失败:包不全 —— 带了 Super-LIO 源码却没有 deploy/nexwar_superlio_build。机器人照旧跑原来那一版。" >&2
   exit 1
 fi
 
 say "5/7 装代理单元与环境文件;清掉老服务"
-# **狗上只有 d1max-agent.service 一个服务**(W00c5e:老的 HTTP 服务、手机直连、特权助手退役)。
+# **狗上只有 nexwar_agent.service 一个服务**(W00c5e:老的 HTTP 服务、手机直连、特权助手退役)。
 # 单元优先取包里的 deploy/,老包没带就退回这个脚本自己所在的目录。单元装一次不随版本换:
-# 启动参数在每一版带的 deploy/d1max-agent-start 里(W00c5d),退回上一版时参数跟着回来。
-AGENT_UNIT_SRC="$PKG/deploy/d1max-agent.service"
-[[ -f "$AGENT_UNIT_SRC" ]] || AGENT_UNIT_SRC="$(dirname "$0")/d1max-agent.service"
+# 启动参数在每一版带的 deploy/nexwar_agent_start 里(W00c5d),退回上一版时参数跟着回来。
+AGENT_UNIT_SRC="$PKG/deploy/nexwar_agent.service"
+[[ -f "$AGENT_UNIT_SRC" ]] || AGENT_UNIT_SRC="$(dirname "$0")/nexwar_agent.service"
 install -m 0644 "$AGENT_UNIT_SRC" /etc/systemd/system/
 # 定位器单元(W09b):**只装、不 enable** —— 真狗在 W09b 的真机项验过之前不起。开车的仍然只有代理:
 # 定位器只读雷达、经本机定位桥给代理位姿,不碰旁路进程。老包没带就跳过。
-if [[ -f "$PKG/deploy/d1max-localizer.service" ]]; then
-  install -m 0644 "$PKG/deploy/d1max-localizer.service" /etc/systemd/system/
+if [[ -f "$PKG/deploy/nexwar_localizer.service" ]]; then
+  install -m 0644 "$PKG/deploy/nexwar_localizer.service" /etc/systemd/system/
 fi
 # 感知节点单元(W11):同样**只装、不 enable** —— 真狗在 W11 的真机项验过之前不起。它只读雷达、给代理
 # 局部栅格(开了的话给旁路进程发净空许可),不发速度。老包没带就跳过。
-if [[ -f "$PKG/deploy/d1max-obstacles.service" ]]; then
-  install -m 0644 "$PKG/deploy/d1max-obstacles.service" /etc/systemd/system/
+if [[ -f "$PKG/deploy/nexwar_obstacles.service" ]]; then
+  install -m 0644 "$PKG/deploy/nexwar_obstacles.service" /etc/systemd/system/
 fi
 # 人员检测节点单元(W24):同样**只装、不 enable** —— 检测模型、推理环境在真狗上装好、W24 的真机项验过之前
 # 不起。它只读相机、雷达,经本机人员桥报看到的人,不发速度。老包没带就跳过。
-if [[ -f "$PKG/deploy/d1max-persons.service" ]]; then
-  install -m 0644 "$PKG/deploy/d1max-persons.service" /etc/systemd/system/
+if [[ -f "$PKG/deploy/nexwar_persons.service" ]]; then
+  install -m 0644 "$PKG/deploy/nexwar_persons.service" /etc/systemd/system/
 fi
 # Nav2 单元(W47):同样**只装、不 enable** —— 真狗在 W47 的真机项验过之前不起。要 ROS 2 Humble 的 Nav2 包
 # (ros-humble-navigation2,离线装)。它不直接发速度:速度经代理过禁行区闸、守卫再给 HAL。老包没带就跳过。
-if [[ -f "$PKG/deploy/d1max-nav2.service" ]]; then
-  install -m 0644 "$PKG/deploy/d1max-nav2.service" /etc/systemd/system/
+if [[ -f "$PKG/deploy/nexwar_nav2.service" ]]; then
+  install -m 0644 "$PKG/deploy/nexwar_nav2.service" /etc/systemd/system/
 fi
 # 前后雷达合并单元(W09i):同样**只装、不 enable** —— 后雷达外参在真机上标过、W09i 的真机项验过之前不起。
 # 它只读两台雷达、发合并话题,不碰代理、不碰旁路进程。老包没带就跳过。
-if [[ -f "$PKG/deploy/d1max-lidar-merge.service" ]]; then
-  install -m 0644 "$PKG/deploy/d1max-lidar-merge.service" /etc/systemd/system/
+if [[ -f "$PKG/deploy/nexwar_lidar_merge.service" ]]; then
+  install -m 0644 "$PKG/deploy/nexwar_lidar_merge.service" /etc/systemd/system/
 fi
 # 运动控制旁路单元(工单 7):同样**只装、不 enable** —— 旁路跑在哪台机器上按角色定,程序要链厂商 SDK、
 # 在那台机器上编(包里不带)。老包没带就跳过。
-if [[ -f "$PKG/deploy/d1max-sidecar.service" ]]; then
-  install -m 0644 "$PKG/deploy/d1max-sidecar.service" /etc/systemd/system/
+if [[ -f "$PKG/deploy/nexwar_sidecar.service" ]]; then
+  install -m 0644 "$PKG/deploy/nexwar_sidecar.service" /etc/systemd/system/
 fi
 # zenoh 路由单元(商业化 A5):装在我们自己的算力板上时,从厂商 Orin(网关)拉雷达、相机话题。同样
-# **只装、不 enable**;`/etc/d1max/env` 里没填 D1MAX_GATEWAY(装在厂商 Orin 上)它自己就不起。老包没带就跳过。
-if [[ -f "$PKG/deploy/d1max-zenohd.service" ]]; then
-  install -m 0644 "$PKG/deploy/d1max-zenohd.service" /etc/systemd/system/
+# **只装、不 enable**;`/etc/nexwar/env` 里没填 NEXWAR_GATEWAY(装在厂商 Orin 上)它自己就不起。老包没带就跳过。
+if [[ -f "$PKG/deploy/nexwar_zenohd.service" ]]; then
+  install -m 0644 "$PKG/deploy/nexwar_zenohd.service" /etc/systemd/system/
 fi
-# 配网服务单元(W42):**只装**;生产线烧写(d1max-patrol factory burn)时 enable。没烧写过(没有
-# /etc/d1max/device.json)它自己就不起。老包没带就跳过。
-if [[ -f "$PKG/deploy/d1max-bind.service" ]]; then
-  install -m 0644 "$PKG/deploy/d1max-bind.service" /etc/systemd/system/
+# 配网服务单元(W42):**只装**;生产线烧写(nexwar_patrol factory burn)时 enable。没烧写过(没有
+# /etc/nexwar/device.json)它自己就不起。老包没带就跳过。
+if [[ -f "$PKG/deploy/nexwar_bind.service" ]]; then
+  install -m 0644 "$PKG/deploy/nexwar_bind.service" /etc/systemd/system/
 fi
 # **老服务清掉。** 两个进程抢同一个旁路进程的控制权会出事,两个服务共用在途标记还会互相数
 # 开机次数、替对方提交。失败不致命:新机器上本来就没有这些。
 # 顺序:先停老服务、再删 sudoers、再删助手 —— 反过来的话中间有一瞬白名单指着一个不存在
 # 的路径,谁在那一刻建出同名文件谁就是 root。
-systemctl disable --now d1max-patrol.service 2>/dev/null || true
-rm -f /etc/systemd/system/d1max-patrol.service
-systemctl disable --now d1max-bootguard.service 2>/dev/null || true
-rm -f /etc/systemd/system/d1max-bootguard.service
-rm -f /etc/sudoers.d/d1max
-rm -f /usr/local/sbin/d1max-privileged /usr/local/sbin/d1max-restart-now
+systemctl disable --now nexwar_patrol.service 2>/dev/null || true
+rm -f /etc/systemd/system/nexwar_patrol.service
+systemctl disable --now nexwar_bootguard.service 2>/dev/null || true
+rm -f /etc/systemd/system/nexwar_bootguard.service
+rm -f /etc/sudoers.d/nexwar
+rm -f /usr/local/sbin/nexwar_privileged /usr/local/sbin/nexwar_restart_now
 # 老服务的任务包目录(狗上不再落任务包,任务随命令从站点来)。
 rm -rf "$ROOT/bundles"
 # 现场值的唯一来源。**已经存在就绝不覆盖** —— 现场填过的值不能被重跑抹掉。
-mkdir -p /etc/d1max
+mkdir -p /etc/nexwar
 ENV_FRESH=0
-if [[ ! -e /etc/d1max/env ]]; then
+if [[ ! -e /etc/nexwar/env ]]; then
   ENV_FRESH=1
   # **先按 0600 建出空文件,再往里写。** `cat >` 在 root 的 umask 022 下建出来是 0644,
   # 同机别的账号都读得到。systemd 的 EnvironmentFile= 由 PID 1(root)读,不需要放宽。
-  install -m 0600 /dev/null /etc/d1max/env
-  cat > /etc/d1max/env <<'环境模板'
-# D1 Max 运行环境(代理 d1max-agent 读它)。装机脚本只在这个文件不存在时才写一次,
+  install -m 0600 /dev/null /etc/nexwar/env
+  cat > /etc/nexwar/env <<'环境模板'
+# D1 Max 运行环境(代理 nexwar_agent 读它)。装机脚本只在这个文件不存在时才写一次,
 # 以后重跑 install.sh 不会碰它 —— 现场填过的值放心填。
 
 # 这只狗的机身序列号(机身标签上抄)。只收字母、数字、点、下划线、减号。
-D1MAX_SN=
+NEXWAR_SN=
 
 # 版本根目录,一般不用改。
-D1MAX_RELEASE_ROOT=/opt/d1max
+NEXWAR_RELEASE_ROOT=/opt/nexwar
 
 # ---------------------------------------------------------------- 站点
 # 站点 broker 的地址,站点装好之后填:
 #   mqtts://<站点主机>:8883
 # 狗向站点主机对时(W09d;装机脚本按这个地址写 timesyncd 的配置,填了之后再跑一遍装机脚本)。
 # 时间服务器不是这台主机的话另写:
-#   D1MAX_SITE_NTP=<主机>
-# 证书包(ca.crt、robot.crt、robot.key)拷到 /etc/d1max/tls/,注册文件拷成
-# /etc/d1max/registration.json。**没有注册文件代理就不起**(单元的 ConditionPathExists)。
-D1MAX_SITE_MQTT=
+#   NEXWAR_SITE_NTP=<主机>
+# 证书包(ca.crt、robot.crt、robot.key)拷到 /etc/nexwar/tls/,注册文件拷成
+# /etc/nexwar/registration.json。**没有注册文件代理就不起**(单元的 ConditionPathExists)。
+NEXWAR_SITE_MQTT=
 # 狗上现在载着的地图 <map_id>:<version>,与这张图上的原点 x,y,yaw。站点下发过地图之后,
 # 代理以站点下发的那张为准,这两行只是第一次起来时的缺省。
-D1MAX_MAP=
-D1MAX_HOME=
+NEXWAR_MAP=
+NEXWAR_HOME=
 
 # ---------------------------------------------------------------- 适配器
 # sim = 仿真(动不了真狗)。**W00d 真机验收(真机验证 §3b)过了,才改成 d1max**,
-# 同时在 D1MAX_AGENT_ARGS 里带上实测过的换算参数,例如:
-#   D1MAX_AGENT_ARGS=--sidecar 127.0.0.1:8090 --mps-per-unit 1.0 --radps-per-unit 1.5
+# 同时在 NEXWAR_AGENT_ARGS 里带上实测过的换算参数,例如:
+#   NEXWAR_AGENT_ARGS=--sidecar 127.0.0.1:8090 --mps-per-unit 1.0 --radps-per-unit 1.5
 # (W12:不写就是 SDK 文档低速档的 1.0 m/s、1.5 rad/s;旁路进程要 --speed-level 1,默认就是)
-D1MAX_HAL=sim
+NEXWAR_HAL=sim
 # 自主级别(W00c6i):空着就按适配器定 —— d1max 是 supervised(goto、巡检只在有人用手机
 # 「我在现场监护」时才收,监护一断就停;站点的排程、事件派遣不派给它),sim 是 autonomous。
 # **真狗改成 autonomous 要等 W11 避障真机验收过了、用户同意**:
-#   D1MAX_AUTONOMY=autonomous
+#   NEXWAR_AUTONOMY=autonomous
 # 地图位姿从哪来(W09a):空着 = 里程锚定(人在手机上「设位置」)。**W09b 的定位器在这台狗上验过之后**
 # 才改成 bridge(定位器的 ROS 节点经本机定位桥给代理位姿):
-#   D1MAX_LOCALIZER=bridge
+#   NEXWAR_LOCALIZER=bridge
 # 导航后端(W10):空着 = 直线桥(过渡期)。**W10 的真机项(真机验证 §3e)验过之后**才改成
 # planned(在规划栅格上规划、守禁行区与限速区):
-#   D1MAX_NAV=planned
-# 局部避障(W11):空着 = 不用。**W11 的真机项(§3f)验过之后**、起了 d1max-obstacles 单元,才改成 bridge
-# (要 D1MAX_NAV=planned):
-#   D1MAX_OBSTACLES=bridge
-# 人员检测(W24):空着 = 不用。检测模型放到 /etc/d1max/person.onnx、起了 d1max-persons 单元、
+#   NEXWAR_NAV=planned
+# 局部避障(W11):空着 = 不用。**W11 的真机项(§3f)验过之后**、起了 nexwar_obstacles 单元,才改成 bridge
+# (要 NEXWAR_NAV=planned):
+#   NEXWAR_OBSTACLES=bridge
+# 人员检测(W24):空着 = 不用。检测模型放到 /etc/nexwar/person.onnx、起了 nexwar_persons 单元、
 # **W24 的真机项(§3m)验过之后**才改成 bridge:
-#   D1MAX_PERSONS=bridge
+#   NEXWAR_PERSONS=bridge
 # 其余参数(按空白拆开接在代理参数后面),例如建图:--mapping
-D1MAX_AGENT_ARGS=
+NEXWAR_AGENT_ARGS=
 
-# 发件箱(断网暂存):缺省在 /var/lib/d1max/outbox。临时硬盘到了改到它上面,并写挂载点
+# 发件箱(断网暂存):缺省在 /var/lib/nexwar/outbox。临时硬盘到了改到它上面,并写挂载点
 # (没挂上代理就不起,不会悄悄写到系统盘上):
-#   D1MAX_OUTBOX=/mnt/<临时盘>/outbox
-#   D1MAX_OUTBOX_MOUNT=/mnt/<临时盘>
+#   NEXWAR_OUTBOX=/mnt/<临时盘>/outbox
+#   NEXWAR_OUTBOX_MOUNT=/mnt/<临时盘>
 环境模板
 fi
-chmod 0600 /etc/d1max/env
+chmod 0600 /etc/nexwar/env
 # **老机器的 env 是老服务那一代的模板**:没有站点地址、地图、原点、适配器这几行(模板只在文件不存在
 # 时写)。不动它,但把缺的键一个个说出来 —— 不说的话,现场照着清单填的时候找不到那一行。
 if [[ "$ENV_FRESH" == 0 ]]; then
   LACKING=
-  for key in D1MAX_SITE_MQTT D1MAX_MAP D1MAX_HOME D1MAX_HAL; do
-    grep -qE "^[[:space:]]*$key=" /etc/d1max/env || LACKING="$LACKING $key"
+  for key in NEXWAR_SITE_MQTT NEXWAR_MAP NEXWAR_HOME NEXWAR_HAL; do
+    grep -qE "^[[:space:]]*$key=" /etc/nexwar/env || LACKING="$LACKING $key"
   done
   if [[ -n "$LACKING" ]]; then
-    echo "  提示: /etc/d1max/env 是老模板,缺这几行:$LACKING"
-    echo "        照装机清单二补上;D1MAX_HAL 先写 sim(W00d 真机验收过了才改 d1max)。"
+    echo "  提示: /etc/nexwar/env 是老模板,缺这几行:$LACKING"
+    echo "        照装机清单二补上;NEXWAR_HAL 先写 sim(W00d 真机验收过了才改 d1max)。"
   fi
 fi
 # 老机器的 env 里可能还有老服务用的几行(设备 PIN、回传地址与密钥):**不动它们**(不改人手写的
 # 配置文件),只说一声它们已经没人读了。
-if grep -qE '^[[:space:]]*D1MAX_(PIN|CONSOLE_URL|CONSOLE_TOKEN)=' /etc/d1max/env 2>/dev/null; then
-  echo "  提示: /etc/d1max/env 里的 D1MAX_PIN / D1MAX_CONSOLE_URL / D1MAX_CONSOLE_TOKEN"
+if grep -qE '^[[:space:]]*NEXWAR_(PIN|CONSOLE_URL|CONSOLE_TOKEN)=' /etc/nexwar/env 2>/dev/null; then
+  echo "  提示: /etc/nexwar/env 里的 NEXWAR_PIN / NEXWAR_CONSOLE_URL / NEXWAR_CONSOLE_TOKEN"
   echo "        是老服务用的,已经没人读了,可以删掉(手机只连站点,W00c5e)。"
 fi
 systemctl daemon-reload
-systemctl enable d1max-agent.service
+systemctl enable nexwar_agent.service
 
 # W55 远程运维。① 特权执行器:代理(robot 用户)要 root 才能做的几件事(重启我们的服务、重启机器人、
 # 对时、换证书、装验过签的服务单元、清日志)交给它。执行器和验签用的两个小模块拷到 root 属主的
-# /usr/local/lib/d1max/ —— 版本目录属主是 robot,root 绝不跑那里的代码。
-install -d -m 0755 -o root -g root /usr/local/lib/d1max /usr/local/lib/d1max/d1max_contract
-install -m 0755 -o root -g root "$PKG/deploy/d1max-ops-runner" /usr/local/lib/d1max/ops-runner
-install -m 0644 -o root -g root /dev/null /usr/local/lib/d1max/d1max_contract/__init__.py
+# /usr/local/lib/nexwar/ —— 版本目录属主是 robot,root 绝不跑那里的代码。
+install -d -m 0755 -o root -g root /usr/local/lib/nexwar /usr/local/lib/nexwar/nexwar_contract
+install -m 0755 -o root -g root "$PKG/deploy/nexwar_ops_runner" /usr/local/lib/nexwar/ops-runner
+install -m 0644 -o root -g root /dev/null /usr/local/lib/nexwar/nexwar_contract/__init__.py
 for m in ed25519 relsign; do
-  install -m 0644 -o root -g root "$PKG/packages/contract/src/d1max_contract/$m.py" /usr/local/lib/d1max/d1max_contract/
+  install -m 0644 -o root -g root "$PKG/packages/contract/src/nexwar_contract/$m.py" /usr/local/lib/nexwar/nexwar_contract/
 done
-# 配网服务(W42)以 root 跑:它的代码也拷进 root 独占的 /usr/local/lib/d1max/bind/,用系统 python -I 跑
+# 配网服务(W42)以 root 跑:它的代码也拷进 root 独占的 /usr/local/lib/nexwar/bind/,用系统 python -I 跑
 # (外审 W55-1:以前从版本目录跑,机器人账号改得了)。换版本时由特权执行器验签以后换。在跑的话重起一下。
-/usr/bin/python3 /usr/local/lib/d1max/ops-runner --install-bind "$PKG" --lib-dir /usr/local/lib/d1max
-# W57:随发行换解绑钥匙 —— 包里带的解绑公钥(换钥匙时新增的)、作废名单装进 /etc/d1max(配网服务认它们)
+/usr/bin/python3 /usr/local/lib/nexwar/ops-runner --install-bind "$PKG" --lib-dir /usr/local/lib/nexwar
+# W57:随发行换解绑钥匙 —— 包里带的解绑公钥(换钥匙时新增的)、作废名单装进 /etc/nexwar(配网服务认它们)
 if [[ -d "$PKG/deploy/unbind-pub.d" ]]; then
-  install -d -m 0755 -o root -g root /etc/d1max/unbind-pub.d
-  find /etc/d1max/unbind-pub.d -maxdepth 1 -type f -name '*.pem' -delete
+  install -d -m 0755 -o root -g root /etc/nexwar/unbind-pub.d
+  find /etc/nexwar/unbind-pub.d -maxdepth 1 -type f -name '*.pem' -delete
   for k in "$PKG"/deploy/unbind-pub.d/*.pem; do
-    [[ -f "$k" ]] && install -m 0644 -o root -g root "$k" /etc/d1max/unbind-pub.d/
+    [[ -f "$k" ]] && install -m 0644 -o root -g root "$k" /etc/nexwar/unbind-pub.d/
   done
 fi
 if [[ -f "$PKG/deploy/unbind-revoked.txt" ]]; then
-  install -m 0644 -o root -g root "$PKG/deploy/unbind-revoked.txt" /etc/d1max/unbind-revoked.txt
+  install -m 0644 -o root -g root "$PKG/deploy/unbind-revoked.txt" /etc/nexwar/unbind-revoked.txt
 fi
 # W63:出厂公钥(出厂装证书 factory install-cert 时核对证书是我们签的)
 if [[ -f "$PKG/deploy/factory-pub.pem" ]]; then
-  install -m 0644 -o root -g root "$PKG/deploy/factory-pub.pem" /etc/d1max/factory-pub.pem
+  install -m 0644 -o root -g root "$PKG/deploy/factory-pub.pem" /etc/nexwar/factory-pub.pem
 fi
 if [[ -d "$PKG/deploy/factory-pub.d" ]]; then
-  install -d -m 0755 -o root -g root /etc/d1max/factory-pub.d
-  find /etc/d1max/factory-pub.d -maxdepth 1 -type f -name '*.pem' -delete
+  install -d -m 0755 -o root -g root /etc/nexwar/factory-pub.d
+  find /etc/nexwar/factory-pub.d -maxdepth 1 -type f -name '*.pem' -delete
   for k in "$PKG"/deploy/factory-pub.d/*.pem; do
-    [[ -f "$k" ]] && install -m 0644 -o root -g root "$k" /etc/d1max/factory-pub.d/
+    [[ -f "$k" ]] && install -m 0644 -o root -g root "$k" /etc/nexwar/factory-pub.d/
   done
 fi
 systemctl daemon-reload
-systemctl try-restart d1max-bind.service || true
-install -d -m 0755 -o root -g root /var/lib/d1max-ops
-install -d -m 0700 -o "$RUN_USER" -g "$RUN_USER" /var/lib/d1max-ops/req
-install -d -m 0750 -o root -g "$RUN_USER" /var/lib/d1max-ops/done
-cat > /etc/d1max-ops.json <<OPS
-{"profile": "robot", "requester": "$RUN_USER", "spool": "/var/lib/d1max-ops",
- "data_root": "/var/lib/d1max", "release_root": "$ROOT", "pubkey": "/etc/d1max/release-pub.pem"}
+systemctl try-restart nexwar_bind.service || true
+install -d -m 0755 -o root -g root /var/lib/nexwar_ops
+install -d -m 0700 -o "$RUN_USER" -g "$RUN_USER" /var/lib/nexwar_ops/req
+install -d -m 0750 -o root -g "$RUN_USER" /var/lib/nexwar_ops/done
+cat > /etc/nexwar_ops.json <<OPS
+{"profile": "robot", "requester": "$RUN_USER", "spool": "/var/lib/nexwar_ops",
+ "data_root": "/var/lib/nexwar", "release_root": "$ROOT", "pubkey": "/etc/nexwar/release-pub.pem"}
 OPS
-chmod 0644 /etc/d1max-ops.json
-install -m 0644 "$PKG/deploy/d1max-ops.path" "$PKG/deploy/d1max-ops.service" /etc/systemd/system/
+chmod 0644 /etc/nexwar_ops.json
+install -m 0644 "$PKG/deploy/nexwar_ops.path" "$PKG/deploy/nexwar_ops.service" /etc/systemd/system/
 systemctl daemon-reload
-systemctl enable --now d1max-ops.path
+systemctl enable --now nexwar_ops.path
 # ② 日志留在盘上(重启不丢)、留 14 天、最多 500 MB;代理的账号进 systemd-journal 组,站点远程能取日志。
 install -d -m 0755 /etc/systemd/journald.conf.d
-cat > /etc/systemd/journald.conf.d/d1max.conf <<'JOURNAL'
+cat > /etc/systemd/journald.conf.d/nexwar.conf <<'JOURNAL'
 # D1 Max(W55 远程运维):日志留盘,重启不丢;远程取日志、诊断包要用
 [Journal]
 Storage=persistent
@@ -635,32 +641,32 @@ if ! python3 -c 'import onnxruntime' >/dev/null 2>&1; then
 fi
 if [[ " $(id -nG "$RUN_USER" 2>/dev/null) " != *" dialout "* ]]; then
   echo "  提示: $RUN_USER 不在 dialout 组,上装继电器板的串口打不开(W21);接了上装再:" >&2
-  echo "        sudo usermod -aG dialout $RUN_USER && sudo systemctl restart d1max-agent" >&2
+  echo "        sudo usermod -aG dialout $RUN_USER && sudo systemctl restart nexwar_agent" >&2
 fi
 
 say "6/7 看一眼站点签发的证书包与注册文件"
-if [[ -f /etc/d1max/registration.json && -f /etc/d1max/tls/ca.crt \
-      && -f /etc/d1max/tls/robot.crt && -f /etc/d1max/tls/robot.key ]]; then
-  echo "  都在:/etc/d1max/registration.json、/etc/d1max/tls/{ca.crt,robot.crt,robot.key}。"
+if [[ -f /etc/nexwar/registration.json && -f /etc/nexwar/tls/ca.crt \
+      && -f /etc/nexwar/tls/robot.crt && -f /etc/nexwar/tls/robot.key ]]; then
+  echo "  都在:/etc/nexwar/registration.json、/etc/nexwar/tls/{ca.crt,robot.crt,robot.key}。"
 else
   cat <<'提示'
   还没有(没有注册文件代理就不起,不会刷日志)。先在站点主机上给这只狗登记(enroll,
-  见装机清单一),把给出的证书包拷到这台狗的 /etc/d1max/tls/,注册文件拷成 /etc/d1max/registration.json,
-  在 /etc/d1max/env 里填好 D1MAX_SITE_MQTT、D1MAX_MAP、D1MAX_HOME,再:
-    sudo systemctl start d1max-agent
+  见装机清单一),把给出的证书包拷到这台狗的 /etc/nexwar/tls/,注册文件拷成 /etc/nexwar/registration.json,
+  在 /etc/nexwar/env 里填好 NEXWAR_SITE_MQTT、NEXWAR_MAP、NEXWAR_HOME,再:
+    sudo systemctl start nexwar_agent
 提示
 fi
 # W30b(决策 51):站点的证据公钥(证书包里的 evidence-pub.key)。没有照样起,照片、录像明文存,站点报 P2。
-if [[ ! -f /etc/d1max/evidence-pub.key ]]; then
-  echo "  提示: 没有 /etc/d1max/evidence-pub.key —— 照片、截图、录像会明文存在狗上(站点报 P2)。" >&2
+if [[ ! -f /etc/nexwar/evidence-pub.key ]]; then
+  echo "  提示: 没有 /etc/nexwar/evidence-pub.key —— 照片、截图、录像会明文存在狗上(站点报 P2)。" >&2
   echo "        从站点证书包拷过来、重启代理就封着存了(狗自己解不开,站点收齐了解开)。" >&2
 fi
 
 # 对时(W09d):狗向站点主机对时(Orin 的钟不准、没有 NTP;钟不对连 mTLS 都过不了 —— 站点证书「还没生效」)。
-# 配置按 /etc/d1max/env 算(站点主机:D1MAX_SITE_NTP,没有从 D1MAX_SITE_MQTT 取);站点地址还没填就先不配,
+# 配置按 /etc/nexwar/env 算(站点主机:NEXWAR_SITE_NTP,没有从 NEXWAR_SITE_MQTT 取);站点地址还没填就先不配,
 # 填了再跑一遍这个脚本。用系统自带的 systemd-timesyncd,不另装包(狗上离线)。
-TIMESYNC_CONF=/etc/systemd/timesyncd.conf.d/d1max.conf
-CHRONY_CONF=/etc/chrony/conf.d/d1max.conf
+TIMESYNC_CONF=/etc/systemd/timesyncd.conf.d/nexwar.conf
+CHRONY_CONF=/etc/chrony/conf.d/nexwar.conf
 # 厂家那份主配置:**只读不写**(看它在不在、读不读 conf.d)。
 CHRONY_DROPIN_DIR=$(dirname "$CHRONY_CONF")
 CHRONY_MAIN="$(dirname "$CHRONY_DROPIN_DIR")/chrony.conf"
@@ -672,24 +678,24 @@ if [[ "$(systemctl show -p LoadState --value systemd-timesyncd 2>/dev/null)" != 
   if [[ -f "$CHRONY_MAIN" ]]; then
     # W70(用户 2026-11-03 同意「有站点时站点说了算」):厂家板(上装电脑)的钟不准 —— C40221 上慢 28 s,
     # chrony 跟它对、站点往回拨,一分钟拉锯一次。主配置里指向它的 server/pool/peer 行注释掉;第一次改之前
-    # 原文件留一份,卸载时放回去。厂家板地址按 env 的 D1MAX_VENDOR_TIME_HOSTS(逗号分隔),默认 .19。
+    # 原文件留一份,卸载时放回去。厂家板地址按 env 的 NEXWAR_VENDOR_TIME_HOSTS(逗号分隔),默认 .19。
     chrony_changed=0
-    vendor_hosts=$(sed -n 's/^D1MAX_VENDOR_TIME_HOSTS=//p' /etc/d1max/env 2>/dev/null | tail -1)
+    vendor_hosts=$(sed -n 's/^NEXWAR_VENDOR_TIME_HOSTS=//p' /etc/nexwar/env 2>/dev/null | tail -1)
     vendor_hosts=${vendor_hosts:-192.168.168.19}
     for vh in ${vendor_hosts//,/ }; do
       vre=${vh//./\\.}
       if grep -Eq "^[[:space:]]*(server|pool|peer)[[:space:]]+${vre}([[:space:]]|\$)" "$CHRONY_MAIN"; then
-        [[ -e /etc/d1max/chrony.conf.orig ]] || cp -p "$CHRONY_MAIN" /etc/d1max/chrony.conf.orig
-        sed -i -E "s/^([[:space:]]*(server|pool|peer)[[:space:]]+${vre}([[:space:]]|\$))/# d1max W70 厂家板的钟不准,不跟它对时: \1/" "$CHRONY_MAIN"
+        [[ -e /etc/nexwar/chrony.conf.orig ]] || cp -p "$CHRONY_MAIN" /etc/nexwar/chrony.conf.orig
+        sed -i -E "s/^([[:space:]]*(server|pool|peer)[[:space:]]+${vre}([[:space:]]|\$))/# nexwar W70 厂家板的钟不准,不跟它对时: \1/" "$CHRONY_MAIN"
         chrony_changed=1
-        echo "  对时:机器人的 chrony 不再跟厂家板 $vh 对时(原文件在 /etc/d1max/chrony.conf.orig)"
+        echo "  对时:机器人的 chrony 不再跟厂家板 $vh 对时(原文件在 /etc/nexwar/chrony.conf.orig)"
       fi
     done
     # 对时归厂家的 chrony 管(决策 61,2026-10-13,改掉决策 47 的「不动」):厂家配的源是 RTK 秒脉冲(没天线
     # 就没信号)和上装电脑(C40221 上慢 15 s;裸机上没有这台),狗的钟一直不准,站点按钟差拒发命令;整机
     # 断电再开是 1970 年。加**一个单独的片段**把站点主机设成首选、可信的源;厂家那份 chrony.conf 不改,
     # 删掉这个片段、重启 chrony 就回到厂家的配置。
-    if ts_conf=$(bash "$PKG/deploy/d1max-timesync-conf" /etc/d1max/env); then
+    if ts_conf=$(bash "$PKG/deploy/nexwar_timesync_conf" /etc/nexwar/env); then
       ts_host=$(sed -n 's/^NTP=//p' <<<"$ts_conf")
       install -d -m 0755 "$CHRONY_DROPIN_DIR"
       {
@@ -746,7 +752,7 @@ if [[ "$(systemctl show -p LoadState --value systemd-timesyncd 2>/dev/null)" != 
     echo "  !! 这台机器的对时不归 systemd-timesyncd 管(没装或 masked),也没有 $CHRONY_MAIN," >&2
     echo "     我们不配。钟差站点会报(真机项 3d.28)" >&2
   fi
-elif ts_conf=$(bash "$PKG/deploy/d1max-timesync-conf" /etc/d1max/env); then
+elif ts_conf=$(bash "$PKG/deploy/nexwar_timesync_conf" /etc/nexwar/env); then
   install -d -m 0755 "$(dirname "$TIMESYNC_CONF")"
   printf '%s\n' "$ts_conf" > "$TIMESYNC_CONF.tmp"
   chmod 0644 "$TIMESYNC_CONF.tmp"
@@ -765,33 +771,33 @@ else
 fi
 
 say "7/7 切到刚装的这一版并起代理"
-# **把 /etc/d1max/env 里的 D1MAX_SN 读出来(不 source)。** sudo 默认 env_reset,下面
+# **把 /etc/nexwar/env 里的 NEXWAR_SN 读出来(不 source)。** sudo 默认 env_reset,下面
 # release activate 拿不到它;而这份文件是 systemd 的 EnvironmentFile= 在读,systemd 按
-# 字面量解析(等号右边就是值,不分词、不做命令替换、分号不是分隔符)。`. /etc/d1max/env`
-# 让 bash 求值同一份文件,规矩不是一回事 —— `D1MAX_SN=a;reboot` 这种人手敲得出来的行,
+# 字面量解析(等号右边就是值,不分词、不做命令替换、分号不是分隔符)。`. /etc/nexwar/env`
+# 让 bash 求值同一份文件,规矩不是一回事 —— `NEXWAR_SN=a;reboot` 这种人手敲得出来的行,
 # bash 会以 root 把 reboot 跑了。所以只读要用的键,读法对着 systemd 的规矩:只认行首空白
 # 之后紧跟 `键=`,同一个键写两遍取最后一次,值两边的空白剥掉。带引号的值不还原,被下面
 # 的白名单挡掉,让人改干净再来。
 read_env_value() {
-  sed -n "s/^[[:space:]]*$1=//p" /etc/d1max/env 2>/dev/null \
+  sed -n "s/^[[:space:]]*$1=//p" /etc/nexwar/env 2>/dev/null \
     | tail -n 1 \
     | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//'
 }
-D1MAX_SN=
-if [[ -f /etc/d1max/env ]]; then
-  D1MAX_SN=$(read_env_value D1MAX_SN)
+NEXWAR_SN=
+if [[ -f /etc/nexwar/env ]]; then
+  NEXWAR_SN=$(read_env_value NEXWAR_SN)
 fi
 # **SN 的字符白名单,不干净就停下来喊。** 带空格、引号、分号的值说明这一行是手敲歪的,
 # systemd 和这里读出来的多半已经不是同一个东西。
-if [[ -n "$D1MAX_SN" && ! "$D1MAX_SN" =~ ^[A-Za-z0-9._-]+$ ]]; then
-  echo "错误: /etc/d1max/env 里的 D1MAX_SN 不干净: [$D1MAX_SN]" >&2
+if [[ -n "$NEXWAR_SN" && ! "$NEXWAR_SN" =~ ^[A-Za-z0-9._-]+$ ]]; then
+  echo "错误: /etc/nexwar/env 里的 NEXWAR_SN 不干净: [$NEXWAR_SN]" >&2
   echo "      只收字母、数字、点、下划线、减号 —— 空格、引号、分号、中文都不行。" >&2
   echo "      照着机身标签重新填一遍那一行(等号两边都不要加引号),再重跑这个脚本。" >&2
   echo "      **没有 stop/start**,现在跑着的还是上一版(如果有的话)。" >&2
   exit 3
 fi
-if [[ -z "${D1MAX_SN//[[:space:]]/}" ]]; then
-  echo "警告: /etc/d1max/env 里的 D1MAX_SN 还没填(照着机身标签填上,再重跑一次)。" >&2
+if [[ -z "${NEXWAR_SN//[[:space:]]/}" ]]; then
+  echo "警告: /etc/nexwar/env 里的 NEXWAR_SN 还没填(照着机身标签填上,再重跑一次)。" >&2
 fi
 # **链不在就是空串**:readlink -f 在 current 还不存在时什么也不输出,外面套 basename 会得到
 # 字面量 "current"。没有链就是空,跟任何 REL_NAME 都不相等,该 activate 就 activate。
@@ -802,88 +808,92 @@ fi
 if [[ "$CURRENT_REL" == "$REL_NAME" ]]; then
   echo "  $REL_NAME 已经是在跑的那一版了,跳过切换。"
 else
-  # D1MAX_SN 必须显式带过去 —— sudo env_reset 会把上面读出来的它扔掉。
-  sudo -u "$RUN_USER" env D1MAX_RELEASE_ROOT="$ROOT" D1MAX_SN="${D1MAX_SN:-}" \
-    "$ROOT/bin/python" -m d1max_patrol.cli release activate "$REL_NAME"
+  # NEXWAR_SN 必须显式带过去 —— sudo env_reset 会把上面读出来的它扔掉。
+  sudo -u "$RUN_USER" env NEXWAR_RELEASE_ROOT="$ROOT" NEXWAR_SN="${NEXWAR_SN:-}" \
+    "$ROOT/bin/python" -m nexwar_patrol.cli release activate "$REL_NAME"
 fi
-# **先停代理,再搬数据,再起新版。** W01 之前数据落在槽里,新版读的是 /var/lib/d1max。搬的时候
+# **先停代理,再搬数据,再起新版。** W01 之前数据落在槽里,新版读的是 /var/lib/nexwar。搬的时候
 # 谁都不能正往槽里写,所以是 stop → migrate → start,**而且真没停掉就不搬**。可重跑:搬过的源
 # 改名 *.migrated,第二次什么都不做。搬失败不拦装机 —— 数据还在槽里没丢,prune 见到槽里有数据
 # 也不会删。stop 加 '|| true':第一次装机服务还没起过。
-systemctl stop d1max-agent.service || true
-if systemctl is-active --quiet d1max-agent.service; then
+systemctl stop nexwar_agent.service || true
+if systemctl is-active --quiet nexwar_agent.service; then
   echo "  !! 代理停不掉,跳过数据迁移(搬的前提是没人在往槽里写)。装完后手工:stop 代理,再跑 release migrate-data" >&2
 else
-  sudo -u "$RUN_USER" env D1MAX_RELEASE_ROOT="$ROOT" D1MAX_DATA_ROOT=/var/lib/d1max \
-    "$ROOT/bin/python" -m d1max_patrol.cli release migrate-data \
-    || echo "  !! 槽内数据迁移没成功。没搬动的那几样还在原槽里、原名不变,prune 不会删它们;已经改名成 *.migrated 的不受保护。先 ls /opt/d1max/releases/*/ 看还有哪些原名的,再 stop 代理、手工跑 release migrate-data" >&2
+  sudo -u "$RUN_USER" env NEXWAR_RELEASE_ROOT="$ROOT" NEXWAR_DATA_ROOT=/var/lib/nexwar \
+    "$ROOT/bin/python" -m nexwar_patrol.cli release migrate-data \
+    || echo "  !! 槽内数据迁移没成功。没搬动的那几样还在原槽里、原名不变,prune 不会删它们;已经改名成 *.migrated 的不受保护。先 ls /opt/nexwar/releases/*/ 看还有哪些原名的,再 stop 代理、手工跑 release migrate-data" >&2
 fi
 # 没有注册文件的话 systemd 按 ConditionPathExists 跳过,不算失败。**有注册文件、但站点地址、
 # 地图、原点三样有一样空着就先不起**:启动脚本见到空值就退出,Restart=always + RestartSec=5 会把它
 # 刷成每 5 秒一条日志的启动循环 —— 停下来说清楚要填什么,比留一堵日志墙好。
 MISSING=
-for key in D1MAX_SITE_MQTT D1MAX_MAP D1MAX_HOME; do
+for key in NEXWAR_SITE_MQTT NEXWAR_MAP NEXWAR_HOME; do
   if [[ -z "$(read_env_value "$key")" ]]; then
     MISSING="$MISSING $key"
   fi
 done
 # 证书包要**代理的账号读得到**(代理以 $RUN_USER 跑,自己读私钥):root 拷进来的 0600 文件它读不了,
 # 一样是每 5 秒崩一次(W00c5e 内部评审)。
-for f in /etc/d1max/registration.json /etc/d1max/tls/ca.crt /etc/d1max/tls/robot.crt \
-         /etc/d1max/tls/robot.key; do
-  if [[ -f /etc/d1max/registration.json ]] && ! sudo -u "$RUN_USER" test -r "$f"; then
+for f in /etc/nexwar/registration.json /etc/nexwar/tls/ca.crt /etc/nexwar/tls/robot.crt \
+         /etc/nexwar/tls/robot.key; do
+  if [[ -f /etc/nexwar/registration.json ]] && ! sudo -u "$RUN_USER" test -r "$f"; then
     MISSING="$MISSING $f(不在,或者 $RUN_USER 读不了)"
   fi
 done
-if [[ -f /etc/d1max/registration.json && -n "$MISSING" ]]; then
+if [[ -f /etc/nexwar/registration.json && -n "$MISSING" ]]; then
   echo "  代理先不起,这几样还不行:$MISSING" >&2
-  # 外审 W55-2 C5:只把**文件**交给 $RUN_USER 读,目录(/etc/d1max/tls)留 root —— 目录交出去,
+  # 外审 W55-2 C5:只把**文件**交给 $RUN_USER 读,目录(/etc/nexwar/tls)留 root —— 目录交出去,
   # 它就能在里面换目录项,root 的换证书会被它布下的链接带偏
-  echo "  站点值填进 /etc/d1max/env;证书包 sudo chown $RUN_USER:$RUN_USER /etc/d1max/tls/* \\" >&2
-  echo "  /etc/d1max/registration.json(只改文件,目录别改)。好了之后:sudo systemctl start d1max-agent。" >&2
+  echo "  站点值填进 /etc/nexwar/env;证书包 sudo chown $RUN_USER:$RUN_USER /etc/nexwar/tls/* \\" >&2
+  echo "  /etc/nexwar/registration.json(只改文件,目录别改)。好了之后:sudo systemctl start nexwar_agent。" >&2
 else
-  systemctl start d1max-agent.service
+  systemctl start nexwar_agent.service
 fi
 # 定位器(W09b)只装不 enable;有人手工起过(真机验收时)的话,换了版本要跟着重启,不然还跑着旧代码。
 # try-restart:没在跑就什么也不做。
-systemctl try-restart d1max-localizer.service 2>/dev/null || true
-systemctl try-restart d1max-obstacles.service 2>/dev/null || true
-systemctl try-restart d1max-persons.service 2>/dev/null || true
-systemctl try-restart d1max-nav2.service 2>/dev/null || true
-systemctl try-restart d1max-lidar-merge.service 2>/dev/null || true
-systemctl try-restart d1max-zenohd.service 2>/dev/null || true
+systemctl try-restart nexwar_localizer.service 2>/dev/null || true
+systemctl try-restart nexwar_obstacles.service 2>/dev/null || true
+systemctl try-restart nexwar_persons.service 2>/dev/null || true
+systemctl try-restart nexwar_nav2.service 2>/dev/null || true
+systemctl try-restart nexwar_lidar_merge.service 2>/dev/null || true
+systemctl try-restart nexwar_zenohd.service 2>/dev/null || true
 # env 里写了要用的(W70,用户 11-03 现场:W68 起定位器必用,重启后几个桥都没起、换图白等 120 s):
 # 装机就设开机自启并起来;env 里没写的照旧只装不 enable(真机验过才起用,做法写在各自单元文件开头)。
-for pair in D1MAX_LOCALIZER=bridge:d1max-localizer D1MAX_OBSTACLES=bridge:d1max-obstacles \
-            D1MAX_PERSONS=bridge:d1max-persons D1MAX_NAV=nav2:d1max-nav2; do
+for pair in NEXWAR_LOCALIZER=bridge:nexwar_localizer NEXWAR_OBSTACLES=bridge:nexwar_obstacles \
+            NEXWAR_PERSONS=bridge:nexwar_persons NEXWAR_NAV=nav2:nexwar_nav2; do
   want=${pair%%:*}
   unit=${pair##*:}
-  if grep -qE "^[[:space:]]*${want}[[:space:]]*$" /etc/d1max/env 2>/dev/null \
+  if grep -qE "^[[:space:]]*${want}[[:space:]]*$" /etc/nexwar/env 2>/dev/null \
       && [[ -f "/etc/systemd/system/$unit.service" ]]; then
     if systemctl enable --now "$unit.service"; then
-      echo "  /etc/d1max/env 里写了 $want:$unit 设了开机自启并已起来"
+      echo "  /etc/nexwar/env 里写了 $want:$unit 设了开机自启并已起来"
     else
-      echo "  注意: /etc/d1max/env 里写了 $want,但 $unit 设开机自启或起来没成:" \
+      echo "  注意: /etc/nexwar/env 里写了 $want,但 $unit 设开机自启或起来没成:" \
            "journalctl -u $unit 看原因" >&2
     fi
   fi
 done
 
-# 前后雷达合并(W09i)只给 MOLA 用;W68 起定位器是 Super-LIO,没人订 /d1max/merged_lidar。以前手工
+# 前后雷达合并(W09i)只给 MOLA 用;W68 起定位器是 Super-LIO,没人订 /nexwar/merged_lidar。以前手工
 # enable 过的,装机时关掉(W70,用户 11-03 现场:白占两核多)。env 里还有人订它就不动 ——
-# D1MAX_LOC_ARGS 里的 --lidar-topic 只有 --engine mola 才用(Super-LIO 只认前雷达,那一行是 MOLA 时代留下的)。
+# NEXWAR_LOC_ARGS 里的 --lidar-topic 只有 --engine mola 才用(Super-LIO 只认前雷达,那一行是 MOLA 时代留下的)。
 MERGE_USED=0
-if grep -E '^[^#]*merged_lidar' /etc/d1max/env 2>/dev/null \
-    | grep -vqE '^[[:space:]]*D1MAX_LOC_ARGS='; then MERGE_USED=1; fi
-if grep -E '^[[:space:]]*D1MAX_LOC_ARGS=.*merged_lidar' /etc/d1max/env 2>/dev/null \
+if grep -E '^[^#]*merged_lidar' /etc/nexwar/env 2>/dev/null \
+    | grep -vqE '^[[:space:]]*NEXWAR_LOC_ARGS='; then MERGE_USED=1; fi
+if grep -E '^[[:space:]]*NEXWAR_LOC_ARGS=.*merged_lidar' /etc/nexwar/env 2>/dev/null \
     | grep -qE -- '--engine[= ]mola'; then MERGE_USED=1; fi
-if systemctl is-enabled --quiet d1max-lidar-merge.service 2>/dev/null && [[ $MERGE_USED == 0 ]]; then
-  systemctl disable --now d1max-lidar-merge.service || true
-  echo "  没人用前后雷达合并(定位器是 Super-LIO):d1max-lidar-merge 关了,不再开机自启"
+if systemctl is-enabled --quiet nexwar_lidar_merge.service 2>/dev/null && [[ $MERGE_USED == 0 ]]; then
+  systemctl disable --now nexwar_lidar_merge.service || true
+  echo "  没人用前后雷达合并(定位器是 Super-LIO):nexwar_lidar_merge 关了,不再开机自启"
+fi
+
+if [[ -f "$PKG/deploy/nexwar_migrate" ]]; then
+  sh "$PKG/deploy/nexwar_migrate" finish || true
 fi
 
 say "装完了。看一眼:"
-echo "  systemctl status d1max-agent"
-echo "  journalctl -u d1max-agent -f"
+echo "  systemctl status nexwar_agent"
+echo "  journalctl -u nexwar_agent -f"
 echo ""
-echo "  连上站点之后,手机(站点模式)的狗列表里看得到这只狗;能力里报的是 D1MAX_HAL 那个适配器。"
+echo "  连上站点之后,手机(站点模式)的狗列表里看得到这只狗;能力里报的是 NEXWAR_HAL 那个适配器。"

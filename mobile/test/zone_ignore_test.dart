@@ -1,6 +1,6 @@
 // W41：人员检测忽略区（区域种类 `ignore`）在手机上认得：标题写「人员忽略区」，不当成限速区；画成靛蓝色。
-import 'package:d1max_patrol/l10n.dart';
-import 'package:d1max_patrol/ui/site_mapping.dart';
+import 'package:nexwar_patrol/l10n.dart';
+import 'package:nexwar_patrol/ui/site_mapping.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {

@@ -4,10 +4,10 @@
 from __future__ import annotations
 
 import numpy as np
-from d1max_localizer.obstacles import Config, classify_full
+from nexwar_localizer.obstacles import Config, classify_full
 
-from d1max_agent.obstacles import ObstacleGuard, ObstacleView
-from d1max_contract.obsbridge import Grid, pack_bits
+from nexwar_agent.obstacles import ObstacleGuard, ObstacleView
+from nexwar_contract.obsbridge import Grid, pack_bits
 
 H = 0.5
 
@@ -75,7 +75,7 @@ def test_可疑的帧过去了_更新的帧看见是空_按新的():
 def test_报文_可疑位图长度不对_拒():
     import pytest
 
-    from d1max_contract.errors import ContractError
+    from nexwar_contract.errors import ContractError
     n = 10
     ok = {"seq": 1, "stamp_ns": 0, "res": 0.1, "size": n, "occ": pack_bits([False] * 100, n),
           "known": pack_bits([True] * 100, n)}

@@ -98,7 +98,7 @@ export function UpgradePage({ say }: { say: Say }) {
         <ConfirmPassword title={t("upUpload")} onClose={() => setAsking(false)} onConfirm={async (pw) => {
           setBusy(true);
           try {
-            const d = await apiUpload<{ release: Release }>("/api/releases/upload", file, { "X-D1Max-Confirm": pw });
+            const d = await apiUpload<{ release: Release }>("/api/releases/upload", file, { "X-Nexwar-Confirm": pw });
             setAsking(false);
             say(t("upUploaded", { name: d.release?.name ?? "" }));
             reload();

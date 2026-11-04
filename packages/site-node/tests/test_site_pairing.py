@@ -9,8 +9,8 @@ import os
 import pytest
 from test_site_api import PW, 站
 
-from d1max_site import main as site_main
-from d1max_site import pairing
+from nexwar_site import main as site_main
+from nexwar_site import pairing
 
 FP = "ab" * 32
 

@@ -11,7 +11,7 @@ import subprocess
 
 import pytest
 
-from d1max_agent.recording import STAGING, Recorder
+from nexwar_agent.recording import STAGING, Recorder
 
 
 class _假进程:
@@ -160,7 +160,7 @@ def test_上次被杀掉留下的段_起来就收走(录):
 @pytest.mark.skipif(shutil.which("ffmpeg") is None or shutil.which("ffprobe") is None,
                     reason="没有 ffmpeg")
 def test_真ffmpeg_仿真测试图_切出能放的段(tmp_path):
-    from d1max_agent.video_push import lavfi_source
+    from nexwar_agent.video_push import lavfi_source
     events = []
     t = [0.0]
     r = Recorder(tmp_path / "v", ["front"], source=lavfi_source, segment_s=1,
@@ -183,7 +183,7 @@ def test_真ffmpeg_仿真测试图_切出能放的段(tmp_path):
 def test_record参数_auto真狗录前后两路_仿真不录_认不得的相机不起():
     import argparse
 
-    from d1max_agent.main import record_cameras, video_root
+    from nexwar_agent.main import record_cameras, video_root
     ns = argparse.Namespace
     assert record_cameras(ns(record="auto", hal="d1max")) == ["front", "back"]
     assert record_cameras(ns(record="auto", hal="sim")) == []
@@ -196,12 +196,12 @@ def test_record参数_auto真狗录前后两路_仿真不录_认不得的相机�
 
 
 def test_录像在发件箱里_不算进盘况_攒多了不让狗拒巡检(tmp_path):
-    from d1max_agent.outbox import Outbox, OutboxPump
-    from d1max_agent.recording import STAGING, SUB, video_classify
+    from nexwar_agent.outbox import Outbox, OutboxPump
+    from nexwar_agent.recording import STAGING, SUB, video_classify
 
     class _Sink:
         def put(self, req):
-            from d1max_agent.engine.uploader import SinkError
+            from nexwar_agent.engine.uploader import SinkError
             raise SinkError("断网")
     ob = tmp_path / "ob"
     runs = Outbox(ob, cap_bytes=10_000, sink=_Sink(), sn="A", now_ms=lambda: 1,
@@ -225,10 +225,10 @@ def test_录像在发件箱里_不算进盘况_攒多了不让狗拒巡检(tmp_p
 
 
 async def test_运行时_报录像能力_每拍走_关的时候停(tmp_path):
-    from d1max_adapter_sim.robot import SimRobot
-    from d1max_agent.runtime import AgentRuntime
-    from d1max_contract.memory_broker import MemoryBroker, MemoryTransport
-    from d1max_contract.registration import Registration
+    from nexwar_adapter_sim.robot import SimRobot
+    from nexwar_agent.runtime import AgentRuntime
+    from nexwar_contract.memory_broker import MemoryBroker, MemoryTransport
+    from nexwar_contract.registration import Registration
 
     class _录:
         def __init__(self):
@@ -269,10 +269,10 @@ async def test_运行时_报录像能力_每拍走_关的时候停(tmp_path):
 async def test_W18外审_真的Recorder接进运行时_录像断了和删了没传的都进事件簿(tmp_path):
     """外审:接线写的字段跟 Recorder 自己用的不是一个,事件全丢 —— 上面那条用的假对象盖不住。
     这里用真的。"""
-    from d1max_adapter_sim.robot import SimRobot
-    from d1max_agent.runtime import AgentRuntime
-    from d1max_contract.memory_broker import MemoryBroker, MemoryTransport
-    from d1max_contract.registration import Registration
+    from nexwar_adapter_sim.robot import SimRobot
+    from nexwar_agent.runtime import AgentRuntime
+    from nexwar_contract.memory_broker import MemoryBroker, MemoryTransport
+    from nexwar_contract.registration import Registration
     procs = []
 
     def popen(argv, **kw):
@@ -300,7 +300,7 @@ async def test_W18外审_真的Recorder接进运行时_录像断了和删了没�
 
 
 def test_W18外审_狗上删不掉的段不算删了(录, monkeypatch):
-    import d1max_agent.recording as recmod
+    import nexwar_agent.recording as recmod
     r = 录
     r.start()
     for i in range(12):
@@ -325,7 +325,7 @@ def test_W18外审_狗上删不掉的段不算删了(录, monkeypatch):
 
 
 def test_W46正在写的那段每两秒fsync一次_写完的和退了的不管(录, monkeypatch):
-    import d1max_agent.recording as R
+    import nexwar_agent.recording as R
     r = 录
     synced: list[list[str]] = []
     r._sync = lambda paths: synced.append(sorted(p.name for p in paths))
@@ -345,7 +345,7 @@ def test_W46正在写的那段每两秒fsync一次_写完的和退了的不管(�
 
 
 def test_W46fsync真跑_文件没了不炸(tmp_path):
-    from d1max_agent.recording import fsync_files
+    from nexwar_agent.recording import fsync_files
     p = tmp_path / "a.mp4"
     p.write_bytes(b"x")
     fsync_files([p, tmp_path / "gone.mp4"])

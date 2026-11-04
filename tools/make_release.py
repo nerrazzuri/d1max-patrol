@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """出一套发给客户的正式包(商业化 RC0-3,决策 54:在离线的发行机上签,钥匙不进 GitHub)。
 
-    .venv/bin/python tools/make_release.py --key /media/usb/d1max-release.key --out ~/release-out \\
+    .venv/bin/python tools/make_release.py --key /media/usb/nexwar_release.key --out ~/release-out
+    \\
         --wheels dist/wheels-aarch64-py310 --build-number 12
 
 **发行闸**(.github/workflows/release.yml):要发的那个提交先在 GitHub 上过一遍闸(全套测试,集成层
@@ -30,8 +31,8 @@ import time
 from pathlib import Path
 from typing import Any
 
-from d1max_agent.engine.release import ReleaseError, pack
-from d1max_contract import relsign
+from nexwar_agent.engine.release import ReleaseError, pack
+from nexwar_contract import relsign
 
 REPO_PUBKEY = Path("deploy/release-pub.pem")
 #: W63:出厂公钥(站点只让它签过出厂证书的机器人加入;包里没有 = 站点谁都进不来)。
@@ -89,7 +90,7 @@ def preflight(repo: Path, key: Path, out: Path, *, android: bool,
         have_pub = True
     except (ReleaseFail, OSError):
         have_pub = False
-        bad.append(f"仓库里没有提交过的 {REPO_PUBKEY}:先 `d1max-patrol release keygen`,"
+        bad.append(f"仓库里没有提交过的 {REPO_PUBKEY}:先 `nexwar_patrol release keygen`,"
                    "把公钥提交进仓库")
     try:
         _git(repo, "ls-files", "--error-unmatch", str(FACTORY_PUBKEY))
@@ -156,7 +157,7 @@ def read_gate(path: Path) -> dict[str, Any]:
         gate = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
         raise ReleaseFail(f"读不了发行闸的记录 {path}: {exc}") from exc
-    if not isinstance(gate, dict) or gate.get("kind") != "d1max-release-gate" \
+    if not isinstance(gate, dict) or gate.get("kind") != "nexwar_release_gate" \
             or not isinstance(gate.get("commit"), str) \
             or not isinstance(gate.get("content_sha256"), str):
         raise ReleaseFail(f"{path} 不是发行闸的记录")
@@ -178,7 +179,7 @@ def write_gate(repo: Path, dest: Path, *, wheels: Path | None, now_ms: int) -> d
     """发行闸用:不签名,只打一遍包、记下提交和包指纹。工作区要干净。"""
     if _git(repo, "status", "--porcelain"):
         raise ReleaseFail("仓库里有没提交的改动:闸只认提交过的代码")
-    scratch = Path(tempfile.mkdtemp(prefix="d1max-gate-"))
+    scratch = Path(tempfile.mkdtemp(prefix="nexwar_gate-"))
     try:
         pkg = pack(repo, scratch, now_ms=now_ms, wheels=wheels)
         manifest = json.loads((pkg / "release.json").read_text(encoding="utf-8"))
@@ -186,7 +187,7 @@ def write_gate(repo: Path, dest: Path, *, wheels: Path | None, now_ms: int) -> d
         raise ReleaseFail(f"打包没成: {exc}") from exc
     finally:
         shutil.rmtree(scratch, ignore_errors=True)
-    gate = {"kind": "d1max-release-gate", "commit": _git(repo, "rev-parse", "HEAD"),
+    gate = {"kind": "nexwar_release_gate", "commit": _git(repo, "rev-parse", "HEAD"),
                     "content_sha256": manifest["content_sha256"], "version": manifest["version"],
                     "wheels": wheels is not None, "created_ms": now_ms}
     dest.parent.mkdir(parents=True, exist_ok=True)
@@ -228,7 +229,7 @@ def make_package(repo: Path, key: Path, out: Path, *, wheels: Path | None, now_m
 def build_apk(repo: Path, build_name: str, build_number: int) -> Path:
     apk = repo / APK
     apk.unlink(missing_ok=True)                    # 上一次编出来的(可能是调试签名)不许冒充
-    cmd = ["flutter", "build", "apk", "--release", "-Pd1max.requireReleaseKey=true",
+    cmd = ["flutter", "build", "apk", "--release", "-Pnexwar.requireReleaseKey=true",
            "--build-name", build_name, "--build-number", str(build_number)]
     if subprocess.run(cmd, cwd=repo / "mobile").returncode != 0 or not apk.is_file():
         raise ReleaseFail("安卓包没编出来(看上面 flutter 的输出)")

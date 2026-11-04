@@ -14,16 +14,16 @@ import pytest
 from test_site_dispatcher import MAP, 台子
 from test_site_schedule import 任务, 打包, 排程, 毫秒
 
-from d1max_contract.bundle_format import (
+from nexwar_contract.bundle_format import (
     MISSIONS_DIR,
     SCHEDULE_NAME,
     BundleManifest,
     bundle_sha256,
     write_manifest,
 )
-from d1max_site.catalog import CatalogError, active_bundle, import_bundle
-from d1max_site.dispatcher import DispatchRefused
-from d1max_site.scheduler import SiteScheduler
+from nexwar_site.catalog import CatalogError, active_bundle, import_bundle
+from nexwar_site.dispatcher import DispatchRefused
+from nexwar_site.scheduler import SiteScheduler
 
 
 def _pt(x: float) -> dict:
@@ -120,7 +120,7 @@ def _老包(tmp_path, mission: dict, version: int = 1):
 
 
 def test_老包_任务没绑版本_不导入_报错列出站点上这张图有哪几版(tmp_path):
-    from d1max_site.db import SiteDB
+    from nexwar_site.db import SiteDB
     db = SiteDB(tmp_path / "s.db")
     with db.tx() as c:
         for v, at in (("7", 1), ("8", 2)):
@@ -136,7 +136,7 @@ def test_老包_任务没绑版本_不导入_报错列出站点上这张图有�
 
 
 def test_新包绑了版本_导入后任务带着版本(tmp_path):
-    from d1max_site.db import SiteDB
+    from nexwar_site.db import SiteDB
     db = SiteDB(tmp_path / "s.db")
     import_bundle(db, 打包(tmp_path, 1), imported_by="alice", now_ms=1)
     assert active_bundle(db).missions["loop"].map_version == "7"
@@ -221,7 +221,7 @@ async def test_排程_两台狗一台换了版本_挑对得上的那台(站, tmp
     t.clock.ms = 毫秒(22, 0, 30)
     await t.run(2)
     t.site.clients["B"].status_live_at = t.clock()
-    from d1max_site.scheduler import active_bundle as act_of
+    from nexwar_site.scheduler import active_bundle as act_of
     act = act_of(t.db)
     ok, _, why, _ = t.sched._candidates(act, act.schedule.entries[0], {})
     assert ok == ["A"] and "B 加载的是第 8 版" in why, why

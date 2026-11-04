@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from d1max_site import main as site_main
+from nexwar_site import main as site_main
 
 
 @pytest.fixture

@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 from test_site_api import PW, _等, target, wall, 站
 
-from d1max_site.accounts import Accounts, AuthError
+from nexwar_site.accounts import Accounts, AuthError
 
 
 @pytest.fixture
@@ -35,7 +35,7 @@ def test_只看只能看_经理能派能排日程不能遥控_保安能派不能
     # W53:经理能派、能排日程(请求体不对是 400,不是 403),不能遥控、不能改路线
     assert s.req("POST", "/api/route-schedules/e1", {}, token=olga)[0] != 403
     assert s.req("POST", "/api/routes/r1", {}, token=olga)[0] == 403
-    from d1max_site.permissions import TELEOP, allowed
+    from nexwar_site.permissions import TELEOP, allowed
     assert not allowed("owner", TELEOP) and allowed("guard", TELEOP)
     # 经理只多了「派巡逻」:去这里、回待命点、设位置这些照旧不能
     assert s.req("POST", "/api/robots/A/goto", {"target": target(0.3)}, token=olga)[0] == 403
@@ -108,7 +108,7 @@ def test_审计记下失败登录_派单_改角色(站点):
 
 
 def test_账号层的规矩(tmp_path):
-    from d1max_site.db import SiteDB
+    from nexwar_site.db import SiteDB
     db = SiteDB(tmp_path / "s.db")
     acc = Accounts(db, now_ms=wall)
     acc.add("a", PW, role="admin")
@@ -209,11 +209,11 @@ def test_Principal能复制能pickle_加账号必须给角色(tmp_path):
     import copy
     import pickle
 
-    from d1max_site.accounts import Principal
+    from nexwar_site.accounts import Principal
     p = Principal("bob", "guard")
     for q in (copy.copy(p), copy.deepcopy(p), pickle.loads(pickle.dumps(p))):
         assert q == "bob" and q.role == "guard"
-    from d1max_site.db import SiteDB
+    from nexwar_site.db import SiteDB
     db = SiteDB(tmp_path / "s.db")
     with pytest.raises(TypeError):
         Accounts(db, now_ms=wall).add("x", PW)          # 不给角色不许默认成 admin

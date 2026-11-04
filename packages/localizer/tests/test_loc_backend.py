@@ -7,11 +7,11 @@ import asyncio
 import math
 
 import pytest
-from d1max_localizer.backend import FRAMES_FILE, PRIOR_FILE, MolaBackend, Pairer
-from d1max_localizer.core import AUTO_RELOC_SIGMA_M, STALL_S, Estimate, LocalizerCore
-from d1max_localizer.frames import Frames, mat_to_quat
+from nexwar_localizer.backend import FRAMES_FILE, PRIOR_FILE, MolaBackend, Pairer
+from nexwar_localizer.core import AUTO_RELOC_SIGMA_M, STALL_S, Estimate, LocalizerCore
+from nexwar_localizer.frames import Frames, mat_to_quat
 
-from d1max_contract.locbridge import Pose, State
+from nexwar_contract.locbridge import Pose, State
 
 FLAT = Frames(up=(0.0, 0.0, 1.0), sensor_up=(0.0, 0.0, 1.0), sensor_forward=(1.0, 0.0, 0.0),
               sensor_height=0.5, sensor_in_base=(0.4043, 0.0))
@@ -273,7 +273,7 @@ async def test_核心这会儿收不了_MOLA_收下的那次也记着(tmp_path):
 
 
 async def test_记着的重定位放太久就扔掉(tmp_path):
-    from d1max_localizer.backend import PENDING_MAX_S
+    from nexwar_localizer.backend import PENDING_MAX_S
     c, core, sup, svc, be = _台(tmp_path)
     await be.load_prior(M, str(_先验(tmp_path)))
     await _settle()
@@ -369,7 +369,7 @@ def _扫(c, core, valid, secs, dt=0.1):
 
 async def test_W34_雷达被挡住_停掉MOLA不喂_挡着不按卡住重启_揭开马上重起自己重定位(tmp_path):
     """2026-10-08 C40221:罩住前雷达 MOLA 段错误、反复重启(退避到 16 s),揭开以后还要等。"""
-    from d1max_localizer.core import LIDAR_MIN_POINTS
+    from nexwar_localizer.core import LIDAR_MIN_POINTS
     c, core, sup, svc, be = _台(tmp_path)
     await be.load_prior(M, str(_先验(tmp_path)))
     await _settle()
@@ -424,7 +424,7 @@ def test_W34_有效点_有限且离雷达半米外才算():
     import struct
     from types import SimpleNamespace
 
-    from d1max_localizer.backend import valid_points
+    from nexwar_localizer.backend import valid_points
     pts = [(1.0, 0.0, 0.0), (0.1, 0.1, 0.0), (float("nan"), 0.0, 0.0), (0.0, -3.0, 1.0)]
     data = b"".join(struct.pack("<fffI", *p, 7) for p in pts)        # 每点 16 字节
     assert valid_points(SimpleNamespace(point_step=16, data=data)) == 2

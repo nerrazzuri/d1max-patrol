@@ -4,7 +4,7 @@ import asyncio
 
 import pytest
 
-from d1max_patrol.backends.base import (
+from nexwar_patrol.backends.base import (
     AlgErrorEvent,
     BackendDisconnected,
     LocStatusEvent,
@@ -15,8 +15,8 @@ from d1max_patrol.backends.base import (
     NavStatusEvent,
     NavTimeoutError,
 )
-from d1max_patrol.protocol.nav_frames import AlgErrorItem
-from d1max_patrol.protocol.nav_types import LocStatus, NavStatus
+from nexwar_patrol.protocol.nav_frames import AlgErrorItem
+from nexwar_patrol.protocol.nav_types import LocStatus, NavStatus
 
 
 class _Stub(NavBackend):

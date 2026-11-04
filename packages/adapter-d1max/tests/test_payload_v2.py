@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 from test_payload import _假跑, _等到, 假板子, 假进程
 
-from d1max_adapter_d1max.payload import ModbusRelay, Payload, PayloadConfig, PayloadError
+from nexwar_adapter_d1max.payload import ModbusRelay, Payload, PayloadConfig, PayloadError
 
 ROOT = Path(__file__).resolve().parents[3]
 
@@ -198,7 +198,7 @@ async def test_V2继电器板自己掉电重启_代理发现了重新下发(板�
 
 
 async def test_外审R3_回读失败_确认值作废_报故障_通了按意图重新下发():
-    from d1max_adapter_d1max.payload import Payload, PayloadConfig
+    from nexwar_adapter_d1max.payload import Payload, PayloadConfig
 
     class 板:
         def __init__(self):

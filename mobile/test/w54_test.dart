@@ -1,12 +1,12 @@
 // W54 建图向导（用户 2026-10-31）：站点没图时管理员登录弹「开始建图」（稍后记下来）、别的角色只看到提示；
 // 向导七步从头走到尾（遥控器、手机两种开法）、建图结论三档、退出能接着做；地图管理（版本、结论、下发、退回）。
-import 'package:d1max_patrol/l10n.dart';
-import 'package:d1max_patrol/net/site_client.dart';
-import 'package:d1max_patrol/ui/map_manage.dart';
-import 'package:d1max_patrol/ui/map_wizard.dart';
-import 'package:d1max_patrol/ui/nw/nw_shell.dart';
-import 'package:d1max_patrol/ui/site_duty_page.dart';
-import 'package:d1max_patrol/ui/site_teleop.dart';
+import 'package:nexwar_patrol/l10n.dart';
+import 'package:nexwar_patrol/net/site_client.dart';
+import 'package:nexwar_patrol/ui/map_manage.dart';
+import 'package:nexwar_patrol/ui/map_wizard.dart';
+import 'package:nexwar_patrol/ui/nw/nw_shell.dart';
+import 'package:nexwar_patrol/ui/site_duty_page.dart';
+import 'package:nexwar_patrol/ui/site_teleop.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 

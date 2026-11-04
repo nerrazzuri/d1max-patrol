@@ -11,9 +11,9 @@ import sqlite3
 import pytest
 from test_site_restore import NOW, 站  # noqa: F401  (夹具)
 
-from d1max_site import inventory
-from d1max_site import main as site_main
-from d1max_site.restore import restore
+from nexwar_site import inventory
+from nexwar_site import main as site_main
+from nexwar_site.restore import restore
 
 
 def _take(home, **over):
@@ -118,7 +118,7 @@ def test_记录读不了_不是清点记录_没有库_说得出(站, tmp_path, c
                            str(tmp_path / "无")]) != 0
     assert "无法读取清点记录" in capsys.readouterr().err
     bad = tmp_path / "x.json"
-    for text in ('{"kind": "else", "counts": {}}', '{"kind": "d1max-site-inventory"}', "[]"):
+    for text in ('{"kind": "else", "counts": {}}', '{"kind": "nexwar_site_inventory"}', "[]"):
         bad.write_text(text, "utf-8")
         with pytest.raises(inventory.InventoryError, match="不是站点清点记录"):
             inventory.load(bad)

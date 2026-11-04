@@ -1,16 +1,16 @@
 // 2026-10-14 重做之后的收尾：用户看截图挑出来的几处版面毛病，各钉一条。
 import 'dart:io';
 
-import 'package:d1max_patrol/design/nw_tokens.g.dart';
-import 'package:d1max_patrol/l10n.dart';
-import 'package:d1max_patrol/model/alert.dart';
-import 'package:d1max_patrol/ui/nw/nw_cards.dart';
-import 'package:d1max_patrol/ui/nw/nw_theme.dart';
-import 'package:d1max_patrol/ui/nw/nw_widgets.dart';
-import 'package:d1max_patrol/ui/site_alert_scene.dart';
-import 'package:d1max_patrol/ui/site_maps.dart';
-import 'package:d1max_patrol/ui/site_runs.dart';
-import 'package:d1max_patrol/ui/site_watch_page.dart';
+import 'package:nexwar_patrol/design/nw_tokens.g.dart';
+import 'package:nexwar_patrol/l10n.dart';
+import 'package:nexwar_patrol/model/alert.dart';
+import 'package:nexwar_patrol/ui/nw/nw_cards.dart';
+import 'package:nexwar_patrol/ui/nw/nw_theme.dart';
+import 'package:nexwar_patrol/ui/nw/nw_widgets.dart';
+import 'package:nexwar_patrol/ui/site_alert_scene.dart';
+import 'package:nexwar_patrol/ui/site_maps.dart';
+import 'package:nexwar_patrol/ui/site_runs.dart';
+import 'package:nexwar_patrol/ui/site_watch_page.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';

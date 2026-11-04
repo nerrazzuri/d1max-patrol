@@ -2,14 +2,14 @@
 
 import asyncio
 
-import d1max_patrol
-import d1max_sim
+import nexwar_patrol
+import nexwar_sim
 
 
 def test_包可导入且带版本号():
-    from d1max_contract.product import PRODUCT_VERSION
-    assert d1max_patrol.__version__ == PRODUCT_VERSION
-    assert d1max_sim.__version__ == PRODUCT_VERSION
+    from nexwar_contract.product import PRODUCT_VERSION
+    assert nexwar_patrol.__version__ == PRODUCT_VERSION
+    assert nexwar_sim.__version__ == PRODUCT_VERSION
 
 
 async def test_异步测试模式已开启():

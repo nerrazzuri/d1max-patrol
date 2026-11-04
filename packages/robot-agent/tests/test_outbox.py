@@ -11,8 +11,8 @@ from pathlib import Path
 
 import pytest
 
-from d1max_agent.engine.uploader import PutReceipt, SinkError
-from d1max_agent.outbox import Outbox
+from nexwar_agent.engine.uploader import PutReceipt, SinkError
+from nexwar_agent.outbox import Outbox
 
 
 def _几小时前(hours: float) -> str:
@@ -161,8 +161,8 @@ def test_盘况_发件箱多大_满没满(箱, monkeypatch):
 def test_狗传的跟站点收的是同一张单子():
     """代理的上传白名单与站点的接收白名单:狗在代理模式下产生的文件,站点都得收(不然永远传不完、
     永远删不掉);站点不收的(判读、复核、报告)代理模式下根本不产生。"""
-    from d1max_agent.engine.upload_queue import classify
-    from d1max_contract.intake import dog_may_upload
+    from nexwar_agent.engine.upload_queue import classify
+    from nexwar_contract.intake import dog_may_upload
     for rel in ("manifest.json", "events.jsonl", "telemetry.jsonl", "photos/P1__front__t.jpg"):
         assert classify(rel) is not None and dog_may_upload(rel), rel
 
@@ -206,9 +206,9 @@ def test_盘量不了就按满了报(箱, monkeypatch):
 def test_一拍有时间上限_关机不用等满所有块(tmp_path, monkeypatch):
     import threading
 
-    from d1max_agent import outbox as ob
-    from d1max_agent.engine.uploader import SinkError
-    from d1max_agent.outbox import OutboxPump
+    from nexwar_agent import outbox as ob
+    from nexwar_agent.engine.uploader import SinkError
+    from nexwar_agent.outbox import OutboxPump
     monkeypatch.setattr(ob, "STEP_BUDGET_S", 0.3)
 
     class 慢站点:
@@ -236,8 +236,8 @@ def test_一拍有时间上限_关机不用等满所有块(tmp_path, monkeypatch
 def test_落盘的名字安全_发件箱模式每趟带随机后缀(tmp_path):
     from datetime import datetime, timezone
 
-    from d1max_agent.engine.archive import RunArchive, safe_segment
-    from d1max_contract.mission import parse_mission
+    from nexwar_agent.engine.archive import RunArchive, safe_segment
+    from nexwar_contract.mission import parse_mission
     m = parse_mission({"mission": "a/b\x01..", "map_id": "m", "waypoints": [
         {"name": "p", "pose": {"position": {"x": 0, "y": 0},
                                "orientation": {"x": 0, "y": 0, "z": 0, "w": 1}}}]})
@@ -246,7 +246,7 @@ def test_落盘的名字安全_发件箱模式每趟带随机后缀(tmp_path):
     assert a.path.parent.name == "a_b_.." and a.path.name == "20260925T010000Z-004217"
     b = RunArchive(tmp_path, m, started_at=t, suffix="004217")
     assert b.path.name == "20260925T010000Z-0042172", "撞了照样往后加序号(并进后缀里)"
-    from d1max_contract.intake import split_run
+    from nexwar_contract.intake import split_run
     assert split_run(f"a_b_../{b.path.name}") is not None, "站点与本地清理都认这个名字"
     assert safe_segment("..x") == "_.x" and safe_segment("") == "_"
     assert len(safe_segment("点" * 200).encode()) <= 120
@@ -254,8 +254,8 @@ def test_落盘的名字安全_发件箱模式每趟带随机后缀(tmp_path):
 
 
 def test_隔离的不算积压_管理员让它再传一次就重新排上(tmp_path):
-    from d1max_agent.engine.uploader import PutReceipt
-    from d1max_agent.outbox import OutboxPump
+    from nexwar_agent.engine.uploader import PutReceipt
+    from nexwar_agent.outbox import OutboxPump
 
     class 不收站点(假站点):
         def put(self, req):
@@ -282,7 +282,7 @@ def test_隔离的不算积压_管理员让它再传一次就重新排上(tmp_pa
 def test_W46过热暂停上传_放开了接着传():
     import time
 
-    from d1max_agent.outbox import OutboxPump
+    from nexwar_agent.outbox import OutboxPump
 
     class 箱子:
         runs_root = type("P", (), {"name": "x"})()

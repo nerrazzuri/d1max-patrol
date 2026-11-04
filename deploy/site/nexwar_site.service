@@ -1,0 +1,33 @@
+[Unit]
+Description=D1 Max 站点(派遣器 + 站点 API)
+After=network-online.target nexwar_mosquitto.service
+Wants=network-online.target nexwar_mosquitto.service
+StartLimitIntervalSec=0
+ConditionPathExists=/var/lib/nexwar_site/site.json
+
+[Service]
+Type=simple
+User=nexwar_site
+Environment=PYTHONUNBUFFERED=1
+# W00c5d:照片判读的模型密钥(ANTHROPIC_API_KEY=…、可选 NEXWAR_VLM_MODEL=…)写在这个文件里,0600。
+# 没有就不判,记录里是「待判读」。
+EnvironmentFile=-/etc/nexwar_site/env
+# 绑到局域网:站点 API 走 HTTPS(站点服务证书),口令不明文过网。连不上 broker 退 1,5 秒后重起。
+# W00c5d:另开狗专用的接收口 8444/TCP(mTLS,只收站点 CA 签的狗证书;site.json 的 intake.port 可改),
+# 防火墙只对狗那一段放行。
+ExecStart=/opt/nexwar_site/venv/bin/nexwar_site --home /var/lib/nexwar_site serve --api-host 0.0.0.0 --api-port 8443
+# 收紧:只许写站点目录;看不到 /home;不能提权。
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=/var/lib/nexwar_site
+# W00c5d:站点备份(site.json 的 backup_dir)。外接盘挂到这里;没挂也能起(前面的 - )。
+ReadWritePaths=-/var/lib/nexwar_site_backup
+# W55(外审 W55-1 第 7 条):给特权执行器递请求(只开请求目录;结果目录照旧只读)
+ReadWritePaths=-/var/lib/nexwar_ops/req
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

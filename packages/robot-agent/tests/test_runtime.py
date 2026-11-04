@@ -8,13 +8,13 @@ import json
 
 import pytest
 
-from d1max_adapter_sim.robot import SimRobot
-from d1max_agent.runtime import AgentRuntime
-from d1max_contract.memory_broker import MemoryBroker, MemoryTransport
-from d1max_contract.messages import Capabilities, Reconcile, Status, Telemetry
-from d1max_contract.registration import Registration
-from d1max_contract.topics import Topics
-from d1max_patrol.protocol.nav_types import Pose
+from nexwar_adapter_sim.robot import SimRobot
+from nexwar_agent.runtime import AgentRuntime
+from nexwar_contract.memory_broker import MemoryBroker, MemoryTransport
+from nexwar_contract.messages import Capabilities, Reconcile, Status, Telemetry
+from nexwar_contract.registration import Registration
+from nexwar_contract.topics import Topics
+from nexwar_patrol.protocol.nav_types import Pose
 
 REG = Registration(site_id="s", robot_id="r", credential_fingerprint="f", issued_at=0,
                    expires_at=10**12)
@@ -267,8 +267,8 @@ async def test_空闲时status也要周期刷新last_seen(台子):
 
 
 async def test_LWT主题也过ACL(台子):
-    from d1max_agent.transport import GuardedTransport
-    from d1max_contract.topics import TopicAcl
+    from nexwar_agent.transport import GuardedTransport
+    from nexwar_contract.topics import TopicAcl
     broker, c, r, ears, rt, site = 台子
     g = GuardedTransport(MemoryTransport(broker, "x"), TopicAcl(T))
     with pytest.raises(PermissionError):
@@ -304,7 +304,7 @@ async def test_启动顺序_先登记cmd订阅再连接(台子):
     """结构性钉住:runtime.start() 里 subscribe(cmd) 必须在 transport.connect() 之前。"""
     import inspect
 
-    from d1max_agent import runtime as mod
+    from nexwar_agent import runtime as mod
     src = inspect.getsource(mod.AgentRuntime._start)          # start() 只包了一层回滚
     assert src.index("subscribe(self.topics.cmd") < src.index("await self._first_connect()")
 
@@ -329,7 +329,7 @@ async def test_close之后HAL停了_控制权放了_链路关了(台子):
 
 async def test_连不上站点_已拿到的控制权要放掉(台子, monkeypatch):
     broker, c, r, ears, rt, _ = 台子
-    import d1max_agent.runtime as R
+    import nexwar_agent.runtime as R
     monkeypatch.setattr(R, "FIRST_CONNECT_WAIT_S", 0.2)     # W70 首次连接要重试 120 s:测试里别真等
     monkeypatch.setattr(R, "FIRST_CONNECT_RETRY_S", 0.05)
 
@@ -463,7 +463,7 @@ async def test_HAL故障集合变了才发robot_fault_消了发空列表(台子)
 
 
 async def test_HAL没有故障接口_不发也不炸(台子, monkeypatch):
-    from d1max_contract.hal import HalUnsupported
+    from nexwar_contract.hal import HalUnsupported
 
     broker, c, r, ears, rt, _ = 台子
     await rt.start()
@@ -541,7 +541,7 @@ async def test_HAL读故障一直报错_日志只记一条(台子, monkeypatch, 
 
 async def test_盘况每10秒随遥测带一次_满了不接巡检(tmp_path):
     """W00c5d:发件箱的水位上站点;满了代理自己拒巡检(storage_full),不删没传完的。"""
-    from d1max_contract.storage import StorageFacts
+    from nexwar_contract.storage import StorageFacts
     broker = MemoryBroker()
     c = 钟()
     r = SimRobot(now_ms=c)
@@ -589,8 +589,8 @@ async def test_halt不排队_先停车再排队去中止任务(台子):
     站点刚发的叫停在狗看来就是过期的;重投的旧叫停最多让狗停一下,方向安全)。"""
     import asyncio
 
-    from d1max_contract.messages import Command
-    from d1max_contract.transport import Message
+    from nexwar_contract.messages import Command
+    from nexwar_contract.transport import Message
     broker, c, r, ears, rt, site = 台子
     await rt.start()
     stops = []
@@ -624,9 +624,9 @@ async def test_halt不排队_先停车再排队去中止任务(台子):
 async def test_遥控用单调钟_墙钟往回跳也按时停(tmp_path):
     """W00c5c 内部评审:Orin 的墙钟现场就错过;NTP 往回拨一下,按墙钟算的帧有效期、租约就一直「没到」。
     遥控的收帧时刻、帧有效期、租约都走单调钟。"""
-    from d1max_contract.messages import Command
-    from d1max_contract.teleop import TeleopFrame, teleop_grant_payload
-    from d1max_contract.transport import Message
+    from nexwar_contract.messages import Command
+    from nexwar_contract.teleop import TeleopFrame, teleop_grant_payload
+    from nexwar_contract.transport import Message
     broker = MemoryBroker()
     c = 钟()
     r = SimRobot(now_ms=c)
@@ -669,7 +669,7 @@ async def test_遥控用单调钟_墙钟往回跳也按时停(tmp_path):
 async def test_W70_起来时连不上站点_不马上退出_重试连上了照常起(台子, monkeypatch):
     """2026-11-03 C40221:装完新版那一刻隧道断着,代理连不上 broker 就退出,systemd 5 s 后再起,
     开机守卫 8 s 内数满 2 次、把好好的新版退回了上一版。首次连接在进程里重试,网络好了照常起。"""
-    import d1max_agent.runtime as RT
+    import nexwar_agent.runtime as RT
     monkeypatch.setattr(RT, "FIRST_CONNECT_RETRY_S", 0.01)
     broker, c, r, ears, rt, _ = 台子
     real = rt.transport.connect
@@ -686,7 +686,7 @@ async def test_W70_起来时连不上站点_不马上退出_重试连上了照�
 
 
 async def test_W70_一直连不上_等够了照旧退出_让守卫数(台子, monkeypatch):
-    import d1max_agent.runtime as RT
+    import nexwar_agent.runtime as RT
     monkeypatch.setattr(RT, "FIRST_CONNECT_RETRY_S", 0.01)
     monkeypatch.setattr(RT, "FIRST_CONNECT_WAIT_S", 0.05)
     broker, c, r, ears, rt, _ = 台子
@@ -699,7 +699,7 @@ async def test_W70_一直连不上_等够了照旧退出_让守卫数(台子, mo
 
 
 async def test_W70_一直连不上_退出前给守卫留条子(台子, monkeypatch):
-    import d1max_agent.runtime as RT
+    import nexwar_agent.runtime as RT
     monkeypatch.setattr(RT, "FIRST_CONNECT_RETRY_S", 0.01)
     monkeypatch.setattr(RT, "FIRST_CONNECT_WAIT_S", 0.03)
     broker, c, r, ears, rt, _ = 台子
@@ -720,7 +720,7 @@ async def test_W70_一直连不上_退出前给守卫留条子(台子, monkeypat
 
 async def test_现场1104_跟运控断了_过几秒自己重连_拿回控制权(台子):
     """以前只在起来时连一次运控:旁路进程重启以后代理一直断着,只能人重启代理。"""
-    from d1max_agent.runtime import HAL_RETRY_S
+    from nexwar_agent.runtime import HAL_RETRY_S
     _b, c, r, _e, rt, _s = 台子
     await rt.start()
     await rt.step(0.1)

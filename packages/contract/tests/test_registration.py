@@ -6,10 +6,10 @@ import json
 
 import pytest
 
-from d1max_contract.errors import ContractError
-from d1max_contract.registration import Registration
+from nexwar_contract.errors import ContractError
+from nexwar_contract.registration import Registration
 
-REG = Registration(site_id="penang-1", robot_id="D1MAX-C40011",
+REG = Registration(site_id="penang-1", robot_id="NEXWAR-C40011",
                    credential_fingerprint="sha256:abcd", issued_at=1_000, expires_at=2_000)
 
 
@@ -35,9 +35,9 @@ def test_指纹不许为空_id走Topics的规矩():
 
 
 def test_匹配命令来源():
-    assert REG.matches(site_id="penang-1", robot_id="D1MAX-C40011")
-    assert not REG.matches(site_id="penang-2", robot_id="D1MAX-C40011")
-    assert not REG.matches(site_id="penang-1", robot_id="D1MAX-OTHER")
+    assert REG.matches(site_id="penang-1", robot_id="NEXWAR-C40011")
+    assert not REG.matches(site_id="penang-2", robot_id="NEXWAR-C40011")
+    assert not REG.matches(site_id="penang-1", robot_id="NEXWAR-OTHER")
 
 
 def test_文件坏了要说清楚(tmp_path):

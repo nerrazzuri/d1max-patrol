@@ -6,10 +6,10 @@ import math
 import random
 
 import pytest
-from d1max_localizer.frames import Frames
-from d1max_localizer.geo import MIN_PAIRS, fit_rigid2d, georeference, read_rtk
+from nexwar_localizer.frames import Frames
+from nexwar_localizer.geo import MIN_PAIRS, fit_rigid2d, georeference, read_rtk
 
-from d1max_contract.geo import enu_to_llh
+from nexwar_contract.geo import enu_to_llh
 
 F = Frames(up=(0.0, 0.0, 1.0), sensor_up=(0.0, 0.0, 1.0), sensor_forward=(1.0, 0.0, 0.0),
            sensor_height=0.5, sensor_in_base=(0.4, 0.0))

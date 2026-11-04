@@ -7,11 +7,11 @@ from __future__ import annotations
 import pytest
 from test_recording import _段, 录  # noqa: F401
 
-from d1max_agent.engine.archive import RunArchive
-from d1max_agent.engine.mission import Mission, MissionWaypoint, Policy
-from d1max_agent.recording import STAGING
-from d1max_contract import evseal as E
-from d1max_patrol.protocol.nav_types import Pose
+from nexwar_agent.engine.archive import RunArchive
+from nexwar_agent.engine.mission import Mission, MissionWaypoint, Policy
+from nexwar_agent.recording import STAGING
+from nexwar_contract import evseal as E
+from nexwar_patrol.protocol.nav_types import Pose
 
 
 @pytest.fixture
@@ -78,7 +78,7 @@ def test_录像段封着挪进发件箱_暂存明文删掉(录, 钥匙):
 def test_代理_有公钥文件能力报封了_没有报没封(tmp_path, 钥匙):
     from test_agent_main import _args
 
-    from d1max_agent import main as agent_main
+    from nexwar_agent import main as agent_main
     priv, _ = 钥匙
     pubf = tmp_path / "pub.key"
     pubf.write_text(E.public_key(priv).hex())
@@ -134,7 +134,7 @@ def test_外审1_封不上的段也算配额_攒多了从最旧的删_报一次(
 def test_复查_代理_遥测的盘况带封不上的件数_没配加密不带():
     from types import SimpleNamespace
 
-    from d1max_agent.runtime import AgentRuntime
+    from nexwar_agent.runtime import AgentRuntime
     n = [(2, "openssl 坏了")]
     rt = SimpleNamespace(_unsealed=lambda: n[0], _unsealed_told=0,
                          recorder=SimpleNamespace(seal_failed={"front/x": "坏了"}))

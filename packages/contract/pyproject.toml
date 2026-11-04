@@ -3,7 +3,7 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "d1max-contract"
+name = "nexwar_contract"
 version = "1.0.0-rc.1"
 description = "狗 ↔ 站点的唯一契约:报文数据类、主题与 ACL、RobotHAL、Transport、派遣客户端"
 requires-python = ">=3.10"
@@ -14,7 +14,7 @@ dependencies = ["PyYAML>=6.0"]
 # PahoTransport 才用得着;MemoryBroker 和全部数据类不需要它。狗上离线装:
 # paho_mqtt-2.x 是一个 py3-none-any 轮子。
 mqtt = ["paho-mqtt>=2.1"]
-# W23:规划代价图(``d1max_contract.planning.costmap``)要 numpy。狗上根包本来就带;站点设拦截点时查
+# W23:规划代价图(``nexwar_contract.planning.costmap``)要 numpy。狗上根包本来就带;站点设拦截点时查
 # 「从待命点走得到」也要它。
 planning = ["numpy>=1.21"]
 

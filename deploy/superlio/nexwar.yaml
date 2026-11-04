@@ -1,0 +1,61 @@
+# Super-LIO 的参数(D1 Max 前雷达 RoboSense Airy + 它自带的 IMU),建图和巡逻定位共用。
+# 机器人上 /etc/nexwar/superlio.yaml 有就用那份(现场调参),没有用这份。话题由启动方用 -p 覆盖。
+#
+# **取值来源**:整份取自 C40221 上竞品上装的 Super-LIO 参数(2026-11-02 现场),用户 11-02 定:先用竞品调过
+# 的值,POC 时再调。只改了两个运行开关(save_map、eva.timer,见行尾)。离线对比(runs/superlio-params/):
+# 商场两圈、办公室一圈首尾 0.05 / 0.3 / 0.13 m;仓库原来那份(外参差了约 180°)商场首尾 4.2 m。
+#
+# lidar_type 2 = 禾赛的点格式(x, y, z, intensity, ring, timestamp 绝对秒),Airy 一样。
+# lio.extrinsic.lidar_imu = 雷达系 → IMU 系:t 3 个 + R 9 个,R **按列**(Super-LIO 用 Eigen 默认的列优先读);
+# 按列读出来雷达 +X 对 IMU 的 -Y(Airy 雷达 +X 朝下、IMU +Y 朝上),雷达 +Z 对 IMU 的 -Z。
+# 跟我们自己记的 DIFOP(另一台)差 0.75°、平移差 0.3 mm。改这几个数要连这条一起核。
+# lio.extrinsic.odom_robo = 雷达在机身的位置(SDK 2.10:前 404.3 mm、下 37.7 mm,加 DIFOP 平移)+ IMU 朝向:
+# 只决定地图原点放在机身上;/lio/odom 仍是 IMU 位姿,我们的坐标换算(frames.json)从轨迹标定,不受它影响。
+/**:
+  ros__parameters:
+    lio.map.save_map: false                  # 运行开关(不是调参):建图/定位都不让它自己存图
+    lio.map.if_filter: true
+    lio.map.save_map_dir: "map/default"      # 相对 Super-LIO 源码目录;定位时按地图包覆盖
+    lio.map.map_name: "map.pcd"
+    lio.map.ds_size: 0.25
+    lio.map.save_interval: 500
+
+    lio.ros.lidar_topic: "/front_lidar"
+    lio.ros.imu_topic: "/front_lidar/imu"
+
+    lio.sensor.lidar_type: 2
+    lio.sensor.blind: 0.5
+    lio.sensor.maxrange: 100.0
+    lio.sensor.filter_rate: 2
+    lio.sensor.enable_downsample: true
+    lio.sensor.voxel_fliter_size: 0.3
+    lio.sensor.gravity_norm: 9.7946
+    lio.sensor.imu_type: 1
+    lio.sensor.imu_na: 0.1
+    lio.sensor.imu_ng: 0.1
+    lio.sensor.imu_nba: 0.0001
+    lio.sensor.imu_nbg: 0.0001
+
+    lio.extrinsic.lidar_imu: [0.004279, 0.004176, -0.004436,
+                              -0.017043, -0.999836, 0.006192,
+                              -0.999855, 0.017041, -0.000495,
+                              0.00039, -0.006199, -0.999981]
+    lio.extrinsic.odom_robo: [0.3998, 0.0042, -0.042, 90.0, 0.0, -90.0]
+
+    lio.hash_map.hash_capacity: 10000000
+    lio.hash_map.vox_resolution: 0.5
+
+    lio.kf.kf_type: 0
+    lio.kf.kf_max_iterations: 4
+    lio.kf.kf_align_gravity: true
+    lio.kf.kf_quit_eps: 0.001
+
+    lio.output.robot: true
+    lio.output.plan_env_world: false
+    lio.output.plan_env_body: false
+    lio.output.planner: false
+    lio.output.map: true
+    lio.output.dense: false
+    lio.output.pub_step: 10
+
+    lio.eva.timer: false                     # 运行开关:每帧打耗时会刷满日志

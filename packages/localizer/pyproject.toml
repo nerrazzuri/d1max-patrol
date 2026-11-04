@@ -3,23 +3,23 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "d1max-localizer"
+name = "nexwar_localizer"
 version = "1.0.0-rc.1"
 description = "狗上的定位器节点(W09b):MOLA 只定位 + 定位质量,经本机定位桥给代理;另带录包回放工具"
 requires-python = ">=3.10"
-dependencies = ["d1max-contract"]
+dependencies = ["nexwar_contract"]
 
 [project.optional-dependencies]
 # 建图打包(build.py)画规划栅格要它;狗上用 ROS 系统 Python 里 apt 装的 python3-numpy
 build = ["numpy>=1.21"]
 
 [project.scripts]
-d1max-localizer = "d1max_localizer.main:main"
-d1max-loc = "d1max_localizer.tools:main"
+nexwar_localizer = "nexwar_localizer.main:main"
+nexwar_loc = "nexwar_localizer.tools:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
 # 建图回环用的 MOLA 管线配置(build.py 按包内路径找):不声明的话装成 wheel 时不带,狗上回环每次都退回
 [tool.setuptools.package-data]
-d1max_localizer = ["pipelines/*.yaml"]
+nexwar_localizer = ["pipelines/*.yaml"]

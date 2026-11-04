@@ -4,8 +4,8 @@
 # 在 Orin 本机跑最稳;笔记本跑需先配好 zenoh(见 config/zenoh_router.json5)。
 set -uo pipefail
 
-NAME="${1:-d1max}"                      # 包名前缀,例 calib / coverage
-OUT_ROOT="${OUT_ROOT:-$HOME/d1max-bags}"
+NAME="${1:-nexwar}"                      # 包名前缀,例 calib / coverage
+OUT_ROOT="${OUT_ROOT:-$HOME/nexwar_bags}"
 # ★ 关键:必须含 /front_lidar/imu(app 自带录包漏了它 → 标定包无法用 app 录)
 TOPICS=(/front_lidar /front_lidar/imu /tf /tf_static)
 # 备(以后双雷达):/rear_lidar /rear_lidar/imu

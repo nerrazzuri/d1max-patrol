@@ -1,4 +1,4 @@
-"""硬件组 C2 散热测试的满载脚本(``d1max-board-load``):占空比、温度稳定判据、温升换算、按码率写盘、
+"""硬件组 C2 散热测试的满载脚本(``nexwar_board_load``):占空比、温度稳定判据、温升换算、按码率写盘、
 按码率上传(带收的那头)、命令行拼得对、短跑一遍出总结。"""
 
 from __future__ import annotations
@@ -9,7 +9,7 @@ import time
 
 import pytest
 
-from d1max_agent import boardload as bl
+from nexwar_agent import boardload as bl
 
 
 def test_占空比_写法和判定():
@@ -78,9 +78,9 @@ def test_上传对面不在_不炸_过一会儿重连():
 
 
 def test_命令行_录包回放和视频编码拼得对(tmp_path):
-    cmd = bl.replay_cmd("/usr/bin/d1max-loc", tmp_path / "b", tmp_path / "p", "0,0,0",
+    cmd = bl.replay_cmd("/usr/bin/nexwar_loc", tmp_path / "b", tmp_path / "p", "0,0,0",
                         tmp_path / "o")
-    assert cmd[:2] == ["/usr/bin/d1max-loc", "replay"] and "--bag" in cmd and "--prior" in cmd
+    assert cmd[:2] == ["/usr/bin/nexwar_loc", "replay"] and "--bag" in cmd and "--prior" in cmd
     v = bl.video_cmd("/usr/bin/ffmpeg")
     assert "libx264" in v and "testsrc2=size=1280x720:rate=15" in " ".join(v) and v[-1] == "-"
 

@@ -9,10 +9,10 @@ from pathlib import Path
 
 import pytest
 
-from d1max_patrol import provision as dog
+from nexwar_patrol import provision as dog
 
 ROOT = Path(__file__).resolve().parents[1]
-START = ROOT / "deploy" / "d1max-zenohd-start"
+START = ROOT / "deploy" / "nexwar_zenohd_start"
 
 
 def _tool(name):
@@ -26,31 +26,31 @@ def _tool(name):
 def _start(tmp_path, env_text, *args):
     (tmp_path / "env").write_text(env_text)
     return subprocess.run(["bash", str(START), *args], capture_output=True, text=True,
-                          env={"D1MAX_ENV_FILE": str(tmp_path / "env"), "PATH": "/usr/bin:/bin"})
+                          env={"NEXWAR_ENV_FILE": str(tmp_path / "env"), "PATH": "/usr/bin:/bin"})
 
 
 def test_路由_没填网关不起_填了连网关只听本机_值不干净拒(tmp_path):
-    assert _start(tmp_path, "D1MAX_SITE_MQTT=x\n", "--check").returncode == 1
-    assert _start(tmp_path, "D1MAX_GATEWAY=192.168.168.100\n", "--check").returncode == 0
-    p = _start(tmp_path, "D1MAX_GATEWAY=192.168.168.100\nD1MAX_GATEWAY_ZENOH_PORT=7448\n",
+    assert _start(tmp_path, "NEXWAR_SITE_MQTT=x\n", "--check").returncode == 1
+    assert _start(tmp_path, "NEXWAR_GATEWAY=192.168.168.100\n", "--check").returncode == 0
+    p = _start(tmp_path, "NEXWAR_GATEWAY=192.168.168.100\nNEXWAR_GATEWAY_ZENOH_PORT=7448\n",
                "--print")
     assert p.returncode == 0
     assert '"tcp/192.168.168.100:7448"' in p.stdout
     assert '"tcp/127.0.0.1:7447"' in p.stdout and "[::]" not in p.stdout, "只在本机听"
-    assert _start(tmp_path, "D1MAX_GATEWAY=a;reboot\n", "--check").returncode == 4
-    assert _start(tmp_path, "D1MAX_GATEWAY=h\nD1MAX_GATEWAY_ZENOH_PORT=x1\n",
+    assert _start(tmp_path, "NEXWAR_GATEWAY=a;reboot\n", "--check").returncode == 4
+    assert _start(tmp_path, "NEXWAR_GATEWAY=h\nNEXWAR_GATEWAY_ZENOH_PORT=x1\n",
                   "--check").returncode == 4
 
 
 def test_路由单元_有条件才起_只装不启用():
-    unit = (ROOT / "deploy" / "d1max-zenohd.service").read_text(encoding="utf-8")
-    assert "ExecCondition=/opt/d1max/current/deploy/d1max-zenohd-start --check" in unit
+    unit = (ROOT / "deploy" / "nexwar_zenohd.service").read_text(encoding="utf-8")
+    assert "ExecCondition=/opt/nexwar/current/deploy/nexwar_zenohd_start --check" in unit
     assert "User=robot" in unit
     装 = (ROOT / "deploy" / "install.sh").read_text(encoding="utf-8")
-    assert 'install -m 0644 "$PKG/deploy/d1max-zenohd.service" /etc/systemd/system/' in 装
-    assert "enable d1max-zenohd" not in 装.replace("enable --now d1max-zenohd", "")
-    for u in ("localizer", "obstacles", "persons", "lidar-merge"):
-        assert "d1max-zenohd.service" in (ROOT / "deploy" / f"d1max-{u}.service").read_text(), u
+    assert 'install -m 0644 "$PKG/deploy/nexwar_zenohd.service" /etc/systemd/system/' in 装
+    assert "enable nexwar_zenohd" not in 装.replace("enable --now nexwar_zenohd", "")
+    for u in ("localizer", "obstacles", "persons", "lidar_merge"):
+        assert "nexwar_zenohd.service" in (ROOT / "deploy" / f"nexwar_{u}.service").read_text(), u
 
 
 def _齐(etc):
@@ -69,11 +69,11 @@ def _查(etc, probe):
 def test_出厂自检_填了网关才查_连不上FAIL(tmp_path):
     etc = tmp_path / "etc"
     _齐(etc)
-    (etc / "env").write_text("D1MAX_SITE_MQTT=mqtts://s:8883\nD1MAX_MAP=m:1\nD1MAX_HOME=0,0,0\n")
+    (etc / "env").write_text("NEXWAR_SITE_MQTT=mqtts://s:8883\nNEXWAR_MAP=m:1\nNEXWAR_HOME=0,0,0\n")
     hits = []
     assert "网关" not in _查(etc, lambda h, p: hits.append((h, p)) or "")
     assert hits == [], "装在厂商 Orin 上不查网关"
-    (etc / "env").write_text((etc / "env").read_text() + "D1MAX_GATEWAY=192.168.168.100\n")
+    (etc / "env").write_text((etc / "env").read_text() + "NEXWAR_GATEWAY=192.168.168.100\n")
     rows = _查(etc, lambda h, p: hits.append((h, p)) or "")
     assert rows["网关"].level == "PASS" and hits == [("192.168.168.100", 7447)]
     rows = _查(etc, lambda h, p: "Connection refused")

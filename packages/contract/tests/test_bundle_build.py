@@ -7,7 +7,7 @@ import shutil
 
 import pytest
 
-from d1max_contract.bundle_format import (
+from nexwar_contract.bundle_format import (
     BUNDLE_MANIFEST,
     BUNDLE_SCHEMA,
     BundleError,

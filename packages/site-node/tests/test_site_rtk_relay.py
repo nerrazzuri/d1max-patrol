@@ -9,8 +9,8 @@ import time
 
 import pytest
 
-from d1max_contract.rtcm import frame
-from d1max_site.rtk_relay import RtcmRelay, SourceError, parse_source
+from nexwar_contract.rtcm import frame
+from nexwar_site.rtk_relay import RtcmRelay, SourceError, parse_source
 
 
 def _msg(mt: int, n: int = 20) -> bytes:
@@ -64,7 +64,7 @@ def test_假串口_好帧一批发出去_坏帧丢掉计数(tmp_path):
 
 
 def test_TCP源_断了重连(monkeypatch):
-    import d1max_site.rtk_relay as R
+    import nexwar_site.rtk_relay as R
     monkeypatch.setattr(R, "RECONNECT_S", 0.1)
     srv = socket.socket()
     srv.bind(("127.0.0.1", 0))
@@ -95,9 +95,9 @@ def test_TCP源_断了重连(monkeypatch):
 
 
 def test_源连不上_说原因_不炸(monkeypatch):
-    import d1max_site.rtk_relay as R
+    import nexwar_site.rtk_relay as R
     monkeypatch.setattr(R, "RECONNECT_S", 0.05)
-    r = RtcmRelay("serial:/dev/nope-d1max:115200", publish=lambda b: None, now_ms=lambda: 0)
+    r = RtcmRelay("serial:/dev/nope-nexwar:115200", publish=lambda b: None, now_ms=lambda: 0)
     r.start()
     try:
         assert _等(lambda: "nope" in r.error or "No such" in r.error)
@@ -168,7 +168,7 @@ def test_站点接口_没配说没配_配了给统计(tmp_path):
 def test_命令行_源写错了当场退(tmp_path):
     import json
 
-    from d1max_site.main import cmd_serve
+    from nexwar_site.main import cmd_serve
     (tmp_path / "site.json").write_text(json.dumps({"site_id": "s", "broker_port": 1}))
     assert cmd_serve(tmp_path, "127.0.0.1", 0, None, "udp:x:1") == 2
 
@@ -198,7 +198,7 @@ def test_基站坐标跳了_叫一声():
 
 def test_读的时候抛了别的错_读线程不死_接着重连(monkeypatch):
     """W09e 内审:读线程只接网络错的话,一个意外的异常就让它死了、再也不转发。"""
-    import d1max_site.rtk_relay as R
+    import nexwar_site.rtk_relay as R
     monkeypatch.setattr(R, "RECONNECT_S", 0.05)
     got: list[bytes] = []
     r = RtcmRelay("tcp:h:1", publish=got.append, now_ms=lambda: 0)

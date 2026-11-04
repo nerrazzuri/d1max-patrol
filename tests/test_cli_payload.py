@@ -1,4 +1,4 @@
-"""W56:``d1max payload relay-setup`` / ``relay-status``(硬件组 10-31:生产时把 0x0030 设成 50)。"""
+"""W56:``nexwar payload relay-setup`` / ``relay-status``(硬件组 10-31:生产时把 0x0030 设成 50)。"""
 
 from __future__ import annotations
 
@@ -27,7 +27,7 @@ def _fake_board():
 @pytest.fixture
 def board(monkeypatch, tmp_path):
     b = _fake_board()
-    import d1max_contract.serialport as sp
+    import nexwar_contract.serialport as sp
     monkeypatch.setattr(sp, "open_serial", lambda path, baud: b.open())
     raw = json.loads((ROOT / "deploy" / "payload.v2.example.json").read_text())
     raw["audio"]["clips_dir"] = str(tmp_path)
@@ -37,7 +37,7 @@ def board(monkeypatch, tmp_path):
 
 
 def test_生产设置断线全关(board, capsys):
-    from d1max_patrol.cli import main
+    from nexwar_patrol.cli import main
     b, cfg = board
     b.holding[0x30] = 0
     assert main(["payload", "relay-setup", "--config", str(cfg)]) == 0
@@ -46,7 +46,7 @@ def test_生产设置断线全关(board, capsys):
 
 
 def test_看继电器板状态(board, capsys):
-    from d1max_patrol.cli import main
+    from nexwar_patrol.cli import main
     b, cfg = board
     b.coils[1] = True
     b.inputs = 0b0010
@@ -58,7 +58,7 @@ def test_看继电器板状态(board, capsys):
 
 
 def test_外审W56_1_线圈号不连续_按实际线圈号报(board, capsys, tmp_path):
-    from d1max_patrol.cli import main
+    from nexwar_patrol.cli import main
     b, cfg = board
     raw = json.loads(cfg.read_text())
     raw["relay"]["coils"] = {"spot_l": 0, "siren": 2}

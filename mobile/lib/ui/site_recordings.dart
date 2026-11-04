@@ -29,7 +29,7 @@ class DefaultClipPlayer implements ClipPlayer {
   @override
   Future<void> play(BuildContext context, Uint8List bytes, String title) async {
     final dir = await getTemporaryDirectory();
-    final f = File('${dir.path}/d1max-clip.mp4');
+    final f = File('${dir.path}/nexwar_clip.mp4');
     await f.writeAsBytes(bytes, flush: true);
     if (Platform.isLinux || Platform.isWindows) {
       // video_player 没有 Linux、Windows 的实现：交给系统播放器

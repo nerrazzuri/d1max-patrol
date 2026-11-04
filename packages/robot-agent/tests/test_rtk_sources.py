@@ -8,7 +8,7 @@ import time
 
 import pytest
 
-from d1max_agent.rtk import (
+from nexwar_agent.rtk import (
     OwnRtk,
     VendorRtk,
     _nmea_ok,
@@ -17,7 +17,7 @@ from d1max_agent.rtk import (
     parse_heading,
     vendor_driver_running,
 )
-from d1max_contract.rtcm import frame
+from nexwar_contract.rtcm import frame
 
 
 def _nmea(body: str) -> str:
@@ -110,10 +110,10 @@ def test_自己的驱动_pty当模组_读GGA与GST_改正原样写进去_初始�
 
 
 def test_自己的驱动_过时标上_串口开不了说原因不炸(monkeypatch):
-    import d1max_agent.rtk as R
+    import nexwar_agent.rtk as R
     monkeypatch.setattr(R, "REOPEN_S", 0.05)
     t = {"now": 0.0}
-    r = OwnRtk("/dev/nope-d1max", 115200, now_ms=lambda: 1, mono=lambda: t["now"])
+    r = OwnRtk("/dev/nope-nexwar", 115200, now_ms=lambda: 1, mono=lambda: t["now"])
     r._line(_nmea(GGA_FIX))
     assert r.latest()["stale"] is False
     t["now"] = 3.0
@@ -155,7 +155,7 @@ def test_厂家的_辅助进程一行一条JSON_pos_type换成我们的说法_�
 
 
 def test_厂家的_辅助进程退了_隔一会儿再起(tmp_path, monkeypatch):
-    import d1max_agent.rtk as R
+    import nexwar_agent.rtk as R
     monkeypatch.setattr(R, "REOPEN_S", 0.05)
     script = tmp_path / "dies.py"
     script.write_text("import sys; sys.exit(3)\n")
@@ -169,7 +169,7 @@ def test_厂家的_辅助进程退了_隔一会儿再起(tmp_path, monkeypatch):
 
 def test_厂家驱动在跑_自己的驱动不开串口_说清楚(monkeypatch):
     """W09e 内审应修 5:两个进程读同一个口,字节被分走、我们写的改正跟厂家的交错。"""
-    import d1max_agent.rtk as R
+    import nexwar_agent.rtk as R
     monkeypatch.setattr(R, "REOPEN_S", 0.05)
     opened = []
     r = OwnRtk("/dev/x", 460800, now_ms=lambda: 0,
@@ -215,7 +215,7 @@ def test_厂家的_宽巷固定按浮点算_字段坏了不炸():
 
 
 def test_厂家的_起来就退_隔的时间翻倍(tmp_path, monkeypatch):
-    import d1max_agent.rtk as R
+    import nexwar_agent.rtk as R
     monkeypatch.setattr(R, "REOPEN_S", 0.01)
     monkeypatch.setattr(R, "BACKOFF_MAX_S", 0.08)
     waits = []
@@ -324,7 +324,7 @@ def test_初始化命令也走写完为止():
 
 
 def test_初始化命令写进去0字节_当串口坏了重开_不放改正(monkeypatch):
-    import d1max_agent.rtk as R
+    import nexwar_agent.rtk as R
     monkeypatch.setattr(R, "REOPEN_S", 0.05)
     r = OwnRtk("/dev/x", 460800, init=["X"], now_ms=lambda: 0,
                open_port=lambda d, b: os.open(os.devnull, os.O_WRONLY))

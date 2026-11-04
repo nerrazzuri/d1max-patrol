@@ -9,7 +9,7 @@ import math
 
 import pytest
 
-from d1max_agent.bridge_localizer import (
+from nexwar_agent.bridge_localizer import (
     AUTO_RELOC_SIGMA_M,
     DR_MAX_M,
     FRESH_S,
@@ -17,8 +17,8 @@ from d1max_agent.bridge_localizer import (
     SIGMA_LOST_M,
     BridgeLocalizer,
 )
-from d1max_agent.localization import compose, inverse
-from d1max_contract.locbridge import Pose, Relocalize, Reply, SetPrior, State
+from nexwar_agent.localization import compose, inverse
+from nexwar_contract.locbridge import Pose, Relocalize, Reply, SetPrior, State
 
 M = ("estate-1", "7")
 
@@ -43,7 +43,7 @@ class 假桥:
         self.before_reply = None
 
     async def request(self, make, timeout_s):
-        from d1max_agent.bridge_localizer import LocalizerUnavailable
+        from nexwar_agent.bridge_localizer import LocalizerUnavailable
         if self.down:
             raise LocalizerUnavailable("定位器未连接")
         req = len(self.sent) + 1
@@ -1257,7 +1257,7 @@ async def test_S1_换图把记下的锚删掉_写不进盘不出错(tmp_path):
 
 
 async def test_S1_可信的帧攒着写_挪够了或隔够久才写(tmp_path, monkeypatch):
-    import d1max_agent.bridge_localizer as BL
+    import nexwar_agent.bridge_localizer as BL
     keep = tmp_path / "loc_anchor.json"
     c = 钟()
     loc, _ = _代理(c, keep)
@@ -1291,7 +1291,7 @@ async def test_S1_可信的帧攒着写_挪够了或隔够久才写(tmp_path, mo
 
 
 async def test_S6_σ偏大_在推算_算变差_好了过一阵才算回来_不可信的不算变差():
-    from d1max_agent.bridge_localizer import DEGRADED_HOLD_S, SIGMA_DEGRADED_M
+    from nexwar_agent.bridge_localizer import DEGRADED_HOLD_S, SIGMA_DEGRADED_M
     assert (SIGMA_DEGRADED_M, DEGRADED_HOLD_S) == (0.25, 3.0), "来由见常量注释,改了要重核"
     c, link, loc = await _就绪()
     _稳(loc, 0.0, 0.0)
@@ -1364,7 +1364,7 @@ async def test_工单11_上报的定位带原始ICP质量():
 async def test_W70_定位器还在跟踪_只是分低_丢定位重置先不重启它_宽限内回来了就不请(monkeypatch):
     """2026-11-03 C40221:原地转身套图分掉到 0.61、σ 过线,引擎判丢定位重置,按最后位置重定位 =
     Super-LIO 整个重启,停 7–20 s,修正量只有 2–9 cm。定位器自己还说在跟踪、没跳过:先等一阵。"""
-    import d1max_agent.bridge_localizer as B
+    import nexwar_agent.bridge_localizer as B
     monkeypatch.setattr(B, "RESET_GRACE_S", 2.0)
     monkeypatch.setattr(B, "RESET_POLL_S", 0.01)
     c, link, loc = await _就绪()
@@ -1383,7 +1383,7 @@ async def test_W70_定位器还在跟踪_只是分低_丢定位重置先不重�
 
 
 async def test_W70_定位器还在跟踪_宽限过了还不可信_才按最后位置请(monkeypatch):
-    import d1max_agent.bridge_localizer as B
+    import nexwar_agent.bridge_localizer as B
     monkeypatch.setattr(B, "RESET_GRACE_S", 2.0)
     monkeypatch.setattr(B, "RESET_POLL_S", 0.01)
     c, link, loc = await _就绪()

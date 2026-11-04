@@ -7,8 +7,8 @@ import json
 import math
 
 import pytest
-from d1max_localizer import replay, tools
-from d1max_localizer.frames import Frames, mat_to_quat
+from nexwar_localizer import replay, tools
+from nexwar_localizer.frames import Frames, mat_to_quat
 
 FLAT = Frames(up=(0.0, 0.0, 1.0), sensor_up=(0.0, 0.0, 1.0), sensor_forward=(1.0, 0.0, 0.0),
               sensor_height=0.0)
@@ -223,13 +223,13 @@ def test_回放命令_带里程文件(tmp_path, capsys):
 def test_合并话题回放_机身系用前雷达系():
     """合并的点云在前雷达系里(W09i):回放给 MOLA 的机身系要是 rslidar_head,原来只认 /front_lidar,
     合并话题给成 base_link,录包里查不到,一帧都不处理(2026-10-28 台式机回放 glass-160827)。"""
-    assert replay._frame_of("/d1max/merged_lidar") == "rslidar_head"
+    assert replay._frame_of("/nexwar/merged_lidar") == "rslidar_head"
     assert replay._frame_of("/front_lidar") == "rslidar_head"
 
 
 def test_W68_Super_LIO回放_IMU位姿换雷达位姿_点云按时间配位姿打分():
     import numpy as np
-    from d1max_localizer import slioloc as L
+    from nexwar_localizer import slioloc as L
     g = np.mgrid[-6:6:0.1, -6:6:0.1].reshape(2, -1).T
     walls = np.vstack([np.c_[g[:, 0], np.full(len(g), 6.0), (g[:, 1] + 6) / 4],
                        np.c_[np.full(len(g), 6.0), g[:, 0], (g[:, 1] + 6) / 4],
@@ -254,7 +254,7 @@ def test_W68_Super_LIO回放_IMU位姿换雷达位姿_点云按时间配位姿�
 
 def test_W68_Super_LIO没对上前时间戳为负的帧_回放不算():
     import numpy as np
-    from d1max_localizer import slioloc as L
+    from nexwar_localizer import slioloc as L
     fit = L.MapFit(np.array([[1.0, 0.0, 1.0]]))
     ext = ([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]], [0.0, 0.0, 0.0])
     q0 = (0.0, 0.0, 0.0, 1.0)

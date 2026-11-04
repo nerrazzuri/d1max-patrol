@@ -10,9 +10,9 @@ from types import SimpleNamespace
 import pytest
 from test_site_charging import 假告警台
 
-from d1max_contract.charging import FLOOR_PCT, TRIP_ABORT_PCT
-from d1max_site.charging import ChargeDesk
-from d1max_site.db import SiteDB
+from nexwar_contract.charging import FLOOR_PCT, TRIP_ABORT_PCT
+from nexwar_site.charging import ChargeDesk
+from nexwar_site.db import SiteDB
 
 
 class 假派遣器:
@@ -155,7 +155,7 @@ async def test_守到20去充_被拒_30秒后再派_不重复报(台):
 
 
 def test_去桩那一趟的中止线在守的线下面():
-    from d1max_contract.charging import LOW_PCT
+    from nexwar_contract.charging import LOW_PCT
     assert TRIP_ABORT_PCT < FLOOR_PCT < LOW_PCT
 
 

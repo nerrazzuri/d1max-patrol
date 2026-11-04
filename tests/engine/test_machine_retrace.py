@@ -19,11 +19,11 @@ import asyncio
 
 import pytest
 
-from d1max_agent.engine.homing import retrace_route_m
-from d1max_agent.engine.machine import RunState
-from d1max_agent.engine.mission import Mission, MissionWaypoint, Policy
-from d1max_patrol.backends.base import BatteryEvent, NavRequestError, NavStatusEvent
-from d1max_patrol.protocol.nav_types import NavStatus, Pose
+from nexwar_agent.engine.homing import retrace_route_m
+from nexwar_agent.engine.machine import RunState
+from nexwar_agent.engine.mission import Mission, MissionWaypoint, Policy
+from nexwar_patrol.backends.base import BatteryEvent, NavRequestError, NavStatusEvent
+from nexwar_patrol.protocol.nav_types import NavStatus, Pose
 
 from .conftest import _HOME, ARRIVED, NEVER, until
 

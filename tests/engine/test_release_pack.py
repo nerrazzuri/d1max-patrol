@@ -6,7 +6,7 @@
 
 这里最要紧的一条是 ``test_打出来的包过得了verify_package``:打包器和校验器
 要是对不上,现场看到的是 ``install.sh`` 停在 3/7,而那时 1/7、2/7 已经往
-``/opt/d1max`` 写过东西了。
+``/opt/nexwar`` 写过东西了。
 """
 
 from __future__ import annotations
@@ -17,8 +17,8 @@ from pathlib import Path
 
 import pytest
 
-from d1max_agent.engine import release
-from d1max_agent.engine.release import (
+from nexwar_agent.engine import release
+from nexwar_agent.engine.release import (
     MANIFEST_NAME,
     ReleaseError,
     pack,
@@ -26,7 +26,7 @@ from d1max_agent.engine.release import (
     tree_sha256,
     verify_package,
 )
-from d1max_contract.bundle_format import BUNDLE_SCHEMA
+from nexwar_contract.bundle_format import BUNDLE_SCHEMA
 
 #: 打包时刻,固定住 —— 包名里有日期,不固定的话测试会在跨 UTC 零点时翻脸。
 NOW_MS = 1_789_000_000_000
@@ -44,8 +44,8 @@ NOW_MS = 1_789_000_000_000
     "runs/r.json",
     "missions/m.yaml",
     ".git/HEAD",
-    "src/d1max_patrol/__pycache__/a.pyc",
-    "src/d1max_patrol.egg-info/PKG-INFO",
+    "src/nexwar_patrol/__pycache__/a.pyc",
+    "src/nexwar_patrol.egg-info/PKG-INFO",
     "src/半成品.tmp",
 )
 
@@ -60,27 +60,27 @@ def _源码树(root: Path, *, version: str = "0.3.0") -> Path:
         'version = "9.9.9-假的"\n'
         '\n'
         '[project]\n'
-        'name = "d1max-patrol"\n'
+        'name = "nexwar_patrol"\n'
         f'version = "{version}"\n'
         'requires-python = ">=3.10"\n'
         '\n'
         '[tool.ruff]\n'
         'version = "8.8.8-也是假的"\n',
         encoding="utf-8")
-    (root / "src" / "d1max_patrol").mkdir(parents=True, exist_ok=True)
-    (root / "src" / "d1max_patrol" / "__init__.py").write_text(
+    (root / "src" / "nexwar_patrol").mkdir(parents=True, exist_ok=True)
+    (root / "src" / "nexwar_patrol" / "__init__.py").write_text(
         "", encoding="utf-8")
     (root / "config" / "params").mkdir(parents=True, exist_ok=True)
     (root / "config" / "params" / "mapper_3d.yaml").write_text(
         "resolution: 0.05\n", encoding="utf-8")
     # W01b:deploy/ 也进包 —— OTA 升上来的机器要靠包里这份单元和助手更新自己。
     (root / "deploy").mkdir(parents=True, exist_ok=True)
-    for 名 in ("d1max-patrol.service", "d1max-privileged", "d1max-restart-now",
-              "sudoers-d1max", "install.sh"):
+    for 名 in ("nexwar_patrol.service", "nexwar_privileged", "nexwar_restart_now",
+              "sudoers-nexwar", "install.sh"):
         (root / "deploy" / 名).write_text(f"# {名}\n", encoding="utf-8")
     # W00b:packages/ 也进包(robot-agent 装进槽 venv);各包的 tests/ 不进。
-    for 包, 模块 in (("contract", "d1max_contract"), ("adapter-sim", "d1max_adapter_sim"),
-                   ("robot-agent", "d1max_agent")):
+    for 包, 模块 in (("contract", "nexwar_contract"), ("adapter-sim", "nexwar_adapter_sim"),
+                   ("robot-agent", "nexwar_agent")):
         (root / "packages" / 包 / "src" / 模块).mkdir(parents=True, exist_ok=True)
         (root / "packages" / 包 / "src" / 模块 / "__init__.py").write_text("", encoding="utf-8")
         (root / "packages" / 包 / "pyproject.toml").write_text(f'[project]\nname = "{包}"\n',
@@ -195,13 +195,13 @@ def test_三个包随包走但它们的tests不进(tmp_path, 无git):
 
 def test_单元文件和特权助手随包走(tmp_path, 无git):
     """W01b:``deploy/`` 原来不进包,OTA 升上来的机器单元永远是装机那天的版本
-    (没有 D1MAX_DATA_ROOT、StartLimitIntervalSec 在错的段)。``release activate``
+    (没有 NEXWAR_DATA_ROOT、StartLimitIntervalSec 在错的段)。``release activate``
     要从 ``releases/<版本>/deploy/`` 里拿单元交给特权助手装,所以它必须在包里。"""
     dest = pack(_源码树(tmp_path / "树"), tmp_path / "出", now_ms=NOW_MS)
-    assert (dest / "deploy" / "d1max-patrol.service").is_file()
-    assert (dest / "deploy" / "d1max-privileged").is_file()
-    assert (dest / "deploy" / "sudoers-d1max").is_file()
-    assert (dest / "deploy" / "d1max-restart-now").is_file()
+    assert (dest / "deploy" / "nexwar_patrol.service").is_file()
+    assert (dest / "deploy" / "nexwar_privileged").is_file()
+    assert (dest / "deploy" / "sudoers-nexwar").is_file()
+    assert (dest / "deploy" / "nexwar_restart_now").is_file()
 
 
 def test_服务要的那份建图参数在包里(tmp_path, 无git):
@@ -210,7 +210,7 @@ def test_服务要的那份建图参数在包里(tmp_path, 无git):
     """
     dest = pack(_源码树(tmp_path / "树"), tmp_path / "出", now_ms=NOW_MS)
     assert (dest / "config" / "params" / "mapper_3d.yaml").is_file()
-    assert (dest / "src" / "d1max_patrol" / "__init__.py").is_file()
+    assert (dest / "src" / "nexwar_patrol" / "__init__.py").is_file()
 
 
 def test_各包的构建产物不进包_叫build的源码模块照收(tmp_path, 无git):
@@ -218,25 +218,25 @@ def test_各包的构建产物不进包_叫build的源码模块照收(tmp_path, 
     进了包,狗上 setuptools 接着用它,装进去的是旧代码 —— 新参数不认,升级被开机守卫退回。"""
     树 = _源码树(tmp_path / "树")
     for 包 in ("contract", "robot-agent"):
-        for 产物 in ("build/lib/d1max_x/__init__.py", "dist/x-0.1.0.whl"):
+        for 产物 in ("build/lib/nexwar_x/__init__.py", "dist/x-0.1.0.whl"):
             p = 树 / "packages" / 包 / 产物
             p.parent.mkdir(parents=True, exist_ok=True)
             p.write_text("旧的\n", encoding="utf-8")
-    模块 = 树 / "packages" / "contract" / "src" / "d1max_contract" / "build" / "__init__.py"
+    模块 = 树 / "packages" / "contract" / "src" / "nexwar_contract" / "build" / "__init__.py"
     模块.parent.mkdir(parents=True)
     模块.write_text("# 真源码\n", encoding="utf-8")
     dest = pack(树, tmp_path / "出", now_ms=NOW_MS)
     for 包 in ("contract", "robot-agent"):
         assert not (dest / "packages" / 包 / "build").exists()
         assert not (dest / "packages" / 包 / "dist").exists()
-    assert (dest / "packages" / "contract" / "src" / "d1max_contract" / "build" /
+    assert (dest / "packages" / "contract" / "src" / "nexwar_contract" / "build" /
             "__init__.py").is_file()
     # 装好之后槽里长出构建产物(有人在槽里构建过),核槽时照样不算进来,跟打包时的规矩一致
     assert verify_package(dest).content_sha256 == read_manifest(dest).content_sha256
     (dest / "packages" / "contract" / "build").mkdir()
     (dest / "packages" / "contract" / "build" / "x.py").write_text("", encoding="utf-8")
     assert release._packed("packages/contract/build/x.py") is False
-    assert release._packed("packages/contract/src/d1max_contract/build/__init__.py") is True
+    assert release._packed("packages/contract/src/nexwar_contract/build/__init__.py") is True
 
 
 def test_该排掉的东西一个都没进包(tmp_path, 无git):
@@ -292,12 +292,12 @@ def test_加了force才盖(tmp_path, 无git):
 
 
 def test_名字不合规当场报错而且一个包都没造出来(tmp_path, 无git):
-    """``d1max-`` 前缀正是 install.sh 那段注释点名的坏法:_NAME_RE 不认它,
+    """``nexwar_`` 前缀正是 install.sh 那段注释点名的坏法:_NAME_RE 不认它,
     而带着它的包会一路被拷上 U 盘,到 3/7 才被拒。
     """
     出 = tmp_path / "出"
     with pytest.raises(ReleaseError, match="版本名不合规"):
-        pack(_源码树(tmp_path / "树"), 出, name="d1max-2026-09-10-abcdef",
+        pack(_源码树(tmp_path / "树"), 出, name="nexwar_2026_09_10_abcdef",
              now_ms=NOW_MS)
     assert not 出.exists() or list(出.iterdir()) == []
 

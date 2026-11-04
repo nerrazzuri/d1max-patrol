@@ -12,14 +12,14 @@ import math
 
 import pytest
 
-from d1max_patrol.protocol.pose_frames import (
+from nexwar_patrol.protocol.pose_frames import (
     PROTO_VERSION,
     PoseFrame,
     PoseHello,
     decode_frame,
 )
-from d1max_sim.agent_server import SimAgentServer
-from d1max_sim.pose_server import SimPoseServer
+from nexwar_sim.agent_server import SimAgentServer
+from nexwar_sim.pose_server import SimPoseServer
 
 
 @contextlib.asynccontextmanager

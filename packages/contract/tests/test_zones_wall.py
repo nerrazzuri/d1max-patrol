@@ -12,8 +12,8 @@ import math
 
 import pytest
 
-from d1max_contract.errors import ContractError
-from d1max_contract.zones import (
+from nexwar_contract.errors import ContractError
+from nexwar_contract.zones import (
     WALL_WIDTH_M,
     Zone,
     ZoneSet,
@@ -95,7 +95,7 @@ def test_摘要不算墙线_老狗回报的对得上():
 
 
 def test_墙线跟多边形对不上_契约不管_站点每次按线重算():
-    """契约只核墙线本身;多边形是站点算的(:mod:`d1max_site.nav_zones`),狗只按多边形守。"""
+    """契约只核墙线本身;多边形是站点算的(:mod:`nexwar_site.nav_zones`),狗只按多边形守。"""
     z = Zone.from_wire(_wire([(0, 0), (3, 0)]) | {"polygon": [[0, 0], [1, 0], [1, 1]]})
     assert z.wall is not None and len(z.polygon) == 3
 

@@ -8,7 +8,7 @@ import json
 
 import pytest
 
-from d1max_patrol.protocol.agent_frames import (
+from nexwar_patrol.protocol.agent_frames import (
     PROTO_VERSION,
     Ack,
     AgentProtocolError,

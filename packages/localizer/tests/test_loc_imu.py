@@ -11,9 +11,9 @@ import math
 
 import numpy as np
 import pytest
-from d1max_localizer import imu, main, replay, tools
-from d1max_localizer.frames import Frames, mat_to_quat
-from d1max_localizer.supervisor import mola_command
+from nexwar_localizer import imu, main, replay, tools
+from nexwar_localizer.frames import Frames, mat_to_quat
+from nexwar_localizer.supervisor import mola_command
 
 # C40221 前雷达:IMU 的「上」是 +y,点云的「上」是 −x(倒装);录包核出来 ω_点云 = (−ω_y, −ω_x, −ω_z)
 C40221 = np.array([[0.0, -1.0, 0.0], [-1.0, 0.0, 0.0], [0.0, 0.0, -1.0]])
@@ -172,7 +172,7 @@ def test_陀螺仪按轨迹的每一段取平均():
 
 def test_狗上_MOLA_接_IMU_的启动参数与环境变量():
     p = imu.ImuPrior("/front_lidar/imu", (-90.0, 0.0, 180.0))
-    cmd = mola_command(main_prior(), lidar_topic="/d1max/merged_lidar", imu=p)
+    cmd = mola_command(main_prior(), lidar_topic="/nexwar/merged_lidar", imu=p)
     args = dict(a.split(":=", 1) for a in cmd[4:])
     assert args["imu_topic_name"] == "/front_lidar/imu"
     assert args["ignore_imu_pose_from_tf"] == "True"          # 安装角按下面的环境变量,不查 tf
@@ -186,7 +186,7 @@ def test_不给_IMU_启动参数不变():
 
 def main_prior():
     from pathlib import Path
-    return Path("/var/lib/d1max/agent/maps/m/3/prior.mm")
+    return Path("/var/lib/nexwar/agent/maps/m/3/prior.mm")
 
 
 def test_定位器参数_给了话题就得给安装角(capsys):

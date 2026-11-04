@@ -6,9 +6,9 @@ import asyncio
 import inspect
 from types import SimpleNamespace
 
-from d1max_site.alert_store import AlertDesk
-from d1max_site.battery_swap import SwapDesk
-from d1max_site.db import SiteDB
+from nexwar_site.alert_store import AlertDesk
+from nexwar_site.battery_swap import SwapDesk
+from nexwar_site.db import SiteDB
 
 
 class 告警:

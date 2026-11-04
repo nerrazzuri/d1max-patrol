@@ -1,0 +1,56 @@
+#!/bin/sh
+# nexwar_agent 的启动脚本(W00c5d 第三部分内部评审 B1)。
+#
+# **启动参数归版本管,不归单元文件管。** 单元(nexwar_agent.service)只指着
+# /opt/nexwar/current/deploy/nexwar_agent_start,装机时装一次,之后不随版本换。新版加了参数、
+# 自己又起不来的时候,开机守卫把 current 指回上一版 —— 上一版的参数也跟着这个脚本一起回来;
+# 要是参数写在单元里,单元还是新版的,上一版的代码不认新参数,就再也起不来。
+#
+# 用的代码是**这个脚本所在的那一版**的(按脚本自己的位置找,不再经过 current 链)。
+# 现场值从 /etc/nexwar/env 来(单元的 EnvironmentFile):
+#   NEXWAR_SITE_MQTT=mqtts://<站点>:8883   NEXWAR_MAP=<map_id>:<version>   NEXWAR_HOME=x,y,yaw
+#   NEXWAR_HAL=sim|d1max(缺省 sim;W00d 真机验收过了才改 d1max)
+#   NEXWAR_AUTONOMY=supervised|autonomous(W00c6i;空着按适配器定:d1max 要人监护、sim 可自主)
+#   NEXWAR_LOCALIZER=anchor|bridge(W09a;空着 = anchor 里程锚定。bridge 要本机定位桥上有定位器,
+#                    真狗等 W09b 的定位器验过再设)
+#   NEXWAR_OBSTACLES=none|bridge(W11;空着 = none。bridge 要 NEXWAR_NAV=planned、起了 nexwar_obstacles,
+#                   真狗等 W11 的真机项验过再设)
+#   NEXWAR_PERSONS=none|bridge(W24;空着 = none。bridge 要起了 nexwar_persons、检测模型装好,
+#                 真狗等 W24 的真机项验过再设)
+#   NEXWAR_PERSONS_LISTEN=HOST:PORT  人员检测跨板(检测在厂家 Orin、代理在自带的 RK3588):人员桥改在这个地址听
+#                 TCP(比如 192.168.168.50:47010);空着 = 本机套接字。要有共享密钥 NEXWAR_PERSONS_KEY
+#                 (缺省 /etc/nexwar/persons.key,一行十六进制,chmod 600,两块板同一把);
+#                 NEXWAR_PERSONS_PEER=厂家 Orin 的 IP(只认它连上来,可不给)
+#   NEXWAR_NAV=straight|planned|nav2(W10;空着 = straight 直线桥。planned 在规划栅格上规划、守禁行区,
+#              真狗等 W10 的真机项验过再设;nav2 = 规划、避障交给 Nav2(W47),要起 nexwar_nav2、
+#              NEXWAR_OBSTACLES=bridge;Nav2 没就绪的那一段自动退回 planned)
+#   NEXWAR_AGENT_ARGS=其余参数(比如 --mapping、--sidecar 127.0.0.1:8090 --mps-per-unit …)
+set -eu
+here=$(cd "$(dirname "$0")/.." && pwd -P)
+# W68:这一版编的 Super-LIO 在哪(远程升级按版本记,外审 r2 #7);没记的老槽用 current
+if [ -z "${NEXWAR_SUPERLIO_ROOT:-}" ] && [ -f "$here/venv/superlio-root" ]; then
+  NEXWAR_SUPERLIO_ROOT=$(cat "$here/venv/superlio-root")
+  export NEXWAR_SUPERLIO_ROOT
+fi
+# numpy 的线性代数库(OpenBLAS)缺省开满核的线程;代理里的障碍记忆、全局重定位都是小矩阵(W71,同定位器)
+export OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1
+# NEXWAR_AGENT_ARGS 整串交给代理拆(W32):这一版不认识的参数跳过并报站点,退回老版也起得来
+exec "$here/venv/bin/nexwar_agent" \
+  --transport "${NEXWAR_SITE_MQTT:?/etc/nexwar/env 里没有 NEXWAR_SITE_MQTT(站点地址)}" \
+  --tls-ca /etc/nexwar/tls/ca.crt --tls-cert /etc/nexwar/tls/robot.crt \
+  --tls-key /etc/nexwar/tls/robot.key \
+  --hal "${NEXWAR_HAL:-sim}" \
+  ${NEXWAR_AUTONOMY:+--autonomy} ${NEXWAR_AUTONOMY:+"$NEXWAR_AUTONOMY"} \
+  ${NEXWAR_LOCALIZER:+--localizer} ${NEXWAR_LOCALIZER:+"$NEXWAR_LOCALIZER"} \
+  ${NEXWAR_NAV:+--nav} ${NEXWAR_NAV:+"$NEXWAR_NAV"} \
+  ${NEXWAR_OBSTACLES:+--obstacles} ${NEXWAR_OBSTACLES:+"$NEXWAR_OBSTACLES"} \
+  ${NEXWAR_PERSONS:+--persons} ${NEXWAR_PERSONS:+"$NEXWAR_PERSONS"} \
+  ${NEXWAR_PERSONS_LISTEN:+--persons-listen} ${NEXWAR_PERSONS_LISTEN:+"$NEXWAR_PERSONS_LISTEN"} \
+  ${NEXWAR_PERSONS_LISTEN:+--persons-key} \
+  ${NEXWAR_PERSONS_LISTEN:+"${NEXWAR_PERSONS_KEY:-/etc/nexwar/persons.key}"} \
+  ${NEXWAR_PERSONS_PEER:+--persons-peer} ${NEXWAR_PERSONS_PEER:+"$NEXWAR_PERSONS_PEER"} \
+  --registration /etc/nexwar/registration.json --store-dir /var/lib/nexwar/agent \
+  --outbox "${NEXWAR_OUTBOX:?单元里应该有 NEXWAR_OUTBOX}" \
+  --map "${NEXWAR_MAP:?/etc/nexwar/env 里没有 NEXWAR_MAP(地图号:版本)}" \
+  --home "${NEXWAR_HOME:?/etc/nexwar/env 里没有 NEXWAR_HOME(x,y,yaw)}" \
+  "--env-args=${NEXWAR_AGENT_ARGS:-}"

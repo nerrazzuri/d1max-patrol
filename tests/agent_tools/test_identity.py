@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import pytest
 
-from d1max_patrol.app.identity import (
+from nexwar_patrol.app.identity import (
     UNKNOWN_SN,
     Identity,
     clean_sn,

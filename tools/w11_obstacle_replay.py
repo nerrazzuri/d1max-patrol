@@ -26,9 +26,9 @@ def main(argv: list[str] | None = None) -> int:
     a = p.parse_args(argv)
 
     import rosbag2_py
-    from d1max_localizer.build import cloud_xyz
-    from d1max_localizer.frames import Frames
-    from d1max_localizer.obstacles import Config, Mount, Perception, permit_vmax
+    from nexwar_localizer.build import cloud_xyz
+    from nexwar_localizer.frames import Frames
+    from nexwar_localizer.obstacles import Config, Mount, Perception, permit_vmax
     from rclpy.serialization import deserialize_message
     from sensor_msgs.msg import PointCloud2
 
@@ -58,7 +58,7 @@ def main(argv: list[str] | None = None) -> int:
             pre += 1                                     # 自检还没过:整帧未知,不算进统计
             continue
         done += 1
-        from d1max_contract.obsbridge import unpack_bits
+        from nexwar_contract.obsbridge import unpack_bits
         occ = unpack_bits(g["occ"], cfg.size)
         known = unpack_bits(g["known"], cfg.size)
         clears.append(per.last_clear)

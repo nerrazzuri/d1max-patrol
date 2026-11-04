@@ -14,9 +14,9 @@ from __future__ import annotations
 import asyncio
 import contextlib
 
-from d1max_patrol.backends.sidecar_device import SidecarDeviceBackend
-from d1max_patrol.protocol.agent_frames import MotionStatus
-from d1max_sim.agent_server import SimAgentServer
+from nexwar_patrol.backends.sidecar_device import SidecarDeviceBackend
+from nexwar_patrol.protocol.agent_frames import MotionStatus
+from nexwar_sim.agent_server import SimAgentServer
 
 
 async def show(be: SidecarDeviceBackend, tag: str) -> None:

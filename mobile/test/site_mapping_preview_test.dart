@@ -2,8 +2,8 @@
 // 没在边走边建（只录包）、老狗（409）退回录包轨迹。
 import 'dart:convert';
 
-import 'package:d1max_patrol/net/site_client.dart';
-import 'package:d1max_patrol/ui/site_mapping.dart';
+import 'package:nexwar_patrol/net/site_client.dart';
+import 'package:nexwar_patrol/ui/site_mapping.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 

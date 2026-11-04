@@ -10,7 +10,7 @@ from datetime import datetime
 
 import pytest
 
-from d1max_contract.schedule import (
+from nexwar_contract.schedule import (
     DAYS,
     MAX_WINDOW_MIN,
     ON_MISSED,
@@ -217,18 +217,18 @@ def test_解出来的东西是冻的():
 
 def test_排程条目可以指定狗_不写时线格式不变():
     """W00c2a:站点执行排程时用 ``robot`` 指定哪台跑。老包没这个字段,导出也不多出来。"""
-    from d1max_contract.schedule import parse_schedule
+    from nexwar_contract.schedule import parse_schedule
     s = parse_schedule({"timezone": "Asia/Kuala_Lumpur", "entries": [
         {"id": "a", "mission": "m", "at": "22:00", "days": ["mon"], "window_min": 30,
-         "on_missed": "skip", "robot": "D1MAX-001"},
+         "on_missed": "skip", "robot": "NEXWAR-001"},
         {"id": "b", "mission": "m", "at": "23:00", "days": ["mon"], "window_min": 30,
          "on_missed": "skip"}]})
     a, b = s.entries
-    assert a.robot == "D1MAX-001" and a.to_wire()["robot"] == "D1MAX-001"
+    assert a.robot == "NEXWAR-001" and a.to_wire()["robot"] == "NEXWAR-001"
     assert b.robot == "" and "robot" not in b.to_wire()
     import pytest
 
-    from d1max_contract.schedule import ScheduleError
+    from nexwar_contract.schedule import ScheduleError
     with pytest.raises(ScheduleError):
         parse_schedule({"timezone": "UTC", "entries": [
             {"id": "c", "mission": "m", "at": "01:00", "days": ["mon"], "window_min": 5,
@@ -236,7 +236,7 @@ def test_排程条目可以指定狗_不写时线格式不变():
 
 
 def test_W14_任务的巡检点顺序_固定或打乱():
-    from d1max_contract.mission import MissionError, parse_mission
+    from nexwar_contract.mission import MissionError, parse_mission
     base = {"mission": "m", "map_id": "x", "waypoints": [
         {"name": "a", "pose": {"position": {"x": 0, "y": 0},
                                 "orientation": {"x": 0, "y": 0, "z": 0, "w": 1}}}]}

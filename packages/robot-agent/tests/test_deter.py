@@ -6,11 +6,11 @@ from __future__ import annotations
 
 from test_runtime_maps import REG, T, _cmd, _跑, 耳朵, 钟
 
-from d1max_adapter_sim.robot import SimRobot
-from d1max_agent.runtime import AgentRuntime
-from d1max_contract.memory_broker import MemoryBroker, MemoryTransport
-from d1max_contract.messages import MapPose
-from d1max_patrol.protocol.nav_types import Pose
+from nexwar_adapter_sim.robot import SimRobot
+from nexwar_agent.runtime import AgentRuntime
+from nexwar_contract.memory_broker import MemoryBroker, MemoryTransport
+from nexwar_contract.messages import MapPose
+from nexwar_patrol.protocol.nav_types import Pose
 
 
 async def _台(tmp_path, *, payload=True):
@@ -134,8 +134,8 @@ async def test_不占任务槽_去一个点的路上照样能开警灯(tmp_path)
 async def test_代理只派接上的那几路_没接的不碰设备():
     from types import SimpleNamespace
 
-    from d1max_agent.deter import DeterDesk
-    from d1max_contract.messages import Command
+    from nexwar_agent.deter import DeterDesk
+    from nexwar_contract.messages import Command
 
     class 只有警笛:
         calls: list = []
@@ -182,14 +182,14 @@ class _有回调的喇叭:
 
 
 def _喇叭命令(clip, prio, cid="c"):
-    from d1max_contract.messages import Command
+    from nexwar_contract.messages import Command
     p = {"output": "speaker", "on": True, "max_s": 60, "clip": clip, "priority": prio}
     return Command(command_id=cid, task_id=f"deter-{cid}", kind="deter", issued_at=1,
                    expires_at=2, control_epoch=1, payload=p)
 
 
 async def test_外审3_喇叭起不来_回拒绝_不记开_不占优先级():
-    from d1max_agent.deter import DeterDesk
+    from nexwar_agent.deter import DeterDesk
     hal, ev = _有回调的喇叭(), []
     desk = DeterDesk(hal, emit=lambda k, d: ev.append((k, d)))
     hal.fail = "喇叭放不出来: aplay 不在"
@@ -201,7 +201,7 @@ async def test_外审3_喇叭起不来_回拒绝_不记开_不占优先级():
 
 
 async def test_外审3_短话术放完了_当场放开优先级_记一条结束事件():
-    from d1max_agent.deter import DeterDesk
+    from nexwar_agent.deter import DeterDesk
     hal, ev = _有回调的喇叭(), []
     desk = DeterDesk(hal, emit=lambda k, d: ev.append((k, d)))
     assert await desk.handle(_喇叭命令("warn-zh", 90)) == ""
@@ -220,7 +220,7 @@ async def test_复查2_TTS合成中_关喇叭不排队_合成当场掐掉(tmp_pa
     关那一条也当场做,合成进程掐掉、不再起播放器。"""
     import asyncio
 
-    from d1max_adapter_d1max.payload import Payload, PayloadConfig
+    from nexwar_adapter_d1max.payload import Payload, PayloadConfig
 
     procs: list = []
 
@@ -302,8 +302,8 @@ async def test_W40_只开一边聚光灯_挑颜色_事件里记着(tmp_path):
 async def test_W40_HAL不报左右_颜色_代理回unsupported_不碰设备():
     from types import SimpleNamespace
 
-    from d1max_agent.deter import DeterDesk
-    from d1max_contract.messages import Command
+    from nexwar_agent.deter import DeterDesk
+    from nexwar_contract.messages import Command
     calls: list = []
 
     class 老上装:

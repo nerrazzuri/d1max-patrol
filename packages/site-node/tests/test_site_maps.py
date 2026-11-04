@@ -7,8 +7,8 @@ import json
 
 import pytest
 
-from d1max_site.db import SiteDB
-from d1max_site.maps import MapCatalog, MapError
+from nexwar_site.db import SiteDB
+from nexwar_site.maps import MapCatalog, MapError
 
 
 @pytest.fixture
@@ -63,7 +63,7 @@ def test_狗传上来的图_收齐而且哈希对上才登记(cat):
 def test_站点没让它建的图不收_版本撞了或文件对不上永远不收(cat):
     import hashlib
 
-    from d1max_site.evidence import PathRefused
+    from nexwar_site.evidence import PathRefused
     pgm = b"P5 new"
     ref = {"map_id": "estate-1", "version": "9",
            "files": [{"name": "estate-1.pgm", "size": len(pgm),
@@ -100,7 +100,7 @@ def test_收图不在请求里重算哈希_改名不拷贝(cat, monkeypatch):
     收块时已经算过整个文件的哈希(狗也拿它核过),登记时用它;同一块盘上改名。"""
     import os
 
-    import d1max_site.maps as M
+    import nexwar_site.maps as M
     with cat.db.tx() as c:
         c.execute("INSERT INTO commands(command_id, task_id, robot_id, kind, payload, issued_by, "
                   "issued_at, priority) VALUES ('c1','t1','A','map_build',?, 'alice', 1, 0)",
@@ -129,7 +129,7 @@ def test_文件传了一半又重传_记下的哈希作废(cat):
         c.execute("INSERT INTO commands(command_id, task_id, robot_id, kind, payload, issued_by, "
                   "issued_at, priority) VALUES ('c1','t1','A','map_build',?, 'alice', 1, 0)",
                   (json.dumps({"bag": "b", "map_id": "estate-1", "version": "9"}),))
-    from d1max_site.evidence import PathRefused
+    from nexwar_site.evidence import PathRefused
     cat.put_map_chunk("A", "estate-1/9", "x.pgm", offset=0, data=b"good", total=4)
     cat.put_map_chunk("A", "estate-1/9", "x.pgm", offset=0, data=b"ba", total=4)   # 从头重传,没传完
     (cat.incoming / "A" / "estate-1" / "9" / "x.pgm").write_bytes(b"badd")        # 盘上内容变了
@@ -185,7 +185,7 @@ def _cov_version(cat, tmp_path, version, cov=None, yaml_image="floor.pgm"):
 
 def test_哪里有图_文件太大不读_图名不在清单里不读_缓存有上限(cat, tmp_path, monkeypatch):
     """内审应修 2:狗传上来的 coverage.json、栅格整个读进内存,没有上限;缓存从不清。"""
-    import d1max_site.maps as M
+    import nexwar_site.maps as M
     _cov_version(cat, tmp_path, "1", cov={"version": 1, "path": [[0.0, 0.0]] * 50})
     monkeypatch.setattr(M, "MAX_COVERAGE_BYTES", 100)
     with pytest.raises(MapError, match="太大"):
@@ -205,7 +205,7 @@ def test_收完之后盘上的字节又变了_记下的哈希不作数(cat):
     import os
     import time as _t
 
-    from d1max_site.evidence import PathRefused
+    from nexwar_site.evidence import PathRefused
     with cat.db.tx() as c:
         c.execute("INSERT INTO commands(command_id, task_id, robot_id, kind, payload, issued_by, "
                   "issued_at, priority) VALUES ('c1','t1','A','map_build',?, 'alice', 1, 0)",
@@ -247,7 +247,7 @@ def test_登记失败_文件挪回收件目录_下次还能收(cat, monkeypatch)
 
 def test_边走边建的狗传上来的图也收(cat):
     """W09c2:站点让它在录包时建这一版(``mapping start`` 带地图号与版本),传上来照样收。"""
-    from d1max_site.evidence import PathRefused
+    from nexwar_site.evidence import PathRefused
     body = json.dumps({"map_id": "estate-1", "version": "5", "files": [
         {"name": "x.pgm", "size": 4, "sha256": hashlib.sha256(b"good").hexdigest()}]}).encode()
     with pytest.raises(PathRefused):

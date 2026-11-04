@@ -15,10 +15,10 @@ import json
 
 import pytest
 
-from d1max_patrol.backends.base import NavConnectionError
-from d1max_patrol.backends.vendor_nav import VendorNavBackend
-from d1max_patrol.config.models import NavConfig
-from d1max_patrol.conformance import (
+from nexwar_patrol.backends.base import NavConnectionError
+from nexwar_patrol.backends.vendor_nav import VendorNavBackend
+from nexwar_patrol.config.models import NavConfig
+from nexwar_patrol.conformance import (
     ConformanceResult,
     SchemaDiff,
     diff_recording,
@@ -33,8 +33,8 @@ from d1max_patrol.conformance import (
     run_conformance,
     run_probes,
 )
-from d1max_patrol.recorder import FrameRecorder
-from d1max_sim.nav_server import SimNavServer
+from nexwar_patrol.recorder import FrameRecorder
+from nexwar_sim.nav_server import SimNavServer
 
 _POLLER_OFF = 3600.0
 
@@ -351,7 +351,7 @@ def test_报告里差异不一致的条目会被写出来():
 
 def test_报告里的竖线不会撑坏表格():
     """返回值 repr 里带 | 的话 markdown 表格会串列。"""
-    from d1max_patrol.conformance import Call
+    from nexwar_patrol.conformance import Call
     result = ConformanceResult(started_at="t", nav_url="ws://x", allow_motion=False)
     result.calls = [Call("op", True, "a|b|c", 0.1)]
     row = [ln for ln in render_report(result).splitlines() if "`op`" in ln][0]

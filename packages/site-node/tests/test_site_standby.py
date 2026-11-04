@@ -9,10 +9,10 @@ import pytest
 from test_site_dispatcher import target, 台子
 from test_site_schedule import 打包, 毫秒
 
-from d1max_site.catalog import import_bundle
-from d1max_site.priorities import MANUAL, STANDBY_RETURN, schedule_priority
-from d1max_site.scheduler import SiteScheduler
-from d1max_site.standby import StandbyError, StandbyManager
+from nexwar_site.catalog import import_bundle
+from nexwar_site.priorities import MANUAL, STANDBY_RETURN, schedule_priority
+from nexwar_site.scheduler import SiteScheduler
+from nexwar_site.standby import StandbyError, StandbyManager
 
 
 @pytest.fixture
@@ -145,7 +145,7 @@ async def test_人按了abort_狗停在原地_不自动回(站):
 async def test_任务失败_不自动回_哪怕狗此刻看起来就绪(站, monkeypatch):
     """失败可能是安全裁定(比如前面有人):狗的就绪标志不一定变,站点不能靠「没就绪」来拦。
     这里让 HAL 拒速度(导航 Failed → 航点跳过 → goto failed),狗一直是就绪的。"""
-    from d1max_contract.hal import VelocityResult
+    from nexwar_contract.hal import VelocityResult
     t = 站
     t.stb.set("A", "dock", map_id="estate-1", map_version="7", x=0.0, y=0.0, yaw=0.0,
               default=True)
@@ -166,7 +166,7 @@ async def test_待命点的地图版本对不上就不回(站):
     t = 站
     t.stb.set("A", "dock", map_id="estate-1", map_version="6", x=0.0, y=0.0, yaw=0.0,
               default=True)
-    from d1max_site.dispatcher import DispatchRefused
+    from nexwar_site.dispatcher import DispatchRefused
     with pytest.raises(DispatchRefused, match="版本"):
         await t.send(t.stb.return_to("A", issued_by="alice"))
     sub = t.site.feed.subscribe()
@@ -506,7 +506,7 @@ async def test_钟差一直不知道_试够了才推standby_failed(站):
     await t.send(t.site.goto("A", target(0.8), 0.8, issued_by="alice", priority=MANUAL))
     t.site._skew = 不知道()
     await t.run(200)
-    from d1max_site.standby import STANDBY_TRANSIENT_RETRIES
+    from nexwar_site.standby import STANDBY_TRANSIENT_RETRIES
     assert len(waits) == STANDBY_TRANSIENT_RETRIES
     failed = [i for i in _feed(sub) if i["kind"] == "standby_failed"]
     assert len(failed) == 1 and "钟差未知" in failed[0]["reason"]
@@ -659,7 +659,7 @@ async def test_W14外审_站点重启之后晚到的结束事件_照派单时的
 
 async def _雷暴撤了一半的巡检(t):
     """巡检跑到一半被撤(雷暴撤巡检那样):回程意图落库、撤、等停稳。回 task_id。"""
-    from d1max_site.weather import WeatherDesk
+    from nexwar_site.weather import WeatherDesk
     t.stb.set("A", "dock", map_id="estate-1", map_version="7", x=0.0, y=0.0, yaw=0.0, default=True)
     r = await t.send(t.site.patrol("A", _巡检, issued_by="schedule:x", priority=MANUAL))
     tid = r["task_id"]
@@ -675,7 +675,7 @@ async def _雷暴撤了一半的巡检(t):
 
 
 async def test_W29复查_雷暴撤了一半_直线狗来路不明_不回_原地等_报没回待命点(站):
-    from d1max_site.alert_store import AlertDesk
+    from nexwar_site.alert_store import AlertDesk
     t = 站
     tid, w = await _雷暴撤了一半的巡检(t)
     w.alerts = AlertDesk(t.db, now_ms=t.clock)
@@ -700,7 +700,7 @@ async def test_W29复查_雷暴撤了一半_会规划的狗规划回去(站):
 async def test_W33外审_只许手动派的狗_雷暴撤巡检后的回程也不派(站):
     import pytest as _p
 
-    from d1max_site.standby import StandbyError
+    from nexwar_site.standby import StandbyError
     t = 站
     t.stb.set("A", "dock", map_id="estate-1", map_version="7", x=0.0, y=0.0, yaw=0.0, default=True)
     t.reg.set_manual_only("A", True, by="alice", now_ms=0)

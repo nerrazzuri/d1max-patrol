@@ -8,8 +8,8 @@ from types import SimpleNamespace
 import pytest
 from test_site_api import PW, _等, 站
 
-from d1max_site.db import SiteDB
-from d1max_site.pose_track import CELL_M, KEEP_MS, MAX_GAP_MS, STEP_M, PoseTrack
+from nexwar_site.db import SiteDB
+from nexwar_site.pose_track import CELL_M, KEEP_MS, MAX_GAP_MS, STEP_M, PoseTrack
 
 
 def tel(stamp: int, x: float | None, y: float = 0.0, version: str = "1"):

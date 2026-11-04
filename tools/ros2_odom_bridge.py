@@ -5,7 +5,7 @@
 
 它跑在 ROS2 的系统 Python 下(``/usr/bin/python3``,能 import rclpy),
 不是本仓库的 venv —— venv 里没有 rclpy,而往 venv 里塞 ROS2 是条死路。
-所以这里不 import 任何 ``d1max_patrol`` 的东西,线协议就地手写一遍。
+所以这里不 import 任何 ``nexwar_patrol`` 的东西,线协议就地手写一遍。
 协议本身只有一行 JSON,重复这点代价换来"能直接跑"是值的。
 
     /usr/bin/python3 tools/ros2_odom_bridge.py --agent 127.0.0.1:8090
@@ -65,7 +65,7 @@ def _yaw_to_quat(yaw: float) -> tuple:
 class OdomBridge(Node):
     def __init__(self, host: str, port: int, odom_frame: str, base_frame: str,
                  statics: bool) -> None:
-        super().__init__("d1max_odom_bridge")
+        super().__init__("nexwar_odom_bridge")
         self._odom_frame = odom_frame
         self._base_frame = base_frame
         self._pub = self.create_publisher(Odometry, "odom", 10)

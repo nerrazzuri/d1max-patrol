@@ -14,14 +14,14 @@ from zoneinfo import ZoneInfo
 import pytest
 from test_site_schedule import 任务, 打包
 
-from d1max_contract.mission import parse_mission
-from d1max_site import adhoc as ah
-from d1max_site.adhoc import AdhocDesk, AdhocError, geom_estimate_s
-from d1max_site.catalog import import_bundle
-from d1max_site.db import SiteDB
-from d1max_site.dispatcher import DispatchRefused
-from d1max_site.priorities import MANUAL
-from d1max_site.today import today_view
+from nexwar_contract.mission import parse_mission
+from nexwar_site import adhoc as ah
+from nexwar_site.adhoc import AdhocDesk, AdhocError, geom_estimate_s
+from nexwar_site.catalog import import_bundle
+from nexwar_site.db import SiteDB
+from nexwar_site.dispatcher import DispatchRefused
+from nexwar_site.priorities import MANUAL
+from nexwar_site.today import today_view
 
 KL = ZoneInfo("Asia/Kuala_Lumpur")
 
@@ -329,7 +329,7 @@ def test_外审1_排队的到点起跑前再查监护_没人监护就不派(台)
 
 
 def test_外审2和3_通知经过真告警台_一次一条不合并_各推各的人(tmp_path):
-    from d1max_site.alert_store import AlertDesk
+    from nexwar_site.alert_store import AlertDesk
     db = SiteDB(tmp_path / "s.db")
     import_bundle(db, 打包(tmp_path, 1), imported_by="alice", now_ms=1)
     now = {"t": 毫秒(21, 59)}
@@ -361,7 +361,7 @@ def test_外审4_机器人明确没收_记成没走成_晚到的拒收也改(台
     t.disp.ack = "accepted"
     t.disp.running.clear()
     got = 跑(t.desk.submit("A", 任务定义(), label="loop", by="gina"))
-    from d1max_contract.messages import AckResult
+    from nexwar_contract.messages import AckResult
     for cb in t.disp.acks:
         cb(SimpleNamespace(task_id=got["task_id"], result=AckResult.REJECTED, reason="busy"))
     row = t.db.query("SELECT * FROM adhoc_queue WHERE task_id=?", (got["task_id"],))[0]
@@ -419,7 +419,7 @@ def test_外审11_排到明天的也在今天的列表里_能取消(台):
     t = 台
     with t.db.tx() as c:
         c.execute("UPDATE route_schedules SET definition=json_set(definition, '$.at', '00:10')")
-    from d1max_site.catalog import active_bundle
+    from nexwar_site.catalog import active_bundle
     assert active_bundle(t.db).schedule.entries[0].at_h == 0
     t.now["t"] = 毫秒(23, 59)
     got = 跑(t.desk.submit("A", 任务定义(), label="loop", by="gina"))

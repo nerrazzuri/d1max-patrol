@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from d1max_contract.errors import ContractError
-from d1max_contract.hal import (
+from nexwar_contract.errors import ContractError
+from nexwar_contract.hal import (
     Battery,
     Fault,
     HalCapabilities,

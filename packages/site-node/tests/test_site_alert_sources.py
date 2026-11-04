@@ -1,10 +1,10 @@
 
 
 def test_W17_狗的告警带现场_最后在哪_在跑哪一趟_重启读回来还在(tmp_path):
-    from d1max_contract.messages import MapPose, Telemetry
-    from d1max_site.alert_sources import SiteAlertSources
-    from d1max_site.alert_store import AlertDesk
-    from d1max_site.db import SiteDB
+    from nexwar_contract.messages import MapPose, Telemetry
+    from nexwar_site.alert_sources import SiteAlertSources
+    from nexwar_site.alert_store import AlertDesk
+    from nexwar_site.db import SiteDB
     now = [1_000_000]
     db = SiteDB(tmp_path / "s.db")
     desk = AlertDesk(db, now_ms=lambda: now[0])
@@ -23,8 +23,8 @@ def test_W17_狗的告警带现场_最后在哪_在跑哪一趟_重启读回来�
 
 
 def test_W17_现场拿不到不挡告警(tmp_path):
-    from d1max_site.alert_store import AlertDesk
-    from d1max_site.db import SiteDB
+    from nexwar_site.alert_store import AlertDesk
+    from nexwar_site.db import SiteDB
     desk = AlertDesk(SiteDB(tmp_path / "s.db"), now_ms=lambda: 1)
 
     def 炸(_):
@@ -37,8 +37,8 @@ def test_W17_现场拿不到不挡告警(tmp_path):
 def test_W17_老库升级_告警表补上现场列(tmp_path):
     import sqlite3
 
-    from d1max_site.alert_store import AlertDesk
-    from d1max_site.db import SiteDB
+    from nexwar_site.alert_store import AlertDesk
+    from nexwar_site.db import SiteDB
     p = tmp_path / "s.db"
     c = sqlite3.connect(p)
     c.execute("CREATE TABLE alerts (key TEXT PRIMARY KEY, level TEXT NOT NULL, kind TEXT NOT NULL, "
@@ -55,8 +55,8 @@ def test_W17_老库升级_告警表补上现场列(tmp_path):
 
 
 def _故障事件(seq, *codes):
-    from d1max_contract.hal import Fault
-    from d1max_contract.messages import Event, fault_event_data
+    from nexwar_contract.hal import Fault
+    from nexwar_contract.messages import Event, fault_event_data
     return Event(event_id=f"e{seq}", seq=seq, boot_id="b", stamp=1, kind="robot_fault",
                  data=fault_event_data(tuple(Fault(code=c, fatal=False, text=f"{c} 关不上")
                                              for c in codes)))
@@ -67,9 +67,9 @@ def _开着的(desk, kind):
 
 
 def test_W21复查_上装关不上_每一路一条P1_重复上报不重复_好了解决_站点重启也对得上(tmp_path):
-    from d1max_site.alert_sources import SiteAlertSources
-    from d1max_site.alert_store import AlertDesk
-    from d1max_site.db import SiteDB
+    from nexwar_site.alert_sources import SiteAlertSources
+    from nexwar_site.alert_store import AlertDesk
+    from nexwar_site.db import SiteDB
     db = SiteDB(tmp_path / "s.db")
     desk = AlertDesk(db, now_ms=lambda: 1_000)
     src = SiteAlertSources(desk, now_ms=lambda: 1_000)
@@ -94,9 +94,9 @@ def test_W21复查_上装关不上_每一路一条P1_重复上报不重复_好�
 
 
 def test_W21复查_别的狗的上装故障不串(tmp_path):
-    from d1max_site.alert_sources import SiteAlertSources
-    from d1max_site.alert_store import AlertDesk
-    from d1max_site.db import SiteDB
+    from nexwar_site.alert_sources import SiteAlertSources
+    from nexwar_site.alert_store import AlertDesk
+    from nexwar_site.db import SiteDB
     desk = AlertDesk(SiteDB(tmp_path / "s.db"), now_ms=lambda: 1)
     src = SiteAlertSources(desk, now_ms=lambda: 1)
     src.on_event("A", _故障事件(1, "payload_strobe"))
@@ -108,8 +108,8 @@ def _落库(db, rid, seq, *codes, at=1):
     """像派遣器那样先把事件存进库(告警源回调没成也在库里)。"""
     import json
 
-    from d1max_contract.hal import Fault
-    from d1max_contract.messages import fault_event_data
+    from nexwar_contract.hal import Fault
+    from nexwar_contract.messages import fault_event_data
     db.query("INSERT INTO events(robot_id, boot_id, seq, event_id, kind, data, stamp, received_at) "
              "VALUES (?,?,?,?,?,?,?,?)",
              (rid, "b", seq, f"e{seq}", "robot_fault",
@@ -118,9 +118,9 @@ def _落库(db, rid, seq, *codes, at=1):
 
 
 def _台(tmp_path):
-    from d1max_site.alert_sources import SiteAlertSources
-    from d1max_site.alert_store import AlertDesk
-    from d1max_site.db import SiteDB
+    from nexwar_site.alert_sources import SiteAlertSources
+    from nexwar_site.alert_store import AlertDesk
+    from nexwar_site.db import SiteDB
     db = SiteDB(tmp_path / "s.db")
     desk = AlertDesk(db, now_ms=lambda: 1_000)
     return db, desk, SiteAlertSources(desk, now_ms=lambda: 1_000)
@@ -160,8 +160,8 @@ def test_W21复查2_好了_解决没成_下一拍接着解决(tmp_path):
 
 
 def test_W21复查2_事件落了库告警没做成_站点重启后对账补上(tmp_path):
-    from d1max_site.alert_sources import SiteAlertSources
-    from d1max_site.alert_store import AlertDesk
+    from nexwar_site.alert_sources import SiteAlertSources
+    from nexwar_site.alert_store import AlertDesk
     db, desk, src = _台(tmp_path)
     _落库(db, "A", 1, "payload_siren", "payload_strobe", at=10)
     _落库(db, "A", 2, "payload_siren", at=20)                # A 最近一条:只剩警笛
@@ -206,11 +206,11 @@ def test_W21复查2_一台对账炸了_不挡别的台(tmp_path):
 
 def test_W41_狗在禁行区里的P1_出了禁行区够远够久_或者区域删了_自己解决(tmp_path):
     """2026-10-26 现场:禁行区删了、狗也不在里面了,P1 还挂着、也不提示能关。"""
-    from d1max_contract.messages import Event, MapPose, Telemetry
-    from d1max_contract.zones import ZoneSet
-    from d1max_site.alert_sources import NOGO_CLEAR_M, NOGO_CLEAR_S, SiteAlertSources
-    from d1max_site.alert_store import AlertDesk
-    from d1max_site.db import SiteDB
+    from nexwar_contract.messages import Event, MapPose, Telemetry
+    from nexwar_contract.zones import ZoneSet
+    from nexwar_site.alert_sources import NOGO_CLEAR_M, NOGO_CLEAR_S, SiteAlertSources
+    from nexwar_site.alert_store import AlertDesk
+    from nexwar_site.db import SiteDB
     now = [1_000_000]
     desk = AlertDesk(SiteDB(tmp_path / "s.db"), now_ms=lambda: now[0])
     src = SiteAlertSources(desk, now_ms=lambda: now[0])
@@ -265,11 +265,11 @@ def test_W41_定位不可信时报的位置不算出了禁行区(tmp_path):
     离开够远够久照常解决(从好了那一刻起重新计)。"""
     from test_site_alerts import _status
 
-    from d1max_contract.messages import Event, MapPose, Telemetry
-    from d1max_contract.zones import ZoneSet
-    from d1max_site.alert_sources import NOGO_CLEAR_M, NOGO_CLEAR_S, SiteAlertSources
-    from d1max_site.alert_store import AlertDesk
-    from d1max_site.db import SiteDB
+    from nexwar_contract.messages import Event, MapPose, Telemetry
+    from nexwar_contract.zones import ZoneSet
+    from nexwar_site.alert_sources import NOGO_CLEAR_M, NOGO_CLEAR_S, SiteAlertSources
+    from nexwar_site.alert_store import AlertDesk
+    from nexwar_site.db import SiteDB
     now = [1_000_000]
     desk = AlertDesk(SiteDB(tmp_path / "s.db"), now_ms=lambda: now[0])
     src = SiteAlertSources(desk, now_ms=lambda: now[0])

@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from d1max_agent.engine.release import (
+from nexwar_agent.engine.release import (
     MANIFEST_NAME,
     MAX_BOOT_ATTEMPTS,
     Layout,
@@ -21,7 +21,7 @@ from d1max_agent.engine.release import (
     tree_sha256,
     write_pending,
 )
-from d1max_patrol.cli import _release_root, build_parser, main
+from nexwar_patrol.cli import _release_root, build_parser, main
 
 NOW = 1_700_000_000_000
 
@@ -83,7 +83,7 @@ def test_切版本记的sn跟环境变量对齐(tmp_path, monkeypatch):
     对不上,把一版好的自动回滚掉(见 fix1 brief 第 1 条)。
     """
     root = tmp_path / "opt"
-    monkeypatch.setenv("D1MAX_SN", "D1M-XYZ-9")
+    monkeypatch.setenv("NEXWAR_SN", "D1M-XYZ-9")
     main(["release", "install", "--unsigned", str(_pkg(tmp_path / "p", "2026-09-20-77b2de")),
           "--root", str(root)])
     assert main(["release", "activate", "2026-09-20-77b2de",
@@ -199,7 +199,7 @@ def test_守卫看的是根不是自己装在哪(tmp_path):
 def test_根路径也能从环境变量来(tmp_path, monkeypatch, capsys):
     """systemd 单元里写环境变量比写一长串参数干净。"""
     root = tmp_path / "opt"
-    monkeypatch.setenv("D1MAX_RELEASE_ROOT", str(root))
+    monkeypatch.setenv("NEXWAR_RELEASE_ROOT", str(root))
     main(["release", "install", "--unsigned", str(_pkg(tmp_path / "p", "2026-09-20-77b2de"))])
     capsys.readouterr()
     assert main(["release", "list"]) == 0
@@ -254,7 +254,7 @@ def test_migrate_data默认数据根读环境变量(tmp_path, monkeypatch):
     stage(layout, _pkg(tmp_path / "pkg", "2026-09-20-77b2de"), now_ms=NOW)
     (layout.releases / "2026-09-20-77b2de" / "queue.jsonl").write_text(
         json.dumps({"key": "r/x/events.jsonl", "priority": 2}) + "\n", encoding="utf-8")
-    monkeypatch.setenv("D1MAX_DATA_ROOT", str(data))
+    monkeypatch.setenv("NEXWAR_DATA_ROOT", str(data))
 
     assert main(["release", "migrate-data", "--root", str(root)]) == 0
     assert '"key": "r/x/events.jsonl"' in (data / "queue.jsonl").read_text(encoding="utf-8")
@@ -280,12 +280,12 @@ def test_migrate_data合并出错时退非零而且提示搬迁失败(tmp_path, 
 
 
 def test_release_root默认取opt_d1max(monkeypatch):
-    """三级优先级(--root > D1MAX_RELEASE_ROOT > /opt/d1max)只测过前两级。
+    """三级优先级(--root > NEXWAR_RELEASE_ROOT > /opt/nexwar)只测过前两级。
 
-    这里只调纯函数,不经过 main(),绝不能真的去碰 /opt/d1max。
+    这里只调纯函数,不经过 main(),绝不能真的去碰 /opt/nexwar。
     """
-    monkeypatch.delenv("D1MAX_RELEASE_ROOT", raising=False)
-    assert _release_root(None) == Path("/opt/d1max")
+    monkeypatch.delenv("NEXWAR_RELEASE_ROOT", raising=False)
+    assert _release_root(None) == Path("/opt/nexwar")
 
 
 # ------------------------------------------------------- pack(在笔记本上跑)
@@ -295,16 +295,16 @@ def _源码树(root):
     """一棵最小的、能被 pack 收下的源码树。字段都跟真仓库一个形状。"""
     root.mkdir(parents=True, exist_ok=True)
     (root / "pyproject.toml").write_text(
-        '[project]\nname = "d1max-patrol"\nversion = "0.4.2"\n',
+        '[project]\nname = "nexwar_patrol"\nversion = "0.4.2"\n',
         encoding="utf-8")
-    (root / "src" / "d1max_patrol").mkdir(parents=True, exist_ok=True)
-    (root / "src" / "d1max_patrol" / "__init__.py").write_text(
+    (root / "src" / "nexwar_patrol").mkdir(parents=True, exist_ok=True)
+    (root / "src" / "nexwar_patrol" / "__init__.py").write_text(
         "", encoding="utf-8")
     (root / "config" / "params").mkdir(parents=True, exist_ok=True)
     (root / "config" / "params" / "mapper_3d.yaml").write_text(
         "resolution: 0.05\n", encoding="utf-8")
     (root / "deploy").mkdir(parents=True, exist_ok=True)          # W01b:deploy/ 进包
-    (root / "deploy" / "d1max-patrol.service").write_text("[Unit]\n", encoding="utf-8")
+    (root / "deploy" / "nexwar_patrol.service").write_text("[Unit]\n", encoding="utf-8")
     for 包 in ("contract", "adapter-sim", "robot-agent"):           # W00b:packages/ 进包
         (root / "packages" / 包).mkdir(parents=True, exist_ok=True)
         (root / "packages" / 包 / "pyproject.toml").write_text("[project]\n", encoding="utf-8")
@@ -343,7 +343,7 @@ def test_pack打出来的包能被install真的收下(tmp_path, capsys):
 def test_pack名字不合规退非零(tmp_path, capsys):
     出 = tmp_path / "出"
     assert main(["release", "pack", str(_源码树(tmp_path / "树")), str(出),
-                 "--name", "d1max-2026-09-20-77b2de"]) == 2
+                 "--name", "nexwar_2026_09_20_77b2de"]) == 2
     assert "打不了包" in capsys.readouterr().err
     assert not 出.exists() or list(出.iterdir()) == []
 
@@ -379,7 +379,7 @@ def test_切版本不碰单元_说清要重启代理(tmp_path, capsys):
     capsys.readouterr()
     assert main(["release", "activate", "2026-09-20-77b2de", "--root", str(root)]) == 0
     out = capsys.readouterr().out
-    assert "单元文件" not in out and "d1max-agent" in out
+    assert "单元文件" not in out and "nexwar_agent" in out
 
 
 def test_命令行点名切回老服务那一代的槽_退非零链不动(tmp_path, capsys):
@@ -391,8 +391,8 @@ def test_命令行点名切回老服务那一代的槽_退非零链不动(tmp_pa
     stage(layout, _pkg(tmp_path / "p1", old), now_ms=NOW)
     pkg = tmp_path / "p2" / new
     (pkg / "deploy").mkdir(parents=True)
-    (pkg / "deploy" / "d1max-agent-start").write_text("#!/bin/sh\n", encoding="utf-8")
-    (pkg / "deploy" / "d1max-agent-start").chmod(0o755)
+    (pkg / "deploy" / "nexwar_agent_start").write_text("#!/bin/sh\n", encoding="utf-8")
+    (pkg / "deploy" / "nexwar_agent_start").chmod(0o755)
     (pkg / MANIFEST_NAME).write_text(json.dumps({
         "name": new, "version": "0.3.0", "content_sha256": tree_sha256(pkg),
         "requires_mission_schema": 1, "built_at": "2026-09-26T03:11:00Z"}), encoding="utf-8")

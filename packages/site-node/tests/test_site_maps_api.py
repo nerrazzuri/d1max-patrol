@@ -224,7 +224,7 @@ def test_原点表优先_挪删待命点不动原点(站点):
     _确认(s, alice, "14")
     _待命点(s, "14", 3.0, name="gate")
     _原点(s, "14", 0.5)
-    from d1max_site.standby import StandbyManager
+    from nexwar_site.standby import StandbyManager
     stb = s.api.standby or StandbyManager(s.db, s.disp, now_ms=s.disp._now)
     stb.set("A", "gate", map_id=MAP[0], map_version="14", x=9.0, y=9.0, yaw=0.0)
     stb.remove("A", "gate")

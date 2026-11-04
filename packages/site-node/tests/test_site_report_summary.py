@@ -9,8 +9,8 @@ from zoneinfo import ZoneInfo
 import pytest
 from test_site_api import PW, 站
 
-from d1max_site.db import SiteDB
-from d1max_site.reports import ReportError, summary
+from nexwar_site.db import SiteDB
+from nexwar_site.reports import ReportError, summary
 
 KL = ZoneInfo("Asia/Kuala_Lumpur")
 
@@ -169,7 +169,7 @@ def test_W60_指标_平均响应_确认率_只算给保安的(db):
 
 
 def test_W60_指标_机器人和摄像头可用率_按掉线告警扣(db):
-    from d1max_site.registry import Registry
+    from nexwar_site.registry import Registry
     reg = Registry(db, site_id="s")
     reg.enroll("A", fingerprint="fa", issued_at=0, expires_at=2**50)
     reg.enroll("B", fingerprint="fb", issued_at=0, expires_at=2**50)

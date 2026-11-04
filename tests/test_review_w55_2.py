@@ -23,27 +23,27 @@ def _code(**d) -> str:
 @pytest.mark.parametrize("mqtt", ["mqtts://h:8883\nLD_PRELOAD=/tmp/x.so", "mqtts://h:8883 x",
                                   "http://h:1", "mqtts://h"])
 def test_C6_开通码里的消息服务地址不对_拒(mqtt):
-    from d1max_patrol.provision import ProvisionError, decode
+    from nexwar_patrol.provision import ProvisionError, decode
     with pytest.raises(ProvisionError, match="消息服务地址"):
         decode(_code(mqtt=mqtt))
     assert decode(_code())["mqtt"] == "mqtts://172.29.70.1:8883"
 
 
 def test_C6_env_的值带换行_拒(tmp_path):
-    from d1max_patrol.provision import set_env
+    from nexwar_patrol.provision import set_env
     env = tmp_path / "env"
     env.write_text("A=1\n")
     with pytest.raises(ValueError):
-        set_env(env, "D1MAX_SITE_MQTT", "x\nLD_PRELOAD=/tmp/evil.so")
+        set_env(env, "NEXWAR_SITE_MQTT", "x\nLD_PRELOAD=/tmp/evil.so")
     with pytest.raises(ValueError):
         set_env(env, "LD PRELOAD", "x")
     assert env.read_text() == "A=1\n"
-    set_env(env, "D1MAX_SITE_MQTT", "mqtts://h:8883")
-    assert "D1MAX_SITE_MQTT=mqtts://h:8883" in env.read_text()
+    set_env(env, "NEXWAR_SITE_MQTT", "mqtts://h:8883")
+    assert "NEXWAR_SITE_MQTT=mqtts://h:8883" in env.read_text()
 
 
 def test_C7_清机_要清的目录被换成链接_不删过去(tmp_path):
-    from d1max_patrol.bind.wipe import _clear_dir
+    from nexwar_patrol.bind.wipe import _clear_dir
     keep = tmp_path / "system"
     keep.mkdir()
     (keep / "important").write_text("x")
@@ -56,7 +56,7 @@ def test_C7_清机_要清的目录被换成链接_不删过去(tmp_path):
 
 
 def test_C7_清机_上级目录是链接也不跟(tmp_path):
-    from d1max_patrol.bind.wipe import _clear_dir
+    from nexwar_patrol.bind.wipe import _clear_dir
     real = tmp_path / "real"
     (real / "outbox").mkdir(parents=True)
     (real / "outbox" / "f").write_text("x")
@@ -67,7 +67,7 @@ def test_C7_清机_上级目录是链接也不跟(tmp_path):
 
 
 def test_C7_清机_正常目录里的东西都删掉_链接只删链接(tmp_path):
-    from d1max_patrol.bind.wipe import _clear_dir
+    from nexwar_patrol.bind.wipe import _clear_dir
     d = tmp_path / "data"
     (d / "runs" / "a").mkdir(parents=True)
     (d / "runs" / "a" / "x").write_text("1")

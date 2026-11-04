@@ -136,9 +136,9 @@ def test_在事件循环里报告警_直接报不等自己(tmp_path):
     """LoopAlerts 从循环线程里调(比如以后派遣器里报):跳回循环再等结果会等自己,等满 10 s 才炸。"""
     import time as _t
 
-    from d1max_site.alert_store import AlertDesk, LoopAlerts
-    from d1max_site.db import SiteDB
-    from d1max_site.loop import LoopThread
+    from nexwar_site.alert_store import AlertDesk, LoopAlerts
+    from nexwar_site.db import SiteDB
+    from nexwar_site.loop import LoopThread
     lt = LoopThread()
     lt.start()
     try:

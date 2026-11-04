@@ -8,7 +8,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from d1max_contract.schedule import (
+from nexwar_contract.schedule import (
     DecisionKind,
     ScheduleError,
     decide,
@@ -95,7 +95,7 @@ def test_回哪个待命点():
 
 
 def test_W14外审_一段时间里的每一轮_包括前一天起头跨午夜的():
-    from d1max_contract.schedule import occurrences_between
+    from nexwar_contract.schedule import occurrences_between
     e = 排程()
     got = occurrences_between(e, 刻(10, 2, 21, 0), 刻(10, 3, 2, 30))
     assert got == [刻(10, 2, 22, 0), 刻(10, 2, 23, 0), 刻(10, 3, 0, 0), 刻(10, 3, 1, 0),

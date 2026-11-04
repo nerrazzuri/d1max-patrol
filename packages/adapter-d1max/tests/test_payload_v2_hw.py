@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 from test_payload import _等到, 假板子
 
-from d1max_adapter_d1max.payload import (
+from nexwar_adapter_d1max.payload import (
     AlsaMute,
     ModbusRelay,
     Payload,
@@ -189,7 +189,7 @@ def test_系统静音_调amixer_开关对应mute和unmute():
 
 
 def test_生产设置断线全关_写0x0030_读回来(板子):
-    from d1max_adapter_d1max.payload import relay_setup
+    from nexwar_adapter_d1max.payload import relay_setup
     板子.holding[0x30] = 0
     got = relay_setup(ModbusRelay(板子.open, timeout_s=0.2, retries=0), watchdog_ds=50)
     assert 板子.holding[0x30] == 50 and got["watchdog_ds"] == 50

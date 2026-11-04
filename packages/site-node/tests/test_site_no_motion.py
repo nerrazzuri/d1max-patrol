@@ -19,7 +19,7 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-SRC = Path(__file__).resolve().parents[1] / "src" / "d1max_site"
+SRC = Path(__file__).resolve().parents[1] / "src" / "nexwar_site"
 
 #: 站点会发给狗的命令(都是任务级或维护级)。``teleop`` 是授予遥控租约,不是速度;杆量走单独的遥控帧。
 ALLOWED_KINDS = frozenset({

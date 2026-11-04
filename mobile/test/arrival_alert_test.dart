@@ -1,7 +1,7 @@
 // W69 巡检到点提醒（用户 2026-11-03：现场测试时不用盯着地图看到没到点）。
-import 'package:d1max_patrol/l10n.dart';
-import 'package:d1max_patrol/ui/arrival_alert.dart';
-import 'package:d1max_patrol/ui/site_robots.dart';
+import 'package:nexwar_patrol/l10n.dart';
+import 'package:nexwar_patrol/ui/arrival_alert.dart';
+import 'package:nexwar_patrol/ui/site_robots.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 

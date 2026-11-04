@@ -4,7 +4,7 @@ import inspect
 
 import pytest
 
-from d1max_patrol.backends.base import (
+from nexwar_patrol.backends.base import (
     BatteryEvent,
     ControlLostEvent,
     DeviceBackend,
@@ -15,7 +15,7 @@ from d1max_patrol.backends.base import (
     MediaSource,
     NavBackend,
 )
-from d1max_patrol.protocol.nav_types import Pose
+from nexwar_patrol.protocol.nav_types import Pose
 
 DEVICE_METHODS = {
     "connect", "close", "acquire_control", "release_control",
@@ -82,7 +82,7 @@ def test_帧对象():
 
 async def test_返航默认是明确拒绝而不是静默无操作():
     """引擎在电量低的时候调它 —— 静默无操作等于狗停在原地等着没电。"""
-    from d1max_patrol.backends.base import NavRequestError
+    from nexwar_patrol.backends.base import NavRequestError
 
     class _Nav(NavBackend):
         pass
@@ -121,6 +121,6 @@ def test_可选能力不是抽象方法():
 
 def test_自建导航一项可选能力都不声明():
     """建图是 ROS 侧离线重建、删改图是文件系统的事、重定位 slam_toolbox 自己管。"""
-    from d1max_patrol.backends.local_nav import LocalNavBackend
+    from nexwar_patrol.backends.local_nav import LocalNavBackend
 
     assert LocalNavBackend.capabilities.fget(None) == frozenset()

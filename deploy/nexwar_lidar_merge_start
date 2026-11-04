@@ -1,0 +1,26 @@
+#!/bin/sh
+# nexwar_lidar_merge 的启动脚本(W09i,前后雷达合并)。跟 nexwar_localizer_start 一个道理:启动参数归版本管,
+# 单元只指着 /opt/nexwar/current/deploy/nexwar_lidar_merge_start。
+#
+# 跑在 **ROS 的系统 Python** 里(要 rclpy、sensor_msgs、numpy),代码用这个脚本所在那一版带的
+# packages/localizer 与 packages/contract。后雷达外参读 /etc/nexwar/lidars.json(nexwar_loc calibrate-rear
+# 在开发机上标好拷过来);没标过就只转发前雷达。
+#
+# 现场值从 /etc/nexwar/env 来(单元的 EnvironmentFile):
+#   NEXWAR_LOC_ROS_DOMAIN=24      雷达话题在哪个 ROS domain(跟定位器一样)
+#   NEXWAR_LOC_RMW=rmw_zenoh_cpp  中间件
+#   NEXWAR_MERGE_ARGS=其余参数(比如 --rear-topic /rear_lidar)
+set -eu
+here=$(cd "$(dirname "$0")/.." && pwd -P)
+set +u
+. /opt/ros/humble/setup.sh
+set -u
+export ROS_DOMAIN_ID="${NEXWAR_LOC_ROS_DOMAIN:-24}"
+export RMW_IMPLEMENTATION="${NEXWAR_LOC_RMW:-rmw_zenoh_cpp}"
+# numpy 的线性代数库(OpenBLAS)缺省开满核的线程;每帧整片点云乘变换用不着(W71,同定位器)。
+export OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1
+export PYTHONPATH="$here/packages/localizer/src:$here/packages/contract/src${PYTHONPATH:+:$PYTHONPATH}"
+# shellcheck disable=SC2086  # NEXWAR_MERGE_ARGS 要按空白拆成几个参数
+exec /usr/bin/python3 -m nexwar_localizer.merge \
+  --lidars /etc/nexwar/lidars.json \
+  ${NEXWAR_MERGE_ARGS:-}

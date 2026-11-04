@@ -6,8 +6,8 @@ from __future__ import annotations
 
 import pytest
 
-from d1max_contract.hal import Fault
-from d1max_contract.messages import (
+from nexwar_contract.hal import Fault
+from nexwar_contract.messages import (
     Event,
     MapPose,
     Ready,
@@ -17,10 +17,10 @@ from d1max_contract.messages import (
     Telemetry,
     fault_event_data,
 )
-from d1max_site.alert_sources import SiteAlertSources
-from d1max_site.alert_store import AlertDesk
-from d1max_site.alerts import AlertNotFound, Channel
-from d1max_site.db import SiteDB
+from nexwar_site.alert_sources import SiteAlertSources
+from nexwar_site.alert_store import AlertDesk
+from nexwar_site.alerts import AlertNotFound, Channel
+from nexwar_site.db import SiteDB
 
 
 class 钟:
@@ -399,7 +399,7 @@ def test_站点重启_用库里最后见过的状态做种_不重复报也不降
 
     class 假派遣:
         def __init__(self):
-            from d1max_site.dispatcher import Feed
+            from nexwar_site.dispatcher import Feed
             self.db = db
             self.feed = Feed()
 
@@ -444,7 +444,7 @@ def test_写库失败_内存不动_接口报错之后仍是没确认(台, monkey
 
 def test_开张只读回未解决的与最近的_序号照样接着走(tmp_path):
     """读回的只是一部分;没读回来的那些老告警的序号也不许撞(序号从整张表的键里算)。"""
-    from d1max_site import alert_store
+    from nexwar_site import alert_store
 
     db = SiteDB(tmp_path / "s.db")
     c = 钟()
@@ -468,7 +468,7 @@ def test_开张只读回未解决的与最近的_序号照样接着走(tmp_path)
 
 def test_狗上归档写不进去_报P1_证据缺了(台):
     """W00c6a:盘满、只读重挂,那一趟照跑但照片、记录没存下 —— 证据缺了要让人知道。"""
-    from d1max_site.alerts import Level
+    from nexwar_site.alerts import Level
     c, db, desk, src, *_ = 台
     src.on_event("A", _ev("archive_write_failed", task_id="t1",
                           reason="events.jsonl: [Errno 30] Read-only file system"))
@@ -514,7 +514,7 @@ def test_钟差估计_狗慢的方向要攒够样本_超过一分钟的样本不
     """W09d 内审:样本 = 真钟差 − 在途,取最大是真钟差的下界 —— 估计 > 0 一定不虚报;估计 < 0 可能
     只是在途长(站点刚起、事件循环卡了一下),攒够 10 条才算。样本按收到的时刻留 60 s(离线的狗
     不一直挂着旧值)。"""
-    from d1max_site.clockskew import ClockSkew
+    from nexwar_site.clockskew import ClockSkew
     now = {"ms": 1_000_000}
     cs = ClockSkew(now_ms=lambda: now["ms"])
     cs.note("A", now["ms"] - 3000, now["ms"])            # 第一条就 −3 s
@@ -571,7 +571,7 @@ def _遥测(c, reason):
 
 
 def test_对账S6_空闲的狗定位不可信_过两分钟报P2_好了自己解决_再丢再报(台):
-    from d1max_site.alert_sources import LOC_IDLE_BOOT_S, LOC_IDLE_P2_S
+    from nexwar_site.alert_sources import LOC_IDLE_BOOT_S, LOC_IDLE_P2_S
     assert (LOC_IDLE_P2_S, LOC_IDLE_BOOT_S) == (120, 300), "两条线的来由见常量注释,改了要重核"
     c, db, desk, src, *_ = 台
     src.on_status("A", _status())
@@ -601,7 +601,7 @@ def test_对账S6_空闲的狗定位不可信_过两分钟报P2_好了自己解�
 
 
 def test_对账S6_空闲丢定位_短的不报_刚起来和刚换图宽限五分钟(台):
-    from d1max_site.alert_sources import LOC_IDLE_BOOT_S, LOC_IDLE_P2_S
+    from nexwar_site.alert_sources import LOC_IDLE_BOOT_S, LOC_IDLE_P2_S
     c, db, desk, src, *_ = 台
     t0 = c.ms
     src.on_status("A", _status(loc_ok=False))             # 刚上线:等人给初始位置
@@ -641,7 +641,7 @@ def test_对账S6_空闲丢定位_短的不报_刚起来和刚换图宽限五分
 
 
 def test_对账S6_跑着任务丢定位归原来那两条_空闲的不另报_掉线了不计(台):
-    from d1max_site.alert_sources import LOC_IDLE_BOOT_S
+    from nexwar_site.alert_sources import LOC_IDLE_BOOT_S
     c, db, desk, src, pushed, stale = 台
     src.on_status("A", _status())
     c.ms += LOC_IDLE_BOOT_S * 1000
@@ -662,14 +662,14 @@ def test_对账S6_跑着任务丢定位归原来那两条_空闲的不另报_掉
     src.on_status("B", _status(loc_ok=False))             # 回来了、还是不好:从回来起重新计
     src.tick()
     assert "B" not in [a.robot for a in _空闲丢定位(desk)], "掉线那一小时不算进去"
-    from d1max_site.alert_sources import LOC_IDLE_P2_S
+    from nexwar_site.alert_sources import LOC_IDLE_P2_S
     c.ms += LOC_IDLE_P2_S * 1000
     src.tick()
     assert "B" in [a.robot for a in _空闲丢定位(desk)]
 
 
 def test_对账S6_站点重启前报过_重启后不重复报_好了照样解决_写不进去下一拍再报(台, monkeypatch):
-    from d1max_site.alert_sources import LOC_IDLE_P2_S
+    from nexwar_site.alert_sources import LOC_IDLE_P2_S
     c, db, desk, src, *_ = 台
     desk.raise_alert(kind="loc_lost_idle", robot="B", title="空闲的机器人定位不可信")
     src.seed("B", _status(loc_ok=False))                  # 站点重启时还丢着;停机期间好了

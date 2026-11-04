@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""W09i 开发机仿真录包:前后两台半球雷达(:mod:`d1max_localizer.lidarsim`)在一个现场里,狗先狗头为前
+"""W09i 开发机仿真录包:前后两台半球雷达(:mod:`nexwar_localizer.lidarsim`)在一个现场里,狗先狗头为前
 绕一圈、再倒着(狗尾在前)走回去。出 ``/front_lidar``、``/rear_lidar``(``PointCloud2``,10 Hz)的录包、
 真值轨迹(前雷达在世界系的位姿,TUM)、两台雷达的真值外参(``lidars_truth.json``)。
 
@@ -18,9 +18,9 @@ import sys
 from pathlib import Path
 
 import numpy as np
-from d1max_localizer import lidarsim as ls
-from d1max_localizer.frames import mat_to_quat
-from d1max_localizer.lidars import Lidars
+from nexwar_localizer import lidarsim as ls
+from nexwar_localizer.frames import mat_to_quat
+from nexwar_localizer.lidars import Lidars
 
 HZ = 10.0
 SPEED = 0.5                                      # m/s

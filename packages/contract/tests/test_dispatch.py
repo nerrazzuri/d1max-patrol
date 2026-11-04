@@ -7,9 +7,9 @@ import json
 
 import pytest
 
-from d1max_contract.dispatch import DispatchClient, DispatchTimeout
-from d1max_contract.memory_broker import MemoryBroker, MemoryTransport
-from d1max_contract.messages import (
+from nexwar_contract.dispatch import DispatchClient, DispatchTimeout
+from nexwar_contract.memory_broker import MemoryBroker, MemoryTransport
+from nexwar_contract.messages import (
     Ack,
     AckResult,
     Command,
@@ -17,7 +17,7 @@ from d1max_contract.messages import (
     Reconcile,
     Status,
 )
-from d1max_contract.topics import Topics
+from nexwar_contract.topics import Topics
 
 T = Topics(site_id="s", robot_id="r")
 
@@ -130,9 +130,9 @@ async def test_坏报文只记日志不炸(台子, caplog):
 
 
 async def test_attach只登记订阅不连接_站点一条连接挂多台狗():
-    from d1max_contract.dispatch import DispatchClient
-    from d1max_contract.memory_broker import MemoryBroker, MemoryTransport
-    from d1max_contract.topics import Topics
+    from nexwar_contract.dispatch import DispatchClient
+    from nexwar_contract.memory_broker import MemoryBroker, MemoryTransport
+    from nexwar_contract.topics import Topics
 
     broker = MemoryBroker()
     t = MemoryTransport(broker, "site")
@@ -155,10 +155,10 @@ async def test_遥测也订_存最近一条_回调(tmp_path):
     """W00c2c:站点按狗最近的位姿选最近的一台去拦截点。"""
     import json
 
-    from d1max_contract.dispatch import DispatchClient
-    from d1max_contract.memory_broker import MemoryBroker, MemoryTransport
-    from d1max_contract.messages import MapPose, Telemetry
-    from d1max_contract.topics import Topics
+    from nexwar_contract.dispatch import DispatchClient
+    from nexwar_contract.memory_broker import MemoryBroker, MemoryTransport
+    from nexwar_contract.messages import MapPose, Telemetry
+    from nexwar_contract.topics import Topics
     broker = MemoryBroker()
     t = Topics(site_id="s", robot_id="A")
     site = DispatchClient(MemoryTransport(broker, "site"), t, now_ms=lambda: 1)

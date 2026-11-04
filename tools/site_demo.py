@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """开发机上的本机演示站点(W15):没有狗的时候,拿它试手机 app、桌面版。
 
-起一整套真东西(跟站点验收测试 ``test_site_acceptance.py`` 同一条路):``d1max-site`` 建站点、
+起一整套真东西(跟站点验收测试 ``test_site_acceptance.py`` 同一条路):``nexwar_site`` 建站点、
 签一台仿真狗
-``A`` 的证书、加一个管理员 → Mosquitto(mTLS)→ ``d1max-site serve`` → ``d1max-agent --hal sim``。
+``A`` 的证书、加一个管理员 → Mosquitto(mTLS)→ ``nexwar_site serve`` → ``nexwar_agent --hal sim``。
 站点 API
 绑 ``127.0.0.2``(不是 127.0.0.1:站点只在非回环地址上开 HTTPS,而手机、桌面版只认 HTTPS + 证书指纹)。
 
@@ -11,14 +11,15 @@
     .venv/bin/python tools/site_demo.py --map-dir runs/w09i-sim/map_front
     # ↑ 用一张真的图(有预览)
     .venv/bin/python tools/site_demo.py --host 192.168.5.12 --recordings 30
-    # ↑ 绑局域网地址:同一个网里的手机装上 App 就能连(配对码:d1max-site --home <目录>/site pair-code)
+    # ↑ 绑局域网地址:同一个网里的手机装上 App 就能连(配对码:nexwar_site --home <目录>/site
+    # pair-code)
 
     .venv/bin/python tools/site_demo.py --unbound 1
     # ↑ W42:再起一台出厂状态、还没绑定的机器人(带配网服务、假路由器),打印它的贴纸码:
     #   App「添加机器人」粘贴贴纸码 → 热点那一步点「已经连上」→ 站点上批准 → 演示脚本起它的代理
 
 桌面版:「站点」页右下角 +,填打印出来的地址和指纹,账号 ``demo``。每次起都是新的站点目录(``--dir``,
-默认 ``~/.cache/d1max-site-demo``,起之前清掉),证书指纹每次都不一样。
+默认 ``~/.cache/nexwar_site_demo``,起之前清掉),证书指纹每次都不一样。
 """
 
 from __future__ import annotations
@@ -52,10 +53,10 @@ def _free_port() -> int:
 
 
 def _site(home: Path, *args: str, env: dict | None = None) -> str:
-    r = subprocess.run([sys.executable, "-m", "d1max_site.main", "--home", str(home), *args],
+    r = subprocess.run([sys.executable, "-m", "nexwar_site.main", "--home", str(home), *args],
                        capture_output=True, text=True, timeout=120, env=ENV | (env or {}))
     if r.returncode:
-        raise SystemExit(f"d1max-site {' '.join(args)} 没成:\n{r.stderr}")
+        raise SystemExit(f"nexwar_site {' '.join(args)} 没成:\n{r.stderr}")
     return r.stdout
 
 
@@ -85,8 +86,8 @@ def _seed_recordings(home: Path, work: Path, minutes: int,
     就从里面录好的 front.mp4、back.mp4 截。"""
     import time
 
-    from d1max_site.db import SiteDB
-    from d1max_site.recordings import SEGMENT_S, RecordingStore
+    from nexwar_site.db import SiteDB
+    from nexwar_site.recordings import SEGMENT_S, RecordingStore
     ffmpeg = shutil.which("ffmpeg")
     if ffmpeg is None:
         raise SystemExit("没有 ffmpeg:sudo apt-get install ffmpeg")
@@ -116,17 +117,17 @@ def _seed_recordings(home: Path, work: Path, minutes: int,
 
 
 def _patrol(*args: str) -> str:
-    r = subprocess.run([sys.executable, "-m", "d1max_patrol.cli", *args], capture_output=True,
+    r = subprocess.run([sys.executable, "-m", "nexwar_patrol.cli", *args], capture_output=True,
                        text=True, timeout=120, env=ENV)
     if r.returncode:
-        raise SystemExit(f"d1max-patrol {' '.join(args)} 没成:\n{r.stdout}{r.stderr}")
+        raise SystemExit(f"nexwar_patrol {' '.join(args)} 没成:\n{r.stdout}{r.stderr}")
     return r.stdout
 
 
 def _unbound(a: argparse.Namespace, logs: Path, start) -> list[dict]:
     """W42:出厂状态的机器人。各自烧写(绑定码、热点、配网证书)、起配网服务(``--dry-system``:不碰系统
     服务);贴纸码里带上配网服务在这台机器上的地址。"""
-    from d1max_contract.binding import decode_sticker
+    from nexwar_contract.binding import decode_sticker
     keys = a.dir / "unbind-keys"
     keys.mkdir()
     _patrol("unbind-token", "keygen", "--private", str(keys / "unbind.key"),
@@ -134,7 +135,7 @@ def _unbound(a: argparse.Namespace, logs: Path, start) -> list[dict]:
     # W63:演示用的临时出厂钥匙 —— 演示站点认它,出厂机器人照真流程签、装出厂证书(不用跳过开关)
     import json as _json
 
-    from d1max_contract import ed25519
+    from nexwar_contract import ed25519
     fseed = ed25519.new_seed()
     (keys / "factory.key").write_bytes(ed25519.private_pem(fseed))
     (keys / "factory-pub.pem").write_bytes(ed25519.public_pem(ed25519.public_key(fseed)))
@@ -165,7 +166,7 @@ def _unbound(a: argparse.Namespace, logs: Path, start) -> list[dict]:
         sticker = type(st)(st.serial, st.code, st.hotspot_ssid, st.hotspot_psk, st.fingerprint,
                            f"{a.host}:{port}").encode()
         sock = base / "bind.sock"
-        start(f"bind-{serial}", [sys.executable, "-m", "d1max_patrol.cli", "bind-serve",
+        start(f"bind-{serial}", [sys.executable, "-m", "nexwar_patrol.cli", "bind-serve",
                                  "--etc", str(etc), "--data-root", str(data), "--host", a.host,
                                  "--port", str(port), "--sock", str(sock), "--group", "",
                                  "--user", "", "--router", router, "--dry-system",
@@ -186,14 +187,14 @@ def _follow_bind(r: dict, agents: dict[str, subprocess.Popen], logs: Path) -> No
                    if "=" in line and not line.startswith("#"))
         log = logs / f"agent-{serial}.log"
         agents[serial] = subprocess.Popen(
-            [sys.executable, "-m", "d1max_agent.main", "--transport", env["D1MAX_SITE_MQTT"],
+            [sys.executable, "-m", "nexwar_agent.main", "--transport", env["NEXWAR_SITE_MQTT"],
              "--tls-ca", str(etc / "tls" / "ca.crt"), "--tls-cert", str(etc / "tls" / "robot.crt"),
              "--tls-key", str(etc / "tls" / "robot.key"), "--hal", "sim",
              "--registration", str(etc / "registration.json"),
              "--store-dir", str(r["base"] / "agent"), "--runs-root", str(r["base"] / "runs"),
              "--map", "estate-1:7", "--home", "0,0,0", *r.get("video", [])],
             stdout=open(log, "ab"), stderr=subprocess.STDOUT,
-            env=ENV | {"D1MAX_BIND_SOCK": str(r["sock"])})
+            env=ENV | {"NEXWAR_BIND_SOCK": str(r["sock"])})
         print(f"{serial} 绑定好了:起了它的代理(日志 {log})", flush=True)
     elif not bound and p is not None and p.poll() is None:
         p.terminate()
@@ -300,7 +301,7 @@ def _send_maps(base: str, password: str, robots: list[str]) -> list[str]:
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     # 默认不放仓库里:仓库路径带空格(「D1 Max」),Mosquitto 的配置按空白切词,路径里不许有空格
-    ap.add_argument("--dir", type=Path, default=Path.home() / ".cache" / "d1max-site-demo")
+    ap.add_argument("--dir", type=Path, default=Path.home() / ".cache" / "nexwar_site_demo")
     ap.add_argument("--api-port", type=int, default=8443)
     ap.add_argument("--host", default=HOST,
                     help="站点 API 绑哪个地址。给这台机器的局域网地址(比如 192.168.5.12),"
@@ -401,7 +402,7 @@ def _setup_rest(a, home: Path, names: list[str]) -> str:
         cfg = json.loads(cfg_path.read_text())
         cfg.setdefault("video", {})["srt_host"] = "127.0.0.1"
         cfg_path.write_text(json.dumps(cfg, indent=1))
-    _site(home, "add-admin", "demo", env={"D1MAX_SITE_PASSWORD": a.password})
+    _site(home, "add-admin", "demo", env={"NEXWAR_SITE_PASSWORD": a.password})
     src = a.map_dir
     if src is None:
         src = a.dir / "map-src"
@@ -421,12 +422,12 @@ def _run(a, home: Path, logs: Path, names: list[str], bport: int, fp: str, procs
     try:
         start("mosquitto", [mosq, "-c", str(home / "broker" / "mosquitto.conf")],
               "mosquitto version")
-        start("site", [sys.executable, "-m", "d1max_site.main", "--home", str(home), "serve",
-                       "--api-host", a.host, "--api-port", str(a.api_port)], "d1max-site 起来了")
+        start("site", [sys.executable, "-m", "nexwar_site.main", "--home", str(home), "serve",
+                       "--api-host", a.host, "--api-port", str(a.api_port)], "nexwar_site 起来了")
         for i, n in enumerate(names):
             crt = home / "ca" / "issued" / n
             sub = "" if n == "A" else f"-{n}"          # A 跟以前一样,别的各用各的目录
-            start("agent" + sub, [sys.executable, "-m", "d1max_agent.main",
+            start("agent" + sub, [sys.executable, "-m", "nexwar_agent.main",
                                   "--transport", f"mqtts://127.0.0.1:{bport}",
                                   "--tls-ca", str(crt / "ca.crt"),
                                   "--tls-cert", str(crt / "robot.crt"),
@@ -445,10 +446,10 @@ def _run(a, home: Path, logs: Path, names: list[str], bport: int, fp: str, procs
                                     if a.nav == "planned" or a.w54 else []),
                                   *(["--mapping-sim", str(a.map_dir.resolve())] if a.w54
                                     else [])],
-                  "d1max-agent 起来了",
+                  "nexwar_agent 起来了",
                   # W61:每台自己的数据目录(远程运维的维护标记 ops-hold.json 在那里;
                   # 原来几台共用,串了)
-                  env={"D1MAX_DATA_ROOT": str(a.dir / f"data{sub}")})
+                  env={"NEXWAR_DATA_ROOT": str(a.dir / f"data{sub}")})
         fresh = _unbound(a, logs, start) if a.unbound else []
         base = f"https://{a.host}:{a.api_port}"
         seeded = _seed_w53(base, a.password, names) if a.w53 and not reuse else []

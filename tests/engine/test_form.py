@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from d1max_agent.engine.form import STANDALONE, Form, UploadTargetError
+from nexwar_agent.engine.form import STANDALONE, Form, UploadTargetError
 
 
 class _FakeUpload:

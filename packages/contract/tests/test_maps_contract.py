@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from d1max_contract.errors import ContractError
-from d1max_contract.maps import MANIFEST, MapFile, MapRef, parse_map_build, parse_mapping
+from nexwar_contract.errors import ContractError
+from nexwar_contract.maps import MANIFEST, MapFile, MapRef, parse_map_build, parse_mapping
 
 H = "a" * 64
 
@@ -52,7 +52,7 @@ def test_建图命令的载荷():
 
 def test_地图版本的几何文件_名字合法_不超数():
     """W09c1:MOLA 建出来的一个版本就这几样;狗上收产物、站点查「哪里有图」都按这张表。"""
-    from d1max_contract.maps import COVERAGE, GEOMETRY_FILES, MAX_FILES, NAME_RE
+    from nexwar_contract.maps import COVERAGE, GEOMETRY_FILES, MAX_FILES, NAME_RE
     assert GEOMETRY_FILES == ("prior.mm", "frames.json", "floor.pgm", "floor.yaml",
                               "coverage.json", "build.json", "superlio_map.pcd")
     assert COVERAGE in GEOMETRY_FILES and MANIFEST not in GEOMETRY_FILES
@@ -63,7 +63,7 @@ def test_哪里有图_解析与离路线多远():
     """W09c 决定 5:建图时走过的路(地图平面上每 0.5 m 一点)。"""
     import math
 
-    from d1max_contract.maps import COVERAGE_RADIUS_M, Coverage, parse_coverage
+    from nexwar_contract.maps import COVERAGE_RADIUS_M, Coverage, parse_coverage
     assert COVERAGE_RADIUS_M == 5.0
     cov = parse_coverage({"version": 1, "step_m": 0.5,
                           "path": [[0.5 * i, 0.0] for i in range(41)] + [[100.0, 100.0]]})
@@ -84,7 +84,7 @@ def test_哪里有图_解析与离路线多远():
 def test_边走边建_开始录包可以带地图号和版本():
     """W09c2(决策 17):``mapping start`` 带着地图号与版本 = 录包的同时在线建这一版;
     不带照旧只录包。"""
-    from d1max_contract.maps import mapping_target
+    from nexwar_contract.maps import mapping_target
     assert mapping_target({"action": "start", "name": "y", "map_id": "estate-1",
                            "version": "3"}) == ("estate-1", "3")
     assert mapping_target({"action": "start", "name": "y"}) is None
@@ -102,13 +102,13 @@ def test_边走边建_开始录包可以带地图号和版本():
 @pytest.mark.parametrize("bad", ["v1\n", "m\n", "prior.mm\n"])
 def test_名字末尾带换行不认(bad):
     """W09g 内审小 5:``NAME_RE.match`` 加 ``$`` 让末尾一个换行也能过。"""
-    from d1max_contract.maps import check_name
+    from nexwar_contract.maps import check_name
     with pytest.raises(ContractError):
         check_name(bad, "名字")
 
 
 def test_W68_Super_LIO点云是几何文件也是定位先验():
-    from d1max_contract.maps import (
+    from nexwar_contract.maps import (
         GEOMETRY_FILES,
         MAX_FILES,
         OPTIONAL_FILES,

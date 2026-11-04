@@ -5,9 +5,9 @@ from __future__ import annotations
 import math
 
 import numpy as np
-from d1max_localizer.nav2bridge import grid_points, occupancy
+from nexwar_localizer.nav2bridge import grid_points, occupancy
 
-from d1max_contract.obsbridge import pack_bits
+from nexwar_contract.obsbridge import pack_bits
 
 
 def _grid(size, res, occ_cells, known_all=True):
@@ -74,7 +74,7 @@ def _桥(monkeypatch):
     from concurrent.futures import Future
     from types import SimpleNamespace as NS
 
-    from d1max_localizer.nav2bridge import Nav2Bridge
+    from nexwar_localizer.nav2bridge import Nav2Bridge
     b = Nav2Bridge.__new__(Nav2Bridge)
     b._init_goal_book()
     b.sent = []
@@ -170,9 +170,9 @@ def test_外审R10_收下新目标以前规划的路线不标成新目标的(mon
 def test_转接节点握手的协议号跟契约同一个():
     """外审修复把契约升到 2 时转接节点自己还写死着 1:真机上 Nav2 会一直连不上
     (navbench 查出来的)。"""
-    from d1max_localizer import nav2bridge
+    from nexwar_localizer import nav2bridge
 
-    from d1max_contract.navbridge import PROTO
+    from nexwar_contract.navbridge import PROTO
     assert nav2bridge.PROTO == PROTO
 
 
@@ -483,7 +483,7 @@ def test_复查五_某个动作服务没了_它的旧状态清掉_不一直挡�
 
 
 def test_复查五_assisted_teleop也算会出速度的动作():
-    from d1max_localizer.nav2bridge import PRODUCERS
+    from nexwar_localizer.nav2bridge import PRODUCERS
     assert "assisted_teleop" in PRODUCERS
 
 
@@ -598,7 +598,7 @@ def test_W48_经点动作服务不在_带途经点的目标回拒(monkeypatch):
 
 def test_限速没变也定时重发_工单11_02_9():
     """只在变了时发一条,Nav2 控制器那会儿没订上就永远收不到(11-02 限速 0.3,MPPI 按 1.0 规划)。"""
-    from d1max_localizer.nav2bridge import SPEED_REPUB_S, speed_due
+    from nexwar_localizer.nav2bridge import SPEED_REPUB_S, speed_due
     assert speed_due(0.3, None, 0.0, 0.0)
     assert not speed_due(0.3, 0.3, 10.0, 10.0 + SPEED_REPUB_S / 2)
     assert speed_due(0.3, 0.3, 10.0, 10.0 + SPEED_REPUB_S)
@@ -609,7 +609,7 @@ def test_限速没变也定时重发_工单11_02_9():
 def _发钟的桥():
     from types import SimpleNamespace as NS
 
-    from d1max_localizer.nav2bridge import Nav2Bridge
+    from nexwar_localizer.nav2bridge import Nav2Bridge
     b = Nav2Bridge.__new__(Nav2Bridge)
     b.t_ms, b._clock_wall, b.odom = 0, -1e9, None
     b._speed, b._speed_at = None, 0.0
@@ -645,7 +645,7 @@ def test_现场1104_机器人的钟往回调过_转接节点照样发时钟和�
 def _生命周期桥(now):
     from types import SimpleNamespace as NS
 
-    from d1max_localizer.nav2bridge import Nav2Bridge
+    from nexwar_localizer.nav2bridge import Nav2Bridge
     b = Nav2Bridge.__new__(Nav2Bridge)
     b._mono = lambda: now[0]
     b._clock_wall = 1e18                                 # 代理在送时钟
@@ -672,7 +672,7 @@ def _生命周期桥(now):
 
 
 def test_现场1104_生命周期卡住不激活_过一阵自动重启一次_激活了就不再动():
-    from d1max_localizer import nav2bridge as nb
+    from nexwar_localizer import nav2bridge as nb
     now = [100.0]
     b = _生命周期桥(now)
     b._lifecycle_retry()
@@ -692,7 +692,7 @@ def test_现场1104_生命周期卡住不激活_过一阵自动重启一次_激�
 
 
 def test_现场1104_没在送时钟或没有生命周期服务_不重启():
-    from d1max_localizer import nav2bridge as nb
+    from nexwar_localizer import nav2bridge as nb
     now = [0.0]
     b = _生命周期桥(now)
     b._clock_wall = -1e9
@@ -711,7 +711,7 @@ def test_现场1104_没在送时钟或没有生命周期服务_不重启():
 def test_外审r3_7_生命周期管理器卡着不回_过了期限不再等_下个周期照样重来():
     from types import SimpleNamespace as NS
 
-    from d1max_localizer.nav2bridge import LIFECYCLE_RETRY_S
+    from nexwar_localizer.nav2bridge import LIFECYCLE_RETRY_S
     now = [0.0]
     b = _生命周期桥(now)
     late = []
@@ -736,7 +736,7 @@ def test_外审r3_7_生命周期管理器卡着不回_过了期限不再等_下�
 def test_外审r3_7_reset没成功_不接着startup():
     from types import SimpleNamespace as NS
 
-    from d1max_localizer.nav2bridge import LIFECYCLE_RETRY_S
+    from nexwar_localizer.nav2bridge import LIFECYCLE_RETRY_S
     now = [0.0]
     b = _生命周期桥(now)
 
@@ -756,7 +756,7 @@ def test_外审r3_7_reset没成功_不接着startup():
 def test_外审r4_7_生命周期过期以后没时钟_晚到的回话也作废():
     from types import SimpleNamespace as NS
 
-    from d1max_localizer.nav2bridge import LIFECYCLE_CALL_S, LIFECYCLE_RETRY_S
+    from nexwar_localizer.nav2bridge import LIFECYCLE_CALL_S, LIFECYCLE_RETRY_S
     now = [0.0]
     b = _生命周期桥(now)
     callbacks = []

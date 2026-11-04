@@ -28,10 +28,10 @@ beforeEach(() => {
     }
     got.push(url);
     if (url === "/api/robots/A/ops/diag") {
-      return Promise.resolve(json({ at_ms: 0, services: [{ unit: "d1max-agent.service", active: "active", sub: "running", enabled: "enabled", restarts: 2, since: "" }],
-        release: { current: "v1.5.0" }, memory: { MemTotal: 8 * 1048576 * 1024, MemAvailable: 1048576 * 1024 }, env: { D1MAX_PIN: "***" } }));
+      return Promise.resolve(json({ at_ms: 0, services: [{ unit: "nexwar_agent.service", active: "active", sub: "running", enabled: "enabled", restarts: 2, since: "" }],
+        release: { current: "v1.5.0" }, memory: { MemTotal: 8 * 1048576 * 1024, MemAvailable: 1048576 * 1024 }, env: { NEXWAR_PIN: "***" } }));
     }
-    if (url.startsWith("/api/robots/A/ops/journal")) return Promise.resolve(json({ unit: "d1max-agent", text: "line1\nline2", truncated: true }));
+    if (url.startsWith("/api/robots/A/ops/journal")) return Promise.resolve(json({ unit: "nexwar_agent", text: "line1\nline2", truncated: true }));
     if (url === "/api/system/vpn") {
       return Promise.resolve(json({ ready: true, peers: [{ name: "eng-1", kind: "engineer", address: "10.77.0.200", public: "K", expires_ms: 1 }],
         status: { up: true, peers: [{ public_key: "K", latest_handshake: 0 }] } }));
@@ -60,7 +60,7 @@ describe("机器人远程运维", () => {
   it("诊断快照列服务、版本,密码类已打码", async () => {
     const { container: c } = render(<RobotOps robotId="A" tasks={ALL} say={() => {}} />);
     fireEvent.click(btn(c, "诊断快照"));
-    await waitFor(() => expect(c.querySelector(".ops-svc")!.textContent).toContain("d1max-agent.service"));
+    await waitFor(() => expect(c.querySelector(".ops-svc")!.textContent).toContain("nexwar_agent.service"));
     expect(c.textContent).toContain("v1.5.0");
     expect(c.textContent).toContain("***");
   });
@@ -68,9 +68,9 @@ describe("机器人远程运维", () => {
     const { container: c } = render(<RobotOps robotId="A" tasks={ALL} say={() => {}} />);
     fireEvent.click(btn(c, "查看日志"));
     await waitFor(() => expect(c.querySelector(".ops-logtext")!.textContent).toContain("line2"));
-    expect(got.at(-1)).toBe("/api/robots/A/ops/journal?unit=d1max-agent&hours=6");
+    expect(got.at(-1)).toBe("/api/robots/A/ops/journal?unit=nexwar_agent&hours=6");
     expect(c.textContent).toContain("仅显示最近一部分");
-    expect(c.querySelector('a[download="A-d1max-agent.log"]')).not.toBeNull();
+    expect(c.querySelector('a[download="A-nexwar_agent.log"]')).not.toBeNull();
   });
   it("重启整机要再输密码,错了对话框不关", async () => {
     const said: string[] = [];
@@ -87,9 +87,9 @@ describe("机器人远程运维", () => {
   });
   it("重启服务带上选的服务名", async () => {
     const { container: c } = render(<RobotOps robotId="A" tasks={ALL} say={() => {}} />);
-    fireEvent.change(c.querySelector('select[aria-label="服务"]')!, { target: { value: "d1max-localizer" } });
+    fireEvent.change(c.querySelector('select[aria-label="服务"]')!, { target: { value: "nexwar_localizer" } });
     fireEvent.click(btn(c, "重启服务"));
-    await waitFor(() => expect(posted[0]).toMatchObject({ url: "/api/robots/A/ops/restart", body: { unit: "d1max-localizer" } }));
+    await waitFor(() => expect(posted[0]).toMatchObject({ url: "/api/robots/A/ops/restart", body: { unit: "nexwar_localizer" } }));
   });
 });
 

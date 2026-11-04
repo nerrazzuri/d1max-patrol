@@ -7,9 +7,9 @@ import struct
 
 import pytest
 
-from d1max_contract.messages import Telemetry
-from d1max_contract.rtcm import RtcmFramer, crc24q, ecef_to_llh, frame, msg_type, station_ecef
-from d1max_contract.topics import TopicAcl, Topics
+from nexwar_contract.messages import Telemetry
+from nexwar_contract.rtcm import RtcmFramer, crc24q, ecef_to_llh, frame, msg_type, station_ecef
+from nexwar_contract.topics import TopicAcl, Topics
 
 
 def _body(mt: int, extra: bytes = b"\x00" * 10) -> bytes:

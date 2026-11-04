@@ -7,8 +7,8 @@ import os
 import pytest
 from test_site_api import PW, 站
 
-from d1max_site import main as site_main
-from d1max_site import provision
+from nexwar_site import main as site_main
+from nexwar_site import provision
 
 
 @pytest.fixture
@@ -49,7 +49,7 @@ def test_重出开通码_旧码作废_吊销以后码领不到_也不能再出�
     tok = s.login()
     first = s.req("POST", "/api/admin/robots", {"robot_id": "D1-08"}, token=tok)[1]["code"]
     second = s.req("POST", "/api/admin/robots/D1-08/code", {}, token=tok)[1]["code"]
-    from d1max_site.db import SiteDB
+    from nexwar_site.db import SiteDB
     db = SiteDB(home / "site.db")
     try:
         with pytest.raises(provision.ProvisionError):

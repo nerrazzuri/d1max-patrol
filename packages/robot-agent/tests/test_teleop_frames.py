@@ -4,8 +4,8 @@
 
 from __future__ import annotations
 
-from d1max_agent.teleop_frames import FrameGate
-from d1max_contract.teleop import TeleopFrame
+from nexwar_agent.teleop_frames import FrameGate
+from nexwar_contract.teleop import TeleopFrame
 
 SKEW = 7_654_321                    # 狗钟比站点钟快这么多(任意),判定不受影响
 

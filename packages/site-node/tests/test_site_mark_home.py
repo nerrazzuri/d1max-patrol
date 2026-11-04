@@ -9,7 +9,7 @@ from test_site_api import PW, _等, 站
 
 @pytest.fixture
 def 站点(tmp_path):
-    from d1max_site.standby import StandbyManager
+    from nexwar_site.standby import StandbyManager
     s = 站(tmp_path)
     s.accounts.add("gina", PW, role="guard")
     s.api.standby = StandbyManager(s.db, s.disp, now_ms=s.disp._now)
@@ -117,7 +117,7 @@ def test_重投_原命令被拒_409带原来的原因_不说狗上换了(站点,
 
 def test_站点登记没成_500带狗上的位置和命令号_审计也有(站点, monkeypatch):
     """内审应修 7:狗上的原点已经换了、站点没登记上 —— 管理员要拿到坐标才能手工补登。"""
-    from d1max_site.standby import StandbyError
+    from nexwar_site.standby import StandbyError
     s = 站点
     alice = _登(s, "alice")
     _能标(s)
@@ -155,7 +155,7 @@ def test_同名待命点在别的图上_409_明说替换才搬(站点):
 
 def test_回执超时_狗其实标了_站点按事件补登记_504说可能标了(站点, monkeypatch):
     """内审应修 1:站点等回执超时,命令照样到了狗那儿、狗标了;站点按狗发的 ``home_marked`` 补登记。"""
-    from d1max_contract.dispatch import DispatchTimeout
+    from nexwar_contract.dispatch import DispatchTimeout
     s = 站点
     alice = _登(s, "alice")
     _能标(s)
@@ -182,7 +182,7 @@ def _命令(s, cid, task_id, at, result):
 
 
 def _标了(s, task_id, x, seq):
-    from d1max_contract.messages import Event
+    from nexwar_contract.messages import Event
     return Event(event_id=f"e{seq}", seq=seq, boot_id="b", stamp=1, kind="home_marked",
                  data={"task_id": task_id, "name": "home", "map_id": "estate-1",
                        "map_version": "7", "x": x, "y": 0.0, "yaw": 0.0, "sigma_m": 0.2})
@@ -275,7 +275,7 @@ def test_W13a_回指定的待命点(站点):
 
 def test_W13a_狗回的不是只标待命点_站点不登记(站点):
     """防老代理:回执里没有 ``target: standby``(当成标原点做了)就不登记成待命点。"""
-    from d1max_site.standby import StandbyError
+    from nexwar_site.standby import StandbyError
     s = 站点
     _能标(s)
     data = {"map_id": "m", "map_version": "1", "x": 1.0, "y": 2.0, "yaw": 0.0}
@@ -301,7 +301,7 @@ def test_W13a_同样的原点登记两遍_标的时刻不变_换了位置才变(
 
 
 def test_W16_在这儿设拦截点_狗上什么都不改_老代理不发(站点, monkeypatch):
-    from d1max_site.incidents import IncidentDesk
+    from nexwar_site.incidents import IncidentDesk
     s = 站点
     alice, gina = _登(s, "alice"), _登(s, "gina")
     _能标(s)
@@ -357,7 +357,7 @@ def test_回执与晚到的事件同时登记_这张图上的默认待命点不�
 def test_W23_在这儿设拦截点_走不到就不收_409带原因(站点):
     from types import SimpleNamespace
 
-    from d1max_site.incidents import IncidentDesk
+    from nexwar_site.incidents import IncidentDesk
     s = 站点
     alice = _登(s, "alice")
     _能标(s)

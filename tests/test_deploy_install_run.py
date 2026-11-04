@@ -1,8 +1,8 @@
 """真的把 ``deploy/install.sh`` 跑一遍(W00c5e 内部评审:部署测试以前只对字符串和顺序,设计稿
 §9 答应过假根跑一遍)。
 
-**假根**:脚本里的 ``/opt/d1max``、``/etc/d1max``、``/etc/systemd``、``/etc/sudoers.d``、
-``/usr/local/sbin``、``/var/lib/d1max`` 全换成临时目录底下的同名路径;``systemctl``、``sudo``、
+**假根**:脚本里的 ``/opt/nexwar``、``/etc/nexwar``、``/etc/systemd``、``/etc/sudoers.d``、
+``/usr/local/sbin``、``/var/lib/nexwar`` 全换成临时目录底下的同名路径;``systemctl``、``sudo``、
 ``chown``、``id``、``python3`` 换成只记账的假命令(``python3 -m venv`` 造一个只记账的解释器)。
 所以这里验的是脚本自己的**盘上动作与先后**:装什么、清什么、什么时候起代理;验不了 pip、
 ``release install`` 这些真正干活的子进程(那些各有各的测试)。
@@ -33,19 +33,19 @@ def _stub(path: Path, body: str) -> None:
 
 def _准备(root: Path) -> Path:
     """造假根、假命令、一个包目录;返回改过路径的 install.sh。"""
-    subs = {"/opt/d1max": root / "opt/d1max", "/etc/d1max": root / "etc/d1max",
+    subs = {"/opt/nexwar": root / "opt/nexwar", "/etc/nexwar": root / "etc/nexwar",
             "/etc/systemd": root / "etc/systemd", "/etc/sudoers.d": root / "etc/sudoers.d",
             "/etc/chrony": root / "etc/chrony",
-            "/usr/local/sbin": root / "usr/local/sbin", "/var/lib/d1max": root / "var/lib/d1max",
-            # W55:特权执行器、日志留盘(/etc/d1max-ops.json、/var/lib/d1max-ops 跟着上面两条换)
-            "/usr/local/lib/d1max": root / "usr/local/lib/d1max",
+            "/usr/local/sbin": root / "usr/local/sbin", "/var/lib/nexwar": root / "var/lib/nexwar",
+            # W55:特权执行器、日志留盘(/etc/nexwar_ops.json、/var/lib/nexwar_ops 跟着上面两条换)
+            "/usr/local/lib/nexwar": root / "usr/local/lib/nexwar",
             "/var/log/journal": root / "var/log/journal"}
     text = (DEPLOY / "install.sh").read_text(encoding="utf-8")
     for old, new in subs.items():
         text = text.replace(old, str(new))
     script = root / "install.sh"
     script.write_text(text, encoding="utf-8")
-    shutil.copy2(DEPLOY / "d1max-agent.service", root / "d1max-agent.service")
+    shutil.copy2(DEPLOY / "nexwar_agent.service", root / "nexwar_agent.service")
     (root / "etc/systemd/system").mkdir(parents=True)
     log = root / "calls"
     stub = root / "stub"
@@ -91,15 +91,15 @@ exit 0
 ''')
     pkg = root / "pkg" / PKG_NAME
     (pkg / "deploy").mkdir(parents=True)
-    shutil.copy2(DEPLOY / "d1max-agent.service", pkg / "deploy")
-    shutil.copy2(DEPLOY / "d1max-agent-start", pkg / "deploy")
+    shutil.copy2(DEPLOY / "nexwar_agent.service", pkg / "deploy")
+    shutil.copy2(DEPLOY / "nexwar_agent_start", pkg / "deploy")
     # W55:特权执行器、它的单元、验签用的两个模块
-    for f in ("d1max-ops-runner", "d1max-ops.path", "d1max-ops.service"):
+    for f in ("nexwar_ops_runner", "nexwar_ops.path", "nexwar_ops.service"):
         shutil.copy2(DEPLOY / f, pkg / "deploy")
-    (pkg / "packages/contract/src/d1max_contract").mkdir(parents=True)
+    (pkg / "packages/contract/src/nexwar_contract").mkdir(parents=True)
     for m in ("ed25519", "relsign"):
-        shutil.copy2(ROOT / f"packages/contract/src/d1max_contract/{m}.py",
-                     pkg / "packages/contract/src/d1max_contract")
+        shutil.copy2(ROOT / f"packages/contract/src/nexwar_contract/{m}.py",
+                     pkg / "packages/contract/src/nexwar_contract")
     (pkg / "pyproject.toml").write_text("[project]\nname='x'\n", encoding="utf-8")
     return script
 
@@ -118,16 +118,16 @@ def test_新机器_装上代理并自启_env模板没有PIN(tmp_path):
     script = _准备(tmp_path)
     got = _跑(tmp_path, script)
     assert got.returncode == 0, got.stdout + got.stderr
-    unit = tmp_path / "etc/systemd/system/d1max-agent.service"
+    unit = tmp_path / "etc/systemd/system/nexwar_agent.service"
     assert unit.is_file()
     wants = tmp_path / "etc/systemd/system/multi-user.target.wants"
-    assert (wants / "d1max-agent.service").is_symlink()
-    env = (tmp_path / "etc/d1max/env").read_text(encoding="utf-8")
-    assert "D1MAX_PIN" not in env and "\nD1MAX_HAL=sim\n" in env
-    assert oct((tmp_path / "etc/d1max/env").stat().st_mode & 0o777) == "0o600"
+    assert (wants / "nexwar_agent.service").is_symlink()
+    env = (tmp_path / "etc/nexwar/env").read_text(encoding="utf-8")
+    assert "NEXWAR_PIN" not in env and "\nNEXWAR_HAL=sim\n" in env
+    assert oct((tmp_path / "etc/nexwar/env").stat().st_mode & 0o777) == "0o600"
     assert "还没有" in got.stdout, "6/7 说证书包还没有"
     calls = _调用(tmp_path)
-    assert "systemctl start d1max-agent.service" in calls, "没有注册文件:交给单元的条件去跳过"
+    assert "systemctl start nexwar_agent.service" in calls, "没有注册文件:交给单元的条件去跳过"
 
 
 
@@ -135,14 +135,14 @@ def test_W55_装上特权执行器_日志留盘_读日志的组(tmp_path):
     script = _准备(tmp_path)
     got = _跑(tmp_path, script)
     assert got.returncode == 0, got.stdout + got.stderr
-    lib = tmp_path / "usr/local/lib/d1max"
-    assert (lib / "ops-runner").is_file() and (lib / "d1max_contract/relsign.py").is_file()
-    cfg = json.loads((tmp_path / "etc/d1max-ops.json").read_text(encoding="utf-8"))
-    assert cfg["profile"] == "robot" and cfg["spool"] == str(tmp_path / "var/lib/d1max-ops")
-    assert (tmp_path / "var/lib/d1max-ops/req").is_dir()
-    assert "Storage=persistent" in (tmp_path / "etc/systemd/journald.conf.d/d1max.conf").read_text()
+    lib = tmp_path / "usr/local/lib/nexwar"
+    assert (lib / "ops-runner").is_file() and (lib / "nexwar_contract/relsign.py").is_file()
+    cfg = json.loads((tmp_path / "etc/nexwar_ops.json").read_text(encoding="utf-8"))
+    assert cfg["profile"] == "robot" and cfg["spool"] == str(tmp_path / "var/lib/nexwar_ops")
+    assert (tmp_path / "var/lib/nexwar_ops/req").is_dir()
+    assert "Storage=persistent" in (tmp_path / "etc/systemd/journald.conf.d/nexwar.conf").read_text()  # noqa: E501
     calls = _调用(tmp_path)
-    assert "systemctl enable --now d1max-ops.path" in calls
+    assert "systemctl enable --now nexwar_ops.path" in calls
     assert any(c.startswith("install -m 0755 -o root -g root") and c.endswith("ops-runner")
                for c in calls), "执行器要 root 属主"
     assert any(c.startswith("usermod -aG systemd-journal") for c in calls), "代理要读得了系统日志"
@@ -150,57 +150,57 @@ def test_W55_装上特权执行器_日志留盘_读日志的组(tmp_path):
 def test_老机器_清掉老服务助手白名单任务包_老env的PIN行不动只提示(tmp_path):
     script = _准备(tmp_path)
     sysd = tmp_path / "etc/systemd/system"
-    (sysd / "d1max-patrol.service").write_text("[Unit]\n", encoding="utf-8")
+    (sysd / "nexwar_patrol.service").write_text("[Unit]\n", encoding="utf-8")
     (sysd / "multi-user.target.wants").mkdir()
-    (sysd / "multi-user.target.wants/d1max-patrol.service").symlink_to(
-        sysd / "d1max-patrol.service")
-    for p in ("usr/local/sbin/d1max-privileged", "usr/local/sbin/d1max-restart-now",
-              "etc/sudoers.d/d1max", "opt/d1max/bundles/site-1/bundle.yaml"):
+    (sysd / "multi-user.target.wants/nexwar_patrol.service").symlink_to(
+        sysd / "nexwar_patrol.service")
+    for p in ("usr/local/sbin/nexwar_privileged", "usr/local/sbin/nexwar_restart_now",
+              "etc/sudoers.d/nexwar", "opt/nexwar/bundles/site-1/bundle.yaml"):
         (tmp_path / p).parent.mkdir(parents=True, exist_ok=True)
         (tmp_path / p).write_text("x", encoding="utf-8")
-    (tmp_path / "etc/d1max").mkdir(parents=True)
-    (tmp_path / "etc/d1max/env").write_text(
-        "D1MAX_SN=C40221\nD1MAX_PIN=<老PIN>\nD1MAX_CONSOLE_URL=\n", encoding="utf-8")
+    (tmp_path / "etc/nexwar").mkdir(parents=True)
+    (tmp_path / "etc/nexwar/env").write_text(
+        "NEXWAR_SN=C40221\nNEXWAR_PIN=<老PIN>\nNEXWAR_CONSOLE_URL=\n", encoding="utf-8")
     got = _跑(tmp_path, script)
     assert got.returncode == 0, got.stdout + got.stderr
-    for p in ("etc/systemd/system/d1max-patrol.service",
-              "etc/systemd/system/multi-user.target.wants/d1max-patrol.service",
-              "usr/local/sbin/d1max-privileged", "usr/local/sbin/d1max-restart-now",
-              "etc/sudoers.d/d1max", "opt/d1max/bundles"):
+    for p in ("etc/systemd/system/nexwar_patrol.service",
+              "etc/systemd/system/multi-user.target.wants/nexwar_patrol.service",
+              "usr/local/sbin/nexwar_privileged", "usr/local/sbin/nexwar_restart_now",
+              "etc/sudoers.d/nexwar", "opt/nexwar/bundles"):
         assert not (tmp_path / p).exists(), f"{p} 应该被清掉"
-    env = (tmp_path / "etc/d1max/env").read_text(encoding="utf-8")
-    assert "D1MAX_PIN=<老PIN>" in env, "人手写的配置文件不许改"
+    env = (tmp_path / "etc/nexwar/env").read_text(encoding="utf-8")
+    assert "NEXWAR_PIN=<老PIN>" in env, "人手写的配置文件不许改"
     assert "已经没人读了" in got.stdout
-    assert "缺这几行" in got.stdout and "D1MAX_SITE_MQTT" in got.stdout
+    assert "缺这几行" in got.stdout and "NEXWAR_SITE_MQTT" in got.stdout
     calls = _调用(tmp_path)
-    停老 = calls.index("systemctl disable --now d1max-patrol.service")
+    停老 = calls.index("systemctl disable --now nexwar_patrol.service")
     assert 停老 < calls.index("systemctl daemon-reload") < calls.index(
-        "systemctl enable d1max-agent.service")
+        "systemctl enable nexwar_agent.service")
 
 
 def test_登记了但站点值空着_代理先不起(tmp_path):
     script = _准备(tmp_path)
-    (tmp_path / "etc/d1max/tls").mkdir(parents=True)
+    (tmp_path / "etc/nexwar/tls").mkdir(parents=True)
     for f in ("registration.json", "tls/ca.crt", "tls/robot.crt", "tls/robot.key"):
-        (tmp_path / "etc/d1max" / f).write_text("x", encoding="utf-8")
+        (tmp_path / "etc/nexwar" / f).write_text("x", encoding="utf-8")
     got = _跑(tmp_path, script)
     assert got.returncode == 0, got.stdout + got.stderr
-    assert "代理先不起" in got.stderr and "D1MAX_SITE_MQTT" in got.stderr
-    assert "systemctl start d1max-agent.service" not in _调用(tmp_path)
+    assert "代理先不起" in got.stderr and "NEXWAR_SITE_MQTT" in got.stderr
+    assert "systemctl start nexwar_agent.service" not in _调用(tmp_path)
 
 
 def test_登记了_站点值填了_证书读得到_起代理(tmp_path):
     script = _准备(tmp_path)
-    (tmp_path / "etc/d1max/tls").mkdir(parents=True)
+    (tmp_path / "etc/nexwar/tls").mkdir(parents=True)
     for f in ("registration.json", "tls/ca.crt", "tls/robot.crt", "tls/robot.key"):
-        (tmp_path / "etc/d1max" / f).write_text("x", encoding="utf-8")
-    (tmp_path / "etc/d1max/env").write_text(
-        "D1MAX_SITE_MQTT=mqtts://site:8883\nD1MAX_MAP=estate:1\nD1MAX_HOME=0,0,0\n"
-        "D1MAX_HAL=sim\n", encoding="utf-8")
+        (tmp_path / "etc/nexwar" / f).write_text("x", encoding="utf-8")
+    (tmp_path / "etc/nexwar/env").write_text(
+        "NEXWAR_SITE_MQTT=mqtts://site:8883\nNEXWAR_MAP=estate:1\nNEXWAR_HOME=0,0,0\n"
+        "NEXWAR_HAL=sim\n", encoding="utf-8")
     got = _跑(tmp_path, script)
     assert got.returncode == 0, got.stdout + got.stderr
     assert "代理先不起" not in got.stderr
-    assert "systemctl start d1max-agent.service" in _调用(tmp_path)
+    assert "systemctl start nexwar_agent.service" in _调用(tmp_path)
     assert "缺这几行" not in got.stdout
 
 
@@ -208,20 +208,20 @@ def test_证书读不到_代理先不起(tmp_path):
     if os.geteuid() == 0:
         pytest.skip("root 读得到 0000 的文件,这条测不出来")
     script = _准备(tmp_path)
-    (tmp_path / "etc/d1max/tls").mkdir(parents=True)
+    (tmp_path / "etc/nexwar/tls").mkdir(parents=True)
     for f in ("registration.json", "tls/ca.crt", "tls/robot.crt", "tls/robot.key"):
-        (tmp_path / "etc/d1max" / f).write_text("x", encoding="utf-8")
-    (tmp_path / "etc/d1max/tls/robot.key").chmod(0)
-    (tmp_path / "etc/d1max/env").write_text(
-        "D1MAX_SITE_MQTT=mqtts://site:8883\nD1MAX_MAP=estate:1\nD1MAX_HOME=0,0,0\n",
+        (tmp_path / "etc/nexwar" / f).write_text("x", encoding="utf-8")
+    (tmp_path / "etc/nexwar/tls/robot.key").chmod(0)
+    (tmp_path / "etc/nexwar/env").write_text(
+        "NEXWAR_SITE_MQTT=mqtts://site:8883\nNEXWAR_MAP=estate:1\nNEXWAR_HOME=0,0,0\n",
         encoding="utf-8")
     try:
         got = _跑(tmp_path, script)
     finally:
-        (tmp_path / "etc/d1max/tls/robot.key").chmod(0o600)
+        (tmp_path / "etc/nexwar/tls/robot.key").chmod(0o600)
     assert got.returncode == 0, got.stdout + got.stderr
     assert "代理先不起" in got.stderr and "robot.key" in got.stderr
-    assert "systemctl start d1max-agent.service" not in _调用(tmp_path)
+    assert "systemctl start nexwar_agent.service" not in _调用(tmp_path)
 
 
 @pytest.mark.parametrize("坏法", ["没有", "链接"])
@@ -229,14 +229,14 @@ def test_包里没有代理启动脚本_盘上一个字节都不动就停(tmp_pa
     """W00c5 外审阻断 1 的配套:老服务那一代的包 7/7 必被 ``release activate`` 拒,而那时候 5/7
     已经把老服务清掉了 —— 要在动盘之前就停。"""
     script = _准备(tmp_path)
-    start = tmp_path / "pkg" / PKG_NAME / "deploy" / "d1max-agent-start"
+    start = tmp_path / "pkg" / PKG_NAME / "deploy" / "nexwar_agent_start"
     start.unlink()
     if 坏法 == "链接":
-        start.symlink_to(DEPLOY / "d1max-agent-start")
+        start.symlink_to(DEPLOY / "nexwar_agent_start")
     got = _跑(tmp_path, script)
     assert got.returncode == 2, got.stdout + got.stderr
     assert "启动脚本" in got.stderr
-    assert not (tmp_path / "opt/d1max").exists(), "1/7 还没开始"
+    assert not (tmp_path / "opt/nexwar").exists(), "1/7 还没开始"
     assert not (tmp_path / "calls").exists(), "systemctl、chown、python 一个都没跑"
 
 
@@ -245,7 +245,7 @@ def test_包里没有代理启动脚本_盘上一个字节都不动就停(tmp_pa
 
 def test_W35_包里带了离线轮子_没给pip参数就只从它装_给了就听给的(tmp_path):
     """现场:清单写的 ``/home/robot/wheels`` 在这只狗上不存在,包里其实带着 ``wheels/``(站点下发的
-    版本就是从它装的)。没给 ``D1MAX_PIP_ARGS`` 就用包里的;给了(哪怕是空的)听给的。"""
+    版本就是从它装的)。没给 ``NEXWAR_PIP_ARGS`` 就用包里的;给了(哪怕是空的)听给的。"""
     script = _准备(tmp_path)
     wheels = tmp_path / "pkg" / PKG_NAME / "wheels"
     wheels.mkdir()
@@ -259,7 +259,7 @@ def test_W35_包里带了离线轮子_没给pip参数就只从它装_给了就�
         root.mkdir()
         script = _准备(root)
         (root / "pkg" / PKG_NAME / "wheels").mkdir()
-        got = _跑(root, script, D1MAX_PIP_ARGS=given)
+        got = _跑(root, script, NEXWAR_PIP_ARGS=given)
         assert got.returncode == 0, got.stdout + got.stderr
         pips = [c for c in _调用(root) if "-m pip install" in c]
         assert pips and not any("find-links=" + str(root / "pkg") in c for c in pips), pips
@@ -276,24 +276,24 @@ def test_W35_包里没带轮子_不加参数(tmp_path):
 
 def test_W70_开关写了bridge的服务_装机设开机自启并起来_注释掉的不管(tmp_path):
     """W35 现场:定位器、感知、人员检测是手工 ``start`` 的,断电再开都不起;W70(用户 11-03 现场)
-    重启后定位器没起、换图白等 120 s。env 里写了要用的(``=bridge``、``D1MAX_NAV=nav2``),装机就
+    重启后定位器没起、换图白等 120 s。env 里写了要用的(``=bridge``、``NEXWAR_NAV=nav2``),装机就
     ``enable --now``;注释掉的、没写的照旧只装不 enable。"""
     script = _准备(tmp_path)
-    etc = tmp_path / "etc/d1max"
+    etc = tmp_path / "etc/nexwar"
     etc.mkdir(parents=True)
-    (etc / "env").write_text("D1MAX_SITE_MQTT=\nD1MAX_MAP=\nD1MAX_HOME=\nD1MAX_HAL=sim\n"
-                             "D1MAX_LOCALIZER=bridge\n  D1MAX_OBSTACLES=bridge\n"
-                             "#   D1MAX_PERSONS=bridge\nD1MAX_NAV=planned\n", encoding="utf-8")
-    for u in ("d1max-localizer", "d1max-obstacles", "d1max-persons", "d1max-nav2"):
+    (etc / "env").write_text("NEXWAR_SITE_MQTT=\nNEXWAR_MAP=\nNEXWAR_HOME=\nNEXWAR_HAL=sim\n"
+                             "NEXWAR_LOCALIZER=bridge\n  NEXWAR_OBSTACLES=bridge\n"
+                             "#   NEXWAR_PERSONS=bridge\nNEXWAR_NAV=planned\n", encoding="utf-8")
+    for u in ("nexwar_localizer", "nexwar_obstacles", "nexwar_persons", "nexwar_nav2"):
         (tmp_path / f"etc/systemd/system/{u}.service").write_text("", encoding="utf-8")
     got = _跑(tmp_path, script)
     assert got.returncode == 0, got.stdout + got.stderr
     calls = _调用(tmp_path)
     enabled = [c for c in calls if c.startswith("systemctl enable --now")]
-    assert any("d1max-localizer" in c for c in enabled), calls
-    assert any("d1max-obstacles" in c for c in enabled), calls
-    assert not any("d1max-persons" in c for c in enabled), "注释掉的不算"
-    assert not any("d1max-nav2" in c for c in enabled), "D1MAX_NAV 不是 nav2"
+    assert any("nexwar_localizer" in c for c in enabled), calls
+    assert any("nexwar_obstacles" in c for c in enabled), calls
+    assert not any("nexwar_persons" in c for c in enabled), "注释掉的不算"
+    assert not any("nexwar_nav2" in c for c in enabled), "NEXWAR_NAV 不是 nav2"
     assert "设了开机自启并已起来" in got.stdout
 
 
@@ -302,10 +302,10 @@ def _chrony狗(root: Path, *, 主配置: str | None, env: str) -> Path:
     if 主配置 is not None:
         (root / "etc/chrony").mkdir(parents=True)
         (root / "etc/chrony/chrony.conf").write_text(主配置, encoding="utf-8")
-    (root / "etc/d1max").mkdir(parents=True)
-    (root / "etc/d1max/env").write_text("D1MAX_MAP=\nD1MAX_HOME=\nD1MAX_HAL=sim\n" + env,
+    (root / "etc/nexwar").mkdir(parents=True)
+    (root / "etc/nexwar/env").write_text("NEXWAR_MAP=\nNEXWAR_HOME=\nNEXWAR_HAL=sim\n" + env,
                                         encoding="utf-8")
-    shutil.copy2(DEPLOY / "d1max-timesync-conf", root / "pkg" / PKG_NAME / "deploy")
+    shutil.copy2(DEPLOY / "nexwar_timesync_conf", root / "pkg" / PKG_NAME / "deploy")
     return script
 
 
@@ -314,33 +314,33 @@ def test_决策61_对时归chrony管的狗_写一个单独的片段向站点对�
     钟差拒发命令;整机断电再开是 1970 年。假 systemctl 不认 ``show``,等于 timesyncd 不在(masked)。"""
     vendor = "refclock PPS /dev/pps0\nserver 192.168.168.19 iburst\nconfdir /etc/chrony/conf.d\n"
     vendor = vendor.replace("/etc/chrony", str(tmp_path / "etc/chrony"))
-    script = _chrony狗(tmp_path, 主配置=vendor, env="D1MAX_SITE_MQTT=mqtts://10.0.0.5:8883\n")
+    script = _chrony狗(tmp_path, 主配置=vendor, env="NEXWAR_SITE_MQTT=mqtts://10.0.0.5:8883\n")
     got = _跑(tmp_path, script)
     assert got.returncode == 0, got.stdout + got.stderr
-    frag = (tmp_path / "etc/chrony/conf.d/d1max.conf").read_text(encoding="utf-8")
+    frag = (tmp_path / "etc/chrony/conf.d/nexwar.conf").read_text(encoding="utf-8")
     assert "\nserver 10.0.0.5 iburst prefer trust\n" in frag and "\nmakestep 1.0 3\n" in frag
     main = (tmp_path / "etc/chrony/chrony.conf").read_text(encoding="utf-8")
     # W70(用户 11-03 同意):厂家板慢 28 s,chrony 跟它对、站点往回拨,拉锯 —— 那一行注释掉,别的不动
-    assert "\n# d1max W70 厂家板的钟不准,不跟它对时: server 192.168.168.19 iburst\n" in main
-    assert main.replace("# d1max W70 厂家板的钟不准,不跟它对时: ", "") == vendor
-    assert (tmp_path / "etc/d1max/chrony.conf.orig").read_text(encoding="utf-8") == vendor
+    assert "\n# nexwar W70 厂家板的钟不准,不跟它对时: server 192.168.168.19 iburst\n" in main
+    assert main.replace("# nexwar W70 厂家板的钟不准,不跟它对时: ", "") == vendor
+    assert (tmp_path / "etc/nexwar/chrony.conf.orig").read_text(encoding="utf-8") == vendor
     assert "不再跟厂家板 192.168.168.19 对时" in got.stdout
     got = _跑(tmp_path, script)                        # 再装一遍:不再改、原文件那份不被覆盖
     assert got.returncode == 0 and "不再跟厂家板" not in got.stdout
     assert (tmp_path / "etc/chrony/chrony.conf").read_text(encoding="utf-8") == main
-    assert (tmp_path / "etc/d1max/chrony.conf.orig").read_text(encoding="utf-8") == vendor
+    assert (tmp_path / "etc/nexwar/chrony.conf.orig").read_text(encoding="utf-8") == vendor
     assert "systemctl restart chrony" in _调用(tmp_path)
     assert "向 10.0.0.5 对时" in got.stdout
-    assert not (tmp_path / "etc/systemd/timesyncd.conf.d/d1max.conf").exists()
+    assert not (tmp_path / "etc/systemd/timesyncd.conf.d/nexwar.conf").exists()
 
 
 def test_决策61_厂家的主配置不读片段目录_不改它_说清楚要加哪一行(tmp_path):
     vendor = "server 192.168.168.19 iburst\n# confdir /etc/chrony/conf.d\n"
-    script = _chrony狗(tmp_path, 主配置=vendor, env="D1MAX_SITE_NTP=site.lan\n")
+    script = _chrony狗(tmp_path, 主配置=vendor, env="NEXWAR_SITE_NTP=site.lan\n")
     got = _跑(tmp_path, script)
     assert got.returncode == 0, got.stdout + got.stderr
     assert "server site.lan iburst prefer trust" in (
-        tmp_path / "etc/chrony/conf.d/d1max.conf").read_text(encoding="utf-8")
+        tmp_path / "etc/chrony/conf.d/nexwar.conf").read_text(encoding="utf-8")
     assert "systemctl restart chrony" not in _调用(tmp_path), "没生效就不说对上了"
     assert "confdir" in got.stderr and "不替它加这一行" in got.stderr
     out = "\n".join(x for x in got.stdout.splitlines() if "不再跟厂家板" not in x)
@@ -350,15 +350,15 @@ def test_决策61_厂家的主配置不读片段目录_不改它_说清楚要加
 def test_决策61_站点地址没填_不留片段_没有chrony的机器照旧只提示(tmp_path):
     a = tmp_path / "a"
     a.mkdir()
-    script = _chrony狗(a, 主配置="confdir /etc/chrony/conf.d\n", env="D1MAX_SITE_MQTT=\n")
+    script = _chrony狗(a, 主配置="confdir /etc/chrony/conf.d\n", env="NEXWAR_SITE_MQTT=\n")
     (a / "etc/chrony/conf.d").mkdir()
-    (a / "etc/chrony/conf.d/d1max.conf").write_text("server old.lan iburst\n", encoding="utf-8")
+    (a / "etc/chrony/conf.d/nexwar.conf").write_text("server old.lan iburst\n", encoding="utf-8")
     got = _跑(a, script)
     assert got.returncode == 0, got.stdout + got.stderr
-    assert not (a / "etc/chrony/conf.d/d1max.conf").exists(), "指着旧主机的片段不留"
+    assert not (a / "etc/chrony/conf.d/nexwar.conf").exists(), "指着旧主机的片段不留"
     b = tmp_path / "b"
     b.mkdir()
-    script = _chrony狗(b, 主配置=None, env="D1MAX_SITE_MQTT=mqtts://10.0.0.5:8883\n")
+    script = _chrony狗(b, 主配置=None, env="NEXWAR_SITE_MQTT=mqtts://10.0.0.5:8883\n")
     got = _跑(b, script)
     assert got.returncode == 0, got.stdout + got.stderr
     assert not (b / "etc/chrony").exists() and "我们不配" in got.stderr
@@ -369,7 +369,7 @@ def test_决策61_站点地址没填_不留片段_没有chrony的机器照旧只
     ("confdir /etc/chrony/conf.d/\n", True),
     ("confdir /etc/chrony/sources.d /etc/chrony/conf.d\n", True),
     ("include /etc/chrony/conf.d/*.conf\n", True),
-    ("include /etc/chrony/conf.d/d1max.conf\n", True),
+    ("include /etc/chrony/conf.d/nexwar.conf\n", True),
     ("confdir /etc/chrony/conf.d-disabled\n", False),
     ("confdir /etc/chrony/conf.dd\n", False),
     ("include /etc/chrony/conf.d-old/*.conf\n", False),
@@ -381,7 +381,7 @@ def test_W35外审M1_主配置读不读我们的片段_按整个参数认_不按
     """原来只看路径前缀:``confdir /etc/chrony/conf.d-disabled`` 也算读了,脚本重启 chrony、说
     「向站点对时」,其实片段没被载入。"""
     vendor = 主配置.replace("/etc/chrony", str(tmp_path / "etc/chrony"))
-    script = _chrony狗(tmp_path, 主配置=vendor, env="D1MAX_SITE_NTP=site.lan\n")
+    script = _chrony狗(tmp_path, 主配置=vendor, env="NEXWAR_SITE_NTP=site.lan\n")
     got = _跑(tmp_path, script)
     assert got.returncode == 0, got.stdout + got.stderr
     assert ("systemctl restart chrony" in _调用(tmp_path)) is 生效
@@ -393,81 +393,81 @@ def test_W35外审M1_主配置读不读我们的片段_按整个参数认_不按
 def test_W68_Super_LIO是必装的_装机时编_编不成整个装机失败_不切版本不起代理(tmp_path, ok):
     """用户 2026-11-02:Super-LIO 做定位,是必装的核心组件;编不成不留半装的机器人。"""
     script = _准备(tmp_path)
-    build = tmp_path / "pkg" / PKG_NAME / "deploy/d1max-superlio-build"
-    _stub(build, f'echo "superlio-build prefix=$D1MAX_SUPERLIO_PREFIX" >> "{tmp_path / "calls"}"\n'
+    build = tmp_path / "pkg" / PKG_NAME / "deploy/nexwar_superlio_build"
+    _stub(build, f'echo "superlio-build prefix=$NEXWAR_SUPERLIO_PREFIX" >> "{tmp_path / "calls"}"\n'
                  + ("exit 0\n" if ok else 'echo "缺命令: colcon" >&2\nexit 1\n'))
     got = _跑(tmp_path, script)
     calls = _调用(tmp_path)
-    assert f"superlio-build prefix={tmp_path / 'opt/d1max/superlio'}" in calls
+    assert f"superlio-build prefix={tmp_path / 'opt/nexwar/superlio'}" in calls
     if ok:
         assert got.returncode == 0, got.stdout + got.stderr
-        assert "systemctl start d1max-agent.service" in calls
+        assert "systemctl start nexwar_agent.service" in calls
     else:
         assert got.returncode != 0
         assert "Super-LIO" in got.stdout + got.stderr and "装机失败" in got.stdout + got.stderr
-        assert "systemctl start d1max-agent.service" not in calls
-        assert not (tmp_path / "opt/d1max/current").exists(), "不切到这一版"
+        assert "systemctl start nexwar_agent.service" not in calls
+        assert not (tmp_path / "opt/nexwar/current").exists(), "不切到这一版"
 
 
 def test_W68_外审_编译脚本丢了执行位_照样编_用机器人账号编(tmp_path):
     """codex r1 #7:原来按 -x 判,经 FAT/exFAT 拷过变成 0644 就当没有、跳过必装的编译。"""
     script = _准备(tmp_path)
-    build = tmp_path / "pkg" / PKG_NAME / "deploy/d1max-superlio-build"
-    _stub(build, f'echo "superlio-build prefix=$D1MAX_SUPERLIO_PREFIX" >> "{tmp_path / "calls"}"\n')
+    build = tmp_path / "pkg" / PKG_NAME / "deploy/nexwar_superlio_build"
+    _stub(build, f'echo "superlio-build prefix=$NEXWAR_SUPERLIO_PREFIX" >> "{tmp_path / "calls"}"\n')  # noqa: E501
     build.chmod(0o644)
     got = _跑(tmp_path, script)
     assert got.returncode == 0, got.stdout + got.stderr
     calls = _调用(tmp_path)
-    assert f"superlio-build prefix={tmp_path / 'opt/d1max/superlio'}" in calls
-    assert any(c.startswith("sudo -u robot") and "d1max-superlio-build" in c for c in calls)
+    assert f"superlio-build prefix={tmp_path / 'opt/nexwar/superlio'}" in calls
+    assert any(c.startswith("sudo -u robot") and "nexwar_superlio_build" in c for c in calls)
 
 
 def test_W68_外审_包里带了Super_LIO源码却没编译脚本_装机失败(tmp_path):
     script = _准备(tmp_path)
     pkg = tmp_path / "pkg" / PKG_NAME
-    (pkg / "deploy/d1max-superlio-build").unlink(missing_ok=True)
+    (pkg / "deploy/nexwar_superlio_build").unlink(missing_ok=True)
     (pkg / "packages/localizer/native/superlio").mkdir(parents=True, exist_ok=True)
     got = _跑(tmp_path, script)
     assert got.returncode != 0
     assert "装机失败" in got.stdout + got.stderr
-    assert "systemctl start d1max-agent.service" not in _调用(tmp_path)
+    assert "systemctl start nexwar_agent.service" not in _调用(tmp_path)
 
 
 def _合并狗(root: Path, env: str) -> Path:
     script = _准备(root)
-    (root / "etc/d1max").mkdir(parents=True)
-    (root / "etc/d1max/env").write_text("D1MAX_MAP=\nD1MAX_HOME=\nD1MAX_HAL=sim\n" + env,
+    (root / "etc/nexwar").mkdir(parents=True)
+    (root / "etc/nexwar/env").write_text("NEXWAR_MAP=\nNEXWAR_HOME=\nNEXWAR_HAL=sim\n" + env,
                                         encoding="utf-8")
     wants = root / "etc/systemd/system/multi-user.target.wants"
     wants.mkdir(parents=True)
-    (wants / "d1max-lidar-merge.service").write_text("", encoding="utf-8")
+    (wants / "nexwar_lidar_merge.service").write_text("", encoding="utf-8")
     return script
 
 
 def test_W70_没人用合并雷达_开着自启的合并服务装机时关掉(tmp_path):
-    """用户 11-03 现场:W68 起定位器用 Super-LIO,没人订 /d1max/merged_lidar,
+    """用户 11-03 现场:W68 起定位器用 Super-LIO,没人订 /nexwar/merged_lidar,
     合并服务却还开机自启、占两核多。"""
-    script = _合并狗(tmp_path, "D1MAX_LOCALIZER=bridge\n")
+    script = _合并狗(tmp_path, "NEXWAR_LOCALIZER=bridge\n")
     got = _跑(tmp_path, script)
     assert got.returncode == 0, got.stdout + got.stderr
-    assert "systemctl disable --now d1max-lidar-merge.service" in _调用(tmp_path)
+    assert "systemctl disable --now nexwar_lidar_merge.service" in _调用(tmp_path)
     assert "没人用前后雷达合并" in got.stdout
 
 
 def test_W70_env里有人订合并雷达_合并服务不动(tmp_path):
-    script = _合并狗(tmp_path, 'D1MAX_LOC_ARGS="--engine mola --lidar-topic /d1max/merged_lidar"\n')
+    script = _合并狗(tmp_path, 'NEXWAR_LOC_ARGS="--engine mola --lidar-topic /nexwar/merged_lidar"\n')  # noqa: E501
     got = _跑(tmp_path, script)
     assert got.returncode == 0, got.stdout + got.stderr
-    assert "systemctl disable --now d1max-lidar-merge.service" not in _调用(tmp_path)
+    assert "systemctl disable --now nexwar_lidar_merge.service" not in _调用(tmp_path)
 
 
 def test_W70_Super_LIO下定位参数里留着合并话题_没人用_照关(tmp_path):
-    """C40221 的 env 里 D1MAX_LOC_ARGS 还写着 --lidar-topic /d1max/merged_lidar(MOLA 时代留下的),
+    """C40221 的 env 里 NEXWAR_LOC_ARGS 还写着 --lidar-topic /nexwar/merged_lidar(MOLA 时代留下的),
     Super-LIO 不认这个参数。"""
-    script = _合并狗(tmp_path, 'D1MAX_LOC_ARGS="--lidar-topic /d1max/merged_lidar"\n')
+    script = _合并狗(tmp_path, 'NEXWAR_LOC_ARGS="--lidar-topic /nexwar/merged_lidar"\n')
     got = _跑(tmp_path, script)
     assert got.returncode == 0, got.stdout + got.stderr
-    assert "systemctl disable --now d1max-lidar-merge.service" in _调用(tmp_path)
+    assert "systemctl disable --now nexwar_lidar_merge.service" in _调用(tmp_path)
 
 
 def test_W70_厂家板地址按env配_没指向它的主配置不动(tmp_path):
@@ -475,17 +475,17 @@ def test_W70_厂家板地址按env配_没指向它的主配置不动(tmp_path):
     a.mkdir()
     vendor = "server 10.9.9.9 iburst\nserver 192.168.168.190 iburst\nconfdir /etc/chrony/conf.d\n"
     vendor = vendor.replace("/etc/chrony", str(a / "etc/chrony"))
-    script = _chrony狗(a, 主配置=vendor, env="D1MAX_SITE_NTP=site.lan\n"
-                                             "D1MAX_VENDOR_TIME_HOSTS=10.9.9.9\n")
+    script = _chrony狗(a, 主配置=vendor, env="NEXWAR_SITE_NTP=site.lan\n"
+                                             "NEXWAR_VENDOR_TIME_HOSTS=10.9.9.9\n")
     got = _跑(a, script)
     assert got.returncode == 0, got.stdout + got.stderr
     main = (a / "etc/chrony/chrony.conf").read_text(encoding="utf-8")
-    assert main.startswith("# d1max W70") and "\nserver 192.168.168.190 iburst\n" in main
+    assert main.startswith("# nexwar W70") and "\nserver 192.168.168.190 iburst\n" in main
     b = tmp_path / "b"
     b.mkdir()
     vendor = "server 192.168.168.190 iburst\nconfdir /etc/chrony/conf.d\n"
     vendor = vendor.replace("/etc/chrony", str(b / "etc/chrony"))
-    script = _chrony狗(b, 主配置=vendor, env="D1MAX_SITE_NTP=site.lan\n")
+    script = _chrony狗(b, 主配置=vendor, env="NEXWAR_SITE_NTP=site.lan\n")
     got = _跑(b, script)
     assert (b / "etc/chrony/chrony.conf").read_text(encoding="utf-8") == vendor, "前缀相同不算"
-    assert not (b / "etc/d1max/chrony.conf.orig").exists()
+    assert not (b / "etc/nexwar/chrony.conf.orig").exists()

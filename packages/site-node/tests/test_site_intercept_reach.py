@@ -1,6 +1,6 @@
 """拦截点走不走得到(W23,决策 38)。两间屋子中间一道墙、墙上一个门:待命点在左屋,拦截点在右屋。
 门宽够(1.6 m)走得到;门窄(0.8 m,机身外接圆半径 0.52 m 过不去)走不到。跟狗同一份规划
-(``d1max_contract.planning``)。"""
+(``nexwar_contract.planning``)。"""
 
 from __future__ import annotations
 
@@ -10,11 +10,11 @@ from types import SimpleNamespace
 import pytest
 from test_site_maps import _files
 
-from d1max_site.db import SiteDB
-from d1max_site.incidents import IncidentDesk, IncidentError
-from d1max_site.intercept_reach import InterceptReach
-from d1max_site.maps import MapCatalog
-from d1max_site.nav_zones import NavZones
+from nexwar_site.db import SiteDB
+from nexwar_site.incidents import IncidentDesk, IncidentError
+from nexwar_site.intercept_reach import InterceptReach
+from nexwar_site.maps import MapCatalog
+from nexwar_site.nav_zones import NavZones
 
 RES = 0.1
 W_M, H_M = 8.0, 4.0                                     # 8 m × 4 m,原点 (0, 0)
@@ -218,7 +218,7 @@ async def test_外审2_首单没派成_补派前拦截点已经走不到_并进�
 def test_外审3_命令行设拦截点也查_墙里不收_走得到的收(tmp_path):
     from test_site_intercept_reach import _屋子
 
-    from d1max_site import main as site_main
+    from nexwar_site import main as site_main
     h = tmp_path / "site"
     assert site_main.main(["--home", str(h), "init", "--site-id", "estate-1",
                            "--hostname", "localhost", "--broker-port", "18883"]) == 0

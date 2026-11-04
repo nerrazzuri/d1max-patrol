@@ -15,26 +15,26 @@ def _toml(name: str) -> str:
 
 
 def test_三个包都能import():
-    assert importlib.import_module("d1max_contract").SCHEMA == "1.0"
-    importlib.import_module("d1max_adapter_sim")
-    importlib.import_module("d1max_adapter_d1max")
-    importlib.import_module("d1max_agent")
-    importlib.import_module("d1max_site")
+    assert importlib.import_module("nexwar_contract").SCHEMA == "1.0"
+    importlib.import_module("nexwar_adapter_sim")
+    importlib.import_module("nexwar_adapter_d1max")
+    importlib.import_module("nexwar_agent")
+    importlib.import_module("nexwar_site")
 
 
 def test_包名与依赖方向():
     c, s, a = _toml("contract"), _toml("adapter-sim"), _toml("robot-agent")
-    assert 'name = "d1max-contract"' in c
-    assert 'name = "d1max-adapter-sim"' in s
-    assert 'name = "d1max-robot-agent"' in a
-    assert "d1max-contract" in s and "d1max-contract" in a
-    assert "d1max-patrol" not in c, "契约包不许依赖根包 —— 它是唯一被两侧同时依赖的东西"
+    assert 'name = "nexwar_contract"' in c
+    assert 'name = "nexwar_adapter_sim"' in s
+    assert 'name = "nexwar_robot_agent"' in a
+    assert "nexwar_contract" in s and "nexwar_contract" in a
+    assert "nexwar_patrol" not in c, "契约包不许依赖根包 —— 它是唯一被两侧同时依赖的东西"
     assert "paho" not in a and "paho" not in s
     site = _toml("site-node")
     deps = re.search(r"(?m)^dependencies\s*=\s*\[(.*)\]", site).group(1)
     # W23:多了契约包自己的 planning 可选依赖(numpy,跟狗用同一份规划查拦截点走不走得到)
-    want = '"d1max-contract[mqtt,planning]"'
-    assert 'name = "d1max-site-node"' in site and deps.strip() == want, \
+    want = '"nexwar_contract[mqtt,planning]"'
+    assert 'name = "nexwar_site_node"' in site and deps.strip() == want, \
         "站点只依赖契约包:不依赖根包(老 HTTP 面要在 W00c4 退役),也不依赖代理与适配器"
     assert re.search(r"(?ms)\[project\.optional-dependencies\].*mqtt\s*=\s*\[.*paho-mqtt", c), \
         "paho 只作为契约包的 mqtt 可选依赖"
@@ -49,9 +49,9 @@ def test_根pyproject把三处测试目录都收进来():
 
 
 def test_每个包有src布局和tests目录():
-    for name, mod in (("contract", "d1max_contract"), ("adapter-sim", "d1max_adapter_sim"),
-                      ("adapter-d1max", "d1max_adapter_d1max"), ("robot-agent", "d1max_agent"),
-                      ("site-node", "d1max_site")):
+    for name, mod in (("contract", "nexwar_contract"), ("adapter-sim", "nexwar_adapter_sim"),
+                      ("adapter-d1max", "nexwar_adapter_d1max"), ("robot-agent", "nexwar_agent"),
+                      ("site-node", "nexwar_site")):
         assert (PKGS / name / "src" / mod / "__init__.py").is_file(), name
         assert (PKGS / name / "tests").is_dir(), name
 
@@ -73,12 +73,12 @@ def test_包内tests目录不是包而且文件名不与根tests撞():
 
 def test_别名壳已删_全仓不再有旧名字():
     """W00c4 设计决定三 A:根包里那层引擎别名壳删了,引擎只有一个名字
-    ``d1max_agent.engine``。旧名字再出现就是有人照着老代码抄。"""
+    ``nexwar_agent.engine``。旧名字再出现就是有人照着老代码抄。"""
     import pytest
     with pytest.raises(ModuleNotFoundError):
-        importlib.import_module("d1max_patrol" + ".engine")
-    assert not (ROOT / "src" / "d1max_patrol" / "engine").exists()
-    旧 = "d1max_patrol" + ".engine"
+        importlib.import_module("nexwar_patrol" + ".engine")
+    assert not (ROOT / "src" / "nexwar_patrol" / "engine").exists()
+    旧 = "nexwar_patrol" + ".engine"
     for base in ("src", "tests", "packages", "deploy"):
         for f in (ROOT / base).rglob("*"):
             if f.suffix in (".py", ".sh", ".service", ".toml") and f.is_file():
@@ -87,14 +87,14 @@ def test_别名壳已删_全仓不再有旧名字():
 
 def test_狗上的告警与值守已删_全仓不再有旧名字():
     """W00c5a 决定一 A(决策 8:业务信息不留在狗上):告警簿整个搬去站点
-    (``d1max_site.alerts``),狗上老服务的告警来源、值守汇总和那几条路由一起
+    (``nexwar_site.alerts``),狗上老服务的告警来源、值守汇总和那几条路由一起
     删了。旧名字再出现就是有人照着老代码抄;站点包自己的同名路由不在扫描范围里。"""
     import pytest
-    for mod in ("d1max_patrol.app." + "alert_sources", "d1max_patrol.app." + "watch",
-                "d1max_agent.engine." + "alerts"):
+    for mod in ("nexwar_patrol.app." + "alert_sources", "nexwar_patrol.app." + "watch",
+                "nexwar_agent.engine." + "alerts"):
         with pytest.raises(ModuleNotFoundError):
             importlib.import_module(mod)
-    旧 = ("d1max_agent.engine." + "alerts", "/api/watch/" + "summary")
+    旧 = ("nexwar_agent.engine." + "alerts", "/api/watch/" + "summary")
     for base in (ROOT / "src", PKGS / "robot-agent", ROOT / "tests"):
         for f in base.rglob("*"):
             if f.suffix in (".py", ".js", ".html", ".sh", ".service", ".toml") and f.is_file():
@@ -104,47 +104,47 @@ def test_狗上的告警与值守已删_全仓不再有旧名字():
 
 
 def test_搬走的engine里没有旧包名():
-    src = PKGS / "robot-agent" / "src" / "d1max_agent" / "engine"
+    src = PKGS / "robot-agent" / "src" / "nexwar_agent" / "engine"
     for py in src.glob("*.py"):
         代码 = "\n".join(行 for 行 in py.read_text(encoding="utf-8").splitlines()
                         if 行.lstrip().startswith(("from ", "import ")))
-        assert "d1max_patrol" + ".engine" not in 代码, f"{py.name} 里还 import 旧包名"
-    assert 'd1max-patrol' in _toml("robot-agent"), "过渡性依赖要声明"
+        assert "nexwar_patrol" + ".engine" not in 代码, f"{py.name} 里还 import 旧包名"
+    assert 'nexwar_patrol' in _toml("robot-agent"), "过渡性依赖要声明"
     d = _toml("adapter-d1max")
-    assert 'name = "d1max-adapter-d1max"' in d and "d1max-contract" in d
-    assert "d1max-patrol" in d, "adapter-d1max 过渡性借根包的旁路进程客户端,要声明"
+    assert 'name = "nexwar_adapter_d1max"' in d and "nexwar_contract" in d
+    assert "nexwar_patrol" in d, "adapter-d1max 过渡性借根包的旁路进程客户端,要声明"
 
 
 def test_几何类型在契约包里_根包转手的是同一个类():
     """W00c2a:任务点位的 Pose 进契约(站点要解析任务)。根包、引擎、导航后端用的必须是
     同一个类 —— 两种 Pose 混用,isinstance 与相等比较都会悄悄出错。"""
-    from d1max_contract import geometry
-    from d1max_patrol.protocol import nav_types
+    from nexwar_contract import geometry
+    from nexwar_patrol.protocol import nav_types
     for name in ("Position", "Orientation", "Pose", "yaw_to_orientation", "orientation_to_yaw"):
         assert getattr(nav_types, name) is getattr(geometry, name), name
 
 
 def test_任务与排程模块在契约包里_旧名字是同一个模块对象():
-    import d1max_contract.mission as cm
-    import d1max_contract.schedule as cs
-    for old in ("d1max_agent.engine.mission", "d1max_agent.engine.mission"):
+    import nexwar_contract.mission as cm
+    import nexwar_contract.schedule as cs
+    for old in ("nexwar_agent.engine.mission", "nexwar_agent.engine.mission"):
         assert importlib.import_module(old) is cm, old
     # 排程只在契约包里(狗上那个旧名字随 W00c5e 删了)。
     assert cs.parse_schedule is not None
-    assert "d1max_patrol" not in (PKGS / "contract" / "src" / "d1max_contract" / "mission.py"
+    assert "nexwar_patrol" not in (PKGS / "contract" / "src" / "nexwar_contract" / "mission.py"
                                   ).read_text(encoding="utf-8")
 
 
 def test_任务包格式与指纹在契约包里_发布包用的是同一个指纹算法():
-    from d1max_agent.engine import release
-    from d1max_contract import digest
+    from nexwar_agent.engine import release
+    from nexwar_contract import digest
     assert release._tree_sha256 is digest.tree_sha256, "发布包与任务包只有一个指纹算法"
 
 
 def test_契约包不反向依赖根包与代理():
-    src = PKGS / "contract" / "src" / "d1max_contract"
+    src = PKGS / "contract" / "src" / "nexwar_contract"
     for py in src.glob("*.py"):
         text = py.read_text(encoding="utf-8")
-        for bad in ("import d1max_patrol", "from d1max_patrol", "import d1max_agent",
-                    "from d1max_agent", "import d1max_site", "from d1max_site"):
+        for bad in ("import nexwar_patrol", "from nexwar_patrol", "import nexwar_agent",
+                    "from nexwar_agent", "import nexwar_site", "from nexwar_site"):
             assert bad not in text, f"{py.name}: {bad}"

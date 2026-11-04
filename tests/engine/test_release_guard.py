@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from d1max_agent.engine.release import (
+from nexwar_agent.engine.release import (
     MANIFEST_NAME,
     MAX_BOOT_ATTEMPTS,
     GuardAction,
@@ -133,7 +133,7 @@ def test_链丢了也按盘上最新的一版修好(tmp_path):
 def test_有在途标记时修链要照标记修而不是照最新的修(tmp_path):
     """换链换了一半:标记写了,链没换成。这时候「最新的」正是那一版没验过的。"""
     layout = _两版(tmp_path)
-    import d1max_agent.engine.release as rel
+    import nexwar_agent.engine.release as rel
 
     def 炸(_layout, _name):
         raise OSError("换到一半断电")
@@ -167,7 +167,7 @@ def test_权限拒绝也不会把异常甩给调用方(tmp_path):
     for _ in range(MAX_BOOT_ATTEMPTS):
         boot_guard(layout, now_ms=NOW)
 
-    import d1max_agent.engine.release as rel
+    import nexwar_agent.engine.release as rel
 
     def 炸(_layout, _name):
         raise OSError(13, "permission denied")
@@ -184,7 +184,7 @@ def test_标记里的名字不合规也不会把异常甩给调用方(tmp_path):
     """pending.json 里的 to/from 要是不合规的名字(比如带路径穿越的),
     safe_name 会炸 ReleaseError —— 这也得被 boot_guard 兜住,而不是漏出去。"""
     layout = _两版(tmp_path)
-    from d1max_agent.engine.release import Pending, write_pending
+    from nexwar_agent.engine.release import Pending, write_pending
 
     write_pending(
         layout,
@@ -198,8 +198,8 @@ def _带启动脚本(root: Path, name: str, *, mode: int = 0o755) -> Path:
     """代理那一代的包。启动脚本照真的那样带执行位(git 里是 100755);``mode`` 给坏的用。"""
     where = _pkg(root, name)
     (where / "deploy").mkdir()
-    (where / "deploy" / "d1max-agent-start").write_text("#!/bin/sh\n", encoding="utf-8")
-    (where / "deploy" / "d1max-agent-start").chmod(mode)
+    (where / "deploy" / "nexwar_agent_start").write_text("#!/bin/sh\n", encoding="utf-8")
+    (where / "deploy" / "nexwar_agent_start").chmod(mode)
     payload = json.loads((where / MANIFEST_NAME).read_text(encoding="utf-8"))
     payload["content_sha256"] = tree_sha256(where, skip=MANIFEST_NAME)
     (where / MANIFEST_NAME).write_text(json.dumps(payload), encoding="utf-8")
@@ -211,7 +211,7 @@ def test_上一版是老服务那一代_守卫不退回去_留在新版并留条
     老服务的单元也已经被装机脚本删了。新版代理连不上站点、没坐实,守卫数够次数退回老槽 ——
     代理在那一版里起不来,狗就再也没有服务。**退不回去的就不退**:留在新版,清掉在途标记,
     留一张条子说明,等人来看(网络好了代理自己就连上了)。"""
-    from d1max_agent.engine.release import rollback, take_guard_note
+    from nexwar_agent.engine.release import rollback, take_guard_note
     layout = Layout(root=tmp_path / "opt")
     layout.releases.mkdir(parents=True)
     old, new = "2026-09-06-a3f9c1", "2026-09-26-77b2de"
@@ -264,7 +264,7 @@ def test_槽里的启动脚本没有执行位_不切(tmp_path):
     """代理单元的 ExecStart 就是这个脚本:没有执行位 systemd 起不来(203/EXEC)。落槽会补执行位
     (见下一条),这里是落槽之后被改掉的。"""
     layout, old, new = _老与新(tmp_path)
-    (layout.releases / new / "deploy" / "d1max-agent-start").chmod(0o644)
+    (layout.releases / new / "deploy" / "nexwar_agent_start").chmod(0o644)
     with pytest.raises(ReleaseError, match="执行位"):
         activate(layout, new, now_ms=NOW)
     assert current_name(layout) == old and read_pending(layout) is None
@@ -274,7 +274,7 @@ def test_落槽补上执行位_U盘拷掉了也能切_重落一遍也补(tmp_pat
     """现场是 U 盘带包(装机清单):FAT/exFAT 不存执行位,包里的启动脚本到狗上是 0644。
     执行位不进指纹,落槽时补上;以前落下的 0644 槽,重跑装机脚本(再落一遍)也补。"""
     layout, old, new = _老与新(tmp_path, new_mode=0o644)
-    start = layout.releases / new / "deploy" / "d1max-agent-start"
+    start = layout.releases / new / "deploy" / "nexwar_agent_start"
     assert start.stat().st_mode & 0o111 == 0o111
     activate(layout, new, now_ms=NOW)
     assert current_name(layout) == new
@@ -286,7 +286,7 @@ def test_落槽补上执行位_U盘拷掉了也能切_重落一遍也补(tmp_pat
 def test_目标版的启动脚本是链接_不切(tmp_path):
     """包里只许普通文件(站点打包、狗上解包都不收链接);落槽之后被换成链接的也不认。"""
     layout, old, new = _老与新(tmp_path)
-    start = layout.releases / new / "deploy" / "d1max-agent-start"
+    start = layout.releases / new / "deploy" / "nexwar_agent_start"
     real = tmp_path / "别处的脚本"
     real.write_text("#!/bin/sh\n", encoding="utf-8")
     real.chmod(0o755)
@@ -316,7 +316,7 @@ def test_老服务那一代之间照旧能切_代理那一代之间照旧能切(
 
 def test_上一版的启动脚本坏了_守卫也不退回去(tmp_path):
     """守卫退回走的是同一道判据:上一版的启动脚本没有执行位,退过去一样起不来。"""
-    from d1max_agent.engine.release import rollback
+    from nexwar_agent.engine.release import rollback
     layout = Layout(root=tmp_path / "opt")
     layout.releases.mkdir(parents=True)
     a, b = "2026-09-25-aaaaaa", "2026-09-26-bbbbbb"
@@ -325,7 +325,7 @@ def test_上一版的启动脚本坏了_守卫也不退回去(tmp_path):
     activate(layout, a, now_ms=NOW)
     commit(layout)
     activate(layout, b, now_ms=NOW)
-    (layout.releases / a / "deploy" / "d1max-agent-start").chmod(0o644)
+    (layout.releases / a / "deploy" / "nexwar_agent_start").chmod(0o644)
     with pytest.raises(ReleaseError, match="启动脚本"):
         rollback(layout, now_ms=NOW)
     for _ in range(MAX_BOOT_ATTEMPTS):
@@ -337,7 +337,7 @@ def test_上一版的启动脚本坏了_守卫也不退回去(tmp_path):
 def test_重落时槽里的启动脚本是链接_不跟过去补执行位_照样不切(tmp_path):
     """补执行位只动槽里的普通文件:跟着链接 chmod 会改到槽外面的文件。"""
     layout, old, new = _老与新(tmp_path)
-    start = layout.releases / new / "deploy" / "d1max-agent-start"
+    start = layout.releases / new / "deploy" / "nexwar_agent_start"
     outside = tmp_path / "槽外面的文件"
     outside.write_text("#!/bin/sh\n", encoding="utf-8")
     outside.chmod(0o644)
@@ -370,7 +370,7 @@ def test_守卫修链_排最后的那版启动脚本坏了_修到旁边好的那
     good, bad = "2026-09-25-aaaaaa", "2026-09-26-bbbbbb"
     stage(layout, _带启动脚本(tmp_path / "q1", good), now_ms=NOW)
     stage(layout, _带启动脚本(tmp_path / "q2", bad), now_ms=NOW)
-    (layout.releases / bad / "deploy" / "d1max-agent-start").chmod(0o644)
+    (layout.releases / bad / "deploy" / "nexwar_agent_start").chmod(0o644)
     assert boot_guard(layout, now_ms=NOW) is GuardAction.REPAIRED
     assert current_name(layout) == good
 
@@ -394,7 +394,7 @@ def test_不知道在跑哪一版_盘上有代理那一代_就不许切到老服
 def test_执行位不全_不算起得来(tmp_path):
     """只看「有没有哪个执行位」的话 0o010、0o001 也算过,服务账号其实执行不了。"""
     layout, old, new = _老与新(tmp_path)
-    start = layout.releases / new / "deploy" / "d1max-agent-start"
+    start = layout.releases / new / "deploy" / "nexwar_agent_start"
     for mode in (0o710, 0o010, 0o001):
         start.chmod(mode)
         with pytest.raises(ReleaseError, match="执行位"):
@@ -418,7 +418,7 @@ def test_包里的deploy是个文件_落槽不因补执行位而失败(tmp_path)
 def test_W70_上一次是连不上站点才退出的_不算新版坏_不退(tmp_path):
     """11-03 C40221:装完新版那一刻隧道断着,代理连不上 broker 退出,守卫 8 s 内数满 2 次把新版退了;
     网络好了也一直停在旧版。连不上站点是外面的事,退回旧版也一样连不上:不数,接着等新版。"""
-    from d1max_agent.engine.release import note_connect_failure
+    from nexwar_agent.engine.release import note_connect_failure
     layout = _两版(tmp_path)
     activate(layout, "2026-09-20-77b2de", now_ms=NOW)
     assert boot_guard(layout, now_ms=NOW) is GuardAction.COUNTED
@@ -434,7 +434,7 @@ def test_W70_上一次是连不上站点才退出的_不算新版坏_不退(tmp_
 
 
 def test_W70_连不上之后又崩了_崩的那次照数(tmp_path):
-    from d1max_agent.engine.release import note_connect_failure
+    from nexwar_agent.engine.release import note_connect_failure
     layout = _两版(tmp_path)
     activate(layout, "2026-09-20-77b2de", now_ms=NOW)
     assert boot_guard(layout, now_ms=NOW) is GuardAction.COUNTED
@@ -446,7 +446,7 @@ def test_W70_连不上之后又崩了_崩的那次照数(tmp_path):
 
 def test_W70_一直连不上_等够了还是退(tmp_path):
     """新版自己把连接弄坏了(证书路径改错之类)也是「连不上」:不能永远等,等够次数照退。"""
-    from d1max_agent.engine.release import MAX_NET_WAITS, note_connect_failure
+    from nexwar_agent.engine.release import MAX_NET_WAITS, note_connect_failure
     layout = _两版(tmp_path)
     activate(layout, "2026-09-20-77b2de", now_ms=NOW)
     boot_guard(layout, now_ms=NOW)

@@ -11,17 +11,17 @@ import json
 import numpy as np
 import pytest
 
-from d1max_adapter_sim.robot import SimRobot
-from d1max_agent.maps import MapKeeper
-from d1max_agent.planning.planner import Planner
-from d1max_agent.runtime import AgentRuntime
-from d1max_contract.maps import GEOMETRY_FILES
-from d1max_contract.memory_broker import MemoryBroker, MemoryTransport
-from d1max_contract.messages import Capabilities, Command
-from d1max_contract.registration import Registration
-from d1max_contract.topics import Topics
-from d1max_contract.transport import Message
-from d1max_patrol.protocol.nav_types import Pose
+from nexwar_adapter_sim.robot import SimRobot
+from nexwar_agent.maps import MapKeeper
+from nexwar_agent.planning.planner import Planner
+from nexwar_agent.runtime import AgentRuntime
+from nexwar_contract.maps import GEOMETRY_FILES
+from nexwar_contract.memory_broker import MemoryBroker, MemoryTransport
+from nexwar_contract.messages import Capabilities, Command
+from nexwar_contract.registration import Registration
+from nexwar_contract.topics import Topics
+from nexwar_contract.transport import Message
+from nexwar_patrol.protocol.nav_types import Pose
 
 REG = Registration(site_id="s", robot_id="r", credential_fingerprint="f", issued_at=0,
                    expires_at=10**13)
@@ -298,7 +298,7 @@ async def test_直线桥_报不守区域(tmp_path):
 async def test_遥控守硬禁区_直线桥也守_续租回执带着为什么截了(tmp_path):
     """决策 65:硬禁区跟导航守不守无关(``--nav straight`` 的狗遥控照样守);能力里报 ``teleop_hard``;
     截了的原因随续租回执给站点;放宽等空闲的那一份里新加的硬禁区也守。"""
-    from d1max_contract.teleop import TeleopFrame, teleop_grant_payload
+    from nexwar_contract.teleop import TeleopFrame, teleop_grant_payload
     broker, c = MemoryBroker(), 钟()
     r = SimRobot(now_ms=c, max_vx=1.0)
     ears = 耳朵()
@@ -404,7 +404,7 @@ async def test_读规划栅格期间来了新区域_读完不拿旧的盖回去(
 
 
 async def test_运营可视化_走的时候遥测带规划路径_收尾后不带(台):
-    from d1max_contract.messages import Telemetry
+    from nexwar_contract.messages import Telemetry
     broker, c, r, ears, rt, site, mk = 台
     await _换图(rt, broker, site, c, ears)
     r.teleport(1.0, 1.0, 0.0)

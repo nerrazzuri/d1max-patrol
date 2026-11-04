@@ -1,5 +1,5 @@
 // 运营可视化（手机）：两个新接口的请求（真 HTTPS 的假站点；widget 测试的绑定会把网络换成 400，所以单独一个文件）。
-import 'package:d1max_patrol/net/site_client.dart';
+import 'package:nexwar_patrol/net/site_client.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'support/fake_site.dart';

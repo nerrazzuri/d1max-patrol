@@ -8,15 +8,15 @@ import json
 
 import pytest
 
-from d1max_agent.main import record_cameras
-from d1max_agent.video_push import (
+from nexwar_agent.main import record_cameras
+from nexwar_agent.video_push import (
     CameraConfigError,
     VideoPusher,
     lavfi_source,
     load_cameras,
     rtsp_source,
 )
-from d1max_contract.video import VideoRequest, scrub
+from nexwar_contract.video import VideoRequest, scrub
 
 URL = "rtsp://admin:S3cret!pw@192.168.10.64:554/Streaming/Channels/101"
 

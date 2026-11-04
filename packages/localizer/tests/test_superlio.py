@@ -10,7 +10,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-from d1max_localizer import superlio as S
+from nexwar_localizer import superlio as S
 
 
 def _yaw_q(yaw: float) -> tuple[float, float, float, float]:
@@ -154,11 +154,11 @@ def test_边走边建_发的话题全改到建图命名空间下_不跟竞品和
     a = S.node_args(Path("/c.yaml"), ns_remap=True)
     assert a[:3] == ["--ros-args", "--params-file", "/c.yaml"]
     remaps = [a[i + 1] for i, x in enumerate(a) if x == "-r"]
-    assert "/lio/odom:=/d1max_mapping/lio/odom" in remaps
+    assert "/lio/odom:=/nexwar_mapping/lio/odom" in remaps
     assert len(remaps) == len(S.PUBLISHED)
     assert "lio.ros.lidar_topic:=/front_lidar" in a and "lio.map.save_map:=false" in a
     assert "-r" not in S.node_args(Path("/c.yaml"), ns_remap=False)
-    assert S.LIVE_TOPIC == "/d1max_mapping/lio/odom"
+    assert S.LIVE_TOPIC == "/nexwar_mapping/lio/odom"
 
 
 def test_现场参数优先(tmp_path, monkeypatch):
@@ -172,7 +172,7 @@ def test_现场参数优先(tmp_path, monkeypatch):
 def test_没装_起不来_说先编(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(S, "ROOT", tmp_path)
     assert S.main(["live"]) == 2
-    assert "d1max-superlio-build" in capsys.readouterr().out
+    assert "nexwar_superlio_build" in capsys.readouterr().out
 
 
 def test_装好了才算装好(tmp_path, monkeypatch):
@@ -186,7 +186,7 @@ def test_装好了才算装好(tmp_path, monkeypatch):
 
 
 def _fake_front(monkeypatch, tmp_path, *, live: bool):
-    from d1max_localizer import build
+    from nexwar_localizer import build
     monkeypatch.setattr(S, "ROOT", tmp_path / "root")
     for f in (".ok", "install/setup.bash", "bin/kf2sm"):
         (tmp_path / "root" / f).parent.mkdir(parents=True, exist_ok=True)
@@ -215,7 +215,7 @@ def _fake_front(monkeypatch, tmp_path, *, live: bool):
 
 
 def test_建图命令_录包里有边走边建的位姿就直接用(tmp_path, monkeypatch):
-    from d1max_localizer import build, tools
+    from nexwar_localizer import build, tools
     seen = _fake_front(monkeypatch, tmp_path, live=True)
     t = tools._superlio_front(tmp_path / "bag1", tmp_path / "w", reuse=True)
     assert seen["read"] == [("bag1", S.LIVE_TOPIC)] and "offline" not in seen
@@ -224,7 +224,7 @@ def test_建图命令_录包里有边走边建的位姿就直接用(tmp_path, mo
 
 
 def test_建图命令_老包没有位姿_回放重算_边走边建的没有就报错(tmp_path, monkeypatch):
-    from d1max_localizer import tools
+    from nexwar_localizer import tools
     seen = _fake_front(monkeypatch, tmp_path, live=False)
     tools._superlio_front(tmp_path / "bag1", tmp_path / "w", reuse=False)
     assert seen["read"][-1] == ("lio_bag", "/lio/odom") and seen["prepare"][0] == "replay"
@@ -234,7 +234,7 @@ def test_建图命令_老包没有位姿_回放重算_边走边建的没有就�
 
 def test_现场1104_录包里的位姿是定位模式下的_要能强制回放重算(tmp_path, monkeypatch):
     """11-04 广场:录包时机器人上的定位器在旧图上定位,录进来的 Super-LIO 位姿不是建图轨迹。"""
-    from d1max_localizer import tools
+    from nexwar_localizer import tools
     seen = _fake_front(monkeypatch, tmp_path, live=True)
     tools._superlio_front(tmp_path / "bag1", tmp_path / "w", reuse=False, replay=True)
     assert ("bag1", S.LIVE_TOPIC) not in seen["read"] and "offline" in seen
@@ -242,7 +242,7 @@ def test_现场1104_录包里的位姿是定位模式下的_要能强制回放�
 
 
 def test_建图命令_强制回放和用录下的位姿不能一起开(tmp_path, capsys):
-    from d1max_localizer import tools
+    from nexwar_localizer import tools
     with pytest.raises(SystemExit):
         tools.main(["build", "--bag", str(tmp_path), "--out", str(tmp_path / "o"),
                     "--front", "superlio", "--reuse", "--replay"])
@@ -250,9 +250,9 @@ def test_建图命令_强制回放和用录下的位姿不能一起开(tmp_path,
 
 
 def test_建图命令_没装Super_LIO_说先编(tmp_path, monkeypatch):
-    from d1max_localizer import tools
+    from nexwar_localizer import tools
     monkeypatch.setattr(S, "ROOT", tmp_path)
-    with pytest.raises(S.SuperLioError, match="d1max-superlio-build"):
+    with pytest.raises(S.SuperLioError, match="nexwar_superlio_build"):
         tools._superlio_front(tmp_path / "b", tmp_path / "w", reuse=False)
 
 

@@ -3,11 +3,11 @@
 
 from __future__ import annotations
 
-from d1max_agent import events as events_mod
-from d1max_agent import idempotency as idem_mod
-from d1max_agent.events import EventBook
-from d1max_agent.idempotency import IdempotencyStore
-from d1max_contract.messages import Ack, AckResult
+from nexwar_agent import events as events_mod
+from nexwar_agent import idempotency as idem_mod
+from nexwar_agent.events import EventBook
+from nexwar_agent.idempotency import IdempotencyStore
+from nexwar_contract.messages import Ack, AckResult
 
 
 def _lines(p):

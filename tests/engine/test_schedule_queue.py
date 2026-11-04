@@ -11,7 +11,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from d1max_contract.schedule import (
+from nexwar_contract.schedule import (
     Decision,
     DecisionKind,
     ScheduleEntry,

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from d1max_agent.resources import ResourceLedger
+from nexwar_agent.resources import ResourceLedger
 
 
 def test_互斥与释放():

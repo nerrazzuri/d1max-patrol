@@ -9,7 +9,7 @@ import pytest
 from test_site_api import PW, 站
 from test_site_intercept_reach import 台  # noqa: F401  (pytest 夹具)
 
-from d1max_site.nearest import NOMINAL_MPS, nearest
+from nexwar_site.nearest import NOMINAL_MPS, nearest
 
 
 def test_路程_走得通回米数_走不通回None(台):  # noqa: F811

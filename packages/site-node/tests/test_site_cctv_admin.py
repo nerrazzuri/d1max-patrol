@@ -7,8 +7,8 @@ import logging
 
 import pytest
 
-from d1max_site.cctv import load_cameras
-from d1max_site.cctv_admin import check_camera
+from nexwar_site.cctv import load_cameras
+from nexwar_site.cctv_admin import check_camera
 
 SECRET = "s3cret-Pa55"
 GOOD = {"name": "gate-cam", "onvif_url": "http://192.168.1.50", "username": "admin",
@@ -242,7 +242,7 @@ def test_实测_网页加删摄像头_站点当场跟上_不等下一拍(tmp_pat
     from test_site_api import PW, 站
     from test_site_cctv import _假订阅
 
-    from d1max_site.cctv import CctvManager
+    from nexwar_site.cctv import CctvManager
     s = 站(tmp_path)
     try:
         s.cctv = CctvManager(s.db, report=lambda c, e: None, now_ms=lambda: 1,

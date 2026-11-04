@@ -13,7 +13,7 @@ import time
 import pytest
 from test_site_api import PW, _等, target, 站
 
-from d1max_site.ws import client_mask_frame
+from nexwar_site.ws import client_mask_frame
 
 
 class 手机:
@@ -452,7 +452,7 @@ class _钟差不知道:
 def test_遥控中钟差变成不知道_续租被拒_这一趟收掉_狗按租约超时自己停(站点):
     """W09h 外审 6(决策 19):续租是 gated,钟差不知道就不发;站点连续两次续不上收掉这一趟。放租这一路
     也故意丢掉 —— 狗不靠站点的放租,按自己的租约超时停车。"""
-    from d1max_contract.messages import AckResult
+    from nexwar_contract.messages import AckResult
     s = 站点
     tok = _登(s)
     _新鲜(s, tok)
@@ -465,7 +465,7 @@ def test_遥控中钟差变成不知道_续租被拒_这一趟收掉_狗按租�
 
     async def 丢放租(robot_id, lease, *, timeout_s):
         if lease.action == "release":                   # 放租路上丢了
-            from d1max_contract.messages import Ack
+            from nexwar_contract.messages import Ack
             return Ack("x", "x", AckResult.ACCEPTED)
         try:
             return await real(robot_id, lease, timeout_s=timeout_s)

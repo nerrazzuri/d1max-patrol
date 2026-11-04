@@ -14,13 +14,13 @@ import logging
 
 from websockets.asyncio.server import serve
 
-from d1max_patrol.backends.vendor_nav import (
+from nexwar_patrol.backends.vendor_nav import (
     UNPARSEABLE_REMIND_EVERY,
     VendorNavBackend,
 )
-from d1max_patrol.config.models import NavConfig
-from d1max_patrol.protocol.nav_frames import build_response, parse_request
-from d1max_patrol.protocol.nav_requests import response_func_for
+from nexwar_patrol.config.models import NavConfig
+from nexwar_patrol.protocol.nav_frames import build_response, parse_request
+from nexwar_patrol.protocol.nav_requests import response_func_for
 
 #: 轮询周期大到一次都发不出来 —— 桩服务端不会应答,别让轮询器往日志里掺超时。
 _POLLER_OFF = 3600.0
@@ -87,12 +87,12 @@ async def _连上(frames: list[str]):
 
 def _警告(caplog) -> list[logging.LogRecord]:
     return [r for r in caplog.records
-            if r.name == "d1max_patrol.backends.vendor_nav"
+            if r.name == "nexwar_patrol.backends.vendor_nav"
             and r.levelno >= logging.WARNING and "无法解析" in r.getMessage()]
 
 
 async def test_同一类未知报文只警告一次_其余只计数(caplog):
-    caplog.set_level(logging.DEBUG, logger="d1max_patrol.backends.vendor_nav")
+    caplog.set_level(logging.DEBUG, logger="nexwar_patrol.backends.vendor_nav")
     n = 200
     async with _连上([_SUB] * n) as b:
         await _wait_until(lambda: b.unparseable_total >= n)
@@ -104,7 +104,7 @@ async def test_同一类未知报文只警告一次_其余只计数(caplog):
 
 
 async def test_不同类各警告一次_坏JSON也算一类(caplog):
-    caplog.set_level(logging.DEBUG, logger="d1max_patrol.backends.vendor_nav")
+    caplog.set_level(logging.DEBUG, logger="nexwar_patrol.backends.vendor_nav")
     frames = [_SUB, _OTHER, _GARBAGE, _SUB, _OTHER, _GARBAGE, _SUB]
     async with _连上(frames) as b:
         await _wait_until(lambda: b.unparseable_total >= len(frames))
@@ -118,7 +118,7 @@ async def test_不同类各警告一次_坏JSON也算一类(caplog):
 
 async def test_重连之后同一类也不再重复警告(caplog):
     """真机上链路会断会重连;要是按连接清零,每次重连就又刷一遍。"""
-    caplog.set_level(logging.DEBUG, logger="d1max_patrol.backends.vendor_nav")
+    caplog.set_level(logging.DEBUG, logger="nexwar_patrol.backends.vendor_nav")
     async with _连上([_SUB] * 5) as b:
         await _wait_until(lambda: b.unparseable_total >= 5)
         ws = b._ws
@@ -136,13 +136,13 @@ def test_到了提醒阈值再补一行_让人知道还在发生():
 
 
 async def test_提醒阈值那一条以INFO级补一行(caplog, monkeypatch):
-    import d1max_patrol.backends.vendor_nav as vn
+    import nexwar_patrol.backends.vendor_nav as vn
     monkeypatch.setattr(vn, "UNPARSEABLE_REMIND_EVERY", 50)
-    caplog.set_level(logging.DEBUG, logger="d1max_patrol.backends.vendor_nav")
+    caplog.set_level(logging.DEBUG, logger="nexwar_patrol.backends.vendor_nav")
     async with _连上([_SUB] * 120) as b:
         await _wait_until(lambda: b.unparseable_total >= 120)
     提醒 = [r for r in caplog.records
-            if r.name == "d1max_patrol.backends.vendor_nav"
+            if r.name == "nexwar_patrol.backends.vendor_nav"
             and r.levelno == logging.INFO and "累计" in r.getMessage()]
     文本 = [r.getMessage() for r in 提醒]
     assert len(文本) == 2, 文本

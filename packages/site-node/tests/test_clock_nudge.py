@@ -6,7 +6,7 @@ from __future__ import annotations
 import asyncio
 from types import SimpleNamespace
 
-from d1max_site.clockskew import NUDGE_EVERY_MS, ClockNudger
+from nexwar_site.clockskew import NUDGE_EVERY_MS, ClockNudger
 
 
 class 假派遣:

@@ -1,5 +1,5 @@
-"""W00c1 验收(设计 §6),全用真东西:``d1max-site`` 命令行建站点、签证书、加账号 → 真 Mosquitto
-(mTLS + ACL)→ ``d1max-site serve`` 子进程 → ``d1max-agent`` 子进程(sim,带证书)→ 站点 API。
+"""W00c1 验收(设计 §6),全用真东西:``nexwar_site`` 命令行建站点、签证书、加账号 → 真 Mosquitto
+(mTLS + ACL)→ ``nexwar_site serve`` 子进程 → ``nexwar_agent`` 子进程(sim,带证书)→ 站点 API。
 
 1. 登录 → 派 goto → 事件里看到 accepted 与 done;再派一趟远的,中途 abort → aborted、停下。
 2. A 的证书发 B 的主题 → broker 丢弃。
@@ -23,9 +23,9 @@ from pathlib import Path
 import pytest
 from conftest import find_mosquitto, free_port
 
-from d1max_contract.messages import MapPose
-from d1max_contract.paho_transport import PahoTransport
-from d1max_contract.topics import Topics
+from nexwar_contract.messages import MapPose
+from nexwar_contract.paho_transport import PahoTransport
+from nexwar_contract.topics import Topics
 
 SITE = "estate-1"
 PW = "correct-horse-battery"
@@ -35,7 +35,7 @@ ENV["PYTHONUNBUFFERED"] = "1"
 
 
 def site(home: Path, *args: str, **kw) -> subprocess.CompletedProcess:
-    return subprocess.run([sys.executable, "-m", "d1max_site.main", "--home", str(home), *args],
+    return subprocess.run([sys.executable, "-m", "nexwar_site.main", "--home", str(home), *args],
                           capture_output=True, text=True, timeout=120, env=ENV | kw.get("env", {}))
 
 
@@ -87,7 +87,7 @@ def 现场(tmp_path):
         # W33:新登记的狗先只许手动派;验收要跑排程、入侵,管理员确认接自动派遣
         r = site(home, "robot-auto", rid)
         assert r.returncode == 0 and "接自动派遣" in r.stdout, r.stderr
-    r = site(home, "add-admin", "alice", env={"D1MAX_SITE_PASSWORD": PW})
+    r = site(home, "add-admin", "alice", env={"NEXWAR_SITE_PASSWORD": PW})
     assert r.returncode == 0, r.stderr
     # W10:狗用的那张图要在站点目录里(派单前要确认这一版区域)
     src = tmp_path / "map-src"
@@ -106,12 +106,12 @@ def 现场(tmp_path):
         return p
 
     broker = mosq()
-    srv = Proc("site", [sys.executable, "-m", "d1max_site.main", "--home", str(home), "serve",
+    srv = Proc("site", [sys.executable, "-m", "nexwar_site.main", "--home", str(home), "serve",
                         "--api-port", str(aport)], tmp_path / "site.log")
     procs.append(srv)
-    srv.wait_line("d1max-site 起来了")
+    srv.wait_line("nexwar_site 起来了")
     a = home / "ca" / "issued" / "A"
-    agent = Proc("agent", [sys.executable, "-m", "d1max_agent.main",
+    agent = Proc("agent", [sys.executable, "-m", "nexwar_agent.main",
                            "--transport", f"mqtts://127.0.0.1:{bport}",
                            "--tls-ca", str(a / "ca.crt"), "--tls-cert", str(a / "robot.crt"),
                            "--tls-key", str(a / "robot.key"), "--hal", "sim",
@@ -121,7 +121,7 @@ def 现场(tmp_path):
                            "--map", "estate-1:7", "--home", "0,0,0", "--period", "0.05"],
                  tmp_path / "agent.log")
     procs.append(agent)
-    agent.wait_line("d1max-agent 起来了")
+    agent.wait_line("nexwar_agent 起来了")
     ctx = {"home": home, "bport": bport, "api": f"http://127.0.0.1:{aport}", "broker": broker,
            "mosq": mosq, "procs": procs}
     yield ctx

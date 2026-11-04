@@ -9,9 +9,9 @@ import json
 import pytest
 from test_site_dispatcher import 台子
 
-from d1max_site.incidents import IncidentAuthError, IncidentDesk
-from d1max_site.priorities import EVENT
-from d1max_site.standby import StandbyManager
+from nexwar_site.incidents import IncidentAuthError, IncidentDesk
+from nexwar_site.priorities import EVENT
+from nexwar_site.standby import StandbyManager
 
 
 def 签(secret: str, ts: int, body: bytes) -> str:
@@ -130,7 +130,7 @@ async def test_没有能派的狗_记no_robot(站):
 async def test_两台狗_派离拦截点近的那台(站):
     import dataclasses
 
-    from d1max_contract.messages import MapPose, Telemetry
+    from nexwar_contract.messages import MapPose, Telemetry
     t = 站
     t.reg.enroll("B", fingerprint="sha256:b", issued_at=t.clock.ms - 1,
                  expires_at=t.clock.ms + 10**10)
@@ -167,8 +167,8 @@ async def test_拦截点的地图版本对不上_不派(站):
 
 
 def test_登记类的输入校验(tmp_path):
-    from d1max_site.db import SiteDB
-    from d1max_site.incidents import IncidentError
+    from nexwar_site.db import SiteDB
+    from nexwar_site.incidents import IncidentError
     db = SiteDB(tmp_path / "s.db")
 
     class 假派遣:
@@ -224,7 +224,7 @@ async def test_两个事件同时到_不派给同一台狗(站):
 
 
 def test_验签的边角(tmp_path):
-    from d1max_site.db import SiteDB
+    from nexwar_site.db import SiteDB
 
     class 假派遣:
         def on_event(self, cb):
@@ -247,7 +247,7 @@ def test_验签的边角(tmp_path):
                                 hashlib.sha256).hexdigest())):
         with pytest.raises(IncidentAuthError):
             desk.verify(src, stamp, sig, body)
-    from d1max_site.incidents import IncidentError
+    from nexwar_site.incidents import IncidentError
     with pytest.raises(IncidentError):
         IncidentDesk.parse({"event_id": "e", "type": "intrusion", "zone": "z",
                             "occurred_at": 10**30})
@@ -267,7 +267,7 @@ async def test_派单被拒的那条不吸收后续事件(站, monkeypatch):
     async def 第一次被拒(*a, **k):
         calls["n"] += 1
         if calls["n"] == 1:
-            from d1max_site.dispatcher import DispatchRefused
+            from nexwar_site.dispatcher import DispatchRefused
             raise DispatchRefused("模拟:机器人不收")
         return await real(*a, **k)
 
@@ -405,7 +405,7 @@ def test_相同事件两个线程同时提交_一条正常一条duplicate(tmp_pa
     import asyncio
     import threading
 
-    from d1max_site.db import SiteDB
+    from nexwar_site.db import SiteDB
 
     class 假派遣:
         def on_event(self, cb):
@@ -468,7 +468,7 @@ async def test_收尾时收掉还在等回执的提升派单(站, monkeypatch):
 
 
 def test_站点重启_遗留的dispatching落成失败_不占住狗和防区(tmp_path):
-    from d1max_site.db import SiteDB
+    from nexwar_site.db import SiteDB
 
     class 假派遣:
         def on_event(self, cb):
@@ -503,8 +503,8 @@ async def test_要人监护的狗不接事件派遣(站):
 
 @pytest.fixture
 async def 带告警(站):
-    from d1max_site.alert_sources import SiteAlertSources
-    from d1max_site.alert_store import AlertDesk
+    from nexwar_site.alert_sources import SiteAlertSources
+    from nexwar_site.alert_store import AlertDesk
     t = 站
     t.alerts = AlertDesk(t.db, now_ms=t.clock, publish=lambda _: None)
     t.src = SiteAlertSources(t.alerts, now_ms=t.clock)
@@ -574,7 +574,7 @@ async def test_W16_告警报不出去_不带走派遣(站):
 
 
 async def test_W16_每个事件源每分钟有上限_超了不收_报一次P2(带告警):
-    from d1max_site.incidents import RATE_PER_MIN
+    from nexwar_site.incidents import RATE_PER_MIN
     t = 带告警
     assert all(t.desk.allow("nvr-1") for _ in range(RATE_PER_MIN))
     assert not t.desk.allow("nvr-1") and not t.desk.allow("nvr-1")
@@ -599,7 +599,7 @@ async def test_W16_事件源换密钥_旧的当场作废_删了验签不过(站)
     t.desk.remove_source("nvr-1")
     with pytest.raises(IncidentAuthError):
         t.desk.verify("nvr-1", str(ts), 签(new, ts, body), body)
-    from d1max_site.incidents import IncidentError
+    from nexwar_site.incidents import IncidentError
     with pytest.raises(IncidentError):
         t.desk.rotate_secret("nvr-1")
     with pytest.raises(IncidentError):
@@ -607,7 +607,7 @@ async def test_W16_事件源换密钥_旧的当场作废_删了验签不过(站)
 
 
 async def test_W16_拦截点与防区_列出_有防区指着不许删_防区取消映射(站):
-    from d1max_site.incidents import IncidentError
+    from nexwar_site.incidents import IncidentError
     t = 站
     got = t.desk.intercepts()
     assert [i["name"] for i in got["intercepts"]] == ["gate"]
@@ -630,8 +630,8 @@ def test_W16外审_40个线程同时进来_严格只放30个_只报一次(tmp_pa
     import threading
     import time
 
-    from d1max_site.db import SiteDB
-    from d1max_site.incidents import RATE_PER_MIN
+    from nexwar_site.db import SiteDB
+    from nexwar_site.incidents import RATE_PER_MIN
 
     class _慢(dict):
         def get(self, *a):
@@ -689,8 +689,8 @@ async def test_W16外审_告警第一次报不出去_派遣照常_下一拍补�
 
 
 async def test_W16外审_站点重启_没报成的入侵补报_一天以前的不补(带告警):
-    from d1max_site.alert_sources import SiteAlertSources
-    from d1max_site.alert_store import AlertDesk
+    from nexwar_site.alert_sources import SiteAlertSources
+    from nexwar_site.alert_store import AlertDesk
     t = 带告警
     t.desk.on_outcome = None                          # 「重启前」:告警还没接上就停了
     await _报(t, "old", zone="pond")
@@ -712,7 +712,7 @@ async def test_W16外审_站点重启_没报成的入侵补报_一天以前的�
 def test_W16外审_老库升级_历史入侵当说过了_不补报(tmp_path):
     import sqlite3
 
-    from d1max_site.db import SiteDB
+    from nexwar_site.db import SiteDB
     p = tmp_path / "s.db"
     c = sqlite3.connect(p)
     c.execute("CREATE TABLE incidents (id INTEGER PRIMARY KEY AUTOINCREMENT, source TEXT NOT NULL, "
@@ -732,8 +732,8 @@ def test_W16外审_老库升级_历史入侵当说过了_不补报(tmp_path):
 async def test_W16外审_站点告警循环每拍都补报_补报炸了不带走告警(monkeypatch):
     import asyncio
 
-    import d1max_site.alert_sources as als
-    from d1max_site import main as site_main
+    import nexwar_site.alert_sources as als
+    from nexwar_site import main as site_main
     monkeypatch.setattr(als, "STEP_S", 0.01)
     calls: list[str] = []
 
@@ -792,7 +792,7 @@ async def test_W17_入侵告警带现场_防区_拦截点_哪一趟(带告警):
 
 
 async def test_W17_狗报能拍_派去拦截的goto带photo_不报就不带(站):
-    from d1max_agent.bridges.sim_media import sim_media
+    from nexwar_agent.bridges.sim_media import sim_media
     t = 站
     await t.run(12)
     await _报(t, "e1")
@@ -820,7 +820,7 @@ async def test_W17_狗报能拍_派去拦截的goto带photo_不报就不带(站)
 async def test_W19_摄像头报入侵_派最近的狗去_来源是cctv_照样限流(站):
     import asyncio
 
-    from d1max_site.cctv import Camera, OnvifEvent, incident_reporter
+    from nexwar_site.cctv import Camera, OnvifEvent, incident_reporter
     t = 站
     await t.run(12)
     pending = []
@@ -863,7 +863,7 @@ async def test_外审r2_8_近处报警_电量在站点线和狗上线之间_站�
 
 
 async def test_外审r2_8_回程按回原点和换电位里远的那个算(站):
-    from d1max_site import energy
+    from nexwar_site import energy
     t = 站
     t.dog.inject_battery(22.0)
     await t.run(12)

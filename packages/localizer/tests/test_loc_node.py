@@ -14,13 +14,13 @@ import time
 from pathlib import Path
 
 import pytest
-from d1max_localizer.backend import FRAMES_FILE, PRIOR_FILE
-from d1max_localizer.core import Estimate
-from d1max_localizer.frames import Frames
-from d1max_localizer.main import Node, parse_args
+from nexwar_localizer.backend import FRAMES_FILE, PRIOR_FILE
+from nexwar_localizer.core import Estimate
+from nexwar_localizer.frames import Frames
+from nexwar_localizer.main import Node, parse_args
 
-from d1max_agent.bridge_localizer import BridgeLocalizer
-from d1max_agent.locbridge import LocBridgeServer
+from nexwar_agent.bridge_localizer import BridgeLocalizer
+from nexwar_agent.locbridge import LocBridgeServer
 
 FRAMES = Frames(up=(0.0, 0.0, 1.0), sensor_up=(0.0, 0.0, 1.0), sensor_forward=(1.0, 0.0, 0.0),
                 sensor_height=0.5, sensor_in_base=(0.4043, 0.0))
@@ -142,7 +142,7 @@ async def test_收尾时_MOLA_一起关掉(台):
 
 async def test_默认用Super_LIO_没装就说未装_不退回MOLA(tmp_path):
     """W68 用户定:Super-LIO 是必装的核心组件,没装不退回 MOLA。"""
-    from d1max_localizer.slioback import SlioBackend
+    from nexwar_localizer.slioback import SlioBackend
 
     class 假SlioROS(假ROS):
         def set_fit(self, fit):

@@ -1,10 +1,10 @@
 // 连续录像（W18）：一只狗的一分钟一段，按时间翻；点一段下载下来放；值班的人能标留着；告警现场进来看那一刻前后。
 import 'dart:typed_data';
 
-import 'package:d1max_patrol/model/alert.dart';
-import 'package:d1max_patrol/net/site_client.dart' show SiteError;
-import 'package:d1max_patrol/ui/site_alert_scene.dart';
-import 'package:d1max_patrol/ui/site_recordings.dart';
+import 'package:nexwar_patrol/model/alert.dart';
+import 'package:nexwar_patrol/net/site_client.dart' show SiteError;
+import 'package:nexwar_patrol/ui/site_alert_scene.dart';
+import 'package:nexwar_patrol/ui/site_recordings.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 

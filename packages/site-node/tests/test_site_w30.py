@@ -11,12 +11,12 @@ import sqlite3
 
 import pytest
 
-from d1max_site.backup import SEALED, SiteBackup
-from d1max_site.db import SiteDB
-from d1max_site.evidence import EvidenceStore
-from d1max_site.privacy import DAY_MS, PrivacyDesk
-from d1max_site.recordings import RecordingStore
-from d1max_site.sealbox import (
+from nexwar_site.backup import SEALED, SiteBackup
+from nexwar_site.db import SiteDB
+from nexwar_site.evidence import EvidenceStore
+from nexwar_site.privacy import DAY_MS, PrivacyDesk
+from nexwar_site.recordings import RecordingStore
+from nexwar_site.sealbox import (
     SealBox,
     SealError,
     load_or_create_key,
@@ -86,8 +86,8 @@ def test_文件_加密解开一样_改过的解不开_不写半截(箱, tmp_path
 
 
 def test_摄像头口令_事件源密钥_加密落库_读出来是原文_验签照常(箱, tmp_path):
-    from d1max_site.cctv import Camera, add_camera, load_cameras
-    from d1max_site.incidents import IncidentDesk
+    from nexwar_site.cctv import Camera, add_camera, load_cameras
+    from nexwar_site.incidents import IncidentDesk
     db = SiteDB(tmp_path / "site.db")
     db.sealbox = 箱
     add_camera(db, Camera(name="gate", onvif_url="http://10.0.0.5", username="admin",
@@ -146,7 +146,7 @@ def _传(store, robot="A", stamp=S1, photo=b"jpg-bytes"):
 
 
 def test_备份加密_库和证据都是密文_增量_以前的明文删掉_解开一样(箱, tmp_path):
-    from d1max_site.main import cmd_backup_open
+    from nexwar_site.main import cmd_backup_open
     c = 钟()
     db, store = _证据(tmp_path, c)
     _传(store, photo=b"SECRET-PHOTO")
@@ -180,7 +180,7 @@ def test_备份加密_库和证据都是密文_增量_以前的明文删掉_解�
     [snap] = sorted((out / "db").glob("site-*.db"))[-1:]
     assert sqlite3.connect(snap).execute("SELECT COUNT(*) FROM runs").fetchone()[0] == 1
     assert sealed, "镜像有东西"
-    from d1max_site.main import SiteError
+    from nexwar_site.main import SiteError
     with pytest.raises(SiteError, match="解不开"):
         cmd_backup_open(dest, tmp_path / "r2", tmp_path / "keys" / "secrets-wrong.key"
                         if load_or_create_key(tmp_path / "keys" / "secrets-wrong.key") else bkey)
@@ -256,7 +256,7 @@ def test_按时间段删_运行记录和录像_留着的列出来不删(tmp_path
 
 
 def test_命令行按时间段删_要写原因_记审计(tmp_path):
-    from d1max_site.main import SiteError, cmd_privacy_purge
+    from nexwar_site.main import SiteError, cmd_privacy_purge
     home = tmp_path / "home"
     home.mkdir()
     (home / "site.json").write_text(json.dumps({"site_id": "s"}))
@@ -281,8 +281,8 @@ def test_命令行按时间段删_要写原因_记审计(tmp_path):
 def test_站点配了发行公钥_没签名_签错的不登记_签对的登记(tmp_path):
     from test_site_releases import 做包
 
-    from d1max_contract import relsign
-    from d1max_site.releases import ReleaseCatalog, ReleaseCatalogError
+    from nexwar_contract import relsign
+    from nexwar_site.releases import ReleaseCatalog, ReleaseCatalogError
     k, pub = tmp_path / "k", tmp_path / "k.pub"
     relsign.keygen(k, pub)
     cat = ReleaseCatalog(tmp_path / "site", SiteDB(tmp_path / "site.db"), now_ms=lambda: 7,
@@ -326,7 +326,7 @@ def test_外审2_切到加密备份_源已经删了的旧明文备份也加密_�
 
 
 def test_外审3_删证据连导出一起删_正在打的打完作废(tmp_path):
-    from d1max_site.runs import RunDesk, RunError
+    from nexwar_site.runs import RunDesk, RunError
     c, db, store, rec, desk = _台(tmp_path)
     runs = RunDesk(store, home=tmp_path, now_ms=c)
     desk.exports = runs
@@ -360,7 +360,7 @@ def test_外审3_删证据连导出一起删_正在打的打完作废(tmp_path):
 
 
 def test_外审3_过了留存期删的_导出也删(tmp_path):
-    from d1max_site.runs import RunDesk, RunError
+    from nexwar_site.runs import RunDesk, RunError
     c, db, store, rec, desk = _台(tmp_path)
     runs = RunDesk(store, home=tmp_path, now_ms=c)
     desk.exports = runs
@@ -375,9 +375,9 @@ def test_外审3_过了留存期删的_导出也删(tmp_path):
 def test_外审4_换新主机恢复_两把密钥都放回_口令照样解得开_少了secrets_key说清楚(tmp_path):
     """站点主机坏了:新主机上用备份密钥解开备份、库放回、**原来的 secrets.key 放回**,摄像头口令、
     事件源密钥照常;secrets.key 用了新生成的那把就解不开,报错说清楚要放回原来那一把。"""
-    from d1max_site import sealbox
-    from d1max_site.cctv import Camera, add_camera, load_cameras
-    from d1max_site.main import cmd_backup_open
+    from nexwar_site import sealbox
+    from nexwar_site.cctv import Camera, add_camera, load_cameras
+    from nexwar_site.main import cmd_backup_open
     old = tmp_path / "old"
     skey, bkey = old / "keys" / "secrets.key", old / "keys" / "backup.key"
     c = 钟()
@@ -412,7 +412,7 @@ def test_外审4_换新主机恢复_两把密钥都放回_口令照样解得开_
 def test_复查1_导出删不掉_记着_下次删除或定时清理接着删(tmp_path, monkeypatch):
     from pathlib import Path
 
-    from d1max_site.runs import RunDesk, RunError
+    from nexwar_site.runs import RunDesk, RunError
     c, db, store, rec, desk = _台(tmp_path)
     runs = RunDesk(store, home=tmp_path, now_ms=c)
     desk.exports = runs
@@ -438,7 +438,7 @@ def test_复查1_导出删不掉_记着_下次删除或定时清理接着删(tmp
 
 
 def test_复查1_站点重启后定时清理接着删导出(tmp_path, monkeypatch):
-    from d1max_site.runs import RunDesk, RunError
+    from nexwar_site.runs import RunDesk, RunError
     c, db, store, rec, desk = _台(tmp_path)
     runs = RunDesk(store, home=tmp_path, now_ms=c)
     _传(store, stamp=S1)

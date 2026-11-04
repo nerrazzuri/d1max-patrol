@@ -17,16 +17,16 @@ from types import SimpleNamespace
 import pytest
 from test_site_api import PW, 站
 
-from d1max_contract import relsign
-from d1max_contract.privops import SimOps
-from d1max_site.app_dist import AppDistError, AppStore
-from d1max_site.ca import SiteCA
-from d1max_site.db import SiteDB
-from d1max_site.health import support_bundle
-from d1max_site.permissions import MAINTAIN, allowed
-from d1max_site.registry import Registry
-from d1max_site.remote_ops import CLIENT_ERR_KEEP_MS, CertRenewer, ClientErrors
-from d1max_site.vpn import VpnError, VpnState
+from nexwar_contract import relsign
+from nexwar_contract.privops import SimOps
+from nexwar_site.app_dist import AppDistError, AppStore
+from nexwar_site.ca import SiteCA
+from nexwar_site.db import SiteDB
+from nexwar_site.health import support_bundle
+from nexwar_site.permissions import MAINTAIN, allowed
+from nexwar_site.registry import Registry
+from nexwar_site.remote_ops import CLIENT_ERR_KEEP_MS, CertRenewer, ClientErrors
+from nexwar_site.vpn import VpnError, VpnState
 
 
 @pytest.fixture
@@ -61,15 +61,15 @@ def test_机器人运维接口_读日志_保安不行_拒了说原因(站点, mo
     s = 站点
     alice, gina = _登(s, "alice"), _登(s, "gina")
     sent = _假狗(s, monkeypatch, {"result": "accepted", "reason": "",
-                                "data": {"unit": "d1max-agent", "text": "x\n"}})
-    assert s.req("GET", "/api/robots/A/ops/journal?unit=d1max-agent", token=gina)[0] == 403
-    code, d = s.req("GET", "/api/robots/A/ops/journal?unit=d1max-agent&hours=3", token=alice)
+                                "data": {"unit": "nexwar_agent", "text": "x\n"}})
+    assert s.req("GET", "/api/robots/A/ops/journal?unit=nexwar_agent", token=gina)[0] == 403
+    code, d = s.req("GET", "/api/robots/A/ops/journal?unit=nexwar_agent&hours=3", token=alice)
     assert code == 200 and d["text"] == "x\n"
-    assert sent[-1][1:] == ("ops_journal", {"unit": "d1max-agent", "hours": 3}, "alice")
+    assert sent[-1][1:] == ("ops_journal", {"unit": "nexwar_agent", "hours": 3}, "alice")
     assert s.req("GET", "/api/robots/A/ops/nope", token=alice)[0] == 404
     assert s.req("GET", "/api/robots/A/ops/restart", token=alice)[0] == 405
     _假狗(s, monkeypatch, {"result": "rejected", "reason": "busy: 正在执行任务 p1"})
-    code, d = s.req("POST", "/api/robots/A/ops/restart", {"unit": "d1max-agent"}, token=alice)
+    code, d = s.req("POST", "/api/robots/A/ops/restart", {"unit": "nexwar_agent"}, token=alice)
     assert code == 409 and "busy" in d["error"]
 
 
@@ -142,11 +142,11 @@ def test_站点升级包_收下要密码_交给执行器(站点):
         info.size = len(data)
         tf.addfile(info, io.BytesIO(data))
     pkg = buf.getvalue()
-    code, _ = _upload(s, "/api/system/update", pkg, {"X-D1Max-Confirm": "bad"}, alice)
+    code, _ = _upload(s, "/api/system/update", pkg, {"X-Nexwar-Confirm": "bad"}, alice)
     assert code == 403 and not list((s.api.home / "updates").glob("*.tar.gz"))
-    code, d = _upload(s, "/api/system/update", b"junk", {"X-D1Max-Confirm": PW}, alice)
+    code, d = _upload(s, "/api/system/update", b"junk", {"X-Nexwar-Confirm": PW}, alice)
     assert code == 400
-    code, d = _upload(s, "/api/system/update", pkg, {"X-D1Max-Confirm": PW}, alice)
+    code, d = _upload(s, "/api/system/update", pkg, {"X-Nexwar-Confirm": PW}, alice)
     assert code == 202, d
     (action, args), = s.api.priv.calls
     assert action == "update" and (s.api.home / "updates" / args["package"]).read_bytes() == pkg
@@ -296,7 +296,7 @@ def _核过身份(db, rid):
 
 
 def test_W63_没核过设备身份的_不自动续签_手动续签只给中性的话_不告警(tmp_path):
-    from d1max_site.attest import NEUTRAL
+    from nexwar_site.attest import NEUTRAL
     now = 1_800_000_000_000
     ca, reg, db = _ca_reg(tmp_path, 10 * 86_400_000, now)
     with db.tx() as c:
@@ -353,7 +353,7 @@ def test_CA签申请_主体不是这台拒_格式不对拒(tmp_path):
                     "-out", str(k)], check=True, capture_output=True)
     subprocess.run(["openssl", "req", "-new", "-key", str(k), "-subj", "/CN=B", "-out",
                     str(tmp_path / "b.csr")], check=True, capture_output=True)
-    from d1max_site.ca import CAError
+    from nexwar_site.ca import CAError
     with pytest.raises(CAError, match="主体"):
         ca.sign_robot_csr("A", (tmp_path / "b.csr").read_text(), days=10, now_ms=now)
     with pytest.raises(CAError, match="格式"):
@@ -370,17 +370,17 @@ def test_诊断包_带时间段_事件命令操作记录_另取的原样放进�
                          now_ms=5_000_000 + 3_600_000, hours=2, journal=lambda u, h: f"{u} {h}h\n",
                          extra={"robots/A/diag.json": b'{"ok": 1}', "client_errors.json": b"[]"})
     with tarfile.open(out) as tf:
-        names = {m.name.removeprefix("d1max-support/") for m in tf.getmembers()}
-        audit = json.loads(tf.extractfile("d1max-support/audit.json").read())
-        log = tf.extractfile("d1max-support/logs/wg-quick@d1max.log").read()
+        names = {m.name.removeprefix("nexwar_support/") for m in tf.getmembers()}
+        audit = json.loads(tf.extractfile("nexwar_support/audit.json").read())
+        log = tf.extractfile("nexwar_support/logs/wg-quick@nexwar.log").read()
     assert {"robots/A/diag.json", "client_errors.json", "events.json", "commands.json",
             "audit.json", "logs/chrony.log"} <= names
-    assert audit[0]["actor"] == "alice" and log == b"wg-quick@d1max 2h\n"
+    assert audit[0]["actor"] == "alice" and log == b"wg-quick@nexwar 2h\n"
     db.close()
 
 
 def test_命令行签App包_站点认(tmp_path):
-    from d1max_patrol.cli import main
+    from nexwar_patrol.cli import main
     assert main(["release", "keygen", str(tmp_path / "p.pem"), str(tmp_path / "pub.pem")]) == 0
     f = tmp_path / "nw-1.0.0.apk"
     f.write_bytes(b"APK!")
@@ -395,7 +395,7 @@ def test_命令行签App包_站点认(tmp_path):
 
 def test_自动续签早于体检告警_剩40天就续(tmp_path):
     """体检剩 30 天以内报「证书快到期」;自动续签要更早动手,告警才只在自动续签不成时出现。"""
-    from d1max_site import health, remote_ops
+    from nexwar_site import health, remote_ops
     assert remote_ops.RENEW_WITHIN_DAYS > health.CERT_WARN_DAYS
     now = 1_800_000_000_000
     ca, reg, db = _ca_reg(tmp_path, 40 * 86_400_000, now)
@@ -422,7 +422,7 @@ def test_外审W55_1_续签_机器人拒绝换_旧证书照常认_挂着的删�
 
 
 def test_外审W55_1_续签_回执丢了_新证书挂着_机器人拿它连上来就转正(tmp_path):
-    from d1max_site.intake import IntakeServer
+    from nexwar_site.intake import IntakeServer
     now = 1_800_000_000_000
     ca, reg, db = _ca_reg(tmp_path, 10 * 86_400_000, now)
     old = reg.get("A").fingerprint
@@ -449,7 +449,7 @@ def test_外审W55_1_续签_回执丢了_新证书挂着_机器人拿它连上�
 
 
 def test_外审W55_1_续签_机器人正忙_不告警_一小时后再试(tmp_path):
-    from d1max_site import remote_ops
+    from nexwar_site import remote_ops
     now = [1_800_000_000_000]
     ca, reg, db = _ca_reg(tmp_path, 10 * 86_400_000, now[0])
     d, al = _Disp(tmp_path), _Alerts()
@@ -466,7 +466,7 @@ def test_外审W55_1_续签_机器人正忙_不告警_一小时后再试(tmp_pat
 
 
 def test_外审W55_1_钟不准的时候_对时和读诊断放行():
-    from d1max_site.temporal import READ, SAFE, temporal_class
+    from nexwar_site.temporal import READ, SAFE, temporal_class
     assert temporal_class("ops_timesync") == SAFE
     assert temporal_class("ops_diag") == READ and temporal_class("ops_journal") == READ
     assert temporal_class("ops_reboot") not in (SAFE, READ)
@@ -587,7 +587,7 @@ def test_外审W55_4_N4_接收口先转正_回执后到_也算续签成功(tmp_p
 
 def test_W58_续签失败_真告警簿里记得上_成功后自动关掉(tmp_path):
     """原来假告警簿什么参数都收,站点真用的 AlertDesk 不收 now_ms:告警从来没记上。"""
-    from d1max_site.alert_store import AlertDesk
+    from nexwar_site.alert_store import AlertDesk
     now = 1_800_000_000_000
     ca, reg, db = _ca_reg(tmp_path, 10 * 86_400_000, now)
     desk = AlertDesk(db, now_ms=lambda: now)
@@ -604,9 +604,9 @@ def test_W58_续签失败_真告警簿里记得上_成功后自动关掉(tmp_pat
 
 def test_W58_钟差还不知道_当忙_过一会儿再试_不报续签失败(tmp_path):
     """站点刚起来、机器人刚连上时钟差未知,派命令被拒:不算续签失败,按「忙」稍后重试。"""
-    from d1max_site import remote_ops
-    from d1max_site.alert_store import AlertDesk
-    from d1max_site.dispatcher import SkewUnknown
+    from nexwar_site import remote_ops
+    from nexwar_site.alert_store import AlertDesk
+    from nexwar_site.dispatcher import SkewUnknown
     now = 1_800_000_000_000
     ca, reg, db = _ca_reg(tmp_path, 10 * 86_400_000, now)
     desk = AlertDesk(db, now_ms=lambda: now)

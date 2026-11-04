@@ -6,10 +6,10 @@ from __future__ import annotations
 import pytest
 from test_runtime import REG, T, 站点耳朵, 钟
 
-from d1max_adapter_sim.robot import SimRobot
-from d1max_agent.runtime import AgentRuntime
-from d1max_contract.memory_broker import MemoryBroker, MemoryTransport
-from d1max_patrol.protocol.nav_types import Pose
+from nexwar_adapter_sim.robot import SimRobot
+from nexwar_agent.runtime import AgentRuntime
+from nexwar_contract.memory_broker import MemoryBroker, MemoryTransport
+from nexwar_patrol.protocol.nav_types import Pose
 
 
 class 假板子:
@@ -107,8 +107,8 @@ async def test_过热三级_降负载和拒任务(台子):
 async def test_过热时站点下的建图被拒(台子, tmp_path):
     import json
 
-    from d1max_contract.messages import Command
-    from d1max_contract.transport import Message
+    from nexwar_contract.messages import Command
+    from nexwar_contract.transport import Message
     c, r, rt = 台子
     board = 假板子()
     rt.attach_board(board)
@@ -131,7 +131,7 @@ def test_装机入口_没有配置不看_写错就不起(tmp_path):
     import argparse
     import json
 
-    from d1max_agent.main import _board
+    from nexwar_agent.main import _board
     assert _board(argparse.Namespace(board=tmp_path / "nope.json")) is None
     p = tmp_path / "board.json"
     p.write_text(json.dumps({"fans": [{"name": "Bad", "chip": "gpiochip1", "line": 1}]}))

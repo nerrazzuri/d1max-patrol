@@ -14,14 +14,14 @@
  *
  *     patrol_agent(常驻，握着 SDK)  ←TCP+JSONL→  Python 巡检程序(随连随断)
  *
- * 线协议见 src/d1max_patrol/protocol/agent_frames.py，
- * 可执行契约见 src/d1max_sim/agent_server.py（改这个文件前先看那两个）。
+ * 线协议见 src/nexwar_patrol/protocol/agent_frames.py，
+ * 可执行契约见 src/nexwar_sim/agent_server.py（改这个文件前先看那两个）。
  *
  * ============================== 用法 ==============================
  *
  *   patrol_agent <ip> <port> [--listen HOST:PORT] [--fifo PATH] [--token-file PATH]
  *
- *   patrol_agent 192.168.168.168 8082 --listen 127.0.0.1:8090 --fifo runs/d1max-agent.fifo
+ *   patrol_agent 192.168.168.168 8082 --listen 127.0.0.1:8090 --fifo runs/nexwar_agent.fifo
  *
  * **先起它，再给机器上电。** 它会一直刷"第 N 次未抢到"，直到抢到窗口。
  * 端口是 8082/UDP，不是文档里写的 8081（清单 #34）。
@@ -30,7 +30,7 @@
  * 才是给 Python 用的。两条走同一把锁、同一条会话。
  *
  * **只收代理的运动命令**(S11,协议 9,见 cmd_auth.hpp):起来时生成一个随机令牌写进 --token-file
- * (默认 ~/.d1max/sidecar.token,0600);TCP 连接先 auth 才能发运动命令,停车、急停谁都能发。
+ * (默认 ~/.nexwar/sidecar.token,0600);TCP 连接先 auth 才能发运动命令,停车、急停谁都能发。
  * FIFO 只有属主是这个账号、组和别人都不能写的时候才收运动命令。
  *
  * **它不会自己 ReleaseControl。** SIGINT 也不会——那正是要防的事。真要
@@ -1050,14 +1050,14 @@ int main(int argc, char** argv) {
                  " [--max-fraction 0.5-1.0] [--permit-mps-per-unit M]\n"
               << "  例: " << argv[0]
               << " 192.168.168.168 8082 --listen 127.0.0.1:8090"
-                 " --fifo runs/d1max-agent.fifo\n"
-              << "  --token-file 缺省 ~/.d1max/sidecar.token(代理的 --sidecar-token-file 缺省同一个)\n";
+                 " --fifo runs/nexwar_agent.fifo\n"
+              << "  --token-file 缺省 ~/.nexwar/sidecar.token(代理的 --sidecar-token-file 缺省同一个)\n";
     return 2;
   }
   const std::string ip = argv[1], port = argv[2];
   std::string listen_host = "127.0.0.1", fifo, token_file;
   if (const char* home = std::getenv("HOME"); home != nullptr && *home != '\0')
-    token_file = std::string(home) + "/.d1max/sidecar.token";
+    token_file = std::string(home) + "/.nexwar/sidecar.token";
   int listen_port = 8090;
   for (int i = 3; i < argc; ++i) {
     const std::string arg = argv[i];

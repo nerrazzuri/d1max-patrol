@@ -1,0 +1,26 @@
+[Unit]
+Description=D1 Max 站点 MQTT broker(Mosquitto:mTLS + 按 robot_id 的 ACL)
+After=network-online.target
+Wants=network-online.target
+# 不限起动次数;配合 Restart=always/RestartSec=5。键属于 [Unit] 段(W01c 的教训)。
+StartLimitIntervalSec=0
+# 配置由 `nexwar_site init` 生成;没 init 就不起。
+ConditionPathExists=/var/lib/nexwar_site/broker/mosquitto.conf
+
+[Service]
+Type=simple
+# 与站点同一个用户:要读站点证书的私钥(0600)。端口 8883 > 1024,不需要 root。
+User=nexwar_site
+ExecStart=/usr/sbin/mosquitto -c /var/lib/nexwar_site/broker/mosquitto.conf
+# CRL 只在启动时读:吊销之后 `systemctl restart nexwar_mosquitto`。
+# 收紧:只许写站点目录;看不到 /home;不能提权。
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=/var/lib/nexwar_site
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

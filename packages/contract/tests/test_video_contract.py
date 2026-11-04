@@ -6,8 +6,8 @@ from __future__ import annotations
 
 import pytest
 
-from d1max_contract.errors import ContractError
-from d1max_contract.video import (
+from nexwar_contract.errors import ContractError
+from nexwar_contract.video import (
     CAMERAS,
     STANDARD_CAMERAS,
     VIDEO_TTL_MAX_MS,
@@ -64,7 +64,7 @@ def test_停止也是一条video命令_stop字段只认布尔():
 
 
 def test_抹掉口令():
-    from d1max_contract.video import scrub
+    from nexwar_contract.video import scrub
     assert scrub("srt://h:1?passphrase=abcDEF123456&pbkeylen=16: refused") == \
         "srt://h:1?passphrase=***&pbkeylen=16: refused"
 
@@ -72,7 +72,7 @@ def test_抹掉口令():
 def test_外审R2_长地址的报错先打码再截尾巴_口令不漏():
     """W40/W41 外审 R2:原来先截最后 300 字节再打码,截掉了 ``rtsp://`` 开头,口令认不出、
     原样进事件和日志。"""
-    from d1max_contract.video import scrub_tail
+    from nexwar_contract.video import scrub_tail
     secret = "REVIEW_FAKE_SECRET"
     url = "rtsp://admin:" + secret + "@127.0.0.1:1/" + "p" * 240
     raw = (b"[tcp @ 0x1] Connection refused\n" + f"{url}: Connection refused\n".encode())

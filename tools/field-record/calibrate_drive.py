@@ -14,8 +14,8 @@
 前提:**旁路进程已在开机窗口抢到控制权**(重启狗时抢握手)。否则 acquire 抛错。
 
 **要旁路进程的令牌**(协议 9,S11:只收认证过的连接的运动命令;这个脚本绕过代理的禁行区、避障,
-所以令牌要人**显式**给)。令牌在旁路进程那台机器、起它的那个账号的 ~/.d1max/sidecar.token(0600)。
-笔记本上连 Orin 的旁路进程,不落盘地递过来:`--token-file <(ssh robot@<Orin_IP> cat .d1max/sidecar.token)`
+所以令牌要人**显式**给)。令牌在旁路进程那台机器、起它的那个账号的 ~/.nexwar/sidecar.token(0600)。
+笔记本上连 Orin 的旁路进程,不落盘地递过来:`--token-file <(ssh robot@<Orin_IP> cat .nexwar/sidecar.token)`
 (下面写作 TOK)。
 
 用法:
@@ -44,7 +44,7 @@ async def run(args):
     # 延迟导入,--dry-run 不需要连狗也能看计划
     if not args.dry_run:
         sys.path.insert(0, "src")
-        from d1max_patrol.backends.sidecar_device import SidecarDeviceBackend
+        from nexwar_patrol.backends.sidecar_device import SidecarDeviceBackend
         dev = SidecarDeviceBackend(host=args.host, port=args.port, token_file=args.token_file)
     else:
         dev = None

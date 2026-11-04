@@ -13,12 +13,12 @@ from types import SimpleNamespace as NS
 import pytest
 from test_obstacle_avoid import 台子
 
-from d1max_agent.bridges.nav2_nav import Nav2NavBackend, _compose_map_odom
-from d1max_agent.navbridge import NavBridgeServer
-from d1max_agent.planning.planner import Planner
-from d1max_contract.errors import ContractError
-from d1max_contract.navbridge import FROM_AGENT, FROM_BRIDGE, encode, parse
-from d1max_patrol.protocol.nav_types import NavStatus, Pose
+from nexwar_agent.bridges.nav2_nav import Nav2NavBackend, _compose_map_odom
+from nexwar_agent.navbridge import NavBridgeServer
+from nexwar_agent.planning.planner import Planner
+from nexwar_contract.errors import ContractError
+from nexwar_contract.navbridge import FROM_AGENT, FROM_BRIDGE, encode, parse
+from nexwar_patrol.protocol.nav_types import NavStatus, Pose
 
 # ------------------------------------------------------------ 契约
 
@@ -107,7 +107,7 @@ async def test_服务端_握手_补发地图_收就绪速度结果_断了就不�
     await srv.start()
     srv.send({"type": "map", "req": 1, "map_id": "m", "map_version": "", "dir": "/d"})
     r, w, send, recv = await _client(短目录 / "nav2.sock")
-    from d1max_contract.navbridge import PROTO
+    from nexwar_contract.navbridge import PROTO
     await send({"type": "hello", "proto": PROTO, "name": "t"})
     assert (await recv())["type"] == "hello"
     assert (await recv())["type"] == "map", "握手完补发最近一份地图"
@@ -246,7 +246,7 @@ async def test_速度太旧发零_低于死区的整形(tmp_path):
     link.cmd = (9.0, 1, 0.4, 0.0, 0.0)                     # 1 s 前的
     await t.一拍()
     assert abs(t.r.speed[0]) < 1e-9, "太旧的速度不执行"
-    from d1max_agent.bridges.nav2_nav import MIN_TRAVEL_MPS
+    from nexwar_agent.bridges.nav2_nav import MIN_TRAVEL_MPS
     db = max(t.r.deadband_vx, MIN_TRAVEL_MPS)
     assert t.nav._deband(0.02, 0.0) == (0.0, 0.0)
     assert t.nav._deband(-db * 0.6, 0.0) == (-db, 0.0)
@@ -329,7 +329,7 @@ async def test_死区按命令算_0点13米每秒_原地转0点15弧度每秒_�
     0.069 rad/s,比例 0.10 = 命令 0.15 rad/s(1.5 rad/s/比例)—— 原来把实际转速 0.07 当命令门槛,
     等于不转(11-02 工单 10)。MPPI 在障碍边上、收尾发的小速度不清零(清零 = 一直不动、「没进展」):
     0.03 以上一律抬到能走起来的最低速度。走着的时候转向不动(走路时小转向照样转)。"""
-    from d1max_agent.bridges.nav2_nav import DEBAND_FLOOR, MIN_TRAVEL_MPS, MIN_TURN_RPS
+    from nexwar_agent.bridges.nav2_nav import DEBAND_FLOOR, MIN_TRAVEL_MPS, MIN_TURN_RPS
     link = 假转接()
     t = _台(tmp_path, link)
     assert (MIN_TRAVEL_MPS, MIN_TURN_RPS, DEBAND_FLOOR) == (0.13, 0.15, 0.03)
@@ -382,8 +382,8 @@ async def test_看不见的地方快了就慢下来_看得见的挡才停(tmp_pa
     """2026-10-29 仿真:Nav2 1.0 m/s 时人从侧面(盲区)横穿,5 次撞 5 次 ——
     「看不见的放行」快了不安全。改成:扫过区里有看不见的格子、又快,就降到 UNKNOWN_SLOW_MPS;
     低速照旧放行(不回到 10-28 起不了步)。"""
-    from d1max_agent.bridges.nav2_nav import UNKNOWN_SLOW_MPS
-    from d1max_agent.obstacles import Verdict
+    from nexwar_agent.bridges.nav2_nav import UNKNOWN_SLOW_MPS
+    from nexwar_agent.obstacles import Verdict
     link = 假转接()
     t = _台(tmp_path, link)
     await t.start(1.5, 4.0)
@@ -421,14 +421,14 @@ async def _看清(t, n=8):
 
 
 async def test_看得清就快_空地放到最快(tmp_path):
-    from d1max_agent.bridges.nav2_nav import V_FAST
+    from nexwar_agent.bridges.nav2_nav import V_FAST
     t = _台(tmp_path, 假转接())
     await t.start(1.5, 4.0)
     assert await _看清(t) == pytest.approx(V_FAST)
 
 
 async def test_看得清就快_正前方有箱子按刹车距离降(tmp_path):
-    from d1max_agent.bridges.nav2_nav import V_FAST
+    from nexwar_agent.bridges.nav2_nav import V_FAST
     t = _台(tmp_path, 假转接())
     await t.start(1.5, 4.0)
     t.world.dyn["box"] = (3.3, 3.7, 3.7, 4.3)               # 机头前约 1.3 m
@@ -437,7 +437,7 @@ async def test_看得清就快_正前方有箱子按刹车距离降(tmp_path):
 
 
 async def test_看得清就快_斜前方有人就降_地图上的墙不算(tmp_path):
-    from d1max_agent.bridges.nav2_nav import V_FAST
+    from nexwar_agent.bridges.nav2_nav import V_FAST
     walls = [(0.1, 3.2, 11.9, 3.3), (0.1, 4.7, 11.9, 4.8)]  # 1.4 m 走廊:墙在地图里
     t = _台(tmp_path, 假转接(), walls=walls)
     await t.start(1.5, 4.0)
@@ -511,7 +511,7 @@ async def test_设备健康_Nav2就绪没有_为什么(tmp_path):
 
 
 def test_路径抽稀_头尾都留_最多256点():
-    from d1max_localizer.nav2bridge import decimate
+    from nexwar_localizer.nav2bridge import decimate
     pts = [(i * 0.05, 0.0) for i in range(2001)]           # 100 m、每 5 cm 一个点
     out = decimate(pts)
     assert out[0] == [0.0, 0.0] and out[-1] == [100.0, 0.0] and len(out) <= 256
@@ -522,9 +522,9 @@ def test_路径抽稀_头尾都留_最多256点():
 async def test_运行时_nav2后端的设备健康里有Nav2一条(tmp_path):
     from test_runtime import REG, 钟
 
-    from d1max_adapter_sim.robot import SimRobot
-    from d1max_agent.runtime import AgentRuntime
-    from d1max_contract.memory_broker import MemoryBroker, MemoryTransport
+    from nexwar_adapter_sim.robot import SimRobot
+    from nexwar_agent.runtime import AgentRuntime
+    from nexwar_contract.memory_broker import MemoryBroker, MemoryTransport
     c = 钟()
     rt = AgentRuntime(transport=MemoryTransport(MemoryBroker(), "dog"), registration=REG,
                       hal=SimRobot(now_ms=c), store_dir=tmp_path / "a", now_ms=c,
@@ -701,7 +701,7 @@ def test_外审复查P1_转接节点订控制器的原始输出_不经速度平�
     """平滑器会把旧目标的速度慢慢衰减(OPEN_LOOP),目标换了还在出旧方向的速度。"""
     from pathlib import Path
     src = (Path(__file__).resolve().parents[3] / "packages" / "localizer" / "src"
-           / "d1max_localizer" / "nav2bridge.py").read_text(encoding="utf-8")
+           / "nexwar_localizer" / "nav2bridge.py").read_text(encoding="utf-8")
     assert 'create_subscription(Twist, "/cmd_vel_nav"' in src
     assert 'create_subscription(Twist, "/cmd_vel",' not in src
 
@@ -729,7 +729,7 @@ async def test_外审复查P3_MPPI倒车被限速压到死区以下_照最小能
 def test_外审复查P3_代理记的倒车比例跟Nav2参数一致():
     from pathlib import Path
 
-    from d1max_agent.bridges.nav2_nav import MPPI_REVERSE_RATIO
+    from nexwar_agent.bridges.nav2_nav import MPPI_REVERSE_RATIO
     text = (Path(__file__).resolve().parents[3] / "deploy" / "nav2" / "params.yaml").read_text()
     import re
     vmax = float(re.search(r"\n\s+vx_max:\s*([0-9.]+)", text).group(1))
@@ -782,7 +782,7 @@ async def test_复查三P4_脱困动作的速度不用等路线_目标号照样�
 
 
 def test_复查三_转接服务端_报文按到达编号_记下每个目标第一条路线是第几条到的():
-    from d1max_agent.navbridge import NavBridgeServer
+    from nexwar_agent.navbridge import NavBridgeServer
     s = NavBridgeServer("/nonexistent/nav2.sock")
     s._on({"type": "cmd", "t_ms": 1, "vx": 0.1, "vy": 0, "wz": 0, "goal_id": 7, "src": "ctl"})
     s._on({"type": "path", "goal_id": 7, "pts": [[0, 0], [1, 0]]})
@@ -794,12 +794,12 @@ def test_复查三_转接服务端_报文按到达编号_记下每个目标第�
 
 
 def test_W48_协议4_目标可以带途经点():
-    from d1max_contract.navbridge import MAX_VIA, PROTO
+    from nexwar_contract.navbridge import MAX_VIA, PROTO
     assert PROTO == 4 and MAX_VIA >= 500, "路网最多 500 个点,途经点要装得下"
 
 
 async def test_W48_有路网_交给Nav2的目标带上路网上的途经点_没路网不带(tmp_path):
-    from d1max_contract.routenet import RouteNet
+    from nexwar_contract.routenet import RouteNet
     link = 假转接()
     t = _台(tmp_path, link)
     await t.start(1.5, 4.0)
@@ -816,7 +816,7 @@ async def test_W48_有路网_交给Nav2的目标带上路网上的途经点_没�
     await t.nav.goto(Pose.from_xy_yaw(6.0, 4.5, 0.0))
     g = link.kinds("goal")[-1]
     here = (t.r.x, t.r.y)
-    from d1max_contract.routenet import densify, route
+    from nexwar_contract.routenet import densify, route
     want = densify(route(net, here, (6.0, 4.5)), step=1.0)
     assert g["via"] == [[round(x, 3), round(y, 3)] for x, y in want] and len(g["via"]) > 2, \
         "沿路每隔不到 1 m 一个途经点:Nav2 跳过一个(1.5 m 内算经过)下一个还在路上,不切角"
@@ -824,8 +824,8 @@ async def test_W48_有路网_交给Nav2的目标带上路网上的途经点_没�
 
 async def test_W48复查M1_很长的路网_加密以后途经点也不超过协议上限(tmp_path):
     """外审 W48-M1:按总长算间距、每段各自向上取整,点数可能超 500,报文编不出来。"""
-    from d1max_contract.navbridge import MAX_VIA
-    from d1max_contract.routenet import RouteNet
+    from nexwar_contract.navbridge import MAX_VIA
+    from nexwar_contract.routenet import RouteNet
     link = 假转接()
     t = _台(tmp_path, link)
     await t.start(1.5, 4.0)
@@ -903,7 +903,7 @@ async def test_W70_原地转到朝向_差不到3度才算到(tmp_path):
 async def test_W70_刚中止完_Nav2在取消上一个目标_回原点等它一下_不退回(tmp_path, monkeypatch):
     """2026-11-03 C40221:用户中止任务后马上回原点,Nav2 还在取消上一个目标(转接节点报未就绪),
     代理立刻退回自己的规划导航(倒退 1.3 m、停 20 s)。这种一会儿就好的未就绪,等它。"""
-    import d1max_agent.bridges.nav2_nav as N
+    import nexwar_agent.bridges.nav2_nav as N
     monkeypatch.setattr(N, "NAV2_SETTLE_POLL_S", 0.01)
     link = 假转接()
     t = _台(tmp_path, link)
@@ -918,7 +918,7 @@ async def test_W70_刚中止完_Nav2在取消上一个目标_回原点等它一�
 
 
 async def test_W70_Nav2一直取消不完_等够了才退回自己的规划(tmp_path, monkeypatch):
-    import d1max_agent.bridges.nav2_nav as N
+    import nexwar_agent.bridges.nav2_nav as N
     monkeypatch.setattr(N, "NAV2_SETTLE_POLL_S", 0.01)
     monkeypatch.setattr(N, "NAV2_SETTLE_S", 0.1)
     link = 假转接()
@@ -932,7 +932,7 @@ async def test_W70_Nav2一直取消不完_等够了才退回自己的规划(tmp_
 async def test_W70_中止那一拍卡住_未在送时钟_回原点自己送上时钟(tmp_path, monkeypatch):
     """2026-11-03 C40221 11:58:01:中止后马上回原点,「Nav2 未就绪(代理未在送时钟)」→ 退回自己的
     规划(倒退 1.3 m、停 20 s)。处理中止那一拍卡了 2 s 多,时钟没送;goto 自己先送上时钟再等。"""
-    import d1max_agent.bridges.nav2_nav as N
+    import nexwar_agent.bridges.nav2_nav as N
     monkeypatch.setattr(N, "NAV2_SETTLE_POLL_S", 0.01)
     link = 假转接()
     t = _台(tmp_path, link)
@@ -1017,7 +1017,7 @@ async def test_W70_目标点上有箱子_Nav2失败_说目标点被占_不再重
 async def test_W70_Nav2卡住不给速度也不回结果_过20秒重发同一个目标_最多两次(tmp_path):
     """11-03 15:00 C40221:Nav2 的 action server、清图服务都确认超时,原地空等到 120 s;
     重发一次就好了。"""
-    from d1max_agent.bridges.nav2_nav import NAV2_RESENDS, NAV2_STALL_S
+    from nexwar_agent.bridges.nav2_nav import NAV2_RESENDS, NAV2_STALL_S
     link = 假转接()
     t = _台(tmp_path, link)
     await t.start(1.5, 4.0)
@@ -1050,7 +1050,7 @@ async def test_W70_Nav2一直在给速度_不重发(tmp_path):
 async def test_W70_离终点不到半米_15秒没再靠近_停在这儿算到(tmp_path):
     """11-03 17:16 商场 P8:终点离地图障碍 0.26 m(Nav2 的致命带里),机器人离终点 0.3 m
     前后来回 2 分钟。"""
-    from d1max_agent.bridges.nav2_nav import NEAR_STALL_S
+    from nexwar_agent.bridges.nav2_nav import NEAR_STALL_S
     link = 假转接()
     t = _台(tmp_path, link)
     await t.start(1.5, 4.0)
@@ -1072,7 +1072,7 @@ async def test_W70_离终点不到半米_15秒没再靠近_停在这儿算到(tm
 
 def _卡在台阶边(t, roll):
     """仿真狗:朝向跟台阶边差不到 25° 时腿在边上打滑,往前走不动;机身按 ``roll`` 歪着。"""
-    from d1max_contract.hal import ImuSample
+    from nexwar_contract.hal import ImuSample
     real = t.r.tick
 
     def tick(dt):
@@ -1091,7 +1091,7 @@ def _卡在台阶边(t, roll):
 async def test_W71_沿着台阶边打滑走不动_机身歪着_退一点转大角度再上_再交回Nav2(tmp_path):
     """11-03 商场 P2→P3 用户:「轮胎和阶梯角度不够大,轮胎一直卡在阶梯边缘出不来…
     要把角度调大才能出来」。"""
-    from d1max_agent.bridges.nav2_nav import EDGE_TURN_RAD
+    from nexwar_agent.bridges.nav2_nav import EDGE_TURN_RAD
     link = 假转接()
     t = _台(tmp_path, link)
     await t.start(1.5, 4.0)
@@ -1152,7 +1152,7 @@ async def test_W71_机器人自己四周都被判成挡_Nav2失败_说机器人�
 async def test_W71_目标点贴着地图墙_交给Nav2之前挪到最近能站的点(tmp_path):
     """11-03 商场:站点查可达时把贴墙的点挪进来算(intercept_reach.snap),说「到得了」;机器人却把原点
     交给 Nav2,Nav2 判终点在致命带里规划失败。自己的规划早就会挪(工单 20),Nav2 这条路也挪。"""
-    from d1max_agent.bridges.planned_nav import GOAL_SNAP_M
+    from nexwar_agent.bridges.planned_nav import GOAL_SNAP_M
     link = 假转接()
     t = _台(tmp_path, link, walls=[(0.1, 4.7, 11.9, 4.8)])
     await t.start(1.5, 4.0)
@@ -1171,7 +1171,7 @@ async def test_W71_目标点贴着地图墙_交给Nav2之前挪到最近能站�
 async def test_W72_离终点还远_原地打转30秒没进展_报被挡_走起来了报恢复(tmp_path):
     """用户 11-03:导航卡住几十秒要给站点告警(站点一分钟报 P2,恢复了自动解除);11-03 绕人贴着沙发,
     Nav2 自己原地转了 70 秒,守卫没拦,站点什么都不知道。"""
-    from d1max_agent.bridges.nav2_nav import NAV2_NO_PROGRESS_S
+    from nexwar_agent.bridges.nav2_nav import NAV2_NO_PROGRESS_S
     link = 假转接()
     t = _台(tmp_path, link)
     await t.start(1.5, 4.0)
@@ -1199,7 +1199,7 @@ async def test_W72_离终点还远_原地打转30秒没进展_报被挡_走起�
 
 
 async def test_W72_一直在往前走_绕远路也不算卡住(tmp_path):
-    from d1max_agent.bridges.nav2_nav import NAV2_NO_PROGRESS_S
+    from nexwar_agent.bridges.nav2_nav import NAV2_NO_PROGRESS_S
     link = 假转接()
     t = _台(tmp_path, link)
     await t.start(1.5, 4.0)
@@ -1215,7 +1215,7 @@ async def test_W72_一直在往前走_绕远路也不算卡住(tmp_path):
 
 
 async def test_W72_换了新目标_进展从头算_不拿上一个目标的时刻误报(tmp_path):
-    from d1max_agent.bridges.nav2_nav import NAV2_NO_PROGRESS_S
+    from nexwar_agent.bridges.nav2_nav import NAV2_NO_PROGRESS_S
     link = 假转接()
     t = _台(tmp_path, link)
     await t.start(1.5, 4.0)

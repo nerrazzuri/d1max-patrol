@@ -2,7 +2,7 @@
 
 import pytest
 
-from d1max_sim.inject import FaultState, InjectError, apply_command
+from nexwar_sim.inject import FaultState, InjectError, apply_command
 
 
 def test_默认状态什么都不注入():

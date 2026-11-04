@@ -6,11 +6,11 @@ import os
 
 import pytest
 
-from d1max_contract.binding import check_digits
-from d1max_site import binding as bd
-from d1max_site import main as site_main
-from d1max_site import provision as site
-from d1max_site.db import SiteDB
+from nexwar_contract.binding import check_digits
+from nexwar_site import binding as bd
+from nexwar_site import main as site_main
+from nexwar_site import provision as site
+from nexwar_site.db import SiteDB
 
 NOW = 1_800_000_000_000
 NONCE = "0123456789abcdef0123456789abcdef"
@@ -101,7 +101,7 @@ def test_外审C3_序列号不许点打头(台, serial):
 
 
 def test_外审C3_CA不收全是点的编号(tmp_path):
-    from d1max_site.ca import CAError, check_robot_id
+    from nexwar_site.ca import CAError, check_robot_id
     for bad in ("..", "."):
         with pytest.raises(CAError):
             check_robot_id("e", bad)
@@ -236,7 +236,7 @@ def test_W63_没有出厂证书的_悄悄拒_不进待批准_不报警_记给公
     from attest_kit import 出厂
     from test_site_api import 站 as 起站
 
-    from d1max_site.attest import NEUTRAL
+    from nexwar_site.attest import NEUTRAL
     _, home, *_ = 台
     s = 起站(tmp_path / "api", alerts=True)
     try:
@@ -245,8 +245,8 @@ def test_W63_没有出厂证书的_悄悄拒_不进待批准_不报警_记给公
         tok = s.login()
         code, d = s.req("POST", "/api/bind/request", {"serial": "D1M-7", "nonce": NONCE})
         assert code == 403 and d["error"] == NEUTRAL
-        from d1max_contract import device_id as di
-        from d1max_contract import ed25519
+        from nexwar_contract import device_id as di
+        from nexwar_contract import ed25519
         dev, alien = ed25519.new_seed(), ed25519.new_seed()   # 别家「出厂钥匙」签的
         cert = di.sign_device(alien, di.make_request(serial="D1M-8", model="x",
                                                      device_pub=ed25519.public_key(dev),
@@ -300,12 +300,12 @@ def test_端到端_换WiFi站点确认_解绑先叫机器人清机(tmp_path, 台
     from test_site_api import PW
     from test_site_api import 站 as 起站
 
-    from d1max_agent.bindlink import BindLink
-    from d1max_contract import binding as cb
-    from d1max_patrol.bind import server as sv
-    from d1max_patrol.bind.core import BindCore, cert_fp
-    from d1max_patrol.bind.paths import BindPaths, write_json
-    from d1max_patrol.bind.router import FakeRouter
+    from nexwar_agent.bindlink import BindLink
+    from nexwar_contract import binding as cb
+    from nexwar_patrol.bind import server as sv
+    from nexwar_patrol.bind.core import BindCore, cert_fp
+    from nexwar_patrol.bind.paths import BindPaths, write_json
+    from nexwar_patrol.bind.router import FakeRouter
 
     _, home, *_ = 台
     assert site_main.main(["--home", str(home), "enroll", "A"]) == 0
@@ -387,7 +387,7 @@ def test_外审2A_批准后被解绑重新登记_旧申请出码那一刻也领�
 def test_外审2B_老的绑定申请表没有cert_fp列_升上来补上(tmp_path):
     import sqlite3
 
-    from d1max_site.db import SiteDB
+    from nexwar_site.db import SiteDB
     p = tmp_path / "s.db"
     SiteDB(p).close()
     con = sqlite3.connect(p)

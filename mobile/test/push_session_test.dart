@@ -1,7 +1,7 @@
 // 一次登录的推送登记（商业化 A6 外审 F2、F3）：拿不到号、登记失败退避重试；离开时在路上的登记落定后注销。
 import 'dart:async';
 
-import 'package:d1max_patrol/net/push.dart';
+import 'package:nexwar_patrol/net/push.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 class _Reg implements PushRegistrar {

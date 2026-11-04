@@ -45,10 +45,10 @@ GLIM 的 config 是**完整 JSON**，别用残缺文件覆盖。做法：拷官�
 ```bash
 # 找到默认 config 目录(PPA 装的一般在这)：
 GLIM_CFG=$(ros2 pkg prefix glim)/share/glim/config     # 或源码里的 glim/config
-cp -r "$GLIM_CFG" ~/d1max_glim_config
+cp -r "$GLIM_CFG" ~/nexwar_glim_config
 ```
 
-然后按本目录 `config_ros.json` / `config_sensors.json` 的值，改 `~/d1max_glim_config/` 下同名文件的这些字段：
+然后按本目录 `config_ros.json` / `config_sensors.json` 的值，改 `~/nexwar_glim_config/` 下同名文件的这些字段：
 
 **config_ros.json**（话题）：
 ```json
@@ -67,16 +67,16 @@ cp -r "$GLIM_CFG" ~/d1max_glim_config
 
 ## 3. 跑我们的包
 
-把笔记本上的包拷到台式机：`runs/bags/d1max-lio-20260918T163107/`（1.8G，前雷达+IMU+tf）。
+把笔记本上的包拷到台式机：`runs/bags/nexwar_lio_20260918T163107/`（1.8G，前雷达+IMU+tf）。
 
 ```bash
 source ~/ros2_ws/install/setup.bash   # 或 source /opt/ros/humble/setup.bash(PPA)
 # 在线可视化跑 rosbag：
-ros2 run glim_ros glim_rosbag ~/path/to/d1max-lio-20260918T163107 --ros-args --params-file <(echo "") \
-  -p config_path:=$HOME/d1max_glim_config
+ros2 run glim_ros glim_rosbag ~/path/to/nexwar_lio_20260918T163107 --ros-args --params-file <(echo "") \
+  -p config_path:=$HOME/nexwar_glim_config
 # 或用节点 + 单独播包：
-ros2 run glim_ros glim_rosnode --ros-args -p config_path:=$HOME/d1max_glim_config &
-ros2 bag play runs/bags/d1max-lio-20260918T163107 --topics /front_lidar /front_lidar/imu
+ros2 run glim_ros glim_rosnode --ros-args -p config_path:=$HOME/nexwar_glim_config &
+ros2 bag play runs/bags/nexwar_lio_20260918T163107 --topics /front_lidar /front_lidar/imu
 ```
 > 具体子命令名以 `ros2 pkg executables glim_ros` 和官方 docs 为准（版本间略有差异）。
 > 建图结束在 GLIM 界面点 “save” 导出点云/位姿图；离线复看用 `offline_viewer`。

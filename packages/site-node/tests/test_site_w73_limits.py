@@ -9,9 +9,9 @@ from __future__ import annotations
 from test_site_intercept_reach import 假派遣
 from test_site_modes import 台  # noqa: F401 —— 夹具
 
-from d1max_site.db import SiteDB
-from d1max_site.incidents import IncidentDesk
-from d1max_site.modes import MAX_VISITOR_ZONES
+from nexwar_site.db import SiteDB
+from nexwar_site.incidents import IncidentDesk
+from nexwar_site.modes import MAX_VISITOR_ZONES
 
 
 def test_临时撤防一次可以撤几百个防区(台):

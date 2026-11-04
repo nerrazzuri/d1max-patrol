@@ -1,13 +1,13 @@
 // W17：告警带现场（狗在哪、拦截点、那一趟的照片）、响铃那一档一直响到有人确认、后台值守登录就开。
-import 'package:d1max_patrol/model/alert.dart';
-import 'package:d1max_patrol/net/background_watch.dart';
-import 'package:d1max_patrol/net/site_client.dart' show SiteError;
-import 'package:d1max_patrol/store/site_store.dart';
-import 'package:d1max_patrol/ui/site_alert_scene.dart';
-import 'package:d1max_patrol/ui/site_mapping.dart';
-import 'package:d1max_patrol/ui/site_page.dart';
-import 'package:d1max_patrol/ui/site_runs.dart';
-import 'package:d1max_patrol/ui/site_watch_page.dart';
+import 'package:nexwar_patrol/model/alert.dart';
+import 'package:nexwar_patrol/net/background_watch.dart';
+import 'package:nexwar_patrol/net/site_client.dart' show SiteError;
+import 'package:nexwar_patrol/store/site_store.dart';
+import 'package:nexwar_patrol/ui/site_alert_scene.dart';
+import 'package:nexwar_patrol/ui/site_mapping.dart';
+import 'package:nexwar_patrol/ui/site_page.dart';
+import 'package:nexwar_patrol/ui/site_runs.dart';
+import 'package:nexwar_patrol/ui/site_watch_page.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 

@@ -4,10 +4,10 @@
 
 from __future__ import annotations
 
-from d1max_adapter_sim.robot import SimRobot
-from d1max_agent.tasks.dock import DockTask
-from d1max_contract.charging import DockRequest
-from d1max_contract.messages import TaskState
+from nexwar_adapter_sim.robot import SimRobot
+from nexwar_agent.tasks.dock import DockTask
+from nexwar_contract.charging import DockRequest
+from nexwar_contract.messages import TaskState
 
 
 class 钟:
@@ -113,9 +113,9 @@ async def test_回充起不来_直接失败():
 async def test_真代理_配了桩的狗报dock_收命令_没配的不报(tmp_path):
     from test_runtime_maps import REG, T, _cmd, 耳朵
 
-    from d1max_agent.runtime import AgentRuntime
-    from d1max_contract.memory_broker import MemoryBroker, MemoryTransport
-    from d1max_patrol.protocol.nav_types import Pose
+    from nexwar_agent.runtime import AgentRuntime
+    from nexwar_contract.memory_broker import MemoryBroker, MemoryTransport
+    from nexwar_patrol.protocol.nav_types import Pose
     for charger, want in (((0.0, 0.0, 0.0), True), (None, False)):
         broker, ears = MemoryBroker(), 耳朵()
         st = MemoryTransport(broker, "site")
@@ -238,8 +238,8 @@ async def test_外审2_真代理_出不了桩_排着的入侵任务不许起跑_
     from test_runtime_maps import REG, T, 耳朵
     from test_runtime_maps import _跑 as 代理跑
 
-    from d1max_contract.messages import Command
-    from d1max_contract.transport import Message
+    from nexwar_contract.messages import Command
+    from nexwar_contract.transport import Message
 
     def _cmd(kind, payload, cid, c, priority=0):
         cmd = Command(command_id=cid, task_id=cid, kind=kind, issued_at=c.ms,
@@ -247,10 +247,10 @@ async def test_外审2_真代理_出不了桩_排着的入侵任务不许起跑_
                       priority=priority)
         return Message(T.cmd, json.dumps(cmd.to_wire()).encode(), 1, False)
 
-    from d1max_agent.runtime import AgentRuntime
-    from d1max_contract.memory_broker import MemoryBroker, MemoryTransport
-    from d1max_contract.messages import MapPose
-    from d1max_patrol.protocol.nav_types import Pose
+    from nexwar_agent.runtime import AgentRuntime
+    from nexwar_contract.memory_broker import MemoryBroker, MemoryTransport
+    from nexwar_contract.messages import MapPose
+    from nexwar_patrol.protocol.nav_types import Pose
     broker, ears = MemoryBroker(), 耳朵()
     st = MemoryTransport(broker, "site")
     await st.connect()
@@ -355,9 +355,9 @@ async def test_复查_出桩后状态读不到_不交():
 async def test_复查_真代理_挂着危险时状态读不到_不充也不摘锁(tmp_path):
     from test_runtime_maps import REG
 
-    from d1max_agent.runtime import AgentRuntime
-    from d1max_contract.memory_broker import MemoryBroker, MemoryTransport
-    from d1max_patrol.protocol.nav_types import Pose
+    from nexwar_agent.runtime import AgentRuntime
+    from nexwar_contract.memory_broker import MemoryBroker, MemoryTransport
+    from nexwar_patrol.protocol.nav_types import Pose
     broker = MemoryBroker()
     c = 钟()
     c.mono = 100.0
@@ -386,9 +386,9 @@ async def test_复查_真代理_挂着危险时状态读不到_不充也不摘�
 
 
 async def test_W28_去桩的goto_中止线是10_别的是默认停止线15():
-    from d1max_agent.tasks.engine_goto import EngineGotoTask
-    from d1max_contract.charging import TRIP_ABORT_PCT
-    from d1max_contract.messages import MapPose
+    from nexwar_agent.tasks.engine_goto import EngineGotoTask
+    from nexwar_contract.charging import TRIP_ABORT_PCT
+    from nexwar_contract.messages import MapPose
     t = EngineGotoTask.__new__(EngineGotoTask)
     t.task_id, t.photo = "charge-goto-1", None
     t.target = MapPose(map_id="m", map_version="1", frame_id="map", x=1.0, y=0.0, yaw=0.0)

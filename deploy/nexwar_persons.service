@@ -1,0 +1,24 @@
+[Unit]
+Description=D1 Max 人员检测节点(相机看到人 + 雷达量距离,经本机人员桥给代理;W24)
+# 装机脚本只装、不 enable:检测模型、推理环境在真狗上装好、W24 的真机项验过之前不起(代理也还用 --persons none)。
+# 起用:把模型放到 /etc/nexwar/person.onnx,sudo systemctl enable --now nexwar_persons,
+# 再在 /etc/nexwar/env 里写 NEXWAR_PERSONS=bridge。
+After=network-online.target nexwar_agent.service nexwar_zenohd.service
+Wants=network-online.target
+StartLimitIntervalSec=0
+# W42:正在清机(解绑 = 恢复出厂,半路断电了)就不起,等配网服务清完
+ConditionPathExists=!/etc/nexwar/bind/wiping
+
+[Service]
+Type=simple
+# 跟代理同一个账号:本机人员桥按对端进程的账号认(同障碍桥)。
+User=robot
+WorkingDirectory=-/opt/nexwar/current
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=-/etc/nexwar/env
+ExecStart=/opt/nexwar/current/deploy/nexwar_persons_start
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

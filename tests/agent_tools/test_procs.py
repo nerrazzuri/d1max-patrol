@@ -12,7 +12,7 @@ import sys
 
 import pytest
 
-from d1max_patrol.app.procs import ProcError, ProcManager, ProcSpec
+from nexwar_patrol.app.procs import ProcError, ProcManager, ProcSpec
 
 
 @pytest.fixture
@@ -84,7 +84,7 @@ async def test_没写环境变量的进程也拿得到PATH(mgr):
 
 async def test_起不来的命令报得出是哪个(mgr):
     with pytest.raises(ProcError, match="未此命令"):
-        await mgr.start(ProcSpec("未此命令", ("d1max-绝对不存在的可执行文件",)))
+        await mgr.start(ProcSpec("未此命令", ("nexwar_绝对不存在的可执行文件",)))
     assert mgr.running() == []
 
 
@@ -306,7 +306,7 @@ async def test_进程管理不认识ROS也不认识建图():
     import ast
     import inspect
 
-    from d1max_patrol.app import procs
+    from nexwar_patrol.app import procs
 
     tree = ast.parse(inspect.getsource(procs))
     imported = set()
@@ -315,7 +315,7 @@ async def test_进程管理不认识ROS也不认识建图():
             imported.update(a.name for a in node.names)
         elif isinstance(node, ast.ImportFrom) and node.module:
             imported.add(node.module)
-    assert not any(name.startswith(("d1max_patrol.", "d1max_sim", "rclpy"))
+    assert not any(name.startswith(("nexwar_patrol.", "nexwar_sim", "rclpy"))
                    for name in imported), f"进程管理不该依赖 {imported}"
 
     code = "\n".join(line for line in inspect.getsource(procs).splitlines()

@@ -37,17 +37,17 @@ from pathlib import Path
 
 import pytest
 
-from d1max_agent.engine.form import STANDALONE, Form
-from d1max_patrol.backends.base import NavBackend
-from d1max_patrol.backends.local_nav import LocalNavBackend, LocalNavParams
-from d1max_patrol.backends.sidecar_device import SidecarDeviceBackend
-from d1max_patrol.backends.vendor_nav import VendorNavBackend
-from d1max_patrol.config.models import NavConfig
-from d1max_patrol.protocol.agent_frames import MotionStatus
-from d1max_patrol.protocol.nav_types import LocStatus, MappingStatus
-from d1max_sim.agent_server import SimAgentServer
-from d1max_sim.nav_server import SimNavServer
-from d1max_sim.pose_server import SimPoseServer
+from nexwar_agent.engine.form import STANDALONE, Form
+from nexwar_patrol.backends.base import NavBackend
+from nexwar_patrol.backends.local_nav import LocalNavBackend, LocalNavParams
+from nexwar_patrol.backends.sidecar_device import SidecarDeviceBackend
+from nexwar_patrol.backends.vendor_nav import VendorNavBackend
+from nexwar_patrol.config.models import NavConfig
+from nexwar_patrol.protocol.agent_frames import MotionStatus
+from nexwar_patrol.protocol.nav_types import LocStatus, MappingStatus
+from nexwar_sim.agent_server import SimAgentServer
+from nexwar_sim.nav_server import SimNavServer
+from nexwar_sim.pose_server import SimPoseServer
 
 #: 自建后端在契约测试里用的图名。
 LOCAL_MAP_ID = "契约图"

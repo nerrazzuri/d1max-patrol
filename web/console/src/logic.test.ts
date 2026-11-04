@@ -282,8 +282,8 @@ describe("api", () => {
     await api("POST", "/api/mode", { mode: "armed" });
     const h0 = calls[0].init.headers as Record<string, string>;
     const h1 = calls[1].init.headers as Record<string, string>;
-    expect(h0["X-D1Max-Web"]).toBeUndefined();
-    expect(h1["X-D1Max-Web"]).toBe("1");
+    expect(h0["X-Nexwar-Web"]).toBeUndefined();
+    expect(h1["X-Nexwar-Web"]).toBe("1");
     expect(calls[1].init.credentials).toBe("same-origin");
     expect(calls[1].init.body).toBe(JSON.stringify({ mode: "armed" }));
   });

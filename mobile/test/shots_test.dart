@@ -1,27 +1,27 @@
 // 出图（不是测试）：用真字体把真页面画成 PNG，浅色、深色各一套，人眼看版面。平时跳过；要出图：
-//   D1MAX_SHOTS=/某个目录 flutter test test/shots_test.dart
-// 可选 D1MAX_SHOTS_CJK=/路径/中文字体.ttf（不给中文是方块）、D1MAX_SHOTS_ICONS=/路径/MaterialIcons-Regular.otf、
-// D1MAX_SHOTS_LANG=en|zh|all（缺省 en；all 两种都出，文件名带语言）。
+//   NEXWAR_SHOTS=/某个目录 flutter test test/shots_test.dart
+// 可选 NEXWAR_SHOTS_CJK=/路径/中文字体.ttf（不给中文是方块）、NEXWAR_SHOTS_ICONS=/路径/MaterialIcons-Regular.otf、
+// NEXWAR_SHOTS_LANG=en|zh|all（缺省 en；all 两种都出，文件名带语言）。
 // 2026-10-14 收尾：老主题的出图（原来的 shots_test.dart）和新组件的出图（nw_shots_test.dart）并成这一个。
 import 'dart:convert';
 import 'dart:io';
 import 'dart:ui' as ui;
 
-import 'package:d1max_patrol/design/nw_tokens.g.dart';
-import 'package:d1max_patrol/l10n.dart';
-import 'package:d1max_patrol/model/alert.dart';
-import 'package:d1max_patrol/store/site_store.dart';
-import 'package:d1max_patrol/ui/nw/nw_button.dart';
-import 'package:d1max_patrol/ui/nw/nw_cards.dart';
-import 'package:d1max_patrol/ui/nw/nw_theme.dart';
-import 'package:d1max_patrol/ui/nw/nw_widgets.dart';
-import 'package:d1max_patrol/ui/site_alert_scene.dart';
-import 'package:d1max_patrol/ui/site_mapping.dart' show MapMark, SiteMapPreviewPage;
-import 'package:d1max_patrol/ui/site_maps.dart' show SiteMapTab;
-import 'package:d1max_patrol/ui/site_page.dart';
-import 'package:d1max_patrol/ui/site_pose_pick.dart' show PoseBar;
-import 'package:d1max_patrol/ui/site_routes.dart' show SiteRouteEditorPage;
-import 'package:d1max_patrol/ui/site_teleop.dart';
+import 'package:nexwar_patrol/design/nw_tokens.g.dart';
+import 'package:nexwar_patrol/l10n.dart';
+import 'package:nexwar_patrol/model/alert.dart';
+import 'package:nexwar_patrol/store/site_store.dart';
+import 'package:nexwar_patrol/ui/nw/nw_button.dart';
+import 'package:nexwar_patrol/ui/nw/nw_cards.dart';
+import 'package:nexwar_patrol/ui/nw/nw_theme.dart';
+import 'package:nexwar_patrol/ui/nw/nw_widgets.dart';
+import 'package:nexwar_patrol/ui/site_alert_scene.dart';
+import 'package:nexwar_patrol/ui/site_mapping.dart' show MapMark, SiteMapPreviewPage;
+import 'package:nexwar_patrol/ui/site_maps.dart' show SiteMapTab;
+import 'package:nexwar_patrol/ui/site_page.dart';
+import 'package:nexwar_patrol/ui/site_pose_pick.dart' show PoseBar;
+import 'package:nexwar_patrol/ui/site_routes.dart' show SiteRouteEditorPage;
+import 'package:nexwar_patrol/ui/site_teleop.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
@@ -31,8 +31,8 @@ import 'site_page_test.dart' show FakeApi;
 import 'support/fake_map.dart';
 import 'support/fake_site.dart' show siteFixture;
 
-final _out = Platform.environment['D1MAX_SHOTS'];
-final _langs = switch (Platform.environment['D1MAX_SHOTS_LANG']) {
+final _out = Platform.environment['NEXWAR_SHOTS'];
+final _langs = switch (Platform.environment['NEXWAR_SHOTS_LANG']) {
   'zh' => const [AppLang.zh],
   'all' => AppLang.values,
   _ => const [AppLang.en],
@@ -321,8 +321,8 @@ void main() {
             await _font(NwFont.display, '$root/assets/fonts/SpaceGrotesk.ttf');
             await _font(NwFont.sans, '$root/assets/fonts/Inter.ttf');
             await _font(NwFont.mono, '$root/assets/fonts/JetBrainsMono.ttf');
-            await _font('MaterialIcons', Platform.environment['D1MAX_SHOTS_ICONS'] ?? '');
-            await _font('Noto Sans SC', Platform.environment['D1MAX_SHOTS_CJK'] ?? '');
+            await _font('MaterialIcons', Platform.environment['NEXWAR_SHOTS_ICONS'] ?? '');
+            await _font('Noto Sans SC', Platform.environment['NEXWAR_SHOTS_CJK'] ?? '');
           });
           appLang.value = lang;
           addTearDown(() => appLang.value = AppLang.zh);

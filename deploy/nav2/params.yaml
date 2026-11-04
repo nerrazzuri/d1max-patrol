@@ -1,7 +1,7 @@
 # W47 Nav2 参数(docs/W47-导航换Nav2-设计.md)。由 Humble 自带的 nav2_bringup/params/nav2_params.yaml 改出来:
 # 机身 0.93×0.48 m 矩形(每边 +5 cm);Smac Lattice 差速基元(能原地转、按轮廓查碰撞,窄门);MPPI(先 DiffDrive);
 # 局部代价地图也带静态地图层(地图上的墙永远在,不靠雷达记忆:2026-10-29 仿真里窄门里原地转扫到门框);
-# 障碍层吃代理经转接节点送来的两份点云(/d1max/obs_occ 标记、/d1max/obs_free 只清);一律 use_sim_time
+# 障碍层吃代理经转接节点送来的两份点云(/nexwar/obs_occ 标记、/nexwar/obs_free 只清);一律 use_sim_time
 # (转接节点按代理的钟发 /clock)。
 # 速度上限 1.0 m/s,但实际许跑多快由代理每拍按「看得清就快」算、经 /speed_limit 告诉 MPPI(决策 76):
 # 看得清、附近没有地图之外的东西才到 1.0;脱困去掉原地转(行为树 navigate_to_pose_d1max.xml,启动时填路径)。MPPI 已调到能稳定跑到上限(prune_distance、局部图大小、采样幅度)。真机参数先抄厂家导航(真机项 3aj.1)再调。
@@ -210,7 +210,7 @@ local_costmap:
         footprint_clearing_enabled: true
         observation_sources: occ free
         occ:
-          topic: /d1max/obs_occ
+          topic: /nexwar/obs_occ
           data_type: PointCloud2
           marking: true
           clearing: false
@@ -222,7 +222,7 @@ local_costmap:
           observation_persistence: 0.0
           inf_is_valid: false
         free:
-          topic: /d1max/obs_free
+          topic: /nexwar/obs_free
           data_type: PointCloud2
           marking: false
           clearing: true
@@ -257,7 +257,7 @@ global_costmap:
         footprint_clearing_enabled: true
         observation_sources: occ free
         occ:
-          topic: /d1max/obs_occ
+          topic: /nexwar/obs_occ
           data_type: PointCloud2
           marking: true
           clearing: false
@@ -269,7 +269,7 @@ global_costmap:
           observation_persistence: 0.0
           inf_is_valid: false
         free:
-          topic: /d1max/obs_free
+          topic: /nexwar/obs_free
           data_type: PointCloud2
           marking: false
           clearing: true

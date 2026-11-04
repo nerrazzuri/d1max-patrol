@@ -1,4 +1,4 @@
-"""``d1max-agent`` 入口(W00b 决定 3、4):装配 transport/HAL/引擎/运行时(W00c5e 起不再托管老的
+"""``nexwar_agent`` 入口(W00b 决定 3、4):装配 transport/HAL/引擎/运行时(W00c5e 起不再托管老的
 HTTP 面)。这里在进程内调 ``build()``,transport 用 memory://(站点客户端挂同一个 broker)。"""
 
 from __future__ import annotations
@@ -8,16 +8,16 @@ import sys
 
 import pytest
 
-from d1max_agent import main as agent_main
-from d1max_contract.dispatch import DispatchClient
-from d1max_contract.memory_broker import MemoryTransport
-from d1max_contract.messages import AckResult, MapPose, TaskState
-from d1max_contract.registration import Registration
-from d1max_contract.topics import Topics
+from nexwar_agent import main as agent_main
+from nexwar_contract.dispatch import DispatchClient
+from nexwar_contract.memory_broker import MemoryTransport
+from nexwar_contract.messages import AckResult, MapPose, TaskState
+from nexwar_contract.registration import Registration
+from nexwar_contract.topics import Topics
 
-REG = Registration(site_id="penang-1", robot_id="D1MAX-SIM", credential_fingerprint="sha256:x",
+REG = Registration(site_id="penang-1", robot_id="NEXWAR-SIM", credential_fingerprint="sha256:x",
                    issued_at=0, expires_at=10**13)
-T = Topics(site_id="penang-1", robot_id="D1MAX-SIM")
+T = Topics(site_id="penang-1", robot_id="NEXWAR-SIM")
 
 
 def _args(tmp_path, *extra):
@@ -41,7 +41,7 @@ def test_transport必须是mqtt或memory(tmp_path):
 
 
 def test_help子进程退0():
-    got = subprocess.run([sys.executable, "-m", "d1max_agent.main", "--help"],
+    got = subprocess.run([sys.executable, "-m", "nexwar_agent.main", "--help"],
                          capture_output=True, text=True, timeout=60)
     assert got.returncode == 0 and "--transport" in got.stdout
 
@@ -84,7 +84,7 @@ def test_hal_d1max的参数(tmp_path):
     assert d.fwd_offset == 0.0, "缺省纯比例(老行为)"
     assert d.sidecar == ("127.0.0.1", 8090) and d.mps_per_unit == 1.0 and not d.invert_yaw
     assert d.stopped_eps == 0.02
-    assert d.sidecar_token_file == "~/.d1max/sidecar.token", "S11:缺省读旁路进程写的那个令牌"
+    assert d.sidecar_token_file == "~/.nexwar/sidecar.token", "S11:缺省读旁路进程写的那个令牌"
     t = _args(tmp_path, "--hal", "d1max", "--sidecar-token-file", "/run/x/tok")
     assert t.sidecar_token_file == "/run/x/tok"
     with pytest.raises(SystemExit):
@@ -97,7 +97,7 @@ def test_hal_d1max的参数(tmp_path):
 
 def test_真狗的换算系数不在SDK低速档的范围里就不起_人确认过才起(tmp_path, capsys):
     """W12 外审阻断:老机器 env 里照抄的老模板 0.4 / 1.0 会盖过新默认值,限速区照样限不住。"""
-    from d1max_agent.main import UNIT_RANGES
+    from nexwar_agent.main import UNIT_RANGES
     assert UNIT_RANGES == {"mps_per_unit": (0.7, 1.5), "radps_per_unit": (1.1, 2.0)}
     for bad in (["--mps-per-unit", "0.4"], ["--radps-per-unit", "1.0"],
                 ["--mps-per-unit", "0.4", "--radps-per-unit", "1.0"], ["--mps-per-unit", "2.0"]):
@@ -113,14 +113,14 @@ def test_真狗的换算系数不在SDK低速档的范围里就不起_人确认�
         _args(tmp_path, "--units-confirmed")                    # 只用于 --hal d1max
 
 
-def test_hal_d1max_经仿真旁路跑通一条goto(tmp_path):
+def test_hal_nexwar_经仿真旁路跑通一条goto(tmp_path):
     """W00d 验收:代理 ``--hal d1max`` 接旁路进程(这里是仿真旁路)跑完一趟 goto。仿真旁路里
     比例 1.0 折 1.2 m/s、转向折 1.5 rad/s,低于比例 0.2 原地蹭不动,参数照这个配。"""
     import time
 
-    from d1max_patrol.app.bridge import LoopBridge
-    from d1max_patrol.protocol.agent_frames import MotionStatus as SdkMotion
-    from d1max_sim.agent_server import SimAgentServer
+    from nexwar_patrol.app.bridge import LoopBridge
+    from nexwar_patrol.protocol.agent_frames import MotionStatus as SdkMotion
+    from nexwar_sim.agent_server import SimAgentServer
 
     sim_loop = LoopBridge()
     sim_loop.start()
@@ -141,7 +141,7 @@ def test_hal_d1max_经仿真旁路跑通一条goto(tmp_path):
                      "--autonomy", "autonomous", "--sidecar-token-file", str(tok))
         a = agent_main.build(args)
         # 工单 18:真狗到点拍照有取图源(跟实时画面同一套 RTSP 相机),不再是空的
-        from d1max_agent.bridges.rtsp_media import FfmpegCamera
+        from nexwar_agent.bridges.rtsp_media import FfmpegCamera
         assert isinstance(a.parts.engine._media.get("front"), FfmpegCamera)
         a.start()
         site = DispatchClient(MemoryTransport(a.broker, "site"), T, now_ms=agent_main.wall_ms)
@@ -166,7 +166,7 @@ def test_hal_d1max_经仿真旁路跑通一条goto(tmp_path):
         sent = [c for c, _ in sim.commands]
         assert "vel" in sent and sent.index("auth") < sent.index("vel"), "先认证再开车"
         caps = site.capabilities
-        assert caps is not None and caps.adapter == "d1max/0.1.0"
+        assert caps is not None and caps.adapter == "nexwar/0.1.0"
     finally:
         if a is not None:
             a.stop()
@@ -178,7 +178,7 @@ def test_hal_d1max_经仿真旁路跑通一条goto(tmp_path):
 def _命令行(tmp_path, transport="memory://"):
     reg = tmp_path / "registration.json"
     REG.save(reg)
-    return [sys.executable, "-m", "d1max_agent.main", "--transport", transport, "--hal", "sim",
+    return [sys.executable, "-m", "nexwar_agent.main", "--transport", transport, "--hal", "sim",
             "--registration", str(reg), "--store-dir", str(tmp_path / "store"),
             "--runs-root", str(tmp_path / "runs"), "--map", "estate-1:7", "--home", "0,0,0"]
 
@@ -276,16 +276,16 @@ def test_证书交给PahoTransport(monkeypatch):
         def __init__(self, url, client_id, **kw):
             seen.update(kw, url=url, client_id=client_id)
 
-    import d1max_contract.paho_transport as pt
+    import nexwar_contract.paho_transport as pt
     monkeypatch.setattr(pt, "PahoTransport", 假)
-    agent_main._make_transport("mqtts://site:8883", "D1MAX-SIM", None,
+    agent_main._make_transport("mqtts://site:8883", "NEXWAR-SIM", None,
                                tls=("/e/ca.crt", "/e/r.crt", "/e/r.key"))
-    assert seen == {"url": "mqtts://site:8883", "client_id": "D1MAX-SIM", "tls_ca": "/e/ca.crt",
+    assert seen == {"url": "mqtts://site:8883", "client_id": "NEXWAR-SIM", "tls_ca": "/e/ca.crt",
                     "tls_cert": "/e/r.crt", "tls_key": "/e/r.key"}
 
 
 def test_视频参数_仿真用测试图_真狗拉相机RTSP(tmp_path):
-    from d1max_agent.video_push import lavfi_source
+    from nexwar_agent.video_push import lavfi_source
     a = agent_main.build(_args(tmp_path))
     try:
         assert a.runtime.video is not None and a.runtime.video._source is lavfi_source
@@ -307,7 +307,7 @@ def test_仿真也能拉真相机_不抢控制权验视频和录像(tmp_path):
         a.stop()
     a = agent_main.build(_args(tmp_path, "--hal", "sim", "--video-source", "lavfi"))
     try:
-        from d1max_agent.video_push import lavfi_source
+        from nexwar_agent.video_push import lavfi_source
         assert a.runtime.video._source is lavfi_source
     finally:
         a.stop()
@@ -450,7 +450,7 @@ def test_证书还没生效连不上_说是狗的钟可能不对():
     找不到原因。"""
     import ssl
 
-    from d1max_agent.main import clock_hint
+    from nexwar_agent.main import clock_hint
     e = ssl.SSLCertVerificationError(
         1, "[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: "
            "certificate is not yet valid (_ssl.c:1007)")
@@ -479,7 +479,7 @@ def test_起不来时自己再握一次手_拿到真的_TLS_错(tmp_path):
     import subprocess
     import threading
 
-    from d1max_agent.main import clock_hint, tls_probe
+    from nexwar_agent.main import clock_hint, tls_probe
     key, crt = tmp_path / "k.pem", tmp_path / "c.pem"
     subprocess.run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", str(key),
                     "-out", str(crt), "-days", "1", "-subj", "/CN=127.0.0.1"],
@@ -570,7 +570,7 @@ def test_W32_空的env参数什么都不带(tmp_path):
 
 
 def test_提前绕_代理参数能关(tmp_path):
-    """方案 2 的现场开关:真机上表现不好,改 /etc/d1max/env 就能关,不用重新发版。"""
+    """方案 2 的现场开关:真机上表现不好,改 /etc/nexwar/env 就能关,不用重新发版。"""
     assert _args(tmp_path).nav_preview == "on"
     for flag, want in (("on", True), ("off", False)):
         (tmp_path / flag).mkdir()
@@ -604,7 +604,7 @@ def test_W64_仿真画面可以用录好的视频_循环播_演示真人画面(t
 def test_W64_用录好的视频时_到点拍照也从录像里截一帧(tmp_path):
     """仿真拍照原来没有相机(报警缩略图是空的);``--video-source file`` 时从同一段录像
     按当前时刻截一帧。"""
-    from d1max_agent.video_push import file_snapshot_source
+    from nexwar_agent.video_push import file_snapshot_source
     d = tmp_path / "clips"
     d.mkdir()
     for cam in ("front", "back"):
@@ -618,3 +618,17 @@ def test_W64_用录好的视频时_到点拍照也从录像里截一帧(tmp_path
         assert str(d / "front.mp4") in " ".join(media["front"]._input())
     finally:
         a.stop()
+
+
+def test_改名_旁路还是老版本_令牌在老路径_代理读老的(tmp_path, monkeypatch):
+    from nexwar_agent import main as m
+    monkeypatch.setenv("HOME", str(tmp_path))
+    default = m.NEXWAR_DEFAULTS["sidecar_token_file"]
+    assert m.sidecar_token_path(default) == default, "都没有:照新路径(连的时候报读不了)"
+    (tmp_path / ".d1max").mkdir()
+    (tmp_path / ".d1max" / "sidecar.token").write_text("t")
+    assert m.sidecar_token_path(default) == m.OLD_SIDECAR_TOKEN, "只有老的:读老的"
+    (tmp_path / ".nexwar").mkdir()
+    (tmp_path / ".nexwar" / "sidecar.token").write_text("t")
+    assert m.sidecar_token_path(default) == default, "新的有了:读新的"
+    assert m.sidecar_token_path("/run/x/tok") == "/run/x/tok", "人给的路径不动"

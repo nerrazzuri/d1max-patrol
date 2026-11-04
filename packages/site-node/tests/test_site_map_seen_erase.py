@@ -18,7 +18,7 @@ import pytest
 from test_site_api import MAP, PW, 站
 from test_site_map_view import _pgm, _png_ga
 
-from d1max_site import map_preview as mp
+from nexwar_site import map_preview as mp
 
 FREE, OCC, UNKNOWN = 1, 0, 2
 _YAML = "image: yard.pgm\nresolution: 0.05\norigin: [-10.0, -5.0, 0.0]\n"

@@ -10,7 +10,7 @@ from test_site_w73_guard_duty import 站, _方案, _跑, _patrols, MAP
 from test_site_w73_r4 import _待命, _狗上线, _回程
 from test_site_w73_r5 import swap
 from test_site_dispatcher import target
-from d1max_contract.messages import Event
+from nexwar_contract.messages import Event
 
 
 async def test_dog_line_above_resume_target(站):

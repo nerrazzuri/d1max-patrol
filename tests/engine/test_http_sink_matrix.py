@@ -35,13 +35,13 @@ from typing import Any
 
 import pytest
 
-from d1max_agent.engine.http_sink import HttpSink
-from d1max_agent.engine.uploader import PutReceipt, PutRequest, SinkError
+from nexwar_agent.engine.http_sink import HttpSink
+from nexwar_agent.engine.uploader import PutReceipt, PutRequest, SinkError
 
 _地址 = "http://console.example:8095"
 
 样例 = PutRequest(
-    sn="D1MAX-TEST-01",
+    sn="NEXWAR-TEST-01",
     run="巡检一/20260911T101500Z",
     rel="photos/P1__front__20260911T101500Z.jpg",
     offset=7,
@@ -320,7 +320,7 @@ class 故障:
     ),
     故障(
         名字="sn是中文编不成latin1",
-        现场="装机脚本把中文设备名写进了 sn,X-D1Max-SN 这个头不转义",
+        现场="装机脚本把中文设备名写进了 sn,X-Nexwar-SN 这个头不转义",
         装opener=lambda: _照真机编header的opener(_响应(body=_正常body())),
         预期="SinkError",
         信息含="latin-1",

@@ -1,7 +1,7 @@
 // 站点模式的运行记录（W00c5d）：列表、一趟、照片、复核（保安、管理员）、重判；管理员只看。夹具来自真站点。
-import 'package:d1max_patrol/net/site_client.dart' show SiteError;
-import 'package:d1max_patrol/ui/site_page.dart';
-import 'package:d1max_patrol/ui/site_runs.dart';
+import 'package:nexwar_patrol/net/site_client.dart' show SiteError;
+import 'package:nexwar_patrol/ui/site_page.dart';
+import 'package:nexwar_patrol/ui/site_runs.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 

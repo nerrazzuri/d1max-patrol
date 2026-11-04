@@ -16,13 +16,13 @@ from pathlib import Path
 
 import pytest
 
-from d1max_agent.engine.http_sink import HttpSink
-from d1max_agent.outbox import Outbox
-from d1max_site.ca import SiteCA
-from d1max_site.db import SiteDB
-from d1max_site.evidence import EvidenceStore
-from d1max_site.intake import IntakeServer, server_context
-from d1max_site.registry import Registry
+from nexwar_agent.engine.http_sink import HttpSink
+from nexwar_agent.outbox import Outbox
+from nexwar_site.ca import SiteCA
+from nexwar_site.db import SiteDB
+from nexwar_site.evidence import EvidenceStore
+from nexwar_site.intake import IntakeServer, server_context
+from nexwar_site.registry import Registry
 
 NOW = int(time.time() * 1000)
 STAMP = "20260925T010000Z"
@@ -50,15 +50,15 @@ class 站:
             self.reg.enroll(b.robot_id, fingerprint=b.fingerprint, issued_at=NOW - 1000,
                             expires_at=NOW + 10**9)
         self.store = EvidenceStore(tmp_path / "evidence", self.db, now_ms=lambda: NOW)
-        from d1max_site.maps import MapCatalog
+        from nexwar_site.maps import MapCatalog
         self.maps = MapCatalog(tmp_path / "site", self.db, now_ms=lambda: NOW)
         ctx = server_context(cert=ca.srv[0], key=ca.srv[1], ca=ca.ca_cert, crl=ca.crl)
         self.intake = IntakeServer(host="127.0.0.1", port=0, ctx=ctx, db=self.db,
                                    store=self.store, now_ms=lambda: NOW, maps=self.maps)
-        from d1max_site.releases import ReleaseCatalog
+        from nexwar_site.releases import ReleaseCatalog
         self.releases = ReleaseCatalog(tmp_path / "site", self.db, now_ms=lambda: NOW)
         self.intake.releases = self.releases
-        from d1max_site.recordings import RecordingStore
+        from nexwar_site.recordings import RecordingStore
         self.recordings = RecordingStore(self.db, tmp_path / "recordings", now_ms=lambda: NOW)
         self.intake.recordings = self.recordings
         self.intake.start()
@@ -204,9 +204,9 @@ def test_狗建的图和录包传上来_站点收齐登记_别的狗下载核对
                   "issued_at, priority) VALUES ('c1','t1','A','map_build',?, 'alice', 1, 0)",
                   (json.dumps({"bag": "yard", "map_id": "estate-1", "version": "9"}),))
 
-    from d1max_agent.mapping import DONE, bag_classify, map_classify, map_settled
-    from d1max_agent.maps import MapKeeper, https_fetch
-    from d1max_contract.maps import MapRef
+    from nexwar_agent.mapping import DONE, bag_classify, map_classify, map_settled
+    from nexwar_agent.maps import MapKeeper, https_fetch
+    from nexwar_contract.maps import MapRef
     root = tmp_path / "dogA"
     bag = root / "bags" / "yard"
     bag.mkdir(parents=True)
@@ -237,7 +237,7 @@ def test_狗建的图和录包传上来_站点收齐登记_别的狗下载核对
     d = keeper.install(ref)
     assert (d / "estate-1.pgm").read_bytes() == files["estate-1.pgm"]
     stranger = MapKeeper(tmp_path / "x", fetch=https_fetch(站点.intake.url, _ctx(ca, ca.stranger)))
-    from d1max_agent.maps import MapInstallError
+    from nexwar_agent.maps import MapInstallError
     with pytest.raises(MapInstallError):
         stranger.install(ref)
     站点.reg.revoke("B")                              # TLS 过得去,登记表里吊销了:站点不给
@@ -265,7 +265,7 @@ def test_图的路径不合规的不收_没登记的图下载不到(站点, ca, 
 
 
 def test_太大的文件永远不收_站点盘快满了先不收(站点, monkeypatch):
-    from d1max_site import evidence as ev
+    from nexwar_site import evidence as ev
     with pytest.raises(ev.PathRefused):
         站点.store.put("A", "巡检一/" + STAMP, "events.jsonl", offset=0, data=b"x",
                      total=ev.MAX_FILE_BYTES + 1)
@@ -280,7 +280,7 @@ def test_同时连接数有上限_超了的直接关(tmp_path):
     import socket
     import threading
 
-    from d1max_site.tlsserve import TlsHandlerMixin, TlsThreadingServer
+    from nexwar_site.tlsserve import TlsHandlerMixin, TlsThreadingServer
     hold = threading.Event()
 
     class H(TlsHandlerMixin):
@@ -316,7 +316,7 @@ def test_同时连接数有上限_超了的直接关(tmp_path):
 def test_狗能产生的名字站点都收(站点, ca, tmp_path):
     """任务名里有冒号、空格(「夜巡 22:00」)、同秒第二趟 ``-2``、随机后缀、长照片名:都得传得上去、
     传完就删(W00c5d 内部评审:站点按 Windows 的规矩拒了,狗就永远传不完)。"""
-    from d1max_agent.engine.archive import safe_segment
+    from nexwar_agent.engine.archive import safe_segment
     box = Outbox(tmp_path / "dog", cap_bytes=2**30, sink=_sink(站点, ca, ca.a), sn="A",
                  now_ms=lambda: NOW)
     mission = safe_segment("夜巡 22:00 ?*")
@@ -359,8 +359,8 @@ def test_站点永远不收的_狗隔离不再重试_这一趟留着_站点出�
 def test_狗从站点下载发布包_核对落槽_吊销的狗下不到(站点, ca, tmp_path):
     from test_site_releases import NAME, 做包
 
-    from d1max_agent.engine import release as rel
-    from d1max_agent.release_ops import SENTINEL, ReleaseOpError, ReleaseOps, https_fetch
+    from nexwar_agent.engine import release as rel
+    from nexwar_agent.release_ops import SENTINEL, ReleaseOpError, ReleaseOps, https_fetch
     站点.releases.add(做包(tmp_path))
     ref = 站点.releases.get(NAME)
 
@@ -386,7 +386,7 @@ def test_每个来源地址的连接数有上限(tmp_path):
     import socket
     import threading
 
-    from d1max_site.tlsserve import TlsHandlerMixin, TlsThreadingServer
+    from nexwar_site.tlsserve import TlsHandlerMixin, TlsThreadingServer
     hold = threading.Event()
 
     class H(TlsHandlerMixin):
@@ -428,7 +428,7 @@ def test_狗下载图能从断点接着下_Range(站点, ca, tmp_path):
     import urllib.error
     import urllib.request
 
-    from d1max_agent.maps import FetchRefused, https_fetch
+    from nexwar_agent.maps import FetchRefused, https_fetch
     src = tmp_path / "src"
     src.mkdir()
     data = os.urandom(70000)
@@ -457,7 +457,7 @@ def test_狗下载图能从断点接着下_Range(站点, ca, tmp_path):
 
 
 def _录像箱(root: Path, sink, now=lambda: NOW) -> Outbox:
-    from d1max_agent.recording import SUB, video_classify
+    from nexwar_agent.recording import SUB, video_classify
     return Outbox(root, cap_bytes=2**30, sink=sink, sn="A", now_ms=now, sub=SUB,
                   run_depth=2, classify=video_classify, settled=lambda p: True)
 
@@ -506,7 +506,7 @@ def test_W18_站点连不上_狗上攒着_回来补传_传完清掉(站点, ca, 
 
 
 def test_W18_录像的路径不合规的不收(站点):
-    from d1max_site.evidence import PathRefused
+    from nexwar_site.evidence import PathRefused
     for run, rel in (("side/20261004T013000Z", "video.mp4"), ("front/20261004", "video.mp4"),
                      ("front/20261004T013000Z", "x.mp4"), ("front/../x", "video.mp4"),
                      ("front/20261004T013000Z-2", "video.mp4")):
@@ -521,24 +521,39 @@ def test_实测_握手没成_日志一行不打堆栈_别的错照打(caplog):
     import logging
     import ssl
 
-    from d1max_site.tlsserve import TlsHandlerMixin, TlsThreadingServer
+    from nexwar_site.tlsserve import TlsHandlerMixin, TlsThreadingServer
     srv = TlsThreadingServer(("127.0.0.1", 0), TlsHandlerMixin, ctx=None, max_connections=2)
     try:
-        with caplog.at_level(logging.INFO, logger="d1max_site.tlsserve"):
+        with caplog.at_level(logging.INFO, logger="nexwar_site.tlsserve"):
             for exc in (ssl.SSLError(1, "[SSL: TLSV1_ALERT_UNKNOWN_CA] tlsv1 alert unknown ca"),
                         ConnectionResetError(104, "reset"), TimeoutError("timed out")):
                 try:
                     raise exc
                 except (OSError, TimeoutError):
                     srv.handle_error(None, ("127.0.0.1", 1))
-            quiet = [r for r in caplog.records if r.name == "d1max_site.tlsserve"]
+            quiet = [r for r in caplog.records if r.name == "nexwar_site.tlsserve"]
             assert len(quiet) == 3 and all(r.exc_info is None for r in quiet)
             caplog.clear()
             try:
                 raise ValueError("意外")
             except ValueError:
                 srv.handle_error(None, ("127.0.0.1", 1))
-            [r] = [r for r in caplog.records if r.name == "d1max_site.tlsserve"]
+            [r] = [r for r in caplog.records if r.name == "nexwar_site.tlsserve"]
             assert r.exc_info is not None
     finally:
         srv.server_close()
+
+
+def test_改名_还没升级的狗发老的请求头_站点照收(站点, ca, tmp_path, monkeypatch):
+    """改名(d1max → nexwar)兼容一个版本:老版本的狗发 ``X-D1Max-*``,站点也认。"""
+    from nexwar_agent.engine import http_sink
+    new = http_sink._headers
+    monkeypatch.setattr(http_sink, "_headers", lambda req, token: {
+        k.replace("X-Nexwar-", "X-D1Max-"): v for k, v in new(req, token).items()})
+    box = Outbox(tmp_path / "dogA", cap_bytes=2**30, sink=_sink(站点, ca, ca.a), sn="A",
+                 now_ms=lambda: NOW)
+    run = _一趟(box.root)
+    _跑(box, 3)
+    assert not run.exists()
+    assert len(站点.store.runs(robot_id="A")) == 1
+    box.close()

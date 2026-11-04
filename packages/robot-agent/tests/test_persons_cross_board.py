@@ -10,8 +10,8 @@ from pathlib import Path
 
 import pytest
 
-from d1max_agent.pers_server import MAX_REMOTE_SNAPS, PersonBridgeServer
-from d1max_contract import persbridge as pb
+from nexwar_agent.pers_server import MAX_REMOTE_SNAPS, PersonBridgeServer
+from nexwar_contract import persbridge as pb
 
 KEY = bytes(range(32))
 JPEG = b"\xff\xd8\xff\xe0" + b"x" * 200 + b"\xff\xd9"
@@ -73,7 +73,7 @@ class 连接:
         return m
 
 
-async def _连(srv, *, key=KEY, name="d1max-persons"):
+async def _连(srv, *, key=KEY, name="nexwar_persons"):
     r, w = await asyncio.open_connection("127.0.0.1", srv.port, limit=pb.MAX_READ + 2)
     ch = pb.parse(await asyncio.wait_for(r.readline(), 2))
     assert isinstance(ch, pb.Challenge)
@@ -174,7 +174,7 @@ def test_外参读不了_不推也不炸(tmp_path):
 def test_运行时推的外参_是正在用的那张图的frames(tmp_path):
     from types import SimpleNamespace as NS
 
-    from d1max_agent.runtime import AgentRuntime
+    from nexwar_agent.runtime import AgentRuntime
     d = tmp_path / "m" / "3"
     d.mkdir(parents=True)
     (d / "frames.json").write_text('{"lidar": {"x": 0.4}}', "utf-8")
@@ -189,7 +189,7 @@ def test_运行时推的外参_是正在用的那张图的frames(tmp_path):
 def test_代理参数_跨板要密钥_密钥文件写错就不起(tmp_path):
     import argparse
 
-    from d1max_agent.main import _persons_key
+    from nexwar_agent.main import _persons_key
     a = argparse.Namespace(persons_listen=("0.0.0.0", 47010), persons_key=None)
     with pytest.raises(SystemExit, match="persons-key"):
         _persons_key(a)
@@ -238,7 +238,7 @@ async def test_复查P212_真的两头对接_双向认证过了_人员结果和�
     """代理的服务端对检测节点的 PersonLink(两头都是真的):握手、逐行签名对得上。"""
     import socket
 
-    from d1max_localizer.persons import PersonLink
+    from nexwar_localizer.persons import PersonLink
     box = [("m:1", {"lidar": {"x": 0.4}})]
     srv, sink = await _起(tmp_path, frames=lambda: box[0])
     frames: list = []
@@ -277,7 +277,7 @@ async def _等到(cond, n=100):
 async def test_外审Minor_接收端限速_发得太快的丢掉_过一会儿又收(tmp_path):
     """外审(PR212)Minor:接收端没有帧率、字节速率上限 ——
     失常的发送端能一直逼代理验签、解析、落盘。"""
-    from d1max_agent.pers_server import LINE_BURST
+    from nexwar_agent.pers_server import LINE_BURST
     clock = 钟()
     sink = 收(tmp_path / "snaps")
     srv = PersonBridgeServer(tmp_path / "persons.sock", sink, listen=("127.0.0.1", 0), key=KEY,
@@ -303,7 +303,7 @@ async def test_外审Minor_接收端限速_发得太快的丢掉_过一会儿又
 
 
 async def test_外审Minor_截图按字节限速_大图一口气只收几张(tmp_path):
-    from d1max_agent.pers_server import BYTE_BURST
+    from nexwar_agent.pers_server import BYTE_BURST
     clock = 钟()
     sink = 收(tmp_path / "snaps")
     srv = PersonBridgeServer(tmp_path / "persons.sock", sink, listen=("127.0.0.1", 0), key=KEY,

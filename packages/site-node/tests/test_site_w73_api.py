@@ -7,7 +7,7 @@ from test_site_api import PW, 站
 from test_site_maps import _files
 from test_site_w73_guard_plan import EAST, WEST, _两间
 
-from d1max_site.areas import AreaBook
+from nexwar_site.areas import AreaBook
 
 
 @pytest.fixture
@@ -116,9 +116,9 @@ def test_历史版本退回删掉的防区路线_还是防区路线(站点):
 # ---------------------------------------------------------------- 第二期:值守方案、状态、值守记录
 
 def _接值守(s):
-    from d1max_site.api import zone_posts
-    from d1max_site.guard_duty import GuardDuty
-    from d1max_site.modes import ArmingDesk
+    from nexwar_site.api import zone_posts
+    from nexwar_site.guard_duty import GuardDuty
+    from nexwar_site.modes import ArmingDesk
     if getattr(s.api, "arming", None) is None:
         s.api.arming = ArmingDesk(s.db, now_ms=lambda: 1000)
     s.api.guard = GuardDuty(s.db, s.disp, routes=s.api.routes, areas=s.api.areas,
@@ -171,9 +171,9 @@ def test_值守状态和记录_保安能看(站点):
 
 
 def test_W73第五期_设备登记在图上_管理员登记_密钥只给一次_保安只能看(站点):
-    from d1max_site.api import zone_posts
-    from d1max_site.devices import DeviceBook
-    from d1max_site.incidents import IncidentDesk
+    from nexwar_site.api import zone_posts
+    from nexwar_site.devices import DeviceBook
+    from nexwar_site.incidents import IncidentDesk
     s = 站点
     s.api.incidents = IncidentDesk(s.db, s.disp, now_ms=lambda: 1000)
     s.api.devices = DeviceBook(s.db, incidents=s.api.incidents, posts=zone_posts(s.api),

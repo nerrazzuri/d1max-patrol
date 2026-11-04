@@ -16,8 +16,8 @@ import time
 
 import pytest
 
-from d1max_site import cctv
-from d1max_site.cctv import (
+from nexwar_site import cctv
+from nexwar_site.cctv import (
     Camera,
     CameraWatch,
     CctvManager,
@@ -32,7 +32,7 @@ from d1max_site.cctv import (
     parse_event,
     remove_camera,
 )
-from d1max_site.db import SiteDB
+from nexwar_site.db import SiteDB
 
 FIELD = "tns1:RuleEngine/FieldDetector/ObjectsInside"
 MOTION = "tns1:RuleEngine/CellMotionDetector/Motion"
@@ -283,7 +283,7 @@ class _告警:
     """真的告警台(落库),同步调;``fail`` 里的那几样这一下抛错(测重试)。"""
 
     def __init__(self, db, now):
-        from d1max_site.alert_store import AlertDesk
+        from nexwar_site.alert_store import AlertDesk
         self.desk = AlertDesk(db, now_ms=lambda: now[0])
         self.fail: set[str] = set()
         self.calls: list[str] = []
@@ -349,7 +349,7 @@ def test_交给事件派遣的那一条():
     b = incident_body(_cam(), OnvifEvent(FIELD, "Changed", {}, {"IsInside": "true"}), 123)
     assert b == {"event_id": "gate-cam-123", "type": "intrusion", "zone": "front-yard",
                  "occurred_at": 123, "detail": {"camera": "gate-cam", "topic": FIELD}}
-    from d1max_site.incidents import IncidentDesk
+    from nexwar_site.incidents import IncidentDesk
     assert IncidentDesk.parse(b)["zone"] == "front-yard"
 
 
@@ -454,11 +454,11 @@ def test_没开摄像头的站点404(tmp_path):
 
 
 def test_命令行_加_列_删_口令不显示(tmp_path, monkeypatch, capsys):
-    from d1max_site import main as site_main
+    from nexwar_site import main as site_main
     home = tmp_path / "site"
     assert site_main.main(["--home", str(home), "init", "--site-id", "estate-1",
                            "--hostname", "127.0.0.1"]) == 0
-    monkeypatch.setenv("D1MAX_CAMERA_PASSWORD", "cam-secret")
+    monkeypatch.setenv("NEXWAR_CAMERA_PASSWORD", "cam-secret")
     capsys.readouterr()
     assert site_main.main(["--home", str(home), "camera-add", "gate-cam", "--onvif",
                            "http://10.0.0.9", "--user", "admin", "--zone", "front-yard",
@@ -716,7 +716,7 @@ def test_W19外审_口令不进命令行_清单只许本用户读_出画面就�
 
 
 def test_W19外审_报错里的口令抹掉_日志和接口都不出现(站点, caplog):
-    from d1max_site.cctv import scrub
+    from nexwar_site.cctv import scrub
     assert scrub("rtsp://admin:cam-pass@10.0.0.9/s1: 401") == "rtsp://***@10.0.0.9/s1: 401"
     assert scrub("http://u:p@h x rtsp://a:b@c") == "http://***@h x rtsp://***@c"
     code = ("import sys;sys.stderr.write('rtsp://admin:cam-pass@10.0.0.9/s1: 401 Unauthorized')")
@@ -738,7 +738,7 @@ def test_W19外审_报错里的口令抹掉_日志和接口都不出现(站点, 
 
 
 def test_W19外审_告警台按这一位这一种解决_别的摄像头的不动(tmp_path):
-    from d1max_site.alert_store import AlertDesk
+    from nexwar_site.alert_store import AlertDesk
     desk = AlertDesk(SiteDB(tmp_path / "s.db"), now_ms=lambda: 1)
     for n in ("a", "b"):
         desk.raise_alert(kind="cctv_offline", robot=f"cctv:{n}", title=f"{n} 无法连接")
@@ -808,7 +808,7 @@ def test_W19复查_有人在看时改了地址_旧流关掉_再打开按新配�
 
 def test_接口_状态带图上的位置(站点):
     """W44 第三期:保安地图页的摄像头图层要知道摄像头放在哪(管理员在「布置」里放的)。"""
-    from d1max_site.cctv import set_placement
+    from nexwar_site.cctv import set_placement
     s = 站点
     add_camera(s.db, _cam(80), now_ms=1)
     s.cctv.sync()
@@ -823,7 +823,7 @@ def test_接口_状态带图上的位置(站点):
 # 也报得出最后一帧多久了 ----
 
 def test_外审R6_出过画面后卡住_过了停帧时限结束流_收掉进程(monkeypatch):
-    import d1max_site.cctv as cc
+    import nexwar_site.cctv as cc
     monkeypatch.setattr(cc, "STALL_S", 0.4)
     popen, procs = _ffmpeg(b"\xff\xd8A\xff\xd9", then_sleep=30)    # 一帧以后不出也不退
     v = CctvView(_cam(rtsp_url="rtsp://10.0.0.9/s1"), popen=popen, major=lambda f: 4)
@@ -893,7 +893,7 @@ def test_W44复查R4_两次当场同步交错_删掉的摄像头不会被旧的�
     等之前读的配置又把它起来(还能交入侵)。现在同步一次只做一个,停完旧的再读一次库才起新的。"""
     import threading
 
-    from d1max_site import cctv_admin
+    from nexwar_site import cctv_admin
     db = SiteDB(tmp_path / "s.db")
     body = {"name": "gate-cam", "zone": "old-gate", "onvif_url": "http://10.0.0.9",
             "username": "admin", "password": "fake"}
@@ -932,7 +932,7 @@ def test_W44复查R4_两次当场同步交错_删掉的摄像头不会被旧的�
 def _两台慢的(tmp_path):
     import threading
 
-    from d1max_site import cctv_admin
+    from nexwar_site import cctv_admin
     db = SiteDB(tmp_path / "s.db")
     body = {"name": "slow-A", "zone": "old-A", "onvif_url": "http://10.0.0.9",
             "username": "admin", "password": "fake"}
@@ -964,7 +964,7 @@ def test_W44复查N2_改A时删了B_B当场停_不等A的旧订阅退出(tmp_pat
     """复查 R4 加的串行锁让 B 要等 A 的旧订阅退出(最长 35 秒)才停,这期间 B 还能交入侵。"""
     import threading
 
-    from d1max_site import cctv_admin
+    from nexwar_site import cctv_admin
     db, mgr, a, resume, reported = _两台慢的(tmp_path)
     try:
         target = mgr.watches["delete-B"]
@@ -989,7 +989,7 @@ def test_W44复查N2_改A时删了B_B当场停_不等A的旧订阅退出(tmp_pat
 def test_W44复查N2_有一次同步在等旧订阅_站点杂事里的同步不卡住_要的那次接在它后面做(tmp_path):
     import time as _t
 
-    from d1max_site import cctv_admin
+    from nexwar_site import cctv_admin
     db, mgr, a, resume, reported = _两台慢的(tmp_path)
     try:
         cctv_admin.save(db, {"name": "new-C", "zone": "zone-C", "onvif_url": "http://10.0.0.8",
@@ -1008,7 +1008,7 @@ def test_W44复查N2_有一次同步在等旧订阅_站点杂事里的同步不�
 # ---- W44 复查第三轮 M1、M2:起订阅前配置变了要重来;站点收尾要等正在做同步的那个 ----
 
 def _一台(tmp_path, **watch_kw):
-    from d1max_site import cctv_admin
+    from nexwar_site import cctv_admin
     db = SiteDB(tmp_path / "s.db")
     body = {"name": "gate-cam", "zone": "old-gate", "onvif_url": "http://10.0.0.9",
             "username": "admin", "password": "fake"}
@@ -1047,7 +1047,7 @@ def test_W44复查M1_读完配置还没起订阅时删了_不按删之前的起(
     owner = threading.Thread(target=mgr.sync, name="owner")
     owner.start()
     assert at.wait(5)
-    from d1max_site import cctv_admin
+    from nexwar_site import cctv_admin
     assert cctv_admin.remove(db, "gate-cam")
     newer = threading.Thread(target=mgr.sync)
     newer.start()
@@ -1087,7 +1087,7 @@ def test_W44复查M1_旧订阅还在等退出_不起同名的新订阅(tmp_path)
             go.wait(5)
         return w
     mgr._wanted = 停一下
-    from d1max_site import cctv_admin
+    from nexwar_site import cctv_admin
     cctv_admin.save(db, body | {"edit": True, "zone": "mid-gate"}, now_ms=1)
     owner = threading.Thread(target=mgr.sync, name="owner")
     owner.start()
@@ -1125,7 +1125,7 @@ def test_W44复查M2_收尾时有同步在等旧订阅_等它做完_收尾以后
             return True
     mgr = cctv.CctvManager(db, report=lambda cam, ev: None, now_ms=lambda: 1, watch_factory=订阅)
     mgr.sync()
-    from d1max_site import cctv_admin
+    from nexwar_site import cctv_admin
     cctv_admin.save(db, body | {"edit": True, "zone": "new-gate"}, now_ms=1)
     owner = threading.Thread(target=mgr.sync)
     owner.start()
@@ -1212,7 +1212,7 @@ def test_W44复查K1_别处一直叫同步但配置没变_正在做的那个照�
 def test_W44复查K1_别的摄像头在改_没变的那台照样起(tmp_path):
     import threading
 
-    from d1max_site import cctv_admin
+    from nexwar_site import cctv_admin
     db, body = _一台(tmp_path)
 
     class 订阅(cctv.CameraWatch):
@@ -1238,7 +1238,7 @@ def test_W44复查K1_别的摄像头在改_没变的那台照样起(tmp_path):
 def test_W44复查K2_收尾时删了的摄像头_告警照样解决(tmp_path):
     import threading
 
-    from d1max_site import cctv_admin
+    from nexwar_site import cctv_admin
     db, _body = _一台(tmp_path)
     al = _记告警()
     waiting, resume = threading.Event(), threading.Event()

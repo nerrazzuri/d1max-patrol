@@ -33,8 +33,8 @@ jobs:
         run: flutter build macos --release
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
-          name: d1max-desktop-macos
-          path: mobile/build/macos/Build/Products/Release/d1max_patrol.app
+          name: nexwar_desktop_macos
+          path: mobile/build/macos/Build/Products/Release/nexwar_patrol.app
           retention-days: 14
 
   # H13:iOS 基础工程编得过不过。不签名(没有开发者账号),只编 debug;不上传产物(没签名的包装不到手机上)。

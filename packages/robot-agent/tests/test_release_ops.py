@@ -11,25 +11,25 @@ from pathlib import Path
 
 import pytest
 
-from d1max_agent.engine import release as rel
-from d1max_agent.release_ops import SENTINEL, ReleaseOpError, ReleaseOps
-from d1max_contract.releases import ReleaseRef
+from nexwar_agent.engine import release as rel
+from nexwar_agent.release_ops import SENTINEL, ReleaseOpError, ReleaseOps
+from nexwar_contract.releases import ReleaseRef
 
 OLD, NEW = "2026-09-20-aaaaaa", "2026-09-25-bbbbbb"
 
 
 def _包(tmp: Path, name: str, *, extra: dict[str, bytes] | None = None,
        代理: bool = True, mode: int = 0o755) -> Path:
-    """发布包。默认是代理那一代:带 ``deploy/d1max-agent-start``,照真的那样有执行位(git 里是
+    """发布包。默认是代理那一代:带 ``deploy/nexwar_agent_start``,照真的那样有执行位(git 里是
     100755);``代理=False`` 是老服务那一代,``mode`` 给坏的执行位用。"""
     d = tmp / "src" / name
     (d / "src").mkdir(parents=True, exist_ok=True)
     (d / "src" / "x.py").write_text(f"VERSION = {name!r}\n")
     (d / "deploy").mkdir(exist_ok=True)
-    (d / "deploy" / "d1max-agent.service").write_text("[Unit]\n")
+    (d / "deploy" / "nexwar_agent.service").write_text("[Unit]\n")
     if 代理:
-        (d / "deploy" / "d1max-agent-start").write_text("#!/bin/sh\n")
-        (d / "deploy" / "d1max-agent-start").chmod(mode)
+        (d / "deploy" / "nexwar_agent_start").write_text("#!/bin/sh\n")
+        (d / "deploy" / "nexwar_agent_start").chmod(mode)
     for k, v in (extra or {}).items():
         (d / k).write_bytes(v)
     (d / "release.json").write_text(json.dumps({
@@ -276,7 +276,7 @@ def test_建venv_哨兵最后落_失败不落_在了就跳过(tmp_path):
     import os
     import stat
 
-    from d1max_agent.release_ops import build_venv
+    from nexwar_agent.release_ops import build_venv
     log = tmp_path / "calls.log"
     fake = tmp_path / "python3"
     fake.write_text(f"""#!/bin/sh
@@ -362,7 +362,7 @@ def test_槽里的启动脚本没有执行位_拒(ops, tmp_path):
     o, served, restarts, built, layout = ops
     o.install(_ref(served, NEW, _tar(_包(tmp_path, NEW, mode=0o644))))
     assert o.ready(NEW) and o.can_switch_to(NEW), "落槽补上了执行位"
-    (layout.release_dir(NEW) / "deploy" / "d1max-agent-start").chmod(0o644)
+    (layout.release_dir(NEW) / "deploy" / "nexwar_agent_start").chmod(0o644)
     assert not o.can_switch_to(NEW)
     with pytest.raises(ReleaseOpError, match="执行位"):
         o.activate(NEW)
@@ -397,14 +397,14 @@ def test_装好了的再装一次_不重下_执行位照样补(ops, tmp_path):
 
 @pytest.fixture
 def 钥匙(tmp_path):
-    from d1max_contract import relsign
+    from nexwar_contract import relsign
     k, pub = tmp_path / "keys" / "rel.key", tmp_path / "keys" / "rel.pub"
     relsign.keygen(k, pub)
     return k, pub
 
 
 def _签(pkg: Path, key: Path) -> Path:
-    from d1max_contract import relsign
+    from nexwar_contract import relsign
     m = json.loads((pkg / "release.json").read_text())
     m["signature"] = relsign.sign(m, key)
     (pkg / "release.json").write_text(json.dumps(m))
@@ -412,7 +412,7 @@ def _签(pkg: Path, key: Path) -> Path:
 
 
 def _验(o, pub, *, allow=False):
-    from d1max_contract import relsign
+    from nexwar_contract import relsign
     o._sigcheck = lambda pkg: relsign.check_package(pkg, pub, allow_unsigned=allow)
 
 
@@ -424,7 +424,7 @@ def test_W30_签了名的装得上(ops, tmp_path, 钥匙):
 
 
 def test_W30_没签名_签名不对_别人的钥匙签的_改过的_都不装(ops, tmp_path, 钥匙):
-    from d1max_contract import relsign
+    from nexwar_contract import relsign
     o, served, restarts, built, layout = ops
     _验(o, 钥匙[1])
     with pytest.raises(ReleaseOpError, match="没有签名"):
@@ -460,9 +460,9 @@ def test_W30_命令行_keygen_sign_install验签(tmp_path, 钥匙):
 
     def cli(*a, env=None):
         import os
-        return subprocess.run([sys.executable, "-m", "d1max_patrol.cli", "release", *a],
+        return subprocess.run([sys.executable, "-m", "nexwar_patrol.cli", "release", *a],
                               capture_output=True, text=True,
-                              env={**os.environ, "D1MAX_RELEASE_ROOT": str(root), **(env or {})})
+                              env={**os.environ, "NEXWAR_RELEASE_ROOT": str(root), **(env or {})})
     got = cli("install", "--pubkey", str(钥匙[1]), str(pkg))
     assert got.returncode == 2 and "没有签名" in got.stderr
     got = cli("sign", str(pkg), "--key", str(钥匙[0]))

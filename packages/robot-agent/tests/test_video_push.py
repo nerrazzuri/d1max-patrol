@@ -10,8 +10,8 @@ import time
 
 import pytest
 
-from d1max_agent.video_push import VideoPusher, lavfi_source, rtsp_source
-from d1max_contract.video import VideoRequest
+from nexwar_agent.video_push import VideoPusher, lavfi_source, rtsp_source
+from nexwar_contract.video import VideoRequest
 
 pytestmark = pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="没有 ffmpeg")
 
@@ -184,8 +184,8 @@ def test_外审R2_推流和录像的报错尾巴_长RTSP地址的口令也打码
     import io
     from types import SimpleNamespace
 
-    from d1max_agent.recording import Recorder
-    from d1max_agent.video_push import _tail
+    from nexwar_agent.recording import Recorder
+    from nexwar_agent.video_push import _tail
     secret = "REVIEW_FAKE_SECRET"
     raw = f"rtsp://admin:{secret}@127.0.0.1:1/{'p' * 240}: Connection refused\n".encode()
     assert secret not in _tail(io.BytesIO(raw))

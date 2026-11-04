@@ -1,6 +1,6 @@
 """手机端(Dart)读的站点报文夹具(W00c4)。夹具由这里**从真的站点 API** 取、落在
 ``mobile/test/fixtures/site_*.json``;站点改了报文形状,这里先红,提示
-``D1MAX_WRITE_FIXTURES=1`` 重生成,Dart 那侧跟着红 —— 沿用「Python 夹具先红、Dart 跟着红」。
+``NEXWAR_WRITE_FIXTURES=1`` 重生成,Dart 那侧跟着红 —— 沿用「Python 夹具先红、Dart 跟着红」。
 
 比的是**形状**(键与值的类型,递归),不是值:令牌、时刻每次都不一样。"""
 
@@ -66,8 +66,8 @@ def _collect(tmp_path) -> dict[str, object]:
     from test_site_maps_api import 假建图
     from test_site_schedule import 打包
 
-    from d1max_site.incidents import IncidentDesk
-    from d1max_site.scheduler import SiteScheduler
+    from nexwar_site.incidents import IncidentDesk
+    from nexwar_site.scheduler import SiteScheduler
     class _模型:
         n = 0
 
@@ -81,7 +81,7 @@ def _collect(tmp_path) -> dict[str, object]:
     try:
         s.api.scheduler = SiteScheduler(s.db, s.disp, now_ms=wall)
         s.api.incidents = IncidentDesk(s.db, s.disp, now_ms=wall)
-        from d1max_site.modes import ArmingDesk  # W20:布防模式
+        from nexwar_site.modes import ArmingDesk  # W20:布防模式
         s.api.arming = ArmingDesk(s.db, now_ms=wall)
         code, login = s.req("POST", "/api/login", {"name": "alice", "password": PW})
         tok = login["token"]
@@ -103,7 +103,7 @@ def _collect(tmp_path) -> dict[str, object]:
               token=tok)
         mode = s.req("GET", "/api/mode", token=tok)[1]
         # W22:一场驱离(到了拦截点、自动升到 L2)
-        from d1max_site.deterrence import DeterrenceDesk, Session
+        from nexwar_site.deterrence import DeterrenceDesk, Session
         s.api.deterrence = s.loop.call(lambda: _sync_make(DeterrenceDesk, s))
         s.api.deterrence.sessions["A"] = Session(
             robot_id="A", incident_id=1, zone="yard", task_id="incident-abc", level=2,
@@ -112,7 +112,7 @@ def _collect(tmp_path) -> dict[str, object]:
             standoff="retreat")
         deterrence = s.req("GET", "/api/deterrence", token=tok)[1]
         # W29:天气(联网查过一次是正常,手动切成下雨 3 小时)
-        from d1max_site.weather import WeatherDesk
+        from nexwar_site.weather import WeatherDesk
         s.api.weather = WeatherDesk(s.db, s.disp, now_ms=wall, latlon=(3.14, 101.69),
                                     fetch=lambda a, b: {"weather_code": 3, "precipitation": 0.0})
         s.loop.call(s.api.weather.poll)
@@ -155,8 +155,8 @@ def _collect(tmp_path) -> dict[str, object]:
         # W00c5d:一趟运行记录(两张照片,判过、复核过一张);狗报过盘况;站点备份过一次。
         import json as _json
 
-        from d1max_contract.messages import TaskState, Telemetry
-        from d1max_contract.storage import StorageFacts
+        from nexwar_contract.messages import TaskState, Telemetry
+        from nexwar_contract.storage import StorageFacts
         st = "20260925T010000Z"
         for rel, data in ((f"photos/P1__front__{st}.jpg", b"\xff\xd8x\xff\xd9"),
                           (f"photos/P2__front__{st}.jpg", b"\xff\xd8y\xff\xd9"),
@@ -233,17 +233,17 @@ def test_手机读的站点夹具跟真站点同形(tmp_path):
     got["site_login"] = {**got["site_login"], "token": FIXTURE_TOKEN}
     # 登录夹具每个字段都是定的(令牌换成了假值):写出来的跟仓库里的必须一模一样,不只是同形。
     assert json.loads((FIXTURES / "site_login.json").read_text(encoding="utf-8")) == \
-        got["site_login"], "site_login.json 跟写出来的不一样:D1MAX_WRITE_FIXTURES=1 重生成"
-    if os.environ.get("D1MAX_WRITE_FIXTURES") == "1":
+        got["site_login"], "site_login.json 跟写出来的不一样:NEXWAR_WRITE_FIXTURES=1 重生成"
+    if os.environ.get("NEXWAR_WRITE_FIXTURES") == "1":
         for k, v in got.items():
             (FIXTURES / f"{k}.json").write_text(
                 json.dumps(v, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
                 encoding="utf-8")
     for k, v in got.items():
         f = FIXTURES / f"{k}.json"
-        assert f.is_file(), f"{f.name} 没有:D1MAX_WRITE_FIXTURES=1 跑一次这条测试"
+        assert f.is_file(), f"{f.name} 没有:NEXWAR_WRITE_FIXTURES=1 跑一次这条测试"
         assert _shape(json.loads(f.read_text(encoding="utf-8"))) == _shape(v), \
-            f"{f.name} 跟站点现在的报文不同形:D1MAX_WRITE_FIXTURES=1 重生成,再修 Dart 那侧"
+            f"{f.name} 跟站点现在的报文不同形:NEXWAR_WRITE_FIXTURES=1 重生成,再修 Dart 那侧"
 
 
 def test_夹具里不留会话令牌这种随机串():

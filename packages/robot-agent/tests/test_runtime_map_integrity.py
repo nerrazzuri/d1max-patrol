@@ -9,13 +9,13 @@ import json
 import pytest
 from test_runtime_maps import REG, T, _cmd, _跑, 站点, 耳朵, 钟
 
-from d1max_adapter_sim.robot import SimRobot
-from d1max_agent import maps as M
-from d1max_agent.maps import MapKeeper
-from d1max_agent.runtime import AgentRuntime
-from d1max_contract.memory_broker import MemoryBroker, MemoryTransport
-from d1max_contract.messages import Capabilities
-from d1max_patrol.protocol.nav_types import Pose
+from nexwar_adapter_sim.robot import SimRobot
+from nexwar_agent import maps as M
+from nexwar_agent.maps import MapKeeper
+from nexwar_agent.runtime import AgentRuntime
+from nexwar_contract.memory_broker import MemoryBroker, MemoryTransport
+from nexwar_contract.messages import Capabilities
+from nexwar_patrol.protocol.nav_types import Pose
 
 FILES = {"m.pgm": bytes(range(200)), "home.json": b'{"x":1,"y":2,"yaw":0}'}
 
@@ -98,7 +98,7 @@ async def test_同尺寸坏了_重启不载_不报自主_不退回命令行的�
 
 
 async def test_坏了之后_goto_派不进_叫停照收(t):
-    from d1max_contract.messages import MapPose
+    from nexwar_contract.messages import MapPose
     _flip(t.keeper.dir_of(t.keeper.active()) / "m.pgm")
     await t.重启()
     goto = MapPose(map_id="m", map_version="2", frame_id="map", x=1.0, y=0.0, yaw=0.0)
@@ -112,7 +112,7 @@ async def test_坏了之后_goto_派不进_叫停照收(t):
 
 async def test_坏了之后_不宣告定位就绪_遥测不带地图位置(t):
     """锚定要作废:不然状态照报「定位就绪」、狗像是在命令行那张图(m:1)上定着位。"""
-    from d1max_contract.messages import Status, Telemetry
+    from nexwar_contract.messages import Status, Telemetry
     _flip(t.keeper.dir_of(t.keeper.active()) / "m.pgm")
     await t.重启()
     await _跑(t.rt, t.broker, n=15, r=t.r, c=t.c)
@@ -319,7 +319,7 @@ async def test_配了定位器_起来时正在用的版本没有先验_按坏了
     from test_runtime_localizer import 真狗样
     site = 站点()
     keeper = MapKeeper(tmp_path / "keep", fetch=site.fetch)
-    from d1max_contract.maps import MapRef
+    from nexwar_contract.maps import MapRef
     ref = MapRef.from_wire(site.add("m", "2", {"m.pgm": b"P5"}))
     keeper.install(ref)
     keeper.commit(ref)

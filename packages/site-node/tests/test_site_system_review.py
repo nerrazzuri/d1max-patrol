@@ -12,10 +12,10 @@ from types import SimpleNamespace
 
 from test_site_intake import ca, 站点  # noqa: F401  (夹具)
 
-from d1max_site.db import SiteDB
-from d1max_site.deterrence import DeterrenceDesk, Session
-from d1max_site.force import ForceWatch
-from d1max_site.modes import ArmingDesk
+from nexwar_site.db import SiteDB
+from nexwar_site.deterrence import DeterrenceDesk, Session
+from nexwar_site.force import ForceWatch
+from nexwar_site.modes import ArmingDesk
 
 NOW = 1_800_000_000_000
 
@@ -66,11 +66,11 @@ async def test_S04_驱离收场不关被抱起来的警笛警灯_过了45秒才�
 
 
 def test_S05_排程不抢在驱离的狗_选狗和发之前都看(tmp_path):
-    from d1max_contract.mission import parse_mission
-    from d1max_contract.schedule import parse_schedule
-    from d1max_site.catalog import ActiveBundle
-    from d1max_site.dispatcher import Dispatcher
-    from d1max_site.scheduler import SiteScheduler
+    from nexwar_contract.mission import parse_mission
+    from nexwar_contract.schedule import parse_schedule
+    from nexwar_site.catalog import ActiveBundle
+    from nexwar_site.dispatcher import Dispatcher
+    from nexwar_site.scheduler import SiteScheduler
     db = SiteDB(tmp_path / "db")
     mission = parse_mission({"mission": "loop", "map_id": "m", "policy": {}, "waypoints": [
         {"name": "p", "pose": {"position": {"x": 1, "y": 0},
@@ -100,7 +100,7 @@ def test_S05_排程不抢在驱离的狗_选狗和发之前都看(tmp_path):
 
 
 async def test_S06_驱离等回执的时候_受力对账照样每拍跑(monkeypatch):
-    import d1max_site.main as main
+    import nexwar_site.main as main
     cls = next(v for v in vars(main).values() if isinstance(v, type) and "_alert_loop" in vars(v))
     entered, unblock, calls, stop = asyncio.Event(), asyncio.Event(), [], threading.Event()
 
@@ -136,8 +136,8 @@ async def test_S06_驱离等回执的时候_受力对账照样每拍跑(monkeypa
 
 
 def test_S07_删过的照片_又传上来照收照回执_不复活(tmp_path):
-    from d1max_site.evidence import EvidenceStore
-    from d1max_site.privacy import PrivacyDesk
+    from nexwar_site.evidence import EvidenceStore
+    from nexwar_site.privacy import PrivacyDesk
     db = SiteDB(tmp_path / "db")
     now = [NOW]
     store = EvidenceStore(tmp_path / "evidence", db, now_ms=lambda: now[0])
@@ -155,8 +155,8 @@ def test_S07_删过的照片_又传上来照收照回执_不复活(tmp_path):
 
 
 def test_S07_传到一半的时候删了_收齐也不登记(tmp_path):
-    from d1max_site.evidence import EvidenceStore
-    from d1max_site.privacy import PrivacyDesk
+    from nexwar_site.evidence import EvidenceStore
+    from nexwar_site.privacy import PrivacyDesk
     db = SiteDB(tmp_path / "db")
     store = EvidenceStore(tmp_path / "evidence", db, now_ms=lambda: NOW)
     run = "mission/20261009T120000Z"
@@ -170,7 +170,7 @@ def test_S07_传到一半的时候删了_收齐也不登记(tmp_path):
 
 
 def test_S07_删过的录像段_又传上来不复活(tmp_path):
-    from d1max_site.recordings import RecordingStore, stamp_ms
+    from nexwar_site.recordings import RecordingStore, stamp_ms
     db = SiteDB(tmp_path / "db")
     rec = RecordingStore(db, tmp_path / "rec", now_ms=lambda: NOW)
     stamp = "20261009T010000Z"
@@ -183,8 +183,8 @@ def test_S07_删过的录像段_又传上来不复活(tmp_path):
 
 
 def test_S08_加密备份_同一秒里追加的后半截下一轮进备份(tmp_path):
-    from d1max_site.backup import SiteBackup
-    from d1max_site.sealbox import SealBox
+    from nexwar_site.backup import SiteBackup
+    from nexwar_site.sealbox import SealBox
     db = SiteDB(tmp_path / "db")
     root = tmp_path / "evidence"
     root.mkdir()
@@ -215,7 +215,7 @@ def test_S08_加密备份_同一秒里追加的后半截下一轮进备份(tmp_p
 
 
 def test_S08_拷的时候源还在变_标成要重拷_下一轮补上(tmp_path, monkeypatch):
-    from d1max_site.backup import SiteBackup
+    from nexwar_site.backup import SiteBackup
     db = SiteDB(tmp_path / "db")
     root = tmp_path / "evidence"
     root.mkdir()
@@ -240,7 +240,7 @@ def test_S08_拷的时候源还在变_标成要重拷_下一轮补上(tmp_path, 
 
 
 def test_S08_加密开销_跟真的加密文件对得上(tmp_path):
-    from d1max_site.sealbox import FILE_OVERHEAD, SealBox
+    from nexwar_site.sealbox import FILE_OVERHEAD, SealBox
     for n in (0, 1, 100, 70_000):
         (tmp_path / "a").write_bytes(os.urandom(n))
         SealBox(b"k" * 32).seal_file(tmp_path / "a", tmp_path / "b")
@@ -248,8 +248,8 @@ def test_S08_加密开销_跟真的加密文件对得上(tmp_path):
 
 
 def test_S07_删过的又传上来_半截也不落进证据库(tmp_path):
-    from d1max_site.evidence import EvidenceStore
-    from d1max_site.privacy import PrivacyDesk
+    from nexwar_site.evidence import EvidenceStore
+    from nexwar_site.privacy import PrivacyDesk
     db = SiteDB(tmp_path / "db")
     store = EvidenceStore(tmp_path / "evidence", db, now_ms=lambda: NOW)
     run, rel = "mission/20261009T120000Z", "photos/P1__front__20261009T120000Z.jpg"
@@ -262,9 +262,9 @@ def test_S07_删过的又传上来_半截也不落进证据库(tmp_path):
 
 
 def test_S07_收的时候还没删_登记之前删了_登记那一步挡住(tmp_path, monkeypatch):
-    import d1max_site.evidence as ev
-    from d1max_site.evidence import EvidenceStore
-    from d1max_site.privacy import PrivacyDesk
+    import nexwar_site.evidence as ev
+    from nexwar_site.evidence import EvidenceStore
+    from nexwar_site.privacy import PrivacyDesk
     db = SiteDB(tmp_path / "db")
     store = EvidenceStore(tmp_path / "evidence", db, now_ms=lambda: NOW)
     run, rel = "mission/20261009T120000Z", "photos/P1__front__20261009T120000Z.jpg"
@@ -284,8 +284,8 @@ RUN87, REL87, DATA87 = "mission/20261009T120000Z", "photos/P1__front__20261009T1
 
 
 def _证据87(tmp_path, now):
-    from d1max_site.evidence import EvidenceStore
-    from d1max_site.privacy import PrivacyDesk
+    from nexwar_site.evidence import EvidenceStore
+    from nexwar_site.privacy import PrivacyDesk
     db = SiteDB(tmp_path / "db")
     store = EvidenceStore(tmp_path / "evidence", db, now_ms=lambda: now[0])
     store.put("A", RUN87, REL87, offset=0, data=DATA87, total=len(DATA87))
@@ -349,7 +349,7 @@ def test_R2_删过的记号不过期_过了一年再传也不复活(tmp_path):
 
 
 def test_R3_删过的再传_一个字节都不收_没有暂存区_以前的暂存区起来就清(tmp_path):
-    from d1max_site.evidence import EvidenceStore
+    from nexwar_site.evidence import EvidenceStore
     now = [NOW]
     db, store, privacy = _证据87(tmp_path, now)
     privacy.purge(since_ms=NOW - 1, until_ms=NOW + 1)
@@ -365,7 +365,7 @@ def test_R3_删过的再传_一个字节都不收_没有暂存区_以前的暂�
 
 
 def test_R3_删过的录像段再传_不收(tmp_path):
-    from d1max_site.recordings import RecordingStore
+    from nexwar_site.recordings import RecordingStore
     db = SiteDB(tmp_path / "db")
     rec = RecordingStore(db, tmp_path / "rec", now_ms=lambda: NOW)
     stamp = "20261009T010000Z"
@@ -377,7 +377,7 @@ def test_R3_删过的录像段再传_不收(tmp_path):
 
 
 async def test_R4_受力警报开着_狗重启上装全关了_剩下的时间里补开_过了点不再开(tmp_path):
-    from d1max_site.force import RENEW_S
+    from nexwar_site.force import RENEW_S
     db = SiteDB(tmp_path / "s.db")
     now, outputs, sent = [NOW], {}, []
     d = 假派遣(outputs)
@@ -407,8 +407,8 @@ async def test_R4_受力警报开着_狗重启上装全关了_剩下的时间里
 def test_R3_端到端_狗传站点已经删过的那一趟_站点不收_狗当传完删掉(站点, ca, tmp_path):
     from test_site_intake import STAMP, _sink, _一趟, _跑
 
-    from d1max_agent.outbox import Outbox
-    from d1max_site.evidence import mark_purged
+    from nexwar_agent.outbox import Outbox
+    from nexwar_site.evidence import mark_purged
     with 站点.store.db.tx() as tx:                       # 站点上这一趟删过了(狗断网时)
         mark_purged(tx, "run", "A", f"巡检一/{STAMP}", NOW)
     box = Outbox(tmp_path / "dogA", cap_bytes=2**30, sink=_sink(站点, ca, ca.a), sn="A",
@@ -427,10 +427,10 @@ def test_R3_端到端_狗传站点已经删过的那一趟_站点不收_狗当�
 def test_PR88_旧暂存区删不掉_不吞错误_报P2_杂事里再删_删掉了自动解决(tmp_path, monkeypatch):
     import shutil
 
-    from d1max_site import main as site_main
-    from d1max_site.alert_store import AlertDesk
-    from d1max_site.evidence import EvidenceStore
-    from d1max_site.recordings import RecordingStore
+    from nexwar_site import main as site_main
+    from nexwar_site.alert_store import AlertDesk
+    from nexwar_site.evidence import EvidenceStore
+    from nexwar_site.recordings import RecordingStore
     db = SiteDB(tmp_path / "db")
     old = tmp_path / "evidence-purged-incoming" / "A" / "x.jpg"
     old.parent.mkdir(parents=True)

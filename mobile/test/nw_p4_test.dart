@@ -2,24 +2,24 @@
 // 版本格子、诊断包、几个入口）。各页原来的行为测试还在各自的文件里；这里只测这一批新加的东西。
 import 'dart:typed_data';
 
-import 'package:d1max_patrol/l10n.dart';
-import 'package:d1max_patrol/net/site_client.dart';
-import 'package:d1max_patrol/ui/nw/nw_cards.dart';
-import 'package:d1max_patrol/ui/nw/nw_shell.dart';
-import 'package:d1max_patrol/ui/nw/nw_theme.dart';
-import 'package:d1max_patrol/ui/nw/nw_widgets.dart';
-import 'package:d1max_patrol/ui/site_cameras.dart';
-import 'package:d1max_patrol/ui/site_health.dart';
-import 'package:d1max_patrol/ui/site_intercepts.dart';
-import 'package:d1max_patrol/ui/site_logs.dart';
-import 'package:d1max_patrol/ui/site_mapping.dart';
-import 'package:d1max_patrol/ui/site_maps.dart';
-import 'package:d1max_patrol/ui/alarm_log.dart';
-import 'package:d1max_patrol/ui/site_page.dart' show SiteIncidentsPage, SiteRobotPage, SiteSchedulePage;
-import 'package:d1max_patrol/ui/site_tabs.dart';
-import 'package:d1max_patrol/ui/site_releases.dart';
-import 'package:d1max_patrol/ui/site_runs.dart';
-import 'package:d1max_patrol/ui/site_weather.dart';
+import 'package:nexwar_patrol/l10n.dart';
+import 'package:nexwar_patrol/net/site_client.dart';
+import 'package:nexwar_patrol/ui/nw/nw_cards.dart';
+import 'package:nexwar_patrol/ui/nw/nw_shell.dart';
+import 'package:nexwar_patrol/ui/nw/nw_theme.dart';
+import 'package:nexwar_patrol/ui/nw/nw_widgets.dart';
+import 'package:nexwar_patrol/ui/site_cameras.dart';
+import 'package:nexwar_patrol/ui/site_health.dart';
+import 'package:nexwar_patrol/ui/site_intercepts.dart';
+import 'package:nexwar_patrol/ui/site_logs.dart';
+import 'package:nexwar_patrol/ui/site_mapping.dart';
+import 'package:nexwar_patrol/ui/site_maps.dart';
+import 'package:nexwar_patrol/ui/alarm_log.dart';
+import 'package:nexwar_patrol/ui/site_page.dart' show SiteIncidentsPage, SiteRobotPage, SiteSchedulePage;
+import 'package:nexwar_patrol/ui/site_tabs.dart';
+import 'package:nexwar_patrol/ui/site_releases.dart';
+import 'package:nexwar_patrol/ui/site_runs.dart';
+import 'package:nexwar_patrol/ui/site_weather.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 

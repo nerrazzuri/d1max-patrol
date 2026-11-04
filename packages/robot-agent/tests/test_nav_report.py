@@ -8,15 +8,15 @@ import math
 
 from test_obstacle_avoid import 台子
 
-from d1max_agent.nav_report import (
+from nexwar_agent.nav_report import (
     MAX_POINTS,
     MIN_GAP_MS,
     REFRESH_MS,
     NavPathReporter,
     decimate,
 )
-from d1max_contract.messages import Telemetry
-from d1max_patrol.protocol.nav_types import NavStatus, Pose
+from nexwar_contract.messages import Telemetry
+from nexwar_patrol.protocol.nav_types import NavStatus, Pose
 
 
 def _line(n, step=0.05):
@@ -77,7 +77,7 @@ def test_没路径就不带_导航一结束站点就清_下一趟马上发():
 
 
 def test_遥测契约_nav可选_老的没有这个键():
-    from d1max_contract.messages import _stamped
+    from nexwar_contract.messages import _stamped
     base = {"stamp": 1, "pose": None, "battery_pct": 50.0, "task_state": None,
             "loc_quality": 1.0, "net": {}}
     t = Telemetry.from_wire(_stamped(dict(base)))

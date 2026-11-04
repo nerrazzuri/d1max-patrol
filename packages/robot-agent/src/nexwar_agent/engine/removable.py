@@ -1,0 +1,181 @@
+"""狗认到哪些外插盘,各自是什么角色,哪些拦起飞。
+
+**认到取走盘就不许起飞**(spec §7.5)。凸出二十毫米的盘挂在走动的狗侧面是个
+**杠杆** —— 先坏的不是盘,是**接口**,而接口撬坏了整个扩展仓的 USB 就废了,
+那不可现场维修。取走盘凸出来无所谓,因为它只在"狗站着不动、人就在旁边"的
+那几分钟里存在;这条门槛就是把"凸出来"从一个持续风险压缩成一个有人看着的
+短窗口。
+
+**角色写在盘上,不写在狗上。** 判断角色的依据必须跟着盘走 —— 换一台狗、
+换一个挂载点,这块盘还是那块盘。
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import os
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass
+from enum import Enum
+from pathlib import Path
+from typing import Protocol, runtime_checkable
+
+#: 盘上的标记文件。带 SN 和 role,由备份那一层写(见后续计划)。
+MARKER_REL = ".nexwar_backup/target.json"
+
+#: 默认去哪儿找挂载点。Linux 上自动挂载落在这两处。
+DEFAULT_MOUNT_ROOTS: tuple[Path, ...] = (Path("/media"), Path("/mnt"))
+
+
+class DiskRole(str, Enum):
+    #: 装机时装进机器内部,不外露,没人碰。**不拦起飞。**
+    MIRROR = "mirror"
+    #: 人来的时候插一下,用完拔走。**拦起飞。**
+    TRANSFER = "transfer"
+    #: 没有标记文件,或者标记文件读不出来。**按取走盘拦。**
+    UNKNOWN = "unknown"
+
+
+@dataclass(frozen=True, slots=True)
+class Removable:
+    mount: Path
+    role: DiskRole
+    sn: str = ""
+
+
+def read_role(mount: Path | str) -> tuple[DiskRole, str]:
+    """从盘上的标记文件读角色和 SN。
+
+    **读不出来一律回 UNKNOWN,不猜。** 猜错的那一边是"把取走盘当成镜像盘",
+    而那一边的代价是狗带着一根杠杆出门。
+    """
+    marker = Path(mount) / MARKER_REL
+    try:
+        raw = json.loads(marker.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        # ValueError 这个大类接住的不只是 json.JSONDecodeError(它本来就是
+        # ValueError 的子类):marker.read_text 遇到不是 UTF-8 的字节会抛
+        # UnicodeDecodeError,同样是 ValueError 的子类。读不出来的原因不重要,
+        # 一律按 UNKNOWN 处理——抛出去的话,这一炸发生在 run_preflight 的
+        # _guard 外面(见 machine.py 里 scan() 那一步),会把整趟 preflight
+        # 报告都掀翻,而不是让"removable"这一项干净地没过。
+        return DiskRole.UNKNOWN, ""
+    if not isinstance(raw, dict):
+        return DiskRole.UNKNOWN, ""
+    sn = raw.get("sn", "")
+    sn = sn if isinstance(sn, str) else ""
+    try:
+        role = DiskRole(raw.get("role"))
+    except ValueError:
+        # 认不出的角色不是"新角色",是"这个文件我们读不懂"。
+        return DiskRole.UNKNOWN, sn
+    return role, sn
+
+
+@runtime_checkable
+class RemovableProbe(Protocol):
+    async def scan(self) -> tuple[Removable, ...]:
+        """现在认到哪些外插盘。"""
+        ...
+
+
+class MountRootProbe:
+    """扫 ``/media`` ``/mnt`` 下面**真正是挂载点**的那些目录。
+
+    "是不是挂载点"用 ``os.path.ismount`` 判,而这个判据**可以注入** ——
+    临时目录下造不出真挂载点,注入是这一层能被离机测到的唯一办法(spec §8.6
+    列的"仿真测不到的东西"里没有这一条,正是因为它被做成了可注入的)。
+    """
+
+    def __init__(self, roots: Sequence[Path] = DEFAULT_MOUNT_ROOTS, *,
+                 is_mount: Callable[[Path], bool] = os.path.ismount) -> None:
+        self._roots = tuple(Path(r) for r in roots)
+        self._is_mount = is_mount
+
+    async def scan(self) -> tuple[Removable, ...]:
+        """**整个扔进线程里跑。**
+
+        下面那一趟全是同步的文件系统调用:``iterdir``、``is_dir``、
+        ``os.path.ismount``、读标记文件。它们看着便宜,但撞上一个失效的挂载点
+        (拔掉的 USB、断了的 NFS)时,``ismount`` 那一下会在内核里**阻塞到
+        超时**,几秒到几十秒。这个协程跑在事件循环上,而急停、遥控心跳、SSE、
+        全部 HTTP 都在同一条循环上 —— 一块坏盘就能把整台狗冻住。同样的理由
+        见 ``app/video.py`` 里 ``RtspStill.grab``。
+        """
+        return await asyncio.to_thread(self._scan)
+
+    def _scan(self) -> tuple[Removable, ...]:
+        """真正去看文件系统的那一半。**同步的,只在线程里被调。**"""
+        found: list[Removable] = []
+        for root in self._roots:
+            if not root.is_dir():
+                continue
+            for entry in sorted(root.iterdir()):
+                if not entry.is_dir() or not self._is_mount(entry):
+                    continue
+                role, sn = read_role(entry)
+                found.append(Removable(mount=entry, role=role, sn=sn))
+        return tuple(found)
+
+
+#: 默认探针,给 ``MissionEngine`` 和 ``_make_engine`` 当默认值用。
+#: ``MountRootProbe`` 无状态,进程里共享一个实例没问题;写成模块级单例而不是
+#: 在每处签名里现造一个 ``MountRootProbe()``,也是为了不撞 ruff B008
+#: (默认参数里不许调函数)。
+DEFAULT_PROBE = MountRootProbe()
+
+#: 这些"SN"等于没有 SN。``app/identity.py`` 查不到机身 SN 的时候**明写
+#: ``"unknown"``**,不是留空 —— 而 engine 不能反过来 import app(分层),
+#: 所以这里自己列一份。改那边的 ``UNKNOWN_SN``,记得同时改这里。
+#:
+#: 少了 ``"unknown"`` 这一项,下面那条"任一边为空一律放行"在真机上就是
+#: **一句死话**:``resolve()`` 从不返回空串,一只读不出身份的狗会被拦得
+#: 连自己的镜像盘都插不了 —— 正是这条规则本来要避免的那个故障模式。
+NO_IDENTITY = frozenset({"", "unknown"})
+
+
+async def scan_or_unknown(probe: RemovableProbe) -> tuple[Removable, ...] | None:
+    """扫一遍外插盘,**炸了就当作"认不出插着什么"**。
+
+    这一步在 ``run_preflight`` 的 ``_guard`` 保护圈**外面**:``read_role``
+    特意做成永不抛,但 ``scan`` 自己还会抛 —— ``root.iterdir()`` 权限不对是
+    ``PermissionError``,``entry.is_dir()`` 撞上 stale mount 是 ``OSError``。
+    真炸了,调用方那一层的兜底会把整趟变成"引擎内部异常",而那份七项的
+    检查报告压根没写出来 —— 归档里一项结论都没有,人不知道该修哪儿。
+
+    回 ``None`` 的语义是"没扫过"(见 ``preflight._check_removable``):
+    removable 这一项干净地没过,其余六项照常出结论。**最该拦住的那块盘不能
+    反过来把检查炸了。**
+
+    两条起飞路径(引擎自己那道、HTTP 那道)都过这一个函数 —— 一处判得出、
+    另一处炸掉的话,页面上和归档里就会各说各话。
+    """
+    try:
+        return tuple(await probe.scan())
+    except OSError:
+        return None
+
+
+def blocks_takeoff(disks: Sequence[Removable], *,
+                   robot_sn: str = "") -> tuple[Removable, ...]:
+    """哪些盘拦起飞。**镜像盘不拦,别的都拦;别的狗的镜像盘也拦。**
+
+    SN 记下来就是为了这一条(spec §7.6):把 A 狗的备份盘插到 B 狗上,
+    role 上写的还是 ``mirror``,只看 role 的话它一路绿灯,而写进去的数据
+    从此串了台。
+
+    **只在两边的 SN 都知道、而且不相等时才拦。** 任一边不知道一律放行
+    (``NO_IDENTITY``:空串,以及 ``app/identity.py`` 那个明写的 ``"unknown"``):
+
+    - §7.5 那条物理杠杆风险已经被"非镜像盘一律拦"兜住了,SN 这一条防的是
+      **数据串台**,不是飞行安全 —— 不必按"不确定不放行"来办。
+    - 没有身份的狗(``fingerprint`` 读不出 SN)是合法工况。把它连自己的
+      镜像盘都拦掉,是凭空造出来的一个新故障模式。
+
+    代价是一块没写 SN 的镜像盘会放行 —— 但那块盘也不属于任何一只狗。
+    """
+    mine = "" if robot_sn in NO_IDENTITY else robot_sn
+    return tuple(d for d in disks
+                 if d.role is not DiskRole.MIRROR
+                 or (mine and d.sn not in NO_IDENTITY and d.sn != mine))

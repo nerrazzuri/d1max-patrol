@@ -1,3 +1,4 @@
+import "./oldkeys";
 import "./fonts.css";
 import "./styles.css";
 import { render } from "preact";

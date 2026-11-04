@@ -11,18 +11,18 @@ import urllib.request
 
 import pytest
 
-from d1max_adapter_sim.robot import SimRobot
-from d1max_agent.runtime import AgentRuntime
-from d1max_contract.memory_broker import MemoryBroker, MemoryTransport
-from d1max_contract.messages import MapPose
-from d1max_contract.registration import Registration
-from d1max_patrol.protocol.nav_types import Pose
-from d1max_site.accounts import Accounts
-from d1max_site.api import SiteApi
-from d1max_site.db import SiteDB
-from d1max_site.dispatcher import Dispatcher
-from d1max_site.loop import LoopThread
-from d1max_site.registry import Registry
+from nexwar_adapter_sim.robot import SimRobot
+from nexwar_agent.runtime import AgentRuntime
+from nexwar_contract.memory_broker import MemoryBroker, MemoryTransport
+from nexwar_contract.messages import MapPose
+from nexwar_contract.registration import Registration
+from nexwar_patrol.protocol.nav_types import Pose
+from nexwar_site.accounts import Accounts
+from nexwar_site.api import SiteApi
+from nexwar_site.db import SiteDB
+from nexwar_site.dispatcher import Dispatcher
+from nexwar_site.loop import LoopThread
+from nexwar_site.registry import Registry
 
 SITE = "estate-1"
 MAP = ("estate-1", "7")
@@ -68,7 +68,7 @@ class 站:
                                issued_at=0, expires_at=10**14)
             self.pusher = None
             if video is not None and agent_video:      # W00c5b:狗这头用 ffmpeg 测试图顶相机
-                from d1max_agent.video_push import VideoPusher, lavfi_source
+                from nexwar_agent.video_push import VideoPusher, lavfi_source
                 src = lavfi_source
                 if cameras is not None:                # W40:装了热像的狗(测试图顶热像)
                     def src(camera):
@@ -97,8 +97,8 @@ class 站:
                 self.pusher = _假推流()
             self.maps = keeper = None
             if maps is not None:                       # W00c5d 第二部分:站点的地图目录
-                from d1max_agent.maps import MapKeeper
-                from d1max_site.maps import MapCatalog
+                from nexwar_agent.maps import MapKeeper
+                from nexwar_site.maps import MapCatalog
                 self.maps = MapCatalog(tmp_path / "site", self.db, now_ms=wall)
                 cat = self.maps
 
@@ -117,8 +117,8 @@ class 站:
             await self.agent.start()
             self.desk = self.sources = None
             if alerts:                      # W00c5a:告警台挂上派遣器
-                from d1max_site.alert_sources import SiteAlertSources
-                from d1max_site.alert_store import AlertDesk
+                from nexwar_site.alert_sources import SiteAlertSources
+                from nexwar_site.alert_store import AlertDesk
                 self.desk = AlertDesk(self.db, now_ms=wall, publish=self.disp.feed.publish)
                 self.sources = SiteAlertSources(self.desk, now_ms=wall)
                 self.sources.attach(self.disp)
@@ -127,7 +127,7 @@ class 站:
         self.loop.call(build)
         self.hub = None
         if video is not None:                          # W00c5b:站点的视频扇出
-            from d1max_site.video import VideoHub, dispatcher_sender
+            from nexwar_site.video import VideoHub, dispatcher_sender
             self.hub = VideoHub(send=dispatcher_sender(self.disp, self.loop),
                                 known=lambda rid: rid in self.disp.clients,
                                 cameras=self.disp.cameras,
@@ -135,20 +135,20 @@ class 站:
             self.disp.on_event(self.hub.on_event)
         self.teleop = None
         if teleop is not None:                         # W00c5c:遥控台
-            from d1max_site.teleop import TeleopDesk
+            from nexwar_site.teleop import TeleopDesk
             self.teleop = TeleopDesk(self.disp, self.loop, audit=None, now_ms=wall,
                                      video_ok=lambda rid: self.video_live["site"], **teleop)
         self.rel_catalog = None
         if releases is not None:                       # W00c5d 第三部分:站点的发布目录
-            from d1max_site.releases import ReleaseCatalog
+            from nexwar_site.releases import ReleaseCatalog
             self.rel_catalog = ReleaseCatalog(tmp_path / "site", self.db, now_ms=wall)
         self.runs = self.store = self.backup = None
         if runs is not None:                           # W00c5d:证据库、运行记录台、站点备份
-            from d1max_site.backup import SiteBackup
-            from d1max_site.evidence import EvidenceStore
-            from d1max_site.runs import RunDesk
+            from nexwar_site.backup import SiteBackup
+            from nexwar_site.evidence import EvidenceStore
+            from nexwar_site.runs import RunDesk
             self.store = EvidenceStore(tmp_path / "evidence", self.db, now_ms=wall)
-            from d1max_site.alert_store import LoopAlerts
+            from nexwar_site.alert_store import LoopAlerts
             la = LoopAlerts(self.desk, self.loop) if self.desk is not None else None
             self.runs = RunDesk(self.store, home=tmp_path, now_ms=wall, alerts=la,
                                 client_factory=runs.get("client", lambda: None))
@@ -448,7 +448,7 @@ def test_任务包路由的错误(站点, tmp_path):
 
 
 def test_排程视图(站点, tmp_path):
-    from d1max_site.scheduler import SiteScheduler
+    from nexwar_site.scheduler import SiteScheduler
     tok = 站点.login()
     站点.req("POST", "/api/bundles", {"path": str(_任务包(tmp_path))}, token=tok)
     站点.api.scheduler = SiteScheduler(站点.db, 站点.disp, now_ms=wall)
@@ -458,7 +458,7 @@ def test_排程视图(站点, tmp_path):
 
 
 def test_请求体里的priority不起作用_手动派单一律按MANUAL(站点):
-    from d1max_site.priorities import MANUAL
+    from nexwar_site.priorities import MANUAL
     tok = 站点.login()
     _等(lambda: 站点.req("GET", "/api/robots/A", token=tok)[1].get("fresh"))
     code, d = 站点.req("POST", "/api/robots/A/goto", {"target": target(0.3), "priority": 1000},
@@ -469,7 +469,7 @@ def test_请求体里的priority不起作用_手动派单一律按MANUAL(站点)
 
 
 def test_待命点API(站点):
-    from d1max_site.standby import StandbyManager
+    from nexwar_site.standby import StandbyManager
     tok = 站点.login()
     assert 站点.req("GET", "/api/robots/A/standby", token=tok)[0] == 404, "未开启待命点的站点"
     站点.api.standby = StandbyManager(站点.db, 站点.disp, now_ms=wall)
@@ -497,7 +497,7 @@ def test_事件回调要签名_不要登录_管理路由要登录(站点):
     import urllib.error
     import urllib.request
 
-    from d1max_site.incidents import IncidentDesk
+    from nexwar_site.incidents import IncidentDesk
     tok = 站点.login()
     assert 站点.req("GET", "/api/incidents", token=tok)[0] == 404, "未开启事件派遣的站点"
     desk = IncidentDesk(站点.db, 站点.disp, now_ms=wall)
@@ -518,9 +518,9 @@ def test_事件回调要签名_不要登录_管理路由要登录(站点):
         sig = sig or hmac.new(bytes.fromhex(secret), str(ts).encode() + b"." + body,
                               hashlib.sha256).hexdigest()
         r = urllib.request.Request(站点.api.url + "/api/incidents", data=body, method="POST")
-        r.add_header("X-D1MAX-Source", "nvr-1")
-        r.add_header("X-D1MAX-Timestamp", str(ts))
-        r.add_header("X-D1MAX-Signature", sig)
+        r.add_header("X-Nexwar-Source", "nvr-1")
+        r.add_header("X-Nexwar-Timestamp", str(ts))
+        r.add_header("X-Nexwar-Signature", sig)
         try:
             with urllib.request.urlopen(r, timeout=15) as resp:
                 return resp.status, json.loads(resp.read())
@@ -545,7 +545,7 @@ def test_事件回调要签名_不要登录_管理路由要登录(站点):
     assert code == 400 and "yard" in d["error"], "防区还指着它"
     code, d = 站点.req("POST", "/api/zones", {"zone": "yard", "remove": True}, token=tok)
     assert code == 200 and d["zones"] == []
-    from d1max_site.incidents import RATE_PER_MIN
+    from nexwar_site.incidents import RATE_PER_MIN
     desk._recent["nvr-1"] = [wall()] * RATE_PER_MIN
     code, d = 报(json.dumps({"event_id": "e9", "type": "intrusion", "zone": "yard"}).encode())
     assert code == 429, (code, d)
@@ -559,7 +559,7 @@ def test_TLS握手在每条连接自己的线程里_不发ClientHello的挡不�
     import urllib.error
     import urllib.request
 
-    from d1max_site.ca import SiteCA
+    from nexwar_site.ca import SiteCA
     ca = SiteCA(tmp_path / "ca")
     ca.init(SITE)
     crt, key = ca.issue_server(["127.0.0.1"])
@@ -594,7 +594,7 @@ def test_叫停之后站点不再派它_人点恢复才派_经理只看的不能
     code, d = s.req("POST", "/api/robots/A/goto", {"target": target(1.0)}, token=alice)
     assert code == 409 and "叫停" in d["error"]
     assert "叫停" in s.disp.dispatchable("A", "patrol"), "排程、事件派遣选机器人时也跳过它"
-    from d1max_site.dispatcher import DispatchRefused
+    from nexwar_site.dispatcher import DispatchRefused
 
     async def 开遥控():
         return await s.disp.teleop_grant("A", lease_epoch=9, operator="alice",

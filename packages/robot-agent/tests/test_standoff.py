@@ -7,10 +7,10 @@ from __future__ import annotations
 import math
 from types import SimpleNamespace
 
-from d1max_agent.tasks.standoff import RETREAT_V, RETREAT_W, StandoffTask
-from d1max_contract.hal import VelocityResult
-from d1max_contract.messages import MapPose, TaskState
-from d1max_contract.standoff import StandoffRequest
+from nexwar_agent.tasks.standoff import RETREAT_V, RETREAT_W, StandoffTask
+from nexwar_contract.hal import VelocityResult
+from nexwar_contract.messages import MapPose, TaskState
+from nexwar_contract.standoff import StandoffRequest
 
 CENTER = MapPose(map_id="m", map_version="1", frame_id="map", x=0.0, y=0.0, yaw=0.0)
 
@@ -210,7 +210,7 @@ def _慢停(dog):
 
 
 def _栅格(seq, behind_wall=False):
-    from d1max_contract.obsbridge import Grid, pack_bits
+    from nexwar_contract.obsbridge import Grid, pack_bits
     n, res = 60, 0.1
     occ, known = [], []
     for i in range(n):                                   # 行 → x(狗身系)
@@ -225,10 +225,10 @@ def _栅格(seq, behind_wall=False):
 async def _真台(tmp_path):
     from test_runtime_maps import REG, T, 耳朵, 钟
 
-    from d1max_adapter_sim.robot import SimRobot
-    from d1max_agent.runtime import AgentRuntime
-    from d1max_contract.memory_broker import MemoryBroker, MemoryTransport
-    from d1max_patrol.protocol.nav_types import Pose
+    from nexwar_adapter_sim.robot import SimRobot
+    from nexwar_agent.runtime import AgentRuntime
+    from nexwar_contract.memory_broker import MemoryBroker, MemoryTransport
+    from nexwar_patrol.protocol.nav_types import Pose
     broker, c = MemoryBroker(), 钟()
     ears = 耳朵()
     st = MemoryTransport(broker, "site")

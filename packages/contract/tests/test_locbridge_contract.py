@@ -8,8 +8,8 @@ import math
 
 import pytest
 
-from d1max_contract.errors import ContractError
-from d1max_contract.locbridge import (
+from nexwar_contract.errors import ContractError
+from nexwar_contract.locbridge import (
     MAX_LINE,
     PROTO,
     Error,
@@ -41,7 +41,7 @@ def test_每种报文来回一样():
         State(seq=4, state="lost", reason="匹配不上"),
         Heartbeat(seq=5),
         Reply(req=2, ok=False, reason="初值离地图太远"),
-        SetPrior(req=1, map_id="estate-1", map_version="7", dir="/var/lib/d1max/agent/maps/e/7"),
+        SetPrior(req=1, map_id="estate-1", map_version="7", dir="/var/lib/nexwar/agent/maps/e/7"),
         Relocalize(req=2, map_id="estate-1", map_version="7", x=0.0, y=0.0, yaw=1.0, sigma_xy=0.5),
         Error(reason="协议版本对不上"),
     ]
@@ -119,8 +119,8 @@ def test_位姿可以说这一帧是它自己推了多久的():
 def test_W41_重定位带是不是人给的_缺省是人给的_不是布尔拒():
     import pytest as _pt
 
-    from d1max_contract.errors import ContractError
-    from d1max_contract.locbridge import Relocalize, encode, parse
+    from nexwar_contract.errors import ContractError
+    from nexwar_contract.locbridge import Relocalize, encode, parse
     r = Relocalize(req=3, map_id="e", map_version="7", x=0.0, y=0.0, yaw=0.0, sigma_xy=0.5,
                    human=False)
     assert parse(encode(r)) == r
@@ -132,7 +132,7 @@ def test_W41_重定位带是不是人给的_缺省是人给的_不是布尔拒()
 
 
 def test_工单11_位姿带原始ICP质量_可选_越界拒():
-    from d1max_contract.locbridge import Pose, encode, parse
+    from nexwar_contract.locbridge import Pose, encode, parse
     kw = dict(seq=1, stamp_ns=1, map_id="m", map_version="1", x=0.0, y=0.0, yaw=0.0,
               sigma_xy=0.1, sigma_yaw=0.02, source="scan_match")
     assert Pose(**kw).icp_quality is None
@@ -147,7 +147,7 @@ def test_外审R9_后加的字段取默认值时不写进报文_老定位器照�
     """W40/W41 外审 R9:新代理的人工重定位总带 ``human: true``,老定位器(6793485)整条拒收。"""
     import json
 
-    from d1max_contract.locbridge import Pose, Relocalize, encode, parse
+    from nexwar_contract.locbridge import Pose, Relocalize, encode, parse
     r = Relocalize(req=1, map_id="m", map_version="1", x=1.0, y=1.0, yaw=0.0, sigma_xy=0.5)
     d = json.loads(encode(r))
     assert "human" not in d and parse(encode(r)) == r
@@ -165,7 +165,7 @@ def test_外审R9_后加的字段取默认值时不写进报文_老定位器照�
     root = Path(__file__).resolve().parents[3]
     try:
         old = subprocess.check_output(["git", "-C", str(root), "show",
-                                       "6793485:packages/contract/src/d1max_contract/locbridge.py"])
+                                       "6793485:packages/contract/src/nexwar_contract/locbridge.py"])
     except (subprocess.CalledProcessError, FileNotFoundError):
         pytest.skip("没有 git 历史")
     mod = types.ModuleType("old_locbridge_6793485")

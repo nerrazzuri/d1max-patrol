@@ -9,8 +9,8 @@ import time
 
 import pytest
 
-from d1max_contract import gpio
-from d1max_contract.gpio import (
+from nexwar_contract import gpio
+from nexwar_contract.gpio import (
     EVENT_SIZE,
     FLAG_OUTPUT,
     EdgeCounter,
@@ -23,8 +23,9 @@ from d1max_contract.gpio import (
 
 
 def test_请求结构_跟内核头文件逐字节一样():
-    # C:offsets[0]=13, consumer="d1max", flags=OUTPUT, attrs[0]={OUTPUT_VALUES, values=1, mask=1}
-    want = {0: 0x0D, 256: 0x64, 257: 0x31, 258: 0x6D, 259: 0x61, 260: 0x78, 288: 0x08,
+    # C:offsets[0]=13, consumer="nexwar", flags=OUTPUT, attrs[0]={OUTPUT_VALUES, values=1, mask=1}
+    want = {0: 0x0D, 256: 0x6E, 257: 0x65, 258: 0x78, 259: 0x77, 260: 0x61, 261: 0x72,
+            288: 0x08,
             296: 0x01, 320: 0x02, 328: 0x01, 336: 0x01, 560: 0x01}
     b = pack_request([13], flags=FLAG_OUTPUT, values=1)
     assert len(b) == 592

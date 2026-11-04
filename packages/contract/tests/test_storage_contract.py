@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import pytest
 
-from d1max_contract.errors import ContractError
-from d1max_contract.messages import TaskState, Telemetry
-from d1max_contract.storage import StorageFacts
+from nexwar_contract.errors import ContractError
+from nexwar_contract.messages import TaskState, Telemetry
+from nexwar_contract.storage import StorageFacts
 
 
 def _facts(**kw):

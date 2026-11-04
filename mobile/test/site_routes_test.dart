@@ -5,13 +5,13 @@
 import 'dart:async';
 import 'dart:math' as math;
 
-import 'package:d1max_patrol/l10n.dart';
-import 'package:d1max_patrol/net/site_client.dart';
-import 'package:d1max_patrol/ui/map_view.dart';
-import 'package:d1max_patrol/ui/pose_marker.dart';
-import 'package:d1max_patrol/ui/site_maps.dart';
-import 'package:d1max_patrol/ui/site_pose_pick.dart';
-import 'package:d1max_patrol/ui/site_routes.dart';
+import 'package:nexwar_patrol/l10n.dart';
+import 'package:nexwar_patrol/net/site_client.dart';
+import 'package:nexwar_patrol/ui/map_view.dart';
+import 'package:nexwar_patrol/ui/pose_marker.dart';
+import 'package:nexwar_patrol/ui/site_maps.dart';
+import 'package:nexwar_patrol/ui/site_pose_pick.dart';
+import 'package:nexwar_patrol/ui/site_routes.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 

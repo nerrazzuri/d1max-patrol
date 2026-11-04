@@ -5,8 +5,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from d1max_contract import device_id as di
-from d1max_contract import ed25519
+from nexwar_contract import device_id as di
+from nexwar_contract import ed25519
 
 
 class 出厂:

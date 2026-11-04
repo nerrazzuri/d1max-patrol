@@ -8,12 +8,12 @@ import os
 
 import pytest
 
-from d1max_site import main as site_main
-from d1max_site.backup import SEALED, SiteBackup
-from d1max_site.db import SiteDB
-from d1max_site.evidence import EvidenceStore
-from d1max_site.restore import drill, restore, verify, verify_home
-from d1max_site.sealbox import SealBox
+from nexwar_site import main as site_main
+from nexwar_site.backup import SEALED, SiteBackup
+from nexwar_site.db import SiteDB
+from nexwar_site.evidence import EvidenceStore
+from nexwar_site.restore import drill, restore, verify, verify_home
+from nexwar_site.sealbox import SealBox
 
 NOW = 1_800_000_000_000
 RUN = "巡检一/20261009T010000Z"
@@ -206,7 +206,7 @@ def test_R3_umask022下恢复_私钥都是0600_目录0700(站, tmp_path):
 
 
 def test_R4_报P2写失败了_下一拍补上_解决失败了也补(站):
-    from d1max_site.alert_store import AlertDesk
+    from nexwar_site.alert_store import AlertDesk
     home, dest, key, db, b = 站
     desk = AlertDesk(db, now_ms=lambda: NOW)
     b.alerts = desk
@@ -239,8 +239,8 @@ def test_R2_装机脚本有恢复模式_不生成密钥_不init_不起服务():
     assert '恢复模式:不 init' in s
     tail = s[s.index("systemctl daemon-reload"):]
     # (W55 的执行器路径单元在前面就 enable --now 了:它只有请求来了才跑,恢复模式也要)
-    assert tail.index("systemctl enable d1max-mosquitto.service d1max-site.service") \
-        < tail.index("exit 0") < tail.index("enable --now d1max-mosquitto")
+    assert tail.index("systemctl enable nexwar_mosquitto.service nexwar_site.service") \
+        < tail.index("exit 0") < tail.index("enable --now nexwar_mosquitto")
 
 
 def test_R3_明文备份恢复也不抄源文件的宽权限(站, tmp_path):

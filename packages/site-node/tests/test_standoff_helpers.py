@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from d1max_contract.obsbridge import Grid, pack_bits
-from d1max_contract.persbridge import Person, Persons
+from nexwar_contract.obsbridge import Grid, pack_bits
+from nexwar_contract.persbridge import Person, Persons
 
 _seq = [0]
 

@@ -2,7 +2,7 @@
 
 自带算力板的前提:**雷达点云能经狗内网的以太网从厂商 Orin 送到我们的板子上,帧率不掉、延迟够小**。
 板子没到之前先拿笔记本顶:笔记本插进狗的内网,起好 zenoh 路由(``config/zenoh_router.json5`` 或者
-``deploy/d1max-zenohd-start --print`` 打出来的那份),跑这个工具。
+``deploy/nexwar_zenohd_start --print`` 打出来的那份),跑这个工具。
 
     python tools/a5_link_bench.py --seconds 60 /front_lidar /rear_lidar
     python tools/a5_link_bench.py --seconds 60 --json runs/a5/link.json /front_lidar
@@ -116,7 +116,7 @@ def _collect(topics: list[str], seconds: float, offset_ms: float) -> dict[str, T
     from sensor_msgs.msg import PointCloud2
 
     rclpy.init()
-    node = rclpy.create_node("d1max_a5_link_bench")
+    node = rclpy.create_node("nexwar_a5_link_bench")
     stats = {t: TopicStats(t) for t in topics}
 
     def cb(topic: str):

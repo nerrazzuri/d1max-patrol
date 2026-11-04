@@ -1,5 +1,5 @@
 """W09i 前后雷达:``lidars.json``(几何初值、校验)、合并(拼进前雷达系、配对、降级)、后雷达外参标定
-(点到面配准从错的初值收回来、对不上的拒)。点云来自 :mod:`d1max_localizer.lidarsim`
+(点到面配准从错的初值收回来、对不上的拒)。点云来自 :mod:`nexwar_localizer.lidarsim`
 (两台半球雷达)。"""
 
 from __future__ import annotations
@@ -11,9 +11,9 @@ import pytest
 
 np = pytest.importorskip("numpy")
 
-from d1max_localizer import calib  # noqa: E402
-from d1max_localizer import lidarsim as ls  # noqa: E402
-from d1max_localizer.lidars import (  # noqa: E402
+from nexwar_localizer import calib  # noqa: E402
+from nexwar_localizer import lidarsim as ls  # noqa: E402
+from nexwar_localizer.lidars import (  # noqa: E402
     BASELINE_M,
     Lidars,
     LidarsError,
@@ -21,7 +21,7 @@ from d1max_localizer.lidars import (  # noqa: E402
     geometry_guess,
     load,
 )
-from d1max_localizer.merge import Merger, merge_pair, transform, voxel_down  # noqa: E402
+from nexwar_localizer.merge import Merger, merge_pair, transform, voxel_down  # noqa: E402
 
 UP, FWD = (-1.0, 0.0, 0.0), (0.0, 0.0, 1.0)          # C40011:原始系 X 朝下、Z 朝前(#64)
 

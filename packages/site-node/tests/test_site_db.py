@@ -2,7 +2,7 @@
 
 def test_W13a_老库没有原点表_打开时按以前的挑法从待命点抄成原点(tmp_path):
     """以前下发地图拿「这张图上的待命点(默认的优先、再按名字)」当原点;迁移照同样的挑法,待命点原样留着。"""
-    from d1max_site.db import SiteDB
+    from nexwar_site.db import SiteDB
     p = tmp_path / "site.db"
     db = SiteDB(p)
     with db.tx() as c:

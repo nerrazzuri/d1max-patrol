@@ -86,8 +86,8 @@ def test_老代理没报定位块_单狗视图不猜():
     「没设位置」。"""
     from types import SimpleNamespace
 
-    from d1max_contract.messages import Telemetry
-    from d1max_site.dispatcher import Dispatcher
+    from nexwar_contract.messages import Telemetry
+    from nexwar_site.dispatcher import Dispatcher
     old = Telemetry(stamp=1, pose=None, battery_pct=50.0, task_state=None, loc_quality=1.0, net={})
     assert Dispatcher._loc_view(SimpleNamespace(telemetry=old)) is None
     assert Dispatcher._loc_view(None) is None

@@ -73,7 +73,7 @@ def repair(text: str) -> tuple[str, list[str]]:
 def expected_req_func(payload: dict) -> str | None:
     """从报文里直接扒出期望的 req_func,供测试与解析器结果比对。
 
-    **刻意不调用 `d1max_patrol.protocol` 的解析函数**:这里要的是一份独立的
+    **刻意不调用 `nexwar_patrol.protocol` 的解析函数**:这里要的是一份独立的
     第二实现。若改成调用解析器,测试就成了"解析器跟自己比",恒真,这条断言
     的全部价值就没了。以后不要"顺手去重"把它合并掉。
     """

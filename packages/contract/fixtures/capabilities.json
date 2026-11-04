@@ -8,7 +8,7 @@
   },
   "adapter": "sim/0.1.0",
   "agent": "0.1.0",
-  "robot_id": "D1MAX-C40011",
+  "robot_id": "NEXWAR-C40011",
   "schema": "1.0",
   "sensing": {
     "depth": false,

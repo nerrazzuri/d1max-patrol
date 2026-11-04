@@ -13,12 +13,12 @@ import json
 import pytest
 from test_site_dispatcher import MAP, target, 台子
 
-from d1max_site.alert_store import AlertDesk
-from d1max_site.areas import AreaBook
-from d1max_site.arming_schedule import ScheduleError
-from d1max_site.guard_duty import GuardDuty, PlanError
-from d1max_site.modes import ArmingDesk
-from d1max_site.routes import RouteError, RouteStore
+from nexwar_site.alert_store import AlertDesk
+from nexwar_site.areas import AreaBook
+from nexwar_site.arming_schedule import ScheduleError
+from nexwar_site.guard_duty import GuardDuty, PlanError
+from nexwar_site.modes import ArmingDesk
+from nexwar_site.routes import RouteError, RouteStore
 
 ROUTE = [{"name": n, "x": x, "y": 0.0, "yaw": 0.0}
          for n, x in (("A", 2.0), ("B", 4.0), ("C", 7.0), ("D", 9.0))]
@@ -362,7 +362,7 @@ async def test_一圈跑完下一圈派不出去_只记一次跑完_等着(站):
 # ---------------------------------------------------------------- 第三期:保存时查冲突(设计 §6.3)
 
 def _冲突台(t):
-    from d1max_site.guard_clash import ClashCheck
+    from nexwar_site.guard_clash import ClashCheck
     t.store.set_timezone("UTC", by="alice")
     t.store.put_route("day", {"map_id": MAP[0], "map_version": MAP[1], "waypoints": ROUTE,
                               "base_revision": 0}, by="alice")
@@ -441,7 +441,7 @@ def test_外审_改路线让巡逻变长撞进布防_不让存_原样不动(站)
 async def test_电量过不了一圈的出站线_不开_要补能_回充按这条线起(站):
     """30% 以前能开(老 MIN_PCT),现在要「回撤线 + 一圈耗电 × 1.2」;到了这条线回充也该起,
     充到够撑到布防结束(最多 95%)。"""
-    from d1max_site import energy
+    from nexwar_site import energy
     t = 站
     _方案(t)
     info = t.duty._route("night-guard")
@@ -460,7 +460,7 @@ async def test_电量过不了一圈的出站线_不开_要补能_回充按这�
 
 
 async def test_值守中_还有多少分钟要补能_按一圈出站线和耗电算(站):
-    from d1max_site import energy
+    from nexwar_site import energy
     t = 站
     _方案(t)
     assert t.duty.topup_eta_min("A") is None, "没在值守"
@@ -871,8 +871,8 @@ async def test_外审r2_11_跑过的路线加了停留_按新的算_冲突照样
 async def test_外审r3_1_回换电位的路上拔了一块_先停下再引导装回(站):
     from test_site_dispatcher import target
 
-    from d1max_site.battery_swap import SwapDesk
-    from d1max_site.standby import StandbyManager
+    from nexwar_site.battery_swap import SwapDesk
+    from nexwar_site.standby import StandbyManager
     t = 站
     await t.run(12)
     await t.send(t.site.goto("A", target(6), 0.8, issued_by="alice", priority=60))
@@ -965,7 +965,7 @@ async def test_外审r3_6_每圈回待命点那段算进一圈的电_不够就�
 
 
 async def test_外审r3_6_站点放行的一圈_狗上出发线也过得了(站):
-    from d1max_site import energy
+    from nexwar_site import energy
     t = 站
     t.duty.standby = stb = _待命点({"x": 100.0, "y": 0.0, "yaw": 0.0})
     stb.home = lambda rid, m, v: {"x": 0.0, "y": 0.0}
@@ -975,8 +975,8 @@ async def test_外审r3_6_站点放行的一圈_狗上出发线也过得了(站)
     line, _ = t.duty._lap_need(e, info, "A")
     # 狗上(直线后端):回撤线下限 25 + max(3%,全程耗电) × 1.5;全程 = 现在 → 各点 → 待命点 →
     # 沿来路倒回出发点 → 原点
-    from d1max_agent.engine.homing import route_length_m
-    from d1max_contract.geometry import Pose
+    from nexwar_agent.engine.homing import route_length_m
+    from nexwar_contract.geometry import Pose
     c = t.site.clients["A"]
     here = Pose.from_xy_yaw(c.telemetry.pose.x, c.telemetry.pose.y, 0.0)
     wps = [Pose.from_xy_yaw(p["x"], p["y"], 0.0) for p in info["points"]]

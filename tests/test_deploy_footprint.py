@@ -1,8 +1,8 @@
 """``deploy/footprint.sh``:装机前后足迹对照(2026-10-08 装 C40221 时查出两处)。
 
 1. ``install.sh`` 声明过的每一处写盘(``# @写盘``),footprint 都得看得见、判成「我们的」,它上面那几层
-   目录判成「被勘察目录自己的 mtime」—— 当时数据根 ``/var/lib/d1max`` 早在勘察范围里,diff 却没跟上,
-   现场报成「不是我们的」;对时配置 ``/etc/systemd/timesyncd.conf.d/d1max.conf`` 则根本看不见。
+   目录判成「被勘察目录自己的 mtime」—— 当时数据根 ``/var/lib/nexwar`` 早在勘察范围里,diff 却没跟上,
+   现场报成「不是我们的」;对时配置 ``/etc/systemd/timesyncd.conf.d/nexwar.conf`` 则根本看不见。
 2. snapshot 不许落在发行包里:按手册在包目录里跑,快照落进包,包的哈希变了,``install.sh`` 拒收。
 """
 
@@ -57,7 +57,7 @@ def test_装机声明的每处写盘_footprint都看得见并且判成我们的(
     范围 = _勘察范围()
     assert ("/var/lib", 1) in 范围
     写盘 = _写盘()
-    assert "/var/lib/d1max" in 写盘 and "/etc/systemd/timesyncd.conf.d/d1max.conf" in 写盘
+    assert "/var/lib/nexwar" in 写盘 and "/etc/systemd/timesyncd.conf.d/nexwar.conf" in 写盘
     # 每一处:它自己或者离它最近、看得见的那层祖先,要判成我们的(否则这次写盘在 diff 里要么
     # 看不见,要么挂在别人名下)。
     露面 = {}
@@ -93,7 +93,7 @@ def test_每个勘察根目录本身都判成被勘察目录():
 def _跑快照(cwd: Path, *args: str, 勘察: Path) -> subprocess.CompletedProcess[str]:
     return subprocess.run(["bash", str(FOOTPRINT), "snapshot", *args], cwd=cwd, text=True,
                           capture_output=True, env={"PATH": "/usr/bin:/bin",
-                                                    "D1MAX_FOOTPRINT_DIRS": f"{勘察}:1"},
+                                                    "NEXWAR_FOOTPRINT_DIRS": f"{勘察}:1"},
                           timeout=60)
 
 
