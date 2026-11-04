@@ -52,8 +52,8 @@ class SealBox:
     def __init__(self, key: bytes, *, openssl: str | None = None) -> None:
         if len(key) != KEY_BYTES:
             raise SealError(f"密钥要 {KEY_BYTES} 字节")
-        self._enc = hmac.new(key, b"nexwar_seal_enc", hashlib.sha256).hexdigest()
-        self._mac = hmac.new(key, b"nexwar_seal_mac", hashlib.sha256).digest()
+        self._enc = hmac.new(key, b"d1max-seal-enc", hashlib.sha256).hexdigest()
+        self._mac = hmac.new(key, b"d1max-seal-mac", hashlib.sha256).digest()
         self._openssl = openssl or shutil.which("openssl") or "openssl"
 
     # ------------------------------------------------------------ openssl

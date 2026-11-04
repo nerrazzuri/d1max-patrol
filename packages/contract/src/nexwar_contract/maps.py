@@ -135,7 +135,7 @@ def map_digest(ref: MapRef) -> str:
     清单已经把每个文件的哈希写死了,所以摘要等于「这一版的内容」—— 站点和狗各自从自己手里的清单
     算,不用再读文件;两边不一样 = 狗上用的不是站点登记的那一份。跟地图号、版本号**无关**(同样的
     内容换个版本号摘要一样,同一个版本号换了内容摘要不一样)。"""
-    h = hashlib.sha256(b"nexwar_map_digest/1\n")
+    h = hashlib.sha256(b"d1max-map-digest/1\n")
     for f in sorted(ref.files, key=lambda f: f.name):
         h.update(f"{f.name}\t{f.size}\t{f.sha256}\n".encode())
     return h.hexdigest()

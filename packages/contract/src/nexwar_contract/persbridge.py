@@ -122,18 +122,18 @@ def load_key(path: Any) -> bytes:
 
 def hello_mac(key: bytes, nonce: str, name: str) -> str:
     """跨板握手:``hello`` 里的 ``mac``。nonce 是代理这一次连接现给的,录下来也不能重放。"""
-    return hmac.new(key, f"nexwar_persons|{nonce}|{name}".encode(), hashlib.sha256).hexdigest()
+    return hmac.new(key, f"d1max-persons|{nonce}|{name}".encode(), hashlib.sha256).hexdigest()
 
 
 def agent_mac(key: bytes, nonce_detector: str, nonce_agent: str) -> str:
     """跨板握手的另一半:代理回的 ``hello`` 里的 ``mac``(证明代理也有密钥)。"""
-    return hmac.new(key, f"nexwar_persons_agent|{nonce_detector}|{nonce_agent}".encode(),
+    return hmac.new(key, f"d1max-persons-agent|{nonce_detector}|{nonce_agent}".encode(),
                     hashlib.sha256).hexdigest()
 
 
 def session_key(key: bytes, nonce_agent: str, nonce_detector: str) -> bytes:
     """这一条连接的会话密钥(两边的 nonce 都是现给的:换一条连接就换一把)。"""
-    return hmac.new(key, f"nexwar_persons_session|{nonce_agent}|{nonce_detector}".encode(),
+    return hmac.new(key, f"d1max-persons-session|{nonce_agent}|{nonce_detector}".encode(),
                     hashlib.sha256).digest()
 
 
