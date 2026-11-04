@@ -553,3 +553,24 @@ async def test_vel前进上限跟旁路握手报的走_后退还是0点5():
         await backend.stand()
         with pytest.raises(DeviceBackendError):
             await backend.vel(0.6, 0.0, 0.0, 300)
+
+
+async def test_现场1104_旁路进程重启_这头当成断开_能重新连上():
+    """以前断了只发一条「控制权丢了」,连接还当连着(CLOSE-WAIT),健康里 link_ok 一直真,
+    也就从不重连。"""
+    sim = SimAgentServer(port=0)
+    await sim.start()
+    port = sim.port
+    backend = SidecarDeviceBackend("127.0.0.1", port, ack_timeout_s=5.0)
+    await backend.connect()
+    try:
+        await sim.stop()
+        await _until(lambda: not backend.connected)
+        sim = SimAgentServer(port=port)
+        await sim.start()
+        await backend.connect()
+        assert backend.connected and backend.hello is not None
+        await backend.emergency_stop(False)           # 新连接上命令照收
+    finally:
+        await backend.close()
+        await sim.stop()
