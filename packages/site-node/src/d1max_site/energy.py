@@ -28,6 +28,9 @@ WATCH_S = 300
 MAX_RESUME_PCT = 95.0
 #: 换电:新装上的那块读到这么多才算换好(§7.4)。
 SWAP_OK_PCT = 80.0
+#: 一趟最少按这么多电算(起身、站定、对位也要电;跟狗上 ``ReturnParams.floor_pct`` 同一个数,
+#: 外审 r2 #8)。
+COST_FLOOR_PCT = 3.0
 #: 走直线到点的米数 → 秒:绕路 1.4 倍、0.4 m/s(跟狗上 ``ReturnParams`` 一样)。
 _DETOUR, _SPEED = 1.4, 0.4
 
@@ -53,9 +56,12 @@ def alarm_line(go_s: float, back_s: float | None = None, watch_s: float = WATCH_
     """报警出动要的电:去、停着看、回来以后还在停止线以上(比布防放宽一档)。
 
     外审 r1 #8:去、回那两段跟狗上出发线一样乘 :data:`RETURN_FACTOR`(狗上报警 ``goto`` 的出发线 =
-    停止线 + 全程 × 1.5,见 ``ALARM_PRIORITY``)—— 站点放行的,狗上也接。"""
+    停止线 + 全程 × 1.5,见 ``ALARM_PRIORITY``)—— 站点放行的,狗上也接。
+    外审 r2 #8:全程耗电跟狗上一样最少按 :data:`COST_FLOOR_PCT` 算;``back_s`` 是从现场回原点 /
+    换电位(调用方取远的那个),不知道才按跟去程一样。"""
     back = go_s if back_s is None else back_s
-    return STOP_PCT + drain_pct(go_s + back) * RETURN_FACTOR + drain_pct(watch_s)
+    trip = max(COST_FLOOR_PCT, drain_pct(go_s + back))
+    return STOP_PCT + trip * RETURN_FACTOR + drain_pct(watch_s)
 
 
 def topup_target(remaining_s: float, lap_s: float) -> float:

@@ -98,7 +98,8 @@ class DeviceBook:
         # 外审 r1 #10:防区按现在圈的算(圈改了、删了跟着变);查看点只跟摄像头位置、地图版本走
         p = got[1]["point"]
         zone = self._zone(p["map_id"], p["map_version"], p["x"], p["y"])
-        return {**got[1], "zone": zone or (r["zone"] or "")}
+        # 外审 r2 #10:接了防区簿、算出来不在任何防区(``""``)就是全站,不退回旧的登记防区
+        return {**got[1], "zone": (r["zone"] or "") if zone is None else zone}
 
     def point(self, name: str) -> dict[str, Any] | None:
         """``cam:<名字>`` → 那台摄像头的查看点(拦截点的样子)。"""

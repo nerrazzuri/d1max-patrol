@@ -102,6 +102,8 @@ class IncidentDesk:
         self.charging: Callable[[str], str] | None = None
         #: W73 §7.5:正在换电池、换到一半的那一步 → 不派的理由(``SwapDesk.refuse``);不然空串。
         self.swapping: Callable[[str], str] | None = None
+        #: 这台机器人在这张图上报警完要回的点(原点、换电位;外审 r2 #8)→ ``[(x, y)]``。
+        self.homes: Callable[[str, str, str], list[tuple[float, float]]] | None = None
         #: W73 第五期:登记在图上的外部设备(``devices.DeviceBook``):它的事件源报来不用带防区名。
         self.devices: Any = None
         #: W73 第五期:老接口按防区名报 → 先按圈好的防区找查看点(``{"name": "zone:<防区>", map_id,
@@ -369,8 +371,8 @@ class IncidentDesk:
                     if pose is not None and pose.map_id == point["map_id"] else None)
             if pct is not None:              # W73 §7.2:去、停着看 5 分钟、回来后还在停止线上
                 go = energy.walk_s(dist or 0.0)
-                line = energy.alarm_line(go)
-                if pct < line:
+                line = energy.alarm_line(go, self._back_s(rid, point, pose))
+                if pct <= line:              # 外审 r2 #8:狗上是「高过出发线」才走
                     why.append(f"{rid} 电量 {pct:.0f}%,不够去了再回来(要 ≥ {line:.0f}%)")
                     continue
             if dist is not None:
@@ -380,6 +382,32 @@ class IncidentDesk:
         if not best:
             return None, ";".join(why) or "没有登记的机器人"
         return sorted(best)[0][3], ""
+
+    def _back_s(self, rid: str, point: dict[str, Any], pose: Any) -> float | None:
+        """从拦截点回来要走多久(外审 r2 #8):回原点、换电位里远的那个;直线的机器人沿来路回到出发点
+        再回(跟狗上出发线一样)。不知道回哪 → ``None``(按跟去程一样)。"""
+        if self.homes is None:
+            return None
+        try:
+            homes = self.homes(rid, point["map_id"], point["map_version"])
+        except Exception:  # 查不到:按跟去程一样
+            log.exception("%s 报警完回哪查不到", rid)
+            return None
+        if not homes:
+            return None
+        here = (pose.x, pose.y) if pose is not None and pose.map_id == point["map_id"] else None
+        c = self.dispatcher.clients.get(rid)
+        caps = c.capabilities.tasks.get("goto", {}) if c is not None and c.capabilities else {}
+        retrace = here is not None and str(caps.get("path", "straight")) != "planned"
+        back = 0.0
+        for hx, hy in homes:
+            if retrace:
+                m = (math.hypot(point["x"] - here[0], point["y"] - here[1])
+                     + math.hypot(here[0] - hx, here[1] - hy))
+            else:
+                m = math.hypot(point["x"] - hx, point["y"] - hy)
+            back = max(back, m)
+        return energy.walk_s(back)
 
     def _open_incident_robots(self) -> set[str]:
         rows = self.db.query(

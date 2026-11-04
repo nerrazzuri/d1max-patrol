@@ -9,6 +9,7 @@ import math
 import pytest
 from test_site_w73_guard_plan import 台  # noqa: F401 —— 夹具
 
+from d1max_contract.geometry import Pose
 from d1max_site.route_eta import (
     NOMINAL_SPEED_MPS,
     PHOTO_S,
@@ -60,10 +61,17 @@ def test_没接规划_按直线_说明是直线估的(台):
     assert got["waypoints"][1]["travel_m"] == pytest.approx(5.0)
 
 
-def _跑过(台, rid, task, stamps, names=("A", "B"), ok=True):
+AB = [_p("A", 2.0, 2.0), _p("B", 6.0, 2.0)]
+
+
+def _跑过(台, rid, task, stamps, names=("A", "B"), ok=True, pts=AB):
+    """派出去的那一趟(带每个点的定义,跟真派的一样)+ 到点事件。"""
+    wps = [{"name": w["name"], "pose": Pose.from_xy_yaw(w["x"], w["y"], w["yaw"]).to_wire(),
+            **({"actions": w["actions"]} if w.get("actions") else {})} for w in pts]
     台.db.query("INSERT INTO commands(command_id, task_id, robot_id, kind, payload, issued_by, "
                 "issued_at, ack_result) VALUES (?,?,?,?,?,?,?,?)",
-                (f"c-{task}", task, "A", "patrol", json.dumps({"mission": {"mission": rid}}),
+                (f"c-{task}", task, "A", "patrol",
+                 json.dumps({"mission": {"mission": rid, "waypoints": wps}}),
                  "site", stamps[0], "accepted"))
     for i, (n, t) in enumerate(zip(names, stamps, strict=True)):
         台.db.query("INSERT INTO events(robot_id, boot_id, seq, event_id, kind, data, stamp, "
@@ -89,3 +97,18 @@ def test_实际用时_没到的点不算_别的路线不算_挨着的时间戳�
     _跑过(台, "r1", "batch", [5000, 5100])
     b = estimate(台.db, 台.reach, r)["waypoints"][1]
     assert b["actual_s"] is None and b["samples"] == 0
+
+
+def test_外审r2_11_点挪了或动作改了_那两段的旧用时作废(台):
+    _跑过(台, "r1", "t0", [1_000_000, 1_032_000])
+    same = estimate(台.db, 台.reach, _route([_p("A", 2.0, 2.0), _p("B", 6.0, 2.0)]))
+    assert same["waypoints"][1]["actual_s"] == 32.0
+    moved = estimate(台.db, 台.reach, _route([_p("A", 2.0, 2.0), _p("B", 8.0, 2.0)]))
+    assert moved["waypoints"][1]["actual_s"] is None, "B 挪了 2 米"
+    dwell = estimate(台.db, 台.reach, _route([_p("A", 2.0, 2.0),
+                                              _p("B", 6.0, 2.0, 0.0,
+                                                 [{"type": "dwell", "seconds": 600}])]))
+    b = dwell["waypoints"][1]
+    assert b["actual_s"] is None and b["use_s"] >= 600, "B 加了停留:按新的估"
+    turned = estimate(台.db, 台.reach, _route([_p("A", 2.0, 2.0), _p("B", 6.0, 2.0, 0.02)]))
+    assert turned["waypoints"][1]["actual_s"] == 32.0, "朝向来回换算的小误差不算改了"

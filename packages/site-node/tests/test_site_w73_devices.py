@@ -155,3 +155,15 @@ async def test_外审_重新圈防区以后_设备和摄像头按新防区判(�
     assert t.book.by_source("cctv-cam-9")["zone"] == "西区", "摄像头缓存不带旧防区"
     t.areas.remove(*MAP, "西区")
     assert t.book.get("door-1")["zone"] == "", "不在任何防区:按全站"
+
+
+def test_外审r2_10_摄像头移出所有防区_按全站算_不退回旧防区(设备):
+    from d1max_site.cctv import Camera, add_camera, set_placement
+    t = 设备
+    add_camera(t.db, Camera(name="cam-9", onvif_url="http://x", username="u", password="p",
+                            zone="东区"), now_ms=0)
+    set_placement(t.db, "cam-9", {"map_id": MAP[0], "map_version": MAP[1], "x": 0.0, "y": 0.0,
+                                  "yaw": 0.0, "fov_deg": 90.0})
+    assert t.book.by_source("cctv-cam-9")["zone"] == "东区"
+    t.areas.remove(*MAP, "东区")
+    assert t.book.by_source("cctv-cam-9")["zone"] == ""

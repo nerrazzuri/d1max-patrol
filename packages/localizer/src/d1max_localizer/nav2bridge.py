@@ -73,6 +73,11 @@ JUMP_M = 1.0
 #: 代理的 ``t_ms`` 往回跳超过这么多(毫秒)= 机器人的钟被调回去了(对时):从新的时间接着发。
 #: 以前一律当旧拍丢掉,转接节点从此不发 /clock、odom TF,Nav2 一直不就绪(11-04 现场 G1)。
 CLOCK_BACK_MS = 5_000
+#: 生命周期管理器在、节点这么久(秒)还没全部激活 → 让它 reset + startup 重来一次;还不行每隔这么久再来
+#: (11-04 现场:机器人从 1970 年的钟起来,Nav2 激活失败后一直卡着,只能人重启)。正常起来不到 30 秒。
+LIFECYCLE_RETRY_S = 90.0
+#: nav2_msgs/srv/ManageLifecycleNodes 的命令。
+LIFECYCLE_STARTUP, LIFECYCLE_RESET = 0, 3
 
 
 def _stamp_ms(st: Any) -> int:
@@ -215,6 +220,16 @@ class Nav2Bridge:
         #: Nav2 的生命周期管理器:全部节点激活了才算就绪(动作服务在不等于激活了,早发的目标会被拒)。
         self.lm = self.node.create_client(Trigger, "/lifecycle_manager_navigation/is_active")
         self.nav2_active = False
+        self._inactive_since: float | None = None
+        self._restarts = 0
+        self._manage_busy = False
+        try:
+            from nav2_msgs.srv import ManageLifecycleNodes
+            self.manage: Any = self.node.create_client(
+                ManageLifecycleNodes, "/lifecycle_manager_navigation/manage_nodes")
+            self._manage_req = lambda c: ManageLifecycleNodes.Request(command=c)
+        except ImportError:                             # 没装 nav2_msgs:不自动重启
+            self.manage = None
         self._exec = MultiThreadedExecutor(num_threads=2)
         self._exec.add_node(self.node)
         threading.Thread(target=self._exec.spin, name="rclpy", daemon=True).start()
@@ -680,8 +695,51 @@ class Nav2Bridge:
                 self.nav2_active = False
         self.lm.call_async(self._trigger.Request()).add_done_callback(done)
 
+    def _lifecycle_retry(self) -> None:
+        """节点一直没全部激活:超过 :data:`LIFECYCLE_RETRY_S` 让生命周期管理器 reset + startup 一次。
+        没在送时钟(重来也起不来)、管理器不在、已经激活了都不动。"""
+        now = self._mono()
+        clock_ok = time.monotonic() - self._clock_wall <= CLOCK_STALE_S
+        if self.nav2_active or self.manage is None or not self.lm.service_is_ready() \
+                or not self.manage.service_is_ready() or not clock_ok:
+            self._inactive_since = None
+            return
+        if self._inactive_since is None:
+            self._inactive_since = now
+            return
+        if now - self._inactive_since < LIFECYCLE_RETRY_S or self._manage_busy:
+            return
+        self._inactive_since = now                      # 下一回从现在再等一个周期
+        self._restarts += 1
+        self._manage_busy = True
+        log.warning("Nav2 %g 秒还没全部激活:让生命周期管理器重来一次(第 %d 次)",
+                    LIFECYCLE_RETRY_S, self._restarts)
+
+        def started(f: Any) -> None:
+            self._manage_busy = False
+            try:
+                ok = bool(f.result().success)
+            except Exception:                           # noqa: BLE001
+                ok = False
+            log.info("Nav2 重新启动:%s", "成功" if ok else "没成功,过一阵再试")
+
+        def reset(f: Any) -> None:
+            try:
+                self.manage.call_async(self._manage_req(LIFECYCLE_STARTUP)).add_done_callback(
+                    started)
+            except Exception:
+                log.exception("Nav2 重新启动没发出去")
+                self._manage_busy = False
+
+        try:
+            self.manage.call_async(self._manage_req(LIFECYCLE_RESET)).add_done_callback(reset)
+        except Exception:
+            log.exception("Nav2 重置没发出去")
+            self._manage_busy = False
+
     def check_ready(self) -> None:
         self._poll_active()
+        self._lifecycle_retry()
         if self._mono() < self.status_sync_until:
             self._set_ready(False, "等 Nav2 的动作状态同步")
         elif self.cleanup_pending:
@@ -693,7 +751,8 @@ class Nav2Bridge:
         elif not self.nav.server_is_ready() or not self.thru.server_is_ready():
             self._set_ready(False, "Nav2 的导航动作服务尚未起来")
         elif not self.nav2_active:
-            self._set_ready(False, "Nav2 还在启动(生命周期未全部激活)")
+            self._set_ready(False, "Nav2 还在启动(生命周期未全部激活"
+                            + (f";已自动重来 {self._restarts} 次)" if self._restarts else ")"))
         else:
             self._set_ready(True, "")
 

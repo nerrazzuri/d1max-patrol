@@ -543,6 +543,10 @@ class CommandProcessor:
                 self.finished.append(cur)
                 self.current = None
                 self._abort_requested.discard(cur.task_id)
+                # 11-04 现场:任务结局以前只进事件流,机器人日志里查不到 goto 为什么失败
+                (log.info if cur.state is TaskState.DONE else log.warning)(
+                    "任务 %s(%s)结束:%s %s", cur.task_id, cur.kind, _event_for(cur.state),
+                    cur.detail or "")
                 self.events.emit(_event_for(cur.state),
                                  {"task_id": cur.task_id, **cur.detail})
         while self.current is None and self.pending and self._fence is None:

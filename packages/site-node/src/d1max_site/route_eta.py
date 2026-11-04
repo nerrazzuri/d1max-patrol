@@ -51,13 +51,58 @@ def _turn(a: float, b: float) -> float:
     return abs(math.remainder(b - a, math.tau))
 
 
-def actual_segments(db: Any, route_id: str) -> dict[tuple[str, str], list[float]]:
-    """这条路线最近派出去的巡逻里,(上一个点, 这个点) → 实际用时(秒,新的在后)。"""
-    tasks = [r["task_id"] for r in db.query(
-        "SELECT task_id FROM commands WHERE kind='patrol' "
+#: 点挪了这么多以内、朝向转了这么多以内,算同一个点(派出去的朝向经过四元数,来回有误差)。
+SAME_POINT_M = 0.05
+SAME_YAW_RAD = 0.05
+
+PointKey = tuple[float, float, float, str]
+
+
+def point_key(x: float, y: float, yaw: float, actions: list[dict[str, Any]] | None) -> PointKey:
+    """一个点的定义(位置、朝向、动作):定义变了,这个点进出的那两段实际用时就不算数(外审 r2 #11)。"""
+    return (float(x), float(y), float(yaw),
+            json.dumps(actions or [], sort_keys=True, ensure_ascii=False))
+
+
+def _same(a: PointKey | None, b: PointKey | None) -> bool:
+    if a is None or b is None:
+        return False
+    return (math.hypot(a[0] - b[0], a[1] - b[1]) <= SAME_POINT_M
+            and _turn(a[2], b[2]) <= SAME_YAW_RAD and a[3] == b[3])
+
+
+def _wire_keys(payload: Any) -> dict[str, PointKey]:
+    """派出去的那一趟里每个点名 → :func:`point_key`。说不清的点不在里面(它进出的段就不认)。"""
+    from d1max_contract.geometry import Pose
+    try:
+        p = json.loads(payload) if isinstance(payload, str) else payload
+        wps = p["mission"]["waypoints"]
+    except (TypeError, ValueError, KeyError):
+        return {}
+    out: dict[str, PointKey] = {}
+    for w in wps if isinstance(wps, list) else []:
+        try:
+            pose = Pose.from_wire(w["pose"])
+            out[str(w["name"])] = point_key(pose.position.x, pose.position.y, pose.yaw,
+                                            w.get("actions"))
+        except Exception:  # noqa: BLE001 - 这个点说不清:不认它的段
+            continue
+    return out
+
+
+def actual_segments(db: Any, route_id: str,
+                    keys: dict[str, PointKey] | None = None) -> dict[tuple[str, str], list[float]]:
+    """这条路线最近派出去的巡逻里,(上一个点, 这个点) → 实际用时(秒,新的在后)。
+
+    给了 ``keys``(点名 → :func:`point_key`,现在的定义):只认两头的点跟派出去时定义一样的段 ——
+    坐标、朝向、动作改过的,旧用时作废,按新定义估(外审 r2 #11)。"""
+    cmds = db.query(
+        "SELECT task_id, payload FROM commands WHERE kind='patrol' "
         "AND json_extract(payload, '$.mission.mission')=? "
         "AND (ack_result IS NULL OR ack_result='accepted') "
-        "ORDER BY issued_at DESC LIMIT ?", (route_id, HISTORY_TASKS))]
+        "ORDER BY issued_at DESC LIMIT ?", (route_id, HISTORY_TASKS))
+    tasks = [r["task_id"] for r in cmds]
+    sent = {r["task_id"]: _wire_keys(r["payload"]) for r in cmds} if keys is not None else {}
     if not tasks:
         return {}
     marks = ",".join("?" * len(tasks))
@@ -74,7 +119,11 @@ def actual_segments(db: Any, route_id: str) -> dict[tuple[str, str], list[float]
     out: dict[tuple[str, str], list[float]] = {}
     for tid in reversed(tasks):                       # 老的先,新的后
         evs = by_task.get(tid, [])
+        was = sent.get(tid, {})
         for (n0, ok0, t0), (n1, ok1, t1) in zip(evs, evs[1:], strict=False):
+            if keys is not None and not (_same(was.get(n0), keys.get(n0))
+                                         and _same(was.get(n1), keys.get(n1))):
+                continue
             if ok0 and ok1 and t1 - t0 >= MIN_SAMPLE_MS:
                 out.setdefault((n0, n1), []).append((t1 - t0) / 1000.0)
     return out
@@ -88,7 +137,9 @@ def estimate(db: Any, reach: Any, route: dict[str, Any]) -> dict[str, Any]:
     (没跑过是 None),``use_s`` 取实际(有的话)否则估的,``arrive_s`` 是从第一个点算起到这个点
     做完动作的累计秒数。``basis``:``planned`` 全按规划路径估、``straight`` 有的段规划不了按直线。"""
     wps = route.get("waypoints") or []
-    history = actual_segments(db, str(route.get("id", ""))) if route.get("id") else {}
+    keys = {str(w["name"]): point_key(w["x"], w["y"], float(w.get("yaw", 0.0) or 0.0),
+                                      w.get("actions")) for w in wps}
+    history = actual_segments(db, str(route.get("id", "")), keys) if route.get("id") else {}
     out: list[dict[str, Any]] = []
     total = 0.0
     basis = "planned"
