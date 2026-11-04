@@ -77,6 +77,9 @@ INCIDENT_TASK_PREFIX = "incident-"
 
 #: 盘况随遥测多久带一次(毫秒)。
 STORAGE_EVERY_MS = 10_000
+#: 跟运控(旁路进程)断了,这么久(秒)以后自己重连一次,不行每隔这么久再试(11-04 现场:旁路进程重启以后
+#: 代理一直断着,只能人重启代理)。
+HAL_RETRY_S = 5.0
 #: 换图:下载好之后最多等多久让狗空下来(秒)。
 SWITCH_WAIT_S = 600.0
 #: 起来时载入正在用的那张图最多等多久(秒);过了照旧用 ``--map``。
@@ -427,6 +430,8 @@ class AgentRuntime:
         #: 热像镜头被挡(W46;装机入口 :meth:`attach_lens` 接上)。
         self.lens: Any = None
         self._lens_task: asyncio.Task | None = None
+        self._link_job: asyncio.Task | None = None
+        self._link_down_at: float | None = None
         self.processor.admit_hook = self._admit
         #: 地图(W00c5d 第二部分):正在用的那一张(``MapKeeper``)、录包与重建(``MappingService``)。
         self.maps = maps
@@ -2555,6 +2560,8 @@ class AgentRuntime:
             await _step("停录像", _rec_off)
         if self._lens_task is not None and not self._lens_task.done():
             self._lens_task.cancel()
+        if self._link_job is not None and not self._link_job.done():
+            self._link_job.cancel()
         if self.board is not None:
             async def _board_off() -> None:
                 self.board.close()
@@ -2973,9 +2980,41 @@ class AgentRuntime:
             # 取一帧要起 ffmpeg、最长等 15 s:放后台,不卡这一拍(遥测、导航照走)
             self._lens_task = asyncio.get_running_loop().create_task(self._lens_check())
         await self._watch_faults()
+        await self._watch_link()
         await self._flush_events()
         await self._publish_status()
         await self._maybe_telemetry()
+
+    async def _watch_link(self) -> None:
+        """跟运控断了(旁路进程重启、连接被关):过 :data:`HAL_RETRY_S` 在后台重连、核对控制权,
+        不行每隔这么久再试。重连只是把链路接回来:断线时手上的任务照断线规矩处理过了,这里不让狗动。"""
+        if self._closed or (self._link_job is not None and not self._link_job.done()):
+            return
+        try:
+            ok = (await self.hal.health()).link_ok
+        except Exception:  # noqa: BLE001 - 健康都读不出:这一拍不判
+            return
+        now = self._mono()
+        if ok:
+            self._link_down_at = None
+            return
+        if self._link_down_at is None:
+            self._link_down_at = now
+            log.warning("跟运控断了:%g 秒后重连", HAL_RETRY_S)
+            return
+        if now - self._link_down_at < HAL_RETRY_S:
+            return
+        self._link_down_at = now                      # 没连上:从现在再等一个周期
+        self._link_job = asyncio.get_running_loop().create_task(self._reconnect_hal())
+
+    async def _reconnect_hal(self) -> None:
+        try:
+            await self.hal.connect()
+            await self.hal.acquire_control()
+        except Exception as exc:  # noqa: BLE001 - 还连不上:下个周期再试
+            log.warning("重连运控没成:%s", exc)
+            return
+        log.warning("重新连上运控了")
 
     async def _feed_trail(self) -> None:
         """录包时的轨迹(W00c6h):录包开始那一拍清空,录着的每拍喂一帧里程(读不到、不新鲜不喂)。"""

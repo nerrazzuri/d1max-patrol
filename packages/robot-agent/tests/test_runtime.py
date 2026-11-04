@@ -3,6 +3,7 @@ telemetry 每秒一条;命令经 ACL 守卫的 transport 进来、回执出去�
 
 from __future__ import annotations
 
+import asyncio
 import json
 
 import pytest
@@ -715,3 +716,21 @@ async def test_W70_一直连不上_退出前给守卫留条子(台子, monkeypat
     with pytest.raises(ConnectionRefusedError):
         await rt.start()
     assert noted == [1]
+
+
+async def test_现场1104_跟运控断了_过几秒自己重连_拿回控制权(台子):
+    """以前只在起来时连一次运控:旁路进程重启以后代理一直断着,只能人重启代理。"""
+    from d1max_agent.runtime import HAL_RETRY_S
+    _b, c, r, _e, rt, _s = 台子
+    await rt.start()
+    await rt.step(0.1)
+    await r.close()                                     # 运控那头断了
+    assert not (await r.health()).link_ok
+    await rt.step(0.1)
+    assert not (await r.health()).link_ok, "刚断:先不重连(等一个周期)"
+    for _ in range(int(HAL_RETRY_S / 0.5) + 4):
+        c.advance(0.5)
+        await rt.step(0.5)
+        await asyncio.sleep(0)                          # 真代理两拍之间会让出:后台重连才跑得到
+    h = await r.health()
+    assert h.link_ok and h.control, "过一个周期自己连回来、拿回控制权"

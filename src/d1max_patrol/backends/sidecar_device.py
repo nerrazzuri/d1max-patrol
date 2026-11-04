@@ -352,6 +352,10 @@ class SidecarDeviceBackend(DeviceBackend):
             self._fail_pending(DeviceBackendError(f"与旁路进程的连接已断开: {exc}"))
             self._held = False
             self.emit(ControlLostEvent(reason=f"旁路进程连接断开: {exc}"))
+            # 11-04 现场:这头也关掉、记成没连上 —— 不然 connected 一直真(CLOSE-WAIT),
+            # 健康里链路正常,上面也就不会重连
+            self._pump = None
+            await self._teardown()
 
     def _dispatch(self, frame: Any) -> None:
         if isinstance(frame, Ack):
