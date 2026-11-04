@@ -616,3 +616,56 @@ async def test_外审r2_撤防后中止一直发不出去_不派新的一圈_报
     assert len(calls) >= 3
     assert any(a["kind"] == "guard_stuck" and "停不下" in a["title"]
                for a in t.duty.alerts.open)
+
+
+async def test_现场1104_跑圈时断网超过90秒_不当被打断_连回来不重派(站):
+    t = 站
+    _方案(t)
+    await _跑(t, 1.5)
+    tid = _patrols(t)[0]["task_id"]
+    real_running, real_fresh = t.duty._running, t.site._fresh
+    t.duty._running = lambda rid: ""                     # 断网:站点收到 offline 状态,手上没任务
+    t.site._fresh = lambda c: False
+    for _ in range(4):
+        t.clock.advance(30)
+        await t.send(t.duty.tick())
+    assert len(_patrols(t)) == 1, "断网期间:不当被打断、不重派"
+    t.site._fresh = real_fresh                           # 连回来了,事件还没补上来
+    await t.send(t.duty.tick())
+    assert len(_patrols(t)) == 1 and t.duty.status()["runs"][0]["state"] == "lap"
+    t.clock.advance(30)
+    t.duty._running = real_running                       # 状态补上来:还在跑这一圈
+    await t.send(t.duty.tick())
+    assert len(_patrols(t)) == 1 and t.duty.status()["runs"][0]["task_id"] == tid
+
+
+async def test_现场1104_连回来以后90秒还没消息_才当被打断(站):
+    t = 站
+    _方案(t)
+    await _跑(t, 1.5)
+    t.duty._running = lambda rid: ""
+    t.site._fresh = lambda c: False
+    t.clock.advance(120)
+    await t.send(t.duty.tick())
+    t.site._fresh = lambda c: True                       # 连回来了(状态新鲜),但没在跑、事件也没来
+    t.clock.advance(60)
+    await t.send(t.duty.tick())
+    assert len(_patrols(t)) == 1, "连回来才 60 秒:等它把事件补上来"
+    t.clock.advance(31)
+    await _跑(t, 1.5)
+    assert len(_patrols(t)) == 2 and _log(t, "interrupted"), (t.duty.status()["runs"], _log(t)[-4:])
+
+
+async def test_现场1104_要停这一圈时断网_不当已经停了(站):
+    t = 站
+    _方案(t)
+    await _跑(t, 1.5)
+    calls = _中止先失败(t, 99)
+    t.duty.alerts.raise_alert(kind="dog_sees_person", robot="A", title="看见人")
+    await t.send(t.duty.tick())
+    t.duty._running = lambda rid: ""                     # 断网:离线状态里手上没任务
+    t.site._fresh = lambda c: False
+    t.clock.advance(6)
+    await t.send(t.duty.tick())
+    assert t.duty.status()["runs"][0]["state"] == "stopping", "联系不上:没确认停下"
+    assert len(calls) >= 2, "接着发中止(连回来会补投)"
