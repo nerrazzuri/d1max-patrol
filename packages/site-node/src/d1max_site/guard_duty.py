@@ -364,11 +364,11 @@ class GuardDuty:
             pct = self._battery(rid)
             line = max(self.min_pct, energy.lap_line(self._lap_s(info) or 0.0))
             if pct is not None and pct < line:
-                self._prep_told[rid] = nb
                 self.alerts.raise_alert(
                     kind="guard_prep", robot=rid, title=f"{rid} 电量不够开始值守",
                     detail=f"{at} 开始布防值守,{rid} 现在 {pct:.0f}%,跑一圈要 ≥ {line:.0f}%:"
-                           f"布防前请先充电 / 换电池", now_ms=now)
+                           f"布防前请先充电 / 换电池")
+                self._prep_told[rid] = nb                # 真发出去了才记(没发成下一拍补)
 
     def _tz(self) -> Any:
         sched = getattr(self.arming, "schedule", None)

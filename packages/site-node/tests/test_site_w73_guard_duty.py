@@ -7,11 +7,13 @@
 
 from __future__ import annotations
 
+import inspect
 import json
 
 import pytest
 from test_site_dispatcher import MAP, target, 台子
 
+from d1max_site.alert_store import AlertDesk
 from d1max_site.areas import AreaBook
 from d1max_site.arming_schedule import ScheduleError
 from d1max_site.guard_duty import GuardDuty, PlanError
@@ -32,6 +34,7 @@ class 告警台:
         self.done: list[dict] = []
 
     def raise_alert(self, **kw):
+        inspect.signature(AlertDesk.raise_alert).bind(None, **kw)   # 跟真的告警台同一个签名
         self.open.append(kw)
 
     def has_open(self, robot, kind):
@@ -522,7 +525,7 @@ async def test_外审_看见人_原地停下盯着_保安处理了接着值守(�
     _方案(t)
     await _跑(t, 1.5)
     tid = _patrols(t)[0]["task_id"]
-    t.duty.alerts.raise_alert(kind="dog_sees_person", robot="A")
+    t.duty.alerts.raise_alert(kind="dog_sees_person", robot="A", title="看见人")
     await _跑(t, 3)
     assert any(c["kind"] == "abort" and c["task_id"] == tid
                for c in t.site.commands("A", 500)), "停在原地"
@@ -539,7 +542,7 @@ async def test_外审_看见人盯满10分钟没人管_接着值守_同一条不
     t = 站
     _方案(t)
     await _跑(t, 1.5)
-    t.duty.alerts.raise_alert(kind="dog_sees_person", robot="A")
+    t.duty.alerts.raise_alert(kind="dog_sees_person", robot="A", title="看见人")
     await _跑(t, 2)
     t.clock.advance(601)
     await _跑(t, 4)
@@ -589,7 +592,7 @@ async def test_外审r2_看见人_中止没发成不当已停_重发_真停了�
     _方案(t)
     await _跑(t, 1.5)
     calls = _中止先失败(t, 1)
-    t.duty.alerts.raise_alert(kind="dog_sees_person", robot="A")
+    t.duty.alerts.raise_alert(kind="dog_sees_person", robot="A", title="看见人")
     await _跑(t, 2)
     assert t.duty.status()["runs"][0]["state"] == "stopping", "中止没成:不算已经停下盯着"
     assert len(calls) == 1

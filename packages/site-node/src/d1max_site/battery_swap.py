@@ -164,10 +164,10 @@ class SwapDesk:
             if need is None:
                 eta = self._eta(rid)
                 if eta is not None and eta <= SOON_MIN and rid not in self._soon_told:
-                    self._soon_told.add(rid)
                     at = datetime.fromtimestamp((now + eta * 60_000) / 1000).strftime("%H:%M")
                     self._raise("swap_soon", rid, f"{rid} 即将换电",
                                 f"约 {at} {rid} 需要换电池,请准备两块满电电池")
+                    self._soon_told.add(rid)
                 elif eta is None or eta > SOON_MIN + 5:
                     self._soon_told.discard(rid)
                 return
@@ -196,21 +196,21 @@ class SwapDesk:
             self._finish(rid)
             return
         if st["told_ms"] is None:
-            st["told_ms"] = now
             title = f"{rid} 已到换电位,请来换电池" if self._arrived(rid) \
                 else f"{rid} 有电池拔着,请到机器人旁边装回"
             self._raise("swap_needed", rid, title, self._text(st))
+            st["told_ms"] = now                          # 真发出去了才算告诉过(没发成下一拍补)
             return
         idle = now - st["progress_ms"]
         if not st["repushed"] and idle >= REPUSH_MIN * 60_000:
-            st["repushed"] = True
             self._raise("swap_needed", rid, f"{rid} 还在等换电池({REPUSH_MIN} 分钟没进展)",
                         self._text(st))
+            st["repushed"] = True
         if not st["managed"] and idle >= MANAGER_MIN * 60_000:
-            st["managed"] = True
             self._raise("swap_overdue", rid, f"{rid} 换电池 {MANAGER_MIN} 分钟没进展",
                         f"{rid} 在换电位等了 {MANAGER_MIN} 分钟,电池还没换好(现在:"
                         f"{self._text(st)}),请安排人去")
+            st["managed"] = True
 
     async def _send_back(self, rid: str, st: dict[str, Any], now: int) -> None:
         """低电判出来时不在换电位、手上没任务:派它回待命点(= 换电位);没走成过一阵再派。"""
@@ -236,8 +236,9 @@ class SwapDesk:
     def _raise(self, kind: str, rid: str, title: str, detail: str) -> None:
         if self.alerts is None:
             return
-        self.alerts.raise_alert(kind=kind, robot=rid, title=title, detail=detail,
-                                now_ms=self._now(), merge=False)
+        # 站点的告警台自己取时间(``alert_store.AlertDesk``,不收 now_ms;11-04 现场多传了它,
+        # 换电告警一条都没发出去)
+        self.alerts.raise_alert(kind=kind, robot=rid, title=title, detail=detail, merge=False)
 
     @staticmethod
     def _text(st: dict[str, Any]) -> str:

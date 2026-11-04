@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 from types import SimpleNamespace
 
+from d1max_site.alert_store import AlertDesk
 from d1max_site.battery_swap import SwapDesk
+from d1max_site.db import SiteDB
 
 
 class 告警:
@@ -14,6 +17,8 @@ class 告警:
         self.resolved: list[tuple[str, str]] = []
 
     def raise_alert(self, **kw):
+        # 跟站点真的告警台同一个签名(11-04 现场:多传了 now_ms,真站点上换电告警一条都没发出去)
+        inspect.signature(AlertDesk.raise_alert).bind(None, **kw)
         self.raised.append(kw)
 
     def has_open(self, robot, kind):
@@ -253,3 +258,34 @@ def test_外审r2_回换电位按去补能派_低电也走得了():
     t.need, t.pose = 35.0, (6.0, 0.0)
     t.tick()
     assert t.sent_kw == [{"issued_by": "site:swap", "charge": True}]
+
+
+def test_现场1104_接真的告警台_拔着一块_请来装回的告警真发出去(tmp_path):
+    t = 台()
+    real = AlertDesk(SiteDB(tmp_path / "s.db"), now_ms=lambda: t.now)
+    t.desk.alerts = real
+    t.packs, t.pose = [97.0, None], (6.0, 0.0)          # 空闲、不在换电位时拔了一块(现场 B1)
+    t.tick()
+    [a] = [x for x in real.open() if x["kind"] == "swap_needed"]
+    assert "有电池拔着" in a["title"] and "装上一块满电的 2 号" in a["detail"]
+    t.packs = [97.0, 97.0]
+    t.tick()
+    assert not real.has_open("A", "swap_needed"), "装回去:自动解决"
+
+
+def test_现场1104_告警没发成_下一拍补发():
+    t = 台()
+    boom = [True]
+    real_raise = t.alerts.raise_alert
+
+    def flaky(**kw):
+        if boom[0]:
+            boom[0] = False
+            raise RuntimeError("告警台一时出错")
+        real_raise(**kw)
+    t.alerts.raise_alert = flaky
+    t.packs = [None, 60.0]
+    t.tick()
+    assert t.kinds() == []
+    t.tick()
+    assert t.kinds() == ["swap_needed"], "没告诉成:不能当已经告诉过"
