@@ -691,3 +691,16 @@ def test_W71_眼前被大平台占满_地面不跟着平台走():
     g = per.on_front(到雷达系(m, pts), 30)
     occ = unpack_bits(g["occ"], cfg.size)
     assert occ[_cell(cfg, 2.0, 0.0)], "25 cm 高的平台是挡"
+
+
+def test_现场1104_刹车减速度和延迟按启动参数_量出来填进去_1米每秒才许得出来():
+    from d1max_localizer.obstacles import DEFAULT, config_from_args, permit_vmax
+    assert config_from_args([]) == DEFAULT
+    cfg = config_from_args(["--decel", "1.2", "--latency", "0.15", "--frame-age", "0.1"])
+    assert (cfg.decel, cfg.latency, cfg.frame_age) == (1.2, 0.15, 0.1)
+    assert permit_vmax(1.64, DEFAULT) < 0.95             # 占位 0.5 m/s²:前面空 1.64 m 到不了 1.0
+    assert permit_vmax(1.64, cfg) == cfg.max_v
+    import pytest
+    for bad in (["--decel", "0"], ["--decel", "9"], ["--latency", "-1"], ["--frame-age", "nan"]):
+        with pytest.raises(SystemExit):
+            config_from_args(bad)

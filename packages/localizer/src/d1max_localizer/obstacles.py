@@ -691,6 +691,28 @@ class Perception:
         self.sidecar.send({"id": self._cmd, **msg})
 
 
+def _bounded(lo: float, hi: float) -> Any:
+    def conv(v: str) -> float:
+        x = float(v)
+        if not (lo <= x <= hi):                          # NaN 也过不去
+            raise argparse.ArgumentTypeError(f"要在 [{lo}, {hi}] 内")
+        return x
+    return conv
+
+
+def config_from_args(argv: Sequence[str]) -> Config:
+    """许可算法里真机量的几个数(3aj.9 量刹车距离后填 ``D1MAX_OBS_ARGS``);不给 = 默认(保守占位)。"""
+    ap = argparse.ArgumentParser(add_help=False)
+    ap.add_argument("--decel", type=_bounded(0.2, 5.0), default=DEFAULT.decel,
+                    help="刹车减速度 m/s²(真机量)")
+    ap.add_argument("--latency", type=_bounded(0.0, 1.0), default=DEFAULT.latency,
+                    help="发令到开始减速的延迟(秒)")
+    ap.add_argument("--frame-age", type=_bounded(0.0, 1.0), default=DEFAULT.frame_age,
+                    help="一帧点云从扫到到算完(秒)")
+    a = ap.parse_args(list(argv))
+    return Config(decel=a.decel, latency=a.latency, frame_age=a.frame_age)
+
+
 def active_frames(maps_dir: Path) -> tuple[str, Path] | None:
     """狗上正在用的那张图的 ``frames.json``:``<maps>/active.json`` 声明的
     ``<地图号>/<版本>/frames.json``。没有、读不了、名字不规矩都回 ``None``(感知就不出栅格 ——
@@ -722,7 +744,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     ap.add_argument("--lidars", type=Path, default=None,
                     help="后雷达外参 lidars.json(默认 /etc/d1max/lidars.json;没有 = 几何初值)")
     ap.add_argument("--sidecar", default="", help="旁路进程 host:port(发净空许可;空 = 不发)")
-    a = ap.parse_args(argv)
+    a, rest = ap.parse_known_args(argv)
+    cfg = config_from_args(rest)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     # W55:工程师远程打开「详细日志」时调到 DEBUG,到点自动恢复
     from d1max_contract.debuglog import DebugWatch
@@ -770,7 +793,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     if a.sidecar:
         host, port = a.sidecar.rsplit(":", 1)
         side = LineClient(lambda: socket.create_connection((host, int(port)), timeout=1.0), None)
-    per = Perception(front, rear=rear, obs=obs, sidecar=side)
+    per = Perception(front, rear=rear, cfg=cfg, obs=obs, sidecar=side)
+    log.info("许可参数:刹车减速度 %.2f m/s²、延迟 %.2f s、帧龄 %.2f s", cfg.decel, cfg.latency,
+             cfg.frame_age)
     from d1max_localizer import rosinit
     rosinit.init(rclpy)
     stop = rosinit.stop_flag()                           # W41:正常停止退出码 0
