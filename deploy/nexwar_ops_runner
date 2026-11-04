@@ -75,7 +75,7 @@ BIND_FILES = {
        for m in ("__init__", "cli", "core", "devid", "factory", "paths", "router", "server",
                  "sitelink", "wipe")},
     **{f"packages/contract/src/nexwar_contract/{m}.py": f"lib/nexwar_contract/{m}.py"
-       for m in ("__init__", "binding", "device_id", "ed25519")},
+       for m in ("__init__", "binding", "device_id", "ed25519", "oldenv")},
 }
 SITE_UNITS = ("nexwar_site", "nexwar_mosquitto")
 ID_RE = re.compile(r"^[0-9a-f]{8,32}$")
