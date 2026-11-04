@@ -39,7 +39,7 @@ def main(argv: list[str] | None = None) -> int:
     r.open(rosbag2_py.StorageOptions(uri=str(a.bag), storage_id=storage),
            rosbag2_py.ConverterOptions("", ""))
     r.set_filter(rosbag2_py.StorageFilter(topics=[a.topic]))
-    n = done = 0
+    n = done = pre = 0
     clears: list[float] = []
     occs: list[int] = []
     knowns: list[float] = []
@@ -53,6 +53,9 @@ def main(argv: list[str] | None = None) -> int:
             continue
         g = per.on_front(cloud_xyz(deserialize_message(raw, PointCloud2)), t_ns)
         if g is None:
+            continue
+        if per.check.height is None:
+            pre += 1                                     # 自检还没过:整帧未知,不算进统计
             continue
         done += 1
         from d1max_contract.obsbridge import unpack_bits
@@ -89,7 +92,7 @@ def main(argv: list[str] | None = None) -> int:
         if a.max_frames and done >= a.max_frames:
             break
     ck = per.check
-    print(f"录包 {a.bag.name}:{n} 帧,跑了 {done} 帧")
+    print(f"录包 {a.bag.name}:{n} 帧,跑了 {done} 帧(另有 {pre} 帧自检没过、不算)")
     print(f"自检:{ck.check}{('(' + ck.reason + ')') if ck.reason else ''},雷达离地 "
           f"{ck.height if ck.height is None else round(ck.height, 3)} m")
     if done:
