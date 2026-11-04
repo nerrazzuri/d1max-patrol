@@ -400,6 +400,8 @@ class _Live:
     trail: list[Crumb] = field(default_factory=list)
     #: 这一趟半路返航了的话,返航的原因;没返航是空串。
     returned: str = ""
+    #: 起飞前电量没过:狗上的出发线(%),给站点补能用(W73 外审 r5 #4);没因电量拦下是 ``None``。
+    need_pct: float | None = None
     #: 来路作废的原因(W00c6e 内审):半路重设过位置、修正量又算不出来(锚定作废过,比如里程归零),
     #: 记下的出发点与来路不在现在的坐标系里 —— 沿来路回时原地停、说清楚。空串 = 来路可用。
     trail_invalid: str = ""
@@ -502,6 +504,11 @@ class MissionEngine(EventEmitter[RunSnapshot]):
         live.trail = [(k, move(p)) for k, p in live.trail]
         if live.start_pose is not None:
             live.start_pose = move(live.start_pose)
+
+    @property
+    def need_pct(self) -> float | None:
+        """起飞前因为电量没过拦下的:狗上的出发线(%);不是 → ``None``。"""
+        return self._live.need_pct if self._live is not None else None
 
     @property
     def returned(self) -> str:
@@ -792,6 +799,8 @@ class MissionEngine(EventEmitter[RunSnapshot]):
                        checks=[{"name": c.name, "ok": c.ok, "detail": c.detail}
                                for c in report.checks])
             if not report.ok:
+                live.need_pct = next((c.need_pct for c in report.failures
+                                      if c.need_pct is not None), None)
                 raise _AbortRun(_preflight_reason(report))
 
             await self._transition(RunState.LOCALIZING)

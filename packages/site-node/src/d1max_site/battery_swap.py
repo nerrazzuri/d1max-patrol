@@ -148,7 +148,12 @@ class SwapDesk:
     # ------------------------------------------------------------ 每拍
 
     async def tick(self) -> None:
+        now = self._now()
         for rid in sorted(self.dispatcher.clients):
+            if self._heard(rid):                         # 每台每拍记:连着听得见从什么时候起
+                self._heard_since.setdefault(rid, now)
+            else:
+                self._heard_since.pop(rid, None)
             try:
                 await self._one(rid)
             except Exception:                            # 一台出错不影响别的台
@@ -253,6 +258,11 @@ class SwapDesk:
         since = self._heard_since.setdefault(rid, now)
         return now - since >= HALT_SETTLE_MS and self._running(rid) != tid
 
+    def _quiet(self, rid: str, now: int) -> bool:
+        """连着听得见够 :data:`HALT_SETTLE_MS`,手上没有任务。"""
+        since = self._heard_since.get(rid) if self._heard(rid) else None
+        return since is not None and now - since >= HALT_SETTLE_MS and not self._running(rid)
+
     async def _halt_if_moving(self, rid: str, st: dict[str, Any], now: int) -> bool:
         """外审 r3 #1:有一块拔着、机器人手上还有任务(回换电位那一趟、人派的…)→ 先让它停:发中止,
         没停每 :data:`HALT_RETRY_S` 秒再发,发够 :data:`HALT_ALERT` 次报警。停下之前不叫人过来装电池
@@ -264,17 +274,15 @@ class SwapDesk:
             for k in ("halt_tries", "halt_tid"):
                 st.pop(k, None)
             return False
-        if self._heard(rid):
-            self._heard_since.setdefault(rid, now)
-        else:
-            self._heard_since.pop(rid, None)
         tid = self._running(rid) if self._heard(rid) else ""
         pending = st.get("halt_tid")
         if tid and tid != pending:
             st["halt_tid"], st["halt_tries"] = tid, 0
         elif not tid:
             if not pending:
-                return False
+                # 外审 r5 #1:没记下要停的那一趟(断线比这一拍先到)也要停的证据 —— 连着听得见够久、
+                # 手上确实空着才叫人;离线、刚连回来,机器人在不在走说不准,先不叫
+                return not self._quiet(rid, now)
             if self._halted(rid, pending, now):
                 log.info("%s 拔着电池时那一趟 %s 停下了", rid, pending)
                 for k in ("halt_tries", "halt_tid"):

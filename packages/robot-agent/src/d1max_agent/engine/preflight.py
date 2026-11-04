@@ -54,6 +54,9 @@ class CheckResult:
     name: str
     ok: bool
     detail: str
+    #: 电量那一项没过:出发线是多少(%)。站点按它补能(W73 外审 r5 #4:站点、狗上两边算的线不一样时
+    #: 以狗上为准,不当成普通失败一直重派);别的项 ``None``。
+    need_pct: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -206,7 +209,8 @@ async def _check_battery(device: DeviceBackend, mission: Mission,
                        f"电量 {pct:.1f}%,出发线 {line:.1f}%" if ok
                        else f"电量 {pct:.1f}%,不到出发线 {line:.1f}%"
                             f"(回撤线下限 {base:.0f}% + "
-                            f"全程预计 × {slack:g})")
+                            f"全程预计 × {slack:g})",
+                       need_pct=None if ok else round(line, 1))
 
 
 async def _check_storage(runs_root: Path, min_free_mb: float, form: Form,

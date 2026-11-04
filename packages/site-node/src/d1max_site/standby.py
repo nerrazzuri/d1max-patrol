@@ -392,7 +392,21 @@ class StandbyManager:
                                      priority=STANDBY_RETURN,
                                      task_id=f"{STANDBY_PREFIX}{uuid.uuid4().hex[:12]}")
 
+    def _already_back(self, robot_id: str, after: str) -> bool:
+        """``after`` 那一趟发出以后,已经有一条回待命点的命令(收队派的、人点的…),没被拒、没超时 ——
+        这一趟的结束事件再晚到也不再派一次(W73 外审 r5 #2:收队先派了回程,迟到的 ``task_done``
+        又让这里派一次,机器人回到待命点又沿旧路线走出去)。按命令记录判,站点重启了也认。"""
+        rows = self.db.query(
+            "SELECT 1 FROM commands c WHERE c.robot_id=? AND c.task_id LIKE ? "
+            "AND (c.ack_result IS NULL OR c.ack_result IN ('accepted', 'duplicate')) "
+            "AND c.rowid > (SELECT MIN(rowid) FROM commands WHERE robot_id=? AND task_id=?) "
+            "LIMIT 1", (robot_id, STANDBY_PREFIX + "%", robot_id, after))
+        return bool(rows)
+
     async def _auto(self, robot_id: str, after: str) -> None:
+        if self._already_back(robot_id, after):
+            log.info("%s 在 %s 之后已经派过回待命点:这一趟结束不再派", robot_id, after)
+            return
         if self.dispatcher.registry.manual_only(robot_id) is not None:
             # W33:只许手动派的狗,站点不自己让它动(回待命点也不派),人手动叫
             log.info("%s 只许手动派:%s 结束后不自动回待命点", robot_id, after)

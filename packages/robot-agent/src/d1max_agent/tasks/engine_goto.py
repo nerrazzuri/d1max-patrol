@@ -191,6 +191,9 @@ class EngineMissionTask(Task):
         else:
             self.state = TaskState.FAILED
             self.detail = {"reason": snap.reason or "engine aborted"}
+            need = getattr(engine, "need_pct", None)
+            if isinstance(need, (int, float)):           # 外审 r5 #4:电量不够出发,带上狗上的线
+                self.detail["need_pct"] = float(need)
 
     def _failed_reason(self, bad) -> str:
         return bad[0].note or "waypoint failed"
