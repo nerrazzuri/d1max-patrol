@@ -73,6 +73,9 @@ class 台:
                 tt.sent_kw.append({"issued_by": issued_by, "charge": charge})
                 return {"ack": {"result": "accepted"}}
         self.desk.standby = _待命点()
+        # 外审 r5 #1:叫人过来之前要连着听得见够久 —— 测试开始前机器人已经在线一阵了
+        self.tick(0)
+        self.tick(10)
 
     def tick(self, secs=1):
         self.now += secs * 1000
