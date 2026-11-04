@@ -700,3 +700,73 @@ async def test_现场1104_被人派的goto打断后断线又连回来_不抢人�
         t.clock.advance(2)
         await t.send(t.duty.tick())
     assert len(_patrols(t)) == n, "人派的还在跑:不抢"
+
+
+class _待命点:
+    """站点的待命点管理器里值守用到的两样:这台机器人在这张图上的默认待命点、派回待命点。"""
+
+    def __init__(self, point=None):
+        self.point = point
+        self.sent: list[str] = []
+
+    def swap_point(self, rid, map_id, map_version):
+        return self.point
+
+    async def return_to(self, rid, *, issued_by, **kw):
+        self.sent.append(rid)
+        return {}
+
+
+_原点 = {"name": "home", "x": 0.0, "y": 0.0, "yaw": 0.0, "map_id": MAP[0], "map_version": MAP[1]}
+
+
+async def test_现场1104_每圈结束回待命点_默认开_接在路线最后(站):
+    """11-04 用户:最后一个点(东廊尽头)信号差会断网 —— 每圈跑完回待命点,不停在最后一个点。"""
+    t = 站
+    t.duty.standby = _待命点(_原点)
+    _方案(t)
+    assert t.duty.plan()["entries"][0]["end_standby"] is True
+    await _跑(t, 2)
+    assert _names(_patrols(t)[0]) == ["A", "B", "C", "D", "回待命点"]
+    for _ in range(300):
+        await _跑(t, 1)
+        if len(_patrols(t)) >= 2:
+            break
+    assert _log(t, "lap_done")
+    assert _names(_patrols(t)[1]) == ["A", "B", "C", "D", "回待命点"], "待命点不算防区:照常一整圈"
+
+
+async def test_现场1104_每圈结束回待命点_关掉或没登记待命点_就不接(站):
+    t = 站
+    t.duty.standby = _待命点(_原点)
+    t.duty.put_plan({"entries": [{"route": "night-guard", "robot": "A", "end_standby": False}],
+                     "base_revision": t.duty.plan()["revision"]}, by="alice")
+    assert t.duty.plan()["entries"][0]["end_standby"] is False
+    await _跑(t, 2)
+    assert _names(_patrols(t)[0]) == ["A", "B", "C", "D"]
+    with pytest.raises(PlanError):
+        t.duty.put_plan({"entries": [{"route": "night-guard", "end_standby": "yes"}],
+                         "base_revision": t.duty.plan()["revision"]}, by="alice")
+
+
+async def test_现场1104_没登记待命点_照常跑不接(站):
+    t = 站
+    t.duty.standby = _待命点(None)
+    _方案(t)
+    await _跑(t, 2)
+    assert _names(_patrols(t)[0]) == ["A", "B", "C", "D"]
+
+
+async def test_现场1104_有空档又没有值守位_回待命点等_不停在最后一个点(站):
+    t = 站
+    t.duty.standby = stb = _待命点(_原点)
+    t.duty.posts = lambda m, v: {}
+    t.duty.put_plan({"entries": [{"route": "night-guard", "robot": "A", "gap_min": 5,
+                                  "end_standby": False}],
+                     "base_revision": t.duty.plan()["revision"]}, by="alice")
+    for _ in range(300):
+        await _跑(t, 1)
+        if _log(t, "lap_done"):
+            break
+    await _跑(t, 2)
+    assert stb.sent == ["A"] and _log(t, "watch_none")

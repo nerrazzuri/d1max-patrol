@@ -78,6 +78,10 @@ describe("值守方案面板", () => {
     expect(btn(c, "保存值守方案").disabled).toBe(true);
     fireEvent.change(c.querySelector("select[name=gap]")!, { target: { value: "30" } });
     await waitFor(() => expect(c.textContent).toContain("值守方案有改动还没保存"));
+    // 11-04:每圈结束回待命点,老站点没带这个键也是开着的;关掉第一条
+    const homes = c.querySelectorAll<HTMLInputElement>("input[name=end_standby]");
+    expect(homes[0].checked).toBe(true);
+    fireEvent.click(homes[0]);
     fireEvent.click(btn(c, "加一条路线"));
     const robots = c.querySelectorAll("select[name=robot]");
     await waitFor(() => expect(robots.length).toBe(2));
@@ -87,8 +91,8 @@ describe("值守方案面板", () => {
     await waitFor(() => expect(posted.length).toBe(1));
     expect(posted[0].url).toBe("/api/guard/plan");
     expect(posted[0].body).toEqual({
-      entries: [{ route: "night-guard", robot: "", gap_min: 30, shuffle: false },
-        { route: "night-guard", robot: "B", gap_min: 0, shuffle: false }],
+      entries: [{ route: "night-guard", robot: "", gap_min: 30, shuffle: false, end_standby: false },
+        { route: "night-guard", robot: "B", gap_min: 0, shuffle: false, end_standby: true }],
       limits: { "东区": 40 }, base_revision: 4,
     });
     await waitFor(() => expect(c.textContent).not.toContain("值守方案有改动还没保存"));

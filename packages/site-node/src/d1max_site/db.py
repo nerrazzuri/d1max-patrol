@@ -797,7 +797,9 @@ CREATE TABLE IF NOT EXISTS guard_plan (
     route       TEXT NOT NULL,
     robot       TEXT NOT NULL DEFAULT '',
     gap_min     INTEGER NOT NULL DEFAULT 0,
-    shuffle     INTEGER NOT NULL DEFAULT 0
+    shuffle     INTEGER NOT NULL DEFAULT 0,
+    -- 11-04 用户:每圈结束回待命点(接在这一圈路线最后;默认开)
+    end_standby INTEGER NOT NULL DEFAULT 1
 );
 -- 防区多久没看就报警(分钟);没有这一行按预报算(间隔 × 1.5,最少 15 分钟)。
 CREATE TABLE IF NOT EXISTS guard_zone_limits (
@@ -893,6 +895,7 @@ CREATE TABLE IF NOT EXISTS company_reports (
 
 #: 建表之后才加的列:(表, 列, 声明)。老库打开时补上。
 _ADDED_COLUMNS = (
+    ("guard_plan", "end_standby", "INTEGER NOT NULL DEFAULT 1"),      # 11-04 每圈回待命点
     ("commands", "priority", "INTEGER NOT NULL DEFAULT 0"),          # W00c2b
     ("standby_points", "map_version", "TEXT NOT NULL DEFAULT ''"),   # W00c2b 内部评审
     ("intercepts", "map_version", "TEXT NOT NULL DEFAULT ''"),       # W00c2c

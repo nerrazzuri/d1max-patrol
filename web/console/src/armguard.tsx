@@ -7,7 +7,8 @@ import { robotNames } from "./data";
 import { lang, type Lang } from "./i18n";
 import { clock } from "./routes";
 
-export interface GuardEntry { id?: number; route: string; robot: string; gap_min: number; shuffle: boolean }
+// end_standby:每圈结束回待命点(11-04 用户,默认开;老站点不带这个键 = 开)
+export interface GuardEntry { id?: number; route: string; robot: string; gap_min: number; shuffle: boolean; end_standby?: boolean }
 interface Window { day: number; start: string; end: string; minutes: number; laps: number | null; topups?: number | null }
 interface FcEntry { id: number; route: string; robot: string; gap_min: number; lap_s: number | null; cycle_s: number | null; mode: "schedule" | "manual"; windows: Window[]; laps_per_charge?: number | null }
 interface FcZone { zone: string; routes: string[]; interval_s: number | null; limit_min: number; limit_set: boolean }
@@ -34,6 +35,7 @@ const en = {
   gGapNone: "Back to back",
   gMin: "{n} min",
   gShuffle: "Random start and direction",
+  gEndStandby: "Return to standby point after each lap",
   gAdd: "Add a route",
   gRemove: "Remove",
   gSave: "Save guard duty",
@@ -111,6 +113,7 @@ const zh: Record<GKey, string> = {
   gGapNone: "跑完马上下一圈",
   gMin: "{n} 分钟",
   gShuffle: "随机起点和方向",
+  gEndStandby: "每圈结束回待命点",
   gAdd: "加一条路线",
   gRemove: "删除",
   gSave: "保存值守方案",
@@ -188,7 +191,8 @@ const hhmm = (ms: number) => { const d = new Date(ms); return `${String(d.getHou
 const stamp = (ms: number) => { const d = new Date(ms); return `${d.getMonth() + 1}/${d.getDate()} ${hhmm(ms)}`; };
 const who = (rid: string) => robotNames.value[rid] || rid;
 function errText(e: unknown): string { return e instanceof ApiError ? e.message : String(e); }
-const clean = (es: GuardEntry[]) => es.map(({ route, robot, gap_min, shuffle }) => ({ route, robot, gap_min, shuffle }));
+const clean = (es: GuardEntry[]) => es.map(({ route, robot, gap_min, shuffle, end_standby }) =>
+  ({ route, robot, gap_min, shuffle, end_standby: end_standby !== false }));
 
 /** 这台此刻在干什么(一句话)。 */
 export function runText(r: Run): string {
@@ -283,12 +287,14 @@ export function GuardPanel({ say, now, canEdit }: { say: (s: string) => void; no
             </label>
             <label class="guard-shuffle"><input type="checkbox" name="shuffle" checked={e.shuffle} disabled={!canEdit}
               onChange={(ev) => set(i, { shuffle: ev.currentTarget.checked })} /> {gt("gShuffle")}</label>
+            <label class="guard-shuffle"><input type="checkbox" name="end_standby" checked={e.end_standby !== false} disabled={!canEdit}
+              onChange={(ev) => set(i, { end_standby: ev.currentTarget.checked })} /> {gt("gEndStandby")}</label>
             {canEdit && <button type="button" class="btn sm push" onClick={() => setEntries(entries.filter((_, k) => k !== i))}>{gt("gRemove")}</button>}
           </li>
         ))}
       </ul>
       {canEdit && routes.length > 0 && (
-        <button type="button" class="btn sm guard-add" onClick={() => setEntries([...entries, { route: routes[0], robot: "", gap_min: 0, shuffle: false }])}>{gt("gAdd")}</button>
+        <button type="button" class="btn sm guard-add" onClick={() => setEntries([...entries, { route: routes[0], robot: "", gap_min: 0, shuffle: false, end_standby: true }])}>{gt("gAdd")}</button>
       )}
 
       {(plan.clashes ?? []).length > 0 && (
