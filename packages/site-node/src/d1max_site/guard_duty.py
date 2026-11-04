@@ -52,6 +52,9 @@ log = logging.getLogger(__name__)
 #: 或者联系不上它」算起(11-04 现场:走远断网,站点收到离线状态手上没任务;断网期间不算,
 #: 连回来以后再给这么久让它把离线时的事件补上来,别把还在跑的那一圈当打断重派)。
 LOST_S = 90
+#: 连回来以后要连着听得见这么久(毫秒),才信它报的「手上没任务」(11-04 G2:断线时离线状态里手上没任务,
+#: 连回来那一下站点当它空了,接着跑这一圈,把人派的 goto 顶掉)。
+SETTLE_HEARD_MS = 5_000
 #: 人中止之后歇多久(毫秒)。
 PAUSE_MS = 10 * 60_000
 #: 派不出去之后隔多久(毫秒)再派。
@@ -143,6 +146,8 @@ class GuardDuty:
         self._stop_then: dict[int, str] = {}
         #: 每个方案最后一次看见机器人在跑派给它的那一趟、或者联系不上它的时刻(``LOST_S`` 从这算)。
         self._alive_ms: dict[int, int] = {}
+        #: 每台机器人从什么时候起一直听得见(``SETTLE_HEARD_MS`` 从这算)。
+        self._heard_since: dict[str, int] = {}
         self._stop_tries: dict[int, int] = {}
         dispatcher.on_event(self._on_event)
 
@@ -569,10 +574,16 @@ class GuardDuty:
             return
         rid, state = run["robot_id"], run["state"]
         running = self._running(rid)
+        settled = self._settled(rid, now)                # 每拍都记:听得见从什么时候起
         if state == "stopping":
             await self._stopping(e, run, running)
             return
         if await self._person_hold(e, run, running):
+            return
+        if state in ("resume", "post", "wait") and not settled:
+            # 联系不上、刚连回来:手上有没有任务还说不准,先不接着跑、不派下一圈
+            self._wait(e, rid, f"{rid} 不在线" if not self._heard(rid)
+                       else f"{rid} 刚连回来,等它报手上的任务")
             return
         foreign = bool(self._blocking(rid))
         if state in ("post", "wait") and foreign:
@@ -694,6 +705,13 @@ class GuardDuty:
             return False
         fresh = getattr(self.dispatcher, "_fresh", None)
         return not callable(fresh) or bool(fresh(c))
+
+    def _settled(self, rid: str, now: int) -> bool:
+        """听得见、而且连着听得见够久了:它报的「手上没任务」才算数。"""
+        if not self._heard(rid):
+            self._heard_since.pop(rid, None)
+            return False
+        return now - self._heard_since.setdefault(rid, now) >= SETTLE_HEARD_MS
 
     def _lost(self, eid: int, run: dict[str, Any], running: str, now: int) -> bool:
         """派的那一趟没在跑、也没结果,而且从最后一次看见它在跑(或联系不上)起过了 :data:`LOST_S`。"""
