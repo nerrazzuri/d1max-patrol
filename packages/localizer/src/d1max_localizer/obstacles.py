@@ -115,6 +115,10 @@ class Config:
     latency: float = 0.2                # 链路延迟(秒,待 W00d 量)
     decel: float = 0.5                  # 刹车减速度(m/s²,待真机量)
     frame_age: float = 0.2              # 一帧点云从扫到到算完(秒,待真机量)
+    #: 机身前沿往前这么远以内,「看不见」不当挡(**挡**照样当挡):贴身那排时不时一格没回波,一格就把许可
+    #: 掐掉,1.0 m/s 一顿一顿(11-04 现场)。代理那层同样不管机头前 0.5 m 的看不见(``FRONT_BLIND_M``),
+    #: 那里的东西走近之前就看见过、守卫照样查。
+    near_blind: float = 0.3
 
     def stop_dist(self, v: float) -> float:
         return v * self.latency + v * v / (2.0 * self.decel)
@@ -378,6 +382,7 @@ def clear_distance(occ: bytes, known: bytes, cfg: Config = DEFAULT, *,
     n = cfg.size
     front = cfg.body_len / 2
     half = cfg.body_wid / 2 + cfg.margin
+    blind = cfg.near_blind if end == "head" else 0.0     # 贴身那段只认前雷达那头(狗尾照旧)
     best = (n / 2) * cfg.res - front
     for r in range(n // 2, n):
         x0 = (r - n / 2) * cfg.res                       # 这一行格子的后沿
@@ -388,7 +393,7 @@ def clear_distance(occ: bytes, known: bytes, cfg: Config = DEFAULT, *,
             if y0 + cfg.res <= -half or y0 >= half:
                 continue
             i = r * n + c
-            if occ[i] or not known[i]:
+            if occ[i] or (not known[i] and x0 >= front + blind - 1e-9):
                 return max(0.0, x0 - front)
     return best
 
@@ -408,7 +413,7 @@ def clear_why(occ: bytes, known: bytes, cfg: Config = DEFAULT) -> str:
             if y0 + cfg.res <= -half or y0 >= half:
                 continue
             i = r * n + c
-            if occ[i] or not known[i]:
+            if occ[i] or (not known[i] and x0 >= front + cfg.near_blind - 1e-9):
                 what = "挡" if occ[i] else "看不见"
                 return f"{what} 前 {x0:.1f} m、左 {y0 + cfg.res / 2:+.2f} m"
     return "走廊全空"
