@@ -273,13 +273,21 @@ class StandbyManager:
                                   f"(地图或版本不匹配)")
         return p
 
+    def swap_point(self, robot_id: str, map_id: str, map_version: str) -> dict[str, Any] | None:
+        """换电位(W73 §7.4)= 默认待命点,且登记在这张图这一版上;不然 ``None``(派不过去,原地换)。
+        跟 :meth:`return_to` 派去的是同一个点(外审 r2 #3:以前判到没到用的是原点)。"""
+        p = self.default(robot_id)
+        return p if p is not None and (p["map_id"], p["map_version"]) == (map_id, map_version) \
+            else None
+
     async def return_to(self, robot_id: str, *, issued_by: str,
-                        name: str | None = None) -> dict[str, Any]:
+                        name: str | None = None, charge: bool = False) -> dict[str, Any]:
+        """``charge``:这一趟是去补能(换电,W73 外审 r2 #2)—— 狗上出发线只看中止线、低电不掉头。"""
         p = self._checked_default(robot_id, name)
         target = MapPose(map_id=p["map_id"], map_version=p["map_version"], frame_id="map",
                          x=p["x"], y=p["y"], yaw=p["yaw"]).to_wire()
         return await self.dispatcher.goto(robot_id, target, None, issued_by=issued_by,
-                                          priority=STANDBY_RETURN,
+                                          priority=STANDBY_RETURN, charge=charge,
                                           task_id=f"{STANDBY_PREFIX}{uuid.uuid4().hex[:12]}")
 
     def _on_event(self, robot_id: str, e: Event) -> None:

@@ -59,11 +59,13 @@ class 台:
                              home=lambda r, m, v: {"x": 0.0, "y": 0.0})
         self.desk.alerts = self.alerts
         self.sent_home: list[int] = []
+        self.sent_kw: list[dict] = []
         tt = self
 
         class _待命点:
-            async def return_to(self, rid, *, issued_by):
+            async def return_to(self, rid, *, issued_by, charge=False):
                 tt.sent_home.append(tt.now)
+                tt.sent_kw.append({"issued_by": issued_by, "charge": charge})
                 return {"ack": {"result": "accepted"}}
         self.desk.standby = _待命点()
 
@@ -229,3 +231,25 @@ def test_外审_换到一半走了_插回不满_每一步没进展都会再推�
 def test_两块都在_没在换电_不拦():
     t = 台()
     assert t.desk.busy("A") == "" and t.desk.refuse("A") == ""
+
+
+def test_外审r2_回换电位的路上拔了一块_不再派它走_原地引导装回():
+    t = 台()
+    t.need, t.pose, t.packs = 35.0, (6.0, 0.0), [25.1, 60.0]
+    t.tick()
+    assert t.desk.view()["robots"][0]["step"] == "going" and len(t.sent_home) == 1
+    t.packs = [None, 60.0]                               # 没回到换电位就被拔了一块
+    t.tick(61)
+    assert len(t.sent_home) == 1, "拔着电池:绝不派它走"
+    v = t.desk.view()["robots"][0]
+    assert v["step"] == "first_out" and v["first"] == 1
+    assert "装上一块满电的 1 号" in t.alerts.raised[-1]["detail"]
+    t.tick(120)
+    assert len(t.sent_home) == 1
+
+
+def test_外审r2_回换电位按去补能派_低电也走得了():
+    t = 台()
+    t.need, t.pose = 35.0, (6.0, 0.0)
+    t.tick()
+    assert t.sent_kw == [{"issued_by": "site:swap", "charge": True}]

@@ -66,6 +66,10 @@ PERSON_HOLD_MS = 10 * 60_000
 PERSON_KIND = "dog_sees_person"
 #: 撤防时停下这一圈以后,过这么久按还布防着的接着跑(等狗上停稳)。
 SETTLE_MS = 3_000
+#: 要停这一圈(看见人、撤防)发了中止,这么久还没停下再发一次;发了 :data:`STOP_ALERT` 次还没停
+#: 报 P2 ``guard_stuck``。确认停下之前不盯人、不派新的一圈(外审 r2 #5:中止没发成曾当已停)。
+STOP_RETRY_MS = 5_000
+STOP_ALERT = 3
 #: 连着这么多圈跑不成报 P2。
 FAIL_ALERT = 3
 #: 电量不过这条线(%)不开新的一圈。第四期换成按任务算的出站线。
@@ -132,6 +136,10 @@ class GuardDuty:
         self._lap_cache: dict[tuple, float | None] = {}
         #: 看见人盯满 :data:`PERSON_HOLD_MS` 还没人管、接着值守了的:这一条告警不再拦它。
         self._person_done: set[str] = set()
+        #: 在停这一圈的方案:停下以后进哪一步(``held`` / ``resume``)、中止发了几次。只在内存:
+        #: 站点重启后停下了按 ``resume`` 接着办(还看见人的话下一拍照样再盯)。
+        self._stop_then: dict[int, str] = {}
+        self._stop_tries: dict[int, int] = {}
         dispatcher.on_event(self._on_event)
 
     # ------------------------------------------------------------ 方案
@@ -518,7 +526,7 @@ class GuardDuty:
         for e, _, _ in active:
             r = runs.get(e["id"])
             if not e["robot"] and r is not None and r["robot_id"] in self._reserved \
-                    and r["state"] not in ("lap", "held"):
+                    and r["state"] not in ("lap", "held", "stopping"):
                 await self._stand_down(r, f"{r['robot_id']} 让给指定它的值守方案")
         runs = self._runs()
         for e, info, armed in active:
@@ -557,6 +565,9 @@ class GuardDuty:
             return
         rid, state = run["robot_id"], run["state"]
         running = self._running(rid)
+        if state == "stopping":
+            await self._stopping(e, run, running)
+            return
         if await self._person_hold(e, run, running):
             return
         foreign = bool(self._blocking(rid))
@@ -621,13 +632,55 @@ class GuardDuty:
             return False
         self._log("person_hold", robot=rid, entry=eid, zone=run["watch_zone"],
                   detail="看见人:原地停下盯着,等保安处理")
-        self._set_run(eid, state="held", until_ms=now + PERSON_HOLD_MS)
         if running and running == run["task_id"]:        # 一圈 / 去值守位的路上:停在原地
-            try:
-                await self.dispatcher.abort(rid, running, issued_by="guard")
-            except Exception as exc:  # noqa: BLE001 - 停不下来:记下,值守不派新的
-                log.warning("%s 看见人没停下:%s", rid, exc)
+            await self._stop(eid, run, "held")
+        else:
+            self._set_run(eid, state="held", until_ms=now + PERSON_HOLD_MS)
         return True
+
+    async def _stop(self, eid: int, run: dict[str, Any], then: str) -> None:
+        """停手上这一趟:记成 ``stopping``、发中止;确认停下(:meth:`_stopping`)才进 ``then``。"""
+        self._stop_then[eid] = then
+        self._stop_tries[eid] = 0
+        self._set_run(eid, state="stopping")
+        await self._send_abort(eid, run)
+
+    async def _send_abort(self, eid: int, run: dict[str, Any]) -> None:
+        rid = run["robot_id"]
+        self._stop_tries[eid] = self._stop_tries.get(eid, 0) + 1
+        self._set_run(eid, until_ms=self._now() + STOP_RETRY_MS)
+        try:
+            r = await self.dispatcher.abort(rid, run["task_id"], issued_by="guard")
+            if not _accepted(r):
+                log.warning("%s 停这一圈没被接:%s", rid, r)
+        except Exception as exc:  # noqa: BLE001 - 没发成:过几秒再发
+            log.warning("%s 停这一圈没发成:%s", rid, exc)
+
+    async def _stopping(self, e: dict[str, Any], run: dict[str, Any], running: str) -> None:
+        """在等这一趟停下:旧任务有结果了、或手上已经不是它 = 停了。没停到点再发中止,
+        发够 :data:`STOP_ALERT` 次报警;停下之前什么都不派。"""
+        eid, rid, now = e["id"], run["robot_id"], self._now()
+        stopped = running != run["task_id"] or self._terminal(rid, run["task_id"]) is not None
+        if stopped:
+            then = self._stop_then.pop(eid, "resume")
+            self._stop_tries.pop(eid, None)
+            if then == "held":
+                self._set_run(eid, state="held", until_ms=now + PERSON_HOLD_MS)
+            else:
+                self._set_run(eid, state="resume", until_ms=now + SETTLE_MS)
+            return
+        if now < run["until_ms"]:
+            return
+        tries = self._stop_tries.get(eid, 0)
+        if tries >= STOP_ALERT and self.alerts is not None \
+                and not self.alerts.has_open(rid, "guard_stuck"):
+            self._log("stop_failed", robot=rid, entry=eid,
+                      detail=f"发了 {tries} 次中止,这一趟还没停下")
+            self.alerts.raise_alert(
+                kind="guard_stuck", robot=rid, title=f"{rid} 停不下这一圈",
+                detail=f"值守要停下这一圈(看见人或撤防),发了 {tries} 次中止还在跑;"
+                       "站点接着发,请看机器人是否在线、必要时到现场或用遥控器停下")
+        await self._send_abort(eid, run)
 
     def _off_zones(self, info: dict[str, Any], armed: list[str], run: dict[str, Any]) -> list[str]:
         """这一圈还没走到的点里,所在防区已经撤防的(外审 r1 #4)。"""
@@ -646,11 +699,7 @@ class GuardDuty:
             if off:                                      # 外审 r1 #4:别把这一圈跑进撤防的防区
                 self._log("zone_disarmed", robot=rid, entry=eid,
                           detail=f"{'、'.join(off)} 撤防了:这一圈停下,按还布防着的接着跑")
-                self._set_run(eid, state="resume", until_ms=now + SETTLE_MS)
-                try:
-                    await self.dispatcher.abort(rid, running, issued_by="guard")
-                except Exception as exc:  # noqa: BLE001 - 停不下来:记下,下一拍再看
-                    log.warning("%s 撤防后停这一圈没办成:%s", rid, exc)
+                await self._stop(eid, run, "resume")
                 return
         if term is None:
             if running != run["task_id"] and now - run["sent_ms"] >= LOST_S * 1000:
