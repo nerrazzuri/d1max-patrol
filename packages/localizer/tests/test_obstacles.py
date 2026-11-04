@@ -728,3 +728,20 @@ def test_现场1104_每10秒记一行许可发了几条_没发卡在哪(caplog):
     got = [r.message for r in caplog.records if "许可" in r.message]
     assert got and "发了 1 条" in got[-1] and "挡 前 0.6 m" in got[-1], got
     assert "旁路连着" in got[-1]
+
+
+def test_现场1104_贴着机身前沿那一排偶尔看不见_不掐许可_挡着的照样掐():
+    """11-04 1.0 m/s 那趟:前沿 0.5 m 那排时不时有一格「看不见」→ 空距 0.03 → 不发许可 →
+    旁路把前进置 0,
+    一顿一顿。代理那层本来就不把机头前 0.5 m 的看不见当挡(FRONT_BLIND_M);许可这层贴身
+    :attr:`Config.near_blind` 以内的「看不见」也不算,**挡**的照样算,再往前的看不见照样算。"""
+    cfg = Config()
+    occ, known = classify(场景(), H, cfg)
+    known = bytearray(known)
+    known[_cell(cfg, 0.55, -0.25)] = 0                   # 前沿那排一格没回波
+    assert clear_distance(occ, bytes(known), cfg) > 1.5
+    occ_b, known_b = classify(场景(box=((0.6, 0.7), (-0.1, 0.1), 0.5)), H, cfg)
+    assert clear_distance(occ_b, known_b, cfg) < 0.2, "贴身是真挡:照样不许"
+    k2 = bytearray(classify(场景(), H, cfg)[1])
+    k2[_cell(cfg, 0.85, 0.0)] = 0                        # 贴身那段以外的看不见:照样当挡
+    assert clear_distance(occ, bytes(k2), cfg) < 0.45
