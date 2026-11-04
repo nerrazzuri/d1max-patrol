@@ -604,3 +604,39 @@ def test_限速没变也定时重发_工单11_02_9():
     assert speed_due(0.3, 0.3, 10.0, 10.0 + SPEED_REPUB_S)
     assert speed_due(0.4, 0.3, 10.0, 10.1)
     assert not speed_due(None, 0.3, 0.0, 99.0)
+
+
+def _发钟的桥():
+    from types import SimpleNamespace as NS
+
+    from d1max_localizer.nav2bridge import Nav2Bridge
+    b = Nav2Bridge.__new__(Nav2Bridge)
+    b.t_ms, b._clock_wall, b.odom = 0, -1e9, None
+    b._speed, b._speed_at = None, 0.0
+    b.clocks, b.tfs = [], []
+    b._stamp = lambda t: t
+    b._m = {"Clock": lambda: NS(), "TransformStamped": lambda: NS(
+        header=NS(), transform=NS(translation=NS(), rotation=NS())),
+        "Odometry": lambda: NS(header=NS(), pose=NS(pose=NS(position=NS(), orientation=NS())),
+                               twist=NS(twist=NS(linear=NS(), angular=NS())))}
+    b.p_clock = NS(publish=lambda c: b.clocks.append(c.clock))
+    b.p_odom = NS(publish=lambda o: None)
+    b.tf = NS(sendTransform=b.tfs.append)
+    return b
+
+
+def _tick(t_ms):
+    return {"t_ms": t_ms, "odom": [0.0, 0.0, 0.0], "vel": [0.0, 0.0, 0.0], "map_odom": None}
+
+
+def test_现场1104_机器人的钟往回调过_转接节点照样发时钟和里程(monkeypatch):
+    b = _发钟的桥()
+    b.on_tick(_tick(1_793_800_000_000))                  # 钟先被设到一个更晚的时刻
+    b.on_tick(_tick(1_793_800_000_000))                  # 同一拍重复:不发
+    assert b.clocks == [1_793_800_000_000]
+    b.on_tick(_tick(1_793_762_000_000))                  # 对时把钟往回调了约 10 小时
+    b.on_tick(_tick(1_793_762_000_100))
+    assert b.clocks[1:] == [1_793_762_000_000, 1_793_762_000_100], "不能从此不发 odom TF"
+    assert len(b.tfs) == 3
+    b.on_tick(_tick(1_793_762_000_050))                  # 几十毫秒的乱序照旧丢
+    assert len(b.clocks) == 3
