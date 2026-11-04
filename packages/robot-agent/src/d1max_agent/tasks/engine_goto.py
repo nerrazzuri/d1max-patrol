@@ -231,6 +231,8 @@ class EngineGotoTask(EngineMissionTask):
     """``goto``:一个航点的 Mission。``photo`` 给了相机名就到了拍一张(W17:事件派遣的现场照片,
     跟巡检点位的照片一样归档、传站点,站点按这一趟的 ``task_id`` 找)。"""
 
+    homing = False                       # 外审 r3 #4:回待命点这一趟(__init__ 里按 charge 定)
+
     def __init__(self, *, task_id: str, target: MapPose, max_speed_mps: float | None,
                  parts: EngineParts, events: EventBook, now_ms: Callable[[], int],
                  priority: int = 0, photo: str | None = None, charge: bool = False,
