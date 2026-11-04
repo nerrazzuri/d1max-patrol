@@ -40,12 +40,13 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import math
 import threading
 import uuid
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
 from dataclasses import replace
 from typing import Any
 
@@ -91,6 +92,9 @@ class StandbyManager:
         self.dispatcher = dispatcher
         self._now = now_ms
         self._tasks: set[asyncio.Task] = set()
+        #: 外审 r6 #1:这个进程里正在等回执的回待命点命令(每台几条);等完了通知 ``_auto`` 重新结算
+        self._inflight: dict[str, int] = {}
+        self._settled = asyncio.Condition()
         #: 这一趟跑完先别自动回(W22:到了拦截点要驱离,驱离结束时派回程)。
         #: ``(狗, 任务号) → 真 = 先别回``。
         self.hold: Callable[[str, str], bool] | None = None
@@ -288,10 +292,26 @@ class StandbyManager:
         p = self._checked_default(robot_id, name)
         target = MapPose(map_id=p["map_id"], map_version=p["map_version"], frame_id="map",
                          x=p["x"], y=p["y"], yaw=p["yaw"]).to_wire()
-        return await self.dispatcher.goto(robot_id, target, None, issued_by=issued_by,
-                                          priority=STANDBY_RETURN, charge=charge,
-                                          homing=homing and not charge,
-                                          task_id=f"{STANDBY_PREFIX}{uuid.uuid4().hex[:12]}")
+        async with self._sending(robot_id):
+            return await self.dispatcher.goto(robot_id, target, None, issued_by=issued_by,
+                                              priority=STANDBY_RETURN, charge=charge,
+                                              homing=homing and not charge,
+                                              task_id=f"{STANDBY_PREFIX}{uuid.uuid4().hex[:12]}")
+
+    @contextlib.asynccontextmanager
+    async def _sending(self, robot_id: str) -> AsyncIterator[None]:
+        """发一条回待命点命令、等它的回执;等完(收了、拒了、超时、出错)通知等着结算的 ``_auto``。"""
+        self._inflight[robot_id] = self._inflight.get(robot_id, 0) + 1
+        try:
+            yield
+        finally:
+            n = self._inflight.get(robot_id, 1) - 1
+            if n > 0:
+                self._inflight[robot_id] = n
+            else:
+                self._inflight.pop(robot_id, None)
+            async with self._settled:
+                self._settled.notify_all()
 
     def _on_event(self, robot_id: str, e: Event) -> None:
         if e.kind == "home_marked" and isinstance(e.data, dict):
@@ -388,23 +408,44 @@ class StandbyManager:
         # 来路坐标、待命点都在这一版上(_route_back、_checked_default 核过):任务绑它(R1)
         mission = Mission(mission=f"回待命点·{label}", map_id=p["map_id"], waypoints=wps,
                           policy=policy, map_version=p["map_version"])
-        return await self.dispatcher.patrol(robot_id, mission.to_wire(), issued_by="standby:auto",
-                                     priority=STANDBY_RETURN,
-                                     task_id=f"{STANDBY_PREFIX}{uuid.uuid4().hex[:12]}")
+        async with self._sending(robot_id):
+            return await self.dispatcher.patrol(robot_id, mission.to_wire(),
+                                                issued_by="standby:auto", priority=STANDBY_RETURN,
+                                                task_id=f"{STANDBY_PREFIX}{uuid.uuid4().hex[:12]}")
 
-    def _already_back(self, robot_id: str, after: str) -> bool:
-        """``after`` 那一趟发出以后,已经有一条回待命点的命令(收队派的、人点的…),没被拒、没超时 ——
-        这一趟的结束事件再晚到也不再派一次(W73 外审 r5 #2:收队先派了回程,迟到的 ``task_done``
-        又让这里派一次,机器人回到待命点又沿旧路线走出去)。按命令记录判,站点重启了也认。"""
+    def _already_back(self, robot_id: str, after: str) -> str:
+        """``after`` 那一趟发出以后的回待命点命令(收队派的、人点的…)→ ``"back"``:有一条收了,这一趟的
+        结束事件再晚到也不再派(外审 r5 #2);``"pending"``:有一条还在**这个进程里**等回执(外审 r6 #1:
+        先别结算,等它收了 / 被拒 / 超时再看);``""``:没有,该派。没回执又不在等的(站点重启前发的)
+        不算回了。按命令记录判,站点重启了也认。"""
         rows = self.db.query(
-            "SELECT 1 FROM commands c WHERE c.robot_id=? AND c.task_id LIKE ? "
+            "SELECT c.ack_result FROM commands c WHERE c.robot_id=? AND c.task_id LIKE ? "
             "AND (c.ack_result IS NULL OR c.ack_result IN ('accepted', 'duplicate')) "
-            "AND c.rowid > (SELECT MIN(rowid) FROM commands WHERE robot_id=? AND task_id=?) "
-            "LIMIT 1", (robot_id, STANDBY_PREFIX + "%", robot_id, after))
-        return bool(rows)
+            "AND c.rowid > (SELECT MIN(rowid) FROM commands WHERE robot_id=? AND task_id=?)",
+            (robot_id, STANDBY_PREFIX + "%", robot_id, after))
+        acks = [r["ack_result"] for r in rows]
+        if any(a is not None for a in acks):
+            return "back"
+        return "pending" if acks and self._inflight.get(robot_id) else ""
+
+    async def _settle(self, robot_id: str, after: str) -> str:
+        """等这台还在等回执的回待命点命令都有了结果,再判 :meth:`_already_back`
+        (最多等回执超时多一点)。"""
+        got = self._already_back(robot_id, after)
+        if got != "pending":
+            return got
+        wait_s = float(getattr(self.dispatcher, "ack_timeout_s", 10.0)) + 2.0
+        try:
+            async with self._settled:
+                await asyncio.wait_for(
+                    self._settled.wait_for(lambda: not self._inflight.get(robot_id)), wait_s)
+        except asyncio.TimeoutError:
+            log.warning("%s 回待命点的回执等了 %g s 还没结果:按没回去处理", robot_id, wait_s)
+            return ""
+        return "back" if self._already_back(robot_id, after) == "back" else ""
 
     async def _auto(self, robot_id: str, after: str) -> None:
-        if self._already_back(robot_id, after):
+        if await self._settle(robot_id, after) == "back":
             log.info("%s 在 %s 之后已经派过回待命点:这一趟结束不再派", robot_id, after)
             return
         if self.dispatcher.registry.manual_only(robot_id) is not None:
