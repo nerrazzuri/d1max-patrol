@@ -283,6 +283,22 @@ static int g_estop_sw = 0, g_estop_hw = 0;
 static int g_head = 0;  // SDK HeadDirection:0 未知、1 狗头为前、2 狗尾为前
 static int g_speed = 0;  // SDK SpeedLevel:0 未知、1 低速、2 中速、3 高速
 static std::atomic<bool> g_held{false};
+// 两块电池的原始读数(W73 现场 B4b):只打日志,不进状态帧 —— 看拔出时 present 变不变、
+// 快没电时 present 是不是仍为真。给代理的 battery1/2 照旧按 present 压 0(协议不变)。
+static BatteryData g_braw{};
+static bool g_braw_have = false;
+
+static std::string BattRaw(const BatteryData& b) {
+  char buf[256];
+  std::snprintf(buf, sizeof buf,
+                "1: present=%d power=%.1f V=%.2f I=%.2f T=%.1f status=%d | "
+                "2: present=%d power=%.1f V=%.2f I=%.2f T=%.1f status=%d",
+                static_cast<int>(b.present1), b.power1, b.voltage1, b.current1,
+                b.temperature1, static_cast<int>(b.power_supply_status1),
+                static_cast<int>(b.present2), b.power2, b.voltage2, b.current2,
+                b.temperature2, static_cast<int>(b.power_supply_status2));
+  return buf;
+}
 static std::string g_robot_addr;
 static SDKClient* g_client = nullptr;
 static std::mutex g_sdk_mtx;   // 所有 SDK 调用串行化
@@ -358,8 +374,17 @@ static std::string StateFrame() {
 class DataCb : public IDataCallback {
  public:
   void OnRobotStateData(const RobotState& d) override {
+    std::string batt_change;
     {
       std::lock_guard<std::mutex> lk(g_state_mtx);
+      const BatteryData& b = d.battery;
+      if (g_braw_have && (b.present1 != g_braw.present1 || b.present2 != g_braw.present2 ||
+                          static_cast<int>(b.power1) != static_cast<int>(g_braw.power1) ||
+                          static_cast<int>(b.power2) != static_cast<int>(g_braw.power2))) {
+        batt_change = BattRaw(b);
+      }
+      g_braw = b;
+      g_braw_have = true;
       g_motion = static_cast<int>(d.motion_status);
       g_head = static_cast<int>(d.head_direction);
       g_speed = static_cast<int>(d.speed_level);
@@ -370,6 +395,7 @@ class DataCb : public IDataCallback {
       g_estop_sw = static_cast<int>(d.software_emergency_status);
       g_estop_hw = static_cast<int>(d.hardware_emergency_status);
     }
+    if (!batt_change.empty()) std::cout << "[batt] CHANGE " << batt_change << "\n";
     // 急停、趴下、锁死、姿态未知:立刻作废已有的速度目标(恢复了也不复活)。
     g_gate.OnState(static_cast<int>(d.motion_status),
                    static_cast<int>(d.software_emergency_status),
@@ -1290,7 +1316,7 @@ int main(int argc, char** argv) {
       std::lock_guard<std::mutex> lk(g_state_mtx);
       std::cout << "[agent] 心跳#" << beat << " held=" << g_held.load()
                 << " motion=" << g_motion << " batt=" << g_batt1 << "%/"
-                << g_batt2 << "%\n";
+                << g_batt2 << "% | " << (g_braw_have ? BattRaw(g_braw) : "raw=none") << "\n";
     }
   }).detach();
 
