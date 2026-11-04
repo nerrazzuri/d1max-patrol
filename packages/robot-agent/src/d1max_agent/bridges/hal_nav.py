@@ -74,7 +74,6 @@ class HalNavBackend(NavBackend):
         self._init_delay_ms = int(init_delay_s * 1000)
         self._hold_ms = int(terminal_hold_s * 1000)
         caps = hal.hal_capabilities()
-        self._caps = caps
         self._vmax = caps.max_vx
         self._wmax = caps.max_wz
         #: 全狗限速(W29,站点下雨、雷暴时发;运行时按有效期管,没限是无穷大)。不随任务重置。
@@ -290,6 +289,12 @@ class HalNavBackend(NavBackend):
                 raise NavRequestError("set_speed", f"转向上限要是正的有限数,给的是 {z!r}")
             self._wmax = min(float(z), self._caps.max_wz)
         return await self.get_speed()
+
+    @property
+    def _caps(self) -> Any:
+        """HAL 现在的能力(每次现取):建桥时还没连上旁路,hello 没到只能按老上限 0.5(0.436 m/s);
+        连上以后旁路报的 ``--max-fraction`` 才算数(11-04 现场 1.0 那趟一直卡在 0.436)。"""
+        return self._hal.hal_capabilities()
 
     async def reset_speed(self) -> None:
         """回到 HAL 上限。每趟任务开始时由任务调:上一趟的限速不能带到下一趟。"""

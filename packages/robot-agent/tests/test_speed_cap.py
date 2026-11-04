@@ -80,7 +80,8 @@ async def test_限得比死区还低_按死区():
     from d1max_agent.bridges.hal_nav import HalNavBackend
     caps = SimpleNamespace(max_vx=1.0, max_wz=1.5, deadband_vx=0.2)
     nav = HalNavBackend.__new__(HalNavBackend)
-    nav._caps, nav._vmax, nav.speed_cap = caps, 1.0, 0.1
+    nav._hal = SimpleNamespace(hal_capabilities=lambda: caps)   # 能力每次现取(11-04)
+    nav._vmax, nav.speed_cap = 1.0, 0.1
     assert nav._vlim() == 0.2
     nav.speed_cap = 0.3
     assert nav._vlim() == 0.3
@@ -108,7 +109,8 @@ def test_限着速时_近障从更远就开始减速():
 
     from d1max_agent.bridges.planned_nav import NEAR_SLOW_FROM_M, PlannedNavBackend
     nav = PlannedNavBackend.__new__(PlannedNavBackend)
-    nav._caps = SimpleNamespace(max_vx=1.0, max_wz=1.5, deadband_vx=0.2)
+    caps = SimpleNamespace(max_vx=1.0, max_wz=1.5, deadband_vx=0.2)
+    nav._hal = SimpleNamespace(hal_capabilities=lambda: caps)   # 能力每次现取(11-04)
     nav._vmax = 1.0
     nav.guard = SimpleNamespace(margin=0.05, body_len=0.93, body_wid=0.48)
     nav.obstacles = SimpleNamespace(near_ahead=lambda *a: NEAR_SLOW_FROM_M + 0.5)
@@ -126,7 +128,8 @@ def test_对账S6_定位变差_自动走限0点3_比全狗限速低的照全狗�
     caps = SimpleNamespace(max_vx=1.0, max_wz=1.5, deadband_vx=0.2)
     nav = HalNavBackend.__new__(HalNavBackend)
     why = [""]
-    nav._caps, nav._vmax, nav.speed_cap, nav.odom_ok = caps, 1.0, math.inf, True
+    nav._hal = SimpleNamespace(hal_capabilities=lambda: caps)   # 能力每次现取(11-04)
+    nav._vmax, nav.speed_cap, nav.odom_ok = 1.0, math.inf, True
     nav.anchor = SimpleNamespace(degraded=lambda odom_ok: why[0])
     assert nav._vlim() == 1.0
     why[0] = "定位偏差可能到 0.30 m"

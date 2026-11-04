@@ -363,3 +363,18 @@ async def test_W46过热级别变了才发事件(台子):
         got.append(q.get_nowait())
     hot = [(e.level, e.reason) for e in got if isinstance(e, OverheatEvent)]
     assert hot == [("ok", "主控板正常"), ("critical", "SoC 96 °C")]
+
+
+async def test_现场1104_速度上限按连上旁路以后报的算_不是建桥时那个():
+    """建导航桥时还没连旁路(hello 没到,只能按老上限 0.5 → 0.436 m/s);连上以后旁路报 1.0,
+    每趟任务开始(reset_speed)、任务限速(set_speed)都要按现在的上限。11-04 现场两趟都卡在 0.436。"""
+    c = 钟()
+    r = SimRobot(now_ms=c, max_vx=0.436, max_wz=1.5)
+    nav = HalNavBackend(r, now_ms=c, map_id="m")
+    r.max_vx = 0.98                                      # 连上旁路、hello 报了 --max-fraction 1.0
+    await nav.reset_speed()
+    assert (await nav.get_speed())["x"] == pytest.approx(0.98)
+    await nav.set_speed(0.6)
+    assert (await nav.get_speed())["x"] == pytest.approx(0.6)
+    await nav.set_speed(5.0)
+    assert (await nav.get_speed())["x"] == pytest.approx(0.98)
