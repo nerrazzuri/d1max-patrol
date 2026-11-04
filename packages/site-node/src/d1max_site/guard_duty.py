@@ -382,7 +382,7 @@ class GuardDuty:
             if not rid or info is None or self._prep_told.get(rid) == nb:
                 continue
             pct = self._battery(rid)
-            line = max(self.min_pct, energy.lap_line(self._lap_s(info) or 0.0))
+            line = self._lap_need(e, info, rid)[0]
             if pct is not None and pct < line:
                 self.alerts.raise_alert(
                     kind="guard_prep", robot=rid, title=f"{rid} 电量不够开始值守",
@@ -419,7 +419,7 @@ class GuardDuty:
         pct = self._battery(rid)
         if info is None or pct is None:
             return None
-        line = max(self.min_pct, energy.lap_line(self._lap_s(info) or 0.0))
+        line = self._lap_need(e, info, rid)[0]
         return max(0.0, (pct - line) / (energy.DRAIN_PCT_PER_H / 60.0))
 
     def resume_pct(self, rid: str) -> float | None:
@@ -447,7 +447,49 @@ class GuardDuty:
         t = c.telemetry if c is not None else None
         return float(t.battery_pct) if t is not None and t.battery_pct is not None else None
 
-    def _why_not(self, rid: str, info: dict[str, Any]) -> str:
+    def _tail_xy(self, e: dict[str, Any] | None, info: dict[str, Any],
+                 rid: str) -> tuple[float, float] | None:
+        """这个方案每圈结束回的待命点(``end_standby`` 开着、这台在这张图上登记了)。"""
+        if e is None or not e.get("end_standby", True) or self.standby is None or not rid:
+            return None
+        try:
+            p = self.standby.swap_point(rid, info["map_id"], info["map_version"])
+        except Exception:  # noqa: BLE001 - 拿不到:按不接
+            return None
+        return (float(p["x"]), float(p["y"])) if p else None
+
+    def _lap_need(self, e: dict[str, Any] | None, info: dict[str, Any],
+                  rid: str) -> tuple[float, float]:
+        """跑一圈要的电 → ``(线, 一圈秒数)``。外审 r3 #6:一圈算上回待命点那段;再按狗上出发线的式子
+        算一遍(从现在的位置走完各点、到待命点、回原点),取大的 —— 站点放行的,狗上也接。"""
+        tail = self._tail_xy(e, info, rid)
+        lap_s = self._lap_s(info, tail) or 0.0
+        line = max(self.min_pct, energy.lap_line(lap_s))
+        home_fn = getattr(self.standby, "home", None) if self.standby is not None else None
+        try:
+            home = home_fn(rid, info["map_id"], info["map_version"]) if callable(home_fn) else None
+        except Exception:  # noqa: BLE001 - 原点查不到:只按站点那条
+            home = None
+        h = (float(home["x"]), float(home["y"])) if home is not None else tail
+        if h is not None and info["points"]:             # 原点不知道:按回待命点算
+            c = self._client(rid)
+            pose = c.telemetry.pose if c is not None and c.telemetry is not None else None
+            wps = [(float(p["x"]), float(p["y"])) for p in info["points"]]
+            if tail is not None:
+                wps.append(tail)
+            start = (pose.x, pose.y) if pose is not None and pose.map_id == info["map_id"] else h
+            legs = [start, *wps]                         # 跟狗上 ``homing.route_length_m`` 一样
+            caps = c.capabilities.tasks.get("goto", {}) if c is not None and c.capabilities else {}
+            if str(caps.get("path", "straight")) == "planned":
+                legs.append(h)
+            else:                                        # 直线的:沿来路倒着回到出发点再回原点
+                legs += [*reversed(wps[:-1]), start, h]
+            d = sum(math.hypot(a[0] - b[0], a[1] - b[1]) for a, b in zip(legs, legs[1:],
+                                                                          strict=False))
+            line = max(line, energy.patrol_departure_line(d))
+        return line, lap_s
+
+    def _why_not(self, rid: str, info: dict[str, Any], e: dict[str, Any] | None = None) -> str:
         """这台现在能不能派去跑一圈;能 → 空串,不能 → 为什么。"""
         c = self._client(rid)
         if c is None:
@@ -474,8 +516,7 @@ class GuardDuty:
         pct = self._battery(rid)
         if pct is None:
             return f"{rid} 还没报电量"
-        lap_s = self._lap_s(info) or 0.0
-        line = max(self.min_pct, energy.lap_line(lap_s))
+        line, lap_s = self._lap_need(e, info, rid)
         if pct < line:                                   # W73 第四期:出站线,不够就先补能
             self.low[rid] = (line, lap_s, self._now())
             return f"{rid} 电量 {pct:.0f}%,不够跑一圈(要 ≥ {line:.0f}%),先补能"
@@ -500,7 +541,7 @@ class GuardDuty:
         for rid in sorted(self.dispatcher.clients):
             if rid in taken or rid in self._reserved:
                 continue
-            w = self._why_not(rid, info)
+            w = self._why_not(rid, info, e)
             if w:
                 why.append(w)
             else:
@@ -526,6 +567,8 @@ class GuardDuty:
             e = entries.get(eid)
             if e is None or (e["robot"] and e["robot"] != r["robot_id"]):
                 await self._stand_down(r, "值守方案改了")
+            elif r["state"] == "standdown":              # 收队中(让出、撤防):每拍看停没停
+                await self._stand_down(r, "收队")
         runs = self._runs()
         active: list[tuple[dict[str, Any], dict[str, Any], list[str]]] = []
         for e in plan["entries"]:
@@ -546,7 +589,7 @@ class GuardDuty:
         for e, _, _ in active:
             r = runs.get(e["id"])
             if not e["robot"] and r is not None and r["robot_id"] in self._reserved \
-                    and r["state"] not in ("lap", "held", "stopping"):
+                    and r["state"] not in ("lap", "held", "stopping", "standdown"):
                 await self._stand_down(r, f"{r['robot_id']} 让给指定它的值守方案")
         runs = self._runs()
         for e, info, armed in active:
@@ -586,6 +629,8 @@ class GuardDuty:
         rid, state = run["robot_id"], run["state"]
         running = self._running(rid)
         settled = self._settled(rid, now)                # 每拍都记:听得见从什么时候起
+        if state == "standdown":                         # 收队中:tick 里办(外审 r3 #3)
+            return
         if state == "stopping":
             await self._stopping(e, run, running)
             return
@@ -686,9 +731,9 @@ class GuardDuty:
         """在等这一趟停下:旧任务有结果了、或手上已经不是它 = 停了。没停到点再发中止,
         发够 :data:`STOP_ALERT` 次报警;停下之前什么都不派。"""
         eid, rid, now = e["id"], run["robot_id"], self._now()
-        # 联系不上时手上「没任务」是离线状态给的,不算停了;只认它的结果事件
-        stopped = self._terminal(rid, run["task_id"]) is not None \
-            or (self._heard(rid) and running != run["task_id"])
+        # 联系不上时手上「没任务」是离线状态给的,不算停了;刚连回来那几拍也不算(外审 r3 #2:重连先报
+        # 空状态、任务后补)—— 要连着听得见够 :data:`SETTLE_HEARD_MS`,不然只认它的结果事件
+        stopped = self._stopped(rid, run["task_id"], running, now)
         if stopped:
             then = self._stop_then.pop(eid, "resume")
             self._stop_tries.pop(eid, None)
@@ -697,6 +742,16 @@ class GuardDuty:
             else:
                 self._set_run(eid, state="resume", until_ms=now + SETTLE_MS)
             return
+        await self._retry_stop(eid, run, now)
+
+    def _stopped(self, rid: str, tid: str, running: str, now: int) -> bool:
+        """这一趟停了:有结果事件;或连着听得见够久、手上已经不是它。"""
+        return self._terminal(rid, tid) is not None \
+            or (self._settled(rid, now) and running != tid)
+
+    async def _retry_stop(self, eid: int, run: dict[str, Any], now: int) -> None:
+        """还没停:到点再发中止,发够 :data:`STOP_ALERT` 次报警。"""
+        rid = run["robot_id"]
         if now < run["until_ms"]:
             return
         tries = self._stop_tries.get(eid, 0)
@@ -846,7 +901,7 @@ class GuardDuty:
         eid, now = e["id"], self._now()
         if now < self._retry_at.get(eid, 0):
             return
-        why = self._why_not(rid, info)
+        why = self._why_not(rid, info, e)
         if why:
             self._wait(e, rid, why)
             return
@@ -859,7 +914,7 @@ class GuardDuty:
         names = [p["name"] for p in pts]
         by_name = {w["name"]: w for w in info["wire"]["waypoints"]}
         mission = {**info["wire"], "waypoints": [by_name[n] for n in names]
-                   + self._standby_tail(e, info, rid, by_name)}
+                   + self._standby_tail(e, info, rid, by_name, len(names))}
         tid = f"{GUARD_PREFIX}{eid}-{uuid.uuid4().hex[:10]}"
         lap = (run["lap"] if run else 0) + (0 if resume else 1)
         started = run["lap_started_ms"] if (resume and run) else now
@@ -905,10 +960,20 @@ class GuardDuty:
             self._set_run(e["id"], state="wait", next_lap_ms=self._now() + RETRY_MS, **back)
 
     def _standby_tail(self, e: dict[str, Any], info: dict[str, Any], rid: str,
-                      by_name: dict[str, Any]) -> list[dict[str, Any]]:
+                      by_name: dict[str, Any], n: int = 0) -> list[dict[str, Any]]:
         """11-04 用户:每圈结束回待命点(方案里 ``end_standby``,默认开)—— 把这台机器人在这张图上的默认
-        待命点当成最后一个点接上。它不在任何防区里,不算「看过」;没登记待命点就不接。"""
+        待命点当成最后一个点接上。它不在任何防区里,不算「看过」;没登记待命点就不接。
+        外审 r3 #8:这一圈已经 ``n`` = 上限个点,再接就超,派遣会拒 —— 不接,照常跑。"""
         if not e.get("end_standby", True) or self.standby is None:
+            return []
+        from d1max_site.dispatcher import MAX_PATROL_WAYPOINTS
+        if n >= MAX_PATROL_WAYPOINTS:
+            key = (e["id"], rid, info["map_id"], str(info["map_version"]))
+            if key not in self._no_standby:
+                self._no_standby.add(key)
+                self._log("no_standby", robot=rid, entry=e["id"],
+                          detail=f"这一圈已经 {n} 个点(上限 {MAX_PATROL_WAYPOINTS}):"
+                                 "每圈结束不回待命点,停在最后一个点")
             return []
         try:
             p = self.standby.swap_point(rid, info["map_id"], info["map_version"])
@@ -973,20 +1038,36 @@ class GuardDuty:
             self._set_run(eid, state="wait")
 
     async def _stand_down(self, run: dict[str, Any], why: str) -> None:
-        """收队:手上这一趟停下,回待命点交给待命点管理器(先删进度,:meth:`holds` 就放开了)。"""
-        rid, tid = run["robot_id"], run["task_id"]
-        self._drop_run(run["entry"])
-        self._retry_at.pop(run["entry"], None)
-        self._log("stand_down", robot=rid, entry=run["entry"], detail=why)
+        """收队:手上这一趟先停下,停了再删进度、回待命点。
+
+        外审 r3 #3:以前先删进度、只发一次中止 —— 中止没发成 / 被拒,机器人接着跑这一圈,值守却
+        已经不管它了。现在记成 ``standdown``,跟 ``stopping`` 一样确认停下(结果事件,或连着听得见
+        够久、手上已经不是它),没停到点再发、发够报警;``tick`` 每拍都会再叫到这里。"""
+        rid, tid, eid, now = run["robot_id"], run["task_id"], run["entry"], self._now()
         running = self._running(rid)
+        if tid and not self._stopped(rid, tid, running, now):
+            if run["state"] != "standdown":
+                self._log("stand_down", robot=rid, entry=eid, detail=f"{why}:先停下这一趟")
+                self._retry_at.pop(eid, None)
+                self._stop_tries[eid] = 0
+                self._set_run(eid, state="standdown", until_ms=0)
+                run = {**run, "state": "standdown", "until_ms": 0}
+            await self._retry_stop(eid, run, now)
+            return
+        self._drop_run(eid)
+        self._retry_at.pop(eid, None)
+        self._stop_tries.pop(eid, None)
+        self._stop_then.pop(eid, None)
+        if run["state"] != "standdown":
+            self._log("stand_down", robot=rid, entry=eid, detail=why)
+        if running or self.standby is None \
+                or run["state"] not in ("post", "wait", "standdown"):
+            return
         try:
-            if tid and running == tid:
-                await self.dispatcher.abort(rid, tid, issued_by="guard")
-            elif not running and self.standby is not None and run["state"] in ("post", "wait"):
-                await self.standby.return_to(rid, issued_by="guard")
+            await self.standby.return_to(rid, issued_by="guard", homing=True)
         except Exception as exc:  # noqa: BLE001 - 收不了队:记下,机器人原地;人看值守记录
             log.warning("%s 收队没办成:%s", rid, exc)
-            self._log("stand_down_failed", robot=rid, entry=run["entry"], detail=str(exc)[:200])
+            self._log("stand_down_failed", robot=rid, entry=eid, detail=str(exc)[:200])
 
     # ------------------------------------------------------------ 看着
 
@@ -1050,8 +1131,11 @@ class GuardDuty:
 
     # ------------------------------------------------------------ 预报、超时
 
-    def _lap_s(self, info: dict[str, Any]) -> float | None:
-        key = (info["id"], info["revision"])
+    def _lap_s(self, info: dict[str, Any],
+               tail: tuple[float, float] | None = None) -> float | None:
+        """一圈多久(秒)。``tail``:每圈结束回的待命点(外审 r3 #6)—— 最后一个点 → 待命点 → 下一圈
+        第一个点,代替最后一个点直接回第一个点那段。"""
+        key = (info["id"], info["revision"], tail)
         if key not in self._lap_cache:
             from d1max_site.route_eta import estimate
             flat = {"id": info["id"], "map_id": info["map_id"], "map_version": info["map_version"],
@@ -1063,13 +1147,16 @@ class GuardDuty:
             try:
                 got = estimate(self.db, self.reach, flat)
                 total = float(got["total_s"])
-                if len(flat["waypoints"]) > 1:   # 一圈跑完回到第一个点那一段
-                    a, b = flat["waypoints"][-1], flat["waypoints"][0]
-                    m = self.reach.path_m(info["map_id"], info["map_version"], (a["x"], a["y"]),
-                                          (b["x"], b["y"])) if self.reach is not None else None
+                from d1max_site.route_eta import NOMINAL_SPEED_MPS
+                a, b = flat["waypoints"][-1], flat["waypoints"][0]
+                legs = [((a["x"], a["y"]), tail), (tail, (b["x"], b["y"]))] if tail is not None \
+                    else [((a["x"], a["y"]), (b["x"], b["y"]))] if len(flat["waypoints"]) > 1 \
+                    else []                      # 一圈跑完回到第一个点(或经待命点)那一段
+                for p0, p1 in legs:
+                    m = self.reach.path_m(info["map_id"], info["map_version"], p0, p1) \
+                        if self.reach is not None else None
                     if m is None:
-                        m = math.hypot(a["x"] - b["x"], a["y"] - b["y"])
-                    from d1max_site.route_eta import NOMINAL_SPEED_MPS
+                        m = math.hypot(p0[0] - p1[0], p0[1] - p1[1])
                     total += m / NOMINAL_SPEED_MPS
                 self._lap_cache[key] = round(total, 1) if total > 0 else None
             except Exception:  # 估不出:预报里说
@@ -1087,7 +1174,10 @@ class GuardDuty:
             info = self._route(e["route"])
             if info is None:
                 continue
-            lap_s[e["route"]] = self._lap_s(info)
+            # 外审 r3 #6:一圈算上回待命点那段(指定了机器人才知道是哪个待命点);同一路线取最长的
+            got = self._lap_s(info, self._tail_xy(e, info, e["robot"]))
+            prev = lap_s.get(e["route"])
+            lap_s[e["route"]] = got if prev is None or (got is not None and got > prev) else prev
             zones_of[e["route"]] = info["zones"]
             maps.add((info["map_id"], info["map_version"]))
         armable: list[str] = []
@@ -1137,7 +1227,7 @@ class GuardDuty:
             return self._waiting.get(e["id"]) or (f"{e['robot']} 还没出发" if e["robot"]
                                                   else "还没挑到机器人")
         rid, st = run["robot_id"], run["state"]
-        why = self._why_not(rid, info)
+        why = self._why_not(rid, info, e)
         if st == "lap":
             return why or f"{rid} 在跑第 {run['lap']} 圈(可能被挡住了、走得慢)"
         if st == "paused":

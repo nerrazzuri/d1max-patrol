@@ -78,6 +78,9 @@ CLOCK_BACK_MS = 5_000
 LIFECYCLE_RETRY_S = 90.0
 #: nav2_msgs/srv/ManageLifecycleNodes 的命令。
 LIFECYCLE_STARTUP, LIFECYCLE_RESET = 0, 3
+#: 生命周期管理器每一步(reset / startup)最多等这么久(秒)回话;过了当没成,下个周期再来(外审 r3 #7:
+#: 管理器卡在切状态里不回,以前就永远「在办」,再也不重来)。
+LIFECYCLE_CALL_S = 60.0
 
 
 def _stamp_ms(st: Any) -> int:
@@ -223,6 +226,8 @@ class Nav2Bridge:
         self._inactive_since: float | None = None
         self._restarts = 0
         self._manage_busy = False
+        self._manage_deadline = 0.0                      # 这一步等回话等到几时(单调钟)
+        self._manage_gen = 0                             # 第几回重来:过期回调认不出自己就不理
         try:
             from nav2_msgs.srv import ManageLifecycleNodes
             self.manage: Any = self.node.create_client(
@@ -707,23 +712,43 @@ class Nav2Bridge:
         if self._inactive_since is None:
             self._inactive_since = now
             return
+        if self._manage_busy and now >= self._manage_deadline:
+            log.warning("Nav2 生命周期管理器 %g 秒没回话:这一回当没成,下个周期再来",
+                        LIFECYCLE_CALL_S)
+            self._manage_busy = False
+            self._manage_gen += 1                       # 晚到的回调不再理
         if now - self._inactive_since < LIFECYCLE_RETRY_S or self._manage_busy:
             return
         self._inactive_since = now                      # 下一回从现在再等一个周期
         self._restarts += 1
+        self._manage_gen += 1
+        gen = self._manage_gen
         self._manage_busy = True
+        self._manage_deadline = now + LIFECYCLE_CALL_S
         log.warning("Nav2 %g 秒还没全部激活:让生命周期管理器重来一次(第 %d 次)",
                     LIFECYCLE_RETRY_S, self._restarts)
 
-        def started(f: Any) -> None:
-            self._manage_busy = False
+        def ok_of(f: Any) -> bool:
             try:
-                ok = bool(f.result().success)
-            except Exception:                           # noqa: BLE001
-                ok = False
+                return bool(f.result().success)
+            except Exception:                           # noqa: BLE001 - 回话读不出:当没成
+                return False
+
+        def started(f: Any) -> None:
+            if gen != self._manage_gen:
+                return
+            self._manage_busy = False
+            ok = ok_of(f)
             log.info("Nav2 重新启动:%s", "成功" if ok else "没成功,过一阵再试")
 
         def reset(f: Any) -> None:
+            if gen != self._manage_gen:
+                return
+            if not ok_of(f):
+                log.warning("Nav2 重置没成功:不接着启动,过一阵再试")
+                self._manage_busy = False
+                return
+            self._manage_deadline = self._mono() + LIFECYCLE_CALL_S
             try:
                 self.manage.call_async(self._manage_req(LIFECYCLE_STARTUP)).add_done_callback(
                     started)

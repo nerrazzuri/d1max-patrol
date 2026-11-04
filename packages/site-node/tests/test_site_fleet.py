@@ -31,7 +31,8 @@ class 假派遣器:
     def pct(self, rid, p):
         self.clients[rid].telemetry.battery_pct = p
 
-    async def goto(self, rid, target, speed, *, issued_by, priority, task_id, charge):
+    async def goto(self, rid, target, speed, *, issued_by, priority, task_id, charge,
+                   homing=False):
         self.sent.append((rid, "goto", task_id))
         return {"ack": {"result": "rejected" if self.reject else "accepted"}}
 

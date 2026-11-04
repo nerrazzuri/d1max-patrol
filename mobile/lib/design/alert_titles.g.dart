@@ -87,5 +87,6 @@ const Map<String, (String, String)> alertTitles = <String, (String, String)>{
   'swap_soon': ('Battery swap coming up', '即将换电'),
   'swap_needed': ('Robot waiting for a battery swap', '机器人等待换电'),
   'swap_overdue': ('Battery swap overdue', '换电超时未处理'),
+  'swap_stuck': ('Battery out but robot still moving', '拔着电池机器人还在走'),
   'guard_prep': ('Charge before arming', '布防前先补能'),
 };

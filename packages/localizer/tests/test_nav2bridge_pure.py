@@ -651,6 +651,7 @@ def _生命周期桥(now):
     b._clock_wall = 1e18                                 # 代理在送时钟
     b.nav2_active = False
     b._inactive_since, b._restarts, b._manage_busy = None, 0, False
+    b._manage_deadline, b._manage_gen = 0.0, 0
     b.sent = []
 
     class _Fut:
@@ -705,3 +706,48 @@ def test_现场1104_没在送时钟或没有生命周期服务_不重启():
         now[0] += nb.LIFECYCLE_RETRY_S
         b._lifecycle_retry()
     assert b._restarts == 0
+
+
+def test_外审r3_7_生命周期管理器卡着不回_过了期限不再等_下个周期照样重来():
+    from types import SimpleNamespace as NS
+
+    from d1max_localizer.nav2bridge import LIFECYCLE_RETRY_S
+    now = [0.0]
+    b = _生命周期桥(now)
+    late = []
+
+    def call(req):
+        b.sent.append(req.command)
+        return NS(add_done_callback=late.append)        # 管理器在,但卡在切状态里不回
+    b.manage.call_async = call
+    b._lifecycle_retry()
+    now[0] += LIFECYCLE_RETRY_S + 1
+    b._lifecycle_retry()
+    assert b.sent == [3] and b._manage_busy
+    for _ in range(5):
+        now[0] += LIFECYCLE_RETRY_S + 1
+        b._lifecycle_retry()
+    assert len(b.sent) > 1, "管理请求要有期限;一次卡死不能永远不再重来"
+    n = len(b.sent)
+    late[0](NS(result=lambda: NS(success=True)))         # 第一回 reset 很晚才回来:不理
+    assert len(b.sent) == n, "过期的回调不再接着发 startup"
+
+
+def test_外审r3_7_reset没成功_不接着startup():
+    from types import SimpleNamespace as NS
+
+    from d1max_localizer.nav2bridge import LIFECYCLE_RETRY_S
+    now = [0.0]
+    b = _生命周期桥(now)
+
+    class _坏:
+        def add_done_callback(self, cb):
+            cb(self)
+
+        def result(self):
+            return NS(success=False)
+    b.manage.call_async = lambda req: (b.sent.append(req.command), _坏())[1]
+    b._lifecycle_retry()
+    now[0] += LIFECYCLE_RETRY_S + 1
+    b._lifecycle_retry()
+    assert b.sent == [3] and not b._manage_busy

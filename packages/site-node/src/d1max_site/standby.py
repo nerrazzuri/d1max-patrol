@@ -281,13 +281,16 @@ class StandbyManager:
             else None
 
     async def return_to(self, robot_id: str, *, issued_by: str,
-                        name: str | None = None, charge: bool = False) -> dict[str, Any]:
-        """``charge``:这一趟是去补能(换电,W73 外审 r2 #2)—— 狗上出发线只看中止线、低电不掉头。"""
+                        name: str | None = None, charge: bool = False,
+                        homing: bool = False) -> dict[str, Any]:
+        """``charge``:这一趟是去补能(换电,W73 外审 r2 #2)—— 狗上出发线只看中止线、低电不掉头。
+        ``homing``:回待命点(外审 r3 #4)—— 低电不掉头,但停止线留 15%、出发按路程算。"""
         p = self._checked_default(robot_id, name)
         target = MapPose(map_id=p["map_id"], map_version=p["map_version"], frame_id="map",
                          x=p["x"], y=p["y"], yaw=p["yaw"]).to_wire()
         return await self.dispatcher.goto(robot_id, target, None, issued_by=issued_by,
                                           priority=STANDBY_RETURN, charge=charge,
+                                          homing=homing and not charge,
                                           task_id=f"{STANDBY_PREFIX}{uuid.uuid4().hex[:12]}")
 
     def _on_event(self, robot_id: str, e: Event) -> None:
@@ -427,7 +430,7 @@ class StandbyManager:
         name = self._target(robot_id, after)
         came = self._route_back(robot_id, after, name)
         if came is None:
-            return await self.return_to(robot_id, issued_by=issued_by, name=name, charge=True)
+            return await self.return_to(robot_id, issued_by=issued_by, name=name, homing=True)
         return await self._return_along(robot_id, came, name)
 
     async def _dispatch_back(self, robot_id: str, after: str) -> Any:
@@ -444,10 +447,10 @@ class StandbyManager:
             try:
                 came = self._route_back(robot_id, after, name)
                 if came is None:
-                    # 外审 r2 #9:回待命点就是回家的路 —— 按去补能发(狗上出发线只看中止线),不然低电
-                    # 报警到场后过不了普通出发线,机器人留在现场耗电
+                    # 外审 r2 #9 / r3 #4:回待命点是回家的路 —— 按 homing 发(停止线 15%、出发按去那儿
+                    # 的路程算),不然低电报警到场后过不了普通出发线;不按去补能(10%)发
                     return await self.return_to(robot_id, issued_by="standby:auto", name=name,
-                                                charge=True)
+                                                homing=True)
                 return await self._return_along(robot_id, came, name)
             except DispatchRefused as exc:
                 if attempt < STANDBY_TRANSIENT_RETRIES and any(

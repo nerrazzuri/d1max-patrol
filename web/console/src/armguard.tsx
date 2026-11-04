@@ -82,6 +82,7 @@ const en = {
   stPaused: "stopped by a person, resting",
   stHeld: "saw a person: holding still and watching, waiting for the guard",
   stStopping: "stopping this lap, waiting for the robot to confirm",
+  stStandDown: "standing down: stopping the robot first, then back to standby",
   gWaiting: "Waiting: {why}",
   gSeenAgo: "checked {t} ago",
   gSeenNever: "not checked yet",
@@ -160,6 +161,7 @@ const zh: Record<GKey, string> = {
   stPaused: "被人中止，歇着",
   stHeld: "看见人：原地盯着，等保安处理",
   stStopping: "正在停下这一圈，等机器人确认",
+  stStandDown: "收队中：先让机器人停下，再回待命点",
   gWaiting: "在等：{why}",
   gSeenAgo: "{t} 前看过",
   gSeenNever: "还没看过",
@@ -205,6 +207,7 @@ export function runText(r: Run): string {
     case "paused": return gt("stPaused");
     case "held": return gt("stHeld");
     case "stopping": return gt("stStopping");
+    case "standdown": return gt("stStandDown");
     default: return gt("stResume");
   }
 }

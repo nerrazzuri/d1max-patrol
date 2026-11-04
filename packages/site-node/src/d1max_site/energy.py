@@ -64,6 +64,14 @@ def alarm_line(go_s: float, back_s: float | None = None, watch_s: float = WATCH_
     return STOP_PCT + trip * RETURN_FACTOR + drain_pct(watch_s)
 
 
+def patrol_departure_line(distance_m: float) -> float:
+    """狗上巡逻的出发线(外审 r3 #6,跟 ``engine/preflight.py`` 的 ``departure_line_pct`` 同一个式子):
+    回撤线下限(25%,跟停止线取大)+ max(:data:`COST_FLOOR_PCT`,全程耗电)× :data:`RETURN_FACTOR`;
+    全程 = 从现在的位置走完各点、回到原点的直线距离。站点放行前也按它算一遍,不让狗上拒。"""
+    trip = max(COST_FLOOR_PCT, drain_pct(walk_s(distance_m)))
+    return max(RETURN_FLOOR_PCT, STOP_PCT) + trip * RETURN_FACTOR
+
+
 def topup_target(remaining_s: float, lap_s: float) -> float:
     """补能补到多少回来:够撑到布防结束(按一圈的出站线留够),最多 :data:`MAX_RESUME_PCT`。"""
     need = return_line() + drain_pct(remaining_s) * LAP_FACTOR

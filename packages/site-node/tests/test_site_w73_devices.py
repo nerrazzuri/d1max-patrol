@@ -167,3 +167,22 @@ def test_外审r2_10_摄像头移出所有防区_按全站算_不退回旧防区
     assert t.book.by_source("cctv-cam-9")["zone"] == "东区"
     t.areas.remove(*MAP, "东区")
     assert t.book.by_source("cctv-cam-9")["zone"] == ""
+
+
+async def test_外审r3_5_摄像头移出所有防区_报来的事件也按全站_不用事件里带的旧防区(设备):
+    from d1max_site.cctv import Camera, OnvifEvent, add_camera, incident_body, set_placement
+    from d1max_site.modes import ArmingDesk
+    t = 设备
+    await t.run(12)
+    cam = Camera(name="cam-9", onvif_url="http://x", username="u", password="p", zone="东区")
+    add_camera(t.db, cam, now_ms=0)
+    set_placement(t.db, "cam-9", {"map_id": MAP[0], "map_version": MAP[1], "x": 0.0, "y": 0.0,
+                                  "yaw": 0.0, "fov_deg": 90.0})
+    t.areas.remove(*MAP, "东区")
+    assert t.book.by_source("cctv-cam-9")["zone"] == ""
+    t.desk.arming = ArmingDesk(t.db, now_ms=t.clock)
+    t.desk.arming.set_zone_home("东区", False)
+    t.desk.arming.set_mode("home", by="olga")                    # 东区撤着,别的(全站)布防
+    ev = OnvifEvent(topic="tns1:RuleEngine/FieldDetector", operation="", source={}, data={})
+    r = await t.send(t.desk.handle("cctv-cam-9", incident_body(cam, ev, t.clock())))
+    assert r["zone"] == "cctv-cam-9" and r["outcome"] == "dispatched", r

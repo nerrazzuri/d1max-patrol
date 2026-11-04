@@ -863,3 +863,137 @@ async def test_外审r2_11_跑过的路线加了停留_按新的算_冲突照样
     t.store.put_route("day", {"map_id": MAP[0], "map_version": MAP[1], "waypoints": pts,
                               "base_revision": 1}, by="alice")
     assert c._duration("day") >= 5400, "B 改了停留:旧的实际用时不算数"
+
+
+# ---------------------------------------------------------------- 外审 r3
+
+
+async def test_外审r3_1_回换电位的路上拔了一块_先停下再引导装回(站):
+    from test_site_dispatcher import target
+
+    from d1max_site.battery_swap import SwapDesk
+    from d1max_site.standby import StandbyManager
+    t = 站
+    await t.run(12)
+    await t.send(t.site.goto("A", target(6), 0.8, issued_by="alice", priority=60))
+    await t.run(120)
+    s = StandbyManager(t.db, t.site, now_ms=t.clock)
+    s.set("A", "default", map_id=MAP[0], map_version=MAP[1], x=0.0, y=0.0, yaw=0.0, default=True)
+    desk = SwapDesk(t.site, now_ms=t.clock, need=lambda _: 35.0, eta_min=lambda _: None,
+                    has_charger=lambda _: False, home=s.swap_point)
+    desk.standby = s
+    desk.alerts = 告警台()
+    t.dog.inject_packs(25.1, 60)
+    await t.run(12)
+    await t.send(desk.tick())
+    await t.run(20)
+    assert desk.s["A"]["step"] == "going" and t.duty._running("A").startswith("standby-")
+    t.dog.inject_packs(None, 60)
+    await t.run(12)
+    before = t.dog.x
+    await t.send(desk.tick())
+    assert not desk.alerts.open, "还在走:先别叫人过来装电池"
+    for _ in range(10):
+        await t.run(10)
+        await t.send(desk.tick())
+    assert abs(t.dog.x - before) < 0.5, "拔着一块:这一趟回程停下"
+    assert not t.duty._running("A")
+    assert any("装回" in a["title"] for a in desk.alerts.open), "停下了才引导装回"
+
+
+async def test_外审r3_2_在停这一圈时断线又连回来_连回来那一拍的空任务不算停了(站):
+    t = 站
+    _方案(t)
+    await _跑(t, 1.5)
+    calls = []
+
+    async def 拒(*a, **kw):
+        calls.append(a)
+        return {"ack": {"result": "rejected"}}
+    t.site.abort = 拒
+    t.duty.alerts.raise_alert(kind="dog_sees_person", robot="A", title="看见人")
+    await t.send(t.duty.tick())
+    assert t.duty.status()["runs"][0]["state"] == "stopping"
+    real = t.duty._running
+    t.duty._running = lambda _: ""
+    t.site._fresh = lambda _: False
+    await t.send(t.duty.tick())
+    t.site._fresh = lambda _: True
+    await t.send(t.duty.tick())
+    state = t.duty.status()["runs"][0]["state"]
+    t.duty._running = real
+    assert state == "stopping", "刚恢复联系的空状态不能当停车证据"
+
+
+async def test_外审r3_3_全撤防_中止被拒_接着重发_停下了才收队回待命点(站):
+    t = 站
+    t.duty.standby = stb = _待命点(_原点)
+    _方案(t)
+    await _跑(t, 1.5)
+    calls = []
+    real_abort = t.site.abort
+
+    async def 拒(*a, **kw):
+        calls.append(a)
+        return {"ack": {"result": "rejected"}}
+    t.site.abort = 拒
+    for z in ("东区", "西区"):
+        t.arming.set_zone_home(z, False)
+    t.arming.set_mode("home", by="olga")
+    await _跑(t, 12)
+    assert len(calls) >= 2, "全撤防也要重发中止"
+    assert t.duty.status()["runs"], "没停下之前不删记录"
+    assert stb.sent == []
+    t.site.abort = real_abort
+    await _跑(t, 8)
+    assert not t.duty._running("A")
+    assert t.duty.status()["runs"] == [], "停下了才收队"
+    assert stb.sent == ["A"], "收队后回待命点"
+
+
+async def test_外审r3_6_每圈回待命点那段算进一圈的电_不够就先补能(站):
+    t = 站
+    t.duty.standby = _待命点({"x": 400.0, "y": 0.0, "yaw": 0.0})
+    _方案(t)
+    t.dog.inject_battery(40.0)
+    await _跑(t, 8)
+    assert _patrols(t) == [], "带 400 m 回待命点的一圈 40% 不够:不派"
+    assert t.duty.topup_line("A") is not None, "判出不够:进补能"
+    info = t.duty._route("night-guard")
+    assert t.duty._lap_s(info, (400.0, 0.0)) > t.duty._lap_s(info) + 1000, "用时也算上那段"
+
+
+async def test_外审r3_6_站点放行的一圈_狗上出发线也过得了(站):
+    from d1max_site import energy
+    t = 站
+    t.duty.standby = stb = _待命点({"x": 100.0, "y": 0.0, "yaw": 0.0})
+    stb.home = lambda rid, m, v: {"x": 0.0, "y": 0.0}
+    e = {"id": 1, "robot": "A", "end_standby": True}
+    info = t.duty._route("night-guard")
+    await t.run(12)
+    line, _ = t.duty._lap_need(e, info, "A")
+    # 狗上(直线后端):回撤线下限 25 + max(3%,全程耗电) × 1.5;全程 = 现在 → 各点 → 待命点 →
+    # 沿来路倒回出发点 → 原点
+    from d1max_agent.engine.homing import route_length_m
+    from d1max_contract.geometry import Pose
+    c = t.site.clients["A"]
+    here = Pose.from_xy_yaw(c.telemetry.pose.x, c.telemetry.pose.y, 0.0)
+    wps = [Pose.from_xy_yaw(p["x"], p["y"], 0.0) for p in info["points"]]
+    wps.append(Pose.from_xy_yaw(100.0, 0.0, 0.0))
+    d = route_length_m(Pose.from_xy_yaw(0.0, 0.0, 0.0), wps, start=here, back="retrace")
+    assert line >= energy.patrol_departure_line(d) - 1e-9
+    assert line > t.duty._lap_need({**e, "end_standby": False}, info, "A")[0], "回待命点那段算进去"
+    assert energy.patrol_departure_line(0.0) == 25.0 + 3.0 * 1.5
+
+
+async def test_外审r3_8_路线已经500个点_不接待命点_照样派(站):
+    t = 站
+    pts = [{"name": f"p{i}", "x": 2.0 + (i % 2) * 0.1, "y": 0.0, "yaw": 0.0} for i in range(500)]
+    t.store.put_route("night-guard", {"map_id": MAP[0], "map_version": MAP[1], "kind": "guard",
+                                      "waypoints": pts, "base_revision": 1}, by="alice")
+    t.duty.standby = _待命点({"x": 0.0, "y": 0.0, "yaw": 0.0})
+    _方案(t)
+    await _跑(t, 3)
+    assert _patrols(t), "合法的 500 点路线照样派"
+    assert len(_names(_patrols(t)[0])) == 500
+    assert _log(t, "no_standby")

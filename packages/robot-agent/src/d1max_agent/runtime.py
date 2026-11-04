@@ -634,7 +634,8 @@ class AgentRuntime:
                               max_speed_mps=cmd.payload.get("max_speed_mps"), parts=self.parts,
                               events=self.events, now_ms=self._now, priority=cmd.priority,
                               photo=cmd.payload.get("photo"),
-                              charge=cmd.payload.get("charge") is True)
+                              charge=cmd.payload.get("charge") is True,
+                              homing=cmd.payload.get("homing") is True)
 
     def _note_patrol(self, cmd: Command, mission: Any) -> None:
         """记下这趟巡检命令带的任务修订(R4):站点给了 ``mission_rev`` 就原样记;老站点没给就按收到的

@@ -332,3 +332,29 @@ def test_W73外审_报警出动的goto_出发线回撤线按停止线做底_普�
     assert departure_line_pct(alarm, home) < 20.0 < departure_line_pct(plain, home), \
         "近处报警 20% 能去;普通任务照旧不放"
     assert 任务(ALARM_PRIORITY, charge=True).policy.charging_trip, "去桩那一趟不受影响"
+
+
+def test_W73外审r3_4_回待命点这一趟_停止线15_出发按路程算_不是去充电的10():
+    """回家的路:低电不掉头、出发线 = 停止线 + 去那儿的耗电 × 1.5(不算回原点那段);
+    但不是去补能 —— 停止线留 15%,不像去充电桩那趟放到 10%、也不跳过路程预算。"""
+    from types import SimpleNamespace
+
+    from d1max_agent.engine.homing import HomePoint
+    from d1max_agent.engine.preflight import back_mode, departure_line_pct
+    from d1max_contract.charging import HOMING_FLOOR_PCT
+
+    def 任务(x, **kw):
+        return EngineGotoTask(task_id="t", target=_target(x, 0.0), max_speed_mps=None,
+                              parts=SimpleNamespace(), events=SimpleNamespace(),
+                              now_ms=lambda: 0, priority=-10, **kw)._mission()
+
+    home = HomePoint(map_id="m", pose=Pose.from_xy_yaw(0.0, 0.0, 0.0), marked_at_ms=0)
+    near, far = 任务(3.0, homing=True), 任务(400.0, homing=True)
+    assert HOMING_FLOOR_PCT == 15.0
+    assert (near.policy.battery_return_pct, near.policy.battery_abort_pct) == (15.0, 15.0)
+    assert near.policy.on_battery_low == "continue" and not near.policy.charging_trip
+    assert back_mode(SimpleNamespace(), near) == "none"
+    assert departure_line_pct(near, home, back="none") == 15.0 + 3.0 * 1.5, "近:底 15 + 最少 3%"
+    assert departure_line_pct(far, home, back="none") > 25.0, "远:按路程算,不是只看停止线"
+    plain = 任务(3.0)
+    assert plain.policy.battery_return_pct == 25.0, "普通 goto 照旧"

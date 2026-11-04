@@ -352,6 +352,8 @@ class CommandProcessor:
             return "payload: max_speed_mps 要是正的有限数"
         if "charge" in cmd.payload and not isinstance(cmd.payload["charge"], bool):
             return "payload: charge 要是 true/false"     # W13:去充电桩的这一趟
+        if "homing" in cmd.payload and not isinstance(cmd.payload["homing"], bool):
+            return "payload: homing 要是 true/false"     # W73 外审 r3 #4:回待命点的这一趟
         photo = cmd.payload.get("photo", None)
         if photo is not None:
             from d1max_contract.mission import CAMERAS

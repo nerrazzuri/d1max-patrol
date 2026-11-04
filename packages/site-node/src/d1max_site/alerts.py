@@ -101,6 +101,8 @@ LEVEL_OF: dict[str, Level] = {
     "swap_needed": Level.P1,
     "swap_overdue": Level.P1,
     "guard_stuck": Level.P2,
+    # 外审 r3 #1:有一块电池拔着、机器人还在走,站点停不下来 —— 人别靠近,遥控器 / 急停
+    "swap_stuck": Level.P1,
     # 布防中狗没在驱离时自己看见人(W33,决策 48):保安看现场、决定要不要就地驱离。
     "dog_sees_person": Level.P1,
     # W30b(决策 51):狗上的照片、录像没加密(没装站点公钥);狗封好的证据站点解不开(私钥不对、没配)。
