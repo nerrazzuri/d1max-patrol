@@ -70,6 +70,9 @@ CLOCK_STALE_S = 2.0
 OBS_Z = 0.3
 #: 里程一下跳这么远(米)当被搬走了(仿真里换场景):清代价地图。
 JUMP_M = 1.0
+#: 代理的 ``t_ms`` 往回跳超过这么多(毫秒)= 机器人的钟被调回去了(对时):从新的时间接着发。
+#: 以前一律当旧拍丢掉,转接节点从此不发 /clock、odom TF,Nav2 一直不就绪(11-04 现场 G1)。
+CLOCK_BACK_MS = 5_000
 
 
 def _stamp_ms(st: Any) -> int:
@@ -349,7 +352,10 @@ class Nav2Bridge:
 
     def on_tick(self, m: dict[str, Any]) -> None:
         if m["t_ms"] <= self.t_ms:
-            return
+            if self.t_ms - m["t_ms"] < CLOCK_BACK_MS:
+                return                                   # 重复、乱序的一拍
+            log.warning("代理的钟往回跳了 %.1f 秒(机器人对过时?):从新的时间接着发",
+                        (self.t_ms - m["t_ms"]) / 1000)
         self.t_ms = m["t_ms"]
         self._clock_wall = time.monotonic()
         stamp = self._stamp(self.t_ms)
