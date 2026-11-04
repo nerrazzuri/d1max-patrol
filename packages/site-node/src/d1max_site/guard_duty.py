@@ -161,7 +161,10 @@ class GuardDuty:
         self._stop_then: dict[int, str] = {}
         #: 狗上说的出发线(外审 r5 #4):机器人 → (线 %, 什么时候说的)。只在内存:
         #: 重启了再被拒一次就又知道。
-        self._dog_need: dict[str, tuple[float, int]] = {}
+        #: 狗上说过的出发线:``(线, 什么时候, 那一圈的预算上下文)``(外审 r5 #4;r6 #3 绑上下文)
+        self._dog_need: dict[str, tuple[float, int, tuple[Any, ...] | None]] = {}
+        #: 每台最近派出去那一圈的预算上下文(狗上回「不够」时记到 ``_dog_need`` 上)
+        self._sent_key: dict[str, tuple[Any, ...]] = {}
         #: 每个方案最后一次看见机器人在跑派给它的那一趟、或者联系不上它的时刻(``LOST_S`` 从这算)。
         self._alive_ms: dict[int, int] = {}
         #: 每台机器人从什么时候起一直听得见(``SETTLE_HEARD_MS`` 从这算)。
@@ -448,9 +451,13 @@ class GuardDuty:
             except Exception:  # noqa: BLE001 - 算不出:按最多充
                 nb = None
         remaining = (nb - now) / 1000.0 if nb is not None and nb > now else 12 * 3600.0
-        # 外审 r5 #4:补到的要盖过判「不够」的那条线(可能是狗上的),不然补完回来还是不够
-        return round(max(energy.topup_target(remaining, got[1]),
-                         min(energy.MAX_RESUME_PCT, got[0] + 10.0)), 1)
+        # 外审 r5 #4:补到的要盖过判「不够」的那条线(可能是狗上的),不然补完回来还是不够;
+        # r6 #2:线高过平时最多补到的 95% 也要补过它(最多 100%;线 > 100% 的在 _why_not 里直接报)
+        target = max(energy.topup_target(remaining, got[1]),
+                     min(energy.MAX_RESUME_PCT, got[0] + 10.0))
+        if target < got[0] + 0.5:
+            target = min(100.0, got[0] + 1.0)
+        return round(target, 1)
 
     def robots(self) -> set[str]:
         """值守中的机器人(排程别往它们身上派)。"""
@@ -487,14 +494,9 @@ class GuardDuty:
         tail = self._tail_xy(e, info, rid) if len(pts) < MAX_PATROL_WAYPOINTS else None
         lap_s = self._lap_s(info, tail, pts) or 0.0
         line = max(self.min_pct, energy.lap_line(lap_s))
-        home_fn = getattr(self.standby, "home", None) if self.standby is not None else None
-        try:
-            home = home_fn(rid, info["map_id"], info["map_version"]) if callable(home_fn) else None
-        except Exception:  # noqa: BLE001 - 原点查不到:只按站点那条
-            home = None
         # 外审 r4 #4:站点不知道狗上的原点就不按狗上的式子算(以前拿待命点当原点,远的待命点
         # 满电都不够),只按站点那条线;狗上真拒了,原因进值守记录
-        h = (float(home["x"]), float(home["y"])) if home is not None else None
+        h = self._home_xy(info, rid)
         if h is not None and pts:
             c = self._client(rid)
             pose = c.telemetry.pose if c is not None and c.telemetry is not None else None
@@ -512,9 +514,27 @@ class GuardDuty:
                                                                           strict=False))
             line = max(line, energy.patrol_departure_line(d))
         dog = self._dog_need.get(rid)
-        if dog is not None and self._now() - dog[1] <= DOG_NEED_MS:
+        # 外审 r6 #3:狗上的线只对同一份预算上下文(图、路线版本、点、待命点、原点)算数;
+        # 改过就重新让狗上判
+        if dog is not None and self._now() - dog[1] <= DOG_NEED_MS \
+                and dog[2] == self._need_key(e, info, rid, pts):
             line = max(line, dog[0])
         return line, lap_s
+
+    def _home_xy(self, info: dict[str, Any], rid: str) -> tuple[float, float] | None:
+        home_fn = getattr(self.standby, "home", None) if self.standby is not None else None
+        try:
+            home = home_fn(rid, info["map_id"], info["map_version"]) if callable(home_fn) else None
+        except Exception:  # noqa: BLE001 - 原点查不到:只按站点那条
+            home = None
+        return (float(home["x"]), float(home["y"])) if home is not None else None
+
+    def _need_key(self, e: dict[str, Any] | None, info: dict[str, Any], rid: str,
+                  pts: list[dict[str, Any]] | None) -> tuple[Any, ...]:
+        """一圈电量预算的上下文:图、路线版本、这一圈的点(不管顺序)、待命点、原点。"""
+        names = frozenset(str(p.get("name")) for p in (pts or info["points"]))
+        return (info["map_id"], info["map_version"], info["id"], info.get("revision"), names,
+                self._tail_xy(e, info, rid), self._home_xy(info, rid))
 
     def _why_not(self, rid: str, info: dict[str, Any], e: dict[str, Any] | None = None,
                  pts: list[dict[str, Any]] | None = None) -> str:
@@ -531,6 +551,11 @@ class GuardDuty:
         if pct is None:
             return f"{rid} 还没报电量"
         line, lap_s = self._lap_need(e, info, rid, pts)
+        if line > 100.0:
+            # 外审 r6 #2:满电也过不了这条线 —— 补能没用,不去补;直说预算不够
+            self.low.pop(rid, None)
+            return (f"{rid} 满电也不够跑这一圈(要 ≥ {line:.0f}%):"
+                    f"请缩短路线、少布防几个防区,或把待命点、原点设近一点")
         if pct < line:                                   # W73 第四期:出站线,不够就先补能
             self.low[rid] = (line, lap_s, self._now())
             return f"{rid} 电量 {pct:.0f}%,不够跑一圈(要 ≥ {line:.0f}%),先补能"
@@ -890,7 +915,7 @@ class GuardDuty:
             # 外审 r5 #4:狗上起飞前说电量不够出发 —— 不算跑不成(不报堵、不一分钟后重派),
             # 记下狗上的线,下一拍按它判「先补能」
             need = _need_pct(data)
-            self._dog_need[rid] = (need, now)
+            self._dog_need[rid] = (need, now, self._sent_key.get(rid))
             self._log("lap_low", robot=rid, entry=eid,
                       detail=f"机器人说电量不够出发(它算要 ≥ {need:.0f}%):先补能")
             back = {"task_id": run["task_id"], "lap": run["lap"],
@@ -978,6 +1003,7 @@ class GuardDuty:
                       "VALUES (?,?,?,?,?,?,?,?,0,?,'',?)",
                       (eid, rid, "lap", tid, now, lap, started,
                        started + int(e["gap_min"]) * 60_000, plan, run["fails"] if run else 0))
+        self._sent_key[rid] = self._need_key(e, info, rid, pts)
         self._log("resume" if resume else "lap_start", robot=rid, entry=eid,
                   detail=(f"第 {lap} 圈接着跑" if resume else f"第 {lap} 圈") + ":"
                   + "→".join(names))
