@@ -48,7 +48,9 @@ from d1max_site.routes import NAME_RE
 
 log = logging.getLogger(__name__)
 
-#: 派了之后狗上既没在跑、也没终态事件,等这么久(秒)当被打断。
+#: 派了之后狗上既没在跑、也没终态事件,等这么久(秒)当被打断。从「最后一次看见它在跑这一趟、
+#: 或者联系不上它」算起(11-04 现场:走远断网,站点收到离线状态手上没任务;断网期间不算,
+#: 连回来以后再给这么久让它把离线时的事件补上来,别把还在跑的那一圈当打断重派)。
 LOST_S = 90
 #: 人中止之后歇多久(毫秒)。
 PAUSE_MS = 10 * 60_000
@@ -139,6 +141,8 @@ class GuardDuty:
         #: 在停这一圈的方案:停下以后进哪一步(``held`` / ``resume``)、中止发了几次。只在内存:
         #: 站点重启后停下了按 ``resume`` 接着办(还看见人的话下一拍照样再盯)。
         self._stop_then: dict[int, str] = {}
+        #: 每个方案最后一次看见机器人在跑派给它的那一趟、或者联系不上它的时刻(``LOST_S`` 从这算)。
+        self._alive_ms: dict[int, int] = {}
         self._stop_tries: dict[int, int] = {}
         dispatcher.on_event(self._on_event)
 
@@ -583,7 +587,7 @@ class GuardDuty:
             if now >= run["next_lap_ms"]:
                 await self._start_lap(e, info, armed, rid, run)
             elif term is None:
-                if running != run["task_id"] and now - run["sent_ms"] >= LOST_S * 1000:
+                if self._lost(e["id"], run, running, now):
                     self._set_run(e["id"], state="wait")
             elif term[0] == "task_done":
                 self._set_run(e["id"], state="post")
@@ -660,7 +664,9 @@ class GuardDuty:
         """在等这一趟停下:旧任务有结果了、或手上已经不是它 = 停了。没停到点再发中止,
         发够 :data:`STOP_ALERT` 次报警;停下之前什么都不派。"""
         eid, rid, now = e["id"], run["robot_id"], self._now()
-        stopped = running != run["task_id"] or self._terminal(rid, run["task_id"]) is not None
+        # 联系不上时手上「没任务」是离线状态给的,不算停了;只认它的结果事件
+        stopped = self._terminal(rid, run["task_id"]) is not None \
+            or (self._heard(rid) and running != run["task_id"])
         if stopped:
             then = self._stop_then.pop(eid, "resume")
             self._stop_tries.pop(eid, None)
@@ -682,6 +688,21 @@ class GuardDuty:
                        "站点接着发,请看机器人是否在线、必要时到现场或用遥控器停下")
         await self._send_abort(eid, run)
 
+    def _heard(self, rid: str) -> bool:
+        c = self._client(rid)
+        if c is None or c.status is None or not c.status.online:
+            return False
+        fresh = getattr(self.dispatcher, "_fresh", None)
+        return not callable(fresh) or bool(fresh(c))
+
+    def _lost(self, eid: int, run: dict[str, Any], running: str, now: int) -> bool:
+        """派的那一趟没在跑、也没结果,而且从最后一次看见它在跑(或联系不上)起过了 :data:`LOST_S`。"""
+        if running == run["task_id"] or not self._heard(run["robot_id"]):
+            self._alive_ms[eid] = now
+            return False
+        since = max(run["sent_ms"], self._alive_ms.get(eid, 0))
+        return now - since >= LOST_S * 1000
+
     def _off_zones(self, info: dict[str, Any], armed: list[str], run: dict[str, Any]) -> list[str]:
         """这一圈还没走到的点里,所在防区已经撤防的(外审 r1 #4)。"""
         seen = self._seen(info["map_id"], info["map_version"])
@@ -702,7 +723,7 @@ class GuardDuty:
                 await self._stop(eid, run, "resume")
                 return
         if term is None:
-            if running != run["task_id"] and now - run["sent_ms"] >= LOST_S * 1000:
+            if self._lost(e["id"], run, running, now):
                 self._log("interrupted", robot=rid, entry=eid,
                           detail="派了没在跑,也没结果(当被打断)")
                 self._set_run(eid, state="resume", until_ms=now)
