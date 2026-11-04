@@ -394,7 +394,9 @@ def clear_distance(occ: bytes, known: bytes, cfg: Config = DEFAULT, *,
 
 
 def clear_why(occ: bytes, known: bytes, cfg: Config = DEFAULT) -> str:
-    """许可走廊(狗头那头)里第一格挡 / 看不见的是哪一格(看日志用;跟 :func:`clear_distance` 一个走法)。"""
+    """许可走廊(狗头那头)里第一格挡 / 看不见的是哪一格。
+
+    看日志用;跟 :func:`clear_distance` 一个走法。"""
     n = cfg.size
     front, half = cfg.body_len / 2, cfg.body_wid / 2 + cfg.margin
     for r in range(n // 2, n):
