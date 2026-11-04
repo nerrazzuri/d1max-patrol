@@ -22,8 +22,8 @@ from nexwar_contract import ed25519
 from nexwar_contract.binding import BindingError, check_serial
 
 VERSION = 1
-_CERT_DOMAIN = b"nexwar_device_cert_v1\0"
-_ATTEST_DOMAIN = b"nexwar_attest_v2\0"     # v2:现场芯片编号也签进去(外审 W63-1 第 3 条)
+_CERT_DOMAIN = b"d1max-device-cert-v1\0"
+_ATTEST_DOMAIN = b"d1max-attest-v2\0"     # v2:现场芯片编号也签进去(外审 W63-1 第 3 条)
 _HEX64 = re.compile(r"[0-9a-f]{64}")
 _MODEL = re.compile(r"[A-Za-z0-9._-]{1,32}")
 _PURPOSE = re.compile(r"[a-z_]{1,16}")

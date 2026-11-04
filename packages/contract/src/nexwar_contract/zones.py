@@ -486,7 +486,7 @@ def zones_digest(zs: ZoneSet) -> str:
     body = {"map_id": zs.map_id, "map_version": zs.map_version,
             "zones": sorted(wires, key=lambda w: str(w.get("id")))}
     raw = json.dumps(body, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
-    return hashlib.sha256(b"nexwar_zones_digest/1\n" + raw.encode("utf-8")).hexdigest()
+    return hashlib.sha256(b"d1max-zones-digest/1\n" + raw.encode("utf-8")).hexdigest()
 
 
 def _as_strict(new: Zone, old: Zone) -> bool:

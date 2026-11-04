@@ -26,7 +26,7 @@ from nexwar_contract import ed25519
 
 STICKER_PREFIX = "D1MAXBOT1."
 UNBIND_PREFIX = "D1MAXUNBIND1."
-_UNBIND_DOMAIN = b"nexwar_unbind_v1\n"
+_UNBIND_DOMAIN = b"d1max-unbind-v1\n"
 
 #: Crockford Base32(没有 I L O U)。
 ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
@@ -74,7 +74,7 @@ def normalize_code(text: str) -> str:
 
 
 def code_hash(code: str) -> str:
-    return hashlib.sha256(("nexwar_bind_code:" + normalize_code(code)).encode()).hexdigest()
+    return hashlib.sha256(("d1max-bind-code:" + normalize_code(code)).encode()).hexdigest()
 
 
 def pretty_code(code: str) -> str:
@@ -85,7 +85,7 @@ def pretty_code(code: str) -> str:
 
 def check_digits(nonce: str) -> str:
     """核对码:6 位数。"""
-    h = hashlib.sha256(("nexwar_bind_check:" + nonce).encode()).digest()
+    h = hashlib.sha256(("d1max-bind-check:" + nonce).encode()).digest()
     return f"{int.from_bytes(h[:8], 'big') % 1_000_000:06d}"
 
 

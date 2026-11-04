@@ -1709,13 +1709,19 @@ class _Handler(TlsHandlerMixin):
             raise HttpError(413, f"请求体超过 {MAX_BODY} 字节")
         return self.rfile.read(n) if n else b""
 
+    def _src_hdr(self, name: str) -> str | None:
+        """事件源回调的请求头 ``X-Nexwar-<name>``;改名前就配好的设备还发 ``X-D1MAX-<name>``,
+        照收(改名外审 r1 #16;请求头不分大小写)。"""
+        got = self.headers.get("X-Nexwar-" + name)
+        return got if got is not None else self.headers.get("X-D1MAX-" + name)
+
     def _incident_in(self) -> None:
         from nexwar_site.incidents import IncidentAuthError, IncidentError
         desk = self._desk()
         raw = self._raw_body()
         try:
-            desk.verify(self.headers.get("X-Nexwar-Source"), self.headers.get("X-Nexwar-Timestamp"),
-                        self.headers.get("X-Nexwar-Signature"), raw)
+            desk.verify(self._src_hdr("Source"), self._src_hdr("Timestamp"),
+                        self._src_hdr("Signature"), raw)
         except IncidentAuthError as exc:
             # 对外只说「验签没过」:具体哪一步没过只进日志(不让人探出哪些源登记过)。
             log.warning("事件回调验签没过(%s):%s", self.client_address[0], exc)
@@ -1724,7 +1730,7 @@ class _Handler(TlsHandlerMixin):
             body = json.loads(raw or b"{}")
         except (ValueError, UnicodeDecodeError) as exc:
             raise HttpError(400, f"JSON 无法解析: {exc}") from exc
-        source = self.headers.get("X-Nexwar-Source") or ""
+        source = self._src_hdr("Source") or ""
         self._actor = f"source:{source}"
         if not desk.allow(source):                       # W16:每个事件源每分钟有上限
             raise HttpError(429, "此事件源一分钟内报得太多,超出的不收")
@@ -2788,6 +2794,11 @@ class _Handler(TlsHandlerMixin):
             payload.pop("confirm_password", None)
             self._audit_detail = {k: v for k, v in payload.items()
                                   if isinstance(v, (str, int, list))}
+        if isinstance(payload.get("unit"), str):
+            from nexwar_site.remote_ops import robot_unit
+            c = getattr(self.site.dispatcher, "clients", {}).get(robot_id)
+            tasks = getattr(getattr(c, "capabilities", None), "tasks", None)
+            payload["unit"] = robot_unit(tasks, kind, payload["unit"])
         r = self.site.dispatch(lambda: self.site.dispatcher.map_command(
             robot_id, kind, payload, issued_by=str(user)))
         ack = r["ack"]
@@ -2799,7 +2810,7 @@ class _Handler(TlsHandlerMixin):
     def _bundle_extra(self, hours: int) -> dict[str, bytes]:
         """诊断包里另外带的(W55):每台在线机器人的诊断快照、主要服务的日志;App、网页的错误记录。
         机器人那边一项取不到写进它的 errors.txt,别的照样打包。"""
-        from nexwar_site.remote_ops import dumps
+        from nexwar_site.remote_ops import dumps, robot_unit
         out: dict[str, bytes] = {}
         since = self.site._now() - hours * 3_600_000
         if self.site.client_errors is not None:
@@ -2828,6 +2839,7 @@ class _Handler(TlsHandlerMixin):
                 if "ops_diag" in tasks:
                     jobs.append((rid, "ops_diag", {}))
                 for u in units:
+                    u = robot_unit(tasks, "ops_journal", u)      # 还没升级的报老名字
                     if u in (tasks.get("ops_journal") or {}).get("units", []):
                         jobs.append((rid, "ops_journal", {"unit": u, "hours": min(hours, 168)}))
             got = await asyncio.gather(*(one(r, k, p) for r, k, p in jobs))

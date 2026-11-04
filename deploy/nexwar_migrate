@@ -18,6 +18,8 @@ SYSTEMCTL=${NEXWAR_MIGRATE_SYSTEMCTL:-systemctl}
 USERMOD=${NEXWAR_MIGRATE_USERMOD:-usermod}
 GROUPMOD=${NEXWAR_MIGRATE_GROUPMOD:-groupmod}
 RECORD="$R/var/backups/nexwar-migrate.enabled"
+# 进度标记:prepare 开始改系统之前写、全做完才删。断电以后重跑:有它就把每一步再走一遍(每步都能重跑)。
+STATE="$R/var/backups/nexwar-migrate.state"
 
 DIRS="/etc/d1max-site:/etc/nexwar_site /etc/d1max-ops:/etc/nexwar_ops /etc/d1max-console:/etc/nexwar_console
 /etc/d1max:/etc/nexwar /opt/d1max-site:/opt/nexwar_site /opt/d1max:/opt/nexwar
@@ -56,18 +58,74 @@ anything_old() {
   return 1
 }
 
-prepare() {
-  anything_old || return 0
-  say "这台机器还有改名前(d1max)的东西:换成 nexwar"
+# 配置里的老路径、老话题 → 新的(sed 表达式;先长后短:/etc/d1max-site 先于 /etc/d1max)
+SEDX='s/D1MAX_/NEXWAR_/g
+s#/etc/d1max-site#/etc/nexwar_site#g;s#/etc/d1max-ops#/etc/nexwar_ops#g
+s#/etc/d1max-console#/etc/nexwar_console#g;s#/etc/d1max#/etc/nexwar#g
+s#/opt/d1max-site#/opt/nexwar_site#g;s#/opt/d1max#/opt/nexwar#g
+s#/var/lib/d1max-site#/var/lib/nexwar_site#g;s#/var/lib/d1max-ops#/var/lib/nexwar_ops#g
+s#/var/lib/d1max#/var/lib/nexwar#g;s#/usr/local/lib/d1max#/usr/local/lib/nexwar#g'
+# 只给配置用:ROS 话题 /d1max/xxx → /nexwar/xxx(老路径上面已经换完,这里剩下的只有话题)
+TOPICX='s#/d1max/#/nexwar/#g'
+
+conflicts() {
   for pair in $DIRS; do
     old="$R${pair%%:*}"; new="$R${pair#*:}"
-    if [ -e "$old" ] && [ -e "$new" ] && [ -n "$(ls -A "$new" 2>/dev/null)" ]; then
-      echo "错误: $old 和 $new 都有内容,不知道该留哪个。看一眼,把不要的那个挪走再装。" >&2
-      exit 2
-    fi
+    if [ -e "$old" ] && [ -e "$new" ] && [ -n "$(ls -A "$new" 2>/dev/null)" ]; then echo "$old 和 $new"; fi
   done
-  stamp=$(date -u +%Y%m%dT%H%M%SZ)
+  for pair in $FILES; do
+    old="$R${pair%%:*}"; new="$R${pair#*:}"
+    if [ -e "$old" ] && [ -s "$new" ]; then echo "$old 和 $new"; fi
+  done
+}
+
+# 配置文件:env、*.conf/json/yaml/toml(/etc 下我们的目录),站点数据目录里的 site.json、broker 配置
+config_files() {
+  for d in /etc/nexwar /etc/nexwar_site /etc/nexwar_ops /etc/nexwar_console; do
+    [ -d "$R$d" ] || continue
+    find "$R$d" -type f \( -name env -o -name '*.env' -o -name '*.conf' -o -name '*.json' \
+        -o -name '*.yaml' -o -name '*.yml' -o -name '*.toml' \)
+  done
+  for f in /etc/nexwar_ops.json /var/lib/nexwar_site/site.json; do [ -f "$R$f" ] && echo "$R$f"; done
+  [ -d "$R/var/lib/nexwar_site/broker" ] && find "$R/var/lib/nexwar_site/broker" -maxdepth 1 -type f \
+      -name '*.conf'
+  return 0
+}
+
+# 搬过去的程序目录里写死的绝对路径:解释器包装、venv 的脚本头(bin/ 下的文本文件)、pyvenv.cfg、
+# 版本槽记的 SuperLIO 位置;指着老位置的软链(current、superlio/current)。老版本槽里的代码不碰
+# (不会再跑;版本包按哈希对账)。二进制不碰(grep -I)。
+relocate() {
+  for d in /opt/nexwar /opt/nexwar_site /var/lib/nexwar /var/lib/nexwar_site; do
+    [ -d "$R$d" ] || continue
+    find "$R$d" -type l | while read -r l; do
+      t=$(readlink "$l")
+      n=$(printf '%s\n' "$t" | sed "$SEDX")
+      [ "$n" = "$t" ] || ln -sfn "$n" "$l"
+    done
+  done
+  { [ -f "$R/opt/nexwar/bin/python" ] && echo "$R/opt/nexwar/bin/python"
+    for v in /opt/nexwar/bin-venv /opt/nexwar_site/venv; do
+      [ -d "$R$v" ] && find "$R$v" \( -path '*/bin/*' -o -name pyvenv.cfg \) -type f
+    done
+    [ -d "$R/opt/nexwar/releases" ] && find "$R/opt/nexwar/releases" -path '*/venv/superlio-root' -type f
+  } | while read -r f; do
+    grep -qIE '/(opt|etc|var/lib)/d1max' "$f" 2>/dev/null || continue
+    sed -i "$SEDX" "$f"
+  done
+}
+
+prepare() {
+  anything_old || [ -f "$STATE" ] || return 0
+  say "这台机器还有改名前(d1max)的东西:换成 nexwar"
+  c=$(conflicts)
+  if [ -n "$c" ]; then
+    printf '%s\n' "$c" | sed 's/^/错误: /;s/$/ 都有内容,不知道该留哪个。看一眼,把不要的那个挪走再装。/' >&2
+    exit 2
+  fi
   mkdir -p "$R/var/backups"
+  echo prepare > "$STATE"
+  stamp=$(date -u +%Y%m%dT%H%M%SZ)
   conf=""
   for p in /etc/d1max /etc/d1max-site /etc/d1max-ops /etc/d1max-console /etc/d1max-ops.json \
            /etc/wireguard/d1max.conf; do
@@ -78,14 +136,12 @@ prepare() {
     (umask 077; tar -C "$R/" -czf "$bk" $conf)
     say "配置先备份到 ${bk#"$R"}(只有 root 能读;里面有私钥、PIN)"
   fi
-  : > "$RECORD.tmp"
+  # 开着的单元**先记下(落盘)再停**:停到一半断电,重跑时已经停了的查不出原来开着
   for u in $(old_units); do
-    if $SYSTEMCTL is-enabled --quiet "$u" 2>/dev/null; then echo "$u" >> "$RECORD.tmp"; fi
+    if $SYSTEMCTL is-enabled --quiet "$u" 2>/dev/null; then echo "$u" >> "$RECORD"; sync; fi
     $SYSTEMCTL disable --now "$u" >/dev/null 2>&1 || true
   done
-  # 记下的开着的单元并到老记录里(重跑 prepare 不丢上一次记的)
-  { [ -f "$RECORD" ] && cat "$RECORD"; cat "$RECORD.tmp"; } | sort -u > "$RECORD.new"
-  rm -f "$RECORD.tmp"; mv "$RECORD.new" "$RECORD"
+  if [ -f "$RECORD" ]; then sort -u "$RECORD" > "$RECORD.new"; mv "$RECORD.new" "$RECORD"; fi
   for f in "$R"/etc/systemd/system/d1max-* "$R"/etc/systemd/system/*.wants/d1max-*; do
     [ -e "$f" ] || [ -L "$f" ] || continue
     rm -rf "$f"
@@ -93,35 +149,27 @@ prepare() {
   for pair in $DIRS $FILES; do
     old="$R${pair%%:*}"; new="$R${pair#*:}"
     [ -e "$old" ] || continue
-    [ -d "$new" ] && [ -z "$(ls -A "$new")" ] && rmdir "$new"
+    if [ -d "$new" ] && [ -z "$(ls -A "$new")" ]; then rmdir "$new"; fi
+    [ -f "$new" ] && [ ! -s "$new" ] && rm -f "$new"
     mkdir -p "$(dirname "$new")"
     mv "$old" "$new"
     say "${old#"$R"} → ${new#"$R"}"
   done
   for f in $DROP; do rm -f "$R$f"; done
-  # 配置里的键、老路径(env、各种 .conf / .json / .yaml);证书、私钥不碰
-  { for d in /etc/nexwar /etc/nexwar_site /etc/nexwar_ops /etc/nexwar_console; do
-    [ -d "$R$d" ] || continue
-    find "$R$d" -type f \( -name env -o -name '*.env' -o -name '*.conf' -o -name '*.json' \
-        -o -name '*.yaml' -o -name '*.yml' -o -name '*.toml' \)
-  done
-  [ -f "$R/etc/nexwar_ops.json" ] && echo "$R/etc/nexwar_ops.json"
-  } | while read -r f; do
+  # 证书、私钥不碰;只改键名、路径、话题,值不打印
+  config_files | while read -r f; do
       grep -qE 'D1MAX_|/d1max' "$f" 2>/dev/null || continue
-      sed -i -e 's/D1MAX_/NEXWAR_/g' \
-             -e 's#/etc/d1max-site#/etc/nexwar_site#g;s#/etc/d1max-ops#/etc/nexwar_ops#g' \
-             -e 's#/etc/d1max-console#/etc/nexwar_console#g;s#/etc/d1max#/etc/nexwar#g' \
-             -e 's#/opt/d1max-site#/opt/nexwar_site#g;s#/opt/d1max#/opt/nexwar#g' \
-             -e 's#/var/lib/d1max-site#/var/lib/nexwar_site#g;s#/var/lib/d1max-ops#/var/lib/nexwar_ops#g' \
-             -e 's#/var/lib/d1max#/var/lib/nexwar#g;s#/usr/local/lib/d1max#/usr/local/lib/nexwar#g' "$f"
+      sed -i -e "$SEDX" -e "$TOPICX" "$f"
       say "改了 ${f#"$R"} 里的键名、路径(值不打印)"
   done
+  relocate
   if [ -z "$R" ] && id -u d1max-site >/dev/null 2>&1 && ! id -u nexwar_site >/dev/null 2>&1; then
     $USERMOD -l nexwar_site -d /var/lib/nexwar_site d1max-site
     getent group d1max-site >/dev/null 2>&1 && $GROUPMOD -n nexwar_site d1max-site
     say "账号 d1max-site → nexwar_site(uid 不变)"
   fi
   $SYSTEMCTL daemon-reload >/dev/null 2>&1 || true
+  rm -f "$STATE"
 }
 
 finish() {

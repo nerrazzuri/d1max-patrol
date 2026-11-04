@@ -206,6 +206,9 @@ TXT
   exit 0
 fi
 systemctl enable --now nexwar_mosquitto.service nexwar_site.service
+# 改名迁移:改名前开着的(WireGuard 等)按新名字开回来。升级模式下面就退出了,所以放在这儿
+# (恢复模式上面已经退出:服务等恢复完再起,记录留着,下次正常装机再开)
+sh "$PKG/deploy/nexwar_migrate" finish || true
 if [[ $UPGRADE -eq 1 ]]; then
   echo "升级好了(站点服务已起)。"
   exit 0
@@ -228,7 +231,6 @@ cat <<TXT
   sudo -u nexwar_site $VENV/bin/nexwar_site --home $HOME_DIR keys-export <U 盘上的文件>
 恢复步骤见 docs/备份恢复与灾备演练.md 第四节。
 TXT
-sh "$PKG/deploy/nexwar_migrate" finish || true
 
 if [[ $NO_VPN -eq 0 ]]; then
   cat <<TXT

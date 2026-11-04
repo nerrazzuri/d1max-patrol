@@ -78,7 +78,7 @@ def read_hw_id(sources: Iterable[Path] = HW_SOURCES) -> str:
         if m is None and "\n" in value:                # 别的多行文件(cpuinfo 没 Serial 那一行)
             continue
         if not _placeholder(value) and len(value) <= 128:
-            return hashlib.sha256(b"nexwar_hw|" + value.encode("ascii", "replace")).hexdigest()
+            return hashlib.sha256(b"d1max-hw|" + value.encode("ascii", "replace")).hexdigest()
     raise DevIdError("读不到芯片编号(设备树 serial-number、cpuinfo 的 Serial 都没有):"
                      "这块板不能出厂")
 

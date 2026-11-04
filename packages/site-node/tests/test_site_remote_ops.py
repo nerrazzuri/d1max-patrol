@@ -619,3 +619,27 @@ def test_W58_钟差还不知道_当忙_过一会儿再试_不报续签失败(tmp
     asyncio.run(r._auto("A"))
     assert r._wait["A"] == remote_ops.BUSY_RETRY_MS
     assert not desk.has_open("A", "cert_renew_failed")
+
+
+def test_改名外审r1_15_还没升级的机器人报老服务名_站点按它认的名字发(站点, monkeypatch):
+    """新网页 / App 只认新名字(nexwar_*);老机器人白名单里只有 d1max-*。站点按机器人自己报的那份
+    名单换成它认的名字;新机器人照原样。"""
+    s = 站点
+    alice = _登(s, "alice")
+    sent = _假狗(s, monkeypatch, {"result": "accepted", "reason": "", "data": {"text": ""}})
+    old = ["d1max-agent", "d1max-lidar-merge", "wg-quick@d1max"]
+    monkeypatch.setattr(s.disp.clients["A"], "capabilities", SimpleNamespace(tasks={
+        "ops_journal": {"units": old}, "ops_restart": {"units": old[:2]}}))
+    assert s.req("GET", "/api/robots/A/ops/journal?unit=nexwar_agent", token=alice)[0] == 200
+    assert sent[-1][2]["unit"] == "d1max-agent"
+    assert s.req("GET", "/api/robots/A/ops/journal?unit=wg-quick@nexwar", token=alice)[0] == 200
+    assert sent[-1][2]["unit"] == "wg-quick@d1max"
+    assert s.req("POST", "/api/robots/A/ops/restart", {"unit": "nexwar_lidar_merge"},
+                 token=alice)[0] == 200
+    assert sent[-1][2]["unit"] == "d1max-lidar-merge"
+    new = ["nexwar_agent", "nexwar_lidar_merge"]
+    monkeypatch.setattr(s.disp.clients["A"], "capabilities", SimpleNamespace(tasks={
+        "ops_journal": {"units": new}, "ops_restart": {"units": new}}))
+    assert s.req("POST", "/api/robots/A/ops/restart", {"unit": "nexwar_lidar_merge"},
+                 token=alice)[0] == 200
+    assert sent[-1][2]["unit"] == "nexwar_lidar_merge", "新机器人照原样"

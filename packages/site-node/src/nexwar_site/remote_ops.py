@@ -226,5 +226,25 @@ class ClientErrors:
             "FROM client_errors WHERE at_ms >= ? ORDER BY at_ms DESC LIMIT ?", (since_ms, limit))]
 
 
+def old_unit(unit: str) -> str:
+    """改名前的服务名(``nexwar_lidar_merge`` → ``d1max-lidar-merge``,``wg-quick@nexwar`` →
+    ``wg-quick@d1max``);别的原样。"""
+    if unit.startswith("wg-quick@nexwar"):
+        return "wg-quick@d1max" + unit[len("wg-quick@nexwar"):]
+    if unit.startswith("nexwar_"):
+        return "d1max-" + unit[len("nexwar_"):].replace("_", "-")
+    return unit
+
+
+def robot_unit(tasks: Any, kind: str, unit: str) -> str:
+    """发给这台机器人的服务名:按它自己报的那份名单(``capabilities.tasks[kind]["units"]``)。
+    还没升级的机器人只认改名前的名字(改名外审 r1 #15);名单里有新名字或者没报名单,原样。"""
+    units = ((tasks or {}).get(kind) or {}).get("units") or []
+    if not units or unit in units:
+        return unit
+    old = old_unit(unit)
+    return old if old in units else unit
+
+
 def dumps(obj: Any) -> bytes:
     return json.dumps(obj, ensure_ascii=False, indent=1, default=str).encode()

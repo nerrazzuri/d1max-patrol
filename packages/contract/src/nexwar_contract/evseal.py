@@ -102,7 +102,7 @@ def _hkdf(ikm: bytes, salt: bytes, info: bytes, n: int) -> bytes:
 def _keys(shared: bytes, eph_pub: bytes, site_pub: bytes) -> tuple[str, bytes]:
     if shared == bytes(32):
         raise SealError("公钥错误(共享密钥是零)")
-    okm = _hkdf(shared, eph_pub + site_pub, b"nexwar_evidence_v1", 64)
+    okm = _hkdf(shared, eph_pub + site_pub, b"d1max-evidence-v1", 64)
     return okm[:32].hex(), okm[32:]
 
 

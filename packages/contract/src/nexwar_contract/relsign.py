@@ -36,7 +36,7 @@ def message(manifest: dict[str, Any]) -> bytes:
     """要签的那段字节:签名覆盖的几项的规范 JSON(键排序、没有空白)。"""
     body = {k: manifest.get(k) for k in SIGNED_FIELDS}
     body["requires_mission_schema"] = body["requires_mission_schema"] or 1
-    return b"nexwar_release\n" + json.dumps(body, sort_keys=True, separators=(",", ":"),
+    return b"d1max-release\n" + json.dumps(body, sort_keys=True, separators=(",", ":"),
                                            ensure_ascii=False).encode("utf-8")
 
 

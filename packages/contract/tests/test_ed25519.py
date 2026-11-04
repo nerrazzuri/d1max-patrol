@@ -64,7 +64,7 @@ def _openssl3():
 def test_跟OpenSSL3互相认(tmp_path):
     exe = _openssl3()
     k, pub, msg, sig = (tmp_path / n for n in ("k.pem", "p.pem", "m", "s"))
-    msg.write_bytes(b"nexwar_release\nhello")
+    msg.write_bytes(b"d1max-release\nhello")
     subprocess.run([exe, "genpkey", "-algorithm", "ed25519", "-out", str(k)], check=True)
     subprocess.run([exe, "pkey", "-in", str(k), "-pubout", "-out", str(pub)], check=True)
     seed = ed25519.seed_from_pem(k.read_bytes())

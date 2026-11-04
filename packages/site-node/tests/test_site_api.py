@@ -513,14 +513,14 @@ def test_事件回调要签名_不要登录_管理路由要登录(站点):
     assert 站点.req("GET", "/api/incidents")[0] == 401
     _等(lambda: 站点.req("GET", "/api/robots/A", token=tok)[1].get("fresh"))
 
-    def 报(body: bytes, sig: str | None = None, ts: int | None = None):
+    def 报(body: bytes, sig: str | None = None, ts: int | None = None, pre: str = "X-Nexwar-"):
         ts = wall() if ts is None else ts
         sig = sig or hmac.new(bytes.fromhex(secret), str(ts).encode() + b"." + body,
                               hashlib.sha256).hexdigest()
         r = urllib.request.Request(站点.api.url + "/api/incidents", data=body, method="POST")
-        r.add_header("X-Nexwar-Source", "nvr-1")
-        r.add_header("X-Nexwar-Timestamp", str(ts))
-        r.add_header("X-Nexwar-Signature", sig)
+        r.add_header(pre + "Source", "nvr-1")
+        r.add_header(pre + "Timestamp", str(ts))
+        r.add_header(pre + "Signature", sig)
         try:
             with urllib.request.urlopen(r, timeout=15) as resp:
                 return resp.status, json.loads(resp.read())
@@ -535,8 +535,12 @@ def test_事件回调要签名_不要登录_管理路由要登录(站点):
     assert 报(b'{"event_id": ""}')[0] == 400
     code, d = 报(body)
     assert code == 200 and d["outcome"] == "dispatched" and d["robot_id"] == "A", d
+    # 改名外审 r1 #16:改名前就配好的摄像头 / 事件源还发老请求头 X-D1MAX-*,照收
+    code, d = 报(json.dumps({"event_id": "e0", "type": "intrusion", "zone": "yard"}).encode(),
+                pre="X-D1MAX-")
+    assert code == 200, d
     code, d = 站点.req("GET", "/api/incidents", token=tok)
-    assert code == 200 and d["incidents"][0]["event_id"] == "e1"
+    assert code == 200 and "e1" in [i["event_id"] for i in d["incidents"]]
     # W16:看拦截点与防区、删防区、删拦截点;事件源每分钟有上限,超了 429
     code, d = 站点.req("GET", "/api/intercepts", token=tok)
     assert code == 200 and [i["name"] for i in d["intercepts"]] == ["gate"]
