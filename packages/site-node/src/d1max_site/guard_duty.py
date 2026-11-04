@@ -40,6 +40,7 @@ from collections.abc import Callable
 from datetime import datetime
 from typing import Any
 
+from d1max_contract.geometry import Pose
 from d1max_contract.messages import MapPose
 from d1max_site import energy
 from d1max_site.db import SiteDB
@@ -52,6 +53,8 @@ log = logging.getLogger(__name__)
 #: 或者联系不上它」算起(11-04 现场:走远断网,站点收到离线状态手上没任务;断网期间不算,
 #: 连回来以后再给这么久让它把离线时的事件补上来,别把还在跑的那一圈当打断重派)。
 LOST_S = 90
+#: 每圈结束回待命点时接在路线最后的那个点叫什么(跟路线里的点重名就加 *)。
+STANDBY_WP = "回待命点"
 #: 连回来以后要连着听得见这么久(毫秒),才信它报的「手上没任务」(11-04 G2:断线时离线状态里手上没任务,
 #: 连回来那一下站点当它空了,接着跑这一圈,把人派的 goto 顶掉)。
 SETTLE_HEARD_MS = 5_000
@@ -157,7 +160,8 @@ class GuardDuty:
         from d1max_site.site_settings import SiteSettings
         meta = SiteSettings(self.db).get(_KEY, {}) or {}
         entries = [{"id": r["id"], "route": r["route"], "robot": r["robot"],
-                    "gap_min": r["gap_min"], "shuffle": bool(r["shuffle"])}
+                    "gap_min": r["gap_min"], "shuffle": bool(r["shuffle"]),
+                    "end_standby": bool(r["end_standby"])}
                    for r in self.db.query("SELECT * FROM guard_plan ORDER BY id")]
         limits = {r["zone"]: r["max_gap_min"]
                   for r in self.db.query("SELECT * FROM guard_zone_limits ORDER BY zone")}
@@ -165,7 +169,8 @@ class GuardDuty:
                 "updated_by": meta.get("by", ""), "updated_ms": meta.get("at", 0)}
 
     def put_plan(self, d: Any, *, by: str) -> dict[str, Any]:
-        """整份换:``{"entries": [{route, robot?, gap_min?, shuffle?}], "limits"?: {防区: 分钟},
+        """整份换:``{"entries": [{route, robot?, gap_min?, shuffle?, end_standby?}],
+        "limits"?: {防区: 分钟},
         "base_revision"}``。"""
         if not isinstance(d, dict):
             raise PlanError("要一个对象")
@@ -174,7 +179,7 @@ class GuardDuty:
             raise PlanError("entries 要是一个列表")
         if len(raw) > MAX_ENTRIES:
             raise PlanError(f"值守方案最多 {MAX_ENTRIES} 条")
-        rows: list[tuple[int, str, str, int, int]] = []
+        rows: list[tuple[int, str, str, int, int, int]] = []
         fixed: dict[str, str] = {}
         for i, e in enumerate(raw, start=1):
             if not isinstance(e, dict):
@@ -196,11 +201,14 @@ class GuardDuty:
             shuffle = e.get("shuffle", False)
             if not isinstance(shuffle, bool):
                 raise PlanError("shuffle 要是 true/false")
+            end_standby = e.get("end_standby", True)
+            if not isinstance(end_standby, bool):
+                raise PlanError("end_standby 要是 true/false(每圈结束回待命点)")
             if robot:
                 if robot in fixed:
                     raise PlanError(f"同一台机器人 {robot} 不能同时跑两条({fixed[robot]}、{route})")
                 fixed[robot] = route
-            rows.append((i, route, robot, gap, int(shuffle)))
+            rows.append((i, route, robot, gap, int(shuffle), int(end_standby)))
         lim = d.get("limits", {}) or {}
         if not isinstance(lim, dict):
             raise PlanError("limits 要是 {防区: 分钟}")
@@ -213,7 +221,7 @@ class GuardDuty:
         clash = getattr(self, "clash", None)            # W73 第三期:跟巡逻排程撞了不让存
         if clash is not None:
             got = clash.new(plan={"entries": [{"id": i, "route": r, "robot": rb}
-                                              for i, r, rb, _, _ in rows]})
+                                              for i, r, rb, *_ in rows]})
             if got:
                 raise PlanError("跟巡逻排程撞了:" + ";".join(got))
         from d1max_site.site_settings import SiteSettings
@@ -225,8 +233,8 @@ class GuardDuty:
                 raise PlanConflict(f"值守方案别人刚改过(现在第 {cur} 版,你看到的是第 "
                                    f"{d.get('base_revision')} 版):刷新后再改")
             c.execute("DELETE FROM guard_plan")
-            c.executemany("INSERT INTO guard_plan(id, route, robot, gap_min, shuffle) "
-                          "VALUES (?,?,?,?,?)", rows)
+            c.executemany("INSERT INTO guard_plan(id, route, robot, gap_min, shuffle, end_standby) "
+                          "VALUES (?,?,?,?,?,?)", rows)
             c.execute("DELETE FROM guard_zone_limits")
             c.executemany("INSERT INTO guard_zone_limits(zone, max_gap_min) VALUES (?,?)", limits)
             SiteSettings.put_in(c, _KEY, {"revision": cur + 1, "by": by, "at": now})
@@ -838,7 +846,8 @@ class GuardDuty:
         self._retry_at[eid] = now + RETRY_MS              # 派成了再清
         names = [p["name"] for p in pts]
         by_name = {w["name"]: w for w in info["wire"]["waypoints"]}
-        mission = {**info["wire"], "waypoints": [by_name[n] for n in names]}
+        mission = {**info["wire"], "waypoints": [by_name[n] for n in names]
+                   + self._standby_tail(e, info, rid, by_name)}
         tid = f"{GUARD_PREFIX}{eid}-{uuid.uuid4().hex[:10]}"
         lap = (run["lap"] if run else 0) + (0 if resume else 1)
         started = run["lap_started_ms"] if (resume and run) else now
@@ -883,6 +892,25 @@ class GuardDuty:
         else:
             self._set_run(e["id"], state="wait", next_lap_ms=self._now() + RETRY_MS, **back)
 
+    def _standby_tail(self, e: dict[str, Any], info: dict[str, Any], rid: str,
+                      by_name: dict[str, Any]) -> list[dict[str, Any]]:
+        """11-04 用户:每圈结束回待命点(方案里 ``end_standby``,默认开)—— 把这台机器人在这张图上的默认
+        待命点当成最后一个点接上。它不在任何防区里,不算「看过」;没登记待命点就不接。"""
+        if not e.get("end_standby", True) or self.standby is None:
+            return []
+        try:
+            p = self.standby.swap_point(rid, info["map_id"], info["map_version"])
+        except Exception:  # 待命点拿不到:照常跑这一圈
+            log.exception("%s 的待命点拿不到", rid)
+            return []
+        if not p:
+            return []
+        name = STANDBY_WP
+        while name in by_name:
+            name += "*"
+        pose = Pose.from_xy_yaw(float(p["x"]), float(p["y"]), float(p.get("yaw", 0.0)))
+        return [{"name": name, "pose": pose.to_wire()}]
+
     async def _go_watch(self, e: dict[str, Any], info: dict[str, Any], run: dict[str, Any],
                         next_ms: int) -> None:
         """一圈跑完、离下一圈还有空档:去这一圈最早看的那个防区的值守位站着盯。"""
@@ -896,8 +924,16 @@ class GuardDuty:
             post = None
         if not post:
             self._set_run(eid, state="wait", next_lap_ms=next_ms, watch_zone=zone)
+            home = not e.get("end_standby", True) and self.standby is not None
+            where = "回待命点等下一圈" if home else "原地等下一圈"
             self._log("watch_none", robot=rid, entry=eid, zone=zone,
-                      detail="这个防区没有值守位:原地等下一圈")
+                      detail=f"这个防区没有值守位:{where}")
+            if home:
+                # 11-04:不停在最后一个点(那里信号可能差);每圈回待命点开着的,本来就停在待命点
+                try:
+                    await self.standby.return_to(rid, issued_by="guard")
+                except Exception as exc:  # noqa: BLE001 - 回不去:原地等
+                    log.warning("%s 回待命点没派成:%s", rid, exc)
             return
         tid = f"{GUARD_PREFIX}watch-{eid}-{uuid.uuid4().hex[:10]}"
         self._set_run(eid, state="watch", task_id=tid, sent_ms=now, next_lap_ms=next_ms,
