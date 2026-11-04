@@ -669,3 +669,33 @@ async def test_现场1104_要停这一圈时断网_不当已经停了(站):
     await t.send(t.duty.tick())
     assert t.duty.status()["runs"][0]["state"] == "stopping", "联系不上:没确认停下"
     assert len(calls) >= 2, "接着发中止(连回来会补投)"
+
+
+async def test_现场1104_被人派的goto打断后断线又连回来_不抢人派的那一趟(站):
+    """11-04 G2:人派的 goto 打断了这一圈;机器人断线(离线状态里手上没任务)、连回来那一下,站点当它空了,
+    马上接着跑这一圈,把人派的 goto 顶掉。联系不上、刚连回来(还没报手上的任务)都不算空。"""
+    t = 站
+    _方案(t)
+    await _跑(t, 3)
+    await t.send(t.site.goto("A", target(30.0), 0.8, issued_by="gina", priority=80,
+                             task_id="task-manual"))
+    await _跑(t, 3)
+    assert _log(t, "interrupted")
+    n = len(_patrols(t))
+    real_running, real_fresh = t.duty._running, t.site._fresh
+    t.duty._running = lambda rid: ""                     # 断线:离线状态里手上没任务
+    t.site._fresh = lambda c: False
+    for _ in range(3):
+        t.clock.advance(2)
+        await t.send(t.duty.tick())
+    assert len(_patrols(t)) == n, "联系不上:不当它空了"
+    t.site._fresh = real_fresh                           # 连回来了,手上的任务还没报上来
+    await t.send(t.duty.tick())
+    t.clock.advance(1)
+    await t.send(t.duty.tick())
+    assert len(_patrols(t)) == n, "刚连回来:等它报手上的任务"
+    t.duty._running = real_running                       # 报上来了:还在跑人派的那一趟
+    for _ in range(4):
+        t.clock.advance(2)
+        await t.send(t.duty.tick())
+    assert len(_patrols(t)) == n, "人派的还在跑:不抢"
