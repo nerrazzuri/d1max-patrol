@@ -1095,6 +1095,10 @@ class Server:
         self.guard.swap = self.swap
         self.scheduler.swap_busy = self.swap.busy
         self.incidents.swapping = self.swap.refuse
+        # 外审 r2 #8:报警出动线的「回来」算到原点、换电位(跟狗上出发线一样)
+        self.incidents.homes = lambda rid, m, v: [
+            (float(p["x"]), float(p["y"])) for p in (self.standby.home(rid, m, v),
+                                                     self.standby.swap_point(rid, m, v)) if p]
         # W73 第五期:外部设备按位置绑定;老接口按防区名报的先按圈好的防区找查看点
         from d1max_site.api import zone_posts as _zp
         from d1max_site.devices import DeviceBook

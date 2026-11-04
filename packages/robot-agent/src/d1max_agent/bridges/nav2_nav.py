@@ -516,6 +516,7 @@ class Nav2NavBackend(PlannedNavBackend):
             return
         why = self.nav2_ready()
         if why:
+            log.warning("走着走着 Nav2 不能用了:%s(这一趟判失败)", why)
             await self._fail(why)
             return
         tgt = self._target
@@ -784,6 +785,7 @@ class Nav2NavBackend(PlannedNavBackend):
             why = ("规划不出到目标的路线,机器人没动(路被堵死,或者目标附近有东西;"
                    "再试一次还不行就清开后再派)")
         else:
+            log.warning("Nav2 回了失败,这一趟判失败:%s", raw)   # 11-04:以前这一支不留日志
             await self._fail(raw[:200])
             return
         log.warning("%s(%s)", why, raw)

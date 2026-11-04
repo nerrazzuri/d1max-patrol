@@ -58,6 +58,8 @@ STANDBY_WP = "回待命点"
 #: 连回来以后要连着听得见这么久(毫秒),才信它报的「手上没任务」(11-04 G2:断线时离线状态里手上没任务,
 #: 连回来那一下站点当它空了,接着跑这一圈,把人派的 goto 顶掉)。
 SETTLE_HEARD_MS = 5_000
+#: 站在值守位上算「看着」,位置要是这么久以内收到的(外审 r2 #7)。
+POSE_FRESH_MS = 10_000
 #: 人中止之后歇多久(毫秒)。
 PAUSE_MS = 10 * 60_000
 #: 派不出去之后隔多久(毫秒)再派。
@@ -139,6 +141,7 @@ class GuardDuty:
         self.reach: Any = None
         self._retry_at: dict[int, int] = {}
         self._reserved: set[str] = set()
+        self._no_standby: set[tuple[int, str, str, str]] = set()
         self._waiting: dict[int, str] = {}
         self._route_cache: dict[tuple, dict[str, Any]] = {}
         self._lap_cache: dict[tuple, float | None] = {}
@@ -730,12 +733,17 @@ class GuardDuty:
         return now - since >= LOST_S * 1000
 
     def _off_zones(self, info: dict[str, Any], armed: list[str], run: dict[str, Any]) -> list[str]:
-        """这一圈还没走到的点里,所在防区已经撤防的(外审 r1 #4)。"""
-        seen = self._seen(info["map_id"], info["map_version"])
-        done = {z for z, t in seen.items() if t >= run["lap_started_ms"]}
+        """这一圈还没走到的点里,所在防区已经撤防的(外审 r1 #4)。
+
+        外审 r2 #4:按**这一趟**到过的点算剩下哪些(机器人报的到点事件),不按防区「最后看过」——
+        看过东区 A、还没到 B 时东区撤了,B 照样不去;别的机器人刚看过东区也不算这一趟走过。"""
+        passed = {str(r["name"]) for r in self.db.query(
+            "SELECT json_extract(data, '$.name') AS name FROM events WHERE robot_id=? "
+            "AND kind='patrol_waypoint' AND json_extract(data, '$.task_id')=?",
+            (run["robot_id"], run["task_id"]))}
         plan = json.loads(run["plan"] or "[]")
         return list(dict.fromkeys(p["zone"] for p in plan if p.get("zone")
-                                  and p["zone"] not in armed and p["zone"] not in done))
+                                  and p["zone"] not in armed and p["name"] not in passed))
 
     async def _lap_state(self, e: dict[str, Any], info: dict[str, Any], armed: list[str],
                          run: dict[str, Any], running: str) -> None:
@@ -761,6 +769,10 @@ class GuardDuty:
                              f"{(now - run['lap_started_ms']) // 1000} 秒")
             if run["fails"] and self.alerts is not None:
                 self.alerts.resolve_all(rid, "guard_stuck", who="site:guard_lap_done")
+            if not e["robot"] and rid in self._reserved:
+                # 外审 r2 #6:「任意一台」跑完这一圈,机器人让给指定它的方案,不再接着跑下一圈
+                await self._stand_down(run, f"{rid} 让给指定它的值守方案")
+                return
             gap = int(e["gap_min"]) * 60_000
             nxt = max(run["lap_started_ms"] + gap, now) if gap else now
             # 先记成「等下一圈」:下一圈这一拍派不出去(机器人忙、电量低…)就在 wait 里接着等,
@@ -904,7 +916,14 @@ class GuardDuty:
             log.exception("%s 的待命点拿不到", rid)
             return []
         if not p:
+            key = (e["id"], rid, info["map_id"], str(info["map_version"]))
+            if key not in self._no_standby:              # 11-04:没登记就说一声(每张图每台一次)
+                self._no_standby.add(key)
+                self._log("no_standby", robot=rid, entry=e["id"],
+                          detail=f"{rid} 在地图 {info['map_id']}:{info['map_version']} 上没有默认"
+                                 "待命点:每圈结束回不了待命点,停在最后一个点;到待命点页登记一个")
             return []
+        self._no_standby.discard((e["id"], rid, info["map_id"], str(info["map_version"])))
         name = STANDBY_WP
         while name in by_name:
             name += "*"
@@ -1008,6 +1027,11 @@ class GuardDuty:
             if c is None or c.status is None or not c.status.online \
                     or (callable(fresh) and not fresh(c)):
                 continue                                 # 外审 r1 #7:掉线、状态旧了不算看着
+            ready = getattr(c.status, "ready", None)
+            at = getattr(self.dispatcher, "telemetry_at", {}).get(r["robot_id"])
+            if not getattr(ready, "loc_ok", False) or at is None \
+                    or self._now() - at > POSE_FRESH_MS:
+                continue                                 # 外审 r2 #7:定位失效、位置停更了也不算
             pose = c.telemetry.pose if c.telemetry is not None else None
             if pose is not None and (getattr(pose, "map_id", info["map_id"]) != info["map_id"]
                                      or str(getattr(pose, "map_version", info["map_version"]))

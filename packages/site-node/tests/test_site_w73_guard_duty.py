@@ -755,6 +755,10 @@ async def test_现场1104_没登记待命点_照常跑不接(站):
     _方案(t)
     await _跑(t, 2)
     assert _names(_patrols(t)[0]) == ["A", "B", "C", "D"]
+    await _跑(t, 45)
+    assert len(_patrols(t)) >= 2
+    warn = _log(t, "no_standby")
+    assert len(warn) == 1 and "没有默认待命点" in warn[0]["detail"], "值守记录里说一声,只说一次"
 
 
 async def test_现场1104_有空档又没有值守位_回待命点等_不停在最后一个点(站):
@@ -770,3 +774,92 @@ async def test_现场1104_有空档又没有值守位_回待命点等_不停在�
             break
     await _跑(t, 2)
     assert stb.sent == ["A"] and _log(t, "watch_none")
+
+
+# ---------------------------------------------------------------- 外审 r2 #4 #6 #7
+
+
+async def test_外审r2_4_看过防区一个点后撤防_剩下的点也不跑(站):
+    t = 站
+    _方案(t)
+    for _ in range(60):
+        await _跑(t, .5)
+        if "东区" in _seen(t) and t.dog.x < 3.3:
+            break
+    assert "东区" in _seen(t) and t.dog.x < 3.3, "到了 A、还没到 B"
+    at = t.clock()
+    t.arming.set_zone_home("东区", False)
+    t.arming.set_mode("home", by="olga")
+    await _跑(t, 6)
+    later = [dict(r) for r in t.db.query("SELECT * FROM guard_log WHERE at_ms>=?", (at,))]
+    assert not any(r["kind"] == "point" and r["point"] == "B" for r in later), "东区撤了,B 不去"
+    assert _log(t, "zone_disarmed")
+
+
+async def test_外审r2_4_别的机器人看过这个防区_不当成这一圈走过了(站):
+    t = 站
+    _方案(t)
+    await _跑(t, 3)
+    run = t.duty._runs()[t.duty.plan()["entries"][0]["id"]]
+    t.duty._mark_seen(MAP[0], MAP[1], "东区", "B", "point")       # 别的机器人刚看过东区
+    info = t.duty._route("night-guard")
+    assert t.duty._off_zones(info, ["西区"], run) == ["东区"]
+
+
+async def test_外审r2_6_任意方案零间隔_圈完让给指定它的方案(站):
+    t = 站
+    _方案(t, robot="")
+    await _跑(t, 3)
+    t.duty.put_plan({"entries": [{"route": "night-guard", "robot": ""},
+                                 {"route": "night-guard", "robot": "A"}],
+                     "base_revision": t.duty.plan()["revision"]}, by="alice")
+    await _跑(t, 70)
+    runs = t.duty.status()["runs"]
+    fixed = next(e["id"] for e in t.duty.plan()["entries"] if e["robot"] == "A")
+    assert any(r["entry"] == fixed and r["robot_id"] == "A" for r in runs), runs
+    assert _log(t, "stand_down")
+
+
+async def test_外审r2_7_位置停更或定位失效_站在值守位上也不算看着(站):
+    from dataclasses import replace
+    t = 站
+    _方案(t, gap_min=10)
+    await _跑(t, 20)
+    for _ in range(60):
+        if t.duty.watching("A"):
+            break
+        await _跑(t, .5)
+    assert t.duty.watching("A")
+    c = t.site.clients["A"]
+    act = [(t.duty.plan()["entries"][0], t.duty._route("night-guard"), ["东区", "西区"])]
+    await _跑(t, 1)
+    before = _seen(t)["东区"]
+    t.clock.advance(30)
+    c.status_live_at = t.clock()
+    t.site.telemetry_at["A"] = t.clock() - 30_000
+    t.duty._post_seen(act)
+    assert _seen(t)["东区"] == before, "位置 30 秒没更新:不算看着"
+    c.status = replace(c.status, ready=replace(c.status.ready, loc_ok=False))
+    t.site.telemetry_at["A"] = t.clock()
+    t.duty._post_seen(act)
+    assert _seen(t)["东区"] == before, "定位失效:不算看着"
+    c.status = replace(c.status, ready=replace(c.status.ready, loc_ok=True))
+    t.duty._post_seen(act)
+    assert _seen(t)["东区"] > before
+
+
+async def test_外审r2_11_跑过的路线加了停留_按新的算_冲突照样拦(站):
+    from copy import deepcopy
+    t = _冲突台(站)
+    mission = json.loads(t.db.query("SELECT definition FROM routes WHERE route_id='day'")[0]
+                         ["definition"])
+    await t.send(t.site.patrol("A", mission, issued_by="alice", priority=60, task_id="learn-day"))
+    await t.run(250)
+    c = t.store.clash
+    before = c._duration("day")
+    assert before is not None and before < 60, "跑过一趟:按实际用时"
+    pts = deepcopy(ROUTE)
+    pts[1]["actions"] = [{"type": "dwell", "seconds": 5400}]
+    t.store.put_route("day", {"map_id": MAP[0], "map_version": MAP[1], "waypoints": pts,
+                              "base_revision": 1}, by="alice")
+    assert c._duration("day") >= 5400, "B 改了停留:旧的实际用时不算数"

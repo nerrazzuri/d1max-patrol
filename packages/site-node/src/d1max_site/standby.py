@@ -427,7 +427,7 @@ class StandbyManager:
         name = self._target(robot_id, after)
         came = self._route_back(robot_id, after, name)
         if came is None:
-            return await self.return_to(robot_id, issued_by=issued_by, name=name)
+            return await self.return_to(robot_id, issued_by=issued_by, name=name, charge=True)
         return await self._return_along(robot_id, came, name)
 
     async def _dispatch_back(self, robot_id: str, after: str) -> Any:
@@ -444,7 +444,10 @@ class StandbyManager:
             try:
                 came = self._route_back(robot_id, after, name)
                 if came is None:
-                    return await self.return_to(robot_id, issued_by="standby:auto", name=name)
+                    # 外审 r2 #9:回待命点就是回家的路 —— 按去补能发(狗上出发线只看中止线),不然低电
+                    # 报警到场后过不了普通出发线,机器人留在现场耗电
+                    return await self.return_to(robot_id, issued_by="standby:auto", name=name,
+                                                charge=True)
                 return await self._return_along(robot_id, came, name)
             except DispatchRefused as exc:
                 if attempt < STANDBY_TRANSIENT_RETRIES and any(

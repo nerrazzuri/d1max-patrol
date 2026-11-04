@@ -851,3 +851,41 @@ async def test_W33外审_占位之后发之前改成只许手动派_不派_记�
     r = await _报(t)
     assert r["outcome"] == "dispatch_failed" and "只许手动派" in r["note"], r
     assert not [c for c in t.site.commands("A", 20) if c["kind"] == "goto"]
+
+
+async def test_外审r2_8_近处报警_电量在站点线和狗上线之间_站点就不派(站):
+    t = 站
+    t.dog.inject_battery(18.0)
+    await t.run(12)
+    r = await _报(t)
+    assert r["outcome"] == "no_robot" and "电量" in r["note"], r
+    assert not _gotos(t)
+
+
+async def test_外审r2_8_回程按回原点和换电位里远的那个算(站):
+    from d1max_site import energy
+    t = 站
+    t.dog.inject_battery(22.0)
+    await t.run(12)
+    assert t.desk.pick_robot(t.desk.intercept("gate"))[0] == "A", "回原点就在脚下:够"
+    t.desk.homes = lambda rid, m, v: [(0.0, 0.0), (400.0, 0.0)]     # 换电位在 400 m 外
+    rid, why = t.desk.pick_robot(t.desk.intercept("gate"))
+    line = energy.alarm_line(energy.walk_s(1.0), energy.walk_s(399.0))
+    assert rid is None and "电量" in why and line > 25, why
+
+
+async def test_外审r2_9_低电报警到场后_回待命点走得了(站):
+    t = 站
+    s = StandbyManager(t.db, t.site, now_ms=t.clock)
+    s.set("A", "dock", map_id="estate-1", map_version="7", x=0.0, y=0.0, yaw=0.0, default=True)
+    t.dog.inject_battery(22.0)
+    await t.run(12)
+    r = await _报(t)
+    assert r["outcome"] == "dispatched", r
+    await t.run(200)
+    assert t.desk.list()[0]["result"] == "done"
+    await t.run(200)
+    evs = [dict(x) for x in t.db.query(
+        "SELECT kind, data FROM events WHERE kind IN ('task_done','task_failed') ORDER BY rowid")]
+    assert not any(x["kind"] == "task_failed" and "standby-" in x["data"] for x in evs), evs
+    assert abs((await t.dog.odometry()).x) < 0.2, "回到待命点 (0,0)"

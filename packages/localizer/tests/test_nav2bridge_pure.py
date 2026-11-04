@@ -640,3 +640,68 @@ def test_现场1104_机器人的钟往回调过_转接节点照样发时钟和�
     assert len(b.tfs) == 3
     b.on_tick(_tick(1_793_762_000_050))                  # 几十毫秒的乱序照旧丢
     assert len(b.clocks) == 3
+
+
+def _生命周期桥(now):
+    from types import SimpleNamespace as NS
+
+    from d1max_localizer.nav2bridge import Nav2Bridge
+    b = Nav2Bridge.__new__(Nav2Bridge)
+    b._mono = lambda: now[0]
+    b._clock_wall = 1e18                                 # 代理在送时钟
+    b.nav2_active = False
+    b._inactive_since, b._restarts, b._manage_busy = None, 0, False
+    b.sent = []
+
+    class _Fut:
+        def __init__(self, ok=True):
+            self.ok = ok
+
+        def add_done_callback(self, cb):
+            cb(self)
+
+        def result(self):
+            return NS(success=self.ok)
+
+    b.lm = NS(service_is_ready=lambda: True)
+    b.manage = NS(service_is_ready=lambda: True,
+                  call_async=lambda req: (b.sent.append(req.command), _Fut())[1])
+    b._manage_req = lambda c: NS(command=c)
+    return b
+
+
+def test_现场1104_生命周期卡住不激活_过一阵自动重启一次_激活了就不再动():
+    from d1max_localizer import nav2bridge as nb
+    now = [100.0]
+    b = _生命周期桥(now)
+    b._lifecycle_retry()
+    now[0] += nb.LIFECYCLE_RETRY_S - 1
+    b._lifecycle_retry()
+    assert b.sent == [], "刚开始启动:等它"
+    now[0] += 2
+    b._lifecycle_retry()
+    assert b.sent == [nb.LIFECYCLE_RESET, nb.LIFECYCLE_STARTUP] and b._restarts == 1
+    now[0] += 5
+    b._lifecycle_retry()
+    assert len(b.sent) == 2, "刚重启过:再等一个周期"
+    b.nav2_active = True
+    now[0] += nb.LIFECYCLE_RETRY_S * 3
+    b._lifecycle_retry()
+    assert len(b.sent) == 2, "激活了不动它"
+
+
+def test_现场1104_没在送时钟或没有生命周期服务_不重启():
+    from d1max_localizer import nav2bridge as nb
+    now = [0.0]
+    b = _生命周期桥(now)
+    b._clock_wall = -1e9
+    for _ in range(3):
+        now[0] += nb.LIFECYCLE_RETRY_S
+        b._lifecycle_retry()
+    assert b.sent == [], "没时钟重启也起不来"
+    b = _生命周期桥(now)
+    b.manage = None
+    for _ in range(3):
+        now[0] += nb.LIFECYCLE_RETRY_S
+        b._lifecycle_retry()
+    assert b._restarts == 0
