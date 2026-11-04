@@ -704,3 +704,27 @@ def test_现场1104_刹车减速度和延迟按启动参数_量出来填进去_1
     for bad in (["--decel", "0"], ["--decel", "9"], ["--latency", "-1"], ["--frame-age", "nan"]):
         with pytest.raises(SystemExit):
             config_from_args(bad)
+
+
+def test_现场1104_每10秒记一行许可发了几条_没发卡在哪(caplog):
+    m = Mount.from_frames(AIRY)
+    side = 假对端()
+    t = [0.0]
+    per = Perception(m, sidecar=LineClient(lambda: side.a, None), clock=lambda: t[0])
+    per.check = SelfCheck(frames=3)
+    with caplog.at_level("INFO"):
+        per.on_front(到雷达系(m, 场景()), 1)             # 自检中
+        t[0] = 11.0
+        per.on_front(到雷达系(m, 场景()), 2)
+    first = [r.message for r in caplog.records if "许可" in r.message]
+    assert first and "自检" in first[-1] and "发了 0 条" in first[-1], first
+    caplog.clear()
+    near = 到雷达系(m, 场景(box=((0.6, 0.8), (-0.1, 0.1), 0.5)))
+    with caplog.at_level("INFO"):
+        per.on_front(到雷达系(m, 场景()), 3)             # 自检过了、前面空:发一条
+        per.on_front(near, 4)
+        t[0] = 22.0
+        per.on_front(near, 5)
+    got = [r.message for r in caplog.records if "许可" in r.message]
+    assert got and "发了 1 条" in got[-1] and "挡 前 0.6 m" in got[-1], got
+    assert "旁路连着" in got[-1]
