@@ -751,3 +751,26 @@ def test_外审r3_7_reset没成功_不接着startup():
     now[0] += LIFECYCLE_RETRY_S + 1
     b._lifecycle_retry()
     assert b.sent == [3] and not b._manage_busy
+
+
+def test_外审r4_7_生命周期过期以后没时钟_晚到的回话也作废():
+    from types import SimpleNamespace as NS
+
+    from d1max_localizer.nav2bridge import LIFECYCLE_CALL_S, LIFECYCLE_RETRY_S
+    now = [0.0]
+    b = _生命周期桥(now)
+    callbacks = []
+
+    def call(req):
+        b.sent.append(req.command)
+        return NS(add_done_callback=callbacks.append)
+    b.manage.call_async = call
+    b._lifecycle_retry()
+    now[0] += LIFECYCLE_RETRY_S + 1
+    b._lifecycle_retry()
+    assert b.sent == [3]
+    b._clock_wall = -1e18                                # 代理不送时钟了
+    now[0] += LIFECYCLE_CALL_S + 5
+    b._lifecycle_retry()
+    callbacks[0](NS(result=lambda: NS(success=True)))
+    assert b.sent == [3], "过期的回话作废,不接着 startup"

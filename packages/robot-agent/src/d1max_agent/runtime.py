@@ -80,6 +80,9 @@ STORAGE_EVERY_MS = 10_000
 #: 跟运控(旁路进程)断了,这么久(秒)以后自己重连一次,不行每隔这么久再试(11-04 现场:旁路进程重启以后
 #: 代理一直断着,只能人重启代理)。
 HAL_RETRY_S = 5.0
+#: 重连上了、控制权没拿回来(外审 r4 #6:一次临时失败):每 :data:`HAL_RETRY_S` 秒再拿,最多这么多次 ——
+#: 有限次,不跟人(遥控器)长时间抢;拿不回来记日志,任务起飞前检查照样不放行。
+HAL_RECLAIM_TRIES = 6
 #: 换图:下载好之后最多等多久让狗空下来(秒)。
 SWITCH_WAIT_S = 600.0
 #: 起来时载入正在用的那张图最多等多久(秒);过了照旧用 ``--map``。
@@ -432,6 +435,8 @@ class AgentRuntime:
         self._lens_task: asyncio.Task | None = None
         self._link_job: asyncio.Task | None = None
         self._link_down_at: float | None = None
+        self._reclaim_left = 0                           # 重连后还要再拿几次控制权
+        self._reclaim_at = 0.0
         self.processor.admit_hook = self._admit
         #: 地图(W00c5d 第二部分):正在用的那一张(``MapKeeper``)、录包与重建(``MappingService``)。
         self.maps = maps
@@ -2992,12 +2997,19 @@ class AgentRuntime:
         if self._closed or (self._link_job is not None and not self._link_job.done()):
             return
         try:
-            ok = (await self.hal.health()).link_ok
+            h = await self.hal.health()
         except Exception:  # noqa: BLE001 - 健康都读不出:这一拍不判
             return
-        now = self._mono()
+        ok, now = h.link_ok, self._mono()
         if ok:
             self._link_down_at = None
+            if self._reclaim_left > 0 and now >= self._reclaim_at:
+                if h.control:
+                    self._reclaim_left = 0
+                    return
+                self._reclaim_left -= 1
+                self._reclaim_at = now + HAL_RETRY_S
+                self._link_job = asyncio.get_running_loop().create_task(self._reclaim())
             return
         if self._link_down_at is None:
             self._link_down_at = now
@@ -3011,11 +3023,26 @@ class AgentRuntime:
     async def _reconnect_hal(self) -> None:
         try:
             await self.hal.connect()
-            await self.hal.acquire_control()
         except Exception as exc:  # noqa: BLE001 - 还连不上:下个周期再试
             log.warning("重连运控没成:%s", exc)
             return
         log.warning("重新连上运控了")
+        self._reclaim_left, self._reclaim_at = HAL_RECLAIM_TRIES, self._mono() + HAL_RETRY_S
+        await self._reclaim()
+
+    async def _reclaim(self) -> None:
+        """重连以后拿回控制权;没拿成 :meth:`_watch_link` 过一阵再拿
+        (最多 :data:`HAL_RECLAIM_TRIES` 次)。
+        只拿控制权,不复位急停、不接着跑断线前的任务。"""
+        try:
+            await self.hal.acquire_control()
+        except Exception as exc:  # noqa: BLE001 - 这次没拿成:过一阵再拿
+            left = self._reclaim_left
+            log.warning("重连后拿控制权没成:%s(%s)", exc,
+                        f"{HAL_RETRY_S:g} 秒后再拿,还剩 {left} 次" if left else "不再拿了")
+            return
+        self._reclaim_left = 0
+        log.warning("重连后拿回控制权了")
 
     async def _feed_trail(self) -> None:
         """录包时的轨迹(W00c6h):录包开始那一拍清空,录着的每拍喂一帧里程(读不到、不新鲜不喂)。"""

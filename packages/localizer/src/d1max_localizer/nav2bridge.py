@@ -704,6 +704,12 @@ class Nav2Bridge:
         """节点一直没全部激活:超过 :data:`LIFECYCLE_RETRY_S` 让生命周期管理器 reset + startup 一次。
         没在送时钟(重来也起不来)、管理器不在、已经激活了都不动。"""
         now = self._mono()
+        if self._manage_busy and now >= self._manage_deadline:
+            # 外审 r4 #7:先作废过期的这一回,再看要不要提前返回(没时钟、服务不在时也作废)
+            log.warning("Nav2 生命周期管理器 %g 秒没回话:这一回当没成,下个周期再来",
+                        LIFECYCLE_CALL_S)
+            self._manage_busy = False
+            self._manage_gen += 1                       # 晚到的回调不再理
         clock_ok = time.monotonic() - self._clock_wall <= CLOCK_STALE_S
         if self.nav2_active or self.manage is None or not self.lm.service_is_ready() \
                 or not self.manage.service_is_ready() or not clock_ok:
@@ -712,11 +718,6 @@ class Nav2Bridge:
         if self._inactive_since is None:
             self._inactive_since = now
             return
-        if self._manage_busy and now >= self._manage_deadline:
-            log.warning("Nav2 生命周期管理器 %g 秒没回话:这一回当没成,下个周期再来",
-                        LIFECYCLE_CALL_S)
-            self._manage_busy = False
-            self._manage_gen += 1                       # 晚到的回调不再理
         if now - self._inactive_since < LIFECYCLE_RETRY_S or self._manage_busy:
             return
         self._inactive_since = now                      # 下一回从现在再等一个周期
@@ -734,15 +735,18 @@ class Nav2Bridge:
             except Exception:                           # noqa: BLE001 - 回话读不出:当没成
                 return False
 
+        def stale() -> bool:                            # 不是这一回的、或过了期限才回来
+            return gen != self._manage_gen or self._mono() >= self._manage_deadline
+
         def started(f: Any) -> None:
-            if gen != self._manage_gen:
+            if stale():
                 return
             self._manage_busy = False
             ok = ok_of(f)
             log.info("Nav2 重新启动:%s", "成功" if ok else "没成功,过一阵再试")
 
         def reset(f: Any) -> None:
-            if gen != self._manage_gen:
+            if stale():
                 return
             if not ok_of(f):
                 log.warning("Nav2 重置没成功:不接着启动,过一阵再试")
