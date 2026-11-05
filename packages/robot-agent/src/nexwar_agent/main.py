@@ -563,8 +563,9 @@ def build(args: argparse.Namespace) -> Assembled:
             from nexwar_adapter_d1max.hal import D1MaxHal
             host, port = args.sidecar
             if args.payload.is_file():
-                from nexwar_adapter_d1max.payload import Payload, PayloadConfig
-                payload = Payload(PayloadConfig.load(args.payload))
+                # 11-05 POC:kind=anbot_ros1 是借竞品上装的警灯、喇叭(nexwar_adapter_d1max.anbot)
+                from nexwar_adapter_d1max.anbot import load_payload
+                payload = load_payload(args.payload)
                 log.info("上装配置 %s:接了 %s", args.payload,
                          "、".join(o for o in ("strobe", "siren", "spotlight", "speaker")
                                   if payload.has(o)) or "(一路都没有)")

@@ -36,9 +36,12 @@ import asyncio
 import math
 import time
 from collections.abc import Callable
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from nexwar_adapter_d1max.payload import Payload
+
+if TYPE_CHECKING:
+    from nexwar_adapter_d1max.anbot import AnbotPayload
 from nexwar_contract.hal import (
     Battery,
     ControlStatus,
@@ -116,7 +119,7 @@ class D1MaxHal:
                  frame_id: str = "odom",
                  now_ms: Callable[[], int] = wall_ms,
                  backend: SidecarDeviceBackend | None = None,
-                 payload: Payload | None = None,
+                 payload: Payload | AnbotPayload | None = None,
                  token_file: str | None = None) -> None:
         """``token_file``:旁路进程的令牌(协议 9,S11)。代理给缺省的 ``~/.nexwar/sidecar.token``;
         旁路进程要令牌而读不了、不对,``connect`` 就抛(开不了车的代理不该假装能开)。"""
@@ -488,7 +491,7 @@ class D1MaxHal:
             raise ValueError(f"灯只有 front/back/both,收到 {channel!r}")
         await setter(on)
 
-    def _up(self, output: str) -> Payload:
+    def _up(self, output: str) -> Payload | AnbotPayload:
         if self._payload is None or not self._payload.has(output):
             raise HalUnsupported(f"未安装上装的 {output}")
         return self._payload
@@ -515,6 +518,8 @@ class D1MaxHal:
         if self._payload is None or not self._payload.has("speaker"):
             return ()
         from pathlib import Path
+        if not self._payload.cfg.clips_dir:           # 竞品转接:没有录好的话术(别去扫当前目录)
+            return ()
         d = Path(self._payload.cfg.clips_dir)
         return tuple(sorted(p.stem for p in d.glob("*.wav"))) if d.is_dir() else ()
 
