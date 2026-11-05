@@ -50,6 +50,13 @@
             "map_id": "estate-1",
             "map_version": "7"
           },
+          "posture": {
+            "modes": [
+              "stand",
+              "lie",
+              "crawl"
+            ]
+          },
           "release_activate": {},
           "release_install": {
             "current": "2026-09-20-aaaaaa"
@@ -73,7 +80,9 @@
           },
           "teleop": {
             "max_vx": 0.5,
-            "max_wz": 0.75
+            "max_vx_hal": 1.0,
+            "max_wz": 0.75,
+            "max_wz_hal": 1.5
           },
           "zones_set": {
             "enforced": false,
@@ -86,8 +95,8 @@
       },
       "clock_skew_s": 0.0,
       "devices": null,
-      "enrolled_at": 1793379421500,
-      "expires_at": 1794379421501,
+      "enrolled_at": 1793841741297,
+      "expires_at": 1794841741298,
       "fresh": true,
       "held": null,
       "loc": {
@@ -131,9 +140,9 @@
         }
       },
       "status": {
-        "boot_id": "boot-d548ea16a1",
+        "boot_id": "boot-38420fe638",
         "control_epoch": 1,
-        "last_seen": 1793379422263,
+        "last_seen": 1793841741977,
         "online": true,
         "ready": {
           "control": true,
