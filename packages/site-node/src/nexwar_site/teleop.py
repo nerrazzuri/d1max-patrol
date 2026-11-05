@@ -472,7 +472,8 @@ class TeleopDesk:
         except Exception:
             log.warning("放租发不出去(%s 代次 %d),机器人那头租约到期自己停", s.robot_id, s.epoch,
                         exc_info=True)
-        self._tell(s, {"kind": "ended", "reason": reason})
+        self._tell(s, {"kind": "ended", "reason": reason,
+                       **({"by": str(detail["by"])} if detail and detail.get("by") else {})})
         if s.ws is not None:
             try:
                 s.ws.close(1000, reason)
@@ -502,10 +503,28 @@ class TeleopDesk:
             raise
 
     def _close_async(self, s: Session, reason: str, *, by: str = "",
-                     release: bool = True) -> None:
+                     release: bool = True, detail: dict[str, Any] | None = None) -> None:
         threading.Thread(target=self.close, args=(s, reason),
-                         kwargs={"by": by, "release": release},
+                         kwargs={"by": by, "release": release, "detail": detail},
                          daemon=True, name="teleop-close").start()
+
+    def on_event(self, robot_id: str, e: Any) -> None:
+        """现场 11-05:机器人那头这一趟遥控被中止了(站点哪个模块、管理员发的 abort)→ 当场结束,
+        告诉手机是谁停的(以前手机等到连接断了才说「连接断开」,人以为网断了)。halt 自己收尾。"""
+        if e.kind not in ("task_aborted", "task_failed", "task_preempted"):
+            return
+        s = self.active(robot_id)
+        tid = str((e.data or {}).get("task_id", ""))
+        if s is None or tid != f"teleop-{s.epoch}" or (e.data or {}).get("reason") == "halt":
+            return
+        by = ""
+        db = getattr(self.dispatcher, "db", None)
+        if db is not None:
+            row = db.query("SELECT issued_by FROM commands WHERE robot_id=? AND task_id=? "
+                           "AND kind='abort' ORDER BY issued_at DESC LIMIT 1", (robot_id, tid))
+            by = str(row[0][0]) if row else ""
+        log.warning("%s 遥控那一趟 %s 被中止(%s)", robot_id, tid, by or e.kind)
+        self._close_async(s, "aborted", release=False, detail={"by": by} if by else None)
 
     # ------------------------------------------------------------ 续租与守卫
 

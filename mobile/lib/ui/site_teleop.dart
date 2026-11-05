@@ -54,10 +54,17 @@ String? teleopZoneText(Map<String, dynamic>? zg) {
   };
 }
 
-/// 结束原因给人看的话。
-String teleopEndText(String reason) => switch (reason) {
+/// 结束原因给人看的话。`by`：谁中止的（站点在 `aborted` 里说，现场 11-05）。
+String teleopEndText(String reason, [String by = '']) => switch (reason) {
       'released' => tr('You released control', '你已退出遥控'),
       'disconnected' => tr('Remote control connection lost. The robot has stopped', '遥控连接已断开，机器人已停止'),
+      'aborted' when by == 'site:swap' => tr(
+          'The robot is missing a battery: the site stopped remote control. It resumes by itself once the battery is back',
+          '机器人少一块电池，站点叫停了遥控；电池装好后自动恢复'),
+      'aborted' when by.startsWith('site:') =>
+        tr('The site stopped remote control ($by). The robot has stopped', '站点叫停了遥控（$by），机器人已停止'),
+      'aborted' when by.isNotEmpty => tr('$by stopped remote control', '$by 中止了遥控'),
+      'aborted' => tr('Remote control was stopped. The robot has stopped', '遥控被中止，机器人已停止'),
       'taken_over' => tr('An admin took control', '管理员已接管遥控'),
       'halt' => tr('Someone pressed stop', '有人按下了停车'),
       'robot_offline' => tr('The robot went offline', '机器人已离线'),
@@ -145,6 +152,7 @@ class SiteTeleopPage extends StatefulWidget {
 
   static const Key stopKey = Key('teleop-stop');
   static const Key statusKey = Key('teleop-status');
+  static const Key resumeKey = Key('teleop-resume');
   static const Key moveStickKey = Key('teleop-move');
   static const Key turnStickKey = Key('teleop-turn');
   static const Key keysKey = Key('teleop-keys');
@@ -191,6 +199,17 @@ class _SiteTeleopPageState extends State<SiteTeleopPage> with WidgetsBindingObse
   String? _dropNote;
   Timer? _dropTimer;
 
+  /// 现场 11-05：遥控被停了以后怎么接着来。不是自己退出、不是被接管、不是登录过期 → 有「继续遥控」；
+  /// 中止、断线、掉线、续不上 → 还每 [_retryEvery] 自己再要一次（最多 [_retryFor]），要到了接着遥控。
+  static const Duration _retryEvery = Duration(seconds: 3);
+  static const Duration _retryFor = Duration(minutes: 2);
+  static const Set<String> _autoReasons = {'aborted', 'disconnected', 'robot_offline', 'lease_lost'};
+  static const Set<String> _resumeReasons = {..._autoReasons, 'halt', 'stopped_here'};
+  String _endReason = '';
+  Timer? _retryTimer;
+  DateTime? _retryUntil;
+  bool get _canResume => _ended && _resumeReasons.contains(_endReason);
+
   /// 通知栏拉下来、来电盖住这一类：手指多半被系统收走了，这段时间只发零速。
   bool _inactive = false;
 
@@ -224,6 +243,8 @@ class _SiteTeleopPageState extends State<SiteTeleopPage> with WidgetsBindingObse
   /// 本机收手：不再发杆值、零速、放租、关连接、杆变灰。
   void _endLocally(String why) {
     if (_ended) return;
+    _endReason = 'background';
+    _retryTimer?.cancel();
     _stopTicking();
     _clearKeys();
     final link = _link;
@@ -267,6 +288,16 @@ class _SiteTeleopPageState extends State<SiteTeleopPage> with WidgetsBindingObse
         if (mounted && !_ended) await _open();
         return;
       }
+      final until = _retryUntil;
+      if (mounted && until != null && DateTime.now().isBefore(until)) {
+        // 自己再要的那几次：还不能遥控就说站点给的原因，接着等
+        setState(() {
+          _status = tr('Cannot drive yet: ${e.message}. Retrying…', '暂时还不能遥控：${e.message}；稍后自动重试');
+          _ended = true;
+        });
+        _retryTimer = Timer(_retryEvery, _resume);
+        return;
+      }
       if (mounted) {
         setState(() {
           _status = tr("Can't start remote control: ${e.message}", '无法开始遥控：${e.message}');
@@ -276,12 +307,36 @@ class _SiteTeleopPageState extends State<SiteTeleopPage> with WidgetsBindingObse
     }
   }
 
+  /// 「继续遥控」、自己再要：丢掉结束了的那条连接，重新要一次（拿到之前杆是灰的；拿到后要重新按下）。
+  Future<void> _resume() async {
+    _retryTimer?.cancel();
+    _retryTimer = null;
+    if (!mounted || !_ended) return;
+    unawaited(_sub?.cancel());
+    _sub = null;
+    final old = _link;
+    _link = null;
+    if (old != null) unawaited(old.close());
+    _clearKeys();
+    setState(() {
+      _ended = false;
+      _granted = false;
+      _video = true;
+      _noVideo = 0;
+      _status = tr('Requesting control again…', '正在重新请求控制权…');
+    });
+    await _open();
+  }
+
   void _onMsg(Map<String, dynamic> m) {
     // 本机收过手（按了停、切后台、站点说结束）之后，晚到的一概不理：晚到的 granted 会把定时器
     // 点起来、把屏上翻回「你在遥控」（W00c5 外审阻断 2）。
     if (!mounted || _ended) return;
     switch (m['kind']) {
       case 'granted':
+        _retryTimer?.cancel();
+        _retryUntil = null;
+        _endReason = '';
         _clearKeys(); // 授权前按着的键不算：拿到遥控之后要重新按下
         setState(() {
           _granted = true;
@@ -318,11 +373,19 @@ class _SiteTeleopPageState extends State<SiteTeleopPage> with WidgetsBindingObse
       case 'ended':
         _stopTicking();
         _clearKeys();
+        final reason = '${m['reason']}';
+        final auto = _autoReasons.contains(reason);
         setState(() {
           _ended = true;
           _granted = false;
-          _status = teleopEndText('${m['reason']}');
+          _endReason = reason;
+          _status = teleopEndText(reason, '${m['by'] ?? ''}') +
+              (auto ? tr('. Retrying automatically…', '；正在自动重试…') : '');
         });
+        if (auto) {
+          _retryUntil = DateTime.now().add(_retryFor);
+          _retryTimer = Timer(_retryEvery, _resume);
+        }
     }
   }
 
@@ -409,6 +472,7 @@ class _SiteTeleopPageState extends State<SiteTeleopPage> with WidgetsBindingObse
       setState(() {
         _ended = true;
         _granted = false;
+        _endReason = 'stopped_here';
         _status = tr('You pressed stop', '你已按下停车');
       });
     }
@@ -430,6 +494,7 @@ class _SiteTeleopPageState extends State<SiteTeleopPage> with WidgetsBindingObse
     WidgetsBinding.instance.removeObserver(this);
     _stopTicking();
     _dropTimer?.cancel();
+    _retryTimer?.cancel();
     _keys.clear();
     _sub?.cancel();
     final link = _link;
@@ -526,6 +591,19 @@ class _SiteTeleopPageState extends State<SiteTeleopPage> with WidgetsBindingObse
                               style: NwText.titleSmall.copyWith(color: Colors.white, fontWeight: FontWeight.bold),
                             ),
                           ),
+                          if (_canResume)
+                            Padding(
+                              padding: const EdgeInsets.only(top: Nw.s4),
+                              child: Align(
+                                alignment: Alignment.centerLeft,
+                                child: FilledButton.icon(
+                                  key: SiteTeleopPage.resumeKey,
+                                  onPressed: _resume,
+                                  icon: const Icon(Icons.replay_rounded),
+                                  label: Text(tr('Resume remote control', '继续遥控')),
+                                ),
+                              ),
+                            ),
                           if (_zoneNote != null && !_ended)
                             Padding(
                               padding: const EdgeInsets.only(top: Nw.s4),
