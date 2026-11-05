@@ -51,6 +51,28 @@ void main() {
     teleopTierPick = null;
   });
 
+  testWidgets('POC 丢帧原因：站点转来机器人说的原因，显示几秒就收；原因说人话', (t) async {
+    final api = FakeApi('guard');
+    await _open(t, api);
+    expect(find.byKey(SiteTeleopPage.dropKey), findsNothing);
+    api.link!.ctl.add(<String, dynamic>{'kind': 'drops', 'last': 'video_recovered', 'at_ms': 1,
+      'counts': {'video_recovered': 2}});
+    await t.pump();
+    await t.pump();
+    expect(find.text('画面刚恢复，请先松开摇杆'), findsOneWidget);
+    await t.pump(const Duration(seconds: 5));
+    expect(find.byKey(SiteTeleopPage.dropKey), findsNothing, reason: '没有新增就收起');
+    for (final (code, text) in [
+      ('late', '指令被判迟到：钟差或网络'),
+      ('no_video', '无画面'),
+      ('seq', '指令顺序不对（重连中）'),
+      ('epoch', '指令顺序不对（重连中）'),
+    ]) {
+      expect(teleopDropText(code), text);
+    }
+    await t.pumpWidget(Container());
+  });
+
   testWidgets('POC 速度档：老站点不给档，不显示切换，照旧按站点限速', (t) async {
     final api = FakeApi('guard');
     await _open(t, api);

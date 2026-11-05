@@ -78,6 +78,7 @@ async def test_没画面不动_画面没了立刻停(台):
     await _走(c, r, t, 5, frame=lambda: _帧(c, vx=0.4))
     assert (await r.odometry()).x == 0.0, "没画面不许动"
     video["live"] = True
+    await _走(c, r, t, 1, frame=lambda: _帧(c))        # POC:画面回来先回中一帧(见 _drops 测试)
     await _走(c, r, t, 3, frame=lambda: _帧(c, vx=0.4))
     assert (await r.odometry()).vx > 0
     video["live"] = False
@@ -92,7 +93,8 @@ async def test_别的代次的帧不执行(台):
     assert t.gate.dropped["epoch"] == 5
     t.release()
     await _走(c, r, t, 2)
-    assert t.detail == {"reason": "released", "dropped": {"epoch": 5, "seq": 0, "late": 0}}, \
+    assert t.detail == {"reason": "released", "dropped": {"epoch": 5, "seq": 0, "late": 0,
+                                                          "no_video": 0, "video_recovered": 0}}, \
         "丢帧计数随终态上站点(真机项 3c.9)"
 
 

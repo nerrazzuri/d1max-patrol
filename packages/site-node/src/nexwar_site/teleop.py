@@ -97,6 +97,8 @@ class Session:
     zone_told: dict | None = None
     #: POC 速度档:慢/中/快(m/s),都夹到 ``max_vx`` 以内。
     speeds: dict = field(default_factory=dict)
+    #: POC:最近告诉手机的丢帧累计数(没新增不再说)。
+    drops_told: dict | None = None
 
 
 class TeleopDesk:
@@ -230,6 +232,17 @@ class TeleopDesk:
         return {"state": "unsupported",
                 "reason": f"{robot_id} 的代理版本过旧,遥控时不守硬禁区(水体、落差):看着画面开,"
                           "升级代理"}
+
+    def _drops_note(self, s: Session, data: Any) -> None:
+        """POC:机器人在续租回执里说遥控帧为什么被丢(``drops``);累计数有新增才转给手机。"""
+        dr = data.get("drops") if isinstance(data, dict) else None
+        if not isinstance(dr, dict) or not isinstance(dr.get("counts"), dict):
+            return
+        if dr["counts"] == s.drops_told:
+            return
+        s.drops_told = dict(dr["counts"])
+        self._tell(s, {"kind": "drops", "counts": dr["counts"], "last": str(dr.get("last", "")),
+                       "at_ms": dr.get("at_ms")})
 
     def _zone_note(self, s: Session, data: Any) -> None:
         """狗在续租回执里说的硬禁区守卫(决策 65):变了才告诉手机;截了、在边上记一笔审计。"""
@@ -492,6 +505,7 @@ class TeleopDesk:
                 ok = ack.result is AckResult.ACCEPTED
                 if ok:
                     self._zone_note(s, getattr(ack, "data", None))
+                    self._drops_note(s, getattr(ack, "data", None))
             except Exception:  # noqa: BLE001 - 续不上就算一次失败
                 ok = False
             s.renew_failures = 0 if ok else s.renew_failures + 1
