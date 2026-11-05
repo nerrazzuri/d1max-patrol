@@ -76,3 +76,69 @@ def decode(code: str) -> dict[str, str]:
     if _FP.match(d["f"]) is None or not d["n"].strip() or len(d["n"]) > MAX_NAME:
         raise PairingError("配对码无效")
     return {"name": d["n"], "url": check_url(d["u"]), "fingerprint": d["f"]}
+
+
+# ------------------------------------------------------------------ POC:二维码用局域网地址
+
+#: 不是手机能连的网卡:回环、容器、网桥、虚拟对端。
+_SKIP_IFACE = re.compile(r"^(lo|docker\d*|br-.*|veth.*|virbr\d*|cni\d*|flannel.*)$")
+_LOOPBACK = ("localhost", "ip6-localhost")
+
+
+def host_ipv4s() -> list[tuple[str, str]]:
+    """这台站点主机每块网卡的 IPv4:``[(网卡名, 地址)]``。读不到(非 Linux、没权限)就是空。"""
+    import fcntl
+    import socket
+    import struct
+    out: list[tuple[str, str]] = []
+    try:
+        names = [n for _, n in socket.if_nameindex()]
+    except OSError:
+        return out
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+        for n in names:
+            try:
+                req = struct.pack("256s", n.encode()[:15])
+                got = fcntl.ioctl(s.fileno(), 0x8915, req)        # SIOCGIFADDR
+            except OSError:
+                continue                                          # 这块卡没 IPv4
+            out.append((n, socket.inet_ntoa(got[20:24])))
+    return out
+
+
+def lan_addresses(*, hostnames: list[str], port: int,
+                  ifaces: list[tuple[str, str]] | None = None) -> list[str]:
+    """手机可能连得上的站点地址(``https://主机:端口``):手动配的主机名在前(跳过 localhost、回环),
+    然后各块网卡的局域网 IPv4(跳过回环、docker、网桥、veth、链路本地)。去重,一个都没有就是空。"""
+    import ipaddress
+    cands: list[str] = []
+    for h in hostnames:
+        h = h.strip()
+        if not h or h.lower() in _LOOPBACK:
+            continue
+        try:
+            ip = ipaddress.ip_address(h)
+            if ip.is_loopback or ip.is_link_local or ip.is_unspecified:
+                continue
+        except ValueError:
+            pass
+        cands.append(h)
+    for name, a in (host_ipv4s() if ifaces is None else ifaces):
+        if _SKIP_IFACE.match(name):
+            continue
+        try:
+            ip = ipaddress.ip_address(a)
+        except ValueError:
+            continue
+        if ip.is_loopback or ip.is_link_local or ip.is_unspecified:
+            continue
+        cands.append(a)
+    out: list[str] = []
+    for h in cands:
+        try:
+            u = check_url(f"https://{f'[{h}]' if ':' in h else h}:{port}")
+        except PairingError:
+            continue
+        if u not in out:
+            out.append(u)
+    return out

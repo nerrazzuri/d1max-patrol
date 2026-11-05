@@ -129,3 +129,28 @@ def test_命令行出码_地址不对退出码非零(台, capsys):
                            "--name", "East"]) == 0
     assert pairing.decode(capsys.readouterr().out.strip())["name"] == "East"
     assert site_main.main(["--home", str(home), "pair-code", "--url", "http://site.lan"]) != 0
+
+
+def test_POC_局域网地址_跳过回环和容器网卡_手配的主机名排最前():
+    got = pairing.lan_addresses(
+        hostnames=["site.example", "localhost", "127.0.0.1"], port=8443,
+        ifaces=[("lo", "127.0.0.1"), ("docker0", "172.17.0.1"), ("br-1a2b", "172.18.0.1"),
+                ("veth9", "169.254.3.3"), ("eno1", "192.168.1.5"), ("wlp2s0", "10.0.0.7"),
+                ("eno1", "192.168.1.5")])
+    assert got == ["https://site.example:8443", "https://192.168.1.5:8443", "https://10.0.0.7:8443"]
+    assert pairing.lan_addresses(hostnames=["localhost"], port=8443, ifaces=[("lo", "127.0.0.1")]) \
+        == []
+
+
+def test_POC_本机网卡真读得出来_不报错():
+    for name, ip in pairing.host_ipv4s():
+        assert isinstance(name, str) and ip.count(".") == 3
+
+
+def test_POC_接口列地址(台, monkeypatch):
+    s, _ = 台
+    monkeypatch.setattr(pairing, "host_ipv4s",
+                        lambda: [("lo", "127.0.0.1"), ("eno1", "192.168.9.9")])
+    code, d = s.req("GET", "/api/pairing/addresses", token=s.login())
+    assert code == 200 and "https://192.168.9.9:" in " ".join(d["addresses"]), d
+    assert not any("127.0.0.1" in a for a in d["addresses"])
