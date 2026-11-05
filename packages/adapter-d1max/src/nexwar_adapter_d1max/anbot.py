@@ -425,6 +425,10 @@ class AnbotPayload:
             return
         if not 0 < max_s <= MAX_ON_S:
             raise PayloadError(f"max_s 要在 0–{MAX_ON_S:.0f} 秒之间")
+        await self._ensure()
+        if self._open_error or not self._strobe.registered:
+            # 11-05 现场:原来收下、事后才报故障,站点回「已接受」,保安以为开了
+            raise PayloadError(f"警灯没开:{self._why_down(self._strobe)}")
         self._until = time.monotonic() + max_s
         await self._publish_strobe(True)
 

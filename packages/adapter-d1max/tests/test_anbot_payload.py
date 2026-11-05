@@ -233,8 +233,11 @@ async def test_竞品主控没开_起得来不卡_喊话当场报错_警灯报�
     assert time.monotonic() - t0 < 1.0, "主控没开不能把代理卡住"
     with pytest.raises(PayloadError, match="竞品主控"):
         await p.sound("tts:zh:请注意", 30)
-    await p.set("strobe", True, 60)
-    assert "strobe" in p.faults() and "竞品主控" in p.faults()["strobe"]
+    # 11-05 现场:主控连不上时开警灯当场拒(原来收下、事后才报故障,保安以为开了)
+    with pytest.raises(PayloadError, match="竞品主控连不上"):
+        await p.set("strobe", True, 60)
+    assert p.faults() == {}
+    await p.set("strobe", False, 0)                     # 关照发,不拦
     h = {d["id"]: d for d in p.health()}
     assert h["link:anbot"]["state"] == "offline"
     # 主控起来了(同一个端口)
@@ -246,6 +249,7 @@ async def test_竞品主控没开_起得来不卡_喊话当场报错_警灯报�
     threading.Thread(target=m.srv.serve_forever, daemon=True).start()
     try:
         sub = await _接上(m, p, STROBE)
+        await p.set("strobe", True, 60)
         await _等(lambda: True in sub.bools())
         await _等(lambda: p.faults() == {})
         assert {d["id"]: d for d in p.health()}["link:anbot"]["state"] == "degraded", "播音没连上"
