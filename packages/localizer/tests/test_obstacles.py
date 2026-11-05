@@ -250,6 +250,39 @@ def test_发不出去就断开_过一会儿再连():
     assert len(calls) == 1, "没到重连间隔不再连"
 
 
+def test_现场1105_还没东西要发也先连上_拿到hello里的协议号():
+    """11-05:感知重启后不知道旁路协议号,只能按老许可判;前面 1.1 m 有东西、老许可一条都不发,
+    LineClient 只在发的时候才连,就一直连不上、一直拿不到协议号(死锁)。poll 也要按间隔去连。"""
+    side = 假对端()
+    got = []
+    calls = []
+
+    def 连():
+        calls.append(1)
+        return side.a
+    c = LineClient(连, {"t": "hello"}, reconnect_s=10.0, on_line=got.append)
+    side.b.sendall(b'{"t": "hello", "proto": 7}\n')
+    c.poll()
+    assert calls == [1], "没东西要发也要连"
+    assert side.read()[0] == {"t": "hello"}, "连上先发自己的 hello"
+    c.poll()
+    assert got and got[0]["proto"] == 7
+    assert calls == [1], "连着就不再连"
+
+
+def test_现场1105_poll去连_连不上也按间隔():
+    calls = []
+
+    def 连不上():
+        calls.append(1)
+        raise OSError("没有")
+    c = LineClient(连不上, None, reconnect_s=10.0)
+    c.poll()
+    c.poll()
+    assert not c.send({"a": 1})
+    assert len(calls) == 1
+
+
 def test_跟着正在用的图找外参(tmp_path):
     assert active_frames(tmp_path) is None
     (tmp_path / "active.json").write_text(json.dumps({"map_id": "m", "version": "2"}))
