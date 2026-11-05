@@ -959,6 +959,7 @@ class Server:
         from nexwar_site.teleop import TeleopDesk
         self.teleop = TeleopDesk(self.dispatcher, self.loop, audit=None, now_ms=wall_ms,
                                  video_ok=self._video_ok)
+        self.dispatcher.on_event(self.teleop.on_event)
         # W00c5d(决策 8):狗的运行记录经狗专用口(mTLS)传上来,落证据库;判读、复核、导出、备份
         # 都在这儿。
         from nexwar_site.backup import SiteBackup

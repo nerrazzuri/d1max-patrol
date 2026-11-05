@@ -493,3 +493,25 @@ def test_POC_丢帧原因_机器人在续租回执里说_有新增才转给手�
     assert [m["last"] for m in got] == ["late", "video_recovered"], got
     assert got[1]["counts"]["video_recovered"] == 1
     assert any(m.get("kind") == "zone_guard" for m in told), "两样一起带也都转"
+
+
+def test_现场1105_遥控那一趟被中止_站点当场结束_说清是谁停的(desk):
+    # 现场:站点换电台中止了遥控,手机却说「连接断开」,人以为网断了
+    from nexwar_contract.messages import Event
+    k, d = desk
+    told: list = []
+    s = k.open("A", _u("gina", "guard"))
+    s.ws = SimpleNamespace(send_text=lambda t: told.append(json.loads(t)), close=lambda *a: None)
+    tid = f"teleop-{s.epoch}"
+    with d.db.tx() as c:
+        c.execute("INSERT INTO commands(command_id, task_id, robot_id, kind, payload, issued_by, "
+                  "issued_at) VALUES ('c1', ?, 'A', 'abort', '{}', 'site:swap', 1)", (tid,))
+    ev = lambda kind, t: Event(boot_id="b", seq=1, event_id="e1", kind=kind,  # noqa: E731
+                                data={"task_id": t, "reason": "abort"}, stamp=1)
+    k.on_event("A", ev("task_aborted", "teleop-999"))     # 别的那一趟:不管
+    assert not s.ended.is_set()
+    k.on_event("A", ev("task_aborted", tid))
+    _等(lambda: any(m.get("kind") == "ended" for m in told))
+    assert s.end_reason == "aborted"
+    end = [m for m in told if m.get("kind") == "ended"][-1]
+    assert end["reason"] == "aborted" and end["by"] == "site:swap"
