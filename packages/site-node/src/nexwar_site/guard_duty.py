@@ -87,8 +87,6 @@ STOP_RETRY_MS = 5_000
 STOP_ALERT = 3
 #: W74 外审 r1 #7:派跟人被拒,过这么久再试;回执没到、机器人手上也一直不是它,过这么久当没派成、再派。
 FOLLOW_RETRY_MS = 30_000
-#: 刚派出去的跟人类任务,这么久以内机器人状态里没有它也不算停了(状态可能还没跟上;外审 r3 #1)。
-FOLLOW_SEEN_MS = 5_000
 #: 跟人和它派生的那几趟(回线内、看易藏点)的任务号开头(:data:`nexwar_contract.follow.TASK_PREFIX`)。
 FOLLOW_PREFIX = "follow-"
 #: 连着这么多圈跑不成报 P2。
@@ -188,7 +186,12 @@ class GuardDuty:
         #: 接上;没接就不判越线、不去看易藏点。
         self.marks: Any = None
         # 看见人这一回的账(跟人、越线、易藏点)落在值守进度 guard_runs.follow:见 _fs(外审 r2)
+        #: 每台最后一次收到状态的时刻(内存):跟人类任务派出去以后收到过新状态,状态里没它才算停了。
+        self._status_at: dict[str, int] = {}
         dispatcher.on_event(self._on_event)
+        on_status = getattr(dispatcher, "on_status", None)
+        if callable(on_status):
+            on_status(lambda rid, _s: self._note_status(rid))
 
     # ------------------------------------------------------------ 方案
 
@@ -887,16 +890,20 @@ class GuardDuty:
     def _pending_follow(self, rid: str, running: str, now: int) -> str:
         """这一回派的跟人、回线内、看易藏点里还没确认停下的那一趟(在跑的先);都停了 ``""``。
 
-        外审 r3 #1:有结果的不算(状态里还挂着它也不算,不遮住别的);刚派出去
-        :data:`FOLLOW_SEEN_MS` 以内的,状态里没它也不算停了。"""
+        外审 r3 #1:有结果的不算(状态里还挂着它也不算,不遮住别的)。外审 r4 #1:没有结果的,要派出去
+        以后收到过机器人的新状态、状态里不是它,才算停了(站点重启后要重启以后收到的状态)。"""
         fs = self._fs(rid)
         sent = fs.get("sent") or {}
         live = [t for t in (fs.get("task"), fs.get("own")) if isinstance(t, str) and t
                 and self._terminal(rid, t) is None]
         if running in live:
             return running
+        heard = self._status_at.get(rid, 0)
         return next((t for t in live if not self._settled(rid, now) or running == t
-                     or now - int(sent.get(t, 0)) < FOLLOW_SEEN_MS), "")
+                     or heard <= int(sent.get(t, 0))), "")
+
+    def _note_status(self, rid: str) -> None:
+        self._status_at[rid] = self._now()
 
     async def _maybe_follow(self, eid: int, rid: str) -> None:
         """W74 二期:停下盯着以后派跟人(机器人能力里有 ``follow`` 才派;一回成功派一次)。人在不在动、
@@ -989,7 +996,7 @@ class GuardDuty:
                 hit = self.marks.track(ref[0], ref[1], trail, cur)
                 if hit is not None:
                     self._fs_set(rid, trail=trail)
-                    self._crossed(rid, run["entry"], hit[0], hit[1], cur, d, ref)
+                    self._crossed(rid, run["entry"], hit[0], (hit[1], hit[2]), cur, d, ref)
                     return
             if trail != fs.get("trail"):
                 self._fs_set(rid, trail=trail)
@@ -1000,11 +1007,13 @@ class GuardDuty:
         pose = getattr(getattr(self._client(rid), "telemetry", None), "pose", None)
         return (pose.map_id, pose.map_version) if pose is not None else None
 
-    def _crossed(self, rid: str, eid: int, mark: dict[str, Any], prev: tuple[float, float],
-                 cur: tuple[float, float], d: dict[str, Any], ref: tuple[str, str]) -> None:
-        """人越过出口线(设计 §七):报 P1「人离开值守区」;下一拍停跟人、回线内 3 m 朝出口看。"""
+    def _crossed(self, rid: str, eid: int, mark: dict[str, Any],
+                 seg: tuple[tuple[float, float], tuple[float, float]], cur: tuple[float, float],
+                 d: dict[str, Any], ref: tuple[str, str]) -> None:
+        """人越过出口线(设计 §七):报 P1「人离开值守区」;下一拍停跟人、回线内 3 m 朝出口看。
+        ``seg`` 是实际穿过线的那一段(回线内的位置按它的交点算,外审 r4 #3);``cur`` 人现在在哪。"""
         from nexwar_site.map_marks import INSIDE_M, inside_pose
-        x, y, yaw = inside_pose(mark, prev, cur)
+        x, y, yaw = inside_pose(mark, *seg)
         pose = MapPose(map_id=ref[0], map_version=ref[1], frame_id="map", x=x, y=y, yaw=yaw)
         fs = self._fs_set(rid, left=True, todo=["exit", pose.to_wire(), mark["name"]])
         self._amend(fs.get("alert", ""), follow_left=True)

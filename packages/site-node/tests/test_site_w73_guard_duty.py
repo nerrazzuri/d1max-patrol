@@ -1082,10 +1082,20 @@ async def test_W74_看见人_停下以后派跟人_一回只派一次_机器人�
     assert len(_follows(t)) == 1, "这一回只派一次"
 
 
+class _盒(dict):
+    on_run = None
+
+    def __setitem__(self, k, v):
+        super().__setitem__(k, v)
+        if k == "run" and self.on_run is not None:
+            self.on_run()
+
+
 def _假跟(t):
     """派遣器的 follow 当成机器人接了(仿真代理不会跟人,回 unsupported);机器人手上在跑什么由测试
     说了算(``box["run"]``:``None`` = 照仿真狗报的)。``refuse`` 拒、``boom`` 回执没到。"""
-    sent, box = [], {"run": None, "refuse": False, "boom": False}
+    sent, box = [], _盒(run=None, refuse=False, boom=False)
+    box.on_run = lambda: t.duty._note_status("A")       # 改了手上在跑什么 = 机器人发来了新状态
 
     async def follow(rid, tid, req, *, issued_by):
         sent.append(tid)
@@ -1461,7 +1471,9 @@ async def test_外审r3_1_跟人那一趟有结果了状态还挂着它_看易�
     [sw] = [c for c in _patrols(t) if c["task_id"].startswith("follow-sweep-")]
     real = t.duty._terminal
     t.duty._terminal = lambda rid, x: ("task_done", {}) if x == tid else real(rid, x)
+    t.duty._note_status = lambda rid: None               # 外审 r4 #1:派出去以后一直没收到新状态
     t.box["run"] = tid                                   # 跟人有结果了,状态还挂着它(滞后)
+    await _跑(t, 8)                                      # 过了好几秒也一样
     t.duty.alerts.resolve_all("A", "dog_sees_person", who="gina")
     await _跑(t, 2)
     assert any(c["kind"] == "abort" and c["task_id"] == sw["task_id"]
