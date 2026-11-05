@@ -500,6 +500,12 @@ class SidecarDeviceBackend(DeviceBackend):
         await self._require_control("趴下")
         await self._command("lie")
 
+    async def crawl(self) -> None:
+        """蹲下(SDK ``Crawl``,匍匐静止;协议 11 起)。
+        老旁路进程不认,调用方按 ``hello.proto`` 先判。"""
+        await self._require_control("蹲下")
+        await self._command("crawl")
+
     async def walk(self, seconds: float, forward: float,
                    lateral: float = 0.0, yaw: float = 0.0) -> None:
         """直驱行走 —— 运控层的开环平移,**不是导航**。

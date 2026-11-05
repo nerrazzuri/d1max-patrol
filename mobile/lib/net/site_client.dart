@@ -197,6 +197,15 @@ String refusalText(SiteError e) {
 
 /// 这台狗报的能力里有没有这种任务（`robots()`、`robot()` 给的那一份）。没这个能力的按钮不显示：
 /// 狗会回 `unsupported`，按了也白按（W00c5d 第二部分内部评审）。
+/// 这台机器人能换哪几种姿态（POC；能力里没报 = 空）。
+List<String> robotPostures(Map<String, dynamic>? view) {
+  final caps = view?['capabilities'];
+  final tasks = caps is Map ? caps['tasks'] : null;
+  final p = tasks is Map ? tasks['posture'] : null;
+  final modes = p is Map ? p['modes'] : null;
+  return modes is List ? modes.whereType<String>().toList() : const <String>[];
+}
+
 bool robotCan(Map<String, dynamic>? view, String task) {
   final caps = view?['capabilities'];
   final tasks = caps is Map ? caps['tasks'] : null;
@@ -652,6 +661,9 @@ abstract class SiteApi {
   Future<Map<String, dynamic>> abort(String id, String taskId);
   /// 回默认待命点；给了 [name] 就回那一个（W13a）。
   Future<Map<String, dynamic>> returnToStandby(String id, {String? name});
+  /// 换姿态（POC）：`stand` / `lie` / `crawl`。保安、管理员、工程师（跟遥控同一个权限）。
+  /// 机器人做完才回，所以多等一会儿；有任务在跑、急停时机器人拒，原因在 [SiteError]。
+  Future<Map<String, dynamic>> posture(String robotId, String mode);
   /// 这台狗的待命点与原点（W13a）：`{points: [...], homes: [...]}`。
   Future<Map<String, dynamic>> standbyPoints(String id);
   /// 在当前位置设待命点（W13a，管理员）：不动原点。
@@ -1226,6 +1238,11 @@ class SiteClient implements SiteApi {
   Future<Map<String, dynamic>> returnToStandby(String id, {String? name}) async => _map(
       await _send('POST', '/api/robots/${Uri.encodeComponent(id)}/standby/return',
           <String, dynamic>{'name': ?name}));
+
+  @override
+  Future<Map<String, dynamic>> posture(String robotId, String mode) async => _map(await _send(
+      'POST', '/api/robots/${Uri.encodeComponent(robotId)}/posture', <String, dynamic>{'mode': mode},
+      const Duration(seconds: 35)));
 
   @override
   Future<Map<String, dynamic>> standbyPoints(String id) async =>

@@ -590,3 +590,18 @@ async def test_W73_两块电池分别报_拔掉的那块是None_电量按低的�
         sim.battery1 = 0.0                              # 1 号拔了
         assert await _等(lambda: _eq(hal.battery(), 80.0))
         assert (await hal.battery()).packs == (None, 80.0)
+
+
+async def test_POC_蹲下_新旁路进程才报_才做():
+    """蹲下(SDK Crawl)协议 11 起才有:老旁路进程不报能蹲、要蹲直说不支持;新的报、真做、等到姿态。"""
+    async with _台子(sim_kw={"proto": 10}) as (sim, hal):
+        assert hal.hal_capabilities().postures == ("stand", "lie")
+        with pytest.raises(HalUnsupported):
+            await hal.set_motion_mode("crawl")
+    async with _台子() as (sim, hal):
+        assert hal.hal_capabilities().postures == ("stand", "lie", "crawl")
+        await hal.set_motion_mode("crawl")
+        assert _最后一条(sim, "crawl") is not None
+        assert await hal.motion_status() is MotionStatus.STANDING, "蹲着:不算趴着,也不能走"
+        await hal.set_motion_mode("stand")
+        assert await hal.motion_status() is MotionStatus.READY

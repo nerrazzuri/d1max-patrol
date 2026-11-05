@@ -75,6 +75,10 @@ def overview(dispatcher: Any, db: Any, *, now_ms: int, tz: tzinfo) -> list[dict[
                                 for x in (dv or {}).get("items", [])] if dv and not dv.get("stale")
                     else [],
                     "enrolled_at": reg.enrolled_at(rid), "held": _held(dispatcher, rid),
+                    # POC:能换哪几种姿势(狗报的;不新鲜不给)、正在跑的任务(有就不让换姿势)
+                    "postures": list(((getattr(caps, "tasks", None) or {}).get("posture") or {})
+                                     .get("modes", [])) if fresh else [],
+                    "task": _task(c),
                     "manual_note": (reg.manual_only(rid) or {}).get("note", "")})
     return out
 
@@ -88,6 +92,12 @@ def _week(db: Any, rid: str, now_ms: int) -> dict[str, Any]:
     [a] = db.query("SELECT COUNT(*) AS n FROM alerts WHERE robot=? AND kind='run_abort' "
                    "AND first_ms>=?", (rid, since))
     return {"patrols_7d": p["n"], "aborts_7d": a["n"], "last_patrol_ms": p["last"]}
+
+
+def _task(c: Any) -> str | None:
+    """狗状态里正在跑的任务号(没有 / 没状态 = None)。"""
+    task = getattr(getattr(c, "status", None), "task", None)
+    return getattr(task, "task_id", None)
 
 
 def _held(dispatcher: Any, rid: str) -> dict[str, Any] | None:

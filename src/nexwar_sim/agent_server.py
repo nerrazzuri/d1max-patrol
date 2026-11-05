@@ -102,12 +102,15 @@ class SimAgentServer:
         speed_level_want: int = 1,
         token: str | None = None,
         max_fraction: float = LEGACY_MAX_FRACTION,
+        proto: int = PROTO_VERSION,
         permit_mps_per_unit: float | None = None,
     ) -> None:
         #: 同 ``patrol_agent --max-fraction``(W47):前进比例上限;超过 0.5 的只在开了许可门时放行。
         if not LEGACY_MAX_FRACTION <= max_fraction <= MAX_FORWARD_FRACTION:
             raise ValueError(f"max_fraction 要在 [0.5, 1.0],收到 {max_fraction}")
         self.max_fraction = max_fraction
+        #: 报的协议号(测老旁路进程用;11 起认 ``crawl``)。
+        self.proto = proto
         #: 同 ``--permit-mps-per-unit``:分档许可的 m/s 换比例(缺省按仿真自己的运动模型:
         #: 低速 1.2、中速 2.4、其余 3.6;真旁路按实测 1.1 / 2.2 / 3.3)。
         self._permit_mps = permit_mps_per_unit
@@ -285,7 +288,7 @@ class SimAgentServer:
                 await writer.wait_closed()
 
     def _hello(self, held: bool) -> dict[str, Any]:
-        return {"t": "hello", "proto": PROTO_VERSION, "auth": self.token is not None,
+        return {"t": "hello", "proto": self.proto, "auth": self.token is not None,
                 "sdk": self._sdk, "held": held, "robot": "sim://nexwar",
                 "follows_head": self.follows_head, "speed_level_want": self.speed_level_want,
                 "max_fraction": self.max_fraction}
@@ -441,6 +444,10 @@ class SimAgentServer:
         if cmd == "lie":
             self._need_control("lie")
             await self._transition(MotionStatus.LIE_DOWN)
+            return
+        if cmd == "crawl" and self.proto >= 11:
+            self._need_control("crawl")
+            await self._transition(MotionStatus.CRAWL)
             return
         if cmd == "head":
             self._need_control("head")

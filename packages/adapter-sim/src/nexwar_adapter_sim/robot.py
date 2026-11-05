@@ -61,6 +61,9 @@ class SimRobot:
         self._now = now_ms
         #: 横移(2026-10-30):给了才收 ``vy``(机身系左为正),不给照旧拒 ``no_lateral``。
         self.lateral, self.max_vy = lateral, max_vy
+        #: 姿态(POC 2026-11):站着 / 趴着 / 蹲着;起来是站着。
+        self.postures: tuple[str, ...] = ("stand", "lie", "crawl")
+        self._posture = "stand"
         #: 假 IMU(W26):给了才有(``imu()``、能力里报);姿态、撞击、腿上承重用 :meth:`inject_imu` 改。
         self._imu_on = imu
         self._roll = self._pitch = 0.0
@@ -279,14 +282,25 @@ class SimRobot:
     async def motion_status(self) -> MotionStatus:
         if not self._connected:
             return MotionStatus.UNKNOWN
+        if self._posture == "lie":
+            return MotionStatus.LYING
+        if self._posture == "crawl":
+            return MotionStatus.STANDING                  # 蹲着:不是趴着,也不能走
         return MotionStatus.READY if self._control and not self._estop else MotionStatus.STANDING
 
     async def set_motion_mode(self, mode: str) -> None:
-        raise HalUnsupported("sim 只有一种运动模式")
+        """站起、趴下、蹲下(POC 2026-11):只换姿态;不是站着的时候不收速度。"""
+        if mode not in self.postures:
+            raise HalUnsupported(f"sim 只做 {'/'.join(self.postures)},不认 {mode!r}")
+        if not self._control:
+            raise RuntimeError("没有控制权,换不了姿态")
+        self._posture = mode
 
     async def set_velocity(self, cmd: VelocityCommand) -> VelocityResult:
         if not self._control:
             return VelocityResult(0.0, 0.0, clamped=False, rejected=True, reason="no_control")
+        if self._posture != "stand":
+            return VelocityResult(0.0, 0.0, clamped=False, rejected=True, reason="not_standing")
         if self._estop:
             return VelocityResult(0.0, 0.0, clamped=False, rejected=True, reason="estop")
         if abs(cmd.vy) > 1e-9 and not self.lateral:
@@ -513,6 +527,7 @@ class SimRobot:
         return HalCapabilities(
             max_vx=self.max_vx, max_wz=self.max_wz, deadband_vx=self.deadband_vx,
             lateral=self.lateral, max_vy=self.max_vy if self.lateral else 0.0,
+            postures=self.postures,
             control_releasable=True,
             recharge_mode="vendor_dock" if self.charger is not None else "none",
             sensing={"lidar": False, "depth": False, "thermal": False, "imu": self._imu_on,

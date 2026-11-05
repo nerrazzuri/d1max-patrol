@@ -118,6 +118,8 @@ class CommandProcessor:
         self.deter_hook: Callable[[Command], Any] | None = None
         #: 全狗限速(W29):收下回空串,不收回原因。
         self.speed_cap_hook: Callable[[Command], Any] | None = None
+        #: 站立、趴下、蹲下(POC 2026-11):不是任务;回拒绝原因或 ``(原因, 数据)``。
+        self.posture_hook: Callable[[Command], Any] | None = None
         #: 运动闸(W13 外审):会让狗动的任务**收的时候、起跑的时候**都问它;回原因就不收 / 不起跑
         #: (狗在桩上、出没出桩说不清)。``dock`` 自己不问(出桩就是它的事)。
         self.motion_gate: Callable[[], str] | None = None
@@ -241,6 +243,8 @@ class CommandProcessor:
             why = self.speed_cap_hook(cmd)
             return self._rej(cmd, why) if why else Ack(cmd.command_id, cmd.task_id,
                                                          AckResult.ACCEPTED)
+        if cmd.kind == "posture":
+            return self._finish(await self._posture(cmd))
         if cmd.kind in MAP_KINDS:
             if self.map_hook is None:
                 return self._finish(self._rej(cmd, "unsupported"))
@@ -523,6 +527,25 @@ class CommandProcessor:
                 raise
             n += 1
         return n
+
+    async def _posture(self, cmd: Command) -> Ack:
+        """换姿态(POC 2026-11)。会让机身动,但不是任务:有任务在跑、叫停栅栏立着、翻倒抱起、在桩上
+        都不做(急停、能不能做由钩子判)。进幂等记录:重投的一条不再做一次。"""
+        if self.posture_hook is None:
+            return self._rej(cmd, "unsupported")
+        if self._fence is not None:
+            return self._rej(cmd, "halting")
+        for t in (self.current, *self.pending):            # 排着队、马上要跑的也算
+            if t is not None and not t.done:
+                return self._rej(cmd, f"busy: 正在执行任务 {t.task_id}")
+        for gate in (self.force_gate, self.motion_gate):
+            why = gate() if gate is not None else ""
+            if why:
+                return self._rej(cmd, why)
+        got = await self.posture_hook(cmd)
+        reason, data = got if isinstance(got, tuple) else (got, None)
+        return (self._rej(cmd, reason) if reason
+                else Ack(cmd.command_id, cmd.task_id, AckResult.ACCEPTED, data=data))
 
     def _rej(self, cmd: Command, reason: str) -> Ack:
         return Ack(cmd.command_id, cmd.task_id, AckResult.REJECTED, reason=reason)

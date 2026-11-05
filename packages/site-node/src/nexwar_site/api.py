@@ -118,7 +118,7 @@ ALERTS_LIMIT_MAX = 2000
 _ALERT = re.compile(r"^/api/alerts/([^/]{1,256})/(ack|resolve|shelve|unshelve)$")
 #: W00c5c:``/api/robots/<id>/teleop``(WebSocket)与 ``/api/robots/<id>/halt``。
 _TELEOP = re.compile(r"^/api/robots/([^/]{1,64})/"
-                     r"(teleop|halt|resume|supervise|relocalize|home/here|deter|service)$")
+                     r"(teleop|halt|resume|supervise|relocalize|home/here|deter|service|posture)$")
 #: W00c5b:``/api/robots/<id>/video/<front|back|health>``。
 _VIDEO = re.compile(r"^/api/robots/([^/]{1,64})/video/([a-z]{1,16})$")
 #: W00c5d:运行记录与导出。
@@ -440,9 +440,10 @@ class SiteApi:
     def snapshot(self) -> dict[str, Any]:
         return {"kind": "snapshot", "robots": self.dispatcher.robots_view()}
 
-    def dispatch(self, fn: Callable[[], Any]) -> Any:
+    def dispatch(self, fn: Callable[[], Any], *, timeout_s: float | None = None) -> Any:
         try:
-            return self.loop.call(fn, timeout_s=self.dispatcher.ack_timeout_s + 5)
+            return self.loop.call(fn, timeout_s=self.dispatcher.ack_timeout_s + 5
+                                  if timeout_s is None else timeout_s)
         except Unsupported as exc:
             raise HttpError(409, str(exc), extra={"unsupported": True}) from exc
         except DispatchRefused as exc:
@@ -800,6 +801,8 @@ class _Handler(TlsHandlerMixin):
                     return self._relocalize(robot_id, user)
                 if m.group(2) == "deter" and method == "POST":
                     return self._deter(robot_id, user)
+                if m.group(2) == "posture" and method == "POST":
+                    return self._posture(robot_id, user)
                 if m.group(2) == "home/here" and method == "POST":
                     return self._mark_home(robot_id, user)
                 if m.group(2) == "teleop" and method == "GET":
@@ -2467,6 +2470,25 @@ class _Handler(TlsHandlerMixin):
             raise HttpError(400, str(exc)) from exc
         return self._send_json(200, self.site.dispatch(lambda: self.site.dispatcher.deter(
             robot_id, d, issued_by=str(user), priority=MANUAL)))
+
+    def _posture(self, robot_id: str, user) -> None:
+        """站起、趴下、蹲下(POC 2026-11):``{"mode": "stand"|"lie"|"crawl"}``。跟遥控同一个权限
+        (人手动让机身动)。狗拒了(有任务在跑、急停……)回 409、原因原样带回。"""
+        from nexwar_contract.hal import POSTURES
+        self._need(user, TELEOP)
+        self._audit_target = robot_id
+        d = self._body()
+        mode = d.get("mode") if isinstance(d, dict) else None
+        if not isinstance(mode, str) or mode not in POSTURES:
+            raise HttpError(400, f"mode 要是 {'/'.join(POSTURES)} 之一")
+        self._audit_detail = {"mode": mode}
+        r = self.site.dispatch(lambda: self.site.dispatcher.posture(
+            robot_id, mode, issued_by=str(user)), timeout_s=30)
+        ack = r["ack"]
+        if ack.get("result") != "accepted":
+            reason = str(ack.get("reason") or ack.get("result"))
+            raise HttpError(409, f"机器人没换姿势:{reason}", extra={"reason": reason})
+        return self._send_json(200, {"ack": ack, "mode": mode})
 
     def _relocalize(self, robot_id: str, user) -> None:
         """设位置(W00c6e,里程锚定):``{"x", "y", "yaw"}``、``{"at_home": true}`` 或

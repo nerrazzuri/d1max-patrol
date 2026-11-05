@@ -383,6 +383,9 @@ class AgentRuntime:
         self.deter = DeterDesk(self.hal, emit=self.events.emit,
                                monotonic=monotonic or time.monotonic)
         self.processor.deter_hook = self.deter.handle
+        #: 站立、趴下、蹲下(POC 2026-11):适配器报了能做哪几种才接。
+        if self.hal.hal_capabilities().postures:
+            self.processor.posture_hook = self._on_posture
         #: 全狗限速(W29,站点下雨、雷暴时发):(限多少 m/s, 到哪一刻(单调钟毫秒));None = 没限。
         self._speed_cap: tuple[float, int] | None = None
         self._speed_cap_told: tuple = (None,)              # 起来时没限速:不用多发一次能力
@@ -979,6 +982,9 @@ class AgentRuntime:
         deter = self.deter.caps()
         if deter is not None:
             out["deter"] = deter                    # W21:接了哪几路上装、能放哪些话术
+        postures = self.hal.hal_capabilities().postures
+        if postures:
+            out["posture"] = {"modes": list(postures)}   # POC:站起、趴下、蹲下
         return out
 
     def _running_config(self) -> dict[str, Any] | None:
@@ -1007,6 +1013,26 @@ class AgentRuntime:
         if self._last_patrol is not None:
             rc["last_patrol"] = dict(self._last_patrol)
         return rc
+
+    async def _on_posture(self, cmd: Command) -> str | tuple[str, dict[str, Any]]:
+        """换姿态。急停按着、读不到急停都不做(放行要保守);适配器做完才回(等状态帧跟上)。"""
+        mode = cmd.payload.get("mode") if isinstance(cmd.payload, dict) else None
+        modes = self.hal.hal_capabilities().postures
+        if not isinstance(mode, str) or mode not in modes:
+            return f"payload: mode 要是 {'/'.join(modes)} 之一,给的是 {mode!r}"
+        try:
+            estop = await self.hal.estop_status()
+        except Exception:  # noqa: BLE001 - 读不到急停:按按着算
+            estop = True
+        if estop:
+            return "estop: 急停按着(或读不到急停):先解除急停"
+        try:
+            await self.hal.set_motion_mode(mode)
+        except Exception as exc:  # noqa: BLE001 - 适配器拒、超时:原因带回去给人看
+            log.warning("换姿态 %s 没做成:%s", mode, exc)
+            return f"failed: {exc}"
+        log.info("姿态换成 %s", mode)
+        return "", {"mode": mode}
 
     def _on_speed_cap(self, cmd: Command) -> str:
         """全狗限速(W29):记下、马上用上。``null`` 取消。"""

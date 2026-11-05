@@ -71,7 +71,10 @@ from typing import Any
 #: ``hello`` 带 ``max_fraction``(旁路进程 ``--max-fraction``,前进比例上限 0.5–1.0;
 #: 超过 0.5 的只在开了净空许可门时放行)。后退、横移、转向一直 ±0.5。老旁路进程不报:按 0.5。
 #: 感知节点只对 ≥ 10 的发分档许可。
-PROTO_VERSION = 10
+#: 11(POC 2026-11):``crawl`` 蹲下(SDK ``Crawl``,匍匐静止)。
+PROTO_VERSION = 11
+#: 从这一号起认 ``crawl``(老旁路进程不认:适配器不报能蹲下)。
+CRAWL_PROTO_VERSION = 11
 #: 代理(``sidecar_device``)能配的最老的旁路进程:代理只用到 ``vel``(3),``clear`` 是感知节点发的
 #: (W11 内审应修 1:严格等于 4 的话,只推新版代理、旁路进程还是 3 号时整机不能动)。
 MIN_PROTO_VERSION = 3

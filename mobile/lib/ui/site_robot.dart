@@ -124,6 +124,48 @@ class _SiteRobotPageState extends State<SiteRobotPage> {
     return ok;
   }
 
+  /// 换姿态（POC）：先选、再确认（机器人会马上动）；有任务在跑直接说先停任务。
+  Future<void> _posture(Map<String, dynamic>? v) async {
+    final st = v?['status'];
+    final task = st is Map ? st['task'] : null;
+    final tid = task is Map ? task['task_id'] : null;
+    if (tid is String && tid.isNotEmpty) {
+      setState(() => _msg = tr('Running task $tid: stop it first to change posture.',
+          '正在执行任务 $tid：先停止它再换姿态。'));
+      return;
+    }
+    final modes = robotPostures(v);
+    final mode = await showModalBottomSheet<String>(
+        context: context,
+        builder: (ctx) => SafeArea(
+                child: Column(mainAxisSize: MainAxisSize.min, children: [
+              for (final m in modes)
+                ListTile(
+                    key: Key('posture-$m'),
+                    leading: Icon(postureIcon(m)),
+                    title: Text(postureLabel(m)),
+                    onTap: () => Navigator.pop(ctx, m)),
+            ])));
+    if (mode == null || !mounted) return;
+    final what = postureLabel(mode);
+    final yes = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+              title: Text(what),
+              content: Text(tr('The robot will move its body right away. Make sure nobody is next to it.',
+                  '机器人会马上动起来，先确认旁边没有人。')),
+              actions: [
+                TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(tr('Cancel', '取消'))),
+                FilledButton(
+                    key: const Key('posture-confirm'),
+                    onPressed: () => Navigator.pop(ctx, true),
+                    child: Text(what)),
+              ],
+            ));
+    if (yes != true || !mounted) return;
+    await _do(() => widget.api.posture(widget.robotId, mode), what);
+  }
+
   void _openTrail() => Navigator.push(context,
       MaterialPageRoute<void>(builder: (_) => SiteMappingTrailPage(api: widget.api, robotId: widget.robotId)));
 
@@ -420,6 +462,13 @@ class _SiteRobotPageState extends State<SiteRobotPage> {
             label: tr('Return to standby', '回待命点'),
             onTap: () =>
                 _do(() => widget.api.returnToStandby(widget.robotId), tr('Return to standby', '回待命点'))),
+      // 站起、趴下、蹲下（POC）：跟遥控同一个权限；机器人报了才有
+      if ((s?.canTeleop ?? false) && robotPostures(v).isNotEmpty)
+        NwOpTile(
+            tileKey: const Key('btn-posture'),
+            icon: Icons.accessibility_new_rounded,
+            label: tr('Posture…', '姿态…'),
+            onTap: () => _posture(v)),
       // 连续录像（W18）：谁都能看
       NwOpTile(
           tileKey: const Key('btn-recordings'),
@@ -746,3 +795,17 @@ class _Devices extends StatelessWidget {
     ]);
   }
 }
+
+/// 姿态的叫法（POC）。
+String postureLabel(String mode) => switch (mode) {
+      'stand' => tr('Stand up', '站起'),
+      'lie' => tr('Lie down', '趴下'),
+      'crawl' => tr('Crouch', '蹲下'),
+      _ => mode,
+    };
+
+IconData postureIcon(String mode) => switch (mode) {
+      'stand' => Icons.arrow_upward_rounded,
+      'lie' => Icons.airline_seat_flat_rounded,
+      _ => Icons.arrow_downward_rounded,
+    };

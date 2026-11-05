@@ -12,7 +12,7 @@ import { ConfirmPassword } from "./confirmpw";
 import { hm, robotNames } from "./data";
 import { Confirm, Modal } from "./dialogs";
 import { alertTitle, lang, refusalText, t, type Key } from "./i18n";
-import { autoResolved, canDispatch, canPatrol, isOwnerLike } from "./model";
+import { autoResolved, canDispatch, canPatrol, canTeleop, isOwnerLike } from "./model";
 import { notAccepted, type CommandReply } from "./posepick";
 import { siteHm } from "./todaypatrols";
 import { Shape } from "./icons";
@@ -33,7 +33,11 @@ export interface RobotCard {
   map?: { id: string; version: string | null; match: boolean | null } | null;
   devices?: { id: string; state: string }[];
   enrolled_at?: number | null; manual_note?: string; held?: { by: string; at_ms: number } | null;
+  /** POC:能换哪几种姿态、正在跑的任务(老站点没有)。 */
+  postures?: Posture[]; task?: string | null;
 }
+export type Posture = "stand" | "lie" | "crawl";
+const POSTURE_KEY: Record<Posture, "rdStand" | "rdLie" | "rdCrawl"> = { stand: "rdStand", lie: "rdLie", crawl: "rdCrawl" };
 export interface Wifi {
   ssid: string; link: "wifi" | "4g" | "none";
   change: { id: string; ssid: string; mode: "online" | "trial"; expires_ms: number | null } | null;
@@ -253,6 +257,7 @@ function Controls({ r, role, say, onChanged }: { r: RobotCard; role: string; say
   const [pick, setPick] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [ask, setAsk] = useState<Posture | null>(null);
   const patrol = canPatrol(role);
   const dispatch = canDispatch(role);
   useEffect(() => {
@@ -327,6 +332,27 @@ function Controls({ r, role, say, onChanged }: { r: RobotCard; role: string; say
         {patrol && <button type="button" class="btn sm rd-danger" disabled={busy} onClick={() => void abort()}>{t("rdAbort")}</button>}
       </div>
       {err && <p class="error small" role="alert">{err}</p>}
+      {canTeleop(role) && (r.postures ?? []).length > 0 && (
+        <div class="rd-name rd-posture">
+          <span class="rd-label">{t("rdPosture")}</span>
+          <div class="rd-actions">
+            {(r.postures ?? []).map((m) => (
+              <button key={m} type="button" class="btn sm" disabled={busy || off || !!r.task}
+                onClick={() => setAsk(m)}>{t(POSTURE_KEY[m])}</button>
+            ))}
+          </div>
+          {r.task && <p class="muted small">{t("rdPostureBusy", { task: r.task })}</p>}
+        </div>
+      )}
+      {ask && (
+        <Confirm text={t("rdPostureAsk", { id, what: t(POSTURE_KEY[ask]) })} yes={t(POSTURE_KEY[ask])}
+          onNo={() => setAsk(null)}
+          onYes={() => {
+            const m = ask;
+            setAsk(null);
+            void send(() => api("POST", path("posture"), { mode: m }), t("rdPostureDone", { id, what: t(POSTURE_KEY[m]) }));
+          }} />
+      )}
     </section>
   );
 }

@@ -55,6 +55,8 @@ TELEOP_GRANT_TTL_SLACK_MS = 2_000
 #: ``video`` 命令本身至少活多久(毫秒),跟推流的有效期分开。见 :meth:`Dispatcher.video`。
 VIDEO_COMMAND_TTL_MS = 30_000
 COMMAND_TTL_MS = 60_000
+#: 换姿势的回执等多久(秒):狗上等姿态跟上最多 10 s,再加旁路进程那一下。
+POSTURE_ACK_TIMEOUT_S = 20.0
 #: 只读查询(W00c6g 建图进程日志、W00c6h 录包轨迹、W09f 建图预览):**不记进命令账、回执不推给
 #: 事件流** —— 单狗视图里看得到最近 50 条命令、事件流谁登录了都收得到(保安、经理也是),日志只给要它
 #: 的管理员;手机收到事件流的每一帧都会刷新狗的列表,录包时每 2 s 查一次轨迹、每 3 s 查一次预览,
@@ -1041,6 +1043,19 @@ class Dispatcher:
                                 task_id=f"deter-{req.output}-{uuid.uuid4().hex[:8]}",
                                 ttl_ms=VIDEO_COMMAND_TTL_MS)
 
+    async def posture(self, robot_id: str, mode: str, *, issued_by: str) -> dict[str, Any]:
+        """站起、趴下、蹲下(POC 2026-11):不是任务。狗要报了这种姿势、状态新鲜;有没有任务在跑、急停
+        这些狗上判(拒了回执带原因)。狗做完(等到姿态)才回执,所以回执多等一会儿。"""
+        c = self._client_for(robot_id)
+        caps = (c.capabilities.tasks.get("posture") if c.capabilities is not None else None) or {}
+        if mode not in caps.get("modes", []):
+            raise Unsupported(f"{robot_id} 不支持这个姿势({mode})")
+        if not self._fresh(c):
+            raise DispatchRefused(f"{robot_id} 不在线或状态不新鲜")
+        return await self._send(c, robot_id, "posture", {"mode": mode}, issued_by=issued_by,
+                                task_id=f"posture-{uuid.uuid4().hex[:8]}",
+                                timeout_s=POSTURE_ACK_TIMEOUT_S)
+
     async def speed_cap(self, robot_id: str, cap: Any, *, issued_by: str) -> dict[str, Any]:
         """全狗限速(W29,下雨、雷暴):不是任务。要狗报了 ``speed_cap``、状态新鲜。"""
         c = self._client_for(robot_id)
@@ -1055,7 +1070,8 @@ class Dispatcher:
     async def _send(self, c: DispatchClient, robot_id: str, kind: str, payload: dict[str, Any],
                     *, issued_by: str, task_id: str | None = None, priority: int = 0,
                     before_send: Callable[[Any, Any], None] | None = None,
-                    ttl_ms: int = COMMAND_TTL_MS) -> dict[str, Any]:
+                    ttl_ms: int = COMMAND_TTL_MS,
+                    timeout_s: float | None = None) -> dict[str, Any]:
         if not issued_by:
             raise DispatchRefused("没有已认证的派单人")
         self._temporal_gate(robot_id, kind, payload, ttl_ms)
@@ -1077,7 +1093,8 @@ class Dispatcher:
                 if before_send is not None:
                     before_send(cmd, tx)
         try:
-            ack = await c.send(cmd, timeout_s=self.ack_timeout_s)
+            ack = await c.send(cmd, timeout_s=self.ack_timeout_s if timeout_s is None
+                               else timeout_s)
         except DispatchTimeout:
             # 狗可能收到了、可能没收到;记一笔,晚到的回执会经 on_ack 覆盖它。
             with self.db.tx() as tx:
