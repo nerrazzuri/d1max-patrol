@@ -68,6 +68,24 @@ def test_外审r1_12_走到线上停住或折返_不算越线_过线够远才算
     assert 标.crossed("m", "1", (0, 1), (0, -0.5)) is not None
 
 
+def test_外审r2_7_每条线记最后确定在哪一边_从线的延长线附近绕过来照样算越线(标):
+    标.set("m", "1", {"kind": "exit", "name": "门", "points": [[-1, 0], [1, 0]]}, by="g")
+    last: dict = {}
+    seq = [(1.4, 0.8), (1.4, 0.2), (-1.0, -0.4)]       # 中间那点离线段远、离直线近
+    hits = [标.track("m", "1", last, p) for p in seq]
+    assert hits[:2] == [None, None]
+    assert hits[2] is not None and hits[2][0]["name"] == "门", hits
+    assert hits[2][1] == (1.4, 0.8), "越线那一段从最后一个确定在哪一边的点算起"
+    last = {}
+    assert [标.track("m", "1", last, p) for p in [(1.5, 1.0), (1.5, -1.0)]] == [None, None], \
+        "从线段端点外面绕过去:不算"
+    last = {}
+    assert [标.track("m", "1", last, p) for p in [(0, 1), (0, 0.1), (0, 0), (0, 1)]] \
+        == [None] * 4, "走到线上停住、折返"
+    assert 标.track("m", "1", last, (0, -0.1)) is None, "过线一点点"
+    assert 标.track("m", "1", last, (0, -0.5)) is not None
+
+
 def test_出口线内3米_朝出口(标):
     m = 标.set("m", "1", {"kind": "exit", "name": "东门", "points": [[10, 0], [10, 4]]}, by="g")
     x, y, yaw = inside_pose(m, (9, 2), (11, 2))

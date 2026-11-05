@@ -163,8 +163,6 @@ class GuardDuty:
         self._waiting: dict[int, str] = {}
         self._route_cache: dict[tuple, dict[str, Any]] = {}
         self._lap_cache: dict[tuple, float | None] = {}
-        #: 看见人盯满 :data:`PERSON_HOLD_MS` 还没人管、接着值守了的:这一条告警不再拦它。
-        self._person_done: set[str] = set()
         #: 在停这一圈的方案:停下以后进哪一步(``held`` / ``resume``)、中止发了几次。只在内存:
         #: 站点重启后停下了按 ``resume`` 接着办(还看见人的话下一拍照样再盯)。
         self._stop_then: dict[int, str] = {}
@@ -184,24 +182,10 @@ class GuardDuty:
         #: W74 加密巡查:机器人 → (到什么时候, 地图, 版本, 防区们(最后看见人的在第一个))。
         #: 只在内存:站点重启就回到平常的值守。
         self._intense: dict[str, tuple[int, str, str, list[str]]] = {}
-        #: W74 二期:这一回看见人派了跟人的(机器人 → 那一趟的任务号;内存)。
-        self._followed: dict[str, str] = {}
         #: W74 三期:地图上的出口线、易藏点(:class:`~nexwar_site.map_marks.MapMarks`)。站点主程序
         #: 接上;没接就不判越线、不去看易藏点。
         self.marks: Any = None
-        #: 这一回看见人是哪条值守方案的(机器人 → 方案条目;记值守记录用)。
-        self._fentry: dict[str, int] = {}
-        #: 这一回派的回线内 / 看易藏点那一趟(恢复值守之前停掉)。
-        self._own: dict[str, str] = {}
-        #: 被跟的人上一个位置(判越线)、这一回已经越过出口线的、下一拍要办的(越线 / 看易藏点)。
-        self._trail: dict[str, tuple[float, float]] = {}
-        self._left: set[str] = set()
-        self._todo: dict[str, tuple[Any, ...]] = {}
-        #: 外审 r1 #7:派跟人回执没到的(什么时候派的,对账用)、被拒了下一次能派的时刻。
-        self._f_unsure: dict[str, int] = {}
-        self._f_retry: dict[str, int] = {}
-        #: 越线后停跟人:下一次重发中止的时刻、发了几次(外审 r1 #6)。
-        self._f_abort: dict[str, tuple[int, int]] = {}
+        # 看见人这一回的账(跟人、越线、易藏点)落在值守进度 guard_runs.follow:见 _fs(外审 r2)
         dispatcher.on_event(self._on_event)
 
     # ------------------------------------------------------------ 方案
@@ -787,45 +771,69 @@ class GuardDuty:
             if now >= run["until_ms"]:
                 self._set_run(e["id"], state="resume", until_ms=now)
 
+    def _person_alert(self, rid: str) -> Any:
+        """这台还开着的「看见人」告警(最新那条);没有 ``None``。"""
+        f = getattr(self.alerts, "open_of", None)
+        if not callable(f):
+            return None
+        try:
+            return f(rid, PERSON_KIND)
+        except Exception:
+            log.exception("%s 开着的看见人告警读不出来", rid)
+            return None
+
     def _person_open(self, rid: str) -> bool:
-        if self.alerts is None:
+        """有开着的「看见人」要盯:这一条盯满过(``hold_done``,记在告警上,重启也认)的不算。"""
+        if self.alerts is None or not self.alerts.has_open(rid, PERSON_KIND):
             return False
-        if not self.alerts.has_open(rid, PERSON_KIND):
-            self._person_done.discard(rid)               # 那一条处理掉了:下一回看见人照样盯
-            return False
-        return rid not in self._person_done
+        a = self._person_alert(rid)
+        ctx = getattr(a, "context", None) if a is not None else None
+        return not (isinstance(ctx, dict) and ctx.get("hold_done"))
 
     async def _person_hold(self, e: dict[str, Any], run: dict[str, Any], running: str) -> bool:
         """看见人(设计 §5.4):停在原地盯着,等保安下结论;处理了、或盯满 :data:`PERSON_HOLD_MS`
-        没人管 → 接着值守。在盯 → ``True``(这一拍别的不办)。"""
+        没人管 → 接着值守。在盯 → ``True``(这一拍别的不办)。
+
+        外审 r2:这一回盯着、跟人的账(:meth:`_fs`)落在值守进度里、绑着那一条告警的 key ——
+        换了一条告警(上一条刚关就来新的)当上一回办完了;办完了,跟人和它派生的那几趟没确认停下的,
+        挨个按「停下」停了才接着值守(掉线、站点重启都接着停)。"""
         eid, rid, now = e["id"], run["robot_id"], self._now()
         if run["state"] == "held":
-            if self._person_open(rid) and now < run["until_ms"]:
+            a = self._person_alert(rid)
+            fs = self._fs(rid)
+            key = getattr(a, "key", "") if a is not None else ""
+            if a is not None and not fs.get("alert"):
+                fs = self._fs_set(rid, alert=key)        # 老进度(没记是哪一条):认现在这条
+            if self._person_open(rid) and key == fs.get("alert") and now < run["until_ms"]:
                 await self._maybe_follow(eid, rid)
                 await self._follow_todo(eid, rid)
                 return True
-            mine = self._follow_tasks(rid)
-            self._forget_follow(rid)
-            if now >= run["until_ms"]:
-                self._person_done.add(rid)
+            timed_out = now >= run["until_ms"] and a is not None and key == fs.get("alert")
+            if timed_out:
+                self._amend(key, hold_done=True)         # 这一条不再拦(落在告警上,重启也认)
             self._log("person_resume", robot=rid, entry=eid,
-                      detail="保安处理了,接着值守" if now < run["until_ms"]
-                      else f"盯了 {PERSON_HOLD_MS // 60_000} 分钟没人管,接着值守(告警还开着)")
+                      detail=f"盯了 {PERSON_HOLD_MS // 60_000} 分钟没人管,接着值守(告警还开着)"
+                      if timed_out else "保安处理了,接着值守")
             self._start_intense(eid, rid, now)
-            if running and running in mine:
-                # 外审 r1 #6:跟人 / 回线内 / 看易藏点那一趟还在跑:记成这一圈要停的那一趟,按「停下」
-                # 一样确认停了才接着值守(没停到点再发、发够报警;站点重启也接着停)
-                self._set_run(eid, task_id=running)
-                await self._stop(eid, {**run, "task_id": running}, "resume")
+            p = self._pending_follow(rid, running, now)
+            if p:
+                # 跟人 / 回线内 / 看易藏点那一趟还没确认停下(在跑、或掉线了看不出来):
+                # 记成这一圈要停的那一趟,按「停下」确认停了才接着值守
+                # (没停到点再发、发够报警;重启接着停)
+                self._set_run(eid, task_id=p)
+                await self._stop(eid, {**run, "task_id": p}, "resume")
                 return True
             self._set_run(eid, state="resume", until_ms=now)
             return True
         if not self._person_open(rid):
             return False
+        a = self._person_alert(rid)
         self._held_zone.pop(rid, None)
         z = self._zone_now(rid, run)
         if z is not None:
             self._held_zone[rid] = z
+        # 新一回:从头记
+        self._put_fs(rid, {"alert": getattr(a, "key", "") if a is not None else ""})
         self._log("person_hold", robot=rid, entry=eid, zone=run["watch_zone"],
                   detail="看见人:原地停下盯着,等保安处理")
         if running and running == run["task_id"]:        # 一圈 / 去值守位的路上:停在原地
@@ -834,30 +842,77 @@ class GuardDuty:
             self._set_run(eid, state="held", until_ms=now + PERSON_HOLD_MS)
         return True
 
+    # ------------------------------------------------------------ 跟人的账(落库,外审 r2)
+
+    def _run_of(self, rid: str) -> dict[str, Any] | None:
+        rows = self.db.query("SELECT * FROM guard_runs WHERE robot_id=? LIMIT 1", (rid,))
+        return dict(rows[0]) if rows else None
+
+    def _fs(self, rid: str) -> dict[str, Any]:
+        """这台这一回看见人的账:``alert`` 哪一条告警、``task`` 跟人那一趟、``unsure_ms`` 派出去还没
+        确认收到(什么时候派的)、``retry_ms`` 被拒了下一次能派的时刻、
+        ``own`` 回线内 / 看易藏点那一趟、``left`` 越过出口线了、``todo`` 下一拍要办的、
+        ``abort`` 越线后停跟人 [下一次, 第几次]、
+        ``trail`` 每条出口线最后确定在哪一边。落在值守进度 ``guard_runs.follow``:
+        站点重启认得回来。"""
+        run = self._run_of(rid)
+        try:
+            fs = json.loads(run["follow"] or "{}") if run is not None else {}
+        except ValueError:
+            fs = {}
+        return fs if isinstance(fs, dict) else {}
+
+    def _put_fs(self, rid: str, fs: dict[str, Any]) -> None:
+        with self.db.tx() as c:
+            c.execute("UPDATE guard_runs SET follow=? WHERE robot_id=?",
+                      (json.dumps(fs, ensure_ascii=False), rid))
+
+    def _fs_set(self, rid: str, **kw: Any) -> dict[str, Any]:
+        fs = {**self._fs(rid), **kw}
+        self._put_fs(rid, fs)
+        return fs
+
+    def _amend(self, key: str, **ctx: Any) -> None:
+        """记进那一条「看见人」告警的现场(按 key,不是「最新开着的那条」;关了的不改)。"""
+        f = getattr(self.alerts, "amend", None)
+        if not key or not callable(f):
+            return
+        try:
+            f(key, context=ctx)
+        except Exception:
+            log.exception("%s 记不进告警", key)
+
+    def _pending_follow(self, rid: str, running: str, now: int) -> str:
+        """这一回派的跟人、回线内、看易藏点里还没确认停下的那一趟(在跑的先);都停了 ``""``。"""
+        fs = self._fs(rid)
+        mine = [t for t in (fs.get("task"), fs.get("own")) if isinstance(t, str) and t]
+        if running in mine:
+            return running
+        return next((t for t in mine if not self._stopped(rid, t, running, now)), "")
+
     async def _maybe_follow(self, eid: int, rid: str) -> None:
         """W74 二期:停下盯着以后派跟人(机器人能力里有 ``follow`` 才派;一回成功派一次)。人在不在动、
         跟丢了怎么办都在机器人上判(设计 §三)。
 
-        外审 r1:派之前先认回这条告警上记着的那一趟(站点重启,#5);被拒过一阵再试、回执没到的
-        对账(机器人手上一直不是它、也没它的消息才当没派成,#7);刚连回来先看清手上在跑什么。"""
+        外审 r1 #7 / r2 #4:派之前先把「派出去了、还没确认收到」落库;被拒过一阵再试;回执没到的
+        (重启以后也一样)对账 —— 机器人手上一直不是它、也没它的消息,才当没派成再派。"""
         now = self._now()
-        self._restore_follow(rid, eid)
-        tid = self._followed.get(rid)
-        if tid is not None:
-            sent = self._f_unsure.get(rid)
-            if sent is None:
+        fs = self._fs(rid)
+        tid = fs.get("task")
+        if tid:
+            sent = int(fs.get("unsure_ms") or 0)
+            if not sent:
                 return
             if self._running(rid) == tid or self._terminal(rid, tid) is not None:
-                self._f_unsure.pop(rid, None)            # 收到了
+                self._fs_set(rid, unsure_ms=0)           # 收到了
                 return
             if now - sent < FOLLOW_RETRY_MS or not self._settled(rid, now):
                 return
             self._log("follow_refused", robot=rid, entry=eid,
                       detail="派跟人的回执没到,机器人手上也一直不是它:当没派成,再派")
-            self._followed.pop(rid, None)
-            self._f_unsure.pop(rid, None)
-            self._bind(rid, follow_task="")
-        elif now < self._f_retry.get(rid, 0):
+            fs = self._fs_set(rid, task="", unsure_ms=0)
+            self._amend(fs.get("alert", ""), follow_task="")
+        elif now < int(fs.get("retry_ms") or 0):
             return
         c = self._client(rid)
         caps = getattr(getattr(c, "capabilities", None), "tasks", None) or {}
@@ -865,9 +920,9 @@ class GuardDuty:
             return
         from nexwar_contract.follow import TASK_PREFIX, FollowRequest
         tid = f"{TASK_PREFIX}{eid}-{uuid.uuid4().hex[:10]}"
-        self._followed[rid] = tid
-        self._fentry[rid] = eid
-        self._bind(rid, follow_task=tid, follow_done=False)   # 告警现场只收这一趟的(#14)
+        fs = self._fs_set(rid, task=tid, unsure_ms=now)  # 先落库:派到一半重启也认得、会对账
+        # 告警现场只收这一趟(#14)
+        self._amend(fs.get("alert", ""), follow_task=tid, follow_done=False)
         self._log("follow_start", robot=rid, entry=eid, detail="看见人:跟上去,边跟边拍")
         from nexwar_site.dispatcher import DispatchRefused
         try:
@@ -877,105 +932,58 @@ class GuardDuty:
             return
         except Exception:
             log.exception("%s 派跟人没成(回执没到?)", rid)
-            self._f_unsure[rid] = now                    # 说不清收没收:先当派了,过一阵对账
-            return
+            return                                       # 说不清收没收:过一阵对账
         if not _accepted(r):
             ack = (r or {}).get("ack", {}) if isinstance(r, dict) else {}
             self._follow_refused(rid, eid, str((ack or {}).get("reason")
                                                or (ack or {}).get("result") or "被拒"))
+            return
+        self._fs_set(rid, unsure_ms=0)
 
     def _follow_refused(self, rid: str, eid: int, why: str) -> None:
-        self._followed.pop(rid, None)
-        self._bind(rid, follow_task="")                  # 没派成:别再认回它
-        self._f_retry[rid] = self._now() + FOLLOW_RETRY_MS
+        fs = self._fs_set(rid, task="", unsure_ms=0, retry_ms=self._now() + FOLLOW_RETRY_MS)
+        self._amend(fs.get("alert", ""), follow_task="")  # 没派成:告警现场别再收它
         self._log("follow_refused", robot=rid, entry=eid,
                   detail=f"派跟人没成({why[:160]}):{FOLLOW_RETRY_MS // 1000} 秒后再试")
-
-    def _alert_ctx(self, rid: str) -> dict[str, Any]:
-        f = getattr(self.alerts, "open_of", None)
-        try:
-            a = f(rid, PERSON_KIND) if callable(f) else None
-        except Exception:
-            log.exception("%s 开着的看见人告警读不出来", rid)
-            return {}
-        ctx = getattr(a, "context", None) if a is not None else None
-        return ctx if isinstance(ctx, dict) else {}
-
-    def _bind(self, rid: str, **ctx: Any) -> None:
-        """跟人这一回的账记进那条「看见人」告警的现场(落库:站点重启认得回来,外审 r1 #5)。"""
-        f = getattr(self.alerts, "amend_open", None)
-        if not callable(f):
-            return
-        try:
-            f(rid, PERSON_KIND, context=ctx)
-        except Exception:
-            log.exception("%s 跟人的账记不进告警", rid)
-
-    def _restore_follow(self, rid: str, eid: int | None = None) -> None:
-        """站点重启以后,认回这条告警上记着的跟人、回线内 / 看易藏点那一趟、越没越线(外审 r1 #5)。"""
-        if rid in self._followed:
-            return
-        ctx = self._alert_ctx(rid)
-        tid = ctx.get("follow_task")
-        if not isinstance(tid, str) or not tid.startswith(FOLLOW_PREFIX) or ctx.get("follow_done"):
-            return
-        self._followed[rid] = tid
-        own = ctx.get("follow_own")
-        if isinstance(own, str) and own.startswith(FOLLOW_PREFIX):
-            self._own[rid] = own
-        if ctx.get("follow_left"):
-            self._left.add(rid)
-        if eid is not None:
-            self._fentry[rid] = eid
-        log.info("%s 认回跟人那一趟 %s(站点重启前派的)", rid, tid)
-
-    def _follow_tasks(self, rid: str) -> set[str]:
-        """这一回值守给这台派的跟人、回线内、看易藏点那几趟。"""
-        self._restore_follow(rid)
-        return {t for t in (self._followed.get(rid), self._own.get(rid)) if t}
-
-    def _forget_follow(self, rid: str) -> None:
-        """这一回看见人办完了(接着值守、收队):跟人的账清掉;告警上记一笔,重启不再认回。"""
-        had = rid in self._followed
-        for d in (self._followed, self._own, self._fentry, self._todo, self._trail,
-                  self._f_unsure, self._f_retry, self._f_abort):
-            d.pop(rid, None)                              # type: ignore[attr-defined]
-        self._left.discard(rid)
-        if had:
-            self._bind(rid, follow_done=True)
 
     # ------------------------------------------------------------ W74 三期:越线、易藏点
 
     def _on_follow(self, rid: str, e: Any) -> None:
-        """机器人跟人路上的轨迹(判越过出口线)、跟丢(去附近易藏点看一圈)。只认这一回派的那一趟。"""
+        """机器人跟人路上的轨迹(判越过出口线)、跟丢(去附近易藏点看一圈)。只认还在盯的这一回、
+        这一条告警派的那一趟(外审 r2 #5:上一条告警刚关、新的来了,上一回的事件不算)。"""
         d = e.data if isinstance(e.data, dict) else {}
-        self._restore_follow(rid)
-        tid = self._followed.get(rid)
-        if tid is None or d.get("task_id") != tid:
-            return
-        self._f_unsure.pop(rid, None)                    # 有它的消息:收到了
         try:
+            run = self._run_of(rid)
+            if run is None or run["state"] != "held":
+                return
+            fs = self._fs(rid)
+            a = self._person_alert(rid)
+            if a is None or getattr(a, "key", "") != fs.get("alert"):
+                return
+            tid = fs.get("task")
+            if not tid or d.get("task_id") != tid:
+                return
+            if fs.get("unsure_ms"):
+                fs = self._fs_set(rid, unsure_ms=0)      # 有它的消息:收到了
             ref = self._map_of(rid)
             if e.kind == "follow_lost":
-                self._follow_lost(rid, d, ref)
+                self._follow_lost(rid, run["entry"], fs, d, ref)
                 return
-            if self.marks is None or ref is None or rid in self._left:
+            if self.marks is None or ref is None or fs.get("left"):
                 return
             pts = sorted((p for p in d.get("points") or [] if isinstance(p, dict)
                           and _num(p.get("x")) and _num(p.get("y"))),
                          key=lambda p: p.get("at_ms") if _num(p.get("at_ms")) else 0)
+            trail = dict(fs.get("trail") or {})
             for p in pts:
                 cur = (float(p["x"]), float(p["y"]))
-                if self.marks.near_exit(ref[0], ref[1], cur):
-                    continue                             # 在线上:不算哪一边,等它走开(外审 r1 #12)
-                prev = self._trail.get(rid)
-                self._trail[rid] = cur
-                if prev is None:
-                    continue
-                mark = self.marks.crossed(ref[0], ref[1], prev, cur)
-                if mark is not None:
-                    self._crossed(rid, mark, prev, cur, d, ref)
+                hit = self.marks.track(ref[0], ref[1], trail, cur)
+                if hit is not None:
+                    self._fs_set(rid, trail=trail)
+                    self._crossed(rid, run["entry"], hit[0], hit[1], cur, d, ref)
                     return
+            if trail != fs.get("trail"):
+                self._fs_set(rid, trail=trail)
         except Exception:
             log.exception("%s 跟人的 %s 处理不了", rid, e.kind)
 
@@ -983,15 +991,14 @@ class GuardDuty:
         pose = getattr(getattr(self._client(rid), "telemetry", None), "pose", None)
         return (pose.map_id, pose.map_version) if pose is not None else None
 
-    def _crossed(self, rid: str, mark: dict[str, Any], prev: tuple[float, float],
+    def _crossed(self, rid: str, eid: int, mark: dict[str, Any], prev: tuple[float, float],
                  cur: tuple[float, float], d: dict[str, Any], ref: tuple[str, str]) -> None:
         """人越过出口线(设计 §七):报 P1「人离开值守区」;下一拍停跟人、回线内 3 m 朝出口看。"""
         from nexwar_site.map_marks import INSIDE_M, inside_pose
-        self._left.add(rid)
-        self._bind(rid, follow_left=True)
         x, y, yaw = inside_pose(mark, prev, cur)
         pose = MapPose(map_id=ref[0], map_version=ref[1], frame_id="map", x=x, y=y, yaw=yaw)
-        self._todo[rid] = ("exit", pose.to_wire(), mark["name"])
+        fs = self._fs_set(rid, left=True, todo=["exit", pose.to_wire(), mark["name"]])
+        self._amend(fs.get("alert", ""), follow_left=True)
         h = d.get("heading_deg")
         ctx: dict[str, Any] = {"exit": mark["name"], "exit_id": mark["id"],
                                "at": {"x": round(cur[0], 2), "y": round(cur[1], 2),
@@ -1002,18 +1009,20 @@ class GuardDuty:
             kind="person_left", robot=rid, title=f"人离开值守区:{mark['name']}",
             detail=f"被跟的人越过了出口线「{mark['name']}」。机器人回到出口线内 {INSIDE_M:g} m、"
                    "朝出口看着;请保安到出口查看", context=ctx)
-        self._log("person_left", robot=rid, entry=self._fentry.get(rid),
+        self._log("person_left", robot=rid, entry=eid,
                   detail=f"被跟的人越过出口线「{mark['name']}」,回线内 {INSIDE_M:g} m 朝出口看")
 
-    def _follow_lost(self, rid: str, d: dict[str, Any], ref: tuple[str, str] | None) -> None:
+    def _follow_lost(self, rid: str, eid: int, fs: dict[str, Any], d: dict[str, Any],
+                     ref: tuple[str, str] | None) -> None:
         """跟丢了 / 到上限(机器人自己回最后位置)。跟丢了、附近有易藏点:等它回到最后位置,
         挨个去看一圈(设计 §六,用户 11-04 定)。到上限的人还在眼前,不去。"""
         result = d.get("result")
-        self._log("follow_lost", robot=rid, entry=self._fentry.get(rid),
+        self._log("follow_lost", robot=rid, entry=eid,
                   detail="跟丢了:回最后看见人的地方" if result == "lost"
                   else "跟到上限了:停在人后面")
         last = d.get("last")
-        if result != "lost" or rid in self._left or self.marks is None or ref is None \
+        if result != "lost" or fs.get("left") or fs.get("todo") or fs.get("own") \
+                or self.marks is None or ref is None \
                 or not isinstance(last, dict) or not _num(last.get("x")) or not _num(last.get("y")):
             return
         h = d.get("heading_deg")
@@ -1021,26 +1030,27 @@ class GuardDuty:
         lx, ly = float(last["x"]), float(last["y"])
         spots = self.marks.hide_near(ref[0], ref[1], lx, ly, heading)
         if spots:
-            self._todo[rid] = ("sweep", ref, (lx, ly, heading), spots)
+            self._fs_set(rid, todo=["sweep", [ref[0], ref[1]], [lx, ly, heading], spots])
 
     async def _follow_todo(self, eid: int, rid: str) -> None:
-        """越线了 / 跟丢了要去看易藏点:跟人那一趟还在跑就先停它(越线)或等它回到最后位置(跟丢)。"""
-        todo = self._todo.get(rid)
-        if todo is None:
+        """越线了 / 跟丢了要去看易藏点:跟人那一趟还没停就先停它(越线)或等它回到最后位置(跟丢)。
+        外审 r2 #3:要办的事落库,站点重启接着停、接着派。"""
+        fs = self._fs(rid)
+        todo = fs.get("todo")
+        if not isinstance(todo, list) or not todo:
             return
-        ftid = self._followed.get(rid)
-        running = self._running(rid)
-        if ftid is not None and running == ftid:
+        ftid = fs.get("task") or ""
+        running, now = self._running(rid), self._now()
+        if ftid and not self._stopped(rid, ftid, running, now):
             if todo[0] == "exit":
-                await self._abort_follow(rid, ftid)       # 停了下一拍再派回线内
+                await self._abort_follow(rid, eid, ftid)  # 停了下一拍再派回线内
             return
-        del self._todo[rid]
         from nexwar_contract.follow import FOLLOW_PRIORITY, TASK_PREFIX
         from nexwar_site.dispatcher import DispatchRefused
         if todo[0] == "exit":
             tid = f"{TASK_PREFIX}exit-{eid}-{uuid.uuid4().hex[:10]}"
-            self._own[rid] = tid
-            self._bind(rid, follow_own=tid)
+            fs = self._fs_set(rid, todo=None, abort=None, own=tid)   # 先落库,再派
+            self._amend(fs.get("alert", ""), follow_own=tid)
             try:
                 await self.dispatcher.goto(rid, todo[1], None, issued_by="guard",
                                            priority=FOLLOW_PRIORITY, task_id=tid)
@@ -1053,8 +1063,8 @@ class GuardDuty:
         _, (m, v), (lx, ly, heading), spots = todo
         tid = f"{TASK_PREFIX}sweep-{eid}-{uuid.uuid4().hex[:10]}"
         mission = self._sweep_mission(rid, m, v, lx, ly, heading, spots)
-        self._own[rid] = tid
-        self._bind(rid, follow_own=tid)
+        fs = self._fs_set(rid, todo=None, own=tid)
+        self._amend(fs.get("alert", ""), follow_own=tid)
         names = "、".join(s["name"] for s in spots)
         self._log("sweep_start", robot=rid, entry=eid,
                   detail=f"跟丢了:去附近的易藏点看一圈({names}),每个停 {SWEEP_DWELL_S} 秒,"
@@ -1068,18 +1078,18 @@ class GuardDuty:
         except Exception:
             log.exception("%s 看易藏点没派成", rid)
 
-    async def _abort_follow(self, rid: str, ftid: str) -> None:
+    async def _abort_follow(self, rid: str, eid: int, ftid: str) -> None:
         """人越线了:停跟人那一趟。没停下每 :data:`STOP_RETRY_MS` 再发,发够 :data:`STOP_ALERT` 次报警
-        (外审 r1 #6)。"""
+        (外审 r1 #6;发了几次落库,重启接着数)。"""
         now = self._now()
-        at, n = self._f_abort.get(rid, (0, 0))
+        at, n = self._fs(rid).get("abort") or (0, 0)
         if now < at:
             return
         n += 1
-        self._f_abort[rid] = (now + STOP_RETRY_MS, n)
+        self._fs_set(rid, abort=[now + STOP_RETRY_MS, n])
         if n > STOP_ALERT and self.alerts is not None \
                 and not self.alerts.has_open(rid, "guard_stuck"):
-            self._log("stop_failed", robot=rid, entry=self._fentry.get(rid),
+            self._log("stop_failed", robot=rid, entry=eid,
                       detail=f"人越线了,发了 {n - 1} 次中止,跟人那一趟还没停下")
             self.alerts.raise_alert(
                 kind="guard_stuck", robot=rid, title=f"{rid} 停不下跟人",
@@ -1213,6 +1223,13 @@ class GuardDuty:
         # 空状态、任务后补)—— 要连着听得见够 :data:`SETTLE_HEARD_MS`,不然只认它的结果事件
         stopped = self._stopped(rid, run["task_id"], running, now)
         if stopped:
+            nxt = self._pending_follow(rid, running, now)
+            if nxt and nxt != run["task_id"]:
+                # 外审 r2:看见人那一回派的还有一趟没确认停下(跟人停了、回线内还在跑):接着停它
+                self._set_run(eid, task_id=nxt)
+                self._stop_tries[eid] = 0
+                await self._send_abort(eid, {**run, "task_id": nxt})
+                return
             then = self._stop_then.pop(eid, "resume")
             self._stop_tries.pop(eid, None)
             if then == "held":
@@ -1555,12 +1572,14 @@ class GuardDuty:
         够久、手上已经不是它),没停到点再发、发够报警;``tick`` 每拍都会再叫到这里。"""
         rid, tid, eid, now = run["robot_id"], run["task_id"], run["entry"], self._now()
         running = self._running(rid)
-        if running and running != tid and running in self._follow_tasks(rid):
-            # 外审 r1 #4:盯着的时候撤防 / 改方案:跟人、回线内、看易藏点那一趟是值守自己派的,
-            # 先停它(不当别人的任务直接收队)
-            tid = running
-            self._set_run(eid, task_id=tid)
-            run = {**run, "task_id": tid}
+        if not tid or self._stopped(rid, tid, running, now):
+            p = self._pending_follow(rid, running, now)
+            if p and p != tid:
+                # 外审 r1 #4 / r2 #2:盯着的时候撤防 / 改方案:跟人、回线内、看易藏点那一趟
+                # 是值守自己派的,没确认停下(在跑、或掉线看不出来)先停它,不当别人的任务直接收队
+                tid = p
+                self._set_run(eid, task_id=tid)
+                run = {**run, "task_id": tid}
         if tid and not self._stopped(rid, tid, running, now):
             if run["state"] != "standdown":
                 self._log("stand_down", robot=rid, entry=eid, detail=f"{why}:先停下这一趟")
@@ -1585,7 +1604,6 @@ class GuardDuty:
         self._retry_at.pop(eid, None)
         self._stop_tries.pop(eid, None)
         self._stop_then.pop(eid, None)
-        self._forget_follow(rid)
         if run["state"] != "standdown":
             self._log("stand_down", robot=rid, entry=eid, detail=why)
         if taken or self.standby is None:

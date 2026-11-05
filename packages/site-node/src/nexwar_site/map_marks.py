@@ -107,10 +107,30 @@ class MapMarks:
                 best = (t, m)
         return best[1] if best else None
 
-    def near_exit(self, map_id: str, version: str, pt: tuple[float, float]) -> bool:
-        """``pt`` 在哪条出口线上(离线段 :data:`LINE_BAND_M` 以内):算不清在哪一边。"""
-        return any(_seg_dist(pt, m["points"][0], m["points"][1]) < LINE_BAND_M
-                   for m in self.list(map_id, version, "exit"))
+    def track(self, map_id: str, version: str, last: dict[str, Any],
+              pt: tuple[float, float]) -> tuple[dict[str, Any], tuple[float, float]] | None:
+        """被跟的人走到 ``pt``:越过了哪条出口线 → ``(那条线, 越线前最后确定在另一边的点)``;没有
+        ``None``。
+
+        外审 r2 #7:每条线各自记最后一个**确定**在哪一边的点(``last``,按线的 id;调用方存着,
+        这里就地改):离线 :data:`LINE_BAND_M` 以内(算不清哪一边)的点不算、也不盖掉它;换到另一边、
+        而且这一段穿过线段本身才算越线(从端点外面绕过去不算)。"""
+        best: tuple[float, dict[str, Any], tuple[float, float]] | None = None
+        for m in self.list(map_id, version, "exit"):
+            p, q = m["points"][0], m["points"][1]
+            side = _side(pt, p, q)
+            if side == 0:
+                continue
+            k = str(m["id"])
+            prev = last.get(k)
+            last[k] = [float(pt[0]), float(pt[1]), side]
+            if not isinstance(prev, list) or len(prev) != 3 or prev[2] == side:
+                continue
+            a = (float(prev[0]), float(prev[1]))
+            t = _cross(a, pt, p, q)
+            if t is not None and (best is None or t < best[0]):
+                best = (t, m, a)
+        return (best[1], best[2]) if best is not None else None
 
     def hide_near(self, map_id: str, version: str, x: float, y: float,
                   heading_deg: float | None, *, radius: float = HIDE_NEAR_M,
@@ -158,13 +178,6 @@ def _side(a: Any, p: Any, q: Any) -> int:
         return 0
     d = (dx * (a[1] - p[1]) - dy * (a[0] - p[0])) / n
     return 0 if abs(d) < LINE_BAND_M else (1 if d > 0 else -1)
-
-
-def _seg_dist(a: Any, p: Any, q: Any) -> float:
-    dx, dy = q[0] - p[0], q[1] - p[1]
-    n2 = dx * dx + dy * dy
-    t = 0.0 if n2 < 1e-12 else max(0.0, min(1.0, ((a[0] - p[0]) * dx + (a[1] - p[1]) * dy) / n2))
-    return math.hypot(a[0] - (p[0] + t * dx), a[1] - (p[1] + t * dy))
 
 
 def _cross(a: Any, b: Any, p: Any, q: Any) -> float | None:

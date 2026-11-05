@@ -35,7 +35,8 @@ class 告警台:
 
     def raise_alert(self, **kw):
         inspect.signature(AlertDesk.raise_alert).bind(None, **kw)   # 跟真的告警台同一个签名
-        self.open.append(kw)
+        self.n = getattr(self, "n", 0) + 1
+        self.open.append({**kw, "key": f"k{self.n}"})
 
     def has_open(self, robot, kind):
         return any(a["robot"] == robot and a["kind"] == kind for a in self.open)
@@ -49,7 +50,17 @@ class 告警台:
     def open_of(self, robot, kind):
         from types import SimpleNamespace
         cur = [a for a in self.open if a["robot"] == robot and a["kind"] == kind]
-        return SimpleNamespace(context=dict(cur[-1].get("context") or {})) if cur else None
+        return SimpleNamespace(key=cur[-1]["key"], context=dict(cur[-1].get("context") or {})) \
+            if cur else None
+
+    def amend(self, key, *, title=None, detail=None, context=None):
+        inspect.signature(AlertDesk.amend).bind(None, key, title=title, detail=detail,
+                                                context=context)
+        cur = [a for a in self.open if a["key"] == key]
+        if not cur:
+            return None
+        cur[0]["context"] = {**(cur[0].get("context") or {}), **(context or {})}
+        return cur[0]
 
     def amend_open(self, robot, kind, *, title=None, detail=None, context=None):
         inspect.signature(AlertDesk.amend_open).bind(None, robot, kind, title=title,
@@ -1101,7 +1112,12 @@ async def _跟着(t):
     t.site.clients["A"].capabilities.tasks["follow"] = {"state": "idle"}
     t.duty.alerts.raise_alert(kind="dog_sees_person", robot="A", title="看见人")
     await _跑(t, 3)
-    return t.duty._followed["A"]
+    return _在跟(t)
+
+
+def _在跟(t, d=None):
+    """值守记着的这一回跟人那一趟(落在值守进度里)。"""
+    return (d or t.duty)._fs("A").get("task") or None
 
 
 def _事(kind, **data):
@@ -1230,7 +1246,6 @@ async def test_外审r1_4_撤防_跟人那一趟先停_停了才收队(站):
     t.box["run"] = ""
     await _跑(t, 8)
     assert t.duty.status()["runs"] == [], "停了:收队"
-    assert "A" not in t.duty._followed
 
 
 async def test_外审r1_5_站点重启_认回还在跑的跟人_不另派_越线照办(站):
@@ -1280,15 +1295,15 @@ async def test_外审r1_7_派跟人被拒_过一会儿再试_回执没到的过�
     t.site.clients["A"].capabilities.tasks["follow"] = {"state": "idle"}
     t.duty.alerts.raise_alert(kind="dog_sees_person", robot="A", title="看见人")
     await _跑(t, 3)
-    assert len(sent) == 1 and "A" not in t.duty._followed
+    assert len(sent) == 1 and _在跟(t) is None
     assert _log(t, "follow_refused")
     box["refuse"], box["boom"] = False, True
     await _会跟着跑(t, FOLLOW_RETRY_MS / 1000 + 2)
     assert len(sent) == 2, "被拒过一阵再试"
-    assert t.duty._followed["A"] == sent[-1], "回执没到:先当派出去了(不重复派)"
+    assert _在跟(t) == sent[-1], "回执没到:先当派出去了(不重复派)"
     box["boom"] = False
     await _会跟着跑(t, FOLLOW_RETRY_MS / 1000 + 2)
-    assert len(sent) == 3 and t.duty._followed["A"] == sent[-1], \
+    assert len(sent) == 3 and _在跟(t) == sent[-1], \
         "回执没到、机器人手上也不是它:当没派成,再派"
 
 
@@ -1315,3 +1330,114 @@ async def test_外审r1_10_加密巡查_撤防的防区里的易藏点不去_去
     plan = json.loads(t.duty.status()["runs"][0]["plan"]) if "plan" in t.duty.status()["runs"][0] \
         else json.loads(t.db.query("SELECT plan FROM guard_runs")[0]["plan"])
     assert {"name": "加密-易藏点1-西楼梯", "zone": "西区"} in plan, plan
+
+
+# ---------------------------------------------------------------- 外审 r2
+
+
+def _听得见(t):
+    """机器人在不在线由测试说了算(``t.box["heard"]``)。"""
+    real = t.duty._heard
+    t.box["heard"] = True
+    t.duty._heard = lambda rid: t.box["heard"] and real(rid)
+
+
+def _重启(t):
+    d2 = _值守(t)
+    d2.alerts, d2.marks, d2._running = t.duty.alerts, t.duty.marks, t.duty._running
+    if "heard" in t.box:
+        real = d2._heard
+        d2._heard = lambda rid: t.box["heard"] and real(rid)
+    t.duty = d2
+    return d2
+
+
+async def test_外审r2_2_保安处理时机器人掉线_手上看不出在跟_照样停跟人_确认停了才接着值守(站):
+    t = 站
+    tid = await _跟着(t)
+    _听得见(t)
+    n = len(_patrols(t))
+    t.box["heard"], t.box["run"] = False, ""             # 掉线:状态里手上没任务
+    t.duty.alerts.resolve_all("A", "dog_sees_person", who="gina")
+    await _跑(t, 3)
+    _重启(t)                                             # 告警已经关了,站点又重启
+    t.box["heard"], t.box["run"] = True, tid             # 连回来:原来还在跟
+    await _跑(t, 8)
+    assert any(c["kind"] == "abort" and c["task_id"] == tid for c in t.site.commands("A", 500)), \
+        "掉线时没看出在跟,告警关了、站点重启了,连回来照样停跟人"
+    assert len(_patrols(t)) == n, "还在跟:不派下一圈"
+    t.box["run"] = ""
+    await _跑(t, 12)
+    assert len(_patrols(t)) > n, "停了:接着值守"
+
+
+async def test_外审r2_3_越线后停跟人没发成_站点重启_接着停_停了派回线内(站):
+    from nexwar_site.guard_duty import STOP_RETRY_MS
+    t = 站
+    tid = await _跟着(t)
+    t.duty.marks.set(MAP[0], MAP[1], {"kind": "exit", "name": "东门",
+                                      "points": [[3.0, -2.0], [3.0, 2.0]]}, by="alice")
+    calls = _中止先失败(t, 1)
+    t.duty._on_event("A", _事("follow_track", task_id=tid, points=[
+        {"x": 2.0, "y": 0.5, "at_ms": 1}, {"x": 3.5, "y": 0.5, "at_ms": 2}]))
+    await _跑(t, 1)
+    assert calls.count(tid) == 1
+    _重启(t)
+    await _跑(t, STOP_RETRY_MS / 1000 + 2)
+    assert calls.count(tid) >= 2, ("重启了照样接着停", calls)
+    t.box["run"] = ""
+    await _跑(t, 3)
+    assert len(_gotos(t, "follow-exit-")) == 1, "停了:派回线内"
+
+
+async def test_外审r2_4_派跟人回执没到_站点重启_照样过一阵对账再派(站):
+    from nexwar_site.guard_duty import FOLLOW_RETRY_MS
+    t = 站
+    sent, box = _假跟(t)
+    box["boom"] = True
+    _方案(t)
+    await _跑(t, 1.5)
+    t.site.clients["A"].capabilities.tasks["follow"] = {"state": "idle"}
+    t.duty.alerts.raise_alert(kind="dog_sees_person", robot="A", title="看见人")
+    await _跑(t, 3)
+    assert len(sent) == 1
+    box["boom"] = False
+    _重启(t)
+    await _会跟着跑(t, FOLLOW_RETRY_MS / 1000 + 2)
+    assert len(sent) == 2, "重启前回执没到的那一趟,重启后照样对账:机器人手上一直不是它,再派"
+
+
+async def test_外审r2_5_旧告警刚关就来新告警_旧那一趟先停_旧事件不进新告警_新告警另派(站):
+    t = 站
+    tid = await _跟着(t)
+    t.duty.marks.set(MAP[0], MAP[1], {"kind": "exit", "name": "东门",
+                                      "points": [[3.0, -2.0], [3.0, 2.0]]}, by="alice")
+    t.duty.alerts.resolve_all("A", "dog_sees_person", who="gina")
+    t.duty.alerts.raise_alert(kind="dog_sees_person", robot="A", title="又看见人")
+    t.duty._on_event("A", _事("follow_track", task_id=tid, points=[
+        {"x": 2.0, "y": 0.5, "at_ms": 1}, {"x": 3.5, "y": 0.5, "at_ms": 2}]))
+    assert not t.duty.alerts.has_open("A", "person_left"), "上一回的轨迹:不判越线"
+    [a] = [a for a in t.duty.alerts.open if a["kind"] == "dog_sees_person"]
+    assert not (a.get("context") or {}).get("follow_left"), "上一回的事不记进新告警"
+    await _跑(t, 3)
+    assert any(c["kind"] == "abort" and c["task_id"] == tid for c in t.site.commands("A", 500)), \
+        "上一回的跟人先停"
+    t.box["run"] = ""
+    await _会跟着跑(t, 12)
+    assert len(t.sent) == 2 and t.sent[-1] != tid, "新告警:另派一趟"
+    assert a["context"].get("follow_task") == t.sent[-1]
+
+
+async def test_外审r2_6_盯满没人管接着值守_告警还开着_站点重启_不再盯不再跟(站):
+    t = 站
+    await _跟着(t)
+    t.box["run"] = ""
+    with t.db.tx() as c:                                 # 盯满了
+        c.execute("UPDATE guard_runs SET until_ms=?", (t.clock(),))
+    await _跑(t, 6)
+    assert _log(t, "person_resume")
+    holds = len(_log(t, "person_hold"))
+    _重启(t)
+    await _会跟着跑(t, 8)
+    assert len(t.sent) == 1, "同一条告警盯满过了:重启后不再跟"
+    assert len(_log(t, "person_hold")) == holds, "也不再停下盯着"
