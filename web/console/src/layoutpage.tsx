@@ -27,6 +27,8 @@ export interface ZonePost {
   zone: string; auto: boolean; note: string; updated_by?: string;
   view: { x: number; y: number } | null; watch: { x: number; y: number; yaw: number } | null;
 }
+/** W74 三期:出口线(两点)、易藏点(一点 + 朝向,机器人站这儿朝这边看)。 */
+export interface MapMark { id?: string; kind: "exit" | "hide"; name: string; points: Pt[]; yaw: number; updated_by?: string }
 export interface NavZones {
   revision: number; zones: NavZone[]; auto_confirmed?: boolean; confirm_text?: string; held?: NavZone[];
   confirmed?: { revision: number; by: string; at_ms: number; current: boolean; how: string } | null;
@@ -37,7 +39,7 @@ export interface Placement { map_id: string; map_version: string; x: number; y: 
 export interface CamRow { name: string; zone: string; onvif_url: string; rtsp_url?: string; username?: string; has_password?: boolean; motion?: boolean; placement?: Placement | null;
   warnings?: { code: string; text: string }[] }
 export interface LayerData {
-  areas: Area[]; posts: ZonePost[]; nav: NavZones | null; routes: LayoutRoute[]; guardRoutes: LayoutRoute[];
+  areas: Area[]; posts: ZonePost[]; marks?: MapMark[]; nav: NavZones | null; routes: LayoutRoute[]; guardRoutes: LayoutRoute[];
   standby: StandbyPt[]; cameras: CamRow[]; robots: string[];
 }
 
@@ -96,7 +98,7 @@ export function tabFromHash(hash: string): LayoutTab {
   return (LAYOUT_TABS as string[]).includes(v ?? "") ? (v as LayoutTab) : "zones";
 }
 
-const EMPTY: LayerData = { areas: [], posts: [], nav: null, routes: [], guardRoutes: [], standby: [], cameras: [], robots: [] };
+const EMPTY: LayerData = { areas: [], posts: [], marks: [], nav: null, routes: [], guardRoutes: [], standby: [], cameras: [], robots: [] };
 
 export function LayoutPage({ say, robots, tabs }: { say: Say; robots: string[]; tabs: Partial<Record<LayoutTab, FunctionComponent<TabProps>>> }) {
   const [maps, setMaps] = useState<MapRow[]>([]);
@@ -128,7 +130,8 @@ export function LayoutPage({ say, robots, tabs }: { say: Say; robots: string[]; 
     const want = (x: keyof LayerData) => !k || k === x;
     const q = `map_id=${enc(sel.map_id)}&map_version=${enc(sel.version)}`;
     const [areaRes, nav, routes, guardRoutes, standby, cameras] = await Promise.all([
-      want("areas") || want("posts") ? api<{ areas: Area[]; posts?: ZonePost[] }>("GET", `${b}/areas`).catch(() => null) : null,
+      want("areas") || want("posts") || want("marks")
+        ? api<{ areas: Area[]; posts?: ZonePost[]; marks?: MapMark[] }>("GET", `${b}/areas`).catch(() => null) : null,
       want("nav") ? api<NavZones>("GET", `${b}/zones`).catch(() => null) : null,
       want("routes") ? api<{ routes: LayoutRoute[] }>("GET", `/api/routes?${q}`).then((d) => d.routes ?? []).catch(() => null) : null,
       want("guardRoutes") ? api<{ routes: LayoutRoute[] }>("GET", `/api/routes?${q}&kind=guard`).then((d) => d.routes ?? []).catch(() => null) : null,
@@ -138,9 +141,10 @@ export function LayoutPage({ say, robots, tabs }: { say: Say; robots: string[]; 
       want("cameras") ? api<{ cameras: CamRow[] }>("GET", "/api/admin/cameras").then((d) => d.cameras ?? []).catch(() => null) : null,
     ]);
     if (cur.current !== b) return;
-    const areaWant = want("areas") || want("posts");
+    const areaWant = want("areas") || want("posts") || want("marks");
     setData((o) => ({
       areas: areaRes?.areas ?? (areaWant ? [] : o.areas), posts: areaRes?.posts ?? (areaWant ? [] : o.posts),
+      marks: areaRes?.marks ?? (areaWant ? [] : o.marks),
       nav: want("nav") ? nav : o.nav, routes: routes ?? (want("routes") ? [] : o.routes),
       guardRoutes: guardRoutes ?? (want("guardRoutes") ? [] : o.guardRoutes),
       standby: standby ?? (want("standby") ? [] : o.standby), cameras: cameras ?? (want("cameras") ? [] : o.cameras), robots,

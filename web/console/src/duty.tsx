@@ -114,6 +114,8 @@ export function DutyPage(props: {
             <b>{alertTitle(lang.value, top.kind, top.title)}</b>
             <span>{[top.context?.zone ?? (top.context?.where ? t("atWhere", { w: top.context.where }) : ""), hm(top.first_ms)].filter(Boolean).join(" · ")}</span>
             {top.context?.lost_ms != null && <span class="banner-who">{t("dutyLost")}</span>}
+            {top.context?.follow === "follow" && <span class="banner-who">{t("dutyFollowing")}</span>}
+            {top.context?.follow !== "follow" && top.context?.person?.where && <span class="banner-who">{t("dutyLastAt", { w: top.context.person.where })}</span>}
             {top.context?.arrived_by ? <span class="banner-who">{t("dutyArrived", { who: top.context.arrived_by })}</span>
               : mustArrive(top) ? <span class="banner-who">{t("dutyArriveFirst")}</span>
               : top.acked_ms != null && top.acked_by && <span class="banner-who">{t("dutyTakenBy", { who: top.acked_by })}</span>}

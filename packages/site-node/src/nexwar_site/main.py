@@ -1060,6 +1060,7 @@ class Server:
         self.api.arming = self.arming
         self.api.areas, self.api.authz = self.areas, self.authz      # B1c
         self.sightings.areas = self.areas
+        self.sightings.where_of = self.alert_sources.where_of   # W74 二期:人最后在哪
         self.force.armed_for = self.sightings.armed_now          # W44 外审 R2
         self.api.deterrence = self.deterrence
         # W73 第二期:布防值守。布防着自己一圈圈跑防区路线、两圈之间站值守位;值守中的任务

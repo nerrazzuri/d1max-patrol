@@ -279,3 +279,14 @@ def test_跟丢了_告警写跟丢_带最后位置和方向(看):
     assert a.context["follow"] == "lost"
     assert a.context["person"] == {"x": 4.0, "y": 4.0, "at_ms": 9, "heading_deg": 90.0}
     t.w.on_event("A", _事件("patrol_waypoint", task_id="x"))   # 别的事件不管
+
+
+def test_人最后在哪_按区域名说(看):
+    t = 看
+    t.w.where_of = lambda p: "东门附近" if p.get("x") == 4.0 and p.get("map_id") else None
+    t.d.persons(present=True, count=1)
+    t.w.tick()
+    t.w.on_event("A", _事件("follow_lost", task_id="follow-1", result="lost",
+                            last={"x": 4.0, "y": 4.0, "at_ms": 9}))
+    [a] = _开着的(t)
+    assert a.context["person"]["where"] == "东门附近"
