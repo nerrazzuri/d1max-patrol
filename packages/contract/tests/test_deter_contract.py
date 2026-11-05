@@ -40,3 +40,35 @@ def test_side缺省两边_不写进载荷():
 def test_写错就拒(p):
     with pytest.raises(ContractError):
         parse_deter(p)
+
+
+# ------------------------------------------------ POC 11-06:竞品云台、雨刷(只在 POC 分支)
+
+
+@pytest.mark.parametrize("p", [
+    {"output": "wiper", "on": True, "max_s": 10.0},
+    {"output": "wiper", "on": False},
+    {"output": "ptz", "on": True, "pan": 30.0, "tilt": -5.0},
+])
+def test_POC_雨刷云台_来回不变样(p):
+    assert parse_deter(p).to_payload() == p
+
+
+def test_POC_云台不用带max_s_角度按度():
+    r = parse_deter({"output": "ptz", "on": True, "pan": -90, "tilt": 10})
+    assert (r.pan, r.tilt, r.max_s) == (-90.0, 10.0, 0.0)
+
+
+@pytest.mark.parametrize("p", [
+    {"output": "ptz", "on": False},
+    {"output": "ptz", "on": True, "pan": 181, "tilt": 0},
+    {"output": "ptz", "on": True, "pan": 0, "tilt": 91},
+    {"output": "ptz", "on": True, "pan": "0", "tilt": 0},
+    {"output": "ptz", "on": True, "pan": 0},
+    {"output": "ptz", "on": True, "pan": float("nan"), "tilt": 0},
+    {"output": "wiper", "on": True},
+    {"output": "strobe", "on": True, "max_s": 5, "pan": 3},
+])
+def test_POC_云台雨刷写错就拒(p):
+    with pytest.raises(ContractError):
+        parse_deter(p)

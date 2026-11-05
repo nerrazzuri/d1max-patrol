@@ -508,3 +508,121 @@ def test_POC1105_钟不对时代理没起来_单独放一段话术_放完退出(
     assert main(["no_such_clip"], env={"NEXWAR_PAYLOAD": str(cfg)}) == 0, "没有这段:不放、不算错"
     assert main(["ready"], env={"NEXWAR_PAYLOAD": str(tmp_path / "none.json")}) == 0, "没装上装"
     assert not log.exists()
+
+
+# ------------------------------------------------ POC 11-06:云台、雨刷、求助和急停按钮
+
+PTZ = "/anbot/ptz/pose/set"
+WIPER = "/anbot/ptz/wiper/enable"
+
+
+async def test_POC1106_云台_按Float32MultiArray发水平俯仰_雨刷开了到点关(master):
+    from nexwar_adapter_d1max.anbot import F32MA_MD5
+    p = AnbotPayload(_cfg(master.url))
+    assert p.has("ptz") and p.has("wiper")
+    await p.start()
+    await _等(lambda: PTZ in master.pubs and WIPER in master.pubs)
+    ptz = 假订阅端(master.pubs[PTZ], PTZ, "std_msgs/Float32MultiArray", F32MA_MD5)
+    wip = 假订阅端(master.pubs[WIPER], WIPER, "std_msgs/Bool", BOOL_MD5)
+    await _等(lambda: p.connections(PTZ) >= 1 and p.connections(WIPER) >= 1)
+    assert ptz.header["type"] == "std_msgs/Float32MultiArray" and ptz.header["md5sum"] == F32MA_MD5
+    await p.aim(30.0, -5.5)
+    await _等(lambda: ptz.msgs)
+    m = ptz.msgs[-1]
+    assert struct.unpack("<III", m[:12]) == (0, 0, 2), "布局空、data_offset 0、两个数"
+    assert struct.unpack("<2f", m[12:20]) == pytest.approx((30.0, -5.5))
+    await p.set("wiper", True, 0.3)
+    await _等(lambda: wip.bools() and wip.bools()[-1] is True)
+    await _等(lambda: wip.bools()[-1] is False, 2.0)
+    await p.close()
+    ptz.close()
+    wip.close()
+
+
+async def test_POC1106_云台没连上_当场报错(master):
+    p = AnbotPayload(_cfg(master.url))
+    await p.start()
+    await _等(lambda: PTZ in master.pubs)
+    with pytest.raises(PayloadError, match="云台"):
+        await p.aim(10.0, 0.0)
+    await p.close()
+
+
+def _假tail(tmp_path, lines: list[str]):
+    """假 ssh:不管参数,把这些行吐出来(像 tail -F 看到的),再挂着不退。"""
+    s = tmp_path / "ssh-tail"
+    body = "".join(f"printf '%s\\n' '{ln}'\n" for ln in lines)
+    s.write_text(f'#!/bin/sh\necho "$@" >> "{tmp_path / "tail.args"}"\n{body}sleep 30\n')
+    s.chmod(0o755)
+    return s
+
+
+async def test_POC1106_求助和急停按钮_登录竞品主控盯日志_按下各报一次_松开不报(master, tmp_path):
+    ssh = _假tail(tmp_path, [
+        "[2026-11-05 16:54:01] [gpio] [button] [sos] receive a trigger event with 59",
+        "[2026-11-05 16:54:01] [gpio] [button] [sos] receive a trigger event with 59",
+        "led_control: Emergency btn status change: 0",
+        "led_control: Emergency btn status change: 1",
+        "led_control: Pub emergency cmd: 0",
+    ])
+    got: list[str] = []
+    p = AnbotPayload(_cfg(master.url, audio_host="anbot@192.168.113.101", ssh=str(ssh)))
+    p.on_button = got.append
+    await p.start()
+    await _等(lambda: len(got) >= 2)
+    await asyncio.sleep(0.2)
+    assert got == ["sos", "estop"], "同一秒里重复的那一行不再报;松开、Pub 那几行不报"
+    args = (tmp_path / "tail.args").read_text()
+    assert "tail" in args and "/logs/current/can.log" in args and "anbot@192.168.113.101" in args
+    await p.close()
+
+
+async def test_POC1106_没配登录竞品主控_不盯按钮(master, tmp_path):
+    p = AnbotPayload(_cfg(master.url))
+    p.on_button = lambda b: None
+    await p.start()
+    assert p._buttons_task is None
+    await p.close()
+
+
+async def test_POC1106_接到HAL上_能力里有云台雨刷_按钮回调_急停先当场停(master, tmp_path):
+    from nexwar_adapter_d1max.hal import D1MaxHal
+    p = AnbotPayload(_cfg(master.url))
+    hal = D1MaxHal(mps_per_unit=0.4, radps_per_unit=1.0, deadband_mps=0.05, max_fraction=0.5,
+                   payload=p)
+    acts = hal.hal_capabilities().actuators
+    assert acts["wiper"] and acts["ptz"]
+    calls: list = []
+
+    async def aim(pan, tilt):
+        calls.append(("aim", pan, tilt))
+
+    async def setp(out, on, max_s, **kw):
+        calls.append(("set", out, on, max_s))
+
+    async def stop():
+        calls.append(("stop",))
+    p.aim, p.set, hal.stop = aim, setp, stop
+    await hal.ptz(30.0, -5.0)
+    await hal.wiper(True, 10.0)
+    await hal.wiper(False, 0.0)
+    assert calls == [("aim", 30.0, -5.0), ("set", "wiper", True, 10.0),
+                     ("set", "wiper", False, 0.0)]
+    got: list = []
+    hal.set_button_listener(got.append)
+    p.on_button("sos")
+    p.on_button("estop")
+    await asyncio.sleep(0.05)
+    assert got == ["sos", "estop"]
+    assert ("stop",) in calls, "急停按钮:HAL 先当场停,站点叫停随后到"
+
+
+async def test_POC1106_继电器上装没有云台雨刷():
+    from nexwar_adapter_d1max.hal import D1MaxHal
+    from nexwar_contract.hal import HalUnsupported
+    hal = D1MaxHal(mps_per_unit=0.4, radps_per_unit=1.0, deadband_mps=0.05, max_fraction=0.5)
+    acts = hal.hal_capabilities().actuators
+    assert not acts["wiper"] and not acts["ptz"]
+    with pytest.raises(HalUnsupported):
+        await hal.ptz(0.0, 0.0)
+    hal.set_button_listener(lambda b: None)            # 没上装:不报错

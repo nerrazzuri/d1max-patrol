@@ -26,7 +26,10 @@ from typing import Any
 
 from nexwar_contract.errors import ContractError
 
-OUTPUTS = ("strobe", "siren", "spotlight", "speaker")
+OUTPUTS = ("strobe", "siren", "spotlight", "speaker", "wiper", "ptz")
+#: POC 11-06(只在竞品分支):竞品云台 ``ptz`` 转到 ``pan``(水平,度,正 = 向右)、``tilt``(俯仰,度,
+#: 正 = 向下);不带 ``max_s``(转过去就停在那)。雨刷 ``wiper`` 跟警灯一样开、到点关。
+PAN_MAX, TILT_MAX = 180.0, 90.0
 #: 一次最长开这么久;再长要再下一条(站点那头的人得还在)。
 MAX_S = 600.0
 MAX_TTS_CHARS = 300
@@ -46,8 +49,12 @@ class DeterRequest:
     priority: int = 50
     side: str = "both"
     color: str = ""
+    pan: float = 0.0
+    tilt: float = 0.0
 
     def to_payload(self) -> dict[str, Any]:
+        if self.output == "ptz":
+            return {"output": "ptz", "on": True, "pan": self.pan, "tilt": self.tilt}
         d: dict[str, Any] = {"output": self.output, "on": self.on}
         if self.on:
             d["max_s"] = self.max_s
@@ -76,6 +83,16 @@ def parse_deter(p: Any) -> DeterRequest:
     if "color" in p and (out != "strobe" or not on or not isinstance(color, str)
                          or not COLOR.fullmatch(color)):
         raise ContractError("deter: color 只给开警灯,要是颜色名(小写字母开头,最多 16 个字符)")
+    if ("pan" in p or "tilt" in p) and out != "ptz":
+        raise ContractError("deter: pan、tilt 只给云台")
+    if out == "ptz":
+        pan, tilt = p.get("pan"), p.get("tilt")
+        if not on or not all(isinstance(v, (int, float)) and not isinstance(v, bool)
+                             and math.isfinite(v) for v in (pan, tilt)) \
+                or abs(pan) > PAN_MAX or abs(tilt) > TILT_MAX:
+            raise ContractError(f"deter: 云台要 on=true、pan(±{PAN_MAX:g} 度)、"
+                                f"tilt(±{TILT_MAX:g} 度)")
+        return DeterRequest(output="ptz", on=True, pan=float(pan), tilt=float(tilt))
     if not on:
         return DeterRequest(output=out, on=False, side=side)
     ms = p.get("max_s")

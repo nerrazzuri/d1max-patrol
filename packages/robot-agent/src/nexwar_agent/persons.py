@@ -134,6 +134,17 @@ class PersonView:
         r, b = min(got)
         return (b, r)
 
+    def bearing(self) -> float | None:
+        """POC 11-06(竞品云台对准):此刻确认看到人的相机里最近那个人的方向(狗身系,朝前 0°、
+        朝左为正);没测到距离的也算(取第一台确认的相机)。不是「有人」回 None。"""
+        if self.present is not True:
+            return None
+        sure = [c for k, c in self._cams.items() if self._healthy(k) and c.sees()]
+        if not sure:
+            return None
+        ranged = [c for c in sure if c.nearest is not None]
+        return min(ranged, key=lambda c: c.nearest).bearing if ranged else sure[0].bearing
+
     def key(self) -> tuple:
         """能力该重发的时候(这几样变了)。人数、距离天天变,不在里面(站点按 ``near`` 判)。"""
         return (self.state(), self.present, self.present is True and self.near)

@@ -33,6 +33,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import math
 import time
 from collections.abc import Callable
@@ -528,6 +529,28 @@ class D1MaxHal:
         if self._payload is not None:
             self._payload.on_sound_end = fn
 
+    # POC 11-06(竞品上装):云台、雨刷;求助、急停按钮
+
+    async def ptz(self, pan: float, tilt: float) -> None:
+        """云台转到 ``pan``(水平,度,正 = 向右)、``tilt``(俯仰,度,正 = 向下)。"""
+        await self._up("ptz").aim(pan, tilt)
+
+    async def wiper(self, on: bool, max_s: float) -> None:
+        await self._up("wiper").set("wiper", on and max_s > 0, max_s)
+
+    def set_button_listener(self, fn: Callable[[str], Any]) -> None:
+        """上装的按钮按下了回调 ``fn("sos" | "estop")``(代理报事件、站点出告警、叫停)。
+        急停按钮:HAL 先当场停(速度作废),不等站点那一圈。"""
+        if self._payload is None or not hasattr(self._payload, "on_button"):
+            return
+
+        def on_button(name: str) -> None:
+            if name == "estop":
+                with contextlib.suppress(RuntimeError):
+                    asyncio.get_running_loop().create_task(self.stop())
+            fn(name)
+        self._payload.on_button = on_button
+
     def sound_tts(self) -> bool:
         return self._payload is not None and bool(self._payload.cfg.tts_command)
 
@@ -593,4 +616,4 @@ class D1MaxHal:
                      "imu_hz": IMU_HZ, "joint_effort": False, "foot_force": False},
             actuators={"light": True, "head": False} | {
                 k: self._payload is not None and self._payload.has(k)
-                for k in ("strobe", "siren", "speaker", "spotlight")})
+                for k in ("strobe", "siren", "speaker", "spotlight", "wiper", "ptz")})

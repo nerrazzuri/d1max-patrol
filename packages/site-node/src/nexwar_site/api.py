@@ -2599,7 +2599,8 @@ class _Handler(TlsHandlerMixin):
         d = self._body()
         if not isinstance(d, dict):
             raise HttpError(400, "要一个对象")
-        d = {k: d[k] for k in ("output", "on", "max_s", "clip", "side", "color") if k in d}
+        d = {k: d[k] for k in ("output", "on", "max_s", "clip", "side", "color", "pan", "tilt")
+             if k in d}                               # pan/tilt:POC 11-06 竞品云台
         self._audit_detail = {k: str(v)[:80] for k, v in d.items()}
         from nexwar_contract.deter import parse_deter
         from nexwar_contract.errors import ContractError

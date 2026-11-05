@@ -47,7 +47,11 @@ Map<String, (String, double)> get deterOutputs => <String, (String, double)>{
       'siren': (tr('Siren', '警笛'), 10),
       'spotlight': (tr('Spotlight', '聚光灯'), 120),
       'speaker': (tr('Speaker', '喇叭'), 30),
+      'wiper': (tr('Wiper', '雨刷'), 10), // POC 11-06 竞品上装：刷可见光镜头
     };
+
+/// POC 11-06 竞品云台：每按一下转多少度、角度上限（跟站点的 nexwar_contract.deter 一致）。
+const double ptzPanStep = 15, ptzTiltStep = 10, ptzPanMax = 180, ptzTiltMax = 90;
 
 /// 警灯颜色名说人话（狗的配置里起的名字；不认识的原样显示）。
 String strobeColorText(String c) => switch (c) {
@@ -88,9 +92,37 @@ class _SiteDeterPageState extends State<SiteDeterPage> {
   List<String> get _colors => ((widget.caps['strobe_colors'] as List?) ?? const []).map((e) => '$e').toList();
   String? _color;
 
+  /// 云台：没有回读角度，按「上次按到哪」算（看见人自己转过去以后，先点回正再调）。
+  double _pan = 0, _tilt = 0;
+
+  Future<void> _turn(double dp, double dt) async {
+    final center = dp == 0 && dt == 0;
+    final pan = center ? 0.0 : (_pan + dp).clamp(-ptzPanMax, ptzPanMax).toDouble();
+    final tilt = center ? 0.0 : (_tilt + dt).clamp(-ptzTiltMax, ptzTiltMax).toDouble();
+    setState(() {
+      _pan = pan;
+      _tilt = tilt;
+    });
+    final what = tr('Camera head to pan ${pan.toStringAsFixed(0)}°, tilt ${tilt.toStringAsFixed(0)}°',
+        '云台转到水平 ${pan.toStringAsFixed(0)}°、俯仰 ${tilt.toStringAsFixed(0)}°');
+    String msg;
+    try {
+      final r = await widget.api.deter(widget.robotId, 'ptz', true, pan: pan, tilt: tilt);
+      final ack = r['ack'];
+      final res = ack is Map ? '${ack['result']}' : 'accepted';
+      msg = res == 'accepted'
+          ? tr('$what: done', '$what：完成')
+          : tr('$what failed: ${deterReasonText(ack is Map ? '${ack['reason'] ?? res}' : res)}',
+              '$what失败：${deterReasonText(ack is Map ? '${ack['reason'] ?? res}' : res)}');
+    } on SiteError catch (e) {
+      msg = tr('$what failed: $e', '$what失败：$e');
+    }
+    if (mounted) setState(() => _msg = msg);
+  }
+
   /// 喇叭以外的每一行。聚光灯分左右的：「两边」一行，再加左、右各一行。
   List<_Row> get _rows => <_Row>[
-        for (final o in _outputs.where((o) => o != 'speaker')) ...[
+        for (final o in _outputs.where((o) => o != 'speaker' && o != 'ptz')) ...[
           (key: o, output: o, side: null, name: deterOutputs[o]?.$1 ?? o),
           if (o == 'spotlight' && _sides.contains('left'))
             (key: 'spotlight-left', output: o, side: 'left', name: tr('Left spotlight', '左聚光灯')),
@@ -223,6 +255,26 @@ class _SiteDeterPageState extends State<SiteDeterPage> {
                       trailing: narrow ? null : buttons,
                     );
                   }))),
+        if (outs.contains('ptz'))
+          Padding(
+              padding: const EdgeInsets.only(bottom: Nw.s8),
+              child: NwCard(
+                  padding: const EdgeInsets.all(12),
+                  child: Wrap(spacing: Nw.s8, runSpacing: Nw.s8, crossAxisAlignment: WrapCrossAlignment.center, children: [
+                    Text(tr('Camera head: ', '云台：'), style: NwText.titleSmall.copyWith(color: c.text)),
+                    for (final (k, label, dp, dt) in <(String, String, double, double)>[
+                      ('left', tr('Left', '向左'), -ptzPanStep, 0),
+                      ('right', tr('Right', '向右'), ptzPanStep, 0),
+                      ('up', tr('Up', '向上'), 0, -ptzTiltStep),
+                      ('down', tr('Down', '向下'), 0, ptzTiltStep),
+                    ])
+                      NwButton(
+                          buttonKey: Key('ptz-$k'),
+                          variant: NwButtonVariant.outline,
+                          onPressed: () => _turn(dp, dt),
+                          label: label),
+                    NwButton(buttonKey: const Key('ptz-center'), onPressed: () => _turn(0, 0), label: tr('Center', '回正')),
+                  ]))),
         if (outs.contains('speaker')) ...[
           NwCard(
               padding: const EdgeInsets.all(12),

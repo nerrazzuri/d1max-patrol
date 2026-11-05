@@ -311,7 +311,7 @@ class AgentRuntime:
             from nexwar_agent.pers_server import PersonBridgeServer
             from nexwar_agent.persons import PersonView
             self.person_view = PersonView(
-                emit=lambda kind, data: self.events.emit(kind, data),
+                emit=self._on_person_event,
                 monotonic=monotonic or time.monotonic,
                 snapshot_dir=persons_snapshots or store_dir / "person-snapshots",
                 save_snapshot=self._save_person_snapshot)
@@ -558,6 +558,20 @@ class AgentRuntime:
         if not path.is_file():
             return None
         return f"{ref.map_id}:{ref.version}", json.loads(path.read_text("utf-8"))
+
+    def _on_person_event(self, kind: str, data: dict[str, Any]) -> None:
+        """人员检测的事件照发;POC 11-06:确认看见人(``person_seen``)有竞品云台就转过去。"""
+        self.events.emit(kind, data)
+        if kind != "person_seen":
+            return
+        pv, deter = self.person_view, getattr(self, "deter", None)
+        b = pv.bearing() if pv is not None else None
+        if b is None or deter is None:
+            return
+        try:
+            asyncio.get_running_loop().create_task(deter.aim_at(b))
+        except RuntimeError:
+            pass                                       # 没在事件循环里(测试):不转
 
     def _person_ignored(self, bearing_deg: float, range_m: float) -> bool:
         """检测到的人(狗身系:方向°、距离 m)落在正用着的那张图的人员忽略区里(W41)。定位不可信、没有

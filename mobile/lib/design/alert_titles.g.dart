@@ -90,4 +90,6 @@ const Map<String, (String, String)> alertTitles = <String, (String, String)>{
   'swap_overdue': ('Battery swap overdue', '换电超时未处理'),
   'swap_stuck': ('Battery out but robot still moving', '拔着电池机器人还在走'),
   'guard_prep': ('Charge before arming', '布防前先补能'),
+  'payload_sos': ('Help button pressed on site', '现场有人按了求助按钮'),
+  'payload_estop': ('Payload e-stop pressed', '上装急停按钮被按下'),
 };

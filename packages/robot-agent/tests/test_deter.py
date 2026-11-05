@@ -340,3 +340,67 @@ async def test_POC1105_接上了_导航报被挡_有任务在跑_每拍里自己
     auto = [d for d in _事件(ears) if d.get("auto")]
     assert auto and auto[0]["clip"] == "blocked" and auto[0]["auto"] == "nav_blocked"
     await rt.close()
+
+
+# ---------------------------------------------------------------- POC 11-06:竞品云台、雨刷、按钮
+
+
+class _竞品云台:
+    def __init__(self):
+        self.calls: list = []
+        self.button = None
+
+    def hal_capabilities(self):
+        from types import SimpleNamespace
+        return SimpleNamespace(actuators={"strobe": True, "wiper": True, "ptz": True})
+
+    async def ptz(self, pan, tilt):
+        self.calls.append(("ptz", pan, tilt))
+
+    async def wiper(self, on, max_s):
+        self.calls.append(("wiper", on, max_s))
+
+    def set_button_listener(self, fn):
+        self.button = fn
+
+
+def _命令(p):
+    from nexwar_contract.messages import Command
+    return Command(command_id="c", task_id="deter-c", kind="deter", issued_at=1, expires_at=2,
+                   control_epoch=1, payload=p)
+
+
+async def test_POC1106_云台雨刷_派到HAL_记事件_能力里有():
+    from nexwar_agent.deter import DeterDesk
+    hal, ev = _竞品云台(), []
+    desk = DeterDesk(hal, emit=lambda k, d: ev.append((k, d)))
+    assert desk.caps()["outputs"] == ["strobe", "wiper", "ptz"]
+    assert await desk.handle(_命令({"output": "ptz", "on": True, "pan": 30, "tilt": -5})) == ""
+    assert await desk.handle(_命令({"output": "wiper", "on": True, "max_s": 10})) == ""
+    assert hal.calls == [("ptz", 30.0, -5.0), ("wiper", True, 10.0)]
+    assert ev[0] == ("deter", {"task_id": "deter-c", "output": "ptz", "on": True,
+                               "pan": 30.0, "tilt": -5.0})
+
+
+async def test_POC1106_按钮按下_记payload_button事件():
+    from nexwar_agent.deter import DeterDesk
+    hal, ev = _竞品云台(), []
+    DeterDesk(hal, emit=lambda k, d: ev.append((k, d)))
+    hal.button("sos")
+    hal.button("estop")
+    assert ev == [("payload_button", {"button": "sos"}), ("payload_button", {"button": "estop"})]
+
+
+async def test_POC1106_看见人_云台转过去_朝左的人是负的水平角_没云台不动():
+    from nexwar_agent.deter import DeterDesk
+    hal, ev = _竞品云台(), []
+    desk = DeterDesk(hal, emit=lambda k, d: ev.append((k, d)))
+    await desk.aim_at(40.0)
+    await desk.aim_at(-200.0)
+    assert hal.calls == [("ptz", -40.0, 0.0), ("ptz", -160.0, 0.0)], \
+        "左 40° → 云台 -40;右 200° = 左 160°"
+    assert ev[0] == ("deter", {"output": "ptz", "on": True, "pan": -40.0, "tilt": 0.0,
+                               "auto": "person_seen"})
+    hal2, ev2 = _有回调的喇叭(), []
+    await DeterDesk(hal2, emit=lambda k, d: ev2.append((k, d))).aim_at(10.0)
+    assert ev2 == []

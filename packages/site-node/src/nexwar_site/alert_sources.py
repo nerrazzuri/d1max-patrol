@@ -187,6 +187,8 @@ class SiteAlertSources:
         self._skew = ClockSkew(now_ms=now_ms)
         self._skew_of = skew_of
         self._site_errors: dict[str, str] = {}
+        #: POC 11-06:上装急停按钮按下了,站点叫停这台(``attach`` 时接上派遣器)。
+        self._disp: Any = None
         #: 排程告警合并进来的排程 id(按告警的键),拼标题用(W00c6c 内审)。
         self._sched_entries: dict[str, list[str]] = {}
         #: 入侵告警合并进来的防区(按告警的键),拼标题用(W16)。
@@ -240,12 +242,32 @@ class SiteAlertSources:
                 self.seed(row["robot_id"], Status.from_wire(json.loads(row["status"])))
             except (_CE, ValueError, TypeError):
                 log.warning("%s 库里的状态读不懂,不做种", row["robot_id"])
+        self._disp = dispatcher
         dispatcher.on_status(self.on_status)
         dispatcher.on_event(self.on_event)
         dispatcher.on_telemetry(self.on_telemetry)
         # 站点自己推的「没回待命点」(W00c6b):以前只进 SSE 事件流,告警簿不收、值守屏看不见。
         dispatcher.feed.listen(self.on_feed)
         self._is_stale = self._is_stale or dispatcher.is_stale
+
+    def _payload_button(self, rid: str, button: str) -> None:
+        """POC 11-06:竞品上装的按钮。求助 → P1 要人处理(不自己消失);急停 → P1 + 站点叫停这台
+        (跟手机上点「叫停」一样:停住、不再派,要人点恢复)。急停只是辅助:机器人那头已经先停了。"""
+        if button == "sos":
+            self.desk.raise_alert(kind="payload_sos", robot=rid, title="现场有人按了求助按钮",
+                                  detail="上装的求助按钮被按下,请马上派人到机器人所在位置")
+        elif button == "estop":
+            self.desk.raise_alert(kind="payload_estop", robot=rid, title="上装急停按钮被按下",
+                                  detail="机器人已停住,站点已叫停这台;确认现场安全后在机器人页点恢复")
+            disp = self._disp
+            if disp is None:
+                return
+            import asyncio
+            try:
+                asyncio.get_running_loop().create_task(
+                    disp.halt(rid, issued_by="上装急停按钮", reason="payload_estop"))
+            except RuntimeError:
+                log.error("%s 上装急停按钮:没在事件循环里,站点没叫停", rid)
 
     def _m(self, rid: str) -> _Mem:
         return self._mem.setdefault(rid, _Mem())
@@ -505,6 +527,8 @@ class SiteAlertSources:
         tid = d.get("task_id", "")
         if e.kind == "task_done":
             self.desk.raise_alert(kind="run_done", robot=rid, title=f"已完成:{tid}")
+        elif e.kind == "payload_button":
+            self._payload_button(rid, str(d.get("button", "")))
         elif e.kind == "task_failed":
             reason = str(d.get("reason", ""))
             # 站点自己派的回待命点那一趟(回程巡检)失败,狗停在半路;标题别说「整趟中止」

@@ -39,6 +39,10 @@ class DeterDesk:
         listen = getattr(hal, "set_sound_listener", None)
         if callable(listen):
             listen(self._sound_ended)
+        # POC 11-06:竞品上装的求助、急停按钮按下了 → 一条 ``payload_button`` 事件(站点出告警、叫停)
+        buttons = getattr(hal, "set_button_listener", None)
+        if callable(buttons):
+            buttons(lambda name: self._emit("payload_button", {"button": name}))
 
     def _sound_ended(self, ok: bool, why: str) -> None:
         self._sound = None
@@ -69,6 +73,21 @@ class DeterDesk:
         opts = fn() if callable(fn) else {}
         return {k: opts[k] for k in ("spotlight_sides", "strobe_colors", "strobe_default",
                                      "siren_via") if k in opts}
+
+    async def aim_at(self, bearing_deg: float) -> None:
+        """POC 11-06:确认看见人,云台转过去(``bearing_deg`` 狗身系,朝左为正;云台向右为正)。
+        没云台不动;转不了记日志,不打断别的。"""
+        if "ptz" not in self.outputs():
+            return
+        pan = -float(bearing_deg)
+        pan = (pan + 180.0) % 360.0 - 180.0
+        try:
+            await self.hal.ptz(pan, 0.0)
+        except Exception as exc:                     # noqa: BLE001 - 自己转的没转成:记日志
+            log.warning("看见人,云台没转过去: %s", exc)
+            return
+        self._emit("deter", {"output": "ptz", "on": True, "pan": pan, "tilt": 0.0,
+                             "auto": "person_seen"})
 
     def playing(self) -> tuple[int, float] | None:
         if self._sound is not None and self._mono() >= self._sound[1]:
@@ -124,6 +143,10 @@ class DeterDesk:
                 await self.hal.spotlight_side(req.side, req.on, req.max_s)
             elif req.output == "spotlight":
                 await self.hal.spotlight(req.on, req.max_s)
+            elif req.output == "wiper":
+                await self.hal.wiper(req.on, req.max_s)
+            elif req.output == "ptz":
+                await self.hal.ptz(req.pan, req.tilt)
             else:
                 await self.hal.sound(req.clip if req.on else "", req.max_s)
         except HalUnsupported:
@@ -134,7 +157,9 @@ class DeterDesk:
         if req.output == "speaker":
             self._sound = (req.priority, self._mono() + req.max_s) if req.on else None
         data: dict[str, Any] = {"task_id": cmd.task_id, "output": req.output, "on": req.on}
-        if req.on:
+        if req.output == "ptz":
+            data |= {"pan": req.pan, "tilt": req.tilt}
+        elif req.on:
             data["max_s"] = req.max_s
         if req.side != "both":
             data["side"] = req.side

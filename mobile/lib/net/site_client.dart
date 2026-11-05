@@ -807,8 +807,10 @@ abstract class SiteApi {
   /// `speaker` 喇叭（开要 [clip]：话术名或 `tts:<语言>:<文字>`）。返回 `{ack}`。
   /// W40：聚光灯可以只开、关一边（[side] `left`/`right`，狗报了 `spotlight_sides` 才给）；开警灯可以挑颜色
   /// （[color]，狗报的 `strobe_colors` 之一）。
+  /// POC 11-06（竞品上装）：`wiper` 雨刷（同警灯，带时长）；`ptz` 云台转到 [pan]（水平，度，正 = 向右）、
+  /// [tilt]（俯仰，度，正 = 向下），`on` 恒为 true、不带时长。
   Future<Map<String, dynamic>> deter(String robotId, String output, bool on,
-      {double? maxS, String? clip, String? side, String? color});
+      {double? maxS, String? clip, String? side, String? color, double? pan, double? tilt});
 
   /// 在当前位置标原点（W00c6f，管理员）：狗用它此刻的位置当原点（定位不好就拒），站点登记成默认待命点（名字
   /// [name]，空就是 `home`）。返回 `{ack, standby}`。
@@ -1895,7 +1897,7 @@ class SiteClient implements SiteApi {
 
   @override
   Future<Map<String, dynamic>> deter(String robotId, String output, bool on,
-          {double? maxS, String? clip, String? side, String? color}) async =>
+          {double? maxS, String? clip, String? side, String? color, double? pan, double? tilt}) async =>
       _map(await _send('POST', '/api/robots/${Uri.encodeComponent(robotId)}/deter', <String, dynamic>{
         'output': output,
         'on': on,
@@ -1903,6 +1905,8 @@ class SiteClient implements SiteApi {
         if (on) 'clip': ?clip,
         'side': ?side,
         if (on) 'color': ?color,
+        'pan': ?pan,
+        'tilt': ?tilt,
       }));
 
   @override

@@ -60,6 +60,17 @@ log = logging.getLogger(__name__)
 
 BOOL_MD5 = "8b94c1b53db61fb6aed406028ad6332a"
 STRING_MD5 = "992ce8a1687cec8c8bd883ec73ca41d1"
+#: std_msgs/Float32MultiArray(按 ROS1 的规则算过:MultiArrayDimension → MultiArrayLayout → 它)。
+F32MA_MD5 = "6a40e0ffa6a17a503ac3f8616991b1f6"
+F32MA_DEF = ("std_msgs/MultiArrayLayout layout\nfloat32[] data\n" + "=" * 80
+             + "\nMSG: std_msgs/MultiArrayLayout\nstd_msgs/MultiArrayDimension[] dim\n"
+             "uint32 data_offset\n" + "=" * 80
+             + "\nMSG: std_msgs/MultiArrayDimension\nstring label\nuint32 size\nuint32 stride\n")
+#: POC 11-06:竞品主控日志里认这两句(11-05 现场按过):求助按钮(CAN 板)、上装急停按钮按下(松开是 1)。
+SOS_LINE = "[sos] receive a trigger event"
+ESTOP_LINE = "Emergency btn status change: 0"
+#: 同一个按钮这么多秒以内又出现的那一行不再报(竞品日志里一次按下常常连写两行)。
+BUTTON_QUIET_S = 3.0
 KIND = "anbot_ros1"
 HOST_ENV = "NEXWAR_ANBOT_SSH_HOST"
 USER_ENV = "NEXWAR_ANBOT_SSH_USER"
@@ -246,6 +257,11 @@ def string_msg(s: str) -> bytes:
     return struct.pack("<I", len(b)) + b
 
 
+def f32ma_msg(values: tuple[float, ...]) -> bytes:
+    """std_msgs/Float32MultiArray:布局空(没有维度、data_offset 0),后面是数。"""
+    return struct.pack("<III", 0, 0, len(values)) + struct.pack(f"<{len(values)}f", *values)
+
+
 # ---------------------------------------------------------------- 上装
 
 
@@ -255,6 +271,13 @@ class AnbotConfig:
     host: str
     strobe_topic: str = "/sensor/strobeLightSwitch"
     voice_topic: str = "/anbot/voice/play"
+    #: POC 11-06:云台 [水平, 俯仰](度;水平正 = 向右,俯仰正 = 向下)、雨刷(刷可见光镜头)。
+    ptz_topic: str = "/anbot/ptz/pose/set"
+    wiper_topic: str = "/anbot/ptz/wiper/enable"
+    #: POC 11-06:登录竞品主控盯的两份日志(求助按钮在 CAN 板日志里,急停按钮在灯控日志里)。
+    #: 没配登录(``audio_host``)就不盯。
+    sos_log: str = "/logs/current/can.log"
+    estop_log: str = "/logs/current/led_control.log"
     caller: str = "/nexwar_agent"
     #: 念一个字大约多久(现场 11-05:12 个字约 3 秒)。
     secs_per_char: float = 0.25
@@ -281,7 +304,8 @@ class AnbotConfig:
             raise PayloadError(f"master 要写成 http://<地址>:<端口>: {self.master!r}")
         if not self.host or not isinstance(self.host, str):
             raise PayloadError("host 要写 Orin 在竞品网段上的地址")
-        for t in (self.strobe_topic, self.voice_topic, self.caller):
+        for t in (self.strobe_topic, self.voice_topic, self.ptz_topic, self.wiper_topic,
+                  self.caller):
             if not isinstance(t, str) or not t.startswith("/"):
                 raise PayloadError(f"话题、节点名要以 / 开头: {t!r}")
         for k in ("secs_per_char", "republish_s", "reregister_s"):
@@ -292,7 +316,7 @@ class AnbotConfig:
             raise PayloadError(f"audio_host 要写成 账号@地址: {self.audio_host!r}")
         if not _DEV.fullmatch(str(self.aplay_device)):
             raise PayloadError(f"aplay_device 只许字母、数字、_ : , . -: {self.aplay_device!r}")
-        for k in ("ssh_key", "ssh", "clips_dir"):
+        for k in ("ssh_key", "ssh", "clips_dir", "sos_log", "estop_log"):
             v = getattr(self, k)
             if not isinstance(v, str) or any(ch.isspace() for ch in v) or v.startswith("-"):
                 raise PayloadError(f"{k} 写错了: {v!r}")
@@ -303,7 +327,7 @@ class AnbotConfig:
     def from_dict(cls, d: dict[str, Any]) -> AnbotConfig:
         known = {"master", "host", "strobe_topic", "voice_topic", "caller", "secs_per_char",
                  "republish_s", "reregister_s", "audio_host", "ssh_key", "aplay_device",
-                 "clips_dir", "ssh"}
+                 "clips_dir", "ssh", "ptz_topic", "wiper_topic", "sos_log", "estop_log"}
         extra = set(d) - known - {"kind"}
         if extra:
             raise PayloadError(f"竞品上装配置里有不认识的项: {', '.join(sorted(extra))}")
@@ -331,8 +355,19 @@ class AnbotPayload:
         self._voice = Ros1Publisher(master=cfg.master, host=cfg.host, caller=cfg.caller,
                                     topic=cfg.voice_topic, mtype="std_msgs/String",
                                     md5=STRING_MD5, definition="string data\n", latching=False)
-        self._pubs = (self._strobe, self._voice)
+        self._ptz = Ros1Publisher(master=cfg.master, host=cfg.host, caller=cfg.caller,
+                                  topic=cfg.ptz_topic, mtype="std_msgs/Float32MultiArray",
+                                  md5=F32MA_MD5, definition=F32MA_DEF, latching=False)
+        self._wiper = Ros1Publisher(master=cfg.master, host=cfg.host, caller=cfg.caller,
+                                    topic=cfg.wiper_topic, mtype="std_msgs/Bool",
+                                    md5=BOOL_MD5, definition="bool data\n", latching=True)
+        self._pubs = (self._strobe, self._voice, self._ptz, self._wiper)
         self._until: float | None = None              # 警灯开着:到这个时刻(monotonic)
+        self._wiper_until: float | None = None        # 雨刷开着:到这个时刻
+        #: POC 11-06:竞品的求助、急停按钮按下了(``"sos"`` / ``"estop"``);HAL 挂上。
+        self.on_button: Callable[[str], Any] | None = None
+        self._buttons_task: asyncio.Task[None] | None = None
+        self._button_at: dict[str, float] = {}
         self._guard: asyncio.Task[None] | None = None
         self._speech: asyncio.Task[None] | None = None
         self._open_error = ""
@@ -341,7 +376,7 @@ class AnbotPayload:
     # 能力
 
     def has(self, output: str) -> bool:
-        return output in ("strobe", "speaker")
+        return output in ("strobe", "speaker", "wiper", "ptz")
 
     def options(self) -> dict[str, Any]:
         return {}
@@ -360,6 +395,8 @@ class AnbotPayload:
         await self._publish_strobe(False)
         if self._guard is None or self._guard.done():
             self._guard = asyncio.get_running_loop().create_task(self._watch())
+        if self.cfg.audio_host and (self._buttons_task is None or self._buttons_task.done()):
+            self._buttons_task = asyncio.get_running_loop().create_task(self._buttons())
 
     async def _ensure(self) -> None:
         now = time.monotonic()
@@ -386,6 +423,9 @@ class AnbotPayload:
                         await self._publish_strobe(False)
                     else:
                         await self._publish_strobe(True)
+                if self._wiper_until is not None and time.monotonic() >= self._wiper_until:
+                    self._wiper_until = None
+                    await asyncio.to_thread(self._wiper.publish, bool_msg(False))
             except asyncio.CancelledError:
                 raise
             except Exception:
@@ -394,17 +434,19 @@ class AnbotPayload:
 
     async def close(self) -> None:
         """全关:警灯发「关」,不再估喊话,注销,关端口。"""
-        t, self._guard = self._guard, None
-        if t is not None:
-            t.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await t
+        for t in (self._guard, self._buttons_task):
+            if t is not None:
+                t.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await t
+        self._guard = self._buttons_task = None
         await self.stop_sound()
-        self._until = None
+        self._until = self._wiper_until = None
         try:
             await self._publish_strobe(False)
+            await asyncio.to_thread(self._wiper.publish, bool_msg(False))
         except Exception:
-            log.exception("竞品上装收尾时发不出「关警灯」")
+            log.exception("竞品上装收尾时发不出「关警灯」「关雨刷」")
         for p in self._pubs:
             await asyncio.to_thread(p.close)
         self._next_register = 0.0
@@ -417,8 +459,11 @@ class AnbotPayload:
 
     async def set(self, output: str, on: bool, max_s: float, *, side: str = "both",
                   color: str = "") -> None:
+        if output == "wiper":
+            await self._set_wiper(on, max_s)
+            return
         if output != "strobe":
-            raise PayloadError(f"竞品上装只有警灯和喇叭,没有 {output}")
+            raise PayloadError(f"竞品上装只有警灯、雨刷和喇叭,没有 {output}")
         if not on:
             self._until = None
             await self._publish_strobe(False)
@@ -431,6 +476,87 @@ class AnbotPayload:
             raise PayloadError(f"警灯没开:{self._why_down(self._strobe)}")
         self._until = time.monotonic() + max_s
         await self._publish_strobe(True)
+
+    # 雨刷、云台(POC 11-06)
+
+    async def _set_wiper(self, on: bool, max_s: float) -> None:
+        if not on:
+            self._wiper_until = None
+            await asyncio.to_thread(self._wiper.publish, bool_msg(False))
+            return
+        if not 0 < max_s <= MAX_ON_S:
+            raise PayloadError(f"max_s 要在 0–{MAX_ON_S:.0f} 秒之间")
+        await self._ensure()
+        if self._open_error or self._wiper.connections() == 0:
+            raise PayloadError(f"雨刷没开:{self._why_down(self._wiper)}")
+        self._wiper_until = time.monotonic() + max_s
+        await asyncio.to_thread(self._wiper.publish, bool_msg(True))
+
+    async def aim(self, pan: float, tilt: float) -> None:
+        """云台转到 ``pan``(水平,度,正 = 向右)、``tilt``(俯仰,度,正 = 向下)。转过去就停在那。"""
+        await self._ensure()
+        if self._open_error or self._ptz.connections() == 0:
+            raise PayloadError(f"云台没转:{self._why_down(self._ptz) or '竞品的云台程序没连上'}")
+        if await asyncio.to_thread(self._ptz.publish, f32ma_msg((float(pan), float(tilt)))) == 0:
+            raise PayloadError("云台没转:竞品的云台程序断开了")
+
+    # 求助、急停按钮(POC 11-06)
+
+    async def _buttons(self) -> None:
+        """登录竞品主控 ``tail -F`` 两份日志,认出按下就回调 ``on_button``;断了 5 秒后重连。"""
+        while True:
+            cmd, env = self._ssh_cmd(f"tail -n0 -F {self.cfg.sos_log} {self.cfg.estop_log}")
+            proc = None
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    *cmd, stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.DEVNULL, start_new_session=True, env=env)
+                assert proc.stdout is not None
+                async for raw in proc.stdout:
+                    self._button_line(raw.decode("utf-8", "replace"))
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                log.exception("盯竞品按钮日志出错,5 秒后重连")
+            finally:
+                if proc is not None and proc.returncode is None:
+                    with contextlib.suppress(ProcessLookupError, PermissionError):
+                        os.killpg(proc.pid, signal.SIGKILL)
+                    with contextlib.suppress(Exception):
+                        await proc.wait()
+            await asyncio.sleep(5.0)
+
+    def _button_line(self, line: str) -> None:
+        name = "sos" if SOS_LINE in line else "estop" if ESTOP_LINE in line else ""
+        if not name:
+            return
+        now = time.monotonic()
+        if now - self._button_at.get(name, -1e9) < BUTTON_QUIET_S:
+            return
+        self._button_at[name] = now
+        log.warning("竞品上装的%s按钮按下了", "求助" if name == "sos" else "急停")
+        fn = self.on_button
+        if fn is not None:
+            try:
+                fn(name)
+            except Exception:
+                log.exception("按钮回调出错")
+
+    def _ssh_cmd(self, remote: str) -> tuple[list[str], dict[str, str] | None]:
+        """登录竞品主控跑 ``remote`` 的命令行和环境(密码走 SSH_ASKPASS,不进命令行)。"""
+        common = ["-o", "ConnectTimeout=3", "-o", "StrictHostKeyChecking=accept-new"]
+        env = None
+        if self._password:
+            auth = ["-o", "PubkeyAuthentication=no",
+                    "-o", "PreferredAuthentications=password,keyboard-interactive",
+                    "-o", "NumberOfPasswordPrompts=1"]
+            env = dict(os.environ) | {"SSH_ASKPASS": str(self._askpass_script()),
+                                      "SSH_ASKPASS_REQUIRE": "force",
+                                      "DISPLAY": os.environ.get("DISPLAY", ":0"),
+                                      PASSWORD_ENV: self._password}
+        else:
+            auth = ["-i", self.cfg.ssh_key, "-o", "BatchMode=yes"]
+        return [self.cfg.ssh, *auth, *common, self.cfg.audio_host, remote], env
 
     # 喊话
 
@@ -467,21 +593,8 @@ class AnbotPayload:
         if not 0 < max_s <= MAX_ON_S:
             raise PayloadError(f"max_s 要在 0–{MAX_ON_S:.0f} 秒之间")
         await self.stop_sound()
-        common = ["-o", "ConnectTimeout=3", "-o", "StrictHostKeyChecking=accept-new"]
-        env = None
-        if self._password:
-            # 密码:ssh 没有终端(新会话)时找 SSH_ASKPASS 要;那个小脚本从环境变量里念出来
-            auth = ["-o", "PubkeyAuthentication=no",
-                    "-o", "PreferredAuthentications=password,keyboard-interactive",
-                    "-o", "NumberOfPasswordPrompts=1"]
-            env = dict(os.environ) | {"SSH_ASKPASS": str(self._askpass_script()),
-                                      "SSH_ASKPASS_REQUIRE": "force",
-                                      "DISPLAY": os.environ.get("DISPLAY", ":0"),
-                                      PASSWORD_ENV: self._password}
-        else:
-            auth = ["-i", self.cfg.ssh_key, "-o", "BatchMode=yes"]
-        cmd = [self.cfg.ssh, *auth, *common, self.cfg.audio_host,
-               f"aplay -q -D {self.cfg.aplay_device} -"]
+        # 密码:ssh 没有终端(新会话)时找 SSH_ASKPASS 要;那个小脚本从环境变量里念出来
+        cmd, env = self._ssh_cmd(f"aplay -q -D {self.cfg.aplay_device} -")
         try:
             with path.open("rb") as f:
                 proc = await asyncio.create_subprocess_exec(
@@ -563,11 +676,14 @@ class AnbotPayload:
     def health(self) -> list[dict[str, Any]]:
         from nexwar_contract.devices import device
         why = self._why_down(self._strobe) or self._why_down(self._voice)
-        if self._open_error or not all(p.registered for p in self._pubs):
+        if self._open_error or not all(p.registered for p in (self._strobe, self._voice)):
             return [device("link:anbot", "offline", why)]
         if why:
             return [device("link:anbot", "degraded", why)]
-        return [device("link:anbot", "online", "竞品主控上的警灯、播音程序都连上了")]
+        # POC 11-06:云台、雨刷是附带的,没连上不算降级,说一声
+        extra = "" if self._ptz.connections() and self._wiper.connections() else \
+            ";云台、雨刷程序还没连上"
+        return [device("link:anbot", "online", "竞品主控上的警灯、播音程序都连上了" + extra)]
 
 
 def load_payload(path: str | Path,

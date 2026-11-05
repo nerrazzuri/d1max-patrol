@@ -130,6 +130,9 @@ LEVEL_OF: dict[str, Level] = {
     # 任务在跑、狗被挡在原地超过一分钟(运营可视化):去看路上是不是有东西。不动了自己解决。
     "nav_blocked": Level.P2,
     "estop_pressed": Level.P1,
+    # POC 11-06:竞品上装的求助按钮(现场有人要帮忙)、急停按钮(站点同时叫停这台)。
+    "payload_sos": Level.P1,
+    "payload_estop": Level.P1,
     # lease_expired、suspend_stale、watchdog_died 三类原来由狗上老服务报;W00c5e 之后没有来源
     # (遥控租约在站点上、接管不挂起),种类留着是为了库里的老记录读得懂。
     "lease_expired": Level.P1,

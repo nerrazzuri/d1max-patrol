@@ -208,4 +208,36 @@ void pocClipNames() {
     await t.pumpAndSettle();
     expect(api.calls.last, 'deter A speaker true 30.0 restricted');
   });
+
+  testWidgets('POC 11-06 竞品云台、雨刷：报了才有；方向键按步转、到头不超；回正；雨刷是一行开 10 秒', (t) async {
+    final api = FakeApi('guard');
+    await _open(t, api, caps: const <String, dynamic>{
+      'outputs': <String>['strobe', 'wiper', 'ptz', 'speaker'],
+      'clips': <String>[],
+      'tts': false,
+      'max_s': 600.0,
+    });
+    expect(find.byKey(const Key('deter-ptz')), findsNothing, reason: '云台不是一行开关');
+    await t.ensureVisible(find.byKey(const Key('ptz-right')));
+    await t.tap(find.byKey(const Key('ptz-right')));
+    await t.pumpAndSettle();
+    expect(api.calls.last, 'deter A ptz true pan=15.0 tilt=0.0');
+    await t.tap(find.byKey(const Key('ptz-down')));
+    await t.pumpAndSettle();
+    expect(api.calls.last, 'deter A ptz true pan=15.0 tilt=10.0');
+    await t.tap(find.byKey(const Key('ptz-center')));
+    await t.pumpAndSettle();
+    expect(api.calls.last, 'deter A ptz true pan=0.0 tilt=0.0');
+    for (var i = 0; i < 10; i++) {
+      await t.tap(find.byKey(const Key('ptz-up')));
+      await t.pumpAndSettle();
+    }
+    expect(api.calls.last, 'deter A ptz true pan=0.0 tilt=-90.0');
+    await t.ensureVisible(find.byKey(const Key('deter-on-wiper')));
+    await t.tap(find.byKey(const Key('deter-on-wiper')));
+    await t.pumpAndSettle();
+    expect(api.calls.last, 'deter A wiper true 10.0');
+    await _open(t, FakeApi('guard'));
+    expect(find.byKey(const Key('ptz-right')), findsNothing);
+  });
 }

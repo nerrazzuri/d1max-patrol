@@ -378,3 +378,37 @@ async def test_W41_代理按狗此刻的位置把人放到图上_落在忽略区
     rt._zones = ZoneSet.from_wire({"map_id": "m", "map_version": "2", "revision": 1, "zones": [
         {"id": "ex", "kind": "ignore", "polygon": [[0, 3], [2, 3], [2, 5], [0, 5]]}]})
     assert not rt._person_ignored(0.0, 3.0), "区域不是这张图的:不忽略"
+
+
+def test_POC1106_看见人的方向_没测到距离也给_没人是None():
+    """竞品云台对准(POC 11-06):确认看到人就给方向,测没测到距离都行(target 要距离)。"""
+    c, ev, v = _台()
+    assert v.bearing() is None
+    for _ in range(3):
+        v.on_persons(_帧(None, camera="front"))
+    assert v.target() is None and v.bearing() == 5.0
+    v.on_disconnect()
+    assert v.bearing() is None
+
+
+async def test_POC1106_runtime_看见人_云台转过去():
+    """runtime 把 person_seen 接到上装命令台的 aim_at(其他事件照发、不转)。"""
+    import asyncio
+    from types import SimpleNamespace
+
+    from nexwar_agent.runtime import AgentRuntime
+    c, ev, v = _台()
+    aims: list = []
+
+    async def aim_at(b):
+        aims.append(b)
+    rt = AgentRuntime.__new__(AgentRuntime)
+    rt.events = SimpleNamespace(emit=lambda k, d: ev.append((k, d)))
+    rt.person_view = v
+    rt.deter = SimpleNamespace(aim_at=aim_at)
+    v._emit = rt._on_person_event
+    for _ in range(3):
+        v.on_persons(_帧(4.0, camera="front"))
+    await asyncio.sleep(0)
+    assert ("person_seen", {"count": 1, "nearest_m": 4.0}) in ev
+    assert aims == [5.0]

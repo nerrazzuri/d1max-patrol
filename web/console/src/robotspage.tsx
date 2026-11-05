@@ -380,6 +380,9 @@ function Controls({ r, role, say, onChanged }: { r: RobotCard; role: string; say
   );
 }
 
+/** POC 11-06 竞品云台:每按一下转多少度、角度上限(跟 nexwar_contract.deter 一致)、雨刷刷多久。 */
+const PAN_STEP = 15, TILT_STEP = 10, PAN_MAX = 180, TILT_MAX = 90, WIPER_S = 10;
+
 /** POC 11-05:警灯开关(带时长)、喊话(打字、录好的话术)。保安、管理员;狗报了 deter 才有。 */
 function DeterPanel({ r, d, id, busy, off, send, path }: {
   r: RobotCard; d: Deter; id: string; busy: boolean; off: boolean;
@@ -392,6 +395,15 @@ function DeterPanel({ r, d, id, busy, off, send, path }: {
   const strobe = d.outputs.includes("strobe");
   const speaker = d.outputs.includes("speaker");
   const words = text.trim();
+  // POC 11-06 竞品云台:没有回读角度,按「上次按到哪」算(看见人自己转过去以后,先点回正再调)
+  const [aim, setAim] = useState<[number, number]>([0, 0]);
+  useEffect(() => setAim([0, 0]), [r.robot_id]);
+  const turn = (dp: number, dt: number) => {
+    const pan = dp === 0 && dt === 0 ? 0 : Math.max(-PAN_MAX, Math.min(PAN_MAX, aim[0] + dp));
+    const tilt = dp === 0 && dt === 0 ? 0 : Math.max(-TILT_MAX, Math.min(TILT_MAX, aim[1] + dt));
+    setAim([pan, tilt]);
+    void send(deter({ output: "ptz", on: true, pan, tilt }), t("rdPtzDone", { id, pan, tilt }));
+  };
   return (
     <div class="rd-name rd-deter">
       <span class="rd-label">{t("rdDeter")}</span>
@@ -404,6 +416,19 @@ function DeterPanel({ r, d, id, busy, off, send, path }: {
             onClick={() => void send(deter({ output: "strobe", on: true, max_s: secs }), t("rdStrobeOnDone", { id, s: secs }))}>{t("rdStrobeOn")}</button>
           <button type="button" class="btn sm" disabled={busy || off}
             onClick={() => void send(deter({ output: "strobe", on: false }), t("rdStrobeOffDone", { id }))}>{t("rdStrobeOff")}</button>
+        </div>
+      )}
+      {d.outputs.includes("ptz") && (
+        <div class="rd-actions rd-ptz" aria-label={t("rdPtz")}>
+          <button type="button" class="btn sm" disabled={busy || off} onClick={() => turn(-PAN_STEP, 0)}>{t("rdPtzLeft")}</button>
+          <button type="button" class="btn sm" disabled={busy || off} onClick={() => turn(PAN_STEP, 0)}>{t("rdPtzRight")}</button>
+          <button type="button" class="btn sm" disabled={busy || off} onClick={() => turn(0, -TILT_STEP)}>{t("rdPtzUp")}</button>
+          <button type="button" class="btn sm" disabled={busy || off} onClick={() => turn(0, TILT_STEP)}>{t("rdPtzDown")}</button>
+          <button type="button" class="btn sm" disabled={busy || off} onClick={() => turn(0, 0)}>{t("rdPtzCenter")}</button>
+          {d.outputs.includes("wiper") && (
+            <button type="button" class="btn sm" disabled={busy || off}
+              onClick={() => void send(deter({ output: "wiper", on: true, max_s: WIPER_S }), t("rdWiperDone", { id, s: WIPER_S }))}>{t("rdWiper")}</button>
+          )}
         </div>
       )}
       {speaker && d.tts && (

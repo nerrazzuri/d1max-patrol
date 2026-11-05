@@ -351,5 +351,13 @@
   "guard_prep": {
     "en": "Charge before arming",
     "zh": "布防前先补能"
+  },
+  "payload_sos": {
+    "en": "Help button pressed on site",
+    "zh": "现场有人按了求助按钮"
+  },
+  "payload_estop": {
+    "en": "Payload e-stop pressed",
+    "zh": "上装急停按钮被按下"
   }
 }

@@ -27,6 +27,7 @@ _HELP = ("stuck", "nav_blocked", "fallen", "force_flipped", "deter_cornered", "b
          "schedule_missed", "battery_swap", "standby_failed", "lease_expired", "suspend_stale",
          "board_overheat",
          "deter_failed",                       # POC 11-05:那句没喊出去
+         "payload_sos", "payload_estop",       # POC 11-06:上装的求助、急停按钮
          "zone_unwatched", "guard_stuck",      # W73:防区没人看 —— 保安盯摄像头或人去
          "swap_soon", "swap_needed", "guard_prep",   # W73 第四期:保安换电池 / 布防前先补能
          "swap_stuck")                         # 外审 r3:拔着电池还在走

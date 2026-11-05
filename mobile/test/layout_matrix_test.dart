@@ -211,6 +211,12 @@ final _pages = <String, Widget Function()>{
   'deterrence settings': () => SiteDeterrencePage(api: FakeApi('admin'), robotId: 'A'),
   'deter': () => SiteDeterPage(api: FakeApi('guard'), robotId: 'A',
       caps: const <String, dynamic>{'light': true, 'siren': true, 'tts': true}),
+  'deter ptz': () => SiteDeterPage(api: FakeApi('guard'), robotId: 'A', caps: const <String, dynamic>{
+        'outputs': <String>['strobe', 'wiper', 'ptz', 'speaker'],
+        'clips': <String>['blocked', 'restricted'],
+        'tts': true,
+        'max_s': 600.0,
+      }), // POC 11-06 竞品云台、雨刷
   'cameras': () => SiteCamerasPage(api: FakeApi('admin')),
   'recordings': () => SiteRecordingsPage(api: FakeApi('guard'), robotId: 'A'),
 };

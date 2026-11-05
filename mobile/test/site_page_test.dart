@@ -354,9 +354,10 @@ class FakeApi implements SiteApi {
   Map<String, dynamic> deterAck = <String, dynamic>{'result': 'accepted'};
   @override
   Future<Map<String, dynamic>> deter(String robotId, String output, bool on,
-      {double? maxS, String? clip, String? side, String? color}) async {
+      {double? maxS, String? clip, String? side, String? color, double? pan, double? tilt}) async {
     calls.add('deter $robotId $output $on${maxS == null ? '' : ' $maxS'}${clip == null ? '' : ' $clip'}'
-        '${side == null ? '' : ' side=$side'}${color == null ? '' : ' color=$color'}');
+        '${side == null ? '' : ' side=$side'}${color == null ? '' : ' color=$color'}'
+        '${pan == null ? '' : ' pan=$pan'}${tilt == null ? '' : ' tilt=$tilt'}');
     return <String, dynamic>{'ack': deterAck};
   }
   /// 天气（W29）：默认用真站点的夹具（手动切成下雨）；切记在 [calls] 里。

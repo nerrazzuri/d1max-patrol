@@ -326,6 +326,37 @@ describe("W71 Nav2 没起来", () => {
     expect(c3.querySelector(".rd-deter")).toBeNull();
   });
 
+  it("POC 11-06 云台、雨刷:报了才有;方向键按步转、到头不超;回正;雨刷开 10 秒", async () => {
+    robots[0] = card({ deter: { outputs: ["strobe", "wiper", "ptz"], max_s: 600, tts: false, clips: [] } });
+    const { container: c } = render(<RobotsPage say={(s) => said.push(s)} now={NOW} role="guard" />);
+    await waitFor(() => expect(cardOf(c, "A")).not.toBeNull());
+    fireEvent.click(cardOf(c, "A"));
+    const d = c.querySelector(".robot-detail")!;
+    const last = () => posted.filter((p) => p.url === "/api/robots/A/deter").at(-1)?.body;
+    fireEvent.click(btn(d, "向右"));
+    await waitFor(() => expect(last()).toEqual({ output: "ptz", on: true, pan: 15, tilt: 0 }));
+    await waitFor(() => expect(btn(d, "向下").disabled).toBe(false));
+    fireEvent.click(btn(d, "向下"));
+    await waitFor(() => expect(last()).toEqual({ output: "ptz", on: true, pan: 15, tilt: 10 }));
+    await waitFor(() => expect(btn(d, "回正").disabled).toBe(false));
+    fireEvent.click(btn(d, "回正"));
+    await waitFor(() => expect(last()).toEqual({ output: "ptz", on: true, pan: 0, tilt: 0 }));
+    for (let i = 0; i < 10; i++) {
+      await waitFor(() => expect(btn(d, "向上").disabled).toBe(false));
+      fireEvent.click(btn(d, "向上"));
+    }
+    await waitFor(() => expect(last()).toEqual({ output: "ptz", on: true, pan: 0, tilt: -90 }));
+    await waitFor(() => expect(btn(d, "雨刷").disabled).toBe(false));
+    fireEvent.click(btn(d, "雨刷"));
+    await waitFor(() => expect(last()).toEqual({ output: "wiper", on: true, max_s: 10 }));
+    cleanup();
+    robots[0] = card({ deter: { outputs: ["strobe"], max_s: 600, tts: false, clips: [] } });
+    const { container: c2 } = render(<RobotsPage say={(s) => said.push(s)} now={NOW} role="guard" />);
+    await waitFor(() => expect(cardOf(c2, "A")).not.toBeNull());
+    fireEvent.click(cardOf(c2, "A"));
+    expect(c2.querySelector(".rd-ptz")).toBeNull();
+  });
+
   it("POC 姿态:报了才显示;点了先确认再发;有任务在跑灰掉写原因;经理看不到", async () => {
     robots[0] = card({ postures: ["stand", "lie", "crawl"], task: null });
     const { container: c } = render(<RobotsPage say={(s) => said.push(s)} now={NOW} role="guard" />);

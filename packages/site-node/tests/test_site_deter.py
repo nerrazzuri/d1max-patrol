@@ -199,3 +199,26 @@ def test_POC1105_竞品主控连不上_开当场409说清楚_关照发(站点):
     assert not s.dog.deter_on("siren")
     code, d = s.req("POST", "/api/robots/A/deter", {"output": "siren", "on": False}, token=gina)
     assert code == 200, d
+
+
+def test_POC1106_云台角度带到派遣器_没云台的狗回409(站点):
+    s = 站点
+    gina = _登(s, "gina")
+    _新鲜(s, gina)
+    body = {"output": "ptz", "on": True, "pan": 30, "tilt": -5}
+    code, d = s.req("POST", "/api/robots/A/deter", body, token=gina)
+    assert code == 409 and "ptz" in str(d), "仿真狗没云台"
+    got: list = []
+    real = s.disp.deter
+
+    async def deter(rid, payload, **kw):
+        got.append(payload)
+        return {"ack": {"result": "accepted"}}
+    s.disp.deter = deter
+    try:
+        assert s.req("POST", "/api/robots/A/deter", body, token=gina)[0] == 200
+    finally:
+        s.disp.deter = real
+    assert got == [body]
+    assert s.req("POST", "/api/robots/A/deter", {"output": "ptz", "on": True, "pan": 999},
+                 token=gina)[0] == 400
