@@ -328,6 +328,10 @@
     "en": "Zone route keeps failing",
     "zh": "防区路线连着跑不成"
   },
+  "person_overdue": {
+    "en": "Person detected, no guard on site",
+    "zh": "发现人员无人到场"
+  },
   "swap_soon": {
     "en": "Battery swap coming up",
     "zh": "即将换电"

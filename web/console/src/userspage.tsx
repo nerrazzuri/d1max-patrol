@@ -41,7 +41,7 @@ export function leftText(until: number, now: number): string {
 /** 审计里的动作翻成人话;认不得的原样。 */
 const ACTIONS: [RegExp, string][] = [
   [/^login/, "actLogin"], [/^POST \/api\/logout/, "actLogout"], [/^POST \/api\/mode$/, "actMode"],
-  [/^POST \/api\/alerts\/.+\/resolve$/, "actResolve"], [/^POST \/api\/alerts\/.+\/ack$/, "actAck"],
+  [/^POST \/api\/alerts\/.+\/resolve$/, "actResolve"], [/^POST \/api\/alerts\/.+\/ack$/, "actAck"], [/^POST \/api\/alerts\/.+\/arrive$/, "actArrive"],
   [/^POST \/api\/robots\/[^/]+\/(goto|patrol)$/, "actDispatch"], [/^POST \/api\/robots\/[^/]+\/halt$/, "actHalt"],
   [/^POST \/api\/accounts\/engineer$/, "actEngineer"], [/^POST \/api\/accounts/, "actAccounts"],
   [/^POST \/api\/lists\/authorizations/, "actAuthz"], [/^POST \/api\/arming\//, "actSchedule"],

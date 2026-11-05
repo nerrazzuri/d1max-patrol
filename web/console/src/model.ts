@@ -30,6 +30,13 @@ export interface Alert {
     where?: string;
     persons?: { count?: number; nearest_m?: number };
     pose?: { map_id: string; map_version: string; x: number; y: number };
+    /** W74:最后看见人时机器人在哪(看得见时每 5 秒更新)。 */
+    last_seen?: { map_id: string; map_version: string; x: number; y: number; at_ms?: number };
+    /** W74:看不到人了(去向不明)的时刻;又看见了是 null。 */
+    lost_ms?: number | null;
+    /** W74:谁、几点点了「已到场」(看见人那一类要先到场才能关)。 */
+    arrived_by?: string;
+    arrived_ms?: number;
   };
 }
 

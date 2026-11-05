@@ -42,14 +42,16 @@ void _english() {
 
 final _t0 = DateTime(2026, 10, 11, 2, 14, 36).millisecondsSinceEpoch;
 
-Alert _p1({String? ackedBy, int? ackedMs, int? resolvedMs, String level = 'P1'}) =>
+Alert _p1({String? ackedBy, int? ackedMs, int? resolvedMs, String level = 'P1', bool arrived = false}) =>
     Alert.fromWire(<String, dynamic>{
       'key': 'A/dog_sees_person#1', 'level': level, 'kind': 'dog_sees_person', 'robot': 'A',
       'title': '机器人看见人了:1 个人,最近 6.2 m', 'detail': '布防中', 'count': 1,
       'first_ms': _t0, 'last_ms': _t0,
       'acked_by': ackedBy ?? '', 'acked_ms': ackedMs, 'resolved_ms': resolvedMs,
       'context': <String, dynamic>{'zone': 'East wall',
-        'persons': <String, dynamic>{'count': 1, 'nearest_m': 6.2}}});
+        'persons': <String, dynamic>{'count': 1, 'nearest_m': 6.2},
+        // W74：看见人要保安点过「已到场」才能关
+        if (arrived) ...<String, dynamic>{'arrived_by': 'alice', 'arrived_ms': _t0 + 1000}}});
 
 Map<String, dynamic> _session(
         {int level = 1,
@@ -62,10 +64,11 @@ Map<String, dynamic> _session(
       // 老站点不发这两样
       if (active != null) ...<String, dynamic>{'active': active, 'outputs': outputs}};
 
-Alert _p1b() => Alert.fromWire(<String, dynamic>{
+Alert _p1b({bool arrived = false}) => Alert.fromWire(<String, dynamic>{
       'key': 'B/dog_sees_person#7', 'level': 'P1', 'kind': 'dog_sees_person', 'robot': 'B', 'title': 't',
       'first_ms': _t0, 'last_ms': _t0, 'acked_by': '', 'acked_ms': null, 'resolved_ms': null,
-      'context': <String, dynamic>{'zone': 'North gate'}});
+      'context': <String, dynamic>{'zone': 'North gate',
+        if (arrived) ...<String, dynamic>{'arrived_by': 'bob', 'arrived_ms': _t0 + 1000}}});
 
 /// 确认、跳级的回包扣在手里，测试自己放（或者让它失败）。
 class _Held extends FakeApi {
@@ -363,7 +366,7 @@ void main() {
           home: Builder(
               builder: (c) => TextButton(
                   onPressed: () => Navigator.push(c,
-                      MaterialPageRoute<void>(builder: (_) => SiteAlertScenePage(api: api, alert: _p1()))),
+                      MaterialPageRoute<void>(builder: (_) => SiteAlertScenePage(api: api, alert: _p1(arrived: true)))),
                   child: const Text('open')))));
       await t.tap(find.text('open'));
       await t.pumpAndSettle();
@@ -408,7 +411,7 @@ void main() {
       expect(find.text('Nearest person 6.2 m from A. Deterrence level 1.'), findsOneWidget);
       expect(find.text("I'll handle it"), findsOneWidget);
       expect(find.text('Sound siren (level 3)'), findsOneWidget);
-      expect(find.text('Talk: not available'), findsOneWidget);
+      expect(find.text("I'm on site"), findsOneWidget, reason: 'W74：看见人第四个位置是已到场');
       expect(find.text('布防中'), findsOneWidget);
       await t.pumpWidget(Container());
     });
@@ -666,7 +669,7 @@ void main() {
 
     testWidgets('I3 上一条的「记成误报？」还开着就换了告警：对话框收掉，谁都不关', (t) async {
       final api = FakeApi('guard');
-      await _alarm(t, api, _p1());
+      await _alarm(t, api, _p1(arrived: true));
       await t.ensureVisible(find.byKey(SiteAlertScenePage.falseKey));
       await t.tap(find.byKey(SiteAlertScenePage.falseKey));
       await t.pumpAndSettle();
@@ -674,7 +677,7 @@ void main() {
       await t.pumpWidget(MaterialApp(
           theme: nwTheme(Brightness.dark),
           home: SiteAlertScenePage(
-              api: api, alert: _p1b(), now: () => DateTime.fromMillisecondsSinceEpoch(_t0 + 42000))));
+              api: api, alert: _p1b(arrived: true), now: () => DateTime.fromMillisecondsSinceEpoch(_t0 + 42000))));
       await t.pumpAndSettle();
       expect(find.byKey(SiteAlertScenePage.falseGoKey), findsNothing, reason: '问的是上一条');
       expect(find.byType(SiteAlertScenePage), findsOneWidget);

@@ -456,3 +456,40 @@ def test_复查P212_冒充的代理_不知道密钥_什么也收不到_外参也
     _t.sleep(0.2)
     assert fake.raw == [] and frames == []
     link.close()
+
+
+
+def test_W74_留证_看到人的头3分钟每3秒一张_之后10秒_前后相机各拍各的(tmp_path):
+    """W74 一期:看见人以后每 3 秒拍一张,前后相机各拍各的。商场白天一直有人:同一台相机连着看到人
+    满 3 分钟以后退回 10 秒一张(量不涨);断开 20 秒以上没看到人,再看到重新算头 3 分钟。"""
+    s0 = Settings()
+    assert (s0.snapshot_every_s, s0.snapshot_slow_s, s0.snapshot_burst_s, s0.snapshot_gap_s) \
+        == (3.0, 10.0, 180.0, 20.0)
+    c = 钟()
+    det = 假检测器([Box(860, 300, 1060, 900, 0.88)])
+    n = PersonNode(det, snapshot_dir=tmp_path, monotonic=c, wall_ns=lambda: 1_791_000_000 * 10**9)
+
+    def 拍(cam):
+        return _过契约(n.on_image(cam, b"\xff\xd8x\xff\xd9", 1)).snapshot != ""
+    t0 = c.t
+    assert 拍("front") and 拍("back"), "后相机不被前相机的计时挡"
+    c.t += 2
+    assert not 拍("front"), "同一台 3 秒内不再拍"
+    c.t += 1.1
+    assert 拍("front")
+    张 = []
+    while c.t < t0 + 240:                                # 一直有人:每秒一帧
+        c.t += 1.0
+        张.append((c.t - t0, 拍("front")))
+    头 = sum(ok for t, ok in 张 if t < 60)
+    后 = sum(ok for t, ok in 张 if 190 <= t < 240)
+    assert 17 <= 头 <= 21, f"头 1 分钟 3 秒一张:{头}"
+    assert 4 <= 后 <= 5, f"连着看到人满 3 分钟以后退回 10 秒一张:{后}"
+    det.boxes = []                                       # 人走了 21 秒
+    for _ in range(21):
+        c.t += 1.0
+        n.on_image("front", b"x", 1)
+    det.boxes = [Box(860, 300, 1060, 900, 0.88)]
+    assert 拍("front")
+    c.t += 3.1
+    assert 拍("front"), "又来了:重新算头 3 分钟,3 秒一张"

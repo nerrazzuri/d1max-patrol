@@ -57,6 +57,30 @@ def inside(x: float, y: float, pts: list[list[float]]) -> bool:
     return hit
 
 
+#: 两个防区的边界相距这么近(米)算相邻(W74:恢复值守后最后位置所在的防区和相邻防区加密巡查)。
+NEIGHBOUR_M = 3.0
+
+
+def _seg_dist(p: list[float], a: list[float], b: list[float]) -> float:
+    ax, ay = a
+    dx, dy = b[0] - ax, b[1] - ay
+    L = dx * dx + dy * dy
+    t = 0.0 if L == 0 else max(0.0, min(1.0, ((p[0] - ax) * dx + (p[1] - ay) * dy) / L))
+    return math.hypot(p[0] - ax - t * dx, p[1] - ay - t * dy)
+
+
+def poly_dist(a: list[list[float]], b: list[list[float]]) -> float:
+    """两个多边形之间最近的距离(米);一个的点在另一个里面(重叠)算 0。"""
+    if any(inside(x, y, b) for x, y in a) or any(inside(x, y, a) for x, y in b):
+        return 0.0
+    best = math.inf
+    for P, Q in ((a, b), (b, a)):
+        for p in P:
+            for i in range(len(Q)):
+                best = min(best, _seg_dist(p, Q[i - 1], Q[i]))
+    return best
+
+
 class AreaBook:
     def __init__(self, db: SiteDB, *, now_ms: Any) -> None:
         self.db = db
@@ -88,6 +112,16 @@ class AreaBook:
             if inside(x, y, a["points"]):
                 return a["zone"]
         return None
+
+    def neighbours(self, map_id: str, version: str, zone: str,
+                   within_m: float = NEIGHBOUR_M) -> list[str]:
+        """这个防区和跟它相邻的(边界相距 ``within_m`` 以内),它自己排第一个,别的按名字。"""
+        areas = {a["zone"]: a["points"] for a in self.list(map_id, version)}
+        me = areas.get(zone)
+        if me is None:
+            return [zone]
+        return [zone] + [z for z, pts in areas.items()
+                         if z != zone and poly_dist(me, pts) <= within_m]
 
     def zones(self) -> list[str]:
         rows = self.db.query("SELECT DISTINCT zone FROM zone_areas ORDER BY zone")

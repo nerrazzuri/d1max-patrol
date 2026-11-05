@@ -603,6 +603,11 @@ class FakeApi implements SiteApi {
     calls.add('resolve $key');
     return _acked(key);
   }
+  @override
+  Future<Map<String, dynamic>> arriveAlert(String key) async {
+    calls.add('arrive $key');
+    return <String, dynamic>{};
+  }
 
   /// 站点回的是**问的那一条**确认之后的样子（真站点的夹具，换成问的那一条、确认人是登录的这个人）。
   Map<String, dynamic> _acked(String key) {

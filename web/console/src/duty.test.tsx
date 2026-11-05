@@ -113,6 +113,37 @@ describe("值班页的报警横幅", () => {
   });
 });
 
+describe("W74 看见人:到场才能关", () => {
+  const seen = (ctx: Record<string, unknown> = {}) => alert({
+    key: "p1", kind: "dog_sees_person", title: "机器人看见人了",
+    context: { zone: "北区", last_seen: { map_id: "m", map_version: "1", x: 5, y: 6, at_ms: 1000 }, ...ctx } as never,
+  });
+
+  it("没到场:有已到场,点了发 arrive;确认有人、误报都不出", async () => {
+    const { container: c } = page([seen()]);
+    const b = c.querySelector(".banner")!;
+    expect(btn(b, "确认有人")).toBeUndefined();
+    expect(btn(b, "误报")).toBeUndefined();
+    expect(b.textContent).toContain("到场后才能关");
+    fireEvent.click(btn(b, "已到场")!);
+    await waitFor(() => expect(posts).toContainEqual({ url: "/api/alerts/p1/arrive", body: {} }));
+  });
+
+  it("到场了:写谁到场,能确认有人、误报", () => {
+    const { container: c } = page([seen({ arrived_by: "张三", arrived_ms: 900 })]);
+    const b = c.querySelector(".banner")!;
+    expect(b.textContent).toContain("张三 已到场");
+    expect(btn(b, "已到场")).toBeUndefined();
+    expect(btn(b, "确认有人")).toBeDefined();
+    expect(btn(b, "误报")).toBeDefined();
+  });
+
+  it("去向不明写在横幅上", () => {
+    const { container: c } = page([seen({ lost_ms: 900 })]);
+    expect(c.querySelector(".banner")!.textContent).toContain("去向不明");
+  });
+});
+
 describe("值班页的地图", () => {
   const META = { width: 100, height: 100, m_per_px: 0.05, left_x: 0, top_y: 5 };
   const onMap = (state: RobotState = "patrolling") => unit("A", state, {
