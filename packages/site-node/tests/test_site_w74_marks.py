@@ -75,7 +75,7 @@ def test_外审r2_7_每条线记最后确定在哪一边_从线的延长线附�
     hits = [标.track("m", "1", last, p) for p in seq]
     assert hits[:2] == [None, None]
     assert hits[2] is not None and hits[2][0]["name"] == "门", hits
-    assert hits[2][1] == (1.4, 0.8), "越线那一段从最后一个确定在哪一边的点算起"
+    assert hits[2][1:] == ((1.4, 0.2), (-1.0, -0.4)), "回的是实际穿过门的那一段"
     last = {}
     assert [标.track("m", "1", last, p) for p in [(1.5, 1.0), (1.5, -1.0)]] == [None, None], \
         "从线段端点外面绕过去:不算"
@@ -96,6 +96,29 @@ def test_外审r3_3_误差带里的点也算轨迹_按实际走的折线判越�
     assert [标.track("m", "1", last, p) for p in [(0, 0.8), (1.5, 0.2), (1.5, -0.2),
                                                   (0, -0.8)]] == [None] * 4, \
         "从门的端点外面绕过去(两头连起来的直线虽然穿过门):不算"
+
+
+def test_外审r4_2_在线上待很久_折线不截断_照样分清穿门还是绕过(标):
+    标.set("m", "1", {"kind": "exit", "name": "门", "points": [[-1, 0], [1, 0]]}, by="g")
+    last: dict = {}
+    seq = [(1.4, .8), (.6, .2), (.6, -.2), *[(1.4, -.2)] * 51, (1.4, -.8)]
+    hits = [标.track("m", "1", last, p) for p in seq]
+    assert hits[-1] is not None and not any(hits[:-1]), "穿过了门(在线上待了很久)"
+    last = {}
+    seq = [(0, .8), (1.5, .2), (1.5, -.2), *[(0, -.2)] * 51, (0, -.8)]
+    assert not any(标.track("m", "1", last, p) for p in seq), "绕过端点(在线上待了很久)"
+    last = {}
+    seq = [(0, .8), (0, .2), (0, -.2), (0, .2), (1.5, .2), (1.5, -.2), (1.5, -.8)]
+    assert not any(标.track("m", "1", last, p) for p in seq), "穿过去又穿回来、再绕过端点:不算"
+
+
+def test_外审r4_3_回线内的位置按实际穿门的那一段算(标):
+    m = 标.set("m", "1", {"kind": "exit", "name": "大门", "points": [[-30, 0], [30, 0]]}, by="g")
+    last: dict = {}
+    hits = [标.track("m", "1", last, p) for p in [(31, .8), (29, .2), (29, -.2), (31, -.8)]]
+    mark, a, b = hits[-1]
+    x, y, _ = inside_pose(m, a, b)
+    assert abs(x - 29.0) < 1e-6 and abs(y - 3.0) < 1e-6, (x, y)
 
 
 def test_出口线内3米_朝出口(标):
