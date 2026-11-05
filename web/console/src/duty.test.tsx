@@ -142,6 +142,16 @@ describe("W74 看见人:到场才能关", () => {
     const { container: c } = page([seen({ lost_ms: 900 })]);
     expect(c.querySelector(".banner")!.textContent).toContain("去向不明");
   });
+
+  it("W74 二期:机器人在跟、跟丢了最后在哪", () => {
+    const { container: c } = page([seen({ follow: "follow", person: { x: 1, y: 2, at_ms: 900 } })]);
+    expect(c.querySelector(".banner")!.textContent).toContain("机器人正跟着这个人");
+    cleanup();
+    const { container: d } = page([seen({ follow: "lost", lost_ms: 900, person: { x: 1, y: 2, at_ms: 900, where: "东门附近" } })]);
+    const b = d.querySelector(".banner")!.textContent!;
+    expect(b).toContain("最后在 东门附近");
+    expect(b).not.toContain("正跟着");
+  });
 });
 
 describe("值班页的地图", () => {

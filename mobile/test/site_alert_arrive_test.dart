@@ -73,6 +73,25 @@ void main() {
     expect((marks.first.x, marks.first.y), (5.0, 6.0));
   });
 
+  testWidgets('W74 二期：在跟写「正跟着」；跟丢了写最后在哪，图上标人最后的位置', (t) async {
+    await _tall(t);
+    final api = FakeApi('guard');
+    await t.pumpWidget(MaterialApp(
+        home: SiteAlertScenePage(api: api, alert: _person(extra: <String, dynamic>{
+      'follow': 'follow', 'person': <String, dynamic>{'x': 7.0, 'y': 8.0, 'at_ms': 3000}}))));
+    await t.pumpAndSettle();
+    expect(find.textContaining('机器人正跟着这个人'), findsOneWidget);
+    final lost = _person(extra: <String, dynamic>{
+      'follow': 'lost', 'lost_ms': 4000,
+      'person': <String, dynamic>{'x': 7.0, 'y': 8.0, 'at_ms': 3500, 'where': '东门附近'}});
+    await t.pumpWidget(MaterialApp(home: SiteAlertScenePage(api: api, alert: lost)));
+    await t.pumpAndSettle();
+    expect(find.textContaining('机器人正跟着这个人'), findsNothing);
+    expect(find.textContaining('跟丢了，人最后在 东门附近'), findsOneWidget);
+    final (_, _, marks) = sceneMarks(lost)!;
+    expect(marks.map((m) => (m.x, m.y)), contains((7.0, 8.0)));
+  });
+
   testWidgets('别的告警照旧：我来处理、误报', (t) async {
     await _tall(t);
     final api = FakeApi('guard');

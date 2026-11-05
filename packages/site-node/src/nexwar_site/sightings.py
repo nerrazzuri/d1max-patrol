@@ -65,6 +65,9 @@ class PersonWatch:
         self.alerts: Any = None
         #: 每台最后一次记最后位置的时刻(内存;站点重启了下一拍重记)。
         self._tracked: dict[str, int] = {}
+        #: W74 二期:地图上一个点在哪(命名区域、没命名用防区名;``{map_id, map_version, x, y}``)。
+        #: 站点主程序接上;没接就不说。
+        self.where_of: Callable[[dict[str, Any]], str | None] | None = None
         reg = getattr(dispatcher, "on_event", None)
         if callable(reg):
             reg(self.on_event)
@@ -87,6 +90,9 @@ class PersonWatch:
                           "at_ms": int(last.get("at_ms") or self._now())}
                 if _num(d.get("heading_deg")):
                     person["heading_deg"] = float(d["heading_deg"])
+                where = self._place(rid, person)
+                if where:
+                    person["where"] = where
                 ctx["person"] = person
             pts = d.get("points")
             if isinstance(pts, list) and pts:
@@ -168,6 +174,18 @@ class PersonWatch:
         self._overdue(now)
 
     # ------------------------------------------------------------ W74 一期
+
+    def _place(self, rid: str, p: dict[str, Any]) -> str | None:
+        c = self.dispatcher.clients.get(rid)
+        pose = c.telemetry.pose if c is not None and c.telemetry is not None else None
+        if self.where_of is None or pose is None:
+            return None
+        try:
+            return self.where_of({"map_id": pose.map_id, "map_version": pose.map_version,
+                                  "x": p["x"], "y": p["y"]})
+        except Exception:
+            log.exception("%s 人在哪说不出来", rid)
+            return None
 
     def _open(self, rid: str) -> Any:
         """这台还开着的那条 P1(告警台不支持就 ``None``:按老规矩,人走了就清)。"""

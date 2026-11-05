@@ -86,6 +86,12 @@ class SiteAlertScenePage extends StatefulWidget {
   }
 
   add(pose, a.robot == 'site' ? tr('Robot', '机器人') : tr('Robot ${a.robot}', '机器人 ${a.robot}'), Colors.red);
+  // W74 二期：人最后在哪（机器人跟人时算的，跟机器人同一张图）
+  final person = ctx['person'];
+  if (person is Map && mapId != null) {
+    add(<String, dynamic>{'map_id': mapId, 'map_version': version, ...person.cast<String, dynamic>()},
+        tr('Person last seen', '人最后在这'), Colors.orange);
+  }
   if (point is Map) add(point, tr('Intercept point ${point['name'] ?? ''}', '拦截点 ${point['name'] ?? ''}'), Colors.purple);
   if (marks.isEmpty) return null;
   return (mapId!, version!, marks);
@@ -683,6 +689,18 @@ class _SiteAlertScenePageState extends State<SiteAlertScenePage> {
     final lost = _a.context['lost_ms'];
     if (lost is num) {
       rows.add((lost.toInt(), tr('Person no longer seen: whereabouts unknown.', '看不到人了，去向不明。')));
+    }
+    // W74 二期：机器人在跟 / 跟丢了（人最后在哪）
+    final follow = _a.context['follow'];
+    final person = _a.context['person'] is Map ? _a.context['person'] as Map : null;
+    final pAt = person?['at_ms'] is num ? (person!['at_ms'] as num).toInt() : _a.lastMs;
+    if (follow == 'follow') {
+      rows.add((pAt, tr('The robot is following this person.', '机器人正跟着这个人。')));
+    } else if (follow == 'lost' || follow == 'limit') {
+      final w = person?['where'] is String ? person!['where'] as String : '';
+      rows.add((pAt, w.isEmpty
+          ? tr('Robot stopped following.', '机器人不跟了，回到人最后出现的地方。')
+          : tr('Lost the person, last seen near $w.', '跟丢了，人最后在 $w。')));
     }
     final arrivedMs = _a.context['arrived_ms'] is num
         ? (_a.context['arrived_ms'] as num).toInt()

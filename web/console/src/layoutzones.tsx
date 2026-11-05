@@ -1,12 +1,13 @@
 // 布置 → 防区(W44 第三期,设计 §5.2):在图上点几下圈一块、起名;选中一个,勾哪些摄像头归它管(存的是摄像头的防区);
 // 布防时间跳「布防时间」页;删要确认。改的都先记在页面上,外框的「保存」一起存(防区多边形一条条存,摄像头改防区不动口令)。
 // W73:每个防区的查看点(出事去哪看)、值守位(布防空档站哪儿盯)画在图上;站点自动选,选中防区能挪、能恢复自动。
+// W74 三期:出口线(点两头)、易藏点(点站的位置、再点朝哪看)也画在这里,一起存。
 import { useEffect, useRef, useState } from "preact/hooks";
 import { api } from "./api";
 import { Confirm, Modal } from "./dialogs";
 import { clickGuard, startDrag, swallowClick } from "./dragpt";
 import { t } from "./i18n";
-import { polyPx, toMap, type Area, type CamRow, type TabProps, type ZonePost } from "./layoutpage";
+import { polyPx, toMap, type Area, type CamRow, type MapMark, type TabProps, type ZonePost } from "./layoutpage";
 import type { Pt } from "./mapview";
 import { PoseMarker } from "./posemarker";
 import { clientToMap, handleAt, yawToward } from "./routes";
@@ -27,8 +28,12 @@ export function ZonesTab(p: TabProps) {
   const [placing, setPlacing] = useState<"view" | "watch" | null>(null);
   const root = useRef<HTMLDivElement>(null);
   const guard = useRef(clickGuard());
+  // W74 三期:出口线、易藏点(改的先记在页面上);正在画的那一条
+  const [marks, setMarks] = useState<MapMark[]>(p.data.marks ?? []);
+  const [markDraft, setMarkDraft] = useState<{ kind: MapMark["kind"]; pts: Pt[] } | null>(null);
 
   const changed = JSON.stringify(areas) !== JSON.stringify(p.data.areas)
+    || JSON.stringify(marks) !== JSON.stringify(p.data.marks ?? [])
     || p.data.cameras.some((c) => camZone[c.name] !== undefined && camZone[c.name] !== c.zone)
     || Object.keys(postEdit).length > 0;
   useEffect(() => p.setDirty(changed), [changed]);
@@ -46,11 +51,14 @@ export function ZonesTab(p: TabProps) {
       for (const [z, pair] of Object.entries(postEdit)) {
         if (now.has(z)) await api("POST", `${p.base}/areas`, { zone: z, posts: pair });
       }
+      const keep = new Set(marks.map((m) => m.id).filter(Boolean));
+      for (const m of p.data.marks ?? []) if (m.id && !keep.has(m.id)) await api("POST", `${p.base}/areas`, { mark_id: m.id, remove: true });
+      for (const m of marks) if (!m.id) await api("POST", `${p.base}/areas`, { mark: { kind: m.kind, name: m.name, points: m.points, yaw: m.yaw } });
       await p.reload("areas");
       await p.reload("cameras");
     });
     return () => p.registerSave(null);
-  }, [areas, camZone, postEdit]);
+  }, [areas, camZone, postEdit, marks]);
 
   const cur = areas.find((a) => a.zone === sel) ?? null;
   const serverPost = (z: string) => p.data.posts.find((x) => x.zone === z);
@@ -66,6 +74,7 @@ export function ZonesTab(p: TabProps) {
     return x?.view && x.watch ? { view: x.view, watch: x.watch } : null;
   };
   function pick(px: number, py: number) {
+    if (markDraft) { setMarkDraft({ ...markDraft, pts: [...markDraft.pts, toMap(p.meta, px, py)] }); return; }
     if (draft) { setDraft((d) => (d ? [...d, toMap(p.meta, px, py)] : d)); return; }
     if (!cur || !placing) return;
     const [x, y] = toMap(p.meta, px, py);
@@ -87,8 +96,8 @@ export function ZonesTab(p: TabProps) {
       <div ref={root} onClickCapture={(e) => swallowClick(guard.current, e)}>
       <p.Map
         areas={areas.map((a) => ({ name: a.zone, pts: a.points, kind: "zone" as const, hot: a.zone === sel }))}
-        drawing={!!draft || !!placing}
-        onPick={draft || placing ? pick : undefined}
+        drawing={!!draft || !!placing || !!markDraft}
+        onPick={draft || placing || markDraft ? pick : undefined}
         world={draft && draft.length > 0 ? <polyline points={polyPx(p.meta, draft)} class="draft-line" /> : null}
         marks={(s) => <>
           {!draft && areas.map((a) => {
@@ -108,6 +117,19 @@ export function ZonesTab(p: TabProps) {
               </g>
             );
           })}
+          {marks.map((m, i) => {
+            if (m.kind === "exit") {
+              const [[ax, ay], [bx, by]] = m.points.map(([x, y]) => s.map(x, y));
+              return <line key={`m${i}`} x1={ax} y1={ay} x2={bx} y2={by} class="mark-exit" data-mark="exit"><title>{`${m.name} · ${t("lyMarkExit")}`}</title></line>;
+            }
+            const h = handleAt(p.meta, s, m.points[0][0], m.points[0][1], m.yaw, 16);
+            return (
+              <PoseMarker key={`m${i}`} x={h.x} y={h.y} hx={h.hx} hy={h.hy} r={6} label="" class="mark-hide" attrs={{ "data-mark": "hide" } as Record<string, unknown>}>
+                <title>{`${m.name} · ${t("lyMarkHide")}`}</title>
+              </PoseMarker>
+            );
+          })}
+          {markDraft?.pts.map(([x, y], i) => { const [sx, sy] = s.map(x, y); return <circle key={`d${i}`} cx={sx} cy={sy} r={5} class="draft-pt" />; })}
           {draft?.map(([x, y], i) => { const [sx, sy] = s.map(x, y); return <circle key={i} cx={sx} cy={sy} r={5} class="draft-pt" />; })}
         </>} />
       </div>
@@ -128,6 +150,10 @@ export function ZonesTab(p: TabProps) {
             <li key={a.zone}><button type="button" class={a.zone === sel ? "linklike on" : "linklike"} onClick={() => { setSel(a.zone); setPlacing(null); }}>{a.zone}</button></li>
           ))}
         </ul>
+        <MarksBox marks={marks} draft={markDraft} busy={!!draft || !!placing}
+          onStart={(kind) => { setMarkDraft({ kind, pts: [] }); setSel(null); setPlacing(null); }}
+          onCancel={() => setMarkDraft(null)}
+          onRemove={(i) => setMarks(marks.filter((_, j) => j !== i))} />
         {cur && (
           <section class="panel ly-detail">
             <h3>{cur.zone}</h3>
@@ -156,6 +182,16 @@ export function ZonesTab(p: TabProps) {
           </section>
         )}
       </div>
+      {markDraft && markDraft.pts.length >= 2 && (
+        <NameMark onClose={() => setMarkDraft(null)} onSave={(name) => {
+          const [a, b] = markDraft.pts;
+          const m: MapMark = markDraft.kind === "exit"
+            ? { kind: "exit", name, points: [a, b], yaw: 0 }
+            : { kind: "hide", name, points: [a], yaw: Math.atan2(b[1] - a[1], b[0] - a[0]) };
+          setMarks([...marks, m]);
+          setMarkDraft(null);
+        }} />
+      )}
       {naming && draft && (
         <NameZone taken={areas.map((a) => a.zone)} onClose={() => setNaming(false)}
           onSave={(name) => { setAreas([...areas.filter((a) => a.zone !== name), { zone: name, points: draft }]); setDraft(null); setNaming(false); setSel(name); }} />
@@ -187,6 +223,56 @@ function ZonePostsBox({ post, saved, placing, edited, onPlace, onReset }: {
         <button type="button" class="btn sm" disabled={!!post?.auto && !edited} onClick={onReset}>{t("lyPostsReset")}</button>
       </div>
     </fieldset>
+  );
+}
+
+function MarksBox({ marks, draft, busy, onStart, onCancel, onRemove }: {
+  marks: MapMark[]; draft: { kind: MapMark["kind"]; pts: Pt[] } | null; busy: boolean;
+  onStart: (kind: MapMark["kind"]) => void; onCancel: () => void; onRemove: (i: number) => void;
+}) {
+  const hint = !draft ? "" : draft.kind === "exit" ? t("lyExitHint")
+    : draft.pts.length === 0 ? t("lyHideHint") : t("lyHideHint2");
+  return (
+    <fieldset class="ly-marks">
+      <legend>{t("lyMarks")}</legend>
+      <p class="muted small">{t("lyMarksHint")}</p>
+      {draft ? (
+        <div class="row wrap">
+          <span class="muted small" role="status">{hint}</span>
+          <button type="button" class="btn sm" onClick={onCancel}>{t("cancel")}</button>
+        </div>
+      ) : (
+        <div class="row wrap">
+          <button type="button" class="btn sm" disabled={busy} onClick={() => onStart("exit")}>{t("lyDrawExit")}</button>
+          <button type="button" class="btn sm" disabled={busy} onClick={() => onStart("hide")}>{t("lyAddHide")}</button>
+        </div>
+      )}
+      <ul class="plain ly-list">
+        {marks.length === 0 && <li class="muted small">{t("noMarks")}</li>}
+        {marks.map((m, i) => (
+          <li key={m.id ?? `new${i}`} class="row">
+            <span>{m.name}</span>
+            <span class="muted small">{m.kind === "exit" ? t("lyMarkExit") : t("lyMarkHide")}</span>
+            <button type="button" class="btn sm" onClick={() => onRemove(i)}>{t("remove")}</button>
+          </li>
+        ))}
+      </ul>
+    </fieldset>
+  );
+}
+
+function NameMark({ onClose, onSave }: { onClose: () => void; onSave: (name: string) => void }) {
+  const [name, setName] = useState("");
+  return (
+    <Modal label={t("lyMarks")} onClose={onClose}>
+      <form class="form" onSubmit={(e) => { e.preventDefault(); if (name.trim()) onSave(name.trim()); }}>
+        <label class="field">{t("lyMarkName")}<input name="mark" value={name} maxLength={40} required onInput={(e) => setName(e.currentTarget.value)} /></label>
+        <div class="row end">
+          <button type="button" class="btn" onClick={onClose}>{t("cancel")}</button>
+          <button type="submit" class="btn primary">{t("save")}</button>
+        </div>
+      </form>
+    </Modal>
   );
 }
 
