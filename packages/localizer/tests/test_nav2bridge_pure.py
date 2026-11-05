@@ -774,3 +774,20 @@ def test_外审r4_7_生命周期过期以后没时钟_晚到的回话也作废()
     b._lifecycle_retry()
     callbacks[0](NS(result=lambda: NS(success=True)))
     assert b.sent == [3], "过期的回话作废,不接着 startup"
+
+
+def test_现场1105_机身底下临时擦掉_残影没了_禁行区照烧(tmp_path):
+    """代理说「机器人站在这里」(x, y, yaw, 半长, 半宽):机身矩形里静态图的挡当空
+    (机器人站着,一定是空的);禁行区后烧,不被擦掉。"""
+    img = np.full((40, 60), 254, dtype=np.uint8)
+    img[40 - 1 - 20, 30] = 0                              # (1.5, 1.0) 那格是残影
+    img[40 - 1 - 20, 50] = 0                              # (2.5, 1.0) 机身外面的墙
+    (tmp_path / "floor.pgm").write_bytes(b"P5\n60 40\n255\n" + img.tobytes())
+    (tmp_path / "floor.yaml").write_text("resolution: 0.05\norigin: [0.0, 0.0, 0.0]\nnegate: 0\n")
+    occ, _, _ = occupancy(tmp_path, [])
+    assert occ[20, 30] == 100 and occ[20, 50] == 100
+    nogo = [[[1.4, 0.95], [1.45, 0.95], [1.45, 1.05], [1.4, 1.05]]]
+    occ, _, _ = occupancy(tmp_path, nogo, clear=[[1.5, 1.0, 0.0, 0.465, 0.24]])
+    assert occ[20, 30] == 0, "残影擦了"
+    assert occ[20, 50] == 100, "机身外面的不动"
+    assert occ[20, 28] == 100, "禁行区照烧"

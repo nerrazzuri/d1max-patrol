@@ -134,12 +134,30 @@ def decimate(pts: list[tuple[float, float]], step: float = 0.2,
     return [[round(float(x), 3), round(float(y), 3)] for x, y in out]
 
 
-def occupancy(map_dir: Path, nogo: list[list[list[float]]]
+def occupancy(map_dir: Path, nogo: list[list[list[float]]], clear: Any = ()
               ) -> tuple[np.ndarray, float, tuple[float, float]]:
-    """地图目录 → (占用 int8 栅格,行从下往上:0 空、100 挡;分辨率;原点)。禁行区烧成挡。"""
+    """地图目录 → (占用 int8 栅格,行从下往上:0 空、100 挡;分辨率;原点)。禁行区烧成挡。
+
+    ``clear``:代理说「机器人站在这里」的 ``[x, y, yaw, 半长, 半宽]``(11-05 商场原点、广场窄口:那格在
+    静态图上是残影,Nav2「Starting point in lethal space」一直规划不出)—— 机身矩形里的挡当空(机器人
+    站着,一定是空的)。禁行区在后面烧,不被擦掉。"""
     from nexwar_contract.planning.costmap import load_floor, polygon_mask
     free, res, origin = load_floor(map_dir)
     occ = np.where(free, 0, 100).astype(np.int8)
+    if clear:
+        h, w = occ.shape
+        cx = origin[0] + (np.arange(w) + 0.5) * res
+        cy = origin[1] + (np.arange(h) + 0.5) * res
+        gx, gy = np.meshgrid(cx, cy)
+        for item in clear:
+            try:
+                x, y, yaw, hl, hw = (float(v) for v in item)
+            except (TypeError, ValueError):
+                continue
+            c, sn = math.cos(yaw), math.sin(yaw)
+            u = c * (gx - x) + sn * (gy - y)
+            v = -sn * (gx - x) + c * (gy - y)
+            occ[(np.abs(u) <= hl) & (np.abs(v) <= hw)] = 0
     for poly in nogo:
         occ[polygon_mask(tuple(tuple(p) for p in poly), occ.shape, res, origin)] = 100
     return occ, res, origin
@@ -422,7 +440,7 @@ class Nav2Bridge:
 
     def on_map(self, m: dict[str, Any]) -> None:
         try:
-            occ, res, origin = occupancy(Path(m["dir"]), m.get("nogo", []))
+            occ, res, origin = occupancy(Path(m["dir"]), m.get("nogo", []), m.get("clear") or ())
         except Exception as exc:                        # noqa: BLE001 - 说清楚、不就绪
             log.error("地图读不了:%s", exc)
             self.map_sent = False
