@@ -134,14 +134,20 @@ class MapMarks:
                 continue
             r = (float(st["r"][0]), float(st["r"][1]))
             n, c = int(st.get("n") or 0), st.get("c")
-            if _cross(r, (x, y), p, q) is not None:
+            t = _cross(r, (x, y), p, q)
+            if t is not None and t < 1.0 - 1e-9:         # 正好落在线上的点只算一次(外审 r5 #2)
                 n, c = n + 1, [list(r), [x, y]]
             if side == 0:
                 last[k] = {"d": st["d"], "r": [x, y], "n": n, "c": c}
                 continue
             last[k] = {"d": side, "r": [x, y], "n": 0, "c": None}
             if side != st["d"] and n % 2 == 1 and c is not None and best is None:
-                best = (m, (float(c[0][0]), float(c[0][1])), (float(c[1][0]), float(c[1][1])))
+                a, b = (float(c[0][0]), float(c[0][1])), (float(c[1][0]), float(c[1][1]))
+                # 外审 r5 #3:那一段可能是反着穿的 —— 起点要在人原来那一边(回线内站那边)
+                sa = _signed(a, p, q)
+                if (sa * st["d"] < 0) or (sa == 0 and _signed(b, p, q) * st["d"] > 0):
+                    a, b = b, a
+                best = (m, a, b)
         return best
 
     def hide_near(self, map_id: str, version: str, x: float, y: float,
@@ -182,13 +188,16 @@ def inside_pose(mark: dict[str, Any], a: tuple[float, float],
     return cx + nx * inside_m, cy + ny * inside_m, math.atan2(-ny, -nx)
 
 
-def _side(a: Any, p: Any, q: Any) -> int:
-    """``a`` 在直线 p–q 的哪一边:1 / -1;离线 :data:`LINE_BAND_M` 以内算 0(线上)。"""
+def _signed(a: Any, p: Any, q: Any) -> float:
+    """``a`` 到直线 p–q 的有向距离(米;正负分两边)。"""
     dx, dy = q[0] - p[0], q[1] - p[1]
     n = math.hypot(dx, dy)
-    if n < 1e-9:
-        return 0
-    d = (dx * (a[1] - p[1]) - dy * (a[0] - p[0])) / n
+    return 0.0 if n < 1e-9 else (dx * (a[1] - p[1]) - dy * (a[0] - p[0])) / n
+
+
+def _side(a: Any, p: Any, q: Any) -> int:
+    """``a`` 在直线 p–q 的哪一边:1 / -1;离线 :data:`LINE_BAND_M` 以内算 0(线上)。"""
+    d = _signed(a, p, q)
     return 0 if abs(d) < LINE_BAND_M else (1 if d > 0 else -1)
 
 

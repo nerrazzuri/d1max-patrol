@@ -905,6 +905,13 @@ class GuardDuty:
     def _note_status(self, rid: str) -> None:
         self._status_at[rid] = self._now()
 
+    def _sent_done(self, rid: str, tid: str) -> None:
+        """命令真发出去了(回执到了 / 说不清):派之前那一会儿(查地图等)收到的状态都不算派出去以后的
+        (外审 r5 #1)。"""
+        fs = self._fs(rid)
+        at = max(self._now(), self._status_at.get(rid, 0))
+        self._fs_set(rid, sent={**(fs.get("sent") or {}), tid: at})
+
     async def _maybe_follow(self, eid: int, rid: str) -> None:
         """W74 二期:停下盯着以后派跟人(机器人能力里有 ``follow`` 才派;一回成功派一次)。人在不在动、
         跟丢了怎么办都在机器人上判(设计 §三)。
@@ -948,7 +955,9 @@ class GuardDuty:
             return
         except Exception:
             log.exception("%s 派跟人没成(回执没到?)", rid)
+            self._sent_done(rid, tid)
             return                                       # 说不清收没收:过一阵对账
+        self._sent_done(rid, tid)
         if not _accepted(r):
             ack = (r or {}).get("ack", {}) if isinstance(r, dict) else {}
             self._follow_refused(rid, eid, str((ack or {}).get("reason")
@@ -1107,7 +1116,9 @@ class GuardDuty:
             return
         except Exception:
             log.exception("%s %s没派成(回执没到?)", rid, what)
+            self._sent_done(rid, tid)
             return                                       # 说不清收没收:过一阵对账
+        self._sent_done(rid, tid)
         if not _accepted(r):
             ack = (r or {}).get("ack", {}) if isinstance(r, dict) else {}
             self._todo_refused(rid, eid, todo[0], what, str((ack or {}).get("reason")

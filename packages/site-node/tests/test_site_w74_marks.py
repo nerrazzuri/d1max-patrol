@@ -121,6 +121,27 @@ def test_外审r4_3_回线内的位置按实际穿门的那一段算(标):
     assert abs(x - 29.0) < 1e-6 and abs(y - 3.0) < 1e-6, (x, y)
 
 
+def test_外审r5_2_正好踩在线上的那一点_只算穿一次_踩一下又回来不算(标):
+    标.set("m", "1", {"kind": "exit", "name": "门", "points": [[-1, 0], [1, 0]]}, by="g")
+    last: dict = {}
+    hits = [标.track("m", "1", last, p) for p in [(0, .8), (0, 0), (0, -.8)]]
+    assert hits[:2] == [None, None] and hits[2] is not None, "踩着线上那一点穿过去了"
+    last = {}
+    assert not any(标.track("m", "1", last, p) for p in [(0, .8), (0, 0), (0, .8)]), \
+        "踩一下又回来"
+
+
+def test_外审r5_3_最后穿门那一段是反着走的_回线内照样站在原来那一边(标):
+    m = 标.set("m", "1", {"kind": "exit", "name": "门", "points": [[-1, 0], [1, 0]]}, by="g")
+    last: dict = {}
+    seq = [(1.4, .8), (1.4, -.2), (0, -.2), (0, .2), (1.4, .2), (1.4, -.8)]
+    hits = [标.track("m", "1", last, p) for p in seq]
+    assert hits[-1] is not None and not any(hits[:-1])
+    _, a, b = hits[-1]
+    x, y, _ = inside_pose(m, a, b)
+    assert abs(x) < 1e-6 and abs(y - 3.0) < 1e-6, ("人原来在 y>0 那边:回 y=3", x, y)
+
+
 def test_出口线内3米_朝出口(标):
     m = 标.set("m", "1", {"kind": "exit", "name": "东门", "points": [[10, 0], [10, 4]]}, by="g")
     x, y, yaw = inside_pose(m, (9, 2), (11, 2))
