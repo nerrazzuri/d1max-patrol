@@ -160,6 +160,23 @@ describe("发布", () => {
     void getByText;
   });
 
+  it("缺定位文件的版本(11-05 现场第 10 条):卡片上写不能下发、缺什么;带定位器的机器人不能勾", async () => {
+    lang.value = "zh";
+    overview.maps[0].versions[0].unusable = "此地图需要重建:旧版建的图没有 Super-LIO 定位用的点云(superlio_map.pcd)";
+    overview.robots[0].running = { ...overview.robots[0].running!, confirms: "localizer" };
+    overview.robots[1].running = { ...overview.robots[1].running!, confirms: "load" };
+    const { container: c, getByLabelText } = mount();
+    await waitFor(() => getByLabelText("estate:3"));
+    expect(getByLabelText("estate:3").textContent).toContain("带定位器的机器人用不了");
+    expect(getByLabelText("estate:3").textContent).toContain("superlio_map.pcd");
+    expect(getByLabelText("estate:2").textContent).not.toContain("用不了");
+    fireEvent.click(getByLabelText("estate:3").querySelector(".btn.primary") as HTMLElement);
+    const dialog = await waitFor(() => c.querySelector("dialog") as HTMLDialogElement);
+    const boxes = Array.from(dialog.querySelectorAll("fieldset input[type=checkbox]")) as HTMLInputElement[];
+    expect(boxes.map((b) => b.disabled)).toEqual([true, false, true]);           // A 带定位器、C 不在线
+    expect(dialog.textContent).toContain("缺定位文件");
+  });
+
   it("发布整个请求失败:对话框里显示错误,还能再试", async () => {
     routes["POST /api/admin/maps/estate/3/publish"] = () => json({ error: "boom" }, 500);
     const { container: c, getByLabelText } = mount();
