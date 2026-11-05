@@ -34,9 +34,11 @@ DROP="/etc/sudoers.d/d1max /etc/systemd/timesyncd.conf.d/d1max.conf /etc/chrony/
 say() { printf '  [改名迁移] %s\n' "$*"; }
 # d1max-lidar-merge.service → nexwar_lidar_merge.service;wg-quick@d1max → wg-quick@nexwar。
 # 单元名里只有最后一个点前面是名字:d1max-lidar-merge.service 的名字部分连字符全换下划线
+# 现场手写的单元 d1max-field-X(11-05 C40221:d1max-field-sidecar)→ 版本里的 nexwar_X
 newunit() {
   case "$1" in
     wg-quick@d1max*) printf 'wg-quick@nexwar%s' "${1#wg-quick@d1max}" ;;
+    d1max-field-*) n=${1#d1max-field-}; printf 'nexwar_%s.%s' "$(printf '%s' "${n%.*}" | tr '-' '_')" "${n##*.}" ;;
     d1max-*) n=${1#d1max-}; printf 'nexwar_%s.%s' "$(printf '%s' "${n%.*}" | tr '-' '_')" "${n##*.}" ;;
     *) printf '%s' "$1" ;;
   esac
@@ -65,6 +67,8 @@ s#/etc/d1max-console#/etc/nexwar_console#g;s#/etc/d1max#/etc/nexwar#g
 s#/opt/d1max-site#/opt/nexwar_site#g;s#/opt/d1max#/opt/nexwar#g
 s#/var/lib/d1max-site#/var/lib/nexwar_site#g;s#/var/lib/d1max-ops#/var/lib/nexwar_ops#g
 s#/var/lib/d1max#/var/lib/nexwar#g;s#/usr/local/lib/d1max#/usr/local/lib/nexwar#g'
+# 只换路径(不动键名):编出来的 Super-LIO 工作区用
+PATHX=$(printf '%s\n' "$SEDX" | sed '1d')
 # 只给配置用:ROS 话题 /d1max/xxx → /nexwar/xxx(老路径上面已经换完,这里剩下的只有话题)
 TOPICX='s#/d1max/#/nexwar/#g'
 
@@ -113,6 +117,65 @@ relocate() {
     grep -qIE '/(opt|etc|var/lib)/d1max' "$f" 2>/dev/null || continue
     sed -i "$SEDX" "$f"
   done
+  # 11-05 C40221:编好的 Super-LIO 工作区(colcon 的 setup.sh、*.dsv、cmake 配置)写死编译时的绝对路径,
+  # 搬了目录 source 就报「build time path doesn't exist」,定位器起不来。文本文件只换路径,二进制不碰。
+  if [ -d "$R/opt/nexwar/superlio" ]; then
+    find "$R/opt/nexwar/superlio" -path '*/install/*' -type f -print0 \
+      | xargs -0 -r grep -lIE '/(opt|etc|var/lib)/d1max' 2>/dev/null | while read -r f; do
+      sed -i "$PATHX" "$f"
+    done
+  fi
+  return 0
+}
+
+# 11-05 C40221:现场手写的旁路单元 d1max-field-sidecar(程序、地址、参数都写在 ExecStart 里)迁移时被删,
+# 版本里的 nexwar_sidecar 读 /etc/nexwar/env 的 NEXWAR_SIDECAR_*(见 deploy/nexwar_sidecar_start)。
+# 删单元之前把它的启动命令拆成这几项记下(落盘,断电重跑不丢),env 搬好以后补进去。
+# 跟缺省一样的不写(程序写了会盖住装机时按版本编的那个);--fifo、--token-file 不带(新旧缺省路径代理都认)。
+SIDECAR_CARRY="$R/var/backups/nexwar-migrate.sidecar"
+SIDECAR_UNIT="$R/etc/systemd/system/d1max-field-sidecar.service"
+sidecar_note() {
+  [ -f "$SIDECAR_UNIT" ] || return 0
+  [ -f "$SIDECAR_CARRY" ] && return 0
+  line=$(sed -n 's/^ExecStart=//p' "$SIDECAR_UNIT" | head -n 1 | sed 's/^[-@+!:]*//')
+  set -f
+  # shellcheck disable=SC2086  # 按空白拆成几个参数
+  set -- $line
+  set +f
+  if [ "$(basename "${1:-x}")" != patrol_agent ] || [ $# -lt 3 ]; then
+    say "警告: 现场旁路单元 d1max-field-sidecar 的启动命令认不出来:迁完手工在 /etc/nexwar/env 里填" \
+        "NEXWAR_SIDECAR_BIN / NEXWAR_SIDECAR_ARGS(见 deploy/nexwar_sidecar_start)"
+    return 0
+  fi
+  bin=$1; robot="$2:$3"; shift 3
+  listen=""; args=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --listen) shift; if [ $# -gt 0 ]; then listen=$1; shift; fi ;;
+      --fifo|--token-file) shift; if [ $# -gt 0 ]; then shift; fi ;;
+      *) args="${args:+$args }$1"; shift ;;
+    esac
+  done
+  {
+    if [ "$bin" != /home/robot/d1max-motion/patrol_agent ]; then echo "NEXWAR_SIDECAR_BIN=$bin"; fi
+    if [ "$robot" != 192.168.168.168:8082 ]; then echo "NEXWAR_SIDECAR_ROBOT=$robot"; fi
+    if [ -n "$listen" ] && [ "$listen" != 127.0.0.1:8090 ]; then echo "NEXWAR_SIDECAR_LISTEN=$listen"; fi
+    if [ -n "$args" ]; then echo "NEXWAR_SIDECAR_ARGS=\"$args\""; fi
+  } > "$SIDECAR_CARRY.new"
+  mv "$SIDECAR_CARRY.new" "$SIDECAR_CARRY"
+}
+
+sidecar_apply() {
+  [ -f "$SIDECAR_CARRY" ] || return 0
+  env="$R/etc/nexwar/env"
+  if [ ! -f "$env" ]; then mkdir -p "$(dirname "$env")"; (umask 077; : > "$env"); fi
+  if [ -s "$env" ] && [ -n "$(tail -c 1 "$env")" ]; then echo >> "$env"; fi
+  while IFS= read -r kv; do
+    [ -n "$kv" ] || continue
+    grep -q "^${kv%%=*}=" "$env" || printf '%s\n' "$kv" >> "$env"
+  done < "$SIDECAR_CARRY"
+  say "现场旁路单元 d1max-field-sidecar 的程序、参数补进 /etc/nexwar/env 的 NEXWAR_SIDECAR_*(已有的不盖)"
+  rm -f "$SIDECAR_CARRY"
 }
 
 prepare() {
@@ -136,6 +199,7 @@ prepare() {
     (umask 077; tar -C "$R/" -czf "$bk" $conf)
     say "配置先备份到 ${bk#"$R"}(只有 root 能读;里面有私钥、PIN)"
   fi
+  sidecar_note
   # 开着的单元**先记下(落盘)再停**:停到一半断电,重跑时已经停了的查不出原来开着
   for u in $(old_units); do
     if $SYSTEMCTL is-enabled --quiet "$u" 2>/dev/null; then echo "$u" >> "$RECORD"; sync; fi
@@ -163,6 +227,7 @@ prepare() {
       say "改了 ${f#"$R"} 里的键名、路径(值不打印)"
   done
   relocate
+  sidecar_apply
   if [ -z "$R" ] && id -u d1max-site >/dev/null 2>&1 && ! id -u nexwar_site >/dev/null 2>&1; then
     $USERMOD -l nexwar_site -d /var/lib/nexwar_site d1max-site
     getent group d1max-site >/dev/null 2>&1 && $GROUPMOD -n nexwar_site d1max-site

@@ -422,3 +422,16 @@ def test_工单9_renew_换证书不断线_登记表跟着换_代次和手动派�
     assert site_main.main(["--home", str(home), "renew", "B"]) == 2, "没登记的不许续"
     assert site_main.main(["--home", str(home), "revoke", "A"]) == 0
     assert site_main.main(["--home", str(home), "renew", "A"]) == 2, "吊销了的不许续(重新 enroll)"
+
+
+def test_1105_相对路径init_conf里写绝对路径_换目录起broker也找得到(tmp_path, monkeypatch):
+    """11-05 笔记本现场:``--home runs/site`` 这样 init 的,acl、证书在 mosquitto.conf 里是相对路径,
+    不在 init 那个目录下起 broker 就找不到。"""
+    monkeypatch.chdir(tmp_path)
+    assert site_main.main(["--home", "rel/site", "init", "--site-id", "estate-1",
+                           "--hostname", "localhost", "--broker-port", "18883"]) == 0
+    conf = (tmp_path / "rel/site/broker/mosquitto.conf").read_text()
+    for line in conf.splitlines():
+        key, _, val = line.partition(" ")
+        if key in ("acl_file", "cafile", "certfile", "keyfile", "crlfile", "persistence_location"):
+            assert val.startswith("/"), line

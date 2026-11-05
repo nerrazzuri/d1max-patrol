@@ -248,3 +248,89 @@ def test_r1_13_站点升级模式_也先开回原来开着的再退出():
     fin = text.index('nexwar_migrate" finish')
     up = text.index("升级好了")
     assert fin < up, "--upgrade 在 finish 之前退出,WireGuard 等不会开回来"
+
+
+# ---------------------------------------------------------------- 11-05 C40221 真机迁移暴露的两处
+
+
+def test_1105_SuperLIO编出来的工作区_colcon脚本里的老路径也改_二进制不动(tmp_path):
+    """colcon 的 setup.sh 写死编译时的绝对路径,搬了目录 source 就报
+    「build time path doesn't exist」,定位器起不来(11-05 C40221)。"""
+    root = tmp_path / "root"
+    _老机器(root)
+    ws = root / "opt/d1max/superlio/f89f48d-8ff747753336/install"
+    (ws / "lib").mkdir(parents=True)
+    (ws / "setup.sh").write_text(
+        '_colcon_prefix_chain_sh_COLCON_CURRENT_PREFIX="/opt/d1max/superlio/f89f48d-8ff747753336'
+        '/install"\n')
+    (ws / "share").mkdir()
+    (ws / "share" / "package.dsv").write_text("prepend-non-duplicate;LD_LIBRARY_PATH;lib\n"
+                                              "source;/opt/d1max/superlio/x/hook.sh\n")
+    blob = b"\x7fELF\x00\x00/opt/d1max/superlio/f89f48d-8ff747753336/install/lib\x00"
+    (ws / "lib" / "libx.so").write_bytes(blob)
+    stub = _stub(tmp_path, set())
+    r = _run(root, stub, "prepare")
+    assert r.returncode == 0, r.stderr
+    new = root / "opt/nexwar/superlio/f89f48d-8ff747753336/install"
+    assert "/opt/nexwar/superlio/f89f48d-8ff747753336/install" in (new / "setup.sh").read_text()
+    assert "/opt/d1max" not in (new / "share" / "package.dsv").read_text()
+    assert (new / "lib" / "libx.so").read_bytes() == blob, "二进制一个字节不动"
+
+
+def _现场旁路(root: Path, exec_start: str) -> None:
+    unit = root / "etc/systemd/system/d1max-field-sidecar.service"
+    unit.write_text(f"[Unit]\nDescription=field\n[Service]\nUser=robot\nExecStart={exec_start}\n")
+    # 新版装机脚本装的(只装、不开)
+    (root / "etc/systemd/system/nexwar_sidecar.service").write_text("[Unit]\n")
+
+
+def test_1105_现场手写的旁路单元_参数带到新单元的env_迁完开新的旁路(tmp_path):
+    """11-05 C40221:现场单元 d1max-field-sidecar 被删、新的 nexwar_sidecar 只装没开、参数丢了,
+    代理连不上旁路一直重启。"""
+    root = tmp_path / "root"
+    _老机器(root)
+    _现场旁路(root, "/home/robot/d1max-motion/patrol_agent 192.168.168.168 8082 --listen "
+                    "127.0.0.1:8090 --fifo /home/robot/d1max-motion/runs/d1max-agent.fifo "
+                    "--token-file /home/robot/.d1max/sidecar.token --require-clearance "
+                    "--max-fraction 1.0")
+    stub = _stub(tmp_path, {"d1max-field-sidecar.service"})
+    assert _run(root, stub, "prepare").returncode == 0
+    env = (root / "etc/nexwar/env").read_text()
+    assert 'NEXWAR_SIDECAR_ARGS="--require-clearance --max-fraction 1.0"' in env, env
+    assert "NEXWAR_SIDECAR_BIN" not in env, "缺省位置就是它:不写(写了会盖住装机时按版本编的)"
+    assert "NEXWAR_SIDECAR_ROBOT" not in env and "NEXWAR_SIDECAR_LISTEN" not in env, "缺省值不写"
+    assert "token" not in env, "令牌走新旧缺省路径(代理两处都认),不带"
+    assert "NEXWAR_DEVICE_PIN=246810" in env, "别的行原样"
+    r = _run(root, stub, "finish")
+    assert r.returncode == 0, r.stderr
+    assert "enable --now nexwar_sidecar.service" in (tmp_path / "calls").read_text()
+    again = _run(root, stub, "prepare")
+    assert again.returncode == 0 and (root / "etc/nexwar/env").read_text() == env, "重跑不重复写"
+
+
+def test_1105_现场旁路程序不在缺省位置_地址不是缺省_照写_env里已有的不盖(tmp_path):
+    root = tmp_path / "root"
+    _老机器(root)
+    _现场旁路(root, "-/opt/motion/patrol_agent 10.0.0.5 9000 --listen 0.0.0.0:8090 "
+                    "--max-fraction 0.8")
+    with (root / "etc/d1max/env").open("a") as f:
+        f.write('D1MAX_SIDECAR_ARGS="--max-fraction 0.5"\n')
+    stub = _stub(tmp_path, {"d1max-field-sidecar.service"})
+    assert _run(root, stub, "prepare").returncode == 0
+    env = (root / "etc/nexwar/env").read_text()
+    assert "NEXWAR_SIDECAR_BIN=/opt/motion/patrol_agent" in env
+    assert "NEXWAR_SIDECAR_ROBOT=10.0.0.5:9000" in env
+    assert "NEXWAR_SIDECAR_LISTEN=0.0.0.0:8090" in env
+    assert env.count("NEXWAR_SIDECAR_ARGS") == 1, "现场已经填的不盖"
+    assert '"--max-fraction 0.5"' in env
+
+
+def test_1105_现场旁路单元认不出来_不瞎写_说清楚要手工填(tmp_path):
+    root = tmp_path / "root"
+    _老机器(root)
+    _现场旁路(root, "/bin/sh -c 'cd /x && ./run.sh'")
+    stub = _stub(tmp_path, {"d1max-field-sidecar.service"})
+    r = _run(root, stub, "prepare")
+    assert r.returncode == 0
+    assert "NEXWAR_SIDECAR" not in (root / "etc/nexwar/env").read_text()
+    assert "NEXWAR_SIDECAR_" in r.stdout and "手工" in r.stdout, r.stdout
