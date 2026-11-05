@@ -101,7 +101,9 @@ def wall_cells(pts_base: Any, height: float, *, res: float = WALL_RES,
 class Config:
     res: float = 0.1
     size: int = 80
-    h_lo: float = 0.10                  # 凸起障碍的下沿(离地,米;草尖会不会误报是真机项)
+    #: 凸起障碍的下沿(离地,米)。11-05 用户:小台阶、草坪边(8–13 cm)运控能过(厂家:连续攀爬台阶
+    #: 25 cm),避障不挡;0.10 → 0.15。代价:10–15 cm 的小物件也不挡(人另有人员检测)。
+    h_lo: float = 0.15
     h_hi: float = 1.30                  # 上沿(狗高约 0.6 m,带上头顶的东西)
     ground_tol: float = 0.08            # 离地这么近算地面
     drop: float = 0.15                  # 比地面低这么多算落差
