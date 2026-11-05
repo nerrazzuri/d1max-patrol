@@ -2001,3 +2001,11 @@ def test_1105_定位器source_SuperLIO工作区_告诉colcon工作区在哪_搬�
     r = subprocess.run(["sh", "-ec", script], capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
     assert f"seen={ws} left=" in r.stdout, r.stdout + r.stderr
+
+
+def test_1105_代理也等钟对了再起_不再因为1970握不上TLS反复重启():
+    """11-05 现场:开机没对时,钟是 1970,代理 TLS 连不上站点只报「等了 30s 超时」,一次开机重启 12 次
+    (开机守卫在数这些重启)。代理的启动脚本跟 Nav2 一样先等钟:日志里说「钟还不对(1970…)」,不崩。"""
+    start = (DEPLOY / "nexwar_agent_start").read_text(encoding="utf-8")
+    assert '"$here/deploy/nexwar_wait_clock"' in start
+    assert start.index("nexwar_wait_clock") < start.index('exec "$here/venv/bin/nexwar_agent"')
