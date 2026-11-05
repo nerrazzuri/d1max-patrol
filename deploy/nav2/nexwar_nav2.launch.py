@@ -15,7 +15,9 @@ smoother_server、waypoint_follower。
 import os
 
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, ExecuteProcess
+from launch.actions import DeclareLaunchArgument, EmitEvent, ExecuteProcess, RegisterEventHandler
+from launch.event_handlers import OnProcessExit
+from launch.events import Shutdown
 from launch.substitutions import EnvironmentVariable, LaunchConfiguration
 from launch_ros.actions import Node
 from launch_ros.descriptions import ParameterFile
@@ -23,6 +25,15 @@ from nav2_common.launch import RewrittenYaml
 
 #: 生命周期管理器按这个顺序配置、激活(转接节点问 /lifecycle_manager_navigation/is_active)。
 LIFECYCLE_NODES = ["controller_server", "planner_server", "behavior_server", "bt_navigator"]
+#: 转接节点用这个退出码退出 = Nav2 自己重来连着不成(11-05 现场第 5 条):整个关掉,systemd 拉起来。
+#: 跟 nexwar_localizer.nav2bridge.FULL_RESTART_RC 一致(测试核)。
+FULL_RESTART_RC = 75
+
+
+def _whole_restart(event, _context):
+    if event.returncode == 75:
+        return [EmitEvent(event=Shutdown(reason="Nav2 自己重来连着不成,整个重启"))]
+    return None
 
 
 def generate_launch_description():
@@ -55,11 +66,12 @@ def generate_launch_description():
              name="lifecycle_manager_navigation", output="screen",
              parameters=[{"use_sim_time": True}, {"autostart": True},
                          {"node_names": LIFECYCLE_NODES}]),
-        ExecuteProcess(cmd=["/usr/bin/python3", "-m", "nexwar_localizer.nav2bridge",
+        bridge := ExecuteProcess(cmd=["/usr/bin/python3", "-m", "nexwar_localizer.nav2bridge",
                             "--socket", sock],
                        # 接在 ROS 原有的 PYTHONPATH 前面(覆盖掉就找不到 rclpy)
                        additional_env={"PYTHONPATH": [pypath, ":", EnvironmentVariable(
                            "PYTHONPATH", default_value="")]},
                        output="screen",
                        respawn=True, respawn_delay=2.0),
+        RegisterEventHandler(OnProcessExit(target_action=bridge, on_exit=_whole_restart)),
     ])
