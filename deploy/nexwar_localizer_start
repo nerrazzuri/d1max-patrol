@@ -28,7 +28,10 @@ set +u
 # Super-LIO 的工作区(它的库要在 LD_LIBRARY_PATH 上,子进程继承)
 slio="${NEXWAR_SUPERLIO_ROOT:-/opt/nexwar/superlio/current}"
 if [ -f "$slio/install/setup.sh" ]; then
+  # colcon 的 setup.sh 写死编译时的绝对路径;告诉它工作区现在在哪,挪过目录(11-05 改名迁移)也找得到
+  COLCON_CURRENT_PREFIX="$slio/install"
   . "$slio/install/setup.sh"
+  unset COLCON_CURRENT_PREFIX
 fi
 set -u
 export ROS_DOMAIN_ID="${NEXWAR_LOC_ROS_DOMAIN:-24}"

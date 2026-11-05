@@ -100,6 +100,8 @@ def _check_owner(home: Path) -> None:
 
 
 def cmd_init(home: Path, site_id: str, hostnames: list[str], broker_port: int) -> None:
+    # 11-05:mosquitto.conf 里的 acl、证书路径要绝对的,不然换个目录起 broker 就找不到
+    home = home.resolve()
     if (home / "site.json").exists():
         raise SiteError(f"{home} 已经 init 过了")
     if (home / "ca").exists():
