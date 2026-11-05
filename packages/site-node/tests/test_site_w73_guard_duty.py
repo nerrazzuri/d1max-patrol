@@ -1504,3 +1504,35 @@ async def test_外审r3_2_回线内还没派出去站点就重启_重启后照�
     assert len(calls) == 2 and calls[1] != calls[0], ("回执没到、机器人手上也不是它:再派", calls)
     await _跑(t, FOLLOW_RETRY_MS / 1000 + 4)
     assert len(calls) == 2, "派成了:不再派"
+
+
+# ---------------------------------------------------------------- 外审 r5
+
+
+async def test_外审r5_1_派之前那一会儿收到的状态_不算派出去以后的(站):
+    t = 站
+    tid = await _跟着(t)
+    t.duty.marks.set(MAP[0], MAP[1], {"kind": "hide", "name": "北", "points": [[4.0, 1.5]]},
+                     by="alice")
+    real = t.site.patrol
+
+    async def patrol(*a, **kw):
+        t.duty._status_at["A"] = t.clock() + 1           # 查地图那一会儿收到一份(派出之前的)状态
+        t.duty._note_status = lambda rid: None           # 派出去以后没再收到状态
+        return await real(*a, **kw)
+    t.site.patrol = patrol
+    t.duty._on_event("A", _事("follow_lost", task_id=tid, result="lost",
+                              last={"x": 3.0, "y": 0.0, "at_ms": 3}, heading_deg=90.0))
+    t.box["run"] = ""
+    for _ in range(30):
+        await _跑(t, 0.1)
+        if [c for c in _patrols(t) if c["task_id"].startswith("follow-sweep-")]:
+            break
+    [sw] = [c for c in _patrols(t) if c["task_id"].startswith("follow-sweep-")]
+    real_t = t.duty._terminal
+    t.duty._terminal = lambda rid, x: ("task_done", {}) if x == tid else real_t(rid, x)
+    t.box["run"] = tid
+    t.duty.alerts.resolve_all("A", "dog_sees_person", who="gina")
+    await _跑(t, 2)
+    assert any(c["kind"] == "abort" and c["task_id"] == sw["task_id"]
+               for c in t.site.commands("A", 500)), "派之前收到的状态不能证明它停了"
