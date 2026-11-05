@@ -411,6 +411,57 @@ void main() {
     await t.pumpWidget(Container());
   });
 
+  testWidgets('现场 11-05：被中止说清是谁停的；几秒后自己再要，要到了接着遥控，不用退出再进', (t) async {
+    final api = FakeApi('guard');
+    await _open(t, api);
+    final first = api.link!;
+    first.ctl.add(<String, dynamic>{'kind': 'ended', 'reason': 'aborted', 'by': 'site:swap'});
+    await t.pump();
+    await t.pump();
+    expect(find.textContaining('少一块电池'), findsOneWidget);
+    expect(find.textContaining('连接已断开'), findsNothing);
+    expect(find.byKey(SiteTeleopPage.resumeKey), findsOneWidget);
+    expect(_stickEnabled(t, 0), isFalse);
+    api.teleopError = const SiteError(409, 'A 的 2 号电池拔着');
+    await t.pump(const Duration(seconds: 3));
+    await t.pump();
+    expect(api.teleopCalls, 2, reason: '几秒后自己再要一次');
+    expect(find.textContaining('A 的 2 号电池拔着'), findsOneWidget, reason: '还不能遥控：说站点给的原因，接着等');
+    api.teleopError = null;
+    await t.pump(const Duration(seconds: 3));
+    await t.pump();
+    expect(api.teleopCalls, 3);
+    expect(identical(api.link, first), isFalse);
+    api.link!.ctl.add(<String, dynamic>{'kind': 'granted', 'lease_epoch': 2, 'max_vx': 0.5, 'max_wz': 0.75});
+    await t.pump();
+    await t.pump();
+    expect(find.textContaining('遥控中'), findsOneWidget);
+    expect(_stickEnabled(t, 0), isTrue);
+    expect(find.byKey(SiteTeleopPage.resumeKey), findsNothing);
+    await t.pumpWidget(Container());
+  });
+
+  testWidgets('现场 11-05：自己按了停、被管理员接管，不自动再要；按了停可以点「继续遥控」', (t) async {
+    final api = FakeApi('guard');
+    await _open(t, api);
+    api.link!.ctl.add(<String, dynamic>{'kind': 'ended', 'reason': 'taken_over'});
+    await t.pump();
+    await t.pump(const Duration(seconds: 10));
+    expect(api.teleopCalls, 1);
+    expect(find.byKey(SiteTeleopPage.resumeKey), findsNothing);
+    final api2 = FakeApi('guard');
+    await _open(t, api2);
+    api2.link!.ctl.add(<String, dynamic>{'kind': 'ended', 'reason': 'halt'});
+    await t.pump();
+    await t.pump(const Duration(seconds: 10));
+    expect(api2.teleopCalls, 1, reason: '有人按了停：不自己再要');
+    await t.tap(find.byKey(SiteTeleopPage.resumeKey));
+    await t.pump();
+    await t.pump();
+    expect(api2.teleopCalls, 2);
+    await t.pumpWidget(Container());
+  });
+
   testWidgets('没画面杆变灰、屏上说不许动；结束了说原因', (t) async {
     final api = FakeApi('guard');
     await _open(t, api);
