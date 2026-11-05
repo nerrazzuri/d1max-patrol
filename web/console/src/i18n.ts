@@ -708,7 +708,7 @@ const en = {
   rdAbort: "Stop current task",
   rdAutoLoc: "Auto-localize",
   rdPosture: "Posture",
-  atOn: "Alert test mode until {at} (started by {by}): alerts raised now are marked \"测试：\" (test).",
+  atOn: "Alert test mode until {at} (started by {by}): alerts raised now carry a test prefix in the title.",
   atStart: "Start alert test",
   atLen: "For",
   atMin: "{n} min",
