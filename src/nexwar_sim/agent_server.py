@@ -102,15 +102,16 @@ class SimAgentServer:
         speed_level_want: int = 1,
         token: str | None = None,
         max_fraction: float = LEGACY_MAX_FRACTION,
-        proto: int = PROTO_VERSION,
+        proto: int | None = None,
         permit_mps_per_unit: float | None = None,
     ) -> None:
         #: 同 ``patrol_agent --max-fraction``(W47):前进比例上限;超过 0.5 的只在开了许可门时放行。
         if not LEGACY_MAX_FRACTION <= max_fraction <= MAX_FORWARD_FRACTION:
             raise ValueError(f"max_fraction 要在 [0.5, 1.0],收到 {max_fraction}")
         self.max_fraction = max_fraction
-        #: 报的协议号(测老旁路进程用;11 起认 ``crawl``)。
-        self.proto = proto
+        #: 报的协议号(测老旁路进程用;11 起认 ``crawl``)。None = 模块里的 PROTO_VERSION(运行时取,
+        #: 测试 monkeypatch 它也算数)。
+        self._proto = proto
         #: 同 ``--permit-mps-per-unit``:分档许可的 m/s 换比例(缺省按仿真自己的运动模型:
         #: 低速 1.2、中速 2.4、其余 3.6;真旁路按实测 1.1 / 2.2 / 3.3)。
         self._permit_mps = permit_mps_per_unit
@@ -286,6 +287,10 @@ class SimAgentServer:
             writer.close()
             with contextlib.suppress(Exception):
                 await writer.wait_closed()
+
+    @property
+    def proto(self) -> int:
+        return PROTO_VERSION if self._proto is None else self._proto
 
     def _hello(self, held: bool) -> dict[str, Any]:
         return {"t": "hello", "proto": self.proto, "auth": self.token is not None,

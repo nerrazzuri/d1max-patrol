@@ -48,6 +48,13 @@
         "map_id": "estate-1",
         "map_version": "7"
       },
+      "posture": {
+        "modes": [
+          "stand",
+          "lie",
+          "crawl"
+        ]
+      },
       "release_activate": {},
       "release_install": {
         "current": "2026-09-20-aaaaaa"
@@ -71,7 +78,9 @@
       },
       "teleop": {
         "max_vx": 0.5,
-        "max_wz": 0.75
+        "max_vx_hal": 1.0,
+        "max_wz": 0.75,
+        "max_wz_hal": 1.5
       },
       "zones_set": {
         "enforced": false,
@@ -87,8 +96,8 @@
     {
       "ack_reason": "",
       "ack_result": "accepted",
-      "command_id": "cmd-6ec611bae818",
-      "issued_at": 1793379421680,
+      "command_id": "cmd-61283405cad1",
+      "issued_at": 1793841741406,
       "issued_by": "alice",
       "kind": "goto",
       "payload": {
@@ -104,23 +113,23 @@
       },
       "priority": 60,
       "robot_id": "A",
-      "task_id": "task-c1de7d4e5a48"
+      "task_id": "task-af63fe3c75d6"
     }
   ],
   "devices": null,
-  "enrolled_at": 1793379421500,
+  "enrolled_at": 1793841741297,
   "events": [
     {
-      "boot_id": "boot-d548ea16a1",
+      "boot_id": "boot-38420fe638",
       "data": {
         "faults": []
       },
       "kind": "robot_fault",
       "seq": 1,
-      "stamp": 1793379421581
+      "stamp": 1793841741346
     }
   ],
-  "expires_at": 1794379421501,
+  "expires_at": 1794841741298,
   "fresh": true,
   "held": null,
   "loc": null,
@@ -153,9 +162,9 @@
     }
   },
   "status": {
-    "boot_id": "boot-d548ea16a1",
+    "boot_id": "boot-38420fe638",
     "control_epoch": 1,
-    "last_seen": 1793379421690,
+    "last_seen": 1793841741414,
     "online": true,
     "ready": {
       "control": true,
@@ -167,7 +176,7 @@
     "task": {
       "kind": "goto",
       "state": "running",
-      "task_id": "task-c1de7d4e5a48"
+      "task_id": "task-af63fe3c75d6"
     }
   },
   "wifi": null

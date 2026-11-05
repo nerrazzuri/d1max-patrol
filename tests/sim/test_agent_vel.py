@@ -20,7 +20,7 @@ def test_协议是v10_跟C加加旁路进程的常量一致():
     src = (ROOT / "motion" / "patrol_agent.cpp").read_text(encoding="utf-8")
     m = re.search(r"static const int kProtoVersion = (\d+);", src)
     # W12:state 带 speed_level、hello 带 speed_level_want;W26:imu 帧;S11:auth;W47:分档许可
-    assert m and int(m.group(1)) == PROTO_VERSION == 10
+    assert m and int(m.group(1)) == PROTO_VERSION == 11
 
 
 def test_CPP只收代理的运动命令_行为测试编译并通过(tmp_path):
@@ -391,7 +391,7 @@ async def test_分档许可_hello报比例上限_按许可夹前进_最新的说
     换成比例上限。"""
     async with _client(require_clearance=True, max_fraction=1.0) as (sim, client):
         hello = await client.recv()
-        assert hello.proto == 10 and hello.max_fraction == 1.0
+        assert hello.proto == 11 and hello.max_fraction == 1.0
         assert (await client.call("stand", timeout_s=10)).ok
         assert (await client.call("clear", ms=800, dist=0.9, vmax=0.36)).ok
         assert (await client.call("vel", fwd=0.8, lat=0.0, yaw=0.0, ttl_ms=300)).ok
@@ -436,7 +436,7 @@ async def test_老许可不带vmax_按0点5算():
 
 def test_CPP的分档许可_参数与hello():
     src = (ROOT / "motion" / "patrol_agent.cpp").read_text(encoding="utf-8")
-    assert "kProtoVersion = 10" in src and PROTO_VERSION == 10
+    assert "kProtoVersion = 11" in src and PROTO_VERSION == 11
     assert '"--max-fraction"' in src and '"--permit-mps-per-unit"' in src
     assert '\\"max_fraction\\":' in src and '"\\"vmax\\""' in src
 
