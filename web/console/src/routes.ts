@@ -30,6 +30,8 @@ export interface Route {
   policy: Record<string, unknown>;
   updated_by: string;
   updated_ms: number;
+  /** 11-05 现场第 15、35 条:存下了,但这些点要原地转又贴墙(站点只提醒、不挡)。 */
+  warnings?: { index: number; name: string; warning: string }[];
 }
 
 export interface RouteSchedule {

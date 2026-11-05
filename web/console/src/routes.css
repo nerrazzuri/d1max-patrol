@@ -52,3 +52,7 @@
 .routeside-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .routeback { align-self: flex-start; }
 .routename { display: flex; flex-direction: column; gap: 4px; }
+/* 11-05 现场第 15、35 条:要原地转又贴墙的点(只提醒) */
+.route-pt.warn .pm-body { stroke: var(--c-warning); }
+.route-pt.warn .pm-nose { fill: var(--c-warning); }
+p.warn { color: var(--c-warning); }

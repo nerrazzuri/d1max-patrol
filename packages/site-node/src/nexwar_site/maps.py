@@ -421,6 +421,24 @@ class MapCatalog:
                 return f"{name} 在图上不是可通行的地方(墙、障碍或未扫到)"
         return ""
 
+    def clearance(self, map_id: str, version: str, x: float, y: float,
+                  limit: float) -> float | None:
+        """``(x, y)`` 离最近的不可通行格(墙、障碍、没扫到)多远,最多量到 ``limit``(米,按 5 cm 一步
+        取样);没有规划栅格的老版本、站点不认识的版本回 None(不查)。"""
+        reach = self._reach(map_id, version)
+        if reach is None:
+            return None
+        free = reach[1]
+        step = 0.05
+        n = int(math.ceil(limit / step))
+        best = limit
+        for i in range(-n, n + 1):
+            for j in range(-n, n + 1):
+                d = math.hypot(i * step, j * step)
+                if d < best and not free(x + i * step, y + j * step):
+                    best = d
+        return best
+
     def _reach(self, map_id: str, version: str) -> tuple[Coverage, Callable[[float, float], bool]
                                                          ] | None:
         key = (map_id, version)
