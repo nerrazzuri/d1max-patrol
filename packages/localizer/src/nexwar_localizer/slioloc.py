@@ -99,9 +99,41 @@ def lidar_pose(p: Sequence[float], q: Sequence[float], ext: Extrinsic) -> tuple[
 
 # ---------------------------------------------------------------- 进程与参数
 
+#: Super-LIO 把编译时的源码目录(CMake 的 ``ROOT``)编进 ``liblio.so``,
+#: ``lio.map.save_map_dir`` 拼在它后面。
+#: 这串前面不一定是 0(编译器把它跟别的常量挨着放),所以从它前面最近的 0 往后、第一个「/」算起。
+_BUILT_TAIL = b"/src/Super-LIO/src/super_lio/\x00"
+
+
+def built_source_dir(root: Path) -> Path | None:
+    """``liblio.so`` 里编进去的源码目录;库不在、找不到这串(老版本、开发机的假工作区)→ None。"""
+    try:
+        raw = (Path(root) / "install/super_lio/lib/liblio.so").read_bytes()
+    except OSError:
+        return None
+    end = raw.find(_BUILT_TAIL)
+    if end < 0:
+        return None
+    seg = raw[max(0, raw.rfind(b"\x00", max(0, end - 4096), end) + 1):end + len(_BUILT_TAIL) - 1]
+    i = seg.find(b"/")
+    try:
+        path = seg[i:].decode("utf-8") if i >= 0 else ""
+    except UnicodeDecodeError:
+        return None
+    return Path(path.rstrip("/")) if path.startswith("/") else None
+
+
 def source_dir(root: Path) -> Path:
-    """Super-LIO 的源码目录(它拼地图路径的基准):机器人上 ``<root>/ws/src/...``,开发机工作区
-    ``<root>/src/...``。"""
+    """Super-LIO 拼地图路径的基准:**编进库里的那个源码目录**(11-05 现场:改名迁移把 /opt/d1max 挪成
+    /opt/nexwar,按现在的位置算,相对路径从一个不存在的目录往上走,载不了图,Global ICP 一直失败)。
+    库里读不出来就按现在的位置找:机器人上 ``<root>/ws/src/...``,开发机工作区 ``<root>/src/...``。"""
+    built = built_source_dir(root)
+    if built is not None:
+        if not built.is_dir():
+            raise SlioLocError(
+                f"Super-LIO 编译时在 {built},那个目录没了(搬过目录?),它拼不出地图路径:重新跑 "
+                f"deploy/nexwar_superlio_build,或者建一个指过去的兼容链")
+        return built
     for sub in ("ws/src/Super-LIO/src/super_lio", "src/Super-LIO/src/super_lio"):
         d = Path(root) / sub
         if (d / "CMakeLists.txt").is_file():

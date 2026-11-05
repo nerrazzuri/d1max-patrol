@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import os
 from pathlib import Path
 
 import numpy as np
@@ -246,3 +247,36 @@ def test_W71_套图打分只转抽出来的点_分数跟整帧先转一样_整�
     monkeypatch.setattr(L, "_to_map", 记)
     fit.score(scan, (0.0, 0.0, 0.4), (0.0, 0.0, 0.0, 1.0))
     assert calls and max(calls) <= L.FIT_POINTS, calls
+
+
+def _假库(root, built: str):
+    lib = root / "install/super_lio/lib"
+    lib.mkdir(parents=True)
+    (lib / "liblio.so").write_bytes(b"\x7fELF\x00junk\x00" + built.encode() + b"\x00more\x00")
+
+
+def test_现场1105_按库里编进去的源码目录算_目录挪过也对(tmp_path):
+    # Super-LIO 把编译时的源码目录(ROOT)编进 liblio.so,地图路径拼在它后面。改名迁移把
+    # /opt/d1max 挪成 /opt/nexwar 之后,按现在的位置算的相对路径从一个不存在的目录往上走 → 载不了图
+    built = tmp_path / "old" / "ws/src/Super-LIO/src/super_lio"
+    built.mkdir(parents=True)
+    now = tmp_path / "new"
+    (now / "ws/src/Super-LIO/src/super_lio").mkdir(parents=True)
+    (now / "ws/src/Super-LIO/src/super_lio/CMakeLists.txt").write_text("")
+    _假库(now, f"{built}/")
+    assert L.source_dir(now) == built
+    maps = tmp_path / "maps" / "m" / "8"
+    maps.mkdir(parents=True)
+    txt = L.reloc_config("a:\n  ros__parameters:\n    x: 1\n", map_dir=maps,
+                         src_dir=L.source_dir(now), init=[0.0] * 6)
+    rel = next(ln for ln in txt.splitlines() if "save_map_dir" in ln).split(": ", 1)[1].strip('"')
+    assert os.path.realpath(str(built) + "/" + rel) == os.path.realpath(maps)
+
+
+def test_现场1105_编进去的源码目录没了_当场说清楚_不走到ICP失败(tmp_path):
+    now = tmp_path / "new"
+    (now / "ws/src/Super-LIO/src/super_lio").mkdir(parents=True)
+    (now / "ws/src/Super-LIO/src/super_lio/CMakeLists.txt").write_text("")
+    _假库(now, "/opt/d1max/superlio/x/ws/src/Super-LIO/src/super_lio/")
+    with pytest.raises(L.SlioLocError, match="/opt/d1max/superlio/x.*nexwar_superlio_build"):
+        L.source_dir(now)
