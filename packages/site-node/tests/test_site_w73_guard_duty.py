@@ -538,13 +538,18 @@ async def test_外审_看见人_原地停下盯着_保安处理了接着值守(�
     assert len(_patrols(t)) == 2 and _log(t, "person_resume")
 
 
-async def test_外审_看见人盯满10分钟没人管_接着值守_同一条不再拦(站):
+async def test_外审_看见人盯满时限没人管_接着值守_同一条不再拦(站):
+    from nexwar_site.guard_duty import PERSON_HOLD_MS
+    assert PERSON_HOLD_MS == 30 * 60_000, "W74 §九:30 分钟(原来 10 分钟,10 分钟改成报经理)"
     t = 站
     _方案(t)
     await _跑(t, 1.5)
     t.duty.alerts.raise_alert(kind="dog_sees_person", robot="A", title="看见人")
     await _跑(t, 2)
-    t.clock.advance(601)
+    t.clock.advance(PERSON_HOLD_MS // 1000 - 60)
+    await _跑(t, 2)
+    assert len(_patrols(t)) == 1, "还没到时限:盯着"
+    t.clock.advance(61)
     await _跑(t, 4)
     assert len(_patrols(t)) == 2, "没人管:接着值守"
     assert t.duty.status()["runs"][0]["state"] != "held"
@@ -998,3 +1003,32 @@ async def test_外审r3_8_路线已经500个点_不接待命点_照样派(站):
     assert _patrols(t), "合法的 500 点路线照样派"
     assert len(_names(_patrols(t)[0])) == 500
     assert _log(t, "no_standby")
+
+
+
+async def test_W74_恢复值守后_最后位置那个防区和相邻的加密巡查一小时_每圈不歇_之后照旧(站):
+    from nexwar_site.guard_duty import INTENSE_MS
+    assert INTENSE_MS == 60 * 60_000
+    t = 站
+    t.areas.set(MAP[0], MAP[1], "远区", [[20.0, -2.0], [25.0, -2.0], [25.0, 2.0], [20.0, 2.0]],
+                by="alice")
+    _方案(t, gap_min=10)
+    for _ in range(30):                                   # 走到西区(x > 5.5)
+        await _跑(t, 0.5)
+        if t.dog.x > 5.5:
+            break
+    assert t.dog.x > 5.5
+    t.duty.alerts.raise_alert(kind="dog_sees_person", robot="A", title="看见人")
+    await _跑(t, 3)
+    t.duty.alerts.resolve_all("A", "dog_sees_person", who="gina")
+    await _跑(t, 3)
+    [lg] = _log(t, "intense_start")
+    assert "西区" in lg["detail"] and "东区" in lg["detail"] and "远区" not in lg["detail"]
+    assert _names(_patrols(t)[-1])[:1] == ["C"], "从最后看见人的那个防区先跑"
+    n = len(_patrols(t))
+    await _跑(t, 25)
+    assert len(_patrols(t)) >= n + 1, "每圈之间不歇(方案本来隔 10 分钟,会去值守位)"
+    assert not _gotos(t, "guard-watch"), "加密巡查时不去值守位站着"
+    t.clock.advance(INTENSE_MS // 1000 + 1)
+    await _跑(t, 25)
+    assert _log(t, "intense_end")

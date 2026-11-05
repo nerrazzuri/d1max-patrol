@@ -116,7 +116,7 @@ _ROBOT_WIFI = re.compile(r"^/api/robots/([^/]{1,64})/wifi$")
 #: ``GET /api/alerts?all=1&limit=`` 的上限。
 ALERTS_LIMIT_MAX = 2000
 #: 告警键 ``robot/kind#seq`` 里有 ``/`` 与 ``#``:客户端整个键编码成一段(``%2F``、``%23``)。
-_ALERT = re.compile(r"^/api/alerts/([^/]{1,256})/(ack|resolve|shelve|unshelve)$")
+_ALERT = re.compile(r"^/api/alerts/([^/]{1,256})/(ack|arrive|resolve|shelve|unshelve)$")
 #: W00c5c:``/api/robots/<id>/teleop``(WebSocket)与 ``/api/robots/<id>/halt``。
 _TELEOP = re.compile(r"^/api/robots/([^/]{1,64})/"
                      r"(teleop|halt|resume|supervise|relocalize|home/here|deter|service|posture)$")
@@ -937,6 +937,7 @@ class _Handler(TlsHandlerMixin):
         """告警与值守(W00c5a)。看:``view``;确认、解决:``handle_alerts``,人取登录账号。"""
         if self.site.alerts is None:
             raise HttpError(404, "此站点未启用告警")
+        from nexwar_site.alert_store import ArrivalNeeded
         from nexwar_site.alerts import AlertNotFound
         if method == "GET" and path == "/api/alerts":
             self._need(user, VIEW)
@@ -980,6 +981,9 @@ class _Handler(TlsHandlerMixin):
                 a = self.site.loop.call(lambda: _sync(self.site.alerts.unshelve, key))
             elif m.group(2) == "ack":
                 a = self.site.loop.call(lambda: _sync(self.site.alerts.ack, key, who=str(user)))
+            elif m.group(2) == "arrive":
+                # W74:保安到场(看见人的那几种要先到场才能关);到场人取登录账号
+                a = self.site.loop.call(lambda: _sync(self.site.alerts.arrive, key, who=str(user)))
             else:
                 # W44:结论(确认有人 / 误报 / 处理好了);不给 = 空(老客户端照旧能用),别的值 400
                 verdict = d.get("verdict", "")
@@ -990,6 +994,8 @@ class _Handler(TlsHandlerMixin):
                     lambda: _sync(self.site.alerts.resolve, key, who=str(user), verdict=verdict))
         except AlertNotFound as exc:
             raise HttpError(404, "没有此条告警") from exc
+        except ArrivalNeeded as exc:
+            raise HttpError(409, str(exc)) from exc
         except ValueError as exc:
             raise HttpError(400, str(exc)) from exc
         return self._send_json(200, {"alert": a.to_wire()})

@@ -57,7 +57,7 @@ void main() {
         tr("I'll handle it", '我来处理'),
         tr('Sound siren (level 3)', '开警笛（第 3 级）'),
         tr('False alarm', '误报'),
-        tr('Talk: not available', '对讲：暂不支持'),
+        tr("I'm on site", '已到场'), // W74：看见人那一类第四个位置
       ];
       for (final l in labels) {
         final f = find.descendant(of: find.byKey(SiteAlertScenePage.barKey), matching: find.text(l));

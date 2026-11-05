@@ -84,6 +84,7 @@ const Map<String, (String, String)> alertTitles = <String, (String, String)>{
   'cert_renew_failed': ('Automatic certificate renewal failed', '证书自动续签失败'),
   'zone_unwatched': ('Zone not checked for too long', '防区太久没巡到'),
   'guard_stuck': ('Zone route keeps failing', '防区路线连着跑不成'),
+  'person_overdue': ('Person detected, no guard on site', '发现人员无人到场'),
   'swap_soon': ('Battery swap coming up', '即将换电'),
   'swap_needed': ('Robot waiting for a battery swap', '机器人等待换电'),
   'swap_overdue': ('Battery swap overdue', '换电超时未处理'),

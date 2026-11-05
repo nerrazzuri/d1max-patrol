@@ -234,7 +234,13 @@ class Settings:
     z_min: float = Z_MIN
     z_max: float = Z_MAX
     max_range: float = MAX_RANGE_M
-    snapshot_every_s: float = 10.0
+    #: 截图节奏(W74 一期):同一台相机连着看到人的头 ``snapshot_burst_s`` 秒每 ``snapshot_every_s``
+    #: 秒一张(留证),之后 ``snapshot_slow_s`` 一张(商场白天一直有人,量不涨);断开
+    #: ``snapshot_gap_s`` 秒以上没看到人,再看到重新算。前后相机各拍各的。
+    snapshot_every_s: float = 3.0
+    snapshot_slow_s: float = 10.0
+    snapshot_burst_s: float = 180.0
+    snapshot_gap_s: float = 20.0
     #: 测距只用框中间这一段宽度(比例)。人的身子在框中间,框边上常是挡在前面的别的东西:
     #: 2026-10-08 C40221 上人坐在人形机器人斜后方,框右边缘跟机器人重叠一条,整框量到的是
     #: 2 m 的机器人,不是 3 m 的人。
@@ -260,7 +266,10 @@ class PersonNode:
         self._mono = monotonic
         self._wall_ns = wall_ns
         self.seq = 0
-        self._snap_at = -1e18
+        #: 每台相机:上一张截图的时刻、这一段连着看到人从什么时候起、最后一次看到人的时刻。
+        self._snap_at: dict[str, float] = {}
+        self._seen_since: dict[str, float] = {}
+        self._seen_last: dict[str, float] = {}
         #: 每台雷达最近一帧点云(狗身系):``雷达 → (点, 话题时间戳 ns, 收到时刻)``。
         self.clouds: dict[str, tuple[Any, int, float]] = {}
 
@@ -320,10 +329,22 @@ class PersonNode:
                            "score": round(min(1.0, max(0.0, b.score)), 3)})
         snap = ""
         if people and (self.snapshot_dir is not None or self.remote_snapshots) \
-                and self._mono() - self._snap_at >= self.cfg.snapshot_every_s:
+                and self._snap_due(camera):
             snap = self._save_remote(camera, jpeg) if self.remote_snapshots \
                 else self._save(camera, jpeg)
         return base | {"check": "ok", "people": people, "snapshot": snap}
+
+    def _snap_due(self, camera: str) -> bool:
+        """这一帧(看到人了)该不该截图:见 :class:`Settings` 的截图节奏。"""
+        now = self._mono()
+        last = self._seen_last.get(camera)
+        if last is None or now - last > self.cfg.snapshot_gap_s:
+            self._seen_since[camera] = now                # 新的一段
+        self._seen_last[camera] = now
+        burst = now - self._seen_since[camera] < self.cfg.snapshot_burst_s
+        every = self.cfg.snapshot_every_s if burst else max(self.cfg.snapshot_every_s,
+                                                             self.cfg.snapshot_slow_s)
+        return now - self._snap_at.get(camera, -1e18) >= every
 
     def _name(self, camera: str) -> str:
         return f"{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime(self._wall_ns() / 1e9))}" \
@@ -336,7 +357,7 @@ class PersonNode:
             return ""
         name = self._name(camera)
         self._pending_snap = (name, jpeg)
-        self._snap_at = self._mono()
+        self._snap_at[camera] = self._mono()
         return name
 
     def take_snapshot(self) -> tuple[str, bytes] | None:
@@ -358,7 +379,7 @@ class PersonNode:
         except OSError:
             log.exception("截图存不下")
             return ""
-        self._snap_at = self._mono()
+        self._snap_at[camera] = self._mono()
         return name
 
 

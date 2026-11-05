@@ -105,6 +105,7 @@ LEVEL_OF: dict[str, Level] = {
     "swap_stuck": Level.P1,
     # 布防中狗没在驱离时自己看见人(W33,决策 48):保安看现场、决定要不要就地驱离。
     "dog_sees_person": Level.P1,
+    "person_overdue": Level.P1,          # W74:看见人 10 分钟没人到场 → 经理
     # W30b(决策 51):狗上的照片、录像没加密(没装站点公钥);狗封好的证据站点解不开(私钥不对、没配)。
     "evidence_plain": Level.P2,
     "evidence_unopened": Level.P2,
@@ -529,6 +530,39 @@ class AlertBook:
         self._by_key[key] = alert
         return alert
 
+    def amend(self, key: str, *, now_ms: int, title: str | None = None, detail: str | None = None,
+              context: dict[str, Any] | None = None) -> Alert:
+        """同一件事有了新情况(W74:人看不到了、又看见了、最后位置):换标题 / 内容,``context`` 合进
+        原来的现场。不加次数(不是又触发了一次),``last_ms`` 记成现在。"""
+        existing = self._by_key.get(key)
+        if existing is None:
+            raise AlertNotFound(key)
+        alert = replace(existing,
+                        title=existing.title if title is None else title,
+                        detail=existing.detail if detail is None else detail,
+                        context={**existing.context, **(context or {})},
+                        last_ms=now_ms)
+        self._spill(alert)
+        self._by_key[key] = alert
+        return alert
+
+    def arrive(self, key: str, *, who: str, now_ms: int) -> Alert:
+        """保安到场了(W74):现场记 ``arrived_by`` / ``arrived_ms``(第一次的算),也算确认。"""
+        if not who:
+            raise ValueError("到场要有姓名")
+        existing = self._by_key.get(key)
+        if existing is None:
+            raise AlertNotFound(key)
+        if existing.context.get("arrived_ms") is not None:
+            return existing
+        alert = replace(existing,
+                        context={**existing.context, "arrived_by": who, "arrived_ms": now_ms},
+                        acked_by=existing.acked_by or who,
+                        acked_ms=existing.acked_ms if existing.acked_ms is not None else now_ms)
+        self._spill(alert)
+        self._by_key[key] = alert
+        return alert
+
     def shelve(self, key: str, *, who: str, until_ms: int, reason: str, now_ms: int) -> Alert:
         """把一条 P2 搁置到 ``until_ms``(B1,ISA-18.2)。规矩:只有 P2;没解决的;要有人、有原因;
         最多搁置 :data:`MAX_SHELVE_MS`。不合规矩抛 ``ValueError``(消息给人看)。"""
@@ -589,6 +623,9 @@ class AlertBook:
                 self._by_key[alert.key] = updated
                 due.append((updated, _CHANNEL_BY_TIER[tier]))
         return tuple(due)
+
+    def get(self, key: str) -> Alert | None:
+        return self._by_key.get(key)
 
     def open(self) -> tuple[Alert, ...]:
         """未解决的告警,按级别再按 ``last_ms`` 倒序 —— P1 永远在最上面。"""

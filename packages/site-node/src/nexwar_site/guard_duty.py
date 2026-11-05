@@ -70,9 +70,12 @@ FAIL_RETRY_MS = 60_000
 WATCH_MIN_S = 30
 #: 离值守位这么近(米)才算站在值守位上。
 POST_NEAR_M = 1.5
-#: 看见人(P1 ``dog_sees_person``)以后原地盯着等保安下结论,最多这么久(设计 §5.4:10 分钟推给经理),
-#: 之后接着值守(外审 r1 #5)。
-PERSON_HOLD_MS = 10 * 60_000
+#: 看见人(P1 ``dog_sees_person``)以后原地盯着等保安下结论,最多这么久,之后接着值守(外审 r1 #5)。
+#: W74 §九:30 分钟(10 分钟没人到场推给经理,在 :mod:`nexwar_site.sightings`);告警照样开着。
+PERSON_HOLD_MS = 30 * 60_000
+#: W74 §九:看见人以后接着值守的头这么久**加密巡查** —— 一圈只跑最后看见人那个防区和相邻的
+#: (:meth:`~nexwar_site.areas.AreaBook.neighbours`),从那个防区先跑,每圈之间不歇(不去值守位)。
+INTENSE_MS = 60 * 60_000
 PERSON_KIND = "dog_sees_person"
 #: 撤防时停下这一圈以后,过这么久按还布防着的接着跑(等狗上停稳)。
 SETTLE_MS = 3_000
@@ -170,6 +173,11 @@ class GuardDuty:
         #: 每台机器人从什么时候起一直听得见(``SETTLE_HEARD_MS`` 从这算)。
         self._heard_since: dict[str, int] = {}
         self._stop_tries: dict[int, int] = {}
+        #: W74:看见人开始盯的时候机器人在哪个防区(内存)。
+        self._held_zone: dict[str, tuple[str, str, str]] = {}
+        #: W74 加密巡查:机器人 → (到什么时候, 地图, 版本, 防区们(最后看见人的在第一个))。
+        #: 只在内存:站点重启就回到平常的值守。
+        self._intense: dict[str, tuple[int, str, str, list[str]]] = {}
         dispatcher.on_event(self._on_event)
 
     # ------------------------------------------------------------ 方案
@@ -626,6 +634,13 @@ class GuardDuty:
         plan = self.plan()
         entries = {e["id"]: e for e in plan["entries"]}
         runs = self._runs()
+        now = self._now()
+        for rid, (until, *_rest) in list(self._intense.items()):
+            if now >= until:                             # W74 加密巡查到点了
+                del self._intense[rid]
+                eid = next((k for k, r in runs.items() if r["robot_id"] == rid), None)
+                self._log("intense_end", robot=rid, entry=eid,
+                          detail="加密巡查结束,回到平常的值守")
         for eid, r in runs.items():
             e = entries.get(eid)
             if e is None or (e["robot"] and e["robot"] != r["robot_id"]):
@@ -761,11 +776,16 @@ class GuardDuty:
                 self._person_done.add(rid)
             self._log("person_resume", robot=rid, entry=eid,
                       detail="保安处理了,接着值守" if now < run["until_ms"]
-                      else f"盯了 {PERSON_HOLD_MS // 60_000} 分钟没人管,接着值守")
+                      else f"盯了 {PERSON_HOLD_MS // 60_000} 分钟没人管,接着值守(告警还开着)")
             self._set_run(eid, state="resume", until_ms=now)
+            self._start_intense(eid, rid, now)
             return True
         if not self._person_open(rid):
             return False
+        self._held_zone.pop(rid, None)
+        z = self._zone_now(rid, run)
+        if z is not None:
+            self._held_zone[rid] = z
         self._log("person_hold", robot=rid, entry=eid, zone=run["watch_zone"],
                   detail="看见人:原地停下盯着,等保安处理")
         if running and running == run["task_id"]:        # 一圈 / 去值守位的路上:停在原地
@@ -773,6 +793,52 @@ class GuardDuty:
         else:
             self._set_run(eid, state="held", until_ms=now + PERSON_HOLD_MS)
         return True
+
+    def _zone_now(self, rid: str, run: dict[str, Any]) -> tuple[str, str, str] | None:
+        """机器人此刻在哪个防区:站在值守位上按它看着的;不然按位置算。说不清 ``None``。"""
+        c = self._client(rid)
+        pose = getattr(getattr(c, "telemetry", None), "pose", None)
+        if pose is None:
+            return None
+        if run.get("watch_zone"):
+            return pose.map_id, pose.map_version, run["watch_zone"]
+        try:
+            z = self.areas.zone_at(pose.map_id, pose.map_version, pose.x, pose.y)
+        except Exception:                                # 算不出来就不加密
+            log.exception("%s 在哪个防区算不出来", rid)
+            return None
+        return (pose.map_id, pose.map_version, z) if z else None
+
+    def _start_intense(self, eid: int, rid: str, now: int) -> None:
+        held = self._held_zone.pop(rid, None)
+        if held is None:
+            return
+        m, v, z = held
+        try:
+            zones = list(self.areas.neighbours(m, v, z))
+        except Exception:
+            log.exception("%s 相邻防区算不出来", z)
+            zones = [z]
+        self._intense[rid] = (now + INTENSE_MS, m, v, zones)
+        self._log("intense_start", robot=rid, entry=eid, zone=z,
+                  detail=f"看见人以后加密巡查 {INTENSE_MS // 60_000} 分钟:{'、'.join(zones)},"
+                         "每圈不歇")
+
+    def _hot(self, eid: int, rid: str, info: dict[str, Any]) -> list[str] | None:
+        """这台在加密巡查、这条路线有那几个防区的点:那几个防区;不然 ``None``。到点了收掉。"""
+        got = self._intense.get(rid)
+        if got is None:
+            return None
+        until, m, v, zones = got
+        if self._now() >= until:
+            del self._intense[rid]
+            self._log("intense_end", robot=rid, entry=eid,
+                      detail="加密巡查结束,回到平常的值守")
+            return None
+        if (info["map_id"], info["map_version"]) != (m, v) \
+                or not any(p["zone"] in zones for p in info["points"]):
+            return None
+        return zones
 
     async def _stop(self, eid: int, run: dict[str, Any], then: str) -> None:
         """停手上这一趟:记成 ``stopping``、发中止;确认停下(:meth:`_stopping`)才进 ``then``。"""
@@ -895,6 +961,8 @@ class GuardDuty:
                 await self._stand_down(run, f"{rid} 让给指定它的值守方案")
                 return
             gap = int(e["gap_min"]) * 60_000
+            if self._hot(eid, rid, info) is not None:
+                gap = 0                                  # W74 加密巡查:每圈不歇
             nxt = max(run["lap_started_ms"] + gap, now) if gap else now
             # 先记成「等下一圈」:下一圈这一拍派不出去(机器人忙、电量低…)就在 wait 里接着等,
             # 不会每拍把这一圈的「跑完」再记一遍
@@ -952,8 +1020,17 @@ class GuardDuty:
     # ------------------------------------------------------------ 派
 
     def _lap_points(self, info: dict[str, Any], armed: list[str], run: dict[str, Any] | None,
-                    resume: bool, shuffle: bool) -> list[dict[str, Any]]:
+                    resume: bool, shuffle: bool,
+                    hot: list[str] | None = None) -> list[dict[str, Any]]:
         keep = [p for p in info["points"] if not p["zone"] or p["zone"] in armed]
+        if hot is not None:
+            # W74 加密巡查:只跑这几个防区的点,从最后看见人的那个防区(``hot[0]``)先跑;不打乱、
+            # 这一圈看过的照样再看
+            mine = [p for p in keep if p["zone"] in hot]
+            if mine:
+                first = next((z for z in hot if any(p["zone"] == z for p in mine)), None)
+                start = next(i for i, p in enumerate(mine) if p["zone"] == first)
+                return mine[start:] + mine[:start]
         seen = self._seen(info["map_id"], info["map_version"])
         if resume and run is not None:
             done = {z for z, t in seen.items() if t >= run["lap_started_ms"]}
@@ -978,8 +1055,9 @@ class GuardDuty:
         eid, now = e["id"], self._now()
         if now < self._retry_at.get(eid, 0):
             return
+        hot = self._hot(eid, rid, info)
         if pts is None:
-            pts = self._lap_points(info, armed, run, resume, bool(e["shuffle"]))
+            pts = self._lap_points(info, armed, run, resume, bool(e["shuffle"]), hot)
         if not pts:
             self._wait(e, rid, f"防区路线 {info['id']} 上布防着的防区里没有点")
             return
@@ -1002,7 +1080,8 @@ class GuardDuty:
                       "lap, lap_started_ms, next_lap_ms, until_ms, plan, watch_zone, fails) "
                       "VALUES (?,?,?,?,?,?,?,?,0,?,'',?)",
                       (eid, rid, "lap", tid, now, lap, started,
-                       started + int(e["gap_min"]) * 60_000, plan, run["fails"] if run else 0))
+                       started + (0 if hot else int(e["gap_min"])) * 60_000, plan,
+                       run["fails"] if run else 0))
         self._sent_key[rid] = self._need_key(e, info, rid, pts)
         self._log("resume" if resume else "lap_start", robot=rid, entry=eid,
                   detail=(f"第 {lap} 圈接着跑" if resume else f"第 {lap} 圈") + ":"

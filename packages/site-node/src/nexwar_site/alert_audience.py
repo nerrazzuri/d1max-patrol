@@ -33,6 +33,7 @@ _OFFLINE = ("robot_offline", "robot_offline_idle", "cctv_offline")
 _OWNER = ("agent_args_skipped", "agent_too_old", "archive_failed", "backup_stale", "board_hot",
           "bind_request", "wifi_change",
           "swap_overdue",                      # W73 第四期:换电等了 20 分钟没人来 → 经理
+          "person_overdue",                    # W74:看见人 10 分钟没人到场 → 经理
           # W53 / W52:临时巡逻的通知、账号申请 —— 不进保安的报警列表(保安在「今天的巡逻」里看)
           "adhoc_patrol", "adhoc_queue", "account_request",
           "lens_blocked", "backup_verify_failed", "bundle_lag", "cert_expiring",

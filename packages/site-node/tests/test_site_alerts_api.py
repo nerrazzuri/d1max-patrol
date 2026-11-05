@@ -208,3 +208,21 @@ def test_W17外审_值守令牌只有告警流_首帧不带狗_别的帧一律�
     resp = conn.getresponse()
     assert "robots" in 下一帧()
     conn.close()
+
+
+def test_W74_看见人_没到场关不了409说清楚_点了已到场再关(站点):
+    s = 站点
+    alice, gina = _登(s, "alice"), _登(s, "gina")
+    async def 报():
+        s.desk.raise_alert(kind="dog_sees_person", robot="A", title="机器人看见人了:1 个人")
+    s.loop.call(报)
+    a = _等(lambda: _告警(s, gina, "dog_sees_person"))
+    code, d = s.req("POST", f"/api/alerts/{_键(a)}/resolve", {"verdict": "handled"}, token=gina)
+    assert code == 409 and "已到场" in d["error"], d
+    code, d = s.req("POST", f"/api/alerts/{_键(a)}/arrive", {"who": "mallory"}, token=gina)
+    assert code == 200 and d["alert"]["context"]["arrived_by"] == "gina", "到场人取登录账号"
+    assert d["alert"]["acked_by"] == "gina"
+    code, d = s.req("POST", f"/api/alerts/{_键(a)}/resolve", {"verdict": "handled"}, token=gina)
+    assert code == 200 and d["alert"]["resolved_by"] == "gina"
+    audit = s.req("GET", "/api/audit", token=alice)[1]["audit"]
+    assert any(r["actor"] == "gina" and "/arrive" in r["action"] for r in audit)
