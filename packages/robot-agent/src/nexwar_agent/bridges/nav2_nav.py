@@ -226,6 +226,7 @@ class Nav2NavBackend(PlannedNavBackend):
     def install_grid(self, base: Any, problem: str | None) -> None:
         super().install_grid(base, problem)
         self._map_dir = getattr(self, "_reading_dir", self._map_dir) if base is not None else None
+        self._clear_at = []                               # 换了图:以前临时擦的不算了
         self._send_map()
 
     async def set_zones(self, zs: ZoneSet | None) -> None:
@@ -243,7 +244,27 @@ class Nav2NavBackend(PlannedNavBackend):
                  if z.kind == "slow" and z.max_speed_mps and not z.keep_out]
         self.link.send({"type": "map", "req": self._map_req, "map_id": self._map_id,
                         "map_version": "", "dir": str(self._map_dir), "nogo": nogo,
-                        "speed": speed})
+                        "speed": speed, "clear": list(getattr(self, "_clear_at", []))})
+
+    def _start_cause(self, here: Any) -> str:
+        """Nav2 说起点致命(11-05):机器人中心那格在发给 Nav2 的静态图里是挡 —— ``nogo`` = 在禁行区里;
+        ``map`` = 地图上那格是挡(扫图时的人、摊位留下的残影;机器人站着,那里一定是空的);``""`` =
+        都不是(感知的障碍)。"""
+        from nexwar_contract.planning.costmap import load_floor
+        from nexwar_contract.zones import point_in_polygon
+        for z in self._effective(self.zones):
+            if z.keep_out and point_in_polygon(here.x, here.y, z.polygon):
+                return "nogo"
+        if self._map_dir is None:
+            return ""
+        try:
+            free, res, origin = load_floor(self._map_dir)
+        except Exception:                                 # noqa: BLE001 - 读不了就不判
+            return ""
+        r = int(math.floor((here.y - origin[1]) / res))
+        c = int(math.floor((here.x - origin[0]) / res))
+        h, w = free.shape
+        return "map" if 0 <= r < h and 0 <= c < w and not free[r, c] else ""
 
     # ------------------------------------------------------------ 起、停
 
@@ -772,12 +793,29 @@ class Nav2NavBackend(PlannedNavBackend):
         tgt = self._target
         # W71(11-03 17:28 商场:机身歪着,身边一圈被判成挡,Nav2「Starting point in lethal space」,
         # 原来报「目标点被占」):机器人自己被围住先说被困 —— 不是终局,挪开一点再试能好
-        trapped = "lethal" in str(m.get("reason", "")).lower() or self._trapped(here)
+        lethal = "lethal" in str(m.get("reason", "")).lower()
+        cause = self._start_cause(here) if lethal else ""
+        if cause == "map":
+            g = self.guard
+            self._clear_at = (list(getattr(self, "_clear_at", [])) + [[
+                round(here.x, 3), round(here.y, 3), round(here.yaw, 4),
+                getattr(g, "body_len", 0.93) / 2, getattr(g, "body_wid", 0.48) / 2]])[-8:]
+            self._send_map()
+        trapped = lethal or self._trapped(here)
         occupied = not trapped and tgt is not None and self._target_occupied(here, tgt)
         start = getattr(self, "_goal_from", None)
         stuck = start is not None and math.dist(start, (here.x, here.y)) < NO_PROGRESS_M
-        if trapped:
-            why = ("机器人被困:身边一圈都被判成障碍(台阶、地面高差,或者贴着东西),规划不出路;"
+        if cause == "map":
+            why = (f"机器人站的地方在地图上是障碍(多半是扫图时的人、摊位留下的残影,在 "
+                   f"({here.x:.2f}, {here.y:.2f})):机身底下这块已经临时当空地,再试一次;"
+                   "回头在网页上清理地图这一处")
+        elif cause == "nogo":
+            why = "机器人在禁行区里(导航把禁行区当墙,规划不出路):先遥控挪出禁行区再派"
+        elif lethal:
+            why = ("机器人脚下被判成障碍(贴着东西、台阶边,或者机身歪着),规划不出路;"
+                   "把它挪开一点或遥控出来再派")
+        elif trapped:
+            why = ("机器人被困:前后都被判成障碍(台阶、地面高差,或者贴着东西),规划不出路;"
                    "把它挪开一点或遥控出来再派")
         elif occupied:
             why = "目标点被占(那里有东西,机器人站不下),去不了:把东西挪开后再派一次"

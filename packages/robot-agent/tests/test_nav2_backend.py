@@ -1234,3 +1234,58 @@ async def test_W72_换了新目标_进展从头算_不拿上一个目标的时�
         link.cmd = (link.now, gid, 0.0, 0.0, 0.6)
         await t.一拍()
     assert [d for k, d in t.events if k == "nav_blocked"] == []
+
+
+def _残影(tmp_path, x, y):
+    """在 floor.pgm 上 (x, y) 点一格挡(扫图时的人、摊位留下的残影;现场其实是空的)。"""
+    import numpy as np
+    from obs_world import RES
+    raw = (tmp_path / "floor.pgm").read_bytes()
+    w, h = map(int, raw.split(b"\n")[1].split())
+    body = raw[len(b"\n".join(raw.split(b"\n")[:3])) + 1:]
+    img = np.frombuffer(body, dtype=np.uint8).reshape(h, w).copy()
+    img[h - 1 - int(y / RES), int(x / RES)] = 0
+    (tmp_path / "floor.pgm").write_bytes(b"P5\n%d %d\n255\n" % (w, h) + img.tobytes())
+
+
+async def test_现场1105_站在地图残影上_Nav2说起点致命_机身底下临时当空_说清楚再试(tmp_path):
+    """11-05 商场原点、广场窄口:机器人站的那格在静态图上是挡(残影),Nav2「Starting point in lethal
+    space」55 次,倒车脱困也被挡;原来报「身边一圈都被判成障碍」。机器人站着的地方一定是空的。"""
+    link = 假转接()
+    t = _台(tmp_path, link)
+    _残影(tmp_path, 1.5, 4.0)
+    t.nav.load_grid(tmp_path)
+    await t.start(1.5, 4.0)
+    await _看清(t)
+    await t.nav.goto(Pose.from_xy_yaw(8.0, 4.0, 0.0))
+    gid = link.kinds("goal")[-1]["goal_id"]
+    await t.跑(0.5)
+    link.goal_states.append({"type": "goal_state", "goal_id": gid, "state": "aborted",
+                             "reason": "GridBased: failed to create plan, invalid use: "
+                                       "Starting point in lethal space!"})
+    await t.跑(1.0)
+    why = t.nav.fail_reason
+    assert NavStatus.FAILED in t.status and "残影" in why and "清理" in why, why
+    assert "一圈" not in why and not t.nav.fail_final, "临时擦了,引擎再试一次"
+    m = link.kinds("map")[-1]
+    [c] = m["clear"]
+    assert math.dist(c[:2], (1.5, 4.0)) < 0.2 and len(c) == 5, c
+
+
+async def test_现场1105_站在禁行区边上_Nav2说起点致命_说先挪出来_不擦禁行区(tmp_path):
+    from nexwar_contract.zones import Zone, ZoneSet
+    link = 假转接()
+    t = _台(tmp_path, link)
+    await t.start(1.5, 4.0)
+    await t.nav.set_zones(ZoneSet(map_id="m", map_version="1", revision=1, zones=(
+        Zone(id="z", kind="nogo", label="栏杆", polygon=((1.3, 3.8), (3.0, 3.8), (3.0, 3.0),
+                                                        (1.3, 3.0))),)))
+    await _看清(t)
+    t.nav._target = Pose.from_xy_yaw(8.0, 4.0, 0.0)
+    t.r.teleport(1.5, 3.7, 0.0)                       # 机身压着禁行区边
+    await t.跑(0.2)
+    await t.nav._nav2_failed({"state": "aborted",
+                              "reason": "Starting point in lethal space!"}, await t.nav._here())
+    why = t.nav.fail_reason
+    assert "禁行区" in why and "挪" in why and "残影" not in why, why
+    assert not link.kinds("map")[-1].get("clear"), "禁行区不擦"
