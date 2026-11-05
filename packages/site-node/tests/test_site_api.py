@@ -678,3 +678,22 @@ def test_W17_值守令牌只能看告警_注销即作废(站点):
     assert 站点.req("POST", "/api/logout", {}, token=w)[0] == 200
     assert 站点.req("GET", "/api/alerts", token=w)[0] == 401
     assert 站点.req("GET", "/api/robots", token=tok)[0] == 200, "普通会话不受影响"
+
+
+def test_现场1105_请求体没被读走_同一条连接的下一个请求照常_不报501(站点):
+    # 现场:手机值守页上整页「Error code: 501 Unsupported method ('{}GET')」—— 上一个请求带的 {}
+    # 站点没读,留在连接里跟下一个 GET 粘在一起
+    import http.client
+    tok = 站点.login()
+    host, port = 站点.api.httpd.server_address[:2]
+    conn = http.client.HTTPConnection(host, port, timeout=10)
+    h = {"Authorization": f"Bearer {tok}", "Content-Type": "application/json"}
+    conn.request("GET", "/api/robots", body=b"{}", headers=h)  # 带体的 GET:处理时不读体
+    r1 = conn.getresponse()
+    r1.read()
+    assert r1.status == 200
+    conn.request("GET", "/api/robots", headers=h)
+    r2 = conn.getresponse()
+    body = r2.read()
+    assert r2.status == 200, body[:200]
+    conn.close()
