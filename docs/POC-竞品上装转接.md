@@ -84,6 +84,24 @@ Orin 上 `/etc/nexwar/payload.json`：
 2. **音量**：用户定 70%（`amixer -c 1` 的 DACL、DACR 都是 70%，-6 dB），**没存盘**：竞品主控重启会恢复原样，要重新调。
    - 我们的代码不改竞品的音量，也不改它的任何设置。
 3. **登录竞品主控**：POC 阶段用户同意，只用来放录好的话术。密码只在 Orin 的 `/etc/nexwar/env`。
+4. **竞品在 Orin 上的桥（parameter_bridge，把前雷达转给竞品）**：11-05 用户同意停掉，省约 3–4% 的整机 CPU（单核 29%）。
+   - 按 PID 停的，PID 记在 Orin `~/bridge-pids-1105.txt`；自启没改，Orin 重启它会回来。
+   - 停了以后，警灯、喊话、`link:anbot` 都照常。
+   - 竞品自己的定位、避障可能用不了。POC 期间本来就不让竞品带机器人跑。
+5. **视频走 SRT（UDP）**：经不了 SSH 隧道，站点主机和机器人要在同一个网里。站点 `site.json` 里 `"video": {"srt_host": "<站点主机在这个网里的地址>"}`；换网（比如改连手机热点）要跟着改。
+
+## 上装相机（11-05）
+
+Orin 上 `/etc/nexwar/cameras.json`（root:robot 0640，里面有口令，不拷出 Orin）：
+
+```json
+{"thermal": {"url": "rtsp://<账号>:<口令>@192.168.113.113:554/ch1/main/av_stream", "record": false},
+ "payload": {"url": "rtsp://<账号>:<口令>@192.168.113.103:554/ch1/sub/av_stream", "record": false}}
+```
+
+- 热像 384×288 用 main；可见光用 sub，经中继 Wi-Fi 推 1080p 太重。
+- 网页画面上「热像」「上装」二选一，App 视频页能切 4 路。两路都不录。
+- 11-05 现场：4 路出画面，用户说不太卡、能接受；看视频时 Orin 整机 CPU 约 54–57%。
 
 ## 现场试（笔记本，机器人不用动）
 
