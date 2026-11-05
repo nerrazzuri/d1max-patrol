@@ -243,6 +243,8 @@ class Nav2Bridge:
         self.lm = self.node.create_client(Trigger, "/lifecycle_manager_navigation/is_active")
         self.nav2_active = False
         self._inactive_since: float | None = None
+        #: 11-05 现场第 47 条:从什么时候起没就绪(单调钟;就绪了 None)。
+        self._unready_since: float | None = None
         self._restarts = 0
         self._manage_busy = False
         self._manage_deadline = 0.0                      # 这一步等回话等到几时(单调钟)
@@ -786,23 +788,38 @@ class Nav2Bridge:
             self._manage_busy = False
 
     def check_ready(self) -> None:
+        """11-05 现场第 47 条:根上的原因先说(没图、没时钟、Nav2 没起来),「等取消上一次的目标」放在
+        Nav2 起来以后 —— 取消服务要 Nav2 起来了才在,不然一直显示它、看不出是 Nav2 卡在启动。
+        没就绪超过一分钟,原因后面写等了几分钟(按分钟变,不每秒重发)。"""
         self._poll_active()
         self._lifecycle_retry()
+        hint = ""
         if self._mono() < self.status_sync_until:
-            self._set_ready(False, "等 Nav2 的动作状态同步")
-        elif self.cleanup_pending:
-            self._set_ready(False, "等 Nav2 取消上一次留下的导航目标")
+            why = "等 Nav2 的动作状态同步"
         elif not self.map_sent:
-            self._set_ready(False, "尚未收到地图")
+            why = "尚未收到地图"
+            hint = ",一直这样请看定位:机器人加载的图是不是这个地方的、定位好了没有"
         elif time.monotonic() - self._clock_wall > CLOCK_STALE_S:
-            self._set_ready(False, "代理未在送时钟")
-        elif not self.nav.server_is_ready() or not self.thru.server_is_ready():
-            self._set_ready(False, "Nav2 的导航动作服务尚未起来")
+            why = "代理未在送时钟"
         elif not self.nav2_active:
-            self._set_ready(False, "Nav2 还在启动(生命周期未全部激活"
-                            + (f";已自动重来 {self._restarts} 次)" if self._restarts else ")"))
+            why = ("Nav2 还在启动(生命周期未全部激活"
+                   + (f";已自动重来 {self._restarts} 次)" if self._restarts else ")"))
+        elif not self.nav.server_is_ready() or not self.thru.server_is_ready():
+            why = "Nav2 的导航动作服务尚未起来"
+        elif self.cleanup_pending:
+            why = "等 Nav2 取消上一次留下的导航目标"
         else:
+            self._unready_since = None
             self._set_ready(True, "")
+            return
+        now = self._mono()
+        since = getattr(self, "_unready_since", None)
+        if since is None:
+            since = self._unready_since = now
+        mins = int((now - since) // 60)
+        if mins >= 1:
+            why += f"(已等 {mins} 分钟{hint})"
+        self._set_ready(False, why)
 
     # ------------------------------------------------------------ 主循环
 

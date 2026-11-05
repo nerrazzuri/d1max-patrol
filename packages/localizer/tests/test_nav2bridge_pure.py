@@ -791,3 +791,58 @@ def test_现场1105_机身底下临时擦掉_残影没了_禁行区照烧(tmp_pa
     assert occ[20, 30] == 0, "残影擦了"
     assert occ[20, 50] == 100, "机身外面的不动"
     assert occ[20, 28] == 100, "禁行区照烧"
+
+
+def _就绪桥(now):
+    from types import SimpleNamespace as NS
+    b = _生命周期桥(now)
+    b._poll_active = b._lifecycle_retry = lambda: None
+    b.status_sync_until, b.cleanup_pending, b.map_sent = 0.0, True, True
+    b.nav = b.thru = NS(server_is_ready=lambda: False)
+    b._ready, b._unready_since = None, None
+    b.send = b.sent.append
+    return b
+
+
+def test_现场1105_47_Nav2卡在启动_就绪原因说卡在启动_不说等取消上一次目标():
+    """11-05 冷启动:bt_navigator 没配置起来,取消服务也就一直不在,就绪原因一直写「等 Nav2 取消上一次
+    留下的导航目标」,看不出是 Nav2 自己没起来。先说根上的原因;等过一分钟写等了多久。"""
+    now = [100.0]
+    b = _就绪桥(now)
+    b.check_ready()
+    why = b.sent[-1]["reason"]
+    assert "还在启动" in why and "取消" not in why, why
+    assert "已等" not in why
+    now[0] += 61
+    b.check_ready()
+    assert "已等 1 分钟" in b.sent[-1]["reason"], b.sent[-1]
+    n = len(b.sent)
+    now[0] += 5
+    b.check_ready()
+    assert len(b.sent) == n, "同一分钟里不重复发"
+
+
+def test_现场1105_47_没收到地图_一分钟后提示看定位():
+    now = [0.0]
+    b = _就绪桥(now)
+    b.map_sent = False
+    b.check_ready()
+    assert b.sent[-1]["reason"] == "尚未收到地图"
+    now[0] += 120
+    b.check_ready()
+    why = b.sent[-1]["reason"]
+    assert "已等 2 分钟" in why and "定位" in why, why
+
+
+def test_现场1105_47_Nav2都起来了_只剩取消上一次目标():
+    from types import SimpleNamespace as NS
+    now = [0.0]
+    b = _就绪桥(now)
+    b.nav2_active = True
+    b.nav = b.thru = NS(server_is_ready=lambda: True)
+    b.check_ready()
+    assert "取消上一次" in b.sent[-1]["reason"]
+    b.cleanup_pending = False
+    b.check_ready()
+    assert b.sent[-1] == {"type": "ready", "ok": True, "reason": ""}
+    assert b._unready_since is None
