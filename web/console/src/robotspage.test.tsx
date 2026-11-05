@@ -256,6 +256,36 @@ describe("W71 Nav2 没起来", () => {
     await waitFor(() => expect(posted.find((p) => p.url === "/api/robots/A/abort")?.body).toEqual({ task_id: "t9" }));
   });
 
+  it("POC 姿态:报了才显示;点了先确认再发;有任务在跑灰掉写原因;经理看不到", async () => {
+    robots[0] = card({ postures: ["stand", "lie", "crawl"], task: null });
+    const { container: c } = render(<RobotsPage say={(s) => said.push(s)} now={NOW} role="guard" />);
+    await waitFor(() => expect(cardOf(c, "A")).not.toBeNull());
+    fireEvent.click(cardOf(c, "A"));
+    const d = c.querySelector(".robot-detail")!;
+    for (const s of ["站起", "趴下", "蹲下"]) expect(btn(d, s).disabled).toBe(false);
+    fireEvent.click(btn(d, "趴下"));
+    expect(posted.some((p) => p.url === "/api/robots/A/posture")).toBe(false);
+    const dlg = await waitFor(() => { const x = c.querySelector("dialog"); expect(x).toBeTruthy(); return x!; });
+    expect(dlg.textContent).toContain("旁边没有人");
+    fireEvent.click(btn(dlg, "趴下"));
+    await waitFor(() => expect(posted.find((p) => p.url === "/api/robots/A/posture")?.body).toEqual({ mode: "lie" }));
+    await waitFor(() => expect(said.join()).toContain("已趴下"));
+    cleanup();
+    robots[0] = card({ postures: ["stand", "lie"], task: "patrol-7" });
+    const { container: c2 } = render(<RobotsPage say={(s) => said.push(s)} now={NOW} role="guard" />);
+    await waitFor(() => expect(cardOf(c2, "A")).not.toBeNull());
+    fireEvent.click(cardOf(c2, "A"));
+    const d2 = c2.querySelector(".robot-detail")!;
+    expect(btn(d2, "趴下").disabled).toBe(true);
+    expect(d2.textContent).toContain("正在执行任务 patrol-7");
+    expect(Array.from(d2.querySelectorAll("button")).some((b) => b.textContent?.trim() === "蹲下")).toBe(false);
+    cleanup();
+    const { container: c3 } = render(<RobotsPage say={(s) => said.push(s)} now={NOW} role="owner" />);
+    await waitFor(() => expect(cardOf(c3, "A")).not.toBeNull());
+    fireEvent.click(cardOf(c3, "A"));
+    expect(c3.querySelector(".rd-posture")).toBeNull();
+  });
+
   it("W72 控制:被叫停的给恢复;离线不能派;经理只能派巡逻和停", async () => {
     robots[0] = card({ held: { by: "bob", at_ms: NOW - 60_000 } });
     robots[1] = { ...robots[1], problems: [], recent_problems: [] };

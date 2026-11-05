@@ -24,6 +24,10 @@ class HalUnsupported(Exception):
     """这台机器/这个适配器没有这项能力。调用方先看 ``hal_capabilities()``。"""
 
 
+#: 姿态(POC 2026-11):站起、趴下、蹲下(SDK 的 Crawl)。``set_motion_mode`` 收这几个。
+POSTURES: tuple[str, ...] = ("stand", "lie", "crawl")
+
+
 class MotionStatus(str, Enum):
     UNKNOWN = "unknown"
     LYING = "lying"
@@ -155,10 +159,14 @@ class HalCapabilities:
     actuators: dict[str, bool]
     #: 横移最快多少(m/s;``lateral`` 为真才有意义,2026-10-30)。老代理不报 = 0。
     max_vy: float = 0.0
+    #: 能换哪几种姿态(POC 2026-11):``POSTURES`` 的子集;不报 = 都不能(老适配器)。
+    postures: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if not (math.isfinite(self.max_vy) and self.max_vy >= 0):
             raise ContractError("HalCapabilities: max_vy 要是非负的有限数")
+        if not isinstance(self.postures, tuple) or any(p not in POSTURES for p in self.postures):
+            raise ContractError(f"HalCapabilities: postures 只能取 {POSTURES}")
         if self.recharge_mode not in RECHARGE_MODES:
             raise ContractError(f"HalCapabilities: recharge_mode 只能是 {RECHARGE_MODES}")
         for k in SENSING_KEYS:
@@ -173,7 +181,8 @@ class HalCapabilities:
                 "lateral": self.lateral, "control_releasable": self.control_releasable,
                 "recharge_mode": self.recharge_mode, "sensing": dict(self.sensing),
                 "actuators": dict(self.actuators),
-                **({"max_vy": self.max_vy} if self.lateral else {})}
+                **({"max_vy": self.max_vy} if self.lateral else {}),
+                **({"postures": list(self.postures)} if self.postures else {})}
 
     @classmethod
     def from_wire(cls, d: Any) -> HalCapabilities:
@@ -185,7 +194,8 @@ class HalCapabilities:
                    control_releasable=as_bool(d, "control_releasable", w),
                    recharge_mode=as_str(d, "recharge_mode", w),
                    sensing=as_dict(d, "sensing", w), actuators=as_dict(d, "actuators", w),
-                   max_vy=as_float(d, "max_vy", w) if "max_vy" in d else 0.0)
+                   max_vy=as_float(d, "max_vy", w) if "max_vy" in d else 0.0,
+                   postures=tuple(d["postures"]) if isinstance(d.get("postures"), list) else ())
 
 
 class RobotHAL(Protocol):

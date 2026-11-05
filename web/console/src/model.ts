@@ -188,6 +188,11 @@ export function canDispatch(role: string): boolean {
   return isOwnerLike(role) || role === "guard";
 }
 
+/** 遥控、换姿态(人手动让机身动):管理员、工程师、保安;经理不能。 */
+export function canTeleop(role: string): boolean {
+  return isOwnerLike(role) || role === "guard";
+}
+
 /** 派巡逻(临时巡逻,W53):能派单的,加上经理。 */
 export function canPatrol(role: string): boolean {
   return canDispatch(role) || role === "owner";

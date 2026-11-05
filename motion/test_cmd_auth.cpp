@@ -45,13 +45,13 @@ int main() {
     for (const char* c : {"halt", "auth", "clear"}) CHECK(cmdauth::IsOpen(c, true));
     CHECK(cmdauth::IsOpen("estop", true));
     CHECK(!cmdauth::IsOpen("estop", false));
-    for (const char* c : {"vel", "walk", "stand", "lie", "head", "hold", "shutdown", "light",
-                          "什么", ""})
+    for (const char* c : {"vel", "walk", "stand", "lie", "crawl", "head", "hold", "shutdown",
+                          "light", "什么", ""})
       CHECK(!cmdauth::IsOpen(c, true));
   }
   {  // FIFO 不可信时只收停车、急停(按下)、看状态;clear 在 FIFO 里是松开急停,不收
     for (const char* c : {"halt", "estop", "status"}) CHECK(cmdauth::FifoOpen(c));
-    for (const char* c : {"stand", "lie", "walk", "clear", "hold", "shutdown", "quit"})
+    for (const char* c : {"stand", "lie", "crawl", "walk", "clear", "hold", "shutdown", "quit"})
       CHECK(!cmdauth::FifoOpen(c));
   }
   {  // 比较

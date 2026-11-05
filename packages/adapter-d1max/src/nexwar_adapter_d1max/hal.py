@@ -233,15 +233,28 @@ class D1MaxHal:
         return MotionStatus.STANDING
 
     async def set_motion_mode(self, mode: str) -> None:
-        """``stand`` / ``lie``。旁路进程做完才回执,这里再等状态帧跟上。"""
+        """``stand`` / ``lie`` / ``crawl``(蹲下,旁路进程协议 11 起)。
+        旁路进程做完才回执,这里再等状态帧跟上。"""
         if mode == "stand":
             await self._b.stand()
             await self._wait_motion(_READY_MOTIONS)
         elif mode == "lie":
             await self._b.lie()
             await self._wait_motion(frozenset({SdkMotion.LIE_DOWN}))
+        elif mode == "crawl" and self._can_crawl():
+            await self._b.crawl()
+            await self._wait_motion(frozenset({SdkMotion.CRAWL}))
         else:
-            raise HalUnsupported(f"D1 Max 适配器只做 stand/lie,不认 {mode!r}")
+            raise HalUnsupported(f"D1 Max 适配器做 {'/'.join(self._postures())},不认 {mode!r}")
+
+    def _can_crawl(self) -> bool:
+        """蹲下要旁路进程协议 11 起(老的不认 ``crawl``)。"""
+        from nexwar_patrol.protocol.agent_frames import CRAWL_PROTO_VERSION
+        hello = getattr(self._b, "hello", None)
+        return hello is not None and getattr(hello, "proto", 0) >= CRAWL_PROTO_VERSION
+
+    def _postures(self) -> tuple[str, ...]:
+        return ("stand", "lie", "crawl") if self._can_crawl() else ("stand", "lie")
 
     async def _wait_motion(self, want: frozenset[SdkMotion]) -> None:
         deadline = self._monotonic() + POSTURE_TIMEOUT_S
@@ -524,7 +537,7 @@ class D1MaxHal:
     def hal_capabilities(self) -> HalCapabilities:
         return HalCapabilities(
             max_vx=self.max_vx, max_wz=self.max_wz, deadband_vx=self._deadband,
-            lateral=self._lat_mps > 0, max_vy=self.max_vy,
+            lateral=self._lat_mps > 0, max_vy=self.max_vy, postures=self._postures(),
             control_releasable=False, recharge_mode="none",
             sensing={"lidar": False, "depth": False, "thermal": False, "imu": True,
                      "imu_hz": IMU_HZ, "joint_effort": False, "foot_force": False},

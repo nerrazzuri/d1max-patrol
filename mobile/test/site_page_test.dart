@@ -1,5 +1,6 @@
 // 站点模式的几屏（W00c4）：按角色显示按钮、列表与单狗页用真站点的夹具、首屏二选一、站点列表存取。
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -208,6 +209,11 @@ class FakeApi implements SiteApi {
   Future<Map<String, dynamic>> returnToStandby(String id, {String? name}) async {
     calls.add(name == null ? 'standby $id' : 'standby $id $name');
     return {'ack': {'result': 'accepted'}};
+  }
+  @override
+  Future<Map<String, dynamic>> posture(String robotId, String mode) async {
+    calls.add('posture $robotId $mode');
+    return {'ack': {'result': 'accepted'}, 'mode': mode};
   }
   /// 固定摄像头（W19）。
   List<Map<String, dynamic>> cameraRows = <Map<String, dynamic>>[];
@@ -1088,6 +1094,44 @@ void main() {
     await t.pumpAndSettle();
     expect(find.text('A'), findsOneWidget);
     expect(find.textContaining('在线'), findsOneWidget);
+  });
+
+  testWidgets('POC 姿态：报了才有；先选再确认才发；有任务在跑直接说先停；经理没有', (t) async {
+    Map<String, dynamic> withPosture(Map<String, dynamic> v, {bool idle = true}) {
+      final out = jsonDecode(jsonEncode(v)) as Map<String, dynamic>;
+      ((out['capabilities'] as Map)['tasks'] as Map)['posture'] = {'modes': ['stand', 'lie', 'crawl']};
+      if (idle) (out['status'] as Map)['task'] = null;
+      return out;
+    }
+    final api = FakeApi('guard', robotView: withPosture(busyView()));
+    await openRobot(t, api);
+    await t.ensureVisible(find.byKey(const Key('btn-posture')));
+    await t.tap(find.byKey(const Key('btn-posture')));
+    await t.pumpAndSettle();
+    expect(find.byKey(const Key('posture-crawl')), findsOneWidget);
+    await t.tap(find.byKey(const Key('posture-lie')));
+    await t.pumpAndSettle();
+    expect(api.calls, isEmpty, reason: '还没确认，不发');
+    expect(find.textContaining('旁边没有人'), findsOneWidget);
+    await t.tap(find.byKey(const Key('posture-confirm')));
+    await t.pumpAndSettle();
+    expect(api.calls, ['posture A lie']);
+
+    // 换一套假站点前先把页面清掉（不然上一台的详情页还盖在上面）
+    await t.pumpWidget(Container());
+    final busy = FakeApi('guard', robotView: withPosture(busyView(), idle: false));
+    await openRobot(t, busy);
+    await t.ensureVisible(find.byKey(const Key('btn-posture')));
+    await t.tap(find.byKey(const Key('btn-posture')));
+    await t.pumpAndSettle();
+    expect(find.byKey(const Key('posture-lie')), findsNothing);
+    expect(find.textContaining('先停止它再换姿态'), findsOneWidget);
+    expect(busy.calls, isEmpty);
+
+    await t.pumpWidget(Container());
+    final owner = FakeApi('owner', robotView: withPosture(busyView()));
+    await openRobot(t, owner);
+    expect(find.byKey(const Key('btn-posture')), findsNothing);
   });
 
   testWidgets('保安：能派巡检、回待命点、叫停', (t) async {

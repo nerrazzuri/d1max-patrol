@@ -70,7 +70,7 @@ async def test_起来就发能力与状态_均retained(台子):
     assert caps.robot_id == "r"
     assert list(caps.tasks) == [
         "goto", "patrol", "teleop", "relocalize", "mark_home", "head", "zones_set",
-        "running_config", "speed_cap", "compat"]      # R4 加 running_config
+        "running_config", "speed_cap", "compat", "posture"]  # R4 加 running_config;POC 加姿态
     hal = r.hal_capabilities()
     assert caps.tasks["teleop"] == {"max_vx": hal.max_vx / 2, "max_wz": hal.max_wz / 2}, \
         "W00c5c:遥控限速是 HAL 能力的一半"

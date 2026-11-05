@@ -115,7 +115,7 @@ using namespace robot_sdk;
 // 比例上限夹前进分量(不带 vmax 的老许可按 0.5);新参数 --max-fraction(0.5–1.0,默认 0.5):超过 0.5 的
 // 前进只在开了 --require-clearance 时放行。hello 带 max_fraction。感知节点只对 ≥ 10 的发分档许可(9 号会
 // 把任何许可都当成「0.5 随便走」,所以对老的照旧只在够 0.6 m/s 刹停时才发)。代理认 3–10。
-static const int kProtoVersion = 10;
+static const int kProtoVersion = 11;   // 11:crawl(蹲下,POC 2026-11)
 // 这一次起来的令牌(cmd_auth.hpp)。空 = 没写成令牌文件,谁都认证不了(停车照常)。
 static std::string g_token;
 static int g_speed_want = 1;
@@ -526,6 +526,14 @@ static Outcome DoLie() {
   return Outcome{};
 }
 
+/// 蹲下(SDK 的 Crawl,匍匐姿态,静止)。协议 11 起有。SDK 文档:任意姿态都能切过去。
+static Outcome DoCrawl() {
+  if (!g_held.load()) return DenyControl("crawl");
+  std::lock_guard<std::mutex> lk(g_sdk_mtx);
+  g_client->Crawl(3000);
+  return Outcome{};
+}
+
 // 「这一拍被叫停了」的统一话术。Python 那头把它当普通拒绝处理。
 static const char* kWalkCancelled = "行走被停车/急停打断";
 
@@ -716,6 +724,7 @@ static Outcome RunCommand(const std::string& cmd, const std::string& line,
   }
   if (cmd == "stand") return DoStand();
   if (cmd == "lie") return DoLie();
+  if (cmd == "crawl") return DoCrawl();
   if (cmd == "head")
     return DoHead(JsonNumField(line, "yaw", 0.0), JsonNumField(line, "pitch", 0.0));
   if (cmd == "clear") {
@@ -963,6 +972,8 @@ static void HandleFifoLine(const std::string& line, bool trusted) {
     out = DoStand();
   } else if (cmd == "lie") {
     out = DoLie();
+  } else if (cmd == "crawl") {
+    out = DoCrawl();
   } else if (cmd == "walk") {
     double sec = 1.0, fwd = 0.5;
     is >> sec;
