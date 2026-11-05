@@ -316,6 +316,8 @@ class AgentRuntime:
                 snapshot_dir=persons_snapshots or store_dir / "person-snapshots",
                 save_snapshot=self._save_person_snapshot)
             self.person_view.ignore = self._person_ignored     # W41:人员检测忽略区
+            # W74 五期:证据加密配好了(主程序设 evidence_sealed)才留人脸补拍
+            self.person_view.faces_ok = lambda: self.evidence_sealed is True
             self._pers_srv = PersonBridgeServer(persons_socket or store_dir / "persons.sock",
                                                 self.person_view,
                                                 monotonic=monotonic or time.monotonic,
