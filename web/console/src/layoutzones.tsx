@@ -120,6 +120,7 @@ export function ZonesTab(p: TabProps) {
             <button type="button" class="btn sm primary" disabled={draft.length < 3} onClick={() => setNaming(true)}>{t("lyDrawDone")}</button>
           </div>
         ) : <button type="button" class="btn primary" onClick={() => { setDraft([]); setSel(null); }}>{t("lyDrawZone")}</button>}
+        <p class="note small" data-zones-patrol="1">{t("lyZonesPatrol")}</p>
         <p class="muted small">{t("lyZonesHint")}</p>
         <ul class="plain ly-list">
           {areas.length === 0 && <li class="muted small">{t("noZones")}</li>}

@@ -23,7 +23,7 @@ import 'nw/nw_map_raster.dart';
 import 'nw/nw_p4_admin.dart';
 import 'nw/nw_theme.dart';
 import 'nw/nw_widgets.dart';
-import 'patrol_dispatch.dart' show dispatchResultText;
+import 'patrol_dispatch.dart' show dispatchResultText, hhmm, minutesText;
 import 'pose_marker.dart';
 import 'refusal.dart';
 import 'widget/fields_dialog.dart';
@@ -569,8 +569,46 @@ class _SiteRouteEditorPageState extends State<SiteRouteEditorPage> {
                     child: Text('${r['robot_id']}')),
             ]));
     if (id == null || !mounted) return;
+    // POC 第 5 项：派之前先看预计多久、派给谁、现在走还是排在日程后面；确认了才派
+    Map<String, dynamic> plan;
+    try {
+      plan = await widget.api.patrolPlan(id, _id);
+    } on SiteError catch (e) {
+      if (mounted) setState(() => _msg = tr('Refused: ${e.message}', '被拒绝：${e.message}'));
+      return;
+    }
+    if (!mounted) return;
+    final est = plan['estimate_s'];
+    final queued = plan['queued'] == true;
+    final off = (plan['utc_offset_min'] as num?)?.toInt();
+    final at = plan['start_ms'];
+    final go = await showDialog<bool>(
+        context: context,
+        builder: (c) => AlertDialog(
+              title: Text(tr('Send $_id to $id', '派 $id 跑一趟 $_id')),
+              content: Text([
+                if (est is num) tr('Takes ${minutesText(est)} (back to standby included)', '预计${minutesText(est)}（含回待命点）'),
+                if (queued)
+                  tr('A schedule comes first: it starts after ${at is num ? hhmm(at.toInt(), off) : '?'} ${plan['because'] ?? ''}',
+                      '日程优先：${at is num ? hhmm(at.toInt(), off) : '?'} 之后开始 ${plan['because'] ?? ''}')
+                else
+                  tr('Starts now', '现在就走'),
+              ].join('\n')),
+              actions: [
+                TextButton(onPressed: () => Navigator.pop(c, false), child: Text(tr('Cancel', '取消'))),
+                FilledButton(
+                    key: const Key('route-send-go'),
+                    onPressed: () => Navigator.pop(c, true),
+                    child: Text(queued ? tr('Queue it', '排队派出') : tr('Send', '派出'))),
+              ],
+            ));
+    if (go != true || !mounted) return;
     try {
       final r = await widget.api.patrol(id, _id);
+      if (r['queued'] == true) {
+        if (mounted) setState(() => _msg = dispatchResultText(r, _id));
+        return;
+      }
       final ack = (r['ack'] as Map?) ?? const {};
       if (mounted) {
         // 只有狗收下了才说派了（外审 W39-I3：没回执、被拒、过期、重复都不算）
