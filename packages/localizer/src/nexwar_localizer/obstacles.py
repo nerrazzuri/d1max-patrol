@@ -686,7 +686,8 @@ class Perception:
         occ, known, sus = classify_full(p, height, self.cfg, nrm)
         if rear:
             # 没标定(几何初值):只用它的「挡」,不用它的「空」放行;标过(W09i)两样都用
-            occ_r, known_r, sus_r = classify_full(self._rear_pts, height, self.cfg, nrm)
+            nr, hr = self._rear_ground(self._rear_pts, (nrm, height))
+            occ_r, known_r, sus_r = classify_full(self._rear_pts, hr, self.cfg, nr)
             occ = bytes(a | b for a, b in zip(occ, occ_r, strict=True))
             seen = known_r if self.rear_cal else occ_r
             known = bytes(a | b for a, b in zip(known, seen, strict=True))
@@ -747,6 +748,21 @@ class Perception:
         if self.plane is not None and self._plane_age <= LOCAL_HOLD_FRAMES:
             return self.plane
         return (0.0, 0.0, 1.0), base_h
+
+    def _rear_ground(self, q: Any, front: tuple[tuple[float, float, float], float]
+                     ) -> tuple[tuple[float, float, float], float]:
+        """后雷达的点用它自己拟合的地面(11-05:机身一歪,前面拟合的地面往后外推 2 m 差出 10 cm);
+        拟合不认(同 :meth:`_local_ground` 的条件)就用前面的。"""
+        got = fit_ground(q, iters=LOCAL_ITERS, seed=self.seq, max_pts=LOCAL_MAX_PTS,
+                         r_max=LOCAL_GROUND_R_M)
+        if got is not None:
+            n, h, frac = got
+            tilt = math.degrees(math.acos(max(-1.0, min(1.0, n[2]))))
+            base_h = float(self.check.height)
+            if (tilt <= LOCAL_TILT_MAX_DEG and abs(h - base_h) <= LOCAL_HEIGHT_TOL_M
+                    and frac >= MIN_GROUND_FRAC):
+                return n, h
+        return front
 
     def _send_permit(self, dist: float, end: str | None, occ: bytes | None = None,
                      known: bytes | None = None) -> None:
