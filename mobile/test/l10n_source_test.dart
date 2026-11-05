@@ -17,7 +17,7 @@ const _allowed = <String, List<String>>{
     "site.contains('过期')"],
   'lib/ui/site_deter.dart': ["Text('中文')"],
   // 跟站点回的报错原文对：剥掉开头那几个字
-  'lib/ui/site_robot.dart': [r"RegExp(r'^机器人标记失败[:：]')"],
+  'lib/ui/site_robot.dart': [r"RegExp(r'^机器人标记失败[:：]')", "why.contains('未标原点')"],
   'lib/ui/site_standby.dart': [r"RegExp(r'^机器人标记失败[:：]')"],
   // W53：禁行区没确认的拒绝原话里抠出图号、版本
   'lib/ui/refusal.dart': [r"RegExp(r'^(\S+?):(\S+?)\s*当前的区域修订')"],

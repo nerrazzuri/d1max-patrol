@@ -284,8 +284,25 @@ def test_请求体坏_超限_参数不对(站点):
     code, _ = 站点.req("POST", "/api/robots/A/goto",
                      {"target": target(1.0), "max_speed_mps": -1}, token=tok)
     assert code == 400
-    code, _ = 站点.req("POST", "/api/robots/A/abort", {}, token=tok)
+    code, _ = 站点.req("POST", "/api/robots/A/abort", {"task_id": 3}, token=tok)
     assert code == 400
+
+
+def test_POC1105_中止不带task_id_停机器人当前那一个_没任务409说清楚(站点):
+    """现场 11-05:中止要 task_id(不带回 400)—— 人只想「停下现在这个」。"""
+    import dataclasses
+
+    from nexwar_contract.messages import TaskState, TaskSummary
+    tok = 站点.login()
+    _等(lambda: 站点.req("GET", "/api/robots/A", token=tok)[1].get("fresh"))
+    c = 站点.disp.clients["A"]
+    c.status = dataclasses.replace(c.status, task=None)
+    code, d = 站点.req("POST", "/api/robots/A/abort", {}, token=tok)
+    assert code == 409 and "没有任务" in d["error"], (code, d)
+    c.status = dataclasses.replace(c.status, task=TaskSummary(task_id="patrol-x", kind="patrol",
+                                                              state=TaskState.RUNNING))
+    code, d = 站点.req("POST", "/api/robots/A/abort", {}, token=tok)
+    assert code == 200 and d["task_id"] == "patrol-x", (code, d)
 
 
 def test_注销之后令牌作废(站点):

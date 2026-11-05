@@ -13,24 +13,46 @@ class SiteEntry {
   final String url;
   final String fingerprint;
   final String username;
+
+  /// 备用地址（POC 11-05：同一个站点在不同网里地址不同）。登录时 [url] 先试，连不上按顺序试这些。
+  final List<String> alts;
   const SiteEntry(
       {required this.name,
       required this.url,
       required this.fingerprint,
-      required this.username});
+      required this.username,
+      this.alts = const <String>[]});
+
+  /// 登录时按这个顺序试。
+  List<String> get urls => <String>[url, ...alts.where((a) => a != url)];
+
+  /// 把 [u] 挪到最前（登上了的那个下次先试）。
+  SiteEntry preferring(String u) {
+    final rest = urls.where((x) => x != u).toList();
+    return copyWith(url: u, alts: rest);
+  }
+
+  SiteEntry copyWith({String? url, String? username, List<String>? alts}) => SiteEntry(
+      name: name,
+      url: url ?? this.url,
+      fingerprint: fingerprint,
+      username: username ?? this.username,
+      alts: alts ?? this.alts);
 
   Map<String, dynamic> toJson() => <String, dynamic>{
         'name': name,
         'url': url,
         'fingerprint': fingerprint,
         'username': username,
+        if (alts.isNotEmpty) 'alts': alts,
       };
 
   static SiteEntry fromJson(Map<String, dynamic> d) => SiteEntry(
       name: d['name'] as String? ?? '',
       url: d['url'] as String? ?? '',
       fingerprint: d['fingerprint'] as String? ?? '',
-      username: d['username'] as String? ?? '');
+      username: d['username'] as String? ?? '',
+      alts: ((d['alts'] as List?) ?? const []).whereType<String>().toList());
 }
 
 abstract class SiteStore {
