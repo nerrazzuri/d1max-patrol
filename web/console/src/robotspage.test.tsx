@@ -256,6 +256,31 @@ describe("W71 Nav2 没起来", () => {
     await waitFor(() => expect(posted.find((p) => p.url === "/api/robots/A/abort")?.body).toEqual({ task_id: "t9" }));
   });
 
+  it("POC 回原点:没任务直接回;有任务时回原点灰掉,中止并回原点先确认再发 abort", async () => {
+    robots[0] = card({ task: null });
+    const { container: c } = render(<RobotsPage say={(s) => said.push(s)} now={NOW} role="guard" />);
+    await waitFor(() => expect(cardOf(c, "A")).not.toBeNull());
+    fireEvent.click(cardOf(c, "A"));
+    const d = c.querySelector(".robot-detail")!;
+    expect(btn(d, "中止并回原点")).toBeUndefined();
+    fireEvent.click(btn(d, "回原点"));
+    await waitFor(() => expect(posted.find((p) => p.url === "/api/robots/A/home/return")?.body).toEqual({}));
+    cleanup();
+    posted.length = 0;
+    robots[0] = card({ task: "patrol-7" });
+    const { container: c2 } = render(<RobotsPage say={(s) => said.push(s)} now={NOW} role="guard" />);
+    await waitFor(() => expect(cardOf(c2, "A")).not.toBeNull());
+    fireEvent.click(cardOf(c2, "A"));
+    const d2 = c2.querySelector(".robot-detail")!;
+    expect(btn(d2, "回原点").disabled).toBe(true);
+    fireEvent.click(btn(d2, "中止并回原点"));
+    expect(posted.some((p) => p.url === "/api/robots/A/home/return")).toBe(false);
+    const dlg = await waitFor(() => { const x = c2.querySelector("dialog"); expect(x).toBeTruthy(); return x!; });
+    expect(dlg.textContent).toContain("patrol-7");
+    fireEvent.click(btn(dlg, "中止并回原点"));
+    await waitFor(() => expect(posted.find((p) => p.url === "/api/robots/A/home/return")?.body).toEqual({ abort: true }));
+  });
+
   it("POC 姿态:报了才显示;点了先确认再发;有任务在跑灰掉写原因;经理看不到", async () => {
     robots[0] = card({ postures: ["stand", "lie", "crawl"], task: null });
     const { container: c } = render(<RobotsPage say={(s) => said.push(s)} now={NOW} role="guard" />);

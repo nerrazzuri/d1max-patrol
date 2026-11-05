@@ -211,6 +211,11 @@ class FakeApi implements SiteApi {
     return {'ack': {'result': 'accepted'}};
   }
   @override
+  Future<Map<String, dynamic>> returnHome(String robotId, {bool abort = false}) async {
+    calls.add(abort ? 'home $robotId abort' : 'home $robotId');
+    return {'ack': {'result': 'accepted'}};
+  }
+  @override
   Future<Map<String, dynamic>> posture(String robotId, String mode) async {
     calls.add('posture $robotId $mode');
     return {'ack': {'result': 'accepted'}, 'mode': mode};
@@ -1094,6 +1099,30 @@ void main() {
     await t.pumpAndSettle();
     expect(find.text('A'), findsOneWidget);
     expect(find.textContaining('在线'), findsOneWidget);
+  });
+
+  testWidgets('POC 回原点：没任务直接回；有任务只给“中止并回原点”，确认了才发', (t) async {
+    final idle = jsonDecode(jsonEncode(busyView())) as Map<String, dynamic>;
+    (idle['status'] as Map)['task'] = null;
+    final api = FakeApi('guard', robotView: idle);
+    await openRobot(t, api);
+    expect(find.byKey(const Key('btn-home-abort')), findsNothing);
+    await t.ensureVisible(find.byKey(const Key('btn-home')));
+    await t.tap(find.byKey(const Key('btn-home')));
+    await t.pumpAndSettle();
+    expect(api.calls, ['home A']);
+
+    await t.pumpWidget(Container());
+    final busy = FakeApi('guard', robotView: busyView());
+    await openRobot(t, busy);
+    expect(find.byKey(const Key('btn-home')), findsNothing);
+    await t.ensureVisible(find.byKey(const Key('btn-home-abort')));
+    await t.tap(find.byKey(const Key('btn-home-abort')));
+    await t.pumpAndSettle();
+    expect(busy.calls, isEmpty, reason: '先确认');
+    await t.tap(find.byKey(const Key('home-abort-confirm')));
+    await t.pumpAndSettle();
+    expect(busy.calls, ['home A abort']);
   });
 
   testWidgets('POC 姿态：报了才有；先选再确认才发；有任务在跑直接说先停；经理没有', (t) async {

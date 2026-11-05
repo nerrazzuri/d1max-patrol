@@ -124,6 +124,32 @@ class _SiteRobotPageState extends State<SiteRobotPage> {
     return ok;
   }
 
+  static bool _busy(Map<String, dynamic>? v) {
+    final st = v?['status'];
+    final task = st is Map ? st['task'] : null;
+    return task is Map && '${task['task_id'] ?? ''}'.isNotEmpty;
+  }
+
+  Future<void> _abortHome() async {
+    final what = tr('Stop and return home', '中止并回原点');
+    final yes = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+              title: Text(what),
+              content: Text(tr('Stop the current task, then go back to the home point?',
+                  '中止当前任务，然后回原点？')),
+              actions: [
+                TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(tr('Cancel', '取消'))),
+                FilledButton(
+                    key: const Key('home-abort-confirm'),
+                    onPressed: () => Navigator.pop(ctx, true),
+                    child: Text(what)),
+              ],
+            ));
+    if (yes != true || !mounted) return;
+    await _do(() => widget.api.returnHome(widget.robotId, abort: true), what);
+  }
+
   /// 换姿态（POC）：先选、再确认（机器人会马上动）；有任务在跑直接说先停任务。
   Future<void> _posture(Map<String, dynamic>? v) async {
     final st = v?['status'];
@@ -462,6 +488,19 @@ class _SiteRobotPageState extends State<SiteRobotPage> {
             label: tr('Return to standby', '回待命点'),
             onTap: () =>
                 _do(() => widget.api.returnToStandby(widget.robotId), tr('Return to standby', '回待命点'))),
+      // 回原点（POC）：没任务直接回；有任务只给「中止并回原点」（要确认）
+      if (dispatch && !_busy(v))
+        NwOpTile(
+            tileKey: const Key('btn-home'),
+            icon: Icons.flag_rounded,
+            label: tr('Return home', '回原点'),
+            onTap: () => _do(() => widget.api.returnHome(widget.robotId), tr('Return home', '回原点'))),
+      if (dispatch && _busy(v))
+        NwOpTile(
+            tileKey: const Key('btn-home-abort'),
+            icon: Icons.flag_rounded,
+            label: tr('Stop and return home', '中止并回原点'),
+            onTap: _abortHome),
       // 站起、趴下、蹲下（POC）：跟遥控同一个权限；机器人报了才有
       if ((s?.canTeleop ?? false) && robotPostures(v).isNotEmpty)
         NwOpTile(

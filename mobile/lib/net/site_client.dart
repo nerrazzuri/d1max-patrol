@@ -661,6 +661,9 @@ abstract class SiteApi {
   Future<Map<String, dynamic>> abort(String id, String taskId);
   /// 回默认待命点；给了 [name] 就回那一个（W13a）。
   Future<Map<String, dynamic>> returnToStandby(String id, {String? name});
+  /// 回原点（POC）：当前地图上的原点。[abort] 为真先中止正在跑的任务再回（没原点、有任务没带 abort
+  /// 站点 409，原因在 [SiteError]）。保安、管理员。
+  Future<Map<String, dynamic>> returnHome(String robotId, {bool abort = false});
   /// 换姿态（POC）：`stand` / `lie` / `crawl`。保安、管理员、工程师（跟遥控同一个权限）。
   /// 机器人做完才回，所以多等一会儿；有任务在跑、急停时机器人拒，原因在 [SiteError]。
   Future<Map<String, dynamic>> posture(String robotId, String mode);
@@ -1238,6 +1241,11 @@ class SiteClient implements SiteApi {
   Future<Map<String, dynamic>> returnToStandby(String id, {String? name}) async => _map(
       await _send('POST', '/api/robots/${Uri.encodeComponent(id)}/standby/return',
           <String, dynamic>{'name': ?name}));
+
+  @override
+  Future<Map<String, dynamic>> returnHome(String robotId, {bool abort = false}) async => _map(await _send(
+      'POST', '/api/robots/${Uri.encodeComponent(robotId)}/home/return', <String, dynamic>{'abort': abort},
+      const Duration(seconds: 50)));
 
   @override
   Future<Map<String, dynamic>> posture(String robotId, String mode) async => _map(await _send(

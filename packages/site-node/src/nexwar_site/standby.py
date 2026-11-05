@@ -68,6 +68,8 @@ STANDBY_TRANSIENT_RETRIES = 7
 STANDBY_RETRY_EVERY_S = 2.0
 
 _RETURN_AFTER = frozenset({"task_done"})
+#: 中止并回原点(POC):中止之后最多等这么久让上一趟停下(秒)。
+HOME_ABORT_WAIT_S = 15.0
 
 
 class StandbyError(RuntimeError):
@@ -297,6 +299,45 @@ class StandbyManager:
                                               priority=STANDBY_RETURN, charge=charge,
                                               homing=homing and not charge,
                                               task_id=f"{STANDBY_PREFIX}{uuid.uuid4().hex[:12]}")
+
+    async def return_home(self, robot_id: str, *, issued_by: str,
+                          abort: bool = False) -> dict[str, Any]:
+        """回原点(POC 第 4 项):狗当前地图上的原点。有任务在跑:``abort`` 不为真就拒;为真先中止、
+        等它停下(最多 ``HOME_ABORT_WAIT_S``)再派。任务号 ``standby-`` 开头(自动回程的去重认它)。
+        回复多带 ``aborted``(中止了哪一趟,没有是 None)。不成抛 ``DispatchRefused``。"""
+        c = self.dispatcher.clients.get(robot_id)
+        caps = c.capabilities.tasks.get("patrol", {}) if c and c.capabilities else {}
+        mid, ver = caps.get("map_id"), caps.get("map_version")
+        if mid is None:
+            raise DispatchRefused(f"{robot_id} 未上报已加载的地图")
+        h = self.home(robot_id, mid, ver)
+        if h is None:
+            raise DispatchRefused("当前地图上还没有原点:在原点位置点“设为原点”")
+        cur = c.status.task if c is not None and c.status is not None else None
+        aborted = None
+        if cur is not None:
+            if not abort:
+                raise DispatchRefused(f"正在执行任务 {cur.task_id},要先中止:用“中止并回原点”")
+            r = await self.dispatcher.abort(robot_id, cur.task_id, issued_by=issued_by)
+            ack = r.get("ack", {}) if isinstance(r, dict) else {}
+            if ack.get("result") not in ("accepted", "duplicate"):
+                raise DispatchRefused(f"中止没成功:{ack.get('reason') or ack.get('result')}")
+            t0 = asyncio.get_running_loop().time()
+            while True:
+                now = c.status.task if c.status is not None else None
+                if now is None or now.task_id != cur.task_id:
+                    break
+                if asyncio.get_running_loop().time() - t0 > HOME_ABORT_WAIT_S:
+                    raise DispatchRefused(f"中止后 {HOME_ABORT_WAIT_S:.0f} 秒还没停下,没派回原点")
+                await asyncio.sleep(0.2)
+            aborted = cur.task_id
+        target = MapPose(map_id=mid, map_version=ver, frame_id="map",
+                         x=h["x"], y=h["y"], yaw=h["yaw"]).to_wire()
+        async with self._sending(robot_id):
+            r = await self.dispatcher.goto(robot_id, target, None, issued_by=issued_by,
+                                           priority=STANDBY_RETURN, homing=True,
+                                           task_id=f"{STANDBY_PREFIX}{uuid.uuid4().hex[:12]}")
+        return {**r, "aborted": aborted}
 
     @contextlib.asynccontextmanager
     async def _sending(self, robot_id: str) -> AsyncIterator[None]:
