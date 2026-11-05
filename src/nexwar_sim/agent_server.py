@@ -30,6 +30,7 @@ import time
 from typing import Any
 
 from nexwar_patrol.protocol.agent_frames import (
+    GEAR_IDLE_S,
     LEGACY_MAX_FRACTION,
     MAX_FORWARD_FRACTION,
     NOT_AUTHORIZED,
@@ -58,7 +59,7 @@ WALK_DEADBAND = 0.2
 WALK_CANCELLED = "行走被停车/急停打断"
 
 #: 插队执行的命令。跟 ``patrol_agent.cpp`` 的 ``IsUrgent`` 对齐。
-URGENT_COMMANDS = frozenset({"halt", "estop", "vel", "clear"})
+URGENT_COMMANDS = frozenset({"halt", "estop", "vel", "clear", "gear"})
 
 
 def open_command(cmd: str, args: dict[str, Any]) -> bool:
@@ -103,6 +104,7 @@ class SimAgentServer:
         token: str | None = None,
         max_fraction: float = LEGACY_MAX_FRACTION,
         proto: int | None = None,
+        teleop_max_gear: int = 1,
         permit_mps_per_unit: float | None = None,
     ) -> None:
         #: 同 ``patrol_agent --max-fraction``(W47):前进比例上限;超过 0.5 的只在开了许可门时放行。
@@ -112,6 +114,11 @@ class SimAgentServer:
         #: 报的协议号(测老旁路进程用;11 起认 ``crawl``)。None = 模块里的 PROTO_VERSION(运行时取,
         #: 测试 monkeypatch 它也算数)。
         self._proto = proto
+        #: 同 ``--teleop-max-gear``(协议 12):遥控最高能临时换到几档;``_gear`` 是临时档(0 = 没有)。
+        self.teleop_max_gear = teleop_max_gear
+        self._gear = 0
+        self._gear_conn = 0
+        self._gear_seen = 0.0
         #: 同 ``--permit-mps-per-unit``:分档许可的 m/s 换比例(缺省按仿真自己的运动模型:
         #: 低速 1.2、中速 2.4、其余 3.6;真旁路按实测 1.1 / 2.2 / 3.3)。
         self._permit_mps = permit_mps_per_unit
@@ -283,7 +290,10 @@ class SimAgentServer:
             pass
         finally:
             self._clients.discard(writer)
-            self._writer_of.pop(self._conn_of.pop(writer, 0), None)
+            conn = self._conn_of.pop(writer, 0)
+            self._writer_of.pop(conn, None)
+            if self._gear and conn == self._gear_conn:
+                self._gear = 0                        # 同 DropGear:要临时档的连接断了回原档
             writer.close()
             with contextlib.suppress(Exception):
                 await writer.wait_closed()
@@ -296,7 +306,8 @@ class SimAgentServer:
         return {"t": "hello", "proto": self.proto, "auth": self.token is not None,
                 "sdk": self._sdk, "held": held, "robot": "sim://nexwar",
                 "follows_head": self.follows_head, "speed_level_want": self.speed_level_want,
-                "max_fraction": self.max_fraction}
+                "max_fraction": self.max_fraction,
+                **({"teleop_max_gear": self.teleop_max_gear} if self.proto >= 12 else {})}
 
     def _send(self, writer: asyncio.StreamWriter, obj: dict[str, Any]) -> None:
         with contextlib.suppress(ConnectionError, OSError, RuntimeError):
@@ -308,8 +319,14 @@ class SimAgentServer:
 
     # -------------------------------------------------------------- 遥测
 
+    def want_level(self) -> int:
+        """现在要哪一档:没过期的遥控临时档,不然 ``speed_level_want``(同 ``Gate::WantLevel``)。"""
+        if self._gear and time.monotonic() - self._gear_seen < GEAR_IDLE_S:
+            return self._gear
+        return self.speed_level_want
+
     def _speed_wrong(self) -> bool:
-        return self.speed_level_want > 0 and self.speed_level != self.speed_level_want
+        return self.speed_level_want > 0 and self.speed_level != self.want_level()
 
     def _reassert_speed(self) -> None:
         """同 patrol_agent 的档位线程:档位被换掉、握着控制权,过 1 s 设回去。"""
@@ -320,7 +337,7 @@ class SimAgentServer:
         if self._speed_bad_since is None:
             self._speed_bad_since = now
         elif now - self._speed_bad_since >= 1.0:
-            self.speed_level = self.speed_level_want
+            self.speed_level = self.want_level()
             self._speed_bad_since = None
 
     async def _telemetry_loop(self, writer: asyncio.StreamWriter) -> None:
@@ -382,7 +399,7 @@ class SimAgentServer:
             return
         if cmd in URGENT_COMMANDS:
             run_args = dict(args)
-            if cmd == "clear":
+            if cmd in ("clear", "gear"):
                 run_args["_conn"] = self._conn_of.get(writer, 0)    # 许可按连接认(复查 H1)
             await self._execute(writer, (cmd_id, cmd, run_args, self._cancel_gen))
             return
@@ -436,6 +453,7 @@ class SimAgentServer:
                                    else EmergencyStatus.RECOVER)
             if on:
                 self.vx = self.vy = self.vyaw = 0.0
+                self._gear = 0                    # 同 LatchEstop:临时档作废
             return
         if cmd == "light":
             which = str(args.get("which", "both"))
@@ -453,6 +471,9 @@ class SimAgentServer:
         if cmd == "crawl" and self.proto >= 11:
             self._need_control("crawl")
             await self._transition(MotionStatus.CRAWL)
+            return
+        if cmd == "gear" and self.proto >= 12:
+            self._set_gear(args)
             return
         if cmd == "head":
             self._need_control("head")
@@ -519,7 +540,7 @@ class SimAgentServer:
         if self._permit_mps is not None:
             return self._permit_mps
         # 仿真的运动模型是比例 1.0 走 1.2 m/s:低速档换算按它(#208 首审 G2:按 1.1 会超许可约 9%)
-        return {1: 1.2, 2: 2.4}.get(self.speed_level_want, 3.6)
+        return {1: 1.2, 2: 2.4}.get(self.want_level(), 3.6)
 
     def _vel_unsafe(self) -> bool:
         """同 vel_gate.hpp:两路急停都**明确** Recover 才安全(Unknown 与 Stop 一样拒)。"""
@@ -554,6 +575,8 @@ class SimAgentServer:
             raise _Rejected(f"ttl_ms 要在 [{VEL_TTL_MIN_MS}, {VEL_TTL_MAX_MS}] 内")
         self._vel = (fwd, lat, yaw)
         self._vel_until = time.monotonic() + ttl / 1000.0
+        if self._gear:
+            self._gear_seen = time.monotonic()        # 同 Register:有 vel 就算续临时档
         if self._vel_task is None or self._vel_task.done():
             self._vel_task = asyncio.get_running_loop().create_task(
                 self._vel_loop(self._cancel_gen))
@@ -584,8 +607,13 @@ class SimAgentServer:
                     self.vx = self.vy = self.vyaw = 0.0
                 else:
                     self.motion = MotionStatus.GAIT
-                    # 系数同 walk(待真机验证):满量程 1.0 折 1.2 m/s。
-                    self.vx, self.vy, self.vyaw = fwd * 1.2, lat * 1.0, yaw * 1.5
+                    # 系数同 walk(待真机验证):满量程 1.0 折 1.2 m/s;中速档前进翻倍,前进超过
+                    # 1 m/s 时横移 0、转向比例 1.0 = 1.0 rad/s(SDK 0.2.0 SetSpeed 文档)。
+                    mid = self.speed_level == 2
+                    vx = fwd * (2.4 if mid else 1.2)
+                    fast = mid and abs(vx) > 1.0
+                    self.vx, self.vy, self.vyaw = vx, 0.0 if fast else lat * 1.0, \
+                        yaw * (1.0 if fast else 1.5)
                     self.yaw = _wrap(self.yaw + self.vyaw * _VEL_TICK_S)
                     dx = (self.vx * math.cos(self.yaw) - self.vy * math.sin(self.yaw)) \
                         * _VEL_TICK_S
@@ -672,6 +700,29 @@ class SimAgentServer:
             self.cancelled_walks += 1
             raise _Rejected(WALK_CANCELLED)
 
+    def _set_gear(self, args: dict[str, Any]) -> None:
+        """同 ``patrol_agent.cpp`` 的 ``DoGear`` + ``Gate::SetGear``。换了档 0.2 s 后状态里
+        报上来。"""
+        self._need_control("gear")
+        level = args.get("level")
+        if self.speed_level_want <= 0:
+            raise _Rejected("旁路不管档位(--speed-level 0),不能换档")
+        if isinstance(level, bool) or not isinstance(level, int) \
+                or not 1 <= level <= self.teleop_max_gear:
+            raise _Rejected(f"档位要在 [1, {self.teleop_max_gear}](--teleop-max-gear)")
+        if self.estop_software is EmergencyStatus.STOP:
+            raise _Rejected("急停生效中,不换档")
+        before = self.want_level()
+        if level == self.speed_level_want:
+            self._gear = 0
+        else:
+            self._gear, self._gear_conn = level, int(args.get("_conn", 0))
+            self._gear_seen = time.monotonic()
+        if self.want_level() != before:
+            self._vel_until = 0.0                     # 作废速度目标和许可(比例按旧档换的)
+            self._clear_until = [-math.inf, -math.inf]
+            self._speed_bad_since = time.monotonic() - 0.8
+
     # -------------------------------------------------------------- 注入
 
     def drop_control(self, reason: str = "上装收回控制权") -> None:
@@ -680,6 +731,7 @@ class SimAgentServer:
         self._held = False
         self._vel_until = 0.0
         self._cancel_gen += 1
+        self._gear = 0
         self._broadcast({"t": "control_lost", "reason": reason})
 
     def regain_control(self) -> None:

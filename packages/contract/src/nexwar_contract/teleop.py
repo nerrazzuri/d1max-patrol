@@ -58,12 +58,18 @@ class TeleopFrame:
     wz: float
     #: 横移(机身系,左为正;2026-10-30)。0 不上线:老代理不认这个键也照旧(不横移)。
     vy: float = 0.0
+    #: 手机上选的速度档(m/s,POC 2026-11-05):代理按它夹前进、决定要不要换到中速档。
+    #: 不带 = 老手机 / 老站点(不换档)。老代理不认这个键也照旧。
+    vmax: float | None = None
 
     def to_wire(self) -> dict[str, Any]:
-        d = {"lease_epoch": self.lease_epoch, "seq": self.seq, "sent_at": self.sent_at,
-             "ttl_ms": self.ttl_ms, "vx": self.vx, "wz": self.wz}
+        d: dict[str, Any] = {"lease_epoch": self.lease_epoch, "seq": self.seq,
+                             "sent_at": self.sent_at, "ttl_ms": self.ttl_ms, "vx": self.vx,
+                             "wz": self.wz}
         if self.vy:
             d["vy"] = self.vy
+        if self.vmax is not None:
+            d["vmax"] = self.vmax
         return d
 
     @classmethod
@@ -76,11 +82,20 @@ class TeleopFrame:
         return cls(lease_epoch=_pos_int(d, "lease_epoch"), seq=_pos_int(d, "seq"),
                    sent_at=_pos_int(d, "sent_at", lo=0), ttl_ms=ttl,
                    vx=_speed(d, "vx"), wz=_speed(d, "wz"),
-                   vy=_speed(d, "vy") if "vy" in d else 0.0)
+                   vy=_speed(d, "vy") if "vy" in d else 0.0,
+                   vmax=_vmax(d["vmax"]) if "vmax" in d else None)
 
 
-#: 遥控速度档的上限(m/s,POC 2026-11):站点设置、租约里带的快档都不许超过它。
-TELEOP_SPEED_MAX_MPS = 1.5
+def _vmax(v: Any) -> float:
+    if isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v) \
+            or not 0 < v <= TELEOP_SPEED_MAX_MPS:
+        raise ContractError(f"teleop: vmax 要在 (0, {TELEOP_SPEED_MAX_MPS}]")
+    return float(v)
+
+
+#: 遥控速度档的上限(m/s,POC 2026-11;用户 11-05:目前最高到 SDK 中速档 2.0):站点的速度表、
+#: 租约里带的、帧里的 ``vmax`` 都不许超过它。
+TELEOP_SPEED_MAX_MPS = 2.0
 
 
 def teleop_grant_payload(*, lease_epoch: int, operator: str, lease_ttl_ms: int,

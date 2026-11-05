@@ -605,3 +605,56 @@ async def test_POC_蹲下_新旁路进程才报_才做():
         assert await hal.motion_status() is MotionStatus.STANDING, "蹲着:不算趴着,也不能走"
         await hal.set_motion_mode("stand")
         assert await hal.motion_status() is MotionStatus.READY
+
+
+# ---------------------------------------------------------------- 遥控临时换档(协议 12,POC 11-05)
+
+async def test_遥控换档_能力里报_换到中速后同样的速度比例减半():
+    async with _台子(sim_kw={"teleop_max_gear": 2}) as (sim, hal):
+        caps = hal.hal_capabilities()
+        assert caps.max_vx == pytest.approx(0.6) and caps.max_vx_teleop == pytest.approx(1.2)
+        await hal.set_teleop_gear(2)
+        assert _最后一条(sim, "gear")["level"] == 2
+        assert await _等(lambda: _异(hal.teleop_gear() == 2))
+        assert not (await hal.set_velocity(_v(vx=1.1))).rejected
+        assert _最后一条(sim, "vel")["fwd"] == pytest.approx(1.1 / 2.4)
+        await hal.stop()
+        await hal.set_teleop_gear(1)
+        assert await _等(lambda: _异(hal.teleop_gear() == 1))
+        assert not (await hal.set_velocity(_v(vx=0.5))).rejected
+        assert _最后一条(sim, "vel")["fwd"] == pytest.approx(0.5 / 1.2)
+        await hal.stop()
+
+
+async def test_遥控换档_中速档超过1米每秒不横移_转向按1弧度每秒换():
+    async with _台子(sim_kw={"teleop_max_gear": 2}, lateral_mps_per_unit=0.5) as (sim, hal):
+        await hal.set_teleop_gear(2)
+        assert await _等(lambda: _异(hal.teleop_gear() == 2))
+        assert not (await hal.set_velocity(_v(vx=1.1, vy=0.2, wz=0.3))).rejected
+        got = _最后一条(sim, "vel")
+        assert got["lat"] == 0 and got["yaw"] == pytest.approx(0.3 / 1.0)
+        await hal.stop()
+
+
+async def test_旁路不让换档_能力报0_换档抛不支持():
+    async with _台子() as (sim, hal):
+        assert hal.hal_capabilities().max_vx_teleop == 0.0
+        with pytest.raises(HalUnsupported):
+            await hal.set_teleop_gear(2)
+        await hal.set_teleop_gear(1)                  # 本来就是低速:空操作
+        assert not [c for c, _ in sim.commands if c == "gear"]
+
+
+async def test_遥控临时档3秒没续_旁路回低速_HAL也按低速换算():
+    async with _台子(sim_kw={"teleop_max_gear": 2}) as (sim, hal):
+        await hal.set_teleop_gear(2)
+        assert await _等(lambda: _异(hal.teleop_gear() == 2))
+        await asyncio.sleep(3.2)
+        assert await _等(lambda: _异(hal.teleop_gear() == 1), timeout_s=2.0)
+        assert not (await hal.set_velocity(_v(vx=0.5))).rejected
+        assert _最后一条(sim, "vel")["fwd"] == pytest.approx(0.5 / 1.2)
+        await hal.stop()
+
+
+async def _异(v):
+    return v

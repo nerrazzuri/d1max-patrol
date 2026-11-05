@@ -44,6 +44,9 @@ def compose_capabilities(*, robot_id: str, hal_caps: HalCapabilities, adapter_id
         tasks["teleop"] = {"max_vx": hal_caps.max_vx / 2, "max_wz": hal_caps.max_wz / 2,
                            # POC 速度档:机身上限。站点见到它才在授予里带快档(老代理不认)
                            "max_vx_hal": hal_caps.max_vx, "max_wz_hal": hal_caps.max_wz}
+        if hal_caps.max_vx_teleop > hal_caps.max_vx:
+            # 遥控能临时换到中速档(POC 11-05):站点、手机据此显示超过低速档的速度档
+            tasks["teleop"]["max_vx_teleop"] = hal_caps.max_vx_teleop
         if hal_caps.lateral and hal_caps.max_vy > 0:
             tasks["teleop"]["max_vy"] = hal_caps.max_vy / 2      # 横移(2026-10-30)
             tasks["teleop"]["max_vy_hal"] = hal_caps.max_vy

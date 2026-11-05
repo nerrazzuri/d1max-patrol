@@ -218,6 +218,9 @@ def build_parser() -> argparse.ArgumentParser:
                          "默认 ~/.nexwar/sidecar.token —— 跟旁路进程同一个账号跑才读得到")
     d1.add_argument("--mps-per-unit", type=float, default=None,
                     help="Move 比例 1.0 对应的 m/s,默认 1.0(SDK 文档低速档,W12)")
+    d1.add_argument("--mps-per-unit-mid", type=float, default=None,
+                    help="中速档(遥控临时换档,旁路 --teleop-max-gear 2)比例 1.0 对应的 m/s;"
+                         "默认 --mps-per-unit × 2(SDK 文档中速档 2.0 m/s),真机测过再填")
     d1.add_argument("--radps-per-unit", type=float, default=None,
                     help="转向比例 1.0 对应的 rad/s,默认 1.5(SDK 文档低速档)")
     d1.add_argument("--units-confirmed", action="store_true",
@@ -546,7 +549,9 @@ def build(args: argparse.Namespace) -> Assembled:
         if args.hal == "sim":
             from nexwar_adapter_sim.robot import SimRobot
             from nexwar_agent.bridges.sim_media import sim_media
-            hal: Any = SimRobot(now_ms=wall_ms, payload=args.sim_payload, lateral=True)
+            # 仿真能遥控换到中速档(POC 11-05):演示上 1.3 / 1.6 / 2.0 的速度档点得到
+            hal: Any = SimRobot(now_ms=wall_ms, payload=args.sim_payload, lateral=True,
+                                max_vx_mid=2.0)
             media = sim_media(wall_ms)
             if args.video_source == "file" and args.video_dir is not None:
                 # W64:演示用真录像时,到点拍照也从录像里截一帧(不是空白图)
@@ -564,6 +569,7 @@ def build(args: argparse.Namespace) -> Assembled:
                          "、".join(o for o in ("strobe", "siren", "spotlight", "speaker")
                                   if payload.has(o)) or "(一路都没有)")
             hal = D1MaxHal(host, port, mps_per_unit=args.mps_per_unit,
+                           mps_per_unit_mid=args.mps_per_unit_mid,
                            radps_per_unit=args.radps_per_unit, deadband_mps=args.deadband,
                            max_fraction=args.max_fraction, fwd_offset=args.fwd_offset,
                            invert_yaw=args.invert_yaw,

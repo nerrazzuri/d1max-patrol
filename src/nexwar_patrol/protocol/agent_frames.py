@@ -72,9 +72,15 @@ from typing import Any
 #: 超过 0.5 的只在开了净空许可门时放行)。后退、横移、转向一直 ±0.5。老旁路进程不报:按 0.5。
 #: 感知节点只对 ≥ 10 的发分档许可。
 #: 11(POC 2026-11):``crawl`` 蹲下(SDK ``Crawl``,匍匐静止)。
-PROTO_VERSION = 11
+#: 12(POC 2026-11-05):``gear {level}`` 遥控临时换 SDK 速度档(不超过 ``hello.teleop_max_gear``,
+#: 旁路 ``--teleop-max-gear``);3 s 没续(``gear`` 或 ``vel``)、急停、丢控制权、连接断了回原档。
+PROTO_VERSION = 12
 #: 从这一号起认 ``crawl``(老旁路进程不认:适配器不报能蹲下)。
 CRAWL_PROTO_VERSION = 11
+#: 从这一号起认 ``gear``(老旁路进程不认:遥控只在 ``--speed-level`` 那一档)。
+GEAR_PROTO_VERSION = 12
+#: 遥控临时档多久没续就回原档(秒,同 ``vel_gate.hpp`` 的 ``kGearIdleMs``)。
+GEAR_IDLE_S = 3.0
 #: 代理(``sidecar_device``)能配的最老的旁路进程:代理只用到 ``vel``(3),``clear`` 是感知节点发的
 #: (W11 内审应修 1:严格等于 4 的话,只推新版代理、旁路进程还是 3 号时整机不能动)。
 MIN_PROTO_VERSION = 3
@@ -160,6 +166,8 @@ class Hello:
     auth: bool = False
     #: 前进比例上限(10 号起报;没报、报的不像话 = 0.5,老行为)。
     max_fraction: float = LEGACY_MAX_FRACTION
+    #: 遥控最高能临时换到几档(12 号起报,``--teleop-max-gear``;没报 = 1,不让换)。
+    teleop_max_gear: int = 1
 
 
 @dataclass(frozen=True)
@@ -349,6 +357,11 @@ def _emergency(value: Any) -> EmergencyStatus:
     raise AgentProtocolError(f"急停字段既不是整数码也不是名字: {value!r}")
 
 
+def _teleop_max_gear(v: Any) -> int:
+    """hello 的 ``teleop_max_gear``:只认 1、2;别的(没报、布尔、越界)按 1(不让换档)。"""
+    return v if isinstance(v, int) and not isinstance(v, bool) and v in (1, 2) else 1
+
+
 def _max_fraction(v: Any) -> float:
     """hello 的 ``max_fraction``:只认 [0.5, 1.0] 里的数,别的(没报、布尔、越界)一律按 0.5。"""
     if isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v):
@@ -375,6 +388,7 @@ def decode_frame(line: str | bytes) -> Downstream:
             speed_level_want=_int_or_none(obj.get("speed_level_want")),
             auth=obj.get("auth") is True,
             max_fraction=_max_fraction(obj.get("max_fraction")),
+            teleop_max_gear=_teleop_max_gear(obj.get("teleop_max_gear")),
         )
     if kind == "ack":
         ack_id = obj.get("id")

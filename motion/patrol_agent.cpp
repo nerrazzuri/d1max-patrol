@@ -115,21 +115,23 @@ using namespace robot_sdk;
 // 比例上限夹前进分量(不带 vmax 的老许可按 0.5);新参数 --max-fraction(0.5–1.0,默认 0.5):超过 0.5 的
 // 前进只在开了 --require-clearance 时放行。hello 带 max_fraction。感知节点只对 ≥ 10 的发分档许可(9 号会
 // 把任何许可都当成「0.5 随便走」,所以对老的照旧只在够 0.6 m/s 刹停时才发)。代理认 3–10。
-static const int kProtoVersion = 11;   // 11:crawl(蹲下,POC 2026-11)
+//
+// 12(遥控换档,POC 2026-11-05):{"cmd":"gear","level":1|2}(要认证、插队):遥控时临时换 SDK 速度档,
+// level 不许超过新参数 --teleop-max-gear(缺省 1 = 不让换;真机测完刹车再设 2)。临时档 3 s 没续(gear
+// 或 vel)、急停、丢控制权、发它的连接断了都回 --speed-level;换档那一下作废速度目标和净空许可,
+// 档位报上来之前安全门不放行(老规矩)。净空许可的 m/s 换比例跟着当前要的档走。hello 带
+// teleop_max_gear。代理认 3–12。
+static const int kProtoVersion = 12;   // 11:crawl(蹲下);12:遥控换档
 // 这一次起来的令牌(cmd_auth.hpp)。空 = 没写成令牌文件,谁都认证不了(停车照常)。
 static std::string g_token;
 static int g_speed_want = 1;
+// 遥控最高能临时换到几档(--teleop-max-gear,1 或 2;1 = 不让换)。
+static int g_teleop_max_gear = 1;
 static bool g_follows_head = true;
 // 分档许可:比例 1.0 在要的档位上**最多**多快(m/s;宁大勿小 —— 大了只会更慢)。<= 0 = 按档位取缺省:
 // 低速档 1.1(C40221 实测斜率 1.09)、中速 2.2、高速和不管档位 3.3。
 static double g_permit_mps = 0;
 
-static double PermitMpsPerUnit() {
-  if (g_permit_mps > 0) return g_permit_mps;
-  if (g_speed_want == 1) return 1.1;
-  if (g_speed_want == 2) return 2.2;
-  return 3.3;
-}
 
 // 一次 Move 在机器上维持约 1s(清单 #38)，靠 50ms 连续下发维持行走。
 static const int kMoveIntervalMs = 50;
@@ -306,6 +308,15 @@ static std::atomic<uint64_t> g_cancel_gen{0};
 // 同一把锁。速度线程每次要发 Move 之前都现问它。
 static velgate::Gate g_gate;
 
+static double PermitMpsPerUnit() {
+  // 按**现在要的**档(遥控临时换到中速时比例 1.0 快一倍)。--permit-mps-per-unit 给的是 --speed-level
+  // 那一档的,别的档按 SDK 文档的倍数(低 1、中 2、高 3)换。
+  const int want = g_gate.WantLevel(std::chrono::steady_clock::now());
+  auto mul = [](int level) { return level == 1 ? 1.0 : level == 2 ? 2.0 : 3.0; };
+  if (g_permit_mps > 0) return g_permit_mps * mul(want) / mul(g_speed_want);
+  return 1.1 * mul(want);
+}
+
 // 握手帧。连上时发一次;**持有状态一变就再广播一次**(SetHeld):控制权被遥控器、厂家 App 拿走又
 // 被我们自动抢回来时,之前只广播过 control_lost,连着的代理一直以为没控制权,站点就一直拒派
 // (2026-10-08 C40221 实测,要重启代理才好)。客户端收到重复的 hello 只更新持有状态。
@@ -317,6 +328,7 @@ static std::string HelloFrame() {
         << ",\"follows_head\":" << (g_follows_head ? "true" : "false")
         << ",\"speed_level_want\":" << g_speed_want
         << ",\"max_fraction\":" << g_gate.MaxForward()
+        << ",\"teleop_max_gear\":" << g_teleop_max_gear
         << ",\"robot\":\"" << JsonEscape(g_robot_addr) << "\"}";
   return hello.str();
 }
@@ -534,6 +546,23 @@ static Outcome DoCrawl() {
   return Outcome{};
 }
 
+/// 遥控临时换档(协议 12)。要控制权;档位规矩在运动安全门里(SetGear)。要的档变了马上 SetSpeed,
+/// 之后每秒那一圈照「现在要的档」再核。
+static Outcome DoGear(int level, uint64_t conn) {
+  if (!g_held.load()) return DenyControl("gear");
+  const auto now = std::chrono::steady_clock::now();
+  const int before = g_gate.WantLevel(now);
+  const std::string why = g_gate.SetGear(level, g_teleop_max_gear, conn, now);
+  if (!why.empty()) return Reject(why);
+  const int want = g_gate.WantLevel(now);
+  if (want != before) {
+    std::cout << "[GEAR] 遥控换档 " << before << " → " << want << "\n";
+    std::lock_guard<std::mutex> lk(g_sdk_mtx);
+    g_client->SetSpeed(want, 0);
+  }
+  return Outcome{};
+}
+
 // 「这一拍被叫停了」的统一话术。Python 那头把它当普通拒绝处理。
 static const char* kWalkCancelled = "行走被停车/急停打断";
 
@@ -725,6 +754,7 @@ static Outcome RunCommand(const std::string& cmd, const std::string& line,
   if (cmd == "stand") return DoStand();
   if (cmd == "lie") return DoLie();
   if (cmd == "crawl") return DoCrawl();
+  if (cmd == "gear") return DoGear(static_cast<int>(JsonNumField(line, "level", 0)), conn);
   if (cmd == "head")
     return DoHead(JsonNumField(line, "yaw", 0.0), JsonNumField(line, "pitch", 0.0));
   if (cmd == "clear") {
@@ -785,7 +815,8 @@ static Outcome RunCommand(const std::string& cmd, const std::string& line,
 static bool IsUrgent(const std::string& cmd) {
   // vel 也插队:它立刻回执,排在一拍 walk 后面的话速度环就断了。
   // clear 也插队:每帧一条、立刻生效,排在 walk 后面许可就过期了。
-  return cmd == "halt" || cmd == "estop" || cmd == "vel" || cmd == "clear";
+  // gear 也插队:遥控续档每秒一条,排在 walk 后面就过期回低速了。
+  return cmd == "halt" || cmd == "estop" || cmd == "vel" || cmd == "clear" || cmd == "gear";
 }
 
 static std::string AckFrame(int id, const Outcome& out) {
@@ -927,6 +958,8 @@ static void ServeClient(int fd) {
     }
   }
   ::close(fd);
+  // 这条连接要的遥控临时档作废(代理断了不许停在快档上);每秒那一圈会把档位设回去。
+  if (g_gate.DropGear(my_conn)) std::cout << "[GEAR] 要临时档的连接断了,回 " << g_speed_want << " 档\n";
   // 客户端断开**不动 SDK 会话**。巡检程序重启是常态，不是事故。
   std::cout << "[i] 一个客户端断开，会话继续持有\n";
 }
@@ -1058,7 +1091,7 @@ int main(int argc, char** argv) {
     std::cerr << "usage: " << argv[0]
               << " <ip> <port> [--listen HOST:PORT] [--fifo PATH] [--token-file PATH]"
                  " [--require-clearance] [--sdk-follows-head 0|1] [--speed-level 0|1|2|3]"
-                 " [--max-fraction 0.5-1.0] [--permit-mps-per-unit M]\n"
+                 " [--max-fraction 0.5-1.0] [--permit-mps-per-unit M] [--teleop-max-gear 1|2]\n"
               << "  例: " << argv[0]
               << " 192.168.168.168 8082 --listen 127.0.0.1:8090"
                  " --fifo runs/nexwar_agent.fifo\n"
@@ -1102,6 +1135,13 @@ int main(int argc, char** argv) {
         return 2;
       }
       g_speed_want = std::atoi(v.c_str());
+    } else if (arg == "--teleop-max-gear" && i + 1 < argc) {
+      const std::string v = argv[++i];
+      if (v != "1" && v != "2") {
+        std::cerr << "--teleop-max-gear 要是 1(不让遥控换档)或 2(遥控最高到中速档)\n";
+        return 2;
+      }
+      g_teleop_max_gear = std::atoi(v.c_str());
     } else if (arg == "--max-fraction" && i + 1 < argc) {
       char* e = nullptr;
       const double v = std::strtod(argv[++i], &e);
@@ -1249,22 +1289,23 @@ int main(int argc, char** argv) {
     while (g_running.load()) {
       std::this_thread::sleep_for(std::chrono::seconds(1));
       if (g_speed_want <= 0 || !g_held.load()) continue;
+      // 现在要的档:遥控临时档(协议 12)没过期就是它,不然是 --speed-level
+      const int want = g_gate.WantLevel(std::chrono::steady_clock::now());
       int now;
       {
         std::lock_guard<std::mutex> lk(g_state_mtx);
         now = g_speed;
       }
-      if (now == g_speed_want) {
+      if (now == want) {
         told = -1;
         continue;
       }
       if (now != told) {
-        std::cout << "[!] 速度档位是 " << now << "(要 " << g_speed_want
-                  << "):不放行运动,再设一次\n";
+        std::cout << "[!] 速度档位是 " << now << "(要 " << want << "):不放行运动,再设一次\n";
         told = now;
       }
       std::lock_guard<std::mutex> lk(g_sdk_mtx);
-      g_client->SetSpeed(g_speed_want, 0);
+      g_client->SetSpeed(want, 0);
     }
   }).detach();
 

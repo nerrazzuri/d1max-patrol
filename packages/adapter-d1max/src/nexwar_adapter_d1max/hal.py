@@ -112,6 +112,7 @@ class D1MaxHal:
                  deadband_mps: float = 0.2, max_fraction: float = 0.5, fwd_offset: float = 0.0,
                  invert_yaw: bool = False, stopped_eps: float = STOPPED_EPS,
                  lateral_mps_per_unit: float = 0.0, invert_lateral: bool = False,
+                 mps_per_unit_mid: float | None = None,
                  frame_id: str = "odom",
                  now_ms: Callable[[], int] = wall_ms,
                  backend: SidecarDeviceBackend | None = None,
@@ -133,6 +134,11 @@ class D1MaxHal:
         self._payload = payload
         self._payload_up = False
         self._mps, self._radps = mps_per_unit, radps_per_unit
+        # 中速档(遥控临时换档,POC 11-05):比例 1.0 多快;不给按低速档 × 2(SDK 文档 1.0 → 2.0 m/s)
+        mid = 2.0 * mps_per_unit if mps_per_unit_mid is None else mps_per_unit_mid
+        if not (math.isfinite(mid) and mid > 0):
+            raise ValueError(f"mps_per_unit_mid 要是正数,收到 {mps_per_unit_mid}")
+        self._mps_mid = mid
         self._deadband = deadband_mps
         self._frac = max_fraction
         self._fwd0 = fwd_offset
@@ -157,16 +163,48 @@ class D1MaxHal:
         top = getattr(self._b, "max_forward_fraction", MAX_WALK_SPEED)   # 没连上、测试替身:老上限
         return min(self._frac, top), back
 
-    def _vx_range(self) -> tuple[float, float]:
-        """机身系前进速度(m/s)的(下限, 上限)。狗尾为前且 SDK 跟着调头时,机身往前是 SDK 的往后。"""
+    def _gear(self) -> int:
+        """旁路进程现在要的档(遥控临时档没过期就是它;老旁路、不管档位按 1)。"""
+        g = getattr(self._b, "gear_want", None)
+        return g if isinstance(g, int) and g > 0 else 1
+
+    def _cur_mps(self) -> float:
+        return self._mps_mid if self._gear() == 2 else self._mps
+
+    def _vx_range(self, mps: float | None = None) -> tuple[float, float]:
+        """机身系前进速度(m/s)的(下限, 上限)。狗尾为前且 SDK 跟着调头时,机身往前是 SDK 的往后。
+        ``mps`` 不给按现在要的档。"""
         fwd, back = self._sdk_caps()
         if self._sdk_sign() < 0:
             fwd, back = back, fwd
-        return -(back - self._fwd0) * self._mps, (fwd - self._fwd0) * self._mps
+        k = self._cur_mps() if mps is None else mps
+        return -(back - self._fwd0) * k, (fwd - self._fwd0) * k
 
     @property
     def max_vx(self) -> float:
-        return self._vx_range()[1]
+        """低速档前进最快(能力、导航都按它;遥控临时换到中速档另见 :attr:`max_vx_teleop`)。"""
+        return self._vx_range(self._mps)[1]
+
+    @property
+    def max_vx_teleop(self) -> float:
+        """遥控换到中速档时前进最快(m/s);旁路不让换(老旁路、``--teleop-max-gear 1``)是 0。"""
+        if getattr(self._b, "teleop_max_gear", 1) < 2:
+            return 0.0
+        return self._vx_range(self._mps_mid)[1]
+
+    def teleop_gear(self) -> int:
+        """此刻状态里报的档(没报按 1)。"""
+        st = getattr(self._b, "last_state", None)
+        lvl = getattr(st, "speed_level", None)
+        return lvl if isinstance(lvl, int) and lvl > 0 else 1
+
+    async def set_teleop_gear(self, level: int) -> None:
+        """遥控临时换档 / 续档(旁路协议 12 ``gear``)。旁路不让换就抛 :class:`HalUnsupported`。"""
+        if level != 1 and self.max_vx_teleop <= 0:
+            raise HalUnsupported("旁路进程不让遥控换档(老旁路或 --teleop-max-gear 1)")
+        if level == 1 and getattr(self._b, "teleop_max_gear", 1) < 2:
+            return                                    # 本来就只有低速档
+        await self._b.gear(level)
 
     @property
     def max_vy(self) -> float:
@@ -286,13 +324,17 @@ class D1MaxHal:
         if 0.0 < abs(cmd.vx) < self._deadband:
             return _reject("deadband")
         lo, hi = self._vx_range()
-        vx, wz = min(max(cmd.vx, lo), hi), _clamp(cmd.wz, self.max_wz)
-        vy = _clamp(cmd.vy, self.max_vy) if self._lat_mps > 0 else 0.0
+        vx = min(max(cmd.vx, lo), hi)
+        # SDK 中速档:前进超过 1 m/s 时不横移、转向比例 1.0 只到 1.0 rad/s(低速档是 1.5)
+        fast = self._gear() == 2 and abs(vx) > 1.0
+        radps = self._radps / 1.5 if fast else self._radps
+        wz = _clamp(cmd.wz, min(self._frac, MAX_WALK_SPEED) * radps)
+        vy = _clamp(cmd.vy, self.max_vy) if self._lat_mps > 0 and not fast else 0.0
         clamped = (vx != cmd.vx) or (wz != cmd.wz) or (vy != cmd.vy)
         # 换算后再夹一次:浮点误差也不许越过旁路进程的上限(它越界就拒)。
         cap_fwd, cap_back = self._sdk_caps()
         fwd = min(max(self._sdk_sign() * self._fwd_fraction(vx), -cap_back), cap_fwd)
-        yaw = _clamp(self._yaw_sign * wz / self._radps, min(self._frac, MAX_WALK_SPEED))
+        yaw = _clamp(self._yaw_sign * wz / radps, min(self._frac, MAX_WALK_SPEED))
         # 横移:SDK 跟着调头时左右也反(同前进);比例上限同往后
         lat = (_clamp(self._sdk_sign() * self._lat_sign * vy / self._lat_mps,
                       min(self._frac, MAX_WALK_SPEED)) if vy else 0.0)
@@ -308,7 +350,7 @@ class D1MaxHal:
         """前进 m/s → 比例:死区加上直线那一段;0 就是 0(不许把死区当成一条命令发出去)。"""
         if vx == 0.0:
             return 0.0
-        return math.copysign(self._fwd0 + abs(vx) / self._mps, vx)
+        return math.copysign(self._fwd0 + abs(vx) / self._cur_mps(), vx)
 
     # ------------------------------------------------------------ 停止与急停
 
@@ -361,6 +403,8 @@ class D1MaxHal:
         """旁路进程要了档位(7 号起)而此刻的档位不是它(或还不知道)。"""
         hello, st = self._b.hello, self._b.last_state
         want = hello.speed_level_want if hello is not None else None
+        if want:
+            want = self._gear()                       # 遥控临时档(协议 12)
         if not want:
             return False                          # 老旁路进程不报、或旁路进程不管档位
         return st is None or st.speed_level != want
@@ -537,6 +581,7 @@ class D1MaxHal:
     def hal_capabilities(self) -> HalCapabilities:
         return HalCapabilities(
             max_vx=self.max_vx, max_wz=self.max_wz, deadband_vx=self._deadband,
+            max_vx_teleop=self.max_vx_teleop,
             lateral=self._lat_mps > 0, max_vy=self.max_vy, postures=self._postures(),
             control_releasable=False, recharge_mode="none",
             sensing={"lidar": False, "depth": False, "thermal": False, "imu": True,

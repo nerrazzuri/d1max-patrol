@@ -57,8 +57,16 @@ class SimRobot:
                  payload: bool = False,
                  charger: tuple[float, float, float] | None = None,
                  charge_pct_per_h: float = 60.0, imu: bool = False,
-                 lateral: bool = False, max_vy: float = 0.5) -> None:
+                 lateral: bool = False, max_vy: float = 0.5, max_vx_mid: float = 0.0,
+                 gear_switch_s: float = 0.2) -> None:
         self._now = now_ms
+        #: 遥控临时换档(POC 11-05):``max_vx_mid`` > 0 才能换到中速档(前进最快它);换档要
+        #: ``gear_switch_s`` 秒才报上来。``gear_requests`` 记每次要的档(测试看续档、回低速)。
+        self.max_vx_mid = max_vx_mid
+        self._gear_switch_ms = int(gear_switch_s * 1000)
+        self._gear_want = self._gear_now = 1
+        self._gear_at: int | None = None
+        self.gear_requests: list[int] = []
         #: 横移(2026-10-30):给了才收 ``vy``(机身系左为正),不给照旧拒 ``no_lateral``。
         self.lateral, self.max_vy = lateral, max_vy
         #: 姿态(POC 2026-11):站着 / 趴着 / 蹲着;起来是站着。
@@ -307,9 +315,14 @@ class SimRobot:
             return VelocityResult(0.0, 0.0, clamped=False, rejected=True, reason="no_lateral")
         if 0.0 < abs(cmd.vx) < self.deadband_vx:
             return VelocityResult(0.0, 0.0, clamped=False, rejected=True, reason="deadband")
-        vx = max(-self.max_vx, min(self.max_vx, cmd.vx))
-        wz = max(-self.max_wz, min(self.max_wz, cmd.wz))
-        vy = max(-self.max_vy, min(self.max_vy, cmd.vy))
+        if self.teleop_gear() != self._gear_want:
+            return VelocityResult(0.0, 0.0, clamped=False, rejected=True, reason="speed_level")
+        top = self.max_vx_mid if self._gear_now == 2 else self.max_vx
+        vx = max(-top, min(top, cmd.vx))
+        fast = self._gear_now == 2 and abs(vx) > 1.0     # SDK 中速档:超过 1 m/s 不横移、转向慢
+        wmax = min(self.max_wz, 1.0) if fast else self.max_wz
+        wz = max(-wmax, min(wmax, cmd.wz))
+        vy = 0.0 if fast else max(-self.max_vy, min(self.max_vy, cmd.vy))
         clamped = (vx != cmd.vx) or (wz != cmd.wz) or (vy != cmd.vy)
         if self.latency_s > 0:
             at = self._now() + int(self.latency_s * 1000)
@@ -354,6 +367,8 @@ class SimRobot:
         self._estop = on
         if on:
             self._zero()
+            if self._gear_want != 1:              # 同旁路:急停时临时档作废、回低速
+                self._gear_want, self._gear_at = 1, self._now() + self._gear_switch_ms
 
     async def estop_status(self) -> bool:
         return self._estop
@@ -523,9 +538,30 @@ class SimRobot:
 
     # ------------------------------------------------------------ 能力
 
+    def teleop_gear(self) -> int:
+        """此刻报的 SDK 速度档(1 低速、2 中速)。"""
+        if self._gear_at is not None and self._now() >= self._gear_at:
+            self._gear_now, self._gear_at = self._gear_want, None
+        return self._gear_now
+
+    async def set_teleop_gear(self, level: int) -> None:
+        """遥控临时换档(同旁路 ``gear``):换了档过 ``gear_switch_s`` 才报上来;急停时拒。"""
+        if self.max_vx_mid <= 0:
+            raise HalUnsupported("sim 没配中速档")
+        if level not in (1, 2):
+            raise ValueError(f"档位要是 1 或 2,收到 {level}")
+        if self._estop and level != 1:
+            raise RuntimeError("急停生效中,不换档")
+        self.gear_requests.append(level)
+        if level != self._gear_want:
+            self._gear_want = level
+            self._gear_at = self._now() + self._gear_switch_ms
+            self._cmd_vx = self._cmd_wz = self._cmd_vy = 0.0
+
     def hal_capabilities(self) -> HalCapabilities:
         return HalCapabilities(
             max_vx=self.max_vx, max_wz=self.max_wz, deadband_vx=self.deadband_vx,
+            max_vx_teleop=self.max_vx_mid if self.max_vx_mid > self.max_vx else 0.0,
             lateral=self.lateral, max_vy=self.max_vy if self.lateral else 0.0,
             postures=self.postures,
             control_releasable=True,

@@ -1204,15 +1204,15 @@ class _Handler(TlsHandlerMixin):
             raise HttpError(404, "此站点未启用设置")
         if method == "GET":
             self._need(user, VIEW)
-            return self._send_json(200, st.teleop_speeds())
+            return self._send_json(200, {"speeds": st.teleop_speeds()})
         if method != "POST":
             raise HttpError(405, "只支持 GET/POST")
         self._need(user, MANAGE)
         d = self._body()
         if isinstance(d, dict):
-            self._audit_detail = {k: d.get(k) for k in ("slow", "mid", "fast") if k in d}
+            self._audit_detail = {"speeds": d.get("speeds")}
         try:
-            return self._send_json(200, st.set_teleop_speeds(d, by=str(user)))
+            return self._send_json(200, {"speeds": st.set_teleop_speeds(d, by=str(user))})
         except SettingsError as exc:
             raise HttpError(400, str(exc)) from exc
 

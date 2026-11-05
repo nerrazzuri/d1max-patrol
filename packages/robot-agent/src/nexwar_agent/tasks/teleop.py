@@ -19,6 +19,11 @@
   先过它 —— 会把机身(加定位 σ、刹车距离)带进硬禁区的那一下截掉(先减速、再只许转、再零速),往外开、
   平着开照发;定位不可信时全程限速。普通禁行区、没有硬禁区照旧不管。为什么截了随续租回执给站点
   (:meth:`TeleopTask.zone_note`),站点转给手机。
+- **按速度分档 + 自动换档**(POC 11-05):手机每帧带选中的速度 ``vmax``,前进按它夹。超过低速档
+  最快(1.0 m/s)就要 SDK 中速档 —— HAL 报 ``max_vx_teleop``、站点授予时带了 ``max_vx_mps`` 才换。
+  **只在摇杆回中时换**:没回中的帧丢掉(``gear_wait``,停下等松杆),换档没报上来之前丢
+  ``gear_switching``、不下速度。
+  中速档每秒续一次(旁路 3 s 没续自己回低速);结束(放租、断线、急停…)先停车再要回低速档。
 - **横移**(2026-10-30,左杆左右):HAL 报 ``lateral`` 才认 ``vy``,限速同样是 HAL 的一半;前后和横移
   同时给了只走大的那一个(真机遥控器推 45° 也只走一个轴);狗尾为前时左右也反。有硬禁区时横移另过守卫
   (:meth:`~nexwar_agent.zone_guard.TeleopZoneGuard.lateral`):位置不可信、扫过去会更靠近硬禁区就不横移。
@@ -41,13 +46,16 @@ log = logging.getLogger(__name__)
 
 #: 结束时最多等这么久确认停稳(秒);等不到也进终态并记下来(同 goto 的兜底)。
 STOP_CONFIRM_TIMEOUT_S = 5.0
+#: 中速档多久续一次(毫秒);旁路 3 s 没续回低速(``GEAR_IDLE_S``)。
+GEAR_RENEW_MS = 1000
 #: 速度命令有效期的下限(毫秒),跟 HAL/旁路进程的下限一致。
 _MIN_TTL_MS = 50
 
 
 class TeleopTask(Task):
     #: 遥控帧被丢的原因(POC 第 3 项):帧闸三条 + 没画面 + 画面刚恢复、杆还没回中。
-    DROP_CODES = ("epoch", "seq", "late", "no_video", "video_recovered")
+    DROP_CODES = ("epoch", "seq", "late", "no_video", "video_recovered", "gear_wait",
+                  "gear_switching")
 
     def __init__(self, *, task_id: str, lease_epoch: int, operator: str, lease_ttl_ms: int,
                  hal: RobotHAL, now_ms: Callable[[], int], video_live: Callable[[], bool],
@@ -67,10 +75,20 @@ class TeleopTask(Task):
         k = 0.5 if max_vx_mps is None or caps.max_vx <= 0 else min(1.0, max_vx_mps / caps.max_vx)
         self._vmax, self._wmax = caps.max_vx * k, caps.max_wz * k
         self._vymax = caps.max_vy * k if caps.lateral else 0.0
+        # 中速档(POC 11-05):HAL 能换、站点给了上限才用;前进最快 min(HAL 中速档, 站点上限)
+        can = (caps.max_vx_teleop > caps.max_vx and max_vx_mps is not None
+               and callable(getattr(hal, "set_teleop_gear", None))
+               and callable(getattr(hal, "teleop_gear", None)))
+        self._vmax2 = min(caps.max_vx_teleop, max_vx_mps) if can else 0.0  # type: ignore[type-var]
+        #: 要的档(1 / 2);换档要等松杆(``_gear_pending``),报上来之前 ``_gear_ok`` 为假。
+        self._gear = 1
+        self._gear_pending: int | None = None
+        self._gear_ok = True
+        self._gear_told_ms = 0
         self._deadband = caps.deadband_vx
         self._until: int | None = None
-        #: 最近收下的那一帧:(vx, wz, 有效到哪一刻(狗钟), 帧的有效期, vy)。
-        self._cmd: tuple[float, float, int, int, float] | None = None
+        #: 最近收下的那一帧:(vx, wz, 有效到哪一刻(狗钟), 帧的有效期, vy, 选中的速度)。
+        self._cmd: tuple[float, float, int, int, float, float | None] | None = None
         self._moving = False
         self._vseq = 0
         #: 结束的去向 (终态, 原因);None = 还在遥控。
@@ -87,8 +105,8 @@ class TeleopTask(Task):
         self._need_neutral = False
         #: 最近一次丢帧:(原因, 狗钟毫秒)。
         self._last_drop: tuple[str, int] | None = None
-        self.gate.dropped.setdefault("no_video", 0)
-        self.gate.dropped.setdefault("video_recovered", 0)
+        for code in ("no_video", "video_recovered", "gear_wait", "gear_switching"):
+            self.gate.dropped.setdefault(code, 0)
 
     async def _read_head(self) -> str:
         try:
@@ -120,14 +138,58 @@ class TeleopTask(Task):
                 why = "video_recovered"      # 画面刚回来、手还推着:先松手
             else:
                 self._need_neutral = False
+                want = self._want_gear(frame.vmax)
+                target = self._gear if self._gear_pending is None else self._gear_pending
+                if want != target:
+                    if neutral:
+                        self._gear_pending = want    # 松着杆:下一拍换
+                    else:
+                        why = "gear_wait"            # 推着杆换了档位:停下,等松杆再换
+                elif not neutral and (self._gear_pending is not None or not self._gear_ok):
+                    why = "gear_switching"
             if why:
                 self.gate.dropped[why] += 1
                 self._cmd = None
         if why:
             self._last_drop = (why, rx_ms)
             return why
-        self._cmd = (frame.vx, frame.wz, rx_ms + frame.ttl_ms, frame.ttl_ms, frame.vy)
+        self._cmd = (frame.vx, frame.wz, rx_ms + frame.ttl_ms, frame.ttl_ms, frame.vy, frame.vmax)
         return why
+
+    def _want_gear(self, vmax: float | None) -> int:
+        """选中的速度要哪一档:超过低速档最快(不低于 1.0 m/s)且能换中速档 → 2。"""
+        if self._vmax2 <= 0 or vmax is None:
+            return 1
+        return 2 if vmax > max(self._vmax, 1.0) + 1e-6 else 1
+
+    async def _gear_tick(self, now: int) -> None:
+        """换档、续档、核档(每拍)。HAL 出错不换,照旧档;旁路那头没续到自己会回低速。"""
+        if self._vmax2 <= 0:
+            return
+        lvl = self._gear_pending
+        if lvl is not None:
+            self._gear_pending = None
+            if lvl != self._gear:
+                if self._moving:
+                    await self._hal.stop()
+                    self._moving = False
+                try:
+                    await self._hal.set_teleop_gear(lvl)  # type: ignore[attr-defined]
+                    log.info("遥控换档 %d → %d", self._gear, lvl)
+                    self._gear, self._gear_told_ms = lvl, now
+                except Exception:
+                    log.exception("遥控换到 %d 档失败(照旧 %d 档)", lvl, self._gear)
+        elif self._gear != 1 and now - self._gear_told_ms >= GEAR_RENEW_MS:
+            try:
+                await self._hal.set_teleop_gear(self._gear)  # type: ignore[attr-defined]
+                self._gear_told_ms = now
+            except Exception:
+                log.exception("遥控续 %d 档失败", self._gear)
+        try:
+            self._gear_ok = int(self._hal.teleop_gear()) == self._gear  # type: ignore[attr-defined]
+        except Exception:
+            log.exception("读不到档位(按没换好算)")
+            self._gear_ok = False
 
     def drops_note(self) -> dict[str, Any] | None:
         """丢帧的累计数、最近一条原因和时刻(狗钟)。续租回执里带给站点、站点转给手机。
@@ -177,16 +239,22 @@ class TeleopTask(Task):
         if self._ending is not None:
             await self._finish(dt_s)
             return
+        await self._gear_tick(now)
         c = self._cmd
         video = self._video_live()
         if not video:
             self._need_neutral = True        # 画面断过:回来之后要先收到一帧回中的
-        live = c is not None and now < c[2] and video
+        live = c is not None and now < c[2] and video and self._gear_ok
         vx = wz = vy = 0.0
         if live:
-            vx = max(-self._vmax, min(self._vmax, c[0]))
+            vmax = self._vmax2 if self._gear == 2 else self._vmax
+            if c[5] is not None:
+                vmax = min(vmax, c[5])                    # 手机上选的速度档
+            vx = max(-vmax, min(vmax, c[0]))
             wz = max(-self._wmax, min(self._wmax, c[1]))
             vy = max(-self._vymax, min(self._vymax, c[4]))
+            if self._gear == 2 and abs(vx) > 1.0:
+                vy = 0.0                                  # SDK 中速档:超过 1 m/s 不横移
             if abs(vx) < self._deadband:
                 vx = 0.0                                  # 死区以下的平移不下(HAL 会拒)
             if vx and vy:                                 # 前后、横移只走大的那一个
@@ -248,6 +316,12 @@ class TeleopTask(Task):
                 await self._hal.stop()
             except Exception:
                 log.exception("遥控结束时停车失败")
+            if self._gear != 1:
+                try:
+                    await self._hal.set_teleop_gear(1)  # type: ignore[attr-defined]
+                except Exception:
+                    log.exception("遥控结束时回低速档失败(旁路 3 s 没续自己会回)")
+                self._gear = 1
         stopped = False
         try:
             stopped = await self._hal.stopped()
