@@ -77,6 +77,11 @@ CLOCK_BACK_MS = 5_000
 #: 生命周期管理器在、节点这么久(秒)还没全部激活 → 让它 reset + startup 重来一次;还不行每隔这么久再来
 #: (11-04 现场:机器人从 1970 年的钟起来,Nav2 激活失败后一直卡着,只能人重启)。正常起来不到 30 秒。
 LIFECYCLE_RETRY_S = 90.0
+#: 11-05 现场第 5 条:Nav2 自己重来(reset + startup)连着这么多回不成,转接节点用
+#: :data:`FULL_RESTART_RC` 退出;启动文件看见这个退出码就整个关掉,systemd(Restart=always)
+#: 把 nexwar_nav2 拉起来。
+LIFECYCLE_FAILS_FULL = 2
+FULL_RESTART_RC = 75
 #: nav2_msgs/srv/ManageLifecycleNodes 的命令。
 LIFECYCLE_STARTUP, LIFECYCLE_RESET = 0, 3
 #: 生命周期管理器每一步(reset / startup)最多等这么久(秒)回话;过了当没成,下个周期再来(外审 r3 #7:
@@ -246,6 +251,7 @@ class Nav2Bridge:
         #: 11-05 现场第 47 条:从什么时候起没就绪(单调钟;就绪了 None)。
         self._unready_since: float | None = None
         self._restarts = 0
+        self._retry_fails = 0                  # 连着几回重来不成(第 5 条)
         self._manage_busy = False
         self._manage_deadline = 0.0                      # 这一步等回话等到几时(单调钟)
         self._manage_gen = 0                             # 第几回重来:过期回调认不出自己就不理
@@ -731,6 +737,7 @@ class Nav2Bridge:
                         LIFECYCLE_CALL_S)
             self._manage_busy = False
             self._manage_gen += 1                       # 晚到的回调不再理
+            self._retry_failed()
         clock_ok = time.monotonic() - self._clock_wall <= CLOCK_STALE_S
         if self.nav2_active or self.manage is None or not self.lm.service_is_ready() \
                 or not self.manage.service_is_ready() or not clock_ok:
@@ -765,6 +772,10 @@ class Nav2Bridge:
             self._manage_busy = False
             ok = ok_of(f)
             log.info("Nav2 重新启动:%s", "成功" if ok else "没成功,过一阵再试")
+            if ok:
+                self._retry_fails = 0
+            else:
+                self._retry_failed()
 
         def reset(f: Any) -> None:
             if stale():
@@ -772,6 +783,7 @@ class Nav2Bridge:
             if not ok_of(f):
                 log.warning("Nav2 重置没成功:不接着启动,过一阵再试")
                 self._manage_busy = False
+                self._retry_failed()
                 return
             self._manage_deadline = self._mono() + LIFECYCLE_CALL_S
             try:
@@ -786,6 +798,18 @@ class Nav2Bridge:
         except Exception:
             log.exception("Nav2 重置没发出去")
             self._manage_busy = False
+
+    def _retry_failed(self) -> None:
+        self._retry_fails = getattr(self, "_retry_fails", 0) + 1
+        if self._retry_fails >= LIFECYCLE_FAILS_FULL:
+            log.error("Nav2 自己重来连着 %d 回不成:整个 Nav2 服务重启", self._retry_fails)
+            self._retry_fails = 0
+            self._full_restart()
+
+    def _full_restart(self) -> None:
+        """退出码 :data:`FULL_RESTART_RC`:启动文件整个关掉,systemd 拉起来(测试里换掉)。"""
+        logging.shutdown()
+        os._exit(FULL_RESTART_RC)
 
     def check_ready(self) -> None:
         """11-05 现场第 47 条:根上的原因先说(没图、没时钟、Nav2 没起来),「等取消上一次的目标」放在
