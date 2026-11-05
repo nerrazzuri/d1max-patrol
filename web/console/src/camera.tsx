@@ -13,7 +13,7 @@ import { t } from "./i18n";
 import { useVideoFrame } from "./videomux";
 
 /** 相机:狗自带前后两路;装了上装 V1.2 热像的多一路 thermal(W40)。 */
-export type Cam = "front" | "back" | "thermal";
+export type Cam = "front" | "back" | "thermal" | "payload";
 
 const PAUSE_AFTER_MS = 2000;
 const RETRY_MS = 3000;

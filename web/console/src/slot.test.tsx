@@ -55,6 +55,20 @@ describe("画面位", () => {
     expect(mainSrc(c)).toContain("/video/front");
   });
 
+  it("POC 11-05:有上装相机,点「上装」大画面换上装、前摄像头进小窗;跟热像互斥", () => {
+    const { container: c } = render(<VideoSlot u={unit(["front", "back", "thermal", "payload"])} now={0} pinned={false} onPin={() => {}} onZoom={() => {}} />);
+    const p = c.querySelector(".slot-payload") as HTMLButtonElement;
+    expect(p.textContent).toBe("上装");
+    fireEvent.click(p);
+    expect(mainSrc(c)).toContain("/video/payload");
+    expect(pipSrc(c)).toContain("/video/front");
+    fireEvent.click(c.querySelector(".slot-thermal")!);
+    expect(mainSrc(c)).toContain("/video/thermal");
+    expect(p.getAttribute("aria-pressed")).toBe("false");
+    fireEvent.click(c.querySelector(".slot-thermal")!);
+    expect(mainSrc(c)).toContain("/video/front");
+  });
+
   it("断流写最后画面和已断几秒", () => {
     const t0 = new Date(2026, 9, 27, 23, 10, 0).getTime();
     vi.spyOn(Date, "now").mockReturnValue(t0);

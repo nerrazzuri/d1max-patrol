@@ -90,3 +90,11 @@ def test_record_auto_真狗录写了record的热像_没写的不录(tmp_path):
     bad = _写(tmp_path, {"thermal": {"url": "ftp://x"}})
     with pytest.raises(SystemExit, match="rtsp"):
         record_cameras(ns(record="auto", hal="d1max", cameras=bad))
+
+
+def test_POC1105_竞品上装的可见光相机叫payload_按自己的地址拉(tmp_path):
+    u = "rtsp://admin:pw@192.168.113.103:554/ch1/sub/av_stream"
+    got = load_cameras(_写(tmp_path, {"thermal": {"url": URL}, "payload": {"url": u}}))
+    src = rtsp_source("192.168.168.168", got)
+    assert src.cameras == ("front", "back", "thermal", "payload")
+    assert src("payload")[-1] == u

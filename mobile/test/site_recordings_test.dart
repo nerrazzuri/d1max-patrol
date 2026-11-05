@@ -2,7 +2,7 @@
 import 'dart:typed_data';
 
 import 'package:nexwar_patrol/model/alert.dart';
-import 'package:nexwar_patrol/net/site_client.dart' show SiteError;
+import 'package:nexwar_patrol/net/site_client.dart' show SiteError, cameraName, robotCameras;
 import 'package:nexwar_patrol/ui/site_alert_scene.dart';
 import 'package:nexwar_patrol/ui/site_recordings.dart';
 import 'package:flutter/material.dart';
@@ -36,6 +36,7 @@ Future<void> _open(WidgetTester t, FakeApi api, {int? around, ClipPlayer? player
 }
 
 void main() {
+  pocPayloadCamera();
   testWidgets('列出最近的；点一段下载下来放', (t) async {
     final api = _api('owner');
     final p = _Player();
@@ -134,5 +135,19 @@ void main() {
     await t.pumpWidget(const SizedBox()); // 换一只狗：不复用上一页的状态
     await _open(t, _api('guard'));
     expect(find.byKey(SiteRecordingsPage.cameraKey('thermal')), findsNothing);
+  });
+}
+
+void pocPayloadCamera() {
+  test('POC 11-05：上装相机（payload）也认，名字说人话', () {
+    final v = <String, dynamic>{
+      'capabilities': <String, dynamic>{
+        'tasks': <String, dynamic>{
+          'video': <String, dynamic>{'cameras': <String>['front', 'back', 'thermal', 'payload']},
+        },
+      },
+    };
+    expect(robotCameras(v), <String>['front', 'back', 'thermal', 'payload']);
+    expect(cameraName('payload'), '上装');
   });
 }

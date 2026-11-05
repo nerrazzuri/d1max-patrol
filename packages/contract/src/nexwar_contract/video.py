@@ -18,7 +18,8 @@ from nexwar_contract.errors import ContractError
 
 #: 认得的相机名。``front``、``back`` 是狗自带的两路(跟狗上老服务 ``app/video.py`` 的一致);
 #: ``thermal`` 是上装 V1.2 的热像(W40,决策 70),装了的狗在能力 ``video.cameras`` 里报。
-CAMERAS = ("front", "back", "thermal")
+#: ``payload`` 是上装的可见光相机(POC 11-05:先借竞品上装的海康,``/etc/nexwar/cameras.json`` 里配)。
+CAMERAS = ("front", "back", "thermal", "payload")
 #: 不报 ``video.cameras`` 的狗(W40 之前的)当它有这两路。
 STANDARD_CAMERAS = ("front", "back")
 

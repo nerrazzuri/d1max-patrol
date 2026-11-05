@@ -24,6 +24,8 @@ export function SlotBar(props: {
   onPin?: () => void;
   onZoom?: () => void;
   thermal?: { on: boolean; toggle: () => void } | null;
+  /** POC 11-05:上装相机(借竞品上装的可见光)。 */
+  payload?: { on: boolean; toggle: () => void } | null;
 }) {
   const { u } = props;
   return (
@@ -33,6 +35,9 @@ export function SlotBar(props: {
       <span class="slot-mid" />
       {props.thermal && (
         <button type="button" class="slot-btn slot-thermal" aria-pressed={props.thermal.on} onClick={props.thermal.toggle}>{t("thermal")}</button>
+      )}
+      {props.payload && (
+        <button type="button" class="slot-btn slot-payload" aria-pressed={props.payload.on} onClick={props.payload.toggle}>{t("payload")}</button>
       )}
       {props.onPin && (
         <button type="button" class="slot-btn slot-pin" aria-pressed={!!props.pinned} onClick={props.onPin}>{t("pinSlot")}</button>
@@ -63,12 +68,16 @@ export function VideoSlot(props: {
   alarm?: boolean;
 }) {
   const [swapped, setSwapped] = useState(false);
-  const [thermal, setThermal] = useState(false);
+  // 大画面换成哪一路额外的相机(热像、上装):同时只一路
+  const [extra, setExtra] = useState<"thermal" | "payload" | null>(null);
   const id = props.u.robot.robot_id;
-  const hasThermal = robotCams(props.u.robot).includes("thermal");
-  const useThermal = thermal && hasThermal && !props.scene;
-  const main: Cam = useThermal ? "thermal" : swapped ? "back" : "front";
-  const pip: Cam = useThermal ? "front" : props.scene ? "front" : swapped ? "front" : "back";
+  const cams = robotCams(props.u.robot);
+  const hasThermal = cams.includes("thermal");
+  const hasPayload = cams.includes("payload");
+  const useExtra = extra !== null && cams.includes(extra) && !props.scene ? extra : null;
+  const main: Cam = useExtra ?? (swapped ? "back" : "front");
+  const pip: Cam = useExtra ? "front" : props.scene ? "front" : swapped ? "front" : "back";
+  const toggle = (c: "thermal" | "payload") => ({ on: useExtra === c, toggle: () => setExtra(extra === c ? null : c) });
   const off = props.u.state === "offline";
   return (
     <section class={props.alarm ? "slot alarm" : "slot"} id={`unit-${id}`} aria-label={id}>
@@ -84,13 +93,14 @@ export function VideoSlot(props: {
         )}
       </div>
       {!off && (
-        <button type="button" class="slot-pip" aria-label={t(pip)} disabled={!!props.scene || useThermal}
+        <button type="button" class="slot-pip" aria-label={t(pip)} disabled={!!props.scene || !!useExtra}
           onClick={() => setSwapped(!swapped)}>
           <CameraWell key={`p-${pip}`} robot={id} cam={pip} now={props.now} forceLive={props.forceLive} variant="pip" />
         </button>
       )}
       <SlotBar u={props.u} pinned={props.pinned} onPin={props.onPin} onZoom={props.onZoom}
-        thermal={hasThermal && !props.scene ? { on: thermal, toggle: () => setThermal(!thermal) } : null} />
+        thermal={hasThermal && !props.scene ? toggle("thermal") : null}
+        payload={hasPayload && !props.scene ? toggle("payload") : null} />
       <SlotFoot u={props.u} scene={props.scene} />
     </section>
   );

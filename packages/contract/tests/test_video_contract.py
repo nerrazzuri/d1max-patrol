@@ -30,7 +30,9 @@ def test_往返():
                              ttl_ms=10_000)
     assert parse_video_payload(r.to_payload()) == r
     # W40:上装 V1.2 的热像是第三路;不报相机清单的老狗按前后两路
-    assert CAMERAS == ("front", "back", "thermal") and STANDARD_CAMERAS == ("front", "back")
+    # POC 11-05:借竞品上装的可见光相机(payload)
+    assert CAMERAS == ("front", "back", "thermal", "payload")
+    assert STANDARD_CAMERAS == ("front", "back")
 
 
 @pytest.mark.parametrize("bad", [

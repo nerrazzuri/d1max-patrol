@@ -19,7 +19,7 @@ const CHECK: Record<string, Key> = {
 /** 设备编号说人话:camera:front → 前摄像头有画面;link:router → 连得上路由器;认不得的原样。 */
 export function deviceText(id: string): string {
   const [kind, name] = id.split(":");
-  if (kind === "camera") return t("devCam", { c: name === "front" ? t("front") : name === "back" ? t("back") : name === "thermal" ? t("thermal") : name });
+  if (kind === "camera") return t("devCam", { c: name === "front" ? t("front") : name === "back" ? t("back") : name === "thermal" ? t("thermal") : name === "payload" ? t("payload") : name });
   if (kind === "link") return t("devLink", { n: name });
   if (kind === "rtk") return t("devRtk");
   if (kind === "disk") return t("devDisk");

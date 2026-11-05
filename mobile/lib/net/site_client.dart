@@ -382,7 +382,7 @@ List<String> robotCameras(Map<String, dynamic>? view) {
   final video = tasks is Map ? tasks['video'] : null;
   final cams = video is Map ? video['cameras'] : null;
   if (cams is! List) return const <String>['front', 'back'];
-  final got = <String>[for (final c in const ['front', 'back', 'thermal']) if (cams.contains(c)) c];
+  final got = <String>[for (final c in const ['front', 'back', 'thermal', 'payload']) if (cams.contains(c)) c];
   return got.isEmpty ? const <String>['front', 'back'] : got;
 }
 
@@ -426,6 +426,7 @@ String cameraName(String c) => switch (c) {
       'front' => tr('Front', '前'),
       'back' => tr('Back', '后'),
       'thermal' => tr('Thermal', '热像'),
+      'payload' => tr('Payload', '上装'),
       _ => c,
     };
 
