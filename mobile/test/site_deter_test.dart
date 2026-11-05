@@ -41,6 +41,7 @@ Future<void> _robotPage(WidgetTester t, FakeApi api) async {
 }
 
 void main() {
+  pocClipNames();
   testWidgets('单机器人页：保安、机器人报了上装才有入口；管理员没有；机器人没装没有', (t) async {
     await _robotPage(t, FakeApi('guard', robotView: _view()));
     expect(find.byKey(const Key('btn-deter')), findsOneWidget);
@@ -170,5 +171,20 @@ void main() {
     await _robotPage(t, FakeApi('guard', robotView: v));
     await t.scrollUntilVisible(find.byKey(const Key('robot-devices')), 200);
     expect(find.text('设备（长时间未更新）'), findsOneWidget);
+  });
+}
+
+void pocClipNames() {
+  testWidgets('POC 11-05：竞品转接的 4 段英文话术显示中文名，发的还是原名', (t) async {
+    final api = FakeApi('guard');
+    await _open(t, api, caps: <String, dynamic>{..._caps, 'clips': <String>['blocked', 'restricted', 'zz']});
+    await t.tap(find.byKey(const Key('deter-clip')));
+    await t.pumpAndSettle();
+    expect(find.text('zz'), findsWidgets);
+    await t.tap(find.text('禁区警告（英文）').last);
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('deter-play')));
+    await t.pumpAndSettle();
+    expect(api.calls.last, 'deter A speaker true 30.0 restricted');
   });
 }

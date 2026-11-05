@@ -30,6 +30,15 @@ class SiteDeterPage extends StatefulWidget {
   State<SiteDeterPage> createState() => _SiteDeterPageState();
 }
 
+/// 话术名说人话（POC 11-05：竞品转接的 4 段英文）；别的原样。
+String deterClipLabel(String c) => switch (c) {
+      'blocked' => tr('Path blocked (EN)', '请让路（英文）'),
+      'passing' => tr('Passing through (EN)', '巡逻经过（英文）'),
+      'distance' => tr('Keep distance (EN)', '保持距离（英文）'),
+      'restricted' => tr('Restricted area (EN)', '禁区警告（英文）'),
+      _ => c,
+    };
+
 /// 每一路的名字、默认开多久（秒）。
 Map<String, (String, double)> get deterOutputs => <String, (String, double)>{
       'strobe': (tr('Strobe light', '警灯'), 60),
@@ -208,7 +217,7 @@ class _SiteDeterPageState extends State<SiteDeterPage> {
                       value: _clip,
                       items: [
                         for (final c in _clips)
-                          DropdownMenuItem(value: c, child: Text(c, maxLines: 1, overflow: TextOverflow.ellipsis)),
+                          DropdownMenuItem(value: c, child: Text(deterClipLabel(c), maxLines: 1, overflow: TextOverflow.ellipsis)),
                       ],
                       onChanged: (v) => setState(() => _clip = v),
                     );
