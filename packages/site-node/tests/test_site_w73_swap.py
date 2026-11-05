@@ -292,3 +292,61 @@ def test_现场1104_告警没发成_下一拍补发():
     assert t.kinds() == []
     t.tick()
     assert t.kinds() == ["swap_needed"], "没告诉成:不能当已经告诉过"
+
+
+def _记中止(t):
+    calls: list[str] = []
+
+    async def abort(rid, tid, *, issued_by):
+        calls.append(tid)
+        return {"ack": {"result": "accepted"}}
+    t.d.abort = abort
+    return calls
+
+
+def test_现场1105_拔着一块时遥控照样开_不中止():
+    # 缺一块电池时,保安正要遥控它走到换电位;以前站点每 4 秒中止一次遥控(teleop-10/11/12)
+    t = 台()
+    calls = _记中止(t)
+    t.packs = [60.0, None]
+    t.task = "teleop-10"
+    for _ in range(12):
+        t.tick()
+    assert calls == []
+    t.task = "patrol-1"                                  # 不是遥控的照样停
+    t.tick(6)
+    assert calls == ["patrol-1"]
+
+
+def test_现场1105_只插一块电池跑_缺的那块空了10分钟以上_算单电池_不拦不叫人():
+    t = 台()
+    calls = _记中止(t)
+    t.packs = [60.0, None]
+    t.tick()
+    assert "2 号电池拔着" in t.desk.busy("A"), "刚拔下来:当在换电池"
+    t.tick(10 * 60)
+    assert t.desk.busy("A") == "" and t.desk.refuse("A") == ""
+    assert t.desk.missing("A") is None
+    n = len(t.alerts.raised)
+    t.task = "goto-1"
+    t.tick(6)
+    t.tick(60 * 30)
+    assert calls == [] and len(t.alerts.raised) == n, "单电池跑:不中止、不再叫人装回"
+    assert t.desk.view()["robots"] == []
+    t.task = None
+    t.packs = [60.0, 70.0]                               # 装回去了
+    t.tick()
+    t.packs = [60.0, None]                               # 再拔:重新算「在换电池」
+    t.tick()
+    assert "2 号电池拔着" in t.desk.busy("A")
+
+
+def test_现场1105_低电换电走到一半拔着那块空了很久_照样引导装回_绝不提示拔另一块():
+    t = 台()
+    t.need = 35.0
+    t.tick()
+    t.packs = [None, 60.0]                               # 换电中:1 号拔了,保安走开
+    t.tick(30 * 60)
+    v = t.desk.view()["robots"][0]
+    assert v["step"] == "first_out"
+    assert "在等换电池" in t.desk.busy("A") or "拔着" in t.desk.busy("A")

@@ -18,6 +18,12 @@
 - 拔着一块的时候判进度,**先让装回拔着的那块**,绝不引导去拔剩下那块(外审 r1 #2:站点重启后
   ``[None, 20]`` 曾提示「先换 2 号」= 断电)。拔错了(先换的那块还没好,另一块被拔了)→ ``wrong_out``。
 
+现场 11-05:
+- **遥控不中止**:缺一块电池时,保安正要遥控它走到换电位(``teleop-`` 那一趟照常)。
+- **单电池运行**:一块空着连续 :data:`SINGLE_PACK_MIN` 分钟、又不在换电流程里(不是低电换电那一趟)
+  = 这台就是只插一块在跑,不拦、不中止、不叫人装回。低电换电走到一半拔着的那块空再久也照样引导装回。
+  站点重启后先按「拔着」算,满 :data:`SINGLE_PACK_MIN` 分钟才转成单电池。
+
 状态只在内存里(站点重启按电池重新判进度:哪块低、哪块拔了都读得出来;拔着一块的重启后
 直接接上引导)。
 """
@@ -30,6 +36,7 @@ from collections.abc import Callable
 from datetime import datetime
 from typing import Any
 
+from nexwar_site.dispatcher import TELEOP_TASK_PREFIX
 from nexwar_site.energy import SWAP_OK_PCT
 
 log = logging.getLogger(__name__)
@@ -47,6 +54,8 @@ HALT_ALERT = 3
 #: 发过中止以后,连着听得见这么久(毫秒)、手上不是它才算停了(外审 r4 #1:断线时离线状态里「没任务」、
 #: 刚连回来那几拍的空状态都不算;跟值守的 ``SETTLE_HEARD_MS`` 一样)。
 HALT_SETTLE_MS = 5_000
+#: 一块空着连续这么久(分钟)、不在低电换电流程里 = 单电池运行(现场 11-05)。
+SINGLE_PACK_MIN = 10
 
 
 class SwapDesk:
@@ -65,6 +74,8 @@ class SwapDesk:
         #: 进度变化(给值守记录、测试):``{"robot_id", "step", "at_ms"}``,只留最近 200 条。
         self.events: list[dict[str, Any]] = []
         self._heard_since: dict[str, int] = {}
+        #: 哪块空着、从什么时候起(单电池判断用):``rid → (几号, ms)``。
+        self._absent: dict[str, tuple[int, int]] = {}
 
     # ------------------------------------------------------------ 读
 
@@ -82,12 +93,28 @@ class SwapDesk:
         t = c.telemetry if c is not None else None
         return float(t.battery_pct) if t is not None and t.battery_pct is not None else None
 
-    def missing(self, rid: str) -> int | None:
-        """拔着的那块是几号(1 / 2);两块都在、不分块报 → ``None``。"""
+    def _gap(self, rid: str) -> int | None:
+        """空着的那块是几号(1 / 2);两块都在、不分块报 → ``None``。"""
         packs = self._packs(rid)
         if not packs or len(packs) < 2:
             return None
         return next((i + 1 for i, v in enumerate(packs[:2]) if v is None), None)
+
+    def _single(self, rid: str) -> bool:
+        """单电池运行:同一块空着连续 :data:`SINGLE_PACK_MIN` 分钟(站点看见的)。"""
+        n, a = self._gap(rid), self._absent.get(rid)
+        return n is not None and a is not None and a[0] == n \
+            and self._now() - a[1] >= SINGLE_PACK_MIN * 60_000
+
+    def missing(self, rid: str) -> int | None:
+        """拔着的那块是几号(1 / 2);两块都在、不分块报、单电池运行(不在低电换电流程里)→ ``None``。"""
+        n = self._gap(rid)
+        if n is None:
+            return None
+        st = self.s.get(rid)
+        if (st is None or st.get("by_gap")) and self._single(rid):
+            return None
+        return n
 
     def busy(self, rid: str) -> str:
         """值守、排程问:能不能派它出去。有一块拔着、在等换电池 → 不派的理由;不然空串。"""
@@ -150,6 +177,11 @@ class SwapDesk:
     async def tick(self) -> None:
         now = self._now()
         for rid in sorted(self.dispatcher.clients):
+            n = self._gap(rid)                           # 哪块空着、从什么时候起
+            if n is None:
+                self._absent.pop(rid, None)
+            elif self._absent.get(rid, (0, 0))[0] != n:
+                self._absent[rid] = (n, now)
             if self._heard(rid):                         # 每台每拍记:连着听得见从什么时候起
                 self._heard_since.setdefault(rid, now)
             else:
@@ -166,12 +198,17 @@ class SwapDesk:
     async def _one(self, rid: str) -> None:
         now = self._now()
         st = self.s.get(rid)
+        if st is not None and st.get("by_gap") and self._single(rid):
+            log.info("%s 一块空了 %d 分钟以上:当单电池运行,不再叫人装回", rid, SINGLE_PACK_MIN)
+            self._finish(rid)
+            return
         if st is None:
             if self._has_charger(rid):
                 self._soon_told.discard(rid)
                 return
             need = self._need(rid)
-            if need is None and self.missing(rid) is not None:
+            by_gap = need is None and self.missing(rid) is not None
+            if by_gap:
                 need = 0.0                               # 拔着一块(站点重启了?):直接接上引导
             if need is None:
                 eta = self._eta(rid)
@@ -184,7 +221,7 @@ class SwapDesk:
                     self._soon_told.discard(rid)
                 return
             st = self.s[rid] = {"step": "going", "since_ms": now, "told_ms": None,
-                                "first": None, "line": need, "sent_ms": None}
+                                "first": None, "line": need, "sent_ms": None, "by_gap": by_gap}
             self._note(rid, "going")
             if self.missing(rid) is not None:
                 st["arrived_ms"] = now                   # 已经在换了:不用回换电位
@@ -275,6 +312,11 @@ class SwapDesk:
                 st.pop(k, None)
             return False
         tid = self._running(rid) if self._heard(rid) else ""
+        if tid.startswith(TELEOP_TASK_PREFIX):
+            # 现场 11-05:保安遥控它(多半正是开去换电位)—— 不中止;以前每 4 秒停一次遥控
+            for k in ("halt_tries", "halt_tid"):
+                st.pop(k, None)
+            return False
         pending = st.get("halt_tid")
         if tid and tid != pending:
             st["halt_tid"], st["halt_tries"] = tid, 0
