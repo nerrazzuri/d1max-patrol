@@ -240,11 +240,13 @@ class TeleopTask(Task):
             await self._finish(dt_s)
             return
         await self._gear_tick(now)
-        c = self._cmd
         video = self._video_live()
         if not video:
             self._need_neutral = True        # 画面断过:回来之后要先收到一帧回中的
-        live = c is not None and now < c[2] and video and self._gear_ok
+            self._cmd = None                 # 外审 r1 #5:手上那帧也作废,画面回来不许它复活
+        c = self._cmd
+        live = (c is not None and now < c[2] and video and self._gear_ok
+                and not self._need_neutral)
         vx = wz = vy = 0.0
         if live:
             vmax = self._vmax2 if self._gear == 2 else self._vmax

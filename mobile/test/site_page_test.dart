@@ -1164,6 +1164,18 @@ void main() {
     expect(busy.calls, isEmpty);
 
     await t.pumpWidget(Container());
+    final heldView = withPosture(busyView());
+    heldView['held'] = <String, dynamic>{'by': 'bob', 'at_ms': 1};
+    final held = FakeApi('guard', robotView: heldView);
+    await openRobot(t, held);
+    await t.ensureVisible(find.byKey(const Key('btn-posture')));
+    await t.tap(find.byKey(const Key('btn-posture')));
+    await t.pumpAndSettle();
+    expect(find.byKey(const Key('posture-lie')), findsNothing);
+    expect(find.textContaining('先点「恢复」再换姿态'), findsOneWidget);
+    expect(held.calls, isEmpty);
+
+    await t.pumpWidget(Container());
     final owner = FakeApi('owner', robotView: withPosture(busyView()));
     await openRobot(t, owner);
     expect(find.byKey(const Key('btn-posture')), findsNothing);

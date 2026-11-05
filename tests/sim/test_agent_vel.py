@@ -517,3 +517,23 @@ def test_CPP的遥控换档_参数_插队_hello_跟仿真一致():
     assert 'cmd == "gear") return DoGear(' in src and '|| cmd == "gear";' in src
     assert "gear" in URGENT_COMMANDS and not open_command("gear", {"level": 2})
     assert f"kGearIdleMs = {int(GEAR_IDLE_S * 1000)};" in gate
+
+
+async def test_外审r1_临时档过期就作废_vel不复活_机身急停也清():
+    """同 vel_gate.hpp 的 ExpireGearLocked / OnState(外审 r1 #2、#3)。"""
+    from nexwar_sim.agent_server import EmergencyStatus
+    async with _client(teleop_max_gear=2) as (sim, client):
+        await _站起(sim, client)
+        assert (await client.call("gear", level=2)).ok
+        assert sim.want_level() == 2
+        sim._gear_seen = time.monotonic() - 3.1                # 3 s 没续
+        assert (await client.call("vel", fwd=0.2, lat=0.0, yaw=0.0, ttl_ms=300)).ok
+        assert sim.want_level() == 1, "过期了 vel 不能把中速档续活"
+        assert (await client.call("gear", level=2)).ok
+        sim.estop_hardware = EmergencyStatus.STOP              # 机身急停
+        assert sim.want_level() == 1
+        assert not (await client.call("gear", level=2)).ok, "急停中不能换上去"
+        assert (await client.call("gear", level=1)).ok, "回原档随时可以"
+        sim.estop_hardware = EmergencyStatus.RECOVER
+        assert (await client.call("gear", level=2)).ok
+

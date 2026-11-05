@@ -9,14 +9,30 @@ import { isOwnerLike } from "./model";
 interface Mode { active: boolean; until_ms: number | null; by: string }
 const hm = (ms: number) => { const d = new Date(ms); return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`; };
 
-export function AlertTestBar({ role, onCleared }: { role: string; onCleared: () => void }) {
+/** 条幅多久重新问一次站点(外审 r1 #10:别的管理员开了、结束了,这边也要跟着变)。 */
+export const ALERT_TEST_POLL_MS = 15_000;
+
+export function AlertTestBar({ role, onCleared, pollMs = ALERT_TEST_POLL_MS }:
+  { role: string; onCleared: () => void; pollMs?: number }) {
   const [mode, setMode] = useState<Mode | null>(null);
   const [mins, setMins] = useState(30);
   const [ask, setAsk] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   const admin = isOwnerLike(role);
   const load = () => api<Mode>("GET", "/api/alert-test").then(setMode).catch(() => setMode(null));
-  useEffect(() => { void load(); }, []);
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    void load();
+    const h = setInterval(() => void load(), pollMs);
+    return () => clearInterval(h);
+  }, [pollMs]);
+  // 到点就当已结束(不等下一次轮询):测试结束之后的真告警不能被当成演练
+  useEffect(() => {
+    if (!mode?.active || mode.until_ms == null) return;
+    const h = setTimeout(() => { setTick((n) => n + 1); void load(); }, Math.max(0, mode.until_ms - Date.now()) + 50);
+    return () => clearTimeout(h);
+  }, [mode?.active, mode?.until_ms]);
+  const active = !!mode?.active && (mode.until_ms == null || Date.now() < mode.until_ms);
   const post = async (body: Record<string, unknown>) => {
     setMsg(null);
     try {
@@ -27,10 +43,10 @@ export function AlertTestBar({ role, onCleared }: { role: string; onCleared: () 
       setMsg(e instanceof ApiError ? e.message : String(e));
     }
   };
-  if (!mode || (!mode.active && !admin)) return null;
+  if (!mode || (!active && !admin)) return null;
   return (
-    <div class={mode.active ? "note warn alert-test" : "alert-test row"} data-alert-test={mode.active ? "on" : "off"}>
-      {mode.active ? (
+    <div class={active ? "note warn alert-test" : "alert-test row"} data-alert-test={active ? "on" : "off"}>
+      {active ? (
         <>
           <span>{t("atOn", { at: hm(mode.until_ms ?? 0), by: mode.by })}</span>
           {admin && <button type="button" class="btn sm stop" onClick={() => setAsk(true)}>{t("atEndClear")}</button>}

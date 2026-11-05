@@ -67,3 +67,24 @@ def test_到点自动结束_不删(站点):
     after = _报(s, "到点之后", kind="intrusion")
     assert "test" not in after.context
     assert s.db.query("SELECT COUNT(*) AS n FROM alerts")[0]["n"] == 2, "到点不删"
+
+
+def test_外审r1_测试结束不清_之后的真告警不合进测试那条(站点):
+    s = 站点
+    alice = _登(s, "alice")
+    s.req("POST", "/api/alert-test", {"action": "start", "minutes": 30}, token=alice)
+    t1 = _报(s, "演练")
+    s.req("POST", "/api/alert-test", {"action": "end", "clear": False}, token=alice)
+    real = _报(s, "真的卡住了")
+    assert real.key != t1.key and "test" not in real.context and real.title == "真的卡住了", real
+
+
+def test_外审r1_清掉测试再重启_真告警不重用删掉的号(站点):
+    s = 站点
+    alice = _登(s, "alice")
+    s.req("POST", "/api/alert-test", {"action": "start", "minutes": 30}, token=alice)
+    t1 = _报(s, "演练", kind="intrusion")
+    s.req("POST", "/api/alert-test", {"action": "end", "clear": True}, token=alice)
+    desk = type(s.desk)(s.db, now_ms=s.desk._now)       # 站点重启:从库里读回
+    real = desk.raise_alert(kind="intrusion", robot="A", title="真的入侵")
+    assert real.key != t1.key, (real.key, t1.key)

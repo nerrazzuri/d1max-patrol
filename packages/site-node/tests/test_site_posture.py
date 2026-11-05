@@ -94,3 +94,17 @@ def test_概览卡片带能做哪几种姿势_和正在跑的任务(站点):
               "yaw": 0.0}
     tid = s.req("POST", "/api/robots/A/goto", {"target": target}, token=gina)[1]["task_id"]
     _等(lambda: card()["task"] == tid)
+
+
+def test_外审r1_叫停了没恢复_姿势也拒_恢复后照常(站点):
+    s = 站点
+    gina = _登(s, "gina")
+    _新鲜(s, gina)
+    assert s.req("POST", "/api/robots/A/halt", {}, token=gina)[0] == 200
+    code, d = s.req("POST", "/api/robots/A/posture", {"mode": "lie"}, token=gina)
+    assert code == 409 and "恢复" in d["error"], d
+    assert _姿态(s) is MotionStatus.READY
+    assert s.req("POST", "/api/robots/A/resume", {}, token=gina)[0] == 200
+    _新鲜(s, gina)
+    code, d = s.req("POST", "/api/robots/A/posture", {"mode": "lie"}, token=gina)
+    assert code == 200, d

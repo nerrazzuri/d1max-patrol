@@ -76,3 +76,23 @@ def test_没任务_直接回原点(站点):
     assert s.req("POST", "/api/robots/A/home/here", {"name": "dock"}, token=alice)[0] == 200
     code, d = s.req("POST", "/api/robots/A/home/return", {}, token=gina)
     assert code == 200 and d["task_id"].startswith("standby-") and d.get("aborted") is None, d
+
+
+def test_外审r1_中止后停车没确认_不派回原点(站点):
+    s = 站点
+    alice, gina = _登(s, "alice"), _登(s, "gina")
+    _备好(s)
+    assert s.req("POST", "/api/robots/A/home/here", {"name": "dock"}, token=alice)[0] == 200
+    tid = _去远处(s, gina)
+    ev = s.agent.processor.events
+    orig = ev.emit
+
+    def 停不稳(kind, data, *a, **k):                   # 同 engine_goto:停车确认等不到也进终态
+        if kind in ("task_aborted", "task_failed") and data.get("task_id") == tid:
+            data = {**data, "reason": f"{data.get('reason', '')}; stop_unconfirmed"}
+        return orig(kind, data, *a, **k)
+    ev.emit = 停不稳
+    code, d = s.req("POST", "/api/robots/A/home/return", {"abort": True}, token=gina)
+    assert code == 409 and "停车没确认" in d["error"], d
+    assert not any(c["kind"] == "goto" and c["task_id"].startswith("standby-")
+                   for c in s.disp.commands("A", 50)), "没派回原点"

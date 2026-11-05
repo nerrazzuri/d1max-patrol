@@ -543,7 +543,55 @@ static void 遥控换档_急停_丢控制权_连接断了都回低速() {
   }
 }
 
+// 外审 r1 #2:过期的临时档永久作废 —— 之后的 vel(巡逻、回原点)不能把中速档复活。
+static void 遥控换档_过期了就作废_vel不复活() {
+  Rig r;
+  r.gate.SetSpeedWant(1);
+  const auto t0 = r.now;
+  CHECK(r.gate.SetGear(2, 2, 7, t0) == "");
+  r.now = t0 + std::chrono::milliseconds(3100);
+  CHECK(r.vel(0.3, 300) == "");
+  CHECK(r.gate.WantLevel(r.now) == 1);
+  CHECK(r.gate.WantLevel(r.now + std::chrono::milliseconds(100)) == 1);
+}
+
+// 外审 r1 #3:机身急停(软急停、硬急停、状态未知)也清临时档;不安全时不能换上去,回原档随时可以。
+static void 遥控换档_机身急停清临时档_急停中只能回原档() {
+  Rig r;
+  r.gate.SetSpeedWant(1);
+  CHECK(r.gate.SetGear(2, 2, 7, r.now) == "");
+  r.gate.OnState(kGeneral, 0, kRecover);        // 软急停
+  CHECK(r.gate.WantLevel(r.now) == 1);
+  CHECK(r.gate.SetGear(2, 2, 7, r.now) != "");
+  CHECK(r.gate.SetGear(1, 2, 7, r.now) == "");
+  r.gate.OnState(kGeneral, kRecover, kRecover);
+  CHECK(r.gate.SetGear(2, 2, 7, r.now) == "" && r.gate.WantLevel(r.now) == 2);
+  r.gate.OnState(kGeneral, kRecover, 0);        // 硬急停
+  CHECK(r.gate.WantLevel(r.now) == 1);
+}
+
+// 外审 r1 #1:许可的比例是按哪一档换的要一起报;跟锁里现在要的档不一样就不认(换算和换档交错)。
+static void 遥控换档_许可按旧档换算的不认() {
+  Rig r;
+  r.gate.SetSpeedWant(1);
+  r.gate.OnSpeedLevel(2);
+  r.gate.RequireClearance(true);
+  r.gate.OnHead(1);
+  CHECK(r.gate.SetGear(2, 2, 7, r.now) == "");
+  const auto until = r.now + std::chrono::milliseconds(800);
+  CHECK(r.gate.SetClearance(until, velgate::kEndHead, 1.0, 0, 0, r.now, nullptr, 1) ==
+        velgate::kPermitRejected);
+  CHECK(r.vel(0.3, 1000) == "");
+  CHECK(r.gate.Live(true, r.now) && r.gate.Live(true, r.now)->fwd == 0);
+  CHECK(r.gate.SetClearance(until, velgate::kEndHead, 0.5, 0, 0, r.now, nullptr, 2) ==
+        velgate::kPermitAccepted);
+  CHECK(r.gate.Live(true, r.now)->fwd == 0.3);
+}
+
 int main() {
+  遥控换档_过期了就作废_vel不复活();
+  遥控换档_机身急停清临时档_急停中只能回原档();
+  遥控换档_许可按旧档换算的不认();
   遥控换档_报到中速才走_旧许可作废();
   遥控换档_超上限_不管档位_急停时拒();
   遥控换档_3秒没续就回低速_续了不回_halt不回();

@@ -738,6 +738,7 @@ const en = {
   tsBad: "Needs 1–{n} numbers, smallest first, no repeats, each between 0 and {max} m/s",
   tsSave: "Save speeds",
   tsSaved: "Remote-control speeds saved",
+  rdPostureHeld: "Stopped: press Resume before changing posture",
   rdStand: "Stand up",
   rdLie: "Lie down",
   rdCrawl: "Crouch",
@@ -1988,6 +1989,7 @@ const zh: Partial<Record<Key, string>> = {
   tsBad: "要 1–{n} 个数，从小到大不重复，每个在 0–{max} 米/秒",
   tsSave: "保存速度档",
   tsSaved: "遥控速度档已保存",
+  rdPostureHeld: "已叫停：先点「恢复」再换姿态",
   rdStand: "站起",
   rdLie: "趴下",
   rdCrawl: "蹲下",
@@ -2552,10 +2554,15 @@ export function t(key: Key, vars?: Record<string, string | number>): string {
 
 const CATALOG = alertCatalog as unknown as Record<string, { en: string; zh: string }>;
 
-/** 告警标题:认识的种类用目录里的;不认识的用站点给的原文。 */
+/** 站点给告警测试模式期间的告警标题加的前缀(alert_store.TEST_PREFIX)。 */
+const TEST_PREFIX = "测试：";
+
+/** 告警标题:认识的种类用目录里的;不认识的用站点给的原文。测试告警(标题带前缀)换成译文前缀照样标出来
+ *  (外审 r1 #9:不然演练在地图、值守页上看着跟真的一样)。 */
 export function alertTitle(l: Lang, kind: string, siteTitle: string): string {
   const e = CATALOG[kind];
-  return e && !kind.startsWith("$") ? e[l] : siteTitle;
+  if (!e || kind.startsWith("$")) return siteTitle;
+  return siteTitle.startsWith(TEST_PREFIX) ? (l === "zh" ? TEST_PREFIX : "TEST: ") + e[l] : e[l];
 }
 
 export function knownKinds(): string[] {

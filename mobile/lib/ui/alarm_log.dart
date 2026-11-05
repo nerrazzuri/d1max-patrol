@@ -21,6 +21,9 @@ class AlarmLogPage extends StatefulWidget {
 
   static Key rowKey(String key) => Key('alarm-log-$key');
 
+  /// 测试模式条幅多久重新问一次站点（外审 r1 #10：别人开了、结束了，这边也跟着变）。
+  static const Duration testPoll = Duration(seconds: 15);
+
   @override
   State<AlarmLogPage> createState() => _AlarmLogPageState();
 }
@@ -32,23 +35,44 @@ class _AlarmLogPageState extends State<AlarmLogPage> {
   /// POC 告警测试模式开着：到几点、谁开的。没开 / 老站点 = null。
   Map<String, dynamic>? _test;
 
+  Timer? _poll;
+
   @override
   void initState() {
     super.initState();
     unawaited(_load());
+    _poll = Timer.periodic(AlarmLogPage.testPoll, (_) => unawaited(_loadTest()));
+  }
+
+  @override
+  void dispose() {
+    _poll?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _loadTest() async {
+    Map<String, dynamic>? test;
+    try {
+      final m = await widget.api.alertTest();
+      test = m['active'] == true ? m : null;
+    } on SiteError {
+      test = null; // 老站点没有这个接口
+    } on FormatException {
+      test = null;
+    }
+    if (mounted) setState(() => _test = test);
+  }
+
+  /// 到点就当结束了（不等下一次问）。
+  bool get _testOn {
+    final u = _test?['until_ms'];
+    return _test != null && (u is! num || DateTime.now().millisecondsSinceEpoch < u);
   }
 
   Future<void> _load() async {
     try {
       final all = await widget.api.alerts(all: true);
-      Map<String, dynamic>? test;
-      try {
-        final m = await widget.api.alertTest();
-        test = m['active'] == true ? m : null;
-      } on SiteError {
-        test = null; // 老站点没有这个接口
-      }
-      if (mounted) setState(() => _test = test);
+      await _loadTest();
       if (mounted) setState(() => _rows = all.where((a) => a.level != 'P3').toList());
     } on SiteError catch (e) {
       if (mounted) setState(() => _error = refusalText(e));
@@ -69,7 +93,7 @@ class _AlarmLogPageState extends State<AlarmLogPage> {
     return RefreshIndicator(
       onRefresh: _load,
       child: NwListView(children: [
-        if (_test != null)
+        if (_testOn)
           NwNotice(
               key: const Key('alarm-test-mode'),
               tone: NwTone.warning,

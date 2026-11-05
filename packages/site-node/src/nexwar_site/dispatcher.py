@@ -1052,6 +1052,7 @@ class Dispatcher:
         caps = (c.capabilities.tasks.get("posture") if c.capabilities is not None else None) or {}
         if mode not in caps.get("modes", []):
             raise Unsupported(f"{robot_id} 不支持这个姿势({mode})")
+        self._check_held(robot_id)            # 外审 r1 #4:叫停了「恢复前不会再动」,姿势也算动
         if not self._fresh(c):
             raise DispatchRefused(f"{robot_id} 不在线或状态不新鲜")
         return await self._send(c, robot_id, "posture", {"mode": mode}, issued_by=issued_by,
