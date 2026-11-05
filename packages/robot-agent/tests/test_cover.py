@@ -1,4 +1,5 @@
-"""W74 四期:机器人被遮挡(设计 §八)。雷达被挡 + 至少一路相机全黑 / 几乎单色,连着 3 秒才算;
+"""W74 四期:机器人被遮挡(设计 §八)。雷达被挡 + 每一路相机都全黑 / 几乎单色(外审 r1 #11),
+每一路各自连着 3 秒才算;
 揭开了报恢复。只有一样不算(暗处、对着白墙、雷达被人挡一下)。"""
 
 from __future__ import annotations
@@ -43,20 +44,39 @@ class 台:
 
 
 async def test_雷达挡了_相机黑了_连着3秒才报_揭开报恢复():
-    s = 台()
+    s = 台(front=DARK, back=FLAT)
     s.lidar = True
-    s.frames["back"] = DARK
     await s.跑(HOLD_S - 0.5)
     assert s.events == [] and not s.w.covered
     await s.跑(1.5)
     assert s.w.covered and s.flips == [True]
     [(k, d)] = s.events
-    assert k == "robot_covered" and d["cameras"] == ["back"]
+    assert k == "robot_covered" and d["cameras"] == ["back", "front"]
     await s.跑(3)
     assert len(s.events) == 1, "只报一次"
     s.lidar = False
     await s.跑(1)
     assert not s.w.covered and s.events[-1][0] == "robot_uncovered" and s.flips == [True, False]
+
+
+async def test_外审11_只有一路黑不算_两路轮流黑不接力_一路取不到图不算():
+    s = 台(back=DARK)
+    s.lidar = True
+    await s.跑(6)
+    assert s.events == [], "前相机看得见:后相机对着暗处"
+    s = 台()
+    s.lidar = True
+    for _ in range(4):                                   # 前后相机轮流黑,每路连着都不到 3 秒
+        s.frames = {"front": DARK, "back": SCENE}
+        await s.跑(1.6)
+        s.frames = {"front": SCENE, "back": DARK}
+        await s.跑(1.6)
+    assert s.events == [], "不同相机不能接力凑满 3 秒"
+    s = 台(back=DARK)
+    s.frames["front"] = OSError("断流")
+    s.lidar = True
+    await s.跑(6)
+    assert s.events == [], "一路取不到图:说不清,不判被遮挡"
 
 
 async def test_只有一样不算():
@@ -101,6 +121,10 @@ async def test_运行时遮挡(tmp_path):
     from test_standoff import CENTER, _拍, _真台
     broker, c, ears, dog, rt = await _真台(tmp_path)
     try:
+        await rt._publish_caps()
+        await broker.drain()
+        assert ears.by["capabilities"][-1]["tasks"]["cover"] == {"state": "off"}, \
+            "外审 r1:没开遮挡检测要说出来"
         s = {"lidar": False}
 
         async def dark():

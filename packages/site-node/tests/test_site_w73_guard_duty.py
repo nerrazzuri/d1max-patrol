@@ -46,6 +46,20 @@ class 告警台:
         self.done += hit
         return len(hit)
 
+    def open_of(self, robot, kind):
+        from types import SimpleNamespace
+        cur = [a for a in self.open if a["robot"] == robot and a["kind"] == kind]
+        return SimpleNamespace(context=dict(cur[-1].get("context") or {})) if cur else None
+
+    def amend_open(self, robot, kind, *, title=None, detail=None, context=None):
+        inspect.signature(AlertDesk.amend_open).bind(None, robot, kind, title=title,
+                                                     detail=detail, context=context)
+        cur = [a for a in self.open if a["robot"] == robot and a["kind"] == kind]
+        if not cur:
+            return None
+        cur[-1]["context"] = {**(cur[-1].get("context") or {}), **(context or {})}
+        return cur[-1]
+
     def resolve_except(self, kind, prefix, keep, *, who):
         hit = [a for a in self.open if a["kind"] == kind and a["robot"].startswith(prefix)
                and a["robot"][len(prefix):] not in keep]
@@ -1057,10 +1071,31 @@ async def test_W74_看见人_停下以后派跟人_一回只派一次_机器人�
     assert len(_follows(t)) == 1, "这一回只派一次"
 
 
+def _假跟(t):
+    """派遣器的 follow 当成机器人接了(仿真代理不会跟人,回 unsupported);机器人手上在跑什么由测试
+    说了算(``box["run"]``:``None`` = 照仿真狗报的)。``refuse`` 拒、``boom`` 回执没到。"""
+    sent, box = [], {"run": None, "refuse": False, "boom": False}
+
+    async def follow(rid, tid, req, *, issued_by):
+        sent.append(tid)
+        if box["boom"]:
+            raise RuntimeError("回执没到")
+        if box["refuse"]:
+            return {"task_id": tid, "ack": {"result": "rejected", "reason": "busy"}}
+        box["run"] = tid
+        return {"task_id": tid, "ack": {"result": "accepted"}}
+    t.site.follow = follow
+    real = t.duty._running
+    t.duty._running = lambda rid: box["run"] if box["run"] is not None else real(rid)
+    t.sent, t.box = sent, box
+    return sent, box
+
+
 async def _跟着(t):
-    """布防、看见人、派了跟人;回那一趟的任务号。"""
+    """布防、看见人、派了跟人(机器人接了、在跟);回那一趟的任务号。"""
     from nexwar_site.map_marks import MapMarks
     t.duty.marks = MapMarks(t.db, now_ms=t.clock)
+    _假跟(t)
     _方案(t)
     await _跑(t, 1.5)
     t.site.clients["A"].capabilities.tasks["follow"] = {"state": "idle"}
@@ -1090,6 +1125,9 @@ async def test_W74三期_人越过出口线_报人离开值守区_机器人回�
         heading_deg=0.0))
     [a] = [a for a in t.duty.alerts.open if a["kind"] == "person_left"]
     assert "东门" in a["title"] and a["context"]["exit"] == "东门"
+    await _跑(t, 1)
+    assert any(c["kind"] == "abort" and c["task_id"] == tid for c in t.site.commands("A", 500))
+    t.box["run"] = ""                                    # 跟人那一趟停了
     await _跑(t, 3)
     [g] = _gotos(t, "follow-exit-")
     p = g["payload"]["target"]
@@ -1115,6 +1153,10 @@ async def test_W74三期_跟丢了_去附近易藏点看一圈_去向那边先�
                          by="alice")
     t.duty._on_event("A", _事("follow_lost", task_id=tid, result="lost",
                               last={"x": 3.0, "y": 0.0, "at_ms": 3}, heading_deg=90.0))
+    await _跑(t, 1)
+    assert not [c for c in _patrols(t) if c["task_id"].startswith("follow-sweep-")], \
+        "机器人还在回最后位置:等它那一趟结束"
+    t.box["run"] = ""
     await _跑(t, 3)
     [s] = [c for c in _patrols(t) if c["task_id"].startswith("follow-sweep-")]
     assert _names(s) == ["易藏点1-北楼梯", "易藏点2-南门后", "最后位置"]
@@ -1122,6 +1164,7 @@ async def test_W74三期_跟丢了_去附近易藏点看一圈_去向那边先�
     assert {"type": "dwell", "seconds": 10} in w[0]["actions"]
     assert abs(w[-1]["pose"]["position"]["x"] - 3.0) < 1e-6 and s["priority"] == 80
     assert _log(t, "sweep_start")
+    t.box["run"] = s["task_id"]                          # 机器人在看易藏点
     t.duty.alerts.resolve_all("A", "dog_sees_person", who="gina")
     await _跑(t, 3)
     assert any(c["kind"] == "abort" and c["task_id"] == s["task_id"]
@@ -1161,3 +1204,114 @@ async def test_W74三期_加密巡查_那几个防区里的易藏点先看(站):
     names = _names(_patrols(t)[-1])
     assert names[:3] == ["加密-易藏点1-西楼梯", "加密-易藏点2-东仓库", "C"], names
     assert not any("区外" in n for n in names)
+
+
+
+async def test_外审r1_3_跟人和派生的那几趟_盯着的时候跑完不自动回待命点(站):
+    t = 站
+    tid = await _跟着(t)
+    for x in (tid, "follow-sweep-1-ab", "follow-exit-1-ab"):
+        assert t.duty.holds("A", x), x
+    t.box["run"] = ""                                    # 那一趟结束了
+    t.duty.alerts.resolve_all("A", "dog_sees_person", who="gina")
+    await _跑(t, 6)
+    assert not t.duty.holds("A", tid), "接着值守了:不再拦"
+
+
+async def test_外审r1_4_撤防_跟人那一趟先停_停了才收队(站):
+    t = 站
+    tid = await _跟着(t)
+    t.arming.set_zone_home("东区", False)
+    t.arming.set_zone_home("西区", False)
+    t.arming.set_mode("home", by="olga")
+    await _跑(t, 3)
+    assert any(c["kind"] == "abort" and c["task_id"] == tid for c in t.site.commands("A", 500))
+    assert t.duty.status()["runs"], "还在跟:先别删进度"
+    t.box["run"] = ""
+    await _跑(t, 8)
+    assert t.duty.status()["runs"] == [], "停了:收队"
+    assert "A" not in t.duty._followed
+
+
+async def test_外审r1_5_站点重启_认回还在跑的跟人_不另派_越线照办(站):
+    t = 站
+    tid = await _跟着(t)
+    t.duty.marks.set(MAP[0], MAP[1], {"kind": "exit", "name": "东门",
+                                      "points": [[3.0, -2.0], [3.0, 2.0]]}, by="alice")
+    d2 = _值守(t)
+    d2.alerts, d2.marks, d2._running = t.duty.alerts, t.duty.marks, t.duty._running
+    t.duty = d2
+    await _跑(t, 6)
+    assert t.sent == [tid], "重启了:认回还在跑的那一趟,不另派"
+    d2._on_event("A", _事("follow_track", task_id=tid, points=[
+        {"x": 2.0, "y": 0.5, "at_ms": 1}, {"x": 3.5, "y": 0.5, "at_ms": 2}]))
+    assert d2.alerts.has_open("A", "person_left"), "认回来的那一趟的轨迹照样判越线"
+
+
+async def test_外审r1_6_保安处理了_停跟人没发成_到点再发_停了才接着值守(站):
+    from nexwar_site.guard_duty import STOP_RETRY_MS
+    t = 站
+    tid = await _跟着(t)
+    calls = _中止先失败(t, 1)
+    n = len(_patrols(t))
+    t.duty.alerts.resolve_all("A", "dog_sees_person", who="gina")
+    await _跑(t, STOP_RETRY_MS / 1000 + 2)
+    assert calls.count(tid) >= 2, calls
+    assert len(_patrols(t)) == n, "跟人还没停:不派下一圈"
+    t.box["run"] = ""
+    await _跑(t, 12)
+    assert len(_patrols(t)) > n, "停了:接着值守"
+
+
+async def _会跟着跑(t, secs):
+    """跑着的时候一直补上能力里的 follow(仿真代理不会跟人,每次重发能力都会把它盖掉)。"""
+    for _ in range(int(secs * 2)):
+        t.site.clients["A"].capabilities.tasks["follow"] = {"state": "idle"}
+        await _跑(t, 0.5)
+
+
+async def test_外审r1_7_派跟人被拒_过一会儿再试_回执没到的过一会儿对账(站):
+    from nexwar_site.guard_duty import FOLLOW_RETRY_MS
+    t = 站
+    sent, box = _假跟(t)
+    box["refuse"] = True
+    _方案(t)
+    await _跑(t, 1.5)
+    t.site.clients["A"].capabilities.tasks["follow"] = {"state": "idle"}
+    t.duty.alerts.raise_alert(kind="dog_sees_person", robot="A", title="看见人")
+    await _跑(t, 3)
+    assert len(sent) == 1 and "A" not in t.duty._followed
+    assert _log(t, "follow_refused")
+    box["refuse"], box["boom"] = False, True
+    await _会跟着跑(t, FOLLOW_RETRY_MS / 1000 + 2)
+    assert len(sent) == 2, "被拒过一阵再试"
+    assert t.duty._followed["A"] == sent[-1], "回执没到:先当派出去了(不重复派)"
+    box["boom"] = False
+    await _会跟着跑(t, FOLLOW_RETRY_MS / 1000 + 2)
+    assert len(sent) == 3 and t.duty._followed["A"] == sent[-1], \
+        "回执没到、机器人手上也不是它:当没派成,再派"
+
+
+async def test_外审r1_10_加密巡查_撤防的防区里的易藏点不去_去的易藏点记进这一圈(站):
+    from nexwar_site.map_marks import MapMarks
+    t = 站
+    t.duty.marks = MapMarks(t.db, now_ms=t.clock)
+    for n, p in (("西楼梯", [8.0, 1.0]), ("东仓库", [3.0, 1.0])):
+        t.duty.marks.set(MAP[0], MAP[1], {"kind": "hide", "name": n, "points": [p]}, by="alice")
+    t.arming.set_zone_home("东区", False)
+    t.arming.set_mode("home", by="olga")
+    _方案(t, gap_min=10)
+    for _ in range(30):
+        await _跑(t, 0.5)
+        if t.dog.x > 5.5:
+            break
+    t.duty.alerts.raise_alert(kind="dog_sees_person", robot="A", title="看见人")
+    await _跑(t, 3)
+    t.duty.alerts.resolve_all("A", "dog_sees_person", who="gina")
+    await _跑(t, 3)
+    names = _names(_patrols(t)[-1])
+    assert names[:2] == ["加密-易藏点1-西楼梯", "C"], names
+    assert not any("东仓库" in n for n in names), "东区撤防了:不去"
+    plan = json.loads(t.duty.status()["runs"][0]["plan"]) if "plan" in t.duty.status()["runs"][0] \
+        else json.loads(t.db.query("SELECT plan FROM guard_runs")[0]["plan"])
+    assert {"name": "加密-易藏点1-西楼梯", "zone": "西区"} in plan, plan

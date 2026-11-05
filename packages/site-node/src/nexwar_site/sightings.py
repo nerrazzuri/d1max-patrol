@@ -48,6 +48,9 @@ OVERDUE_MIN = 10
 PERSON_TRACK_KEEP = 300
 
 
+#: 任务结果事件(跟人那一趟结束了)。
+_TASK_END = ("task_done", "task_failed", "task_aborted", "task_preempted")
+
 class PersonWatch:
     def __init__(self, db: SiteDB, dispatcher: Any, *, now_ms: Callable[[], int],
                  arming: Any = None, deterrence: Any = None) -> None:
@@ -75,15 +78,29 @@ class PersonWatch:
     def on_event(self, rid: str, e: Any) -> None:
         """W74 二期:机器人跟人路上发的轨迹(``follow_track``)、跟丢 / 到上限(``follow_lost``)
         进这台开着的「看见人」告警的现场:人最后在哪、往哪走、轨迹。没有开着的告警不记。"""
-        if e.kind not in ("follow_track", "follow_lost") or not isinstance(e.data, dict):
+        if e.kind not in ("follow_track", "follow_lost", *_TASK_END) \
+                or not isinstance(e.data, dict):
             return
         try:
             a = self._open(rid)
             if a is None:
                 return
             d = e.data
-            ctx: dict[str, Any] = {"follow": "follow" if e.kind == "follow_track"
-                                   else str(d.get("result") or "lost")}
+            # 外审 r1 #14:只收值守给这一条派的那一趟(派的时候记进 ``follow_task``);断网积压的
+            # 上一回的事件、别的任务的不收
+            if not d.get("task_id") or d.get("task_id") != a.context.get("follow_task"):
+                return
+            cur = a.context.get("follow")
+            if e.kind in _TASK_END:                      # 那一趟结束了:不再说在跟(#13)
+                if cur == "follow":
+                    self.alerts.amend_open(rid, PERSON_KIND, context={"follow": "ended"})
+                return
+            ctx: dict[str, Any] = {}
+            if e.kind == "follow_lost":
+                ctx["follow"] = str(d.get("result") or "lost")
+            elif d.get("phase") == "follow" or (d.get("phase") is None
+                                                and cur not in ("lost", "limit", "ended")):
+                ctx["follow"] = "follow"                 # 收尾时的轨迹不把跟丢改回在跟(#13)
             last = d.get("last")
             if isinstance(last, dict) and _num(last.get("x")) and _num(last.get("y")):
                 person = {"x": float(last["x"]), "y": float(last["y"]),

@@ -6,11 +6,12 @@
 (:meth:`~nexwar_agent.engine.machine.MissionEngine.retarget`,不停车),最快每 :data:`RETARGET_EVERY_S`
 秒一次。一段走到了、人还在 ``keep_m`` 附近 → 站着等;人又走远了 → 再起一段。
 
-**人在哪**:人员检测给的最近一个人(方向 + 距离,狗身系)加上此刻的地图位姿,算出地图上的点。
-连起来跟
-同一个人:新的点离上一个点比人能走的还远(:data:`GATE_M` + :data:`PERSON_MAX_MPS` × 隔了多久)就当是
-别人、不认;被跟的人 :data:`SWITCH_S` 秒没看到以后,谁近跟谁。只有方向、没测到距离的帧不算
-(不知道在哪)。
+**人在哪**:人员检测此刻看到的每一个人(方向 + 距离,狗身系)加上此刻的地图位姿,算出地图上的点。
+连起来跟同一个人(外审 r1 #9):先在这些点里找离被跟的人最近、又在人能走到的范围里
+(:data:`GATE_M` + :data:`PERSON_MAX_MPS` × 隔了多久)的那个;旁边有更近的别人也不换。被跟的人
+:data:`SWITCH_S` 秒没看到以后才谁近跟谁。只有方向、没测到距离的不算(不知道在哪)。
+
+**收尾时守住距离**(外审 r1 #8):到上限往回收尾那一段,人回头走近到 ``keep_m`` 以内就停下。
 
 **跟丢**(``lost_s`` 秒没看到被跟的人、规划不出去人那儿的路)、**到上限**(``max_s`` / ``max_m``)→
 走着的
@@ -56,7 +57,7 @@ TRACK_STEP_S = 0.5
 class FollowTask(Task):
     def __init__(self, *, task_id: str, req: FollowRequest, parts: EngineParts, events: Any,
                  now_ms: Callable[[], int], wall_ms: Callable[[], int],
-                 target: Callable[[], tuple[float, float] | None],
+                 targets: Callable[[], list[tuple[float, float]]],
                  here: Callable[[], tuple[float, float, float] | None],
                  map_ref: tuple[str, str], priority: int = 80) -> None:
         super().__init__(task_id=task_id, kind="follow", priority=priority)
@@ -65,7 +66,7 @@ class FollowTask(Task):
         self._events = events
         self._mono = now_ms
         self._wall = wall_ms
-        self._target = target
+        self._targets = targets
         self._here = here
         self._map = map_ref
         #: ``follow`` 跟着;``back`` 回最后看见人的地方;收尾了按 ``_result`` 进终态。
@@ -156,6 +157,7 @@ class FollowTask(Task):
                 self.state, self.detail = self._final
             return
         self._observe(now, here)
+        await self._keep_back(now, here)
         self._send_track(now)
         if self.phase == "follow":
             await self._follow(now, here)
@@ -191,12 +193,15 @@ class FollowTask(Task):
     # ------------------------------------------------------------ 人在哪
 
     def _observe(self, now: int, here: tuple[float, float, float] | None) -> None:
-        obs = self._target()
-        if obs is not None and here is not None:
-            b, r = obs
-            a = here[2] + math.radians(b)
-            p = (here[0] + r * math.cos(a), here[1] + r * math.sin(a))
-            if self._same(p, now):
+        obs = self._targets() or []
+        p = None
+        if obs and here is not None:
+            pts = []
+            for b, r in obs:
+                a = here[2] + math.radians(b)
+                pts.append((here[0] + r * math.cos(a), here[1] + r * math.sin(a)))
+            p = self._pick(pts, here, now)
+            if p is not None:
                 self._person, self._seen_ms = p, now
                 if not self._track or now - self._track[-1][0] >= TRACK_STEP_S * 1000:
                     self._track.append((now, p[0], p[1], self._wall()))
@@ -212,13 +217,28 @@ class FollowTask(Task):
         elif now - self._t0 >= self.req.max_s * 1000 or self._dist_m >= self.req.max_m:
             self._lose("limit")
 
-    def _same(self, p: tuple[float, float], now: int) -> bool:
-        if self._person is None:
-            return True
+    def _pick(self, pts: list[tuple[float, float]], here: tuple[float, float, float],
+              now: int) -> tuple[float, float] | None:
+        """这一帧里哪个是被跟的人:还认得的(在人能走到的范围里)取离上一个位置最近的;好一会儿没看到
+        (或者还没开始跟)取离机器人最近的;都不像回 ``None``。"""
         gap_s = (now - self._seen_ms) / 1000
-        if gap_s >= SWITCH_S:
-            return True                                  # 被跟的人好一会儿没看到了:谁近跟谁
-        return math.dist(p, self._person) <= GATE_M + PERSON_MAX_MPS * gap_s
+        if self._person is None or gap_s >= SWITCH_S:
+            return min(pts, key=lambda q: math.dist(q, here[:2]))
+        prev = self._person
+        best = min(pts, key=lambda q: math.dist(q, prev))
+        return best if math.dist(best, prev) <= GATE_M + PERSON_MAX_MPS * gap_s else None
+
+    async def _keep_back(self, now: int, here: tuple[float, float, float] | None) -> None:
+        """到上限往回收尾的那一段:人走近到 ``keep_m`` 以内就停下收尾,不往人身上走(外审 r1 #8)。"""
+        if self.phase != "back" or self._result != "limit" or self._final is not None \
+                or self._leg is None or self._leg.aborting or self._person is None \
+                or here is None or now - self._seen_ms > SWITCH_S * 1000:
+            return
+        if math.dist(self._person, here[:2]) > self.req.keep_m:
+            return
+        log.info("跟人 %s:收尾时人走近了,停下", self.task_id)
+        self._final = (TaskState.DONE, {"result": self._result, **self._report()})
+        await self._leg.abort("follow_keep")
 
     def _heading(self) -> float | None:
         """人往哪走(弧度):最近 :data:`HEADING_SPAN_S` 秒的头尾连线;走得太近算不出。"""
@@ -329,4 +349,5 @@ class FollowTask(Task):
             return
         self._sent_at = now
         pts, self._unsent = self._unsent, []
-        self._events.emit("follow_track", {"task_id": self.task_id, "points": pts, **self._last()})
+        self._events.emit("follow_track", {"task_id": self.task_id, "phase": self.phase,
+                                           "points": pts, **self._last()})

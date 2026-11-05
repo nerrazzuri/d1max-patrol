@@ -107,3 +107,12 @@ def test_复查P212_逐行签名_改一个字或者换方向重放旧序号都�
     jpeg = b"\xff\xd8\xff\xe0" + b"x" * 300_000 + b"\xff\xd9"
     snap = pb.seal(ks, pb.TO_AGENT, 6, pb.encode(pb.Snap.of("a.jpg", jpeg)))
     assert isinstance(pb.unseal(ks, pb.TO_AGENT, snap, last_seq=5)[1], pb.Snap)
+
+
+def test_外审r1_2_代理告诉检测节点能不能拍人脸():
+    m = pb.parse(pb.encode(pb.Policy(faces=True)))
+    assert isinstance(m, pb.Policy) and m.faces is True
+    for bad in (b'{"t":"policy","faces":1}', b'{"t":"policy"}',
+                b'{"t":"policy","faces":true,"x":1}'):
+        with pytest.raises(ContractError):
+            pb.parse(bad)

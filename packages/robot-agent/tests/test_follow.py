@@ -33,7 +33,7 @@ class 人:
         return (b, math.hypot(dx, dy))
 
 
-def _任务(台, p, **kw):
+def _任务(台, p, *, others=(), **kw):
     c, r, parts = 台
     emits = []
 
@@ -42,7 +42,9 @@ def _任务(台, p, **kw):
             emits.append((kind, data))
 
     t = FollowTask(task_id="follow-1", req=FollowRequest(**kw), parts=parts, events=簿(),
-                   now_ms=lambda: int(c.mono * 1000), wall_ms=c, target=p.target,
+                   now_ms=lambda: int(c.mono * 1000), wall_ms=c,
+                   targets=lambda: [x for x in (p.target(), *(o.target() for o in others))
+                                    if x is not None],
                    here=lambda: (r.x, r.y, r.yaw), map_ref=("m", "v"), priority=80)
     return t, emits
 
@@ -169,3 +171,42 @@ async def test_运行时_能力里有跟人_收命令_能力报在跟(tmp_path):
         assert st["state"] == "follow" and st["task_id"] == "follow-f1", st
     finally:
         await rt.close()
+
+
+async def test_外审8_到上限往回收尾_人回头靠近_不往人身上走(台子):  # noqa: F811
+    c, r, parts = 台子
+    p = 人(r, 2.0, 5.0)
+    t, _ = _任务(台子, p, max_s=6)
+    await t.start()
+    back = {}
+
+    def 走():
+        if t.phase == "follow":
+            p.y = min(p.y + 0.15, 9.0)                    # 1.5 m/s 往北,机器人跟不上
+        elif t._leg_goal is not None:
+            back.setdefault("goal", t._leg_goal)
+            gy = back["goal"][1] + 1.0                    # 人回头,停在收尾目标前 1 m
+            p.y = max(p.y - 0.15, gy)
+    await _跑(台子, t, 40, 走)
+    assert "goal" in back, "到上限时离人远过 keep_m,要往前收尾"
+    assert t.state is TaskState.DONE and t.detail["result"] == "limit"
+    d = math.hypot(p.x - r.x, p.y - r.y)
+    assert d >= 2.0, f"人回头靠近了还往前走:只剩 {d:.2f} m"
+
+
+async def test_外审9_两个人_被跟的还看得见_旁边更近的不抢(台子):  # noqa: F811
+    c, r, parts = 台子
+    p = 人(r, 3.0, 5.5)
+    t, _ = _任务(台子, p, others=())
+    await t.start()
+    await _跑(台子, t, 1)
+    q = 人(r, 3.5, 2.0)                                  # 另一个人站在机器人旁边,比被跟的近
+    t2_others = [q]
+    t._targets = lambda: [x for x in (p.target(), *(o.target() for o in t2_others))
+                          if x is not None]
+
+    def 走():
+        p.y = min(p.y + 0.05, 8.0)
+    await _跑(台子, t, 8, 走)
+    assert t._person is not None and math.dist(t._person, (p.x, p.y)) < 1.0, \
+        (t._person, (p.x, p.y))

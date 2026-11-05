@@ -23,6 +23,8 @@ NAME_MAX = 40
 #: 出口线长度范围(米)。
 EXIT_MIN_M, EXIT_MAX_M = 0.5, 60.0
 #: 跟丢以后看多远以内的易藏点(米,设计 §六,我定的)、最多看几个。
+#: 离出口线这么近(米)算「在线上」:不算哪一边(定位、测距误差以内;外审 r1 #12)。
+LINE_BAND_M = 0.3
 HIDE_NEAR_M = 30.0
 HIDE_MAX = 6
 #: 人越过出口线以后,机器人停在线内多远(米,设计 §七)。
@@ -90,13 +92,25 @@ class MapMarks:
 
     def crossed(self, map_id: str, version: str, a: tuple[float, float],
                 b: tuple[float, float]) -> dict[str, Any] | None:
-        """人从 ``a`` 走到 ``b`` 越过了哪条出口线(好几条取最先碰上的);没越过 ``None``。"""
+        """人从 ``a`` 走到 ``b`` 越过了哪条出口线(好几条取最先碰上的);没越过 ``None``。
+
+        外审 r1 #12:两头都要离线 :data:`LINE_BAND_M` 以外、分在两边才算 —— 走到线上停住、
+        折返,过线一点点(定位、测距误差以内)都不算。"""
         best: tuple[float, dict[str, Any]] | None = None
         for m in self.list(map_id, version, "exit"):
-            t = _cross(a, b, m["points"][0], m["points"][1])
+            p, q = m["points"][0], m["points"][1]
+            sa, sb = _side(a, p, q), _side(b, p, q)
+            if sa == 0 or sb == 0 or sa == sb:
+                continue
+            t = _cross(a, b, p, q)
             if t is not None and (best is None or t < best[0]):
                 best = (t, m)
         return best[1] if best else None
+
+    def near_exit(self, map_id: str, version: str, pt: tuple[float, float]) -> bool:
+        """``pt`` 在哪条出口线上(离线段 :data:`LINE_BAND_M` 以内):算不清在哪一边。"""
+        return any(_seg_dist(pt, m["points"][0], m["points"][1]) < LINE_BAND_M
+                   for m in self.list(map_id, version, "exit"))
 
     def hide_near(self, map_id: str, version: str, x: float, y: float,
                   heading_deg: float | None, *, radius: float = HIDE_NEAR_M,
@@ -134,6 +148,23 @@ def inside_pose(mark: dict[str, Any], a: tuple[float, float],
     if (a[0] - cx) * nx + (a[1] - cy) * ny < 0:
         nx, ny = -nx, -ny
     return cx + nx * inside_m, cy + ny * inside_m, math.atan2(-ny, -nx)
+
+
+def _side(a: Any, p: Any, q: Any) -> int:
+    """``a`` 在直线 p–q 的哪一边:1 / -1;离线 :data:`LINE_BAND_M` 以内算 0(线上)。"""
+    dx, dy = q[0] - p[0], q[1] - p[1]
+    n = math.hypot(dx, dy)
+    if n < 1e-9:
+        return 0
+    d = (dx * (a[1] - p[1]) - dy * (a[0] - p[0])) / n
+    return 0 if abs(d) < LINE_BAND_M else (1 if d > 0 else -1)
+
+
+def _seg_dist(a: Any, p: Any, q: Any) -> float:
+    dx, dy = q[0] - p[0], q[1] - p[1]
+    n2 = dx * dx + dy * dy
+    t = 0.0 if n2 < 1e-12 else max(0.0, min(1.0, ((a[0] - p[0]) * dx + (a[1] - p[1]) * dy) / n2))
+    return math.hypot(a[0] - (p[0] + t * dx), a[1] - (p[1] + t * dy))
 
 
 def _cross(a: Any, b: Any, p: Any, q: Any) -> float | None:

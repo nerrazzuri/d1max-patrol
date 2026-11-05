@@ -245,6 +245,11 @@ def _事件(kind, **data):
     return SimpleNamespace(kind=kind, data=data)
 
 
+def _绑(t, tid="follow-1"):
+    """值守派跟人时把任务号记进这条告警(外审 r1 #14):只收这一趟的事件。"""
+    t.desk.amend_open("A", "dog_sees_person", context={"follow_task": tid})
+
+
 def test_跟人的轨迹_进告警现场_人最后在哪_方向_轨迹有上限(看):
     from nexwar_site.sightings import PERSON_TRACK_KEEP
     t = 看
@@ -253,6 +258,7 @@ def test_跟人的轨迹_进告警现场_人最后在哪_方向_轨迹有上限(
     assert _开着的(t) == [], "没有开着的告警:不记"
     t.d.persons(present=True, count=1)
     t.w.tick()
+    _绑(t)
     t.w.on_event("A", _事件("follow_track", task_id="follow-1",
                             points=[{"x": 1.0, "y": 2.0, "at_ms": 1},
                                     {"x": 1.5, "y": 2.5, "at_ms": 2}],
@@ -273,6 +279,7 @@ def test_跟丢了_告警写跟丢_带最后位置和方向(看):
     t = 看
     t.d.persons(present=True, count=1)
     t.w.tick()
+    _绑(t)
     t.w.on_event("A", _事件("follow_lost", task_id="follow-1", result="lost",
                             last={"x": 4.0, "y": 4.0, "at_ms": 9}, heading_deg=90.0))
     [a] = _开着的(t)
@@ -286,7 +293,47 @@ def test_人最后在哪_按区域名说(看):
     t.w.where_of = lambda p: "东门附近" if p.get("x") == 4.0 and p.get("map_id") else None
     t.d.persons(present=True, count=1)
     t.w.tick()
+    _绑(t)
     t.w.on_event("A", _事件("follow_lost", task_id="follow-1", result="lost",
                             last={"x": 4.0, "y": 4.0, "at_ms": 9}))
     [a] = _开着的(t)
     assert a.context["person"]["where"] == "东门附近"
+
+
+def test_外审r1_13_收尾时还来的轨迹_不把跟丢改回在跟_任务结束了说结束(看):
+    t = 看
+    t.d.persons(present=True, count=1)
+    t.w.tick()
+    _绑(t)
+    t.w.on_event("A", _事件("follow_lost", task_id="follow-1", result="limit",
+                            last={"x": 4.0, "y": 4.0, "at_ms": 9}))
+    t.w.on_event("A", _事件("follow_track", task_id="follow-1", phase="back",
+                            points=[{"x": 4.2, "y": 4.0, "at_ms": 10}]))
+    t.w.on_event("A", _事件("follow_track", task_id="follow-1",            # 老代理不带 phase
+                            points=[{"x": 4.4, "y": 4.0, "at_ms": 11}]))
+    [a] = _开着的(t)
+    assert a.context["follow"] == "limit", "收尾了还是收尾"
+    assert a.context["person_track"][-1][:2] == [4.4, 4.0], "轨迹照记"
+    _绑(t, "follow-2")
+    t.w.on_event("A", _事件("follow_track", task_id="follow-2", phase="follow",
+                            points=[{"x": 5.0, "y": 4.0, "at_ms": 20}]))
+    assert _开着的(t)[0].context["follow"] == "follow"
+    t.w.on_event("A", _事件("task_aborted", task_id="follow-2", reason="保安处理了"))
+    assert _开着的(t)[0].context["follow"] == "ended", "那一趟结束了:不再说在跟"
+
+
+def test_外审r1_14_不是这条告警派的跟人_事件不进现场(看):
+    t = 看
+    t.d.persons(present=True, count=1)
+    t.w.tick()
+    t.w.on_event("A", _事件("follow_lost", task_id="follow-old", result="lost",
+                            last={"x": 9.0, "y": 9.0, "at_ms": 1}))
+    [a] = _开着的(t)
+    assert "person" not in a.context and "follow" not in a.context, "没派跟人:旧事件不收"
+    _绑(t, "follow-new")
+    t.w.on_event("A", _事件("follow_track", task_id="follow-old",
+                            points=[{"x": 9.0, "y": 9.0, "at_ms": 2}],
+                            last={"x": 9.0, "y": 9.0, "at_ms": 2}))
+    [a] = _开着的(t)
+    assert "person_track" not in a.context and "person" not in a.context, \
+        "断网积压的上一回的轨迹:不写进这一条"

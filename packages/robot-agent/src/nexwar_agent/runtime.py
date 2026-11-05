@@ -655,7 +655,7 @@ class AgentRuntime:
             assert self.loaded_map is not None
             return FollowTask(task_id=cmd.task_id, req=parse_follow(cmd.payload), parts=self.parts,
                               events=self.events, now_ms=self._mono_ms, wall_ms=self._now,
-                              target=self.person_view.target, here=self._standoff_here,
+                              targets=self.person_view.targets, here=self._standoff_here,
                               map_ref=self.loaded_map, priority=cmd.priority)
         if cmd.kind == "patrol":
             from nexwar_agent.tasks.patrol import PatrolTask
@@ -1039,6 +1039,9 @@ class AgentRuntime:
         if self.cover is not None:
             # W74 四期:被遮挡(站点按它对账报 P1、开声光)
             out["cover"] = {"state": "covered" if self.cover.covered else "ok"}
+        else:
+            # 外审 r1:没开遮挡检测(定位器不报雷达被挡、或不是 RTSP 相机)要说出来
+            out["cover"] = {"state": "off"}
         if self.force is not None:
             out["force"] = self.force.caps()        # W26:翻倒、被抱起来(站点按它对账报 P1)
         end = self._tls_expires_ms()
