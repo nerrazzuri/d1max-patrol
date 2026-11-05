@@ -70,6 +70,9 @@ class PersonView:
         self.snapshot_dir = snapshot_dir
         #: 把截图存成一趟归档(代理接上):``(截图路径, 相机) → 那一趟的名字``(空 = 没存成)。
         self.save_snapshot = save_snapshot
+        #: W74 五期:人脸补拍(``face-`` 开头的截图)能不能留 —— 证据加密配好了才能(运行时接上)。
+        #: 没接 = 不能:收到就删、不传(人脸照片不许明文放着)。
+        self.faces_ok: Callable[[], bool] | None = None
         self.connected = False
         self.reason = ""
         self._last_check = ""
@@ -238,6 +241,13 @@ class PersonView:
 
     def _take_snapshot(self, m: Persons) -> None:
         if self.snapshot_dir is None or self.save_snapshot is None:
+            return
+        if m.snapshot.startswith("face-") and not (self.faces_ok is not None and self.faces_ok()):
+            try:
+                (self.snapshot_dir / m.snapshot).unlink(missing_ok=True)
+            except OSError:
+                log.exception("人脸照片 %s 删不掉", m.snapshot)
+            log.warning("证据没加密:人脸照片 %s 删掉、不传", m.snapshot)
             return
         try:
             run = self.save_snapshot(self.snapshot_dir / m.snapshot, m.camera)

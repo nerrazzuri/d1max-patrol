@@ -493,3 +493,52 @@ def test_W74_留证_看到人的头3分钟每3秒一张_之后10秒_前后相机
     assert 拍("front")
     c.t += 3.1
     assert 拍("front"), "又来了:重新算头 3 分钟,3 秒一张"
+
+
+# ------------------------------------------------- W74 五期:人脸补拍
+
+
+class 假人脸:
+    def __init__(self, faces=()):
+        self.list, self.calls = list(faces), 0
+
+    def faces(self, jpeg):
+        self.calls += 1
+        return self.list
+
+
+def test_W74_有正脸够大_连拍3张_同一台相机10秒最多一轮_文件名带face(tmp_path):
+    from nexwar_localizer.persons import FACE_BURST, FACE_EVERY_S, FACE_MIN_PX
+    assert (FACE_BURST, FACE_EVERY_S) == (3, 10.0)
+    c = 钟()
+    face = 假人脸([(900.0, 300.0, FACE_MIN_PX + 10.0, FACE_MIN_PX + 20.0, 0.95)])
+    n = PersonNode(假检测器([Box(860, 300, 1060, 900, 0.88)]), snapshot_dir=tmp_path,
+                   monotonic=c, settings=Settings(snapshot_every_s=1000), faces=face)
+    shots = []
+    for i in range(6):
+        c.t += 0.5
+        shots.append(_过契约(n.on_image("front", b"\xff\xd8x\xff\xd9", i + 1)).snapshot)
+    faces = [s for s in shots if s.startswith("face-")]
+    assert len(faces) == FACE_BURST and shots[:3] == faces, shots
+    assert all((tmp_path / s).is_file() for s in faces)
+    c.t += FACE_EVERY_S
+    assert _过契约(n.on_image("front", b"x", 9)).snapshot.startswith("face-"), "过了 10 秒再来一轮"
+
+
+def test_W74_脸太小_没人_没装人脸模型_都不补拍():
+    c = 钟()
+    small = 假人脸([(900.0, 300.0, 20.0, 24.0, 0.95)])
+    n = PersonNode(假检测器([Box(860, 300, 1060, 900, 0.88)]), monotonic=c, faces=small,
+                   remote_snapshots=True, settings=Settings(snapshot_every_s=1000))
+    snaps = [_过契约(n.on_image("front", b"x", i + 1)).snapshot for i in range(3)]
+    assert not any(s.startswith("face-") for s in snaps)
+    nobody = 假人脸([(900.0, 300.0, 100.0, 120.0, 0.95)])
+    n = PersonNode(假检测器([]), monotonic=c, faces=nobody, remote_snapshots=True)
+    assert _过契约(n.on_image("front", b"x", 1)).snapshot == "" and nobody.calls == 0, \
+        "画面里没人:不跑人脸模型"
+
+
+def test_W74_人脸模型文件没有_就不开(tmp_path):
+    from nexwar_localizer.persons import DetectorUnavailable, YunetFaces
+    with pytest.raises(DetectorUnavailable):
+        YunetFaces(tmp_path / "没有.onnx")

@@ -525,7 +525,8 @@ class EvidencePlainWatch:
                     queue(tx, kind="evidence_plain", robot=rid,
                           title="机器人上的照片、录像未加密",
                           detail="机器人上没有站点的证据公钥(/etc/nexwar/evidence-pub.key):照片、截图、"
-                                 "录像明文存在机器人上。从证书包拷过去、重启代理",
+                                 "录像明文存在机器人上;人脸补拍不开(拍了也删)。"
+                                 "从证书包拷过去、重启代理",
                           context={}, now_ms=now)
             elif ev["sealed"] is True and rid in seen:
                 with self.db.tx() as tx:

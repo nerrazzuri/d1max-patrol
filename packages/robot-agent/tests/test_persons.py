@@ -161,6 +161,24 @@ def test_外审5_每张截图都收_不只第一下_存不下的留着(tmp_path)
     assert v.present is True, "截图存不下不影响判人"
 
 
+def test_W74_人脸照片_证据没加密就删_不存不传(tmp_path):
+    saved = []
+    c, ev, v = _台(snapshot_dir=tmp_path,
+                   save_snapshot=lambda p, cam: saved.append(p.name) or "incident-x")
+    (tmp_path / "face-1.jpg").write_bytes(b"x")
+    v.on_persons(_帧(9.0, snapshot="face-1.jpg"))
+    assert saved == [] and not (tmp_path / "face-1.jpg").exists(), "没说加密:当没加密"
+    v.faces_ok = lambda: True
+    v.on_persons(_帧(9.0, snapshot="face-2.jpg"))
+    v.on_persons(_帧(9.0, snapshot="a.jpg"))
+    assert saved == ["face-2.jpg", "a.jpg"]
+    v.faces_ok = lambda: False
+    (tmp_path / "face-3.jpg").write_bytes(b"x")
+    v.on_persons(_帧(9.0, snapshot="face-3.jpg"))
+    v.on_persons(_帧(9.0, snapshot="b.jpg"))
+    assert saved == ["face-2.jpg", "a.jpg", "b.jpg"], "普通截图照旧"
+
+
 class 耳朵:
     def __init__(self):
         self.caps, self.events = [], []
