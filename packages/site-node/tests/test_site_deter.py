@@ -183,3 +183,19 @@ def test_W40_设备健康_狗带上来_单狗视图里看得到(站点):
     # 过时了标出来(狗 10 s 带一次,丢了两三份)
     s.disp.devices["A"] = (s.disp.devices["A"][0], s.disp.devices["A"][1] - 60_000)
     assert s.req("GET", "/api/robots/A", token=gina)[1]["devices"]["stale"] is True
+
+
+def test_POC1105_竞品主控连不上_开当场409说清楚_关照发(站点):
+    """断网测试:link:anbot 已经 offline,站点还回 200 accepted,失败几秒后才由机器人报回来。"""
+    s = 站点
+    gina = _登(s, "gina")
+    _新鲜(s, gina)
+    disp = s.disp
+    disp.devices["A"] = ([{"id": "link:anbot", "state": "offline",
+                           "detail": "竞品主控连不上:http://192.168.113.203:11311"}], disp._now())
+    code, d = s.req("POST", "/api/robots/A/deter",
+                    {"output": "siren", "on": True, "max_s": 5}, token=gina)
+    assert code == 409 and "竞品主控连不上" in str(d), d
+    assert not s.dog.deter_on("siren")
+    code, d = s.req("POST", "/api/robots/A/deter", {"output": "siren", "on": False}, token=gina)
+    assert code == 200, d

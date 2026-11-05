@@ -165,6 +165,8 @@ LEVEL_OF: dict[str, Level] = {
     "payload_spotlight": Level.P1,
     # 功放(W40,上装 V1.2):关不上只是费电发热,开不了喇叭就哑了(驱离少一档)—— 今天之内去看
     "payload_amp": Level.P2,
+    # POC 11-05:话术没放出来(竞品主控连不上、ssh 失败)—— 保安知道那句没喊出去,今天之内查
+    "deter_failed": Level.P2,
     # 上装主控板过热(W46,决策 74):偏高、降负载今天之内看风扇;严重过热机器人自己回原点,要人去看
     "board_hot": Level.P2,
     "board_overheat": Level.P1,

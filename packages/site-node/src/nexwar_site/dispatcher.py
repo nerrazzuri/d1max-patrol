@@ -1041,6 +1041,15 @@ class Dispatcher:
             raise Unsupported(f"{robot_id} 的警灯没有 {req.color} 色")
         if req.on and not self._fresh(c):
             raise DispatchRefused(f"{robot_id} 不在线或状态不新鲜")
+        if req.on:
+            # POC 11-05 断网测试:竞品转接报了 link:anbot 离线,开就当场拒(原来回「已接受」,几秒后
+            # 机器人才报没放出来)。关照发
+            for dv in (self.devices.get(robot_id) or ([], 0))[0]:
+                if isinstance(dv, dict) and dv.get("id") == "link:anbot" \
+                        and dv.get("state") == "offline":
+                    why = str(dv.get("detail") or "")[:120]
+                    raise DispatchRefused(f"竞品主控连不上,{req.output} 开不了({why});"
+                                          "查网线、竞品主控开着没有")
         return await self._send(c, robot_id, "deter", req.to_payload(), issued_by=issued_by,
                                 task_id=f"deter-{req.output}-{uuid.uuid4().hex[:8]}",
                                 ttl_ms=VIDEO_COMMAND_TTL_MS)
