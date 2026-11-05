@@ -50,6 +50,7 @@ import re
 import ssl
 import threading
 import time
+import uuid
 from collections.abc import Callable, Iterator
 from concurrent.futures import TimeoutError as FutureTimeout
 from pathlib import Path
@@ -1352,8 +1353,16 @@ class _Handler(TlsHandlerMixin):
                                                             by=str(user)))
         else:
             task_id = d.get("task_id")
+            if task_id is None:
+                # 现场 11-05:不带 task_id = 停下机器人现在跑的那一个(看它自己报的 status)
+                c = disp.clients.get(robot_id)
+                task = c.status.task if c is not None and c.status is not None else None
+                if task is None:
+                    raise HttpError(409, f"{robot_id} 现在没有任务在跑(或状态还没上来)")
+                task_id = task.task_id
+                self._audit_detail = {"task_id": task_id, "current": True}
             if not isinstance(task_id, str) or not task_id:
-                raise HttpError(400, "要 task_id")
+                raise HttpError(400, "task_id 要是非空字符串")
             result = self.site.dispatch(lambda: disp.abort(robot_id, task_id, issued_by=str(user)))
         self._send_json(200, result)
 
@@ -2701,6 +2710,7 @@ class _Handler(TlsHandlerMixin):
         d = self._body()
         if not isinstance(d, dict):
             raise HttpError(400, "要一个对象")
+        named = "name" in d
         name = d.get("name", "home")
         if not isinstance(name, str) or not SAFE_ID.match(name):
             raise HttpError(400, f"名字只许 ASCII 字母、数字、. _ -:{name!r}")
@@ -2712,6 +2722,12 @@ class _Handler(TlsHandlerMixin):
         caps = c.capabilities.tasks.get("patrol", {}) if c and c.capabilities else {}
         loaded = (caps.get("map_id"), caps.get("map_version"))
         old = next((p for p in stb.list(robot_id) if p["name"] == name), None)
+        if not named and not replace and old is not None and loaded[0] is not None \
+                and (old["map_id"], old["map_version"]) != loaded:
+            # 现场 11-05:没给名字、home 登记在别的图上 —— 自动换名(home-图名),老图上的 home 留着
+            name = _home_name_for(stb.list(robot_id), loaded[0], loaded[1])
+            old = None
+            self._audit_detail = {"name": name}
         if old is not None and loaded[0] is not None and not replace \
                 and (old["map_id"], old["map_version"]) != loaded:
             raise HttpError(409, f"待命点 {name} 登记在 {old['map_id']}:{old['map_version']} 上,"
@@ -4414,3 +4430,15 @@ class _Handler(TlsHandlerMixin):
         self.wfile.write(b"data: " + json.dumps(item, ensure_ascii=False).encode("utf-8")
                          + b"\n\n")
         self.wfile.flush()
+
+
+def _home_name_for(points: list[dict], map_id: str, version: Any) -> str:
+    """没给名字、``home`` 已登记在别的图上时用的名字(现场 11-05):``home-<图名>``;这个名字也登记在
+    这张图的别的版本上,再加版本号。同一张图同一版上已有的就用它(再标是改同一个)。"""
+    safe = re.sub(r"[^A-Za-z0-9._-]", "-", str(map_id))[:50] or "map"
+    ver = re.sub(r"[^A-Za-z0-9._-]", "-", str(version))
+    for cand in (f"home-{safe}", f"home-{safe}-{ver}"[:64]):
+        p = next((p for p in points if p["name"] == cand), None)
+        if p is None or (p["map_id"], p["map_version"]) == (map_id, version):
+            return cand
+    return f"home-{safe}-{uuid.uuid4().hex[:6]}"
