@@ -86,6 +86,18 @@ def test_外审r2_7_每条线记最后确定在哪一边_从线的延长线附�
     assert 标.track("m", "1", last, (0, -0.5)) is not None
 
 
+def test_外审r3_3_误差带里的点也算轨迹_按实际走的折线判越线(标):
+    标.set("m", "1", {"kind": "exit", "name": "门", "points": [[-1, 0], [1, 0]]}, by="g")
+    last: dict = {}
+    hits = [标.track("m", "1", last, p) for p in [(1.4, 0.8), (0.6, 0.2), (0.6, -0.2),
+                                                  (1.4, -0.8)]]
+    assert hits[:3] == [None] * 3 and hits[3] is not None, "在 (0.6, 0) 穿过了门:算越线"
+    last = {}
+    assert [标.track("m", "1", last, p) for p in [(0, 0.8), (1.5, 0.2), (1.5, -0.2),
+                                                  (0, -0.8)]] == [None] * 4, \
+        "从门的端点外面绕过去(两头连起来的直线虽然穿过门):不算"
+
+
 def test_出口线内3米_朝出口(标):
     m = 标.set("m", "1", {"kind": "exit", "name": "东门", "points": [[10, 0], [10, 4]]}, by="g")
     x, y, yaw = inside_pose(m, (9, 2), (11, 2))

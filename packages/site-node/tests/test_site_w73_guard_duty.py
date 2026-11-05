@@ -1441,3 +1441,54 @@ async def test_外审r2_6_盯满没人管接着值守_告警还开着_站点重�
     await _会跟着跑(t, 8)
     assert len(t.sent) == 1, "同一条告警盯满过了:重启后不再跟"
     assert len(_log(t, "person_hold")) == holds, "也不再停下盯着"
+
+
+# ---------------------------------------------------------------- 外审 r3
+
+
+async def test_外审r3_1_跟人那一趟有结果了状态还挂着它_看易藏点那一趟照样先停(站):
+    t = 站
+    tid = await _跟着(t)
+    t.duty.marks.set(MAP[0], MAP[1], {"kind": "hide", "name": "北", "points": [[4.0, 1.5]]},
+                     by="alice")
+    t.duty._on_event("A", _事("follow_lost", task_id=tid, result="lost",
+                              last={"x": 3.0, "y": 0.0, "at_ms": 3}, heading_deg=90.0))
+    t.box["run"] = ""
+    for _ in range(30):
+        await _跑(t, 0.1)
+        if [c for c in _patrols(t) if c["task_id"].startswith("follow-sweep-")]:
+            break
+    [sw] = [c for c in _patrols(t) if c["task_id"].startswith("follow-sweep-")]
+    real = t.duty._terminal
+    t.duty._terminal = lambda rid, x: ("task_done", {}) if x == tid else real(rid, x)
+    t.box["run"] = tid                                   # 跟人有结果了,状态还挂着它(滞后)
+    t.duty.alerts.resolve_all("A", "dog_sees_person", who="gina")
+    await _跑(t, 2)
+    assert any(c["kind"] == "abort" and c["task_id"] == sw["task_id"]
+               for c in t.site.commands("A", 500)), "刚派的看易藏点那一趟没确认停下:先停它"
+
+
+async def test_外审r3_2_回线内还没派出去站点就重启_重启后照样派(站):
+    from nexwar_site.guard_duty import FOLLOW_RETRY_MS
+    t = 站
+    tid = await _跟着(t)
+    t.duty.marks.set(MAP[0], MAP[1], {"kind": "exit", "name": "东门",
+                                      "points": [[3.0, -2.0], [3.0, 2.0]]}, by="alice")
+    real, calls = t.site.goto, []
+
+    async def goto(*a, **kw):
+        calls.append(kw.get("task_id"))
+        if len(calls) == 1:
+            raise RuntimeError("回执没到")
+        return await real(*a, **kw)
+    t.site.goto = goto
+    t.duty._on_event("A", _事("follow_track", task_id=tid, points=[
+        {"x": 2.0, "y": 0.5, "at_ms": 1}, {"x": 3.5, "y": 0.5, "at_ms": 2}]))
+    t.box["run"] = ""
+    await _跑(t, 3)
+    assert len(calls) == 1
+    _重启(t)
+    await _跑(t, FOLLOW_RETRY_MS / 1000 + 4)
+    assert len(calls) == 2 and calls[1] != calls[0], ("回执没到、机器人手上也不是它:再派", calls)
+    await _跑(t, FOLLOW_RETRY_MS / 1000 + 4)
+    assert len(calls) == 2, "派成了:不再派"
