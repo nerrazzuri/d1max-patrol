@@ -31,6 +31,8 @@ export interface Version {
   previous_on: string[];
   thumbnail: string;
   has_raster: boolean;
+  /** 11-05 现场第 10 条:缺定位文件的原因(带定位器的机器人用不了);空串 / 没有 = 齐了。 */
+  unusable?: string;
 }
 export interface Activation {
   map_id: string; version: string; state: "pending" | "confirmed" | "failed" | "timeout"; at_ms: number; by: string; reason: string; confirmed: string | null;
@@ -106,7 +108,7 @@ export function activationText(a: Activation, nowMs: number = Date.now()): strin
 export function MapManagePage({ say, pollMs = 5000 }: { say: Say; pollMs?: number }) {
   const [data, setData] = useState<Overview | null>(null);
   const [err, setErr] = useState("");
-  const [publish, setPublish] = useState<{ map_id: string; version: string } | null>(null);
+  const [publish, setPublish] = useState<{ map_id: string; version: string; unusable?: string } | null>(null);
   const [deleting, setDeleting] = useState<{ map_id: string; version: string } | null>(null);
   const [rolling, setRolling] = useState<Dog | null>(null);
   const [pick, setPick] = useState<string[]>([]);
@@ -195,7 +197,7 @@ export function MapManagePage({ say, pollMs = 5000 }: { say: Say; pollMs?: numbe
                     return on ? [...rest, key].slice(-2) : rest;
                   })}
                   onNote={(n) => void saveNote(m.map_id, v.version, n)}
-                  onPublish={() => setPublish({ map_id: m.map_id, version: v.version })}
+                  onPublish={() => setPublish({ map_id: m.map_id, version: v.version, unusable: v.unusable ?? "" })}
                   onDelete={() => setDeleting({ map_id: m.map_id, version: v.version })}
                   onNoise={() => setNoise({ map_id: m.map_id, version: v.version })}
                 />
@@ -332,6 +334,7 @@ function VersionCard(p: {
           <span>{tr("Standby points", "待命点")} {v.counts.standby}</span>
           <span>{tr("Intercept points", "拦截点")} {v.counts.intercepts}</span>
         </p>
+        {v.unusable && <p class="bad small">{tr(`Robots with a localizer can't use this version: ${v.unusable}`, `带定位器的机器人用不了这一版:${v.unusable}`)}</p>}
         <p class="small mm-dogs-on">
           {v.loaded_on.length > 0 && <span>{tr("Loaded on", "正在用")}: {v.loaded_on.map((r) => <span key={r} class="mm-chip mono">{r}</span>)}</span>}
           {v.previous_on.length > 0 && <span class="muted">{tr("Rollback target of", "是退回目标")}: {v.previous_on.map((r) => <span key={r} class="mm-chip mono">{r}</span>)}</span>}
@@ -354,8 +357,10 @@ function VersionCard(p: {
 
 // ------------------------------------------------------------------ 发布
 
-export function PublishDialog({ target, dogs, onClose }: { target: { map_id: string; version: string }; dogs: Dog[]; onClose: () => void }) {
-  const eligible = dogs.filter((d) => d.online && d.can_activate);
+export function PublishDialog({ target, dogs, onClose }: { target: { map_id: string; version: string; unusable?: string }; dogs: Dog[]; onClose: () => void }) {
+  // 11-05 现场第 10 条:缺定位文件的版本,带定位器的机器人收了也会拒 —— 不让勾
+  const noLoc = (d: Dog) => !!target.unusable && d.running?.confirms === "localizer";
+  const eligible = dogs.filter((d) => d.online && d.can_activate && !noLoc(d));
   const [chosen, setChosen] = useState<string[]>([]);
   const [noHome, setNoHome] = useState(false);
   const [pw, setPw] = useState("");
@@ -394,14 +399,15 @@ export function PublishDialog({ target, dogs, onClose }: { target: { map_id: str
             <legend>{tr("Robots", "发到这几台机器人")}</legend>
             {dogs.length === 0 && <span class="muted">{tr("No robots enrolled.", "没有登记的机器人。")}</span>}
             {dogs.map((d) => {
-              const ok = d.online && d.can_activate;
+              const ok = d.online && d.can_activate && !noLoc(d);
               return (
                 <label key={d.robot_id}>
                   <input type="checkbox" disabled={!ok} checked={chosen.includes(d.robot_id)}
                     onChange={(e) => setChosen((c) => (e.currentTarget.checked ? [...c, d.robot_id] : c.filter((x) => x !== d.robot_id)))} />
                   <span class="mono"> {d.robot_id}</span>
                   <span class="muted small"> · {d.loaded ? `${tr("now", "现在")} ${d.loaded.map_id}:${d.loaded.version}` : tr("no map loaded", "没加载地图")}
-                    {!d.online ? ` · ${tr("offline", "不在线")}` : !d.can_activate ? ` · ${tr("cannot switch maps", "不能换图")}` : ""}</span>
+                    {!d.online ? ` · ${tr("offline", "不在线")}` : !d.can_activate ? ` · ${tr("cannot switch maps", "不能换图")}`
+                      : noLoc(d) ? ` · ${tr("has a localizer; this version lacks localization files", "带定位器,这一版缺定位文件")}` : ""}</span>
                 </label>
               );
             })}

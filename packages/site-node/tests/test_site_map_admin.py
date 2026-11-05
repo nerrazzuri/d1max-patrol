@@ -365,3 +365,34 @@ def test_W71_换图等机器人时_总览带下载进度(站点):
     assert a["state"] == "pending" and a["version"] == "9"
     assert a["download"]["bytes"] == f0.size // 2 and a["download"]["total"] == total
     assert a["download"]["at_ms"] >= now
+
+
+# ---------------------------------------------------------------- 11-05 现场第 10 条
+
+
+def test_现场10_缺定位文件的版本_总览标出来_带定位器的机器人当场拒(站点):
+    """11-05:切到 field-c40221:1 被机器人拒(缺 prior/frames/pcd)。站点总览要标出「不能下发」,
+    发布给带定位器的机器人当场拒、说清缺什么,不等机器人拒。"""
+    s = 站点
+    alice = _登(s, "alice")
+    _等(lambda: _rc(s) is not None)
+    v9 = next(v for v in s.req("GET", "/api/admin/maps", token=alice)[1]["maps"][0]["versions"]
+              if v["version"] == "9")
+    assert "prior.mm" in v9["unusable"] and "superlio_map.pcd" in v9["unusable"], v9["unusable"]
+    _確认(s, alice, "9")
+    caps = s.disp.clients["A"].capabilities
+    caps.tasks["running_config"] = {**caps.tasks["running_config"], "confirms": "localizer"}
+    code, d = _publish(s, alice, "9")
+    assert code == 200
+    (r,) = d["results"]
+    assert r["state"] == "refused" and r["code"] == "map_unusable", r
+    assert "prior.mm" in r["reason"]
+
+
+def test_现场10_不带定位器的机器人_缺定位文件照发(站点):
+    s = 站点
+    alice = _登(s, "alice")
+    _等(lambda: _rc(s) is not None)
+    _確认(s, alice, "9")
+    code, d = _publish(s, alice, "9")
+    assert code == 200 and d["results"][0]["state"] != "refused", d

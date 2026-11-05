@@ -3560,6 +3560,16 @@ class _Handler(TlsHandlerMixin):
             raise HttpError(409, f"{ref.map_id}:{ref.version} 的禁行区尚未确认(或改过之后"
                                  "未重新确认):先在地图页画好、确认再下发",
                             extra={"reason": "zones_unconfirmed"})
+        # 11-05 现场第 10 条:带定位器的机器人收到缺定位文件的版本会拒;站点当场拒、说清缺什么
+        c = self.site.dispatcher.clients.get(robot_id)
+        rc = (c.capabilities.tasks.get("running_config")
+              if c is not None and c.capabilities is not None else None)
+        if isinstance(rc, dict) and rc.get("confirms") == "localizer":
+            from nexwar_contract.maps import prior_missing
+            why = prior_missing(f.name for f in ref.files)
+            if why:
+                raise HttpError(409, f"{ref.map_id}:{ref.version} 不能下发到 {robot_id}:{why}",
+                                extra={"reason": "map_unusable"})
         payload = ref.to_wire()
         # 这台狗在这张图上的原点:站点原点表里的是权威(W13a),有就下发、盖过图里的 home.json
         # (W00c6f 内审应修 4);没有才按图里带的。**都没有**(新建的图、新版本):照常下发、审计里记

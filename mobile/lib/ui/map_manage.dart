@@ -256,6 +256,8 @@ class _MapManagePageState extends State<MapManagePage> {
     final on = [for (final r in (v['loaded_on'] as List? ?? const [])) '$r'];
     final path = q['path_m'];
     final canDelete = on.isEmpty && v['latest'] != true;
+    // 11-05 现场第 10 条：缺定位文件的老版本，带定位器的机器人收了也会拒
+    final unusable = '${v['unusable'] ?? ''}';
     return Padding(
       padding: const EdgeInsets.only(bottom: Nw.s8),
       child: NwCard(
@@ -280,6 +282,11 @@ class _MapManagePageState extends State<MapManagePage> {
                 ...reasons,
               ].where((s) => s.isNotEmpty).join(' · '),
               style: NwText.bodySmall.copyWith(color: c.textSecondary)),
+          if (unusable.isNotEmpty) ...[
+            const SizedBox(height: 2),
+            Text(tr("Robots with a localizer can't use this version: $unusable", '带定位器的机器人用不了这一版：$unusable'),
+                style: NwText.bodySmall.copyWith(color: c.error)),
+          ],
           const SizedBox(height: Nw.s8),
           Wrap(spacing: Nw.s8, runSpacing: Nw.s4, children: [
             NwButton(

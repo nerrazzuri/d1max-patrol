@@ -422,6 +422,26 @@ void main() {
     expect(api.calls, contains('map A main:20261031-1'));
   });
 
+  testWidgets('缺定位文件的老版本（11-05 现场第 10 条）：卡片上写带定位器的机器人用不了、缺什么', (t) async {
+    _size(t);
+    final api = FakeApi('admin')
+      ..overview = <String, dynamic>{
+        'maps': <dynamic>[
+          <String, dynamic>{'map_id': 'field', 'versions': <dynamic>[
+            <String, dynamic>{'version': '1', 'note': '', 'created_ms': 0, 'latest': true, 'loaded_on': <dynamic>[],
+              'unusable': '没有定位先验(prior.mm, frames.json, superlio_map.pcd)'},
+            <String, dynamic>{'version': '2', 'note': '', 'created_ms': 0, 'latest': false, 'loaded_on': <dynamic>[],
+              'unusable': ''},
+          ]},
+        ],
+        'robots': <dynamic>[],
+      };
+    await t.pumpWidget(MaterialApp(home: MapManagePage(api: api)));
+    await t.pumpAndSettle();
+    expect(find.textContaining('带定位器的机器人用不了'), findsOneWidget);
+    expect(find.textContaining('superlio_map.pcd'), findsOneWidget);
+  });
+
   test('POC 换图进度：已下多少 MB、估还要多久、在载入、换好、没换成写原因', () {
     const now = 1000000;
     Map<String, dynamic> a(String state, {Map<String, dynamic>? d, String reason = '', String? confirmed}) =>
