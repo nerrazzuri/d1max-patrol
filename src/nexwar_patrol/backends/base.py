@@ -320,6 +320,11 @@ class NavBackend(EventEmitter[Event], ABC):
     async def goto(self, pose: Pose) -> None:
         """下发单点导航。返回时只表示指令被接受,不表示已到达。"""
 
+    async def retarget(self, pose: Pose) -> bool:
+        """走着换目标(W74 跟人):正在走的这一段改去 ``pose``,不停车、不回 StandBy。换不了(没在走、
+        后端不支持、新目标不合法)回 ``False``,调用方照旧(这一段走完再 ``goto``)。"""
+        return False
+
     @abstractmethod
     async def stop(self) -> None: ...
 

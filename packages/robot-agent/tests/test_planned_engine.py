@@ -294,3 +294,22 @@ async def test_规划时没定位_走定位恢复_不把后面的点跑空(台�
     await _跑完(c, r, parts)
     assert parts.engine.state is RunState.DONE, parts.engine.snapshot.reason
     assert [x.ok for x in parts.engine._live.results] == [True, True, True]
+
+
+async def test_W74_引擎走着换目标_这一趟到的是新目标_不另起一趟(台子):
+    c, r, parts = 台子
+    await parts.engine.start(_任务([("人后", 4.5, 2.0)]), home=parts.home)
+    for _ in range(15):
+        await _一拍(c, r, parts)
+    await parts.engine.retarget(Pose.from_xy_yaw(3.0, 5.0, 1.57))
+    await _跑完(c, r, parts)
+    assert parts.engine.state is RunState.DONE, parts.engine.snapshot.reason
+    o = await r.odometry()
+    assert math.dist((o.x, o.y), (3.0, 5.0)) < 0.4, (o.x, o.y)
+    assert len(parts.engine._live.results) == 1
+
+
+async def test_W74_引擎没在跑_换目标什么都不做(台子):
+    c, r, parts = 台子
+    await parts.engine.retarget(Pose.from_xy_yaw(3.0, 5.0))
+    assert parts.engine.state is RunState.IDLE

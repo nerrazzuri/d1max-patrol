@@ -210,6 +210,13 @@ class HalNavBackend(NavBackend):
         self._set_status(NavStatus.INITIALIZING)
         self._due = (self._now() + self._init_delay_ms, NavStatus.ACTIVE)
 
+    async def retarget(self, pose: Pose) -> bool:
+        """走着换目标(W74):直线桥每拍按 ``_target`` 走,换了就朝新目标走。"""
+        if self._status not in (NavStatus.INITIALIZING, NavStatus.ACTIVE):
+            return False
+        self._target = pose
+        return True
+
     async def stop(self) -> None:
         if self._status in _MOVING:
             await self._enter_terminal(NavStatus.CANCELLED)
