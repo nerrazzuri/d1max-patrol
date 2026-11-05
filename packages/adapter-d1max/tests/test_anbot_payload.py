@@ -333,3 +333,108 @@ def test_现场1105_代理和HAL用到的上装属性_竞品转接都有():
             assert hasattr(obj, name), f"竞品转接缺 payload.{'.'.join(path)}"
             obj = getattr(obj, name)
     assert p.cfg.inputs_reg < 0 and p.input_bits() is None, "没有继电器板输入:不接风扇报警"
+
+
+# ---------------------------------------------------------------- 11-05 下午:英文话术走 SSH + aplay
+
+
+def _假ssh(tmp_path, *, rc: int = 0, sleep: float = 0.0):
+    """假 ssh:把参数、收到的 wav 字节记下来;``sleep`` 模拟播放时长。"""
+    log = tmp_path / "ssh.log"
+    got = tmp_path / "ssh.wav"
+    s = tmp_path / "ssh"
+    s.write_text("#!/bin/sh\n"
+                 f'echo "$@" >> "{log}"\n'
+                 f'cat > "{got}"\n'
+                 f"sleep {sleep}\n"
+                 f"exit {rc}\n")
+    s.chmod(0o755)
+    return s, log, got
+
+
+def _clips(tmp_path):
+    d = tmp_path / "clips"
+    d.mkdir(exist_ok=True)
+    for n in ("blocked", "passing", "distance", "restricted"):
+        (d / f"{n}.wav").write_bytes(b"RIFF" + n.encode())
+    return d
+
+
+async def test_录好的话术_ssh到竞品主控用aplay放_wav从管道送过去(master, tmp_path):
+    ssh, log, got = _假ssh(tmp_path, sleep=0.1)
+    ends: list = []
+    p = AnbotPayload(_cfg(master.url, clips_dir=str(_clips(tmp_path)), ssh=str(ssh),
+                          audio_host="firefly@192.168.113.101",
+                          ssh_key="/home/robot/.nexwar/anbot_ssh"))
+    p.on_sound_end = lambda ok, why: ends.append((ok, why))
+    await p.sound("blocked", 30)
+    await _等(lambda: ends)
+    assert ends == [(True, "放完了")]
+    assert got.read_bytes() == b"RIFFblocked"
+    args = log.read_text()
+    assert "-i /home/robot/.nexwar/anbot_ssh" in args and "BatchMode=yes" in args
+    assert "firefly@192.168.113.101 aplay -q -D dmix_oneway_play -" in args
+    with pytest.raises(PayloadError, match="没有这段话术"):
+        await p.sound("closing", 30)
+    with pytest.raises(PayloadError):
+        await p.sound("../etc/passwd", 30)
+    await p.close()
+
+
+async def test_录好的话术_关喇叭真掐断_不回调_到点也掐(master, tmp_path):
+    ssh, _, _ = _假ssh(tmp_path, sleep=5)
+    ends: list = []
+    p = AnbotPayload(_cfg(master.url, clips_dir=str(_clips(tmp_path)), ssh=str(ssh),
+                          audio_host="firefly@h"))
+    p.on_sound_end = lambda ok, why: ends.append((ok, why))
+    await p.sound("passing", 30)
+    assert p.playing()
+    await p.stop_sound()
+    assert not p.playing() and ends == []
+    t0 = time.monotonic()
+    await p.sound("passing", 0.3)
+    await _等(lambda: ends)
+    assert ends == [(True, "到点了")] and time.monotonic() - t0 < 2
+    await p.close()
+
+
+async def test_录好的话术_ssh失败_回调失败_说清楚(master, tmp_path):
+    ssh, _, _ = _假ssh(tmp_path, rc=255)
+    ends: list = []
+    p = AnbotPayload(_cfg(master.url, clips_dir=str(_clips(tmp_path)), ssh=str(ssh),
+                          audio_host="firefly@h"))
+    p.on_sound_end = lambda ok, why: ends.append((ok, why))
+    await p.sound("distance", 30)
+    await _等(lambda: ends)
+    assert ends[0][0] is False and "255" in ends[0][1]
+
+
+async def test_没配audio_host_录好的话术不报_只能念文字(master, tmp_path):
+    from nexwar_adapter_d1max.hal import D1MaxHal
+    p = AnbotPayload(_cfg(master.url, clips_dir=str(_clips(tmp_path))))
+    hal = D1MaxHal(mps_per_unit=0.4, radps_per_unit=1.0, deadband_mps=0.05, max_fraction=0.5,
+                   payload=p)
+    assert hal.sound_clips() == ()
+    with pytest.raises(PayloadError, match="只能念文字"):
+        await p.sound("blocked", 30)
+    p2 = AnbotPayload(_cfg(master.url, clips_dir=str(_clips(tmp_path)), audio_host="firefly@h"))
+    hal2 = D1MaxHal(mps_per_unit=0.4, radps_per_unit=1.0, deadband_mps=0.05, max_fraction=0.5,
+                    payload=p2)
+    assert hal2.sound_clips() == ("blocked", "distance", "passing", "restricted")
+
+
+def test_配置_audio_host_ssh_key(tmp_path):
+    a = tmp_path / "anbot.json"
+    a.write_text(json.dumps({"kind": "anbot_ros1", "master": "http://192.168.113.203:11311",
+                             "host": "192.168.113.159", "audio_host": "firefly@192.168.113.101",
+                             "clips_dir": "/var/lib/nexwar/clips"}))
+    p = load_payload(a)
+    assert p.cfg.audio_host == "firefly@192.168.113.101"
+    assert p.cfg.ssh_key == "/home/robot/.nexwar/anbot_ssh"
+    assert p.cfg.aplay_device == "dmix_oneway_play"
+    for bad in ({"audio_host": "-oProxyCommand=x"}, {"audio_host": "a b"},
+                {"aplay_device": "x;rm"}):
+        (tmp_path / "b.json").write_text(json.dumps(
+            {"kind": "anbot_ros1", "master": "http://a:1", "host": "h"} | bad))
+        with pytest.raises(PayloadError):
+            load_payload(tmp_path / "b.json")

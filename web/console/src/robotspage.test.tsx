@@ -281,6 +281,51 @@ describe("W71 Nav2 没起来", () => {
     await waitFor(() => expect(posted.find((p) => p.url === "/api/robots/A/home/return")?.body).toEqual({ abort: true }));
   });
 
+  it("POC 11-05 警灯与喊话:报了才有;警灯带时长开、关;打字喊中文;点录好的话术;停止;经理看不到", async () => {
+    robots[0] = card({ deter: { outputs: ["strobe", "speaker"], max_s: 600, tts: true, clips: ["blocked", "restricted", "zz"] } });
+    const { container: c } = render(<RobotsPage say={(s) => said.push(s)} now={NOW} role="guard" />);
+    await waitFor(() => expect(cardOf(c, "A")).not.toBeNull());
+    fireEvent.click(cardOf(c, "A"));
+    const d = c.querySelector(".robot-detail")!;
+    const sel = d.querySelector('select[name="strobe_s"]') as HTMLSelectElement;
+    fireEvent.change(sel, { target: { value: "120" } });
+    fireEvent.click(btn(d, "开警灯"));
+    await waitFor(() => expect(posted.find((p) => p.url === "/api/robots/A/deter")?.body).toEqual({ output: "strobe", on: true, max_s: 120 }));
+    await waitFor(() => expect(said.join()).toContain("120 秒后自动关"));
+    await waitFor(() => expect(btn(d, "关警灯").disabled).toBe(false));
+    fireEvent.click(btn(d, "关警灯"));
+    await waitFor(() => expect(posted.filter((p) => p.url === "/api/robots/A/deter").at(-1)?.body).toEqual({ output: "strobe", on: false }));
+    expect(btn(d, "喊话").disabled).toBe(true);
+    const box = d.querySelector('input[name="say"]') as HTMLInputElement;
+    fireEvent.input(box, { target: { value: " 请注意，这里是巡逻机器人 " } });
+    await waitFor(() => expect(btn(d, "喊话").disabled).toBe(false));
+    fireEvent.click(btn(d, "喊话"));
+    await waitFor(() => expect(posted.filter((p) => p.url === "/api/robots/A/deter").at(-1)?.body)
+      .toEqual({ output: "speaker", on: true, max_s: 60, clip: "tts:zh:请注意，这里是巡逻机器人" }));
+    await waitFor(() => expect(btn(d, "禁区警告（英文）").disabled).toBe(false));
+    fireEvent.click(btn(d, "禁区警告（英文）"));
+    await waitFor(() => expect(posted.filter((p) => p.url === "/api/robots/A/deter").at(-1)?.body)
+      .toEqual({ output: "speaker", on: true, max_s: 60, clip: "restricted" }));
+    expect(btn(d, "zz")).toBeTruthy();
+    await waitFor(() => expect(btn(d, "停止").disabled).toBe(false));
+    fireEvent.click(btn(d, "停止"));
+    await waitFor(() => expect(posted.filter((p) => p.url === "/api/robots/A/deter").at(-1)?.body).toEqual({ output: "speaker", on: false }));
+    cleanup();
+    robots[0] = card({ deter: { outputs: ["strobe"], max_s: 600, tts: false, clips: [] } });
+    const { container: c2 } = render(<RobotsPage say={(s) => said.push(s)} now={NOW} role="guard" />);
+    await waitFor(() => expect(cardOf(c2, "A")).not.toBeNull());
+    fireEvent.click(cardOf(c2, "A"));
+    const d2 = c2.querySelector(".robot-detail")!;
+    expect(d2.querySelector('input[name="say"]')).toBeNull();
+    expect(Array.from(d2.querySelectorAll("button")).some((b) => b.textContent?.trim() === "停止")).toBe(false);
+    cleanup();
+    robots[0] = card({ deter: { outputs: ["strobe", "speaker"], max_s: 600, tts: true, clips: [] } });
+    const { container: c3 } = render(<RobotsPage say={(s) => said.push(s)} now={NOW} role="owner" />);
+    await waitFor(() => expect(cardOf(c3, "A")).not.toBeNull());
+    fireEvent.click(cardOf(c3, "A"));
+    expect(c3.querySelector(".rd-deter")).toBeNull();
+  });
+
   it("POC 姿态:报了才显示;点了先确认再发;有任务在跑灰掉写原因;经理看不到", async () => {
     robots[0] = card({ postures: ["stand", "lie", "crawl"], task: null });
     const { container: c } = render(<RobotsPage say={(s) => said.push(s)} now={NOW} role="guard" />);

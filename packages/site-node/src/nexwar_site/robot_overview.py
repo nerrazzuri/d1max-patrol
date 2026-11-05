@@ -79,8 +79,19 @@ def overview(dispatcher: Any, db: Any, *, now_ms: int, tz: tzinfo) -> list[dict[
                     "postures": list(((getattr(caps, "tasks", None) or {}).get("posture") or {})
                                      .get("modes", [])) if fresh else [],
                     "task": _task(c),
+                    # POC 11-05:网页上开关警灯、喊话(狗报了接上哪几路、有哪些话术、能不能打字)
+                    "deter": _deter(caps) if fresh else None,
                     "manual_note": (reg.manual_only(rid) or {}).get("note", "")})
     return out
+
+
+def _deter(caps: Any) -> dict[str, Any] | None:
+    d = (getattr(caps, "tasks", None) or {}).get("deter")
+    if not isinstance(d, dict) or not d.get("outputs"):
+        return None
+    return {"outputs": [str(o) for o in d.get("outputs") or []],
+            "max_s": float(d.get("max_s") or 600.0), "tts": bool(d.get("tts")),
+            "clips": [str(x) for x in d.get("clips") or []]}
 
 
 def _week(db: Any, rid: str, now_ms: int) -> dict[str, Any]:

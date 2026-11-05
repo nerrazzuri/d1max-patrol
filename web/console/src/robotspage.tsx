@@ -35,7 +35,14 @@ export interface RobotCard {
   enrolled_at?: number | null; manual_note?: string; held?: { by: string; at_ms: number } | null;
   /** POC:能换哪几种姿态、正在跑的任务(老站点没有)。 */
   postures?: Posture[]; task?: string | null;
+  /** POC 11-05:上装能开哪几路、有哪些话术、能不能打字(老站点没有)。 */
+  deter?: Deter | null;
 }
+export interface Deter { outputs: string[]; max_s: number; tts: boolean; clips: string[] }
+const STROBE_S = [30, 60, 120, 300];
+const CLIP_KEY: Record<string, "clip_blocked" | "clip_passing" | "clip_distance" | "clip_restricted"> = {
+  blocked: "clip_blocked", passing: "clip_passing", distance: "clip_distance", restricted: "clip_restricted",
+};
 export type Posture = "stand" | "lie" | "crawl";
 const POSTURE_KEY: Record<Posture, "rdStand" | "rdLie" | "rdCrawl"> = { stand: "rdStand", lie: "rdLie", crawl: "rdCrawl" };
 export interface Wifi {
@@ -351,6 +358,7 @@ function Controls({ r, role, say, onChanged }: { r: RobotCard; role: string; say
           {!r.task && r.held && <p class="muted small">{t("rdPostureHeld")}</p>}
         </div>
       )}
+      {dispatch && r.deter && <DeterPanel r={r} d={r.deter} id={id} busy={busy} off={off} send={send} path={path} />}
       {askHome && (
         <Confirm text={t("rdAbortHomeAsk", { id, task: r.task ?? "" })} yes={t("rdAbortHome")} danger
           onNo={() => setAskHome(false)}
@@ -369,6 +377,63 @@ function Controls({ r, role, say, onChanged }: { r: RobotCard; role: string; say
           }} />
       )}
     </section>
+  );
+}
+
+/** POC 11-05:警灯开关(带时长)、喊话(打字、录好的话术)。保安、管理员;狗报了 deter 才有。 */
+function DeterPanel({ r, d, id, busy, off, send, path }: {
+  r: RobotCard; d: Deter; id: string; busy: boolean; off: boolean;
+  send: (fn: () => Promise<CommandReply | null>, ok: string) => Promise<void>; path: (a: string) => string;
+}) {
+  const [secs, setSecs] = useState(60);
+  const [text, setText] = useState("");
+  useEffect(() => setText(""), [r.robot_id]);
+  const deter = (body: Record<string, unknown>) => () => api<CommandReply>("POST", path("deter"), body);
+  const strobe = d.outputs.includes("strobe");
+  const speaker = d.outputs.includes("speaker");
+  const words = text.trim();
+  return (
+    <div class="rd-name rd-deter">
+      <span class="rd-label">{t("rdDeter")}</span>
+      {strobe && (
+        <div class="rd-inline">
+          <select name="strobe_s" aria-label={t("rdStrobeFor")} value={String(secs)} onChange={(e) => setSecs(Number(e.currentTarget.value))}>
+            {STROBE_S.filter((s) => s <= d.max_s).map((s) => <option key={s} value={String(s)}>{s} s</option>)}
+          </select>
+          <button type="button" class="btn sm primary" disabled={busy || off}
+            onClick={() => void send(deter({ output: "strobe", on: true, max_s: secs }), t("rdStrobeOnDone", { id, s: secs }))}>{t("rdStrobeOn")}</button>
+          <button type="button" class="btn sm" disabled={busy || off}
+            onClick={() => void send(deter({ output: "strobe", on: false }), t("rdStrobeOffDone", { id }))}>{t("rdStrobeOff")}</button>
+        </div>
+      )}
+      {speaker && d.tts && (
+        <form class="rd-inline" onSubmit={(e) => {
+          e.preventDefault();
+          if (!words) return;
+          void send(deter({ output: "speaker", on: true, max_s: 60, clip: `tts:zh:${words}` }), t("rdSpeakDone", { id }));
+        }}>
+          <input name="say" aria-label={t("rdSpeakText")} placeholder={t("rdSpeakPh")} maxLength={300} value={text}
+            onInput={(e) => setText(e.currentTarget.value)} />
+          <button type="submit" class="btn sm primary" disabled={busy || off || !words}>{t("rdSpeakSend")}</button>
+        </form>
+      )}
+      {speaker && d.clips.length > 0 && (
+        <div class="rd-actions" aria-label={t("rdClips")}>
+          {d.clips.map((c) => (
+            <button key={c} type="button" class="btn sm" disabled={busy || off}
+              onClick={() => void send(deter({ output: "speaker", on: true, max_s: 60, clip: c }), t("rdSpeakDone", { id }))}>
+              {CLIP_KEY[c] ? t(CLIP_KEY[c]) : c}
+            </button>
+          ))}
+        </div>
+      )}
+      {speaker && (
+        <div class="rd-actions">
+          <button type="button" class="btn sm" disabled={busy || off}
+            onClick={() => void send(deter({ output: "speaker", on: false }), t("rdSpeakStopped", { id }))}>{t("rdSpeakStop")}</button>
+        </div>
+      )}
+    </div>
   );
 }
 

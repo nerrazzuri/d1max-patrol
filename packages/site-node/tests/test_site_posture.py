@@ -108,3 +108,26 @@ def test_外审r1_叫停了没恢复_姿势也拒_恢复后照常(站点):
     _新鲜(s, gina)
     code, d = s.req("POST", "/api/robots/A/posture", {"mode": "lie"}, token=gina)
     assert code == 200, d
+
+
+def test_POC1105_概览卡片带上装能力_网页按它出警灯喊话(站点):
+    """11-05 用户:网页上要能开关警灯、喊话(打字、选录好的话术)。卡片带狗报的 ``deter``;
+    不新鲜、没报就是 None(老网页不看)。"""
+    s = 站点
+    gina = _登(s, "gina")
+    _新鲜(s, gina)
+    alice = _登(s, "alice")
+
+    def card():
+        return [r for r in s.req("GET", "/api/robots/overview", token=alice)[1]["robots"]
+                if r["robot_id"] == "A"][0]
+    c = s.disp.clients["A"]
+    tasks = dict(c.capabilities.tasks)
+    tasks["deter"] = {"outputs": ["strobe", "speaker"], "max_s": 600.0, "tts": True,
+                      "clips": ["blocked", "passing"]}
+    c.capabilities = type(c.capabilities)(**{**c.capabilities.__dict__, "tasks": tasks})
+    assert card()["deter"] == {"outputs": ["strobe", "speaker"], "max_s": 600.0, "tts": True,
+                               "clips": ["blocked", "passing"]}
+    tasks.pop("deter")
+    c.capabilities = type(c.capabilities)(**{**c.capabilities.__dict__, "tasks": tasks})
+    assert card()["deter"] is None

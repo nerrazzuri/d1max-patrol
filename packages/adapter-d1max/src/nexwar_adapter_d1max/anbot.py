@@ -32,6 +32,9 @@ import contextlib
 import http.client
 import json
 import logging
+import os
+import re
+import signal
 import socket
 import struct
 import threading
@@ -57,6 +60,9 @@ log = logging.getLogger(__name__)
 BOOL_MD5 = "8b94c1b53db61fb6aed406028ad6332a"
 STRING_MD5 = "992ce8a1687cec8c8bd883ec73ca41d1"
 KIND = "anbot_ros1"
+_HOST = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.-]{0,31}@[A-Za-z0-9][A-Za-z0-9_.-]{0,63}")
+_DEV = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_:,.-]{0,63}")
+_CLIP = re.compile(r"[A-Za-z0-9_-][A-Za-z0-9_.-]{0,63}")
 
 
 # ---------------------------------------------------------------- 最小 ROS1 发布端
@@ -252,9 +258,16 @@ class AnbotConfig:
     republish_s: float = 1.0
     #: 多久重新注册一次(竞品主控重启了注册就丢了)。
     reregister_s: float = 10.0
-    # HAL 看这两个:能 TTS、没有录好的话术
+    #: 录好的话术(英文)放在哪台竞品主控上:``账号@地址``(11-05 用户批准 POC 阶段登录竞品主控放音频)。
+    #: 空 = 不放录好的话术,只念文字。登录用 SSH 密钥(``ssh_key``),密码不存在我们这边任何地方。
+    audio_host: str = ""
+    ssh_key: str = "/home/robot/.nexwar/anbot_ssh"
+    #: 竞品 /etc/asound.conf 里跟它自己的讯飞 TTS 同一条的 dmix。
+    aplay_device: str = "dmix_oneway_play"
+    ssh: str = "ssh"
+    # HAL 看这两个:能 TTS;录好的话术在哪(没配 audio_host 就当没有)
     tts_command: str = "anbot"
-    clips_dir: str = ""
+    clips_dir: str = "/var/lib/nexwar/clips"
     #: 代理入口看这个:没有继电器板输入(W56 风扇报警不接)
     inputs_reg: int = -1
 
@@ -271,11 +284,22 @@ class AnbotConfig:
             v = getattr(self, k)
             if not isinstance(v, (int, float)) or not 0 < v <= 60:
                 raise PayloadError(f"{k} 要在 0–60 之间: {v!r}")
+        if self.audio_host and not _HOST.fullmatch(str(self.audio_host)):
+            raise PayloadError(f"audio_host 要写成 账号@地址: {self.audio_host!r}")
+        if not _DEV.fullmatch(str(self.aplay_device)):
+            raise PayloadError(f"aplay_device 只许字母、数字、_ : , . -: {self.aplay_device!r}")
+        for k in ("ssh_key", "ssh", "clips_dir"):
+            v = getattr(self, k)
+            if not isinstance(v, str) or any(ch.isspace() for ch in v) or v.startswith("-"):
+                raise PayloadError(f"{k} 写错了: {v!r}")
+        if not self.audio_host:
+            object.__setattr__(self, "clips_dir", "")
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> AnbotConfig:
         known = {"master", "host", "strobe_topic", "voice_topic", "caller", "secs_per_char",
-                 "republish_s", "reregister_s"}
+                 "republish_s", "reregister_s", "audio_host", "ssh_key", "aplay_device",
+                 "clips_dir"}
         extra = set(d) - known - {"kind"}
         if extra:
             raise PayloadError(f"竞品上装配置里有不认识的项: {', '.join(sorted(extra))}")
@@ -400,7 +424,8 @@ class AnbotPayload:
 
     async def sound(self, clip_or_tts: str, max_s: float) -> None:
         if not clip_or_tts.startswith("tts:"):
-            raise PayloadError("竞品上装只能念文字(tts:<语言>:<文字>),没有录好的话术")
+            await self._clip(clip_or_tts, max_s)
+            return
         _, _, rest = clip_or_tts.partition(":")
         _, _, text = rest.partition(":")
         if not text.strip() or len(text) > MAX_TTS_CHARS:
@@ -415,6 +440,55 @@ class AnbotPayload:
             raise PayloadError("竞品主控的播音程序断开了,没念出来")
         est = min(max_s, len(text) * self.cfg.secs_per_char)
         self._speech = asyncio.get_running_loop().create_task(self._speak_end(est))
+
+    async def _clip(self, name: str, max_s: float) -> None:
+        """录好的话术:SSH 到竞品主控跑 ``aplay``,wav 从管道送过去(文件不用拷到竞品上;关喇叭掐 ssh,
+        那头 aplay 读到头就停)。放完、放坏了、到点都回调;被关的不回调。"""
+        if not self.cfg.audio_host:
+            raise PayloadError("竞品上装只能念文字(tts:<语言>:<文字>):"
+                               "没配 audio_host,不放录好的话术")
+        if not _CLIP.fullmatch(name) or name.startswith("."):
+            raise PayloadError(f"话术名只许字母、数字、. _ -: {name!r}")
+        path = Path(self.cfg.clips_dir) / f"{name}.wav"
+        if not path.is_file():
+            raise PayloadError(f"没有这段话术: {name}")
+        if not 0 < max_s <= MAX_ON_S:
+            raise PayloadError(f"max_s 要在 0–{MAX_ON_S:.0f} 秒之间")
+        await self.stop_sound()
+        cmd = [self.cfg.ssh, "-i", self.cfg.ssh_key, "-o", "BatchMode=yes",
+               "-o", "ConnectTimeout=3", "-o", "StrictHostKeyChecking=accept-new",
+               self.cfg.audio_host, f"aplay -q -D {self.cfg.aplay_device} -"]
+        try:
+            with path.open("rb") as f:
+                proc = await asyncio.create_subprocess_exec(
+                    *cmd, stdin=f, stdout=asyncio.subprocess.DEVNULL,
+                    stderr=asyncio.subprocess.PIPE, start_new_session=True)
+        except OSError as exc:
+            raise PayloadError(f"放不了录好的话术(ssh 起不来): {exc}") from exc
+        self._speech = asyncio.get_running_loop().create_task(self._clip_end(proc, max_s))
+
+    async def _clip_end(self, proc: Any, max_s: float) -> None:
+        try:
+            try:
+                _, err = await asyncio.wait_for(proc.communicate(), max_s)
+            except asyncio.TimeoutError:                # 3.10 上它不是内建的 TimeoutError
+                ok, why = True, "到点了"
+            else:
+                rc = proc.returncode
+                ok = rc == 0
+                why = "放完了" if ok else (
+                    f"竞品主控放不出来(ssh/aplay 退出码 {rc}):"
+                    + (err or b"").decode("utf-8", "replace").strip()[:150])
+        finally:
+            if proc.returncode is None:
+                with contextlib.suppress(ProcessLookupError, PermissionError):
+                    os.killpg(proc.pid, signal.SIGKILL)       # 连子进程一起(管道才会关)
+                with contextlib.suppress(Exception):
+                    await proc.wait()
+        self._speech = None
+        fn = self.on_sound_end
+        if fn is not None:
+            fn(ok, why)
 
     async def _speak_end(self, est: float) -> None:
         await asyncio.sleep(est)
