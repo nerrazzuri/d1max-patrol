@@ -897,7 +897,8 @@ class Dispatcher:
     # ------------------------------------------------------------ 遥控(W00c5c)
 
     async def teleop_grant(self, robot_id: str, *, lease_epoch: int, operator: str,
-                           lease_ttl_ms: int, issued_by: str) -> dict[str, Any]:
+                           lease_ttl_ms: int, issued_by: str,
+                           max_vx_mps: float | None = None) -> dict[str, Any]:
         """授予遥控租约(一条任务命令,优先级最高)。要在线、新鲜、控制权与姿态就绪、急停已解除、
         支持遥控;**不要定位**(遥控不靠地图)。"""
         c = self._client_for(robot_id)
@@ -911,7 +912,8 @@ class Dispatcher:
         if c.capabilities is not None and "teleop" not in c.capabilities.tasks:
             raise DispatchRefused(f"{robot_id} 不支持遥控")
         return await self._send(c, robot_id, "teleop", teleop_grant_payload(
-            lease_epoch=lease_epoch, operator=operator, lease_ttl_ms=lease_ttl_ms),
+            lease_epoch=lease_epoch, operator=operator, lease_ttl_ms=lease_ttl_ms,
+            max_vx_mps=max_vx_mps),
             issued_by=issued_by, task_id=f"{TELEOP_TASK_PREFIX}{lease_epoch}",
             priority=TELEOP_PRIORITY,
             # 授予的有效期只比等回执长一点(W00c5c 内部评审):站点等不到回执就当没开成,

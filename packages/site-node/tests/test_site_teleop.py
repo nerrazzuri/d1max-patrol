@@ -145,17 +145,18 @@ def _停了(s):
     return s.loop.call(s.dog.stopped)
 
 
-def test_保安遥控_狗动_限速一半_松手停_断开就放租_审计有起止(站点):
+def test_保安遥控_狗动_限速按快档_松手停_断开就放租_审计有起止(站点):
     s = 站点
     tok = _登(s)
     _新鲜(s, tok)
     ph = 手机(s, tok)
     assert ph.status == 101, ph.error
     g = ph.wait_kind("granted")
-    assert g["operator"] == "gina" and g["max_vx"] == pytest.approx(0.5)
-    _推(ph, 3.0, seconds=1.2)                       # 要 3 m/s,只给一半能力
+    # POC 速度档:默认快档 1.0 m/s(仿真狗机身上限也是 1.0);老机器人「一半」见 _speed 那个测试
+    assert g["operator"] == "gina" and g["max_vx"] == pytest.approx(1.0)
+    _推(ph, 3.0, seconds=1.2)                       # 要 3 m/s,只给快档
     o = _odom(s)
-    assert 0 < o.vx <= 0.5 + 1e-6 and o.x > 0.1, o
+    assert 0 < o.vx <= 1.0 + 1e-6 and o.x > 0.1, o
     _推(ph, 0.0, seconds=0.5)
     assert _等(lambda: _停了(s), timeout=3)
     ph.close()                                       # 手机断了

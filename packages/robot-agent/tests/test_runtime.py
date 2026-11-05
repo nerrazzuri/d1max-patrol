@@ -72,7 +72,8 @@ async def test_起来就发能力与状态_均retained(台子):
         "goto", "patrol", "teleop", "relocalize", "mark_home", "head", "zones_set",
         "running_config", "speed_cap", "compat", "posture"]  # R4 加 running_config;POC 加姿态
     hal = r.hal_capabilities()
-    assert caps.tasks["teleop"] == {"max_vx": hal.max_vx / 2, "max_wz": hal.max_wz / 2}, \
+    assert caps.tasks["teleop"] == {"max_vx": hal.max_vx / 2, "max_wz": hal.max_wz / 2,
+                                    "max_vx_hal": hal.max_vx, "max_wz_hal": hal.max_wz}, \
         "W00c5c:遥控限速是 HAL 能力的一半"
     assert caps.tasks["patrol"] == {"map_id": "m", "map_version": "1", "autonomy": "autonomous"}
     assert caps.tasks["goto"]["max_speed_mps"] == r.max_vx

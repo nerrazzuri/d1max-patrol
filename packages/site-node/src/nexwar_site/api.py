@@ -719,6 +719,8 @@ class _Handler(TlsHandlerMixin):
                 return self._shift_notes(method, user)
             if path == "/api/duty-settings":
                 return self._duty_settings(method, user)
+            if path == "/api/teleop-speeds":
+                return self._teleop_speeds(method, user)
             m = _HIST.match(path)
             if m is not None:
                 return self._layout_history(method, m.group(1), user)
@@ -1149,6 +1151,26 @@ class _Handler(TlsHandlerMixin):
         self._audit_detail = {k: d.get(k) for k in ("shift_hours", "stale_hours") if k in d}
         try:
             return self._send_json(200, st.set_duty(d, by=str(user)))
+        except SettingsError as exc:
+            raise HttpError(400, str(exc)) from exc
+
+    def _teleop_speeds(self, method: str, user) -> None:
+        """遥控速度档(POC):``GET`` 谁都能看(手机遥控页显示),``POST`` 管理员改。"""
+        from nexwar_site.site_settings import SettingsError
+        st = self.site.settings
+        if st is None:
+            raise HttpError(404, "此站点未启用设置")
+        if method == "GET":
+            self._need(user, VIEW)
+            return self._send_json(200, st.teleop_speeds())
+        if method != "POST":
+            raise HttpError(405, "只支持 GET/POST")
+        self._need(user, MANAGE)
+        d = self._body()
+        if isinstance(d, dict):
+            self._audit_detail = {k: d.get(k) for k in ("slow", "mid", "fast") if k in d}
+        try:
+            return self._send_json(200, st.set_teleop_speeds(d, by=str(user)))
         except SettingsError as exc:
             raise HttpError(400, str(exc)) from exc
 
@@ -3149,7 +3171,8 @@ class _Handler(TlsHandlerMixin):
             granted = {"kind": "granted", "lease_epoch": session.epoch,
                        "operator": session.operator, "max_vx": session.max_vx,
                        "max_wz": session.max_wz, "max_vy": session.max_vy,
-                       "frame_period_ms": 100}
+                       # POC 速度档:手机摇杆满推按哪一档走(都不超过这次的上限)
+                       "speeds": session.speeds, "frame_period_ms": 100}
             if session.zone_told is not None:
                 granted["zone_guard"] = session.zone_told    # 决策 65:老狗不守硬禁区,开场就说
             ws.send_text(json.dumps(granted, ensure_ascii=False))

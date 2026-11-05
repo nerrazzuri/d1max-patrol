@@ -29,6 +29,7 @@ beforeEach(() => {
       return Promise.resolve(json({}));
     }
     if (url === "/api/health") return Promise.resolve(json(health));
+    if (url === "/api/teleop-speeds") return Promise.resolve(json({ slow: 0.3, mid: 0.6, fast: 1.0 }));
     if (url === "/api/robots") return Promise.resolve(json({ robots: [{ robot_id: "A", fresh: true, revoked: false, devices: { items: [{ id: "camera:front", state: "online" }, { id: "rtk", state: "degraded", detail: "浮点解" }] } }] }));
     if (url === "/api/releases") return Promise.resolve(json({ releases: [{ name: "v1.4.0", note: "" }], robots: { A: "v1.4.0" } }));
     if (url === "/api/versions") return Promise.resolve(json({ site: { version: "1.4.0" }, robots: [], clients: [] }));
@@ -66,6 +67,19 @@ describe("系统", () => {
     expect(c.querySelector(".sys-backup")!.textContent).toContain("9 天");
     expect(c.querySelector(".sys-vpn")!.textContent).toContain("未安装");
     expect(c.textContent).toContain("翠湖庄园");
+  });
+});
+
+describe("POC 遥控速度档", () => {
+  it("显示三档;改了保存发给站点;不合规的当场说", async () => {
+    const { container: c } = render(<SystemPage2 me={{ name: "a", role: "admin", display_name: "", site_name: "x" }} now={0} say={() => {}} />);
+    const fast = await waitFor(() => { const i = c.querySelector<HTMLInputElement>('.sys-teleop input[name="fast"]'); expect(i?.value).toBe("1"); return i!; });
+    fireEvent.input(fast, { target: { value: "0.2" } });
+    expect(c.querySelector(".sys-teleop")!.textContent).toContain("慢 ≤ 中 ≤ 快");
+    expect(btn(c.querySelector(".sys-teleop")!, "保存速度档").disabled).toBe(true);
+    fireEvent.input(fast, { target: { value: "0.8" } });
+    fireEvent.click(btn(c.querySelector(".sys-teleop")!, "保存速度档"));
+    await waitFor(() => expect(posted.find((p) => p.url === "/api/teleop-speeds")?.body).toEqual({ slow: 0.3, mid: 0.6, fast: 0.8 }));
   });
 });
 

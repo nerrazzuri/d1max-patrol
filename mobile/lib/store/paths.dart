@@ -17,6 +17,11 @@ const String sitesFileName = 'sites.json';
 /// 语言选了哪种（App V2）。
 const String langFileName = 'lang.json';
 
+/// 遥控速度档上次选的哪一档（POC）。
+const String teleopTierFileName = 'teleop_tier.json';
+
+Future<File> teleopTierFilePath() async => File('${(await _dir()).path}/$teleopTierFileName');
+
 Future<LangStore> openLangStore() async => LangStore(File('${(await _dir()).path}/$langFileName'));
 
 Future<SiteStore> openSiteStore() async =>

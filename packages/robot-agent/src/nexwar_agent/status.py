@@ -41,9 +41,12 @@ def compose_capabilities(*, robot_id: str, hal_caps: HalCapabilities, adapter_id
                            "autonomy": autonomy}
     if hal_caps.max_vx > 0:
         # W00c5c:遥控不要地图;限速是 HAL 能力的一半(决策 7 追加条件),站点与手机据此夹、显示。
-        tasks["teleop"] = {"max_vx": hal_caps.max_vx / 2, "max_wz": hal_caps.max_wz / 2}
+        tasks["teleop"] = {"max_vx": hal_caps.max_vx / 2, "max_wz": hal_caps.max_wz / 2,
+                           # POC 速度档:机身上限。站点见到它才在授予里带快档(老代理不认)
+                           "max_vx_hal": hal_caps.max_vx, "max_wz_hal": hal_caps.max_wz}
         if hal_caps.lateral and hal_caps.max_vy > 0:
             tasks["teleop"]["max_vy"] = hal_caps.max_vy / 2      # 横移(2026-10-30)
+            tasks["teleop"]["max_vy_hal"] = hal_caps.max_vy
     # W00c5d 第二部分:站点下发地图、建图(不是任务;站点据此决定给不给按钮)。
     tasks.update(extra_tasks or {})
     return Capabilities(

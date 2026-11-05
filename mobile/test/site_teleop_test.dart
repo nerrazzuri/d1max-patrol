@@ -26,6 +26,38 @@ Future<void> _open(WidgetTester t, FakeApi api) async {
 bool _stickEnabled(WidgetTester t, int i) => t.widget<Joystick>(find.byType(Joystick).at(i)).enabled;
 
 void main() {
+  testWidgets('POC 速度档：站点给了三档才显示；默认慢档；切快档推满按快档走、转向同比例；记住选的档', (t) async {
+    teleopTierPick = null;
+    final api = FakeApi('guard');
+    await t.pumpWidget(MaterialApp(home: SiteTeleopPage(key: UniqueKey(), api: api, robotId: 'A')));
+    await t.pump();
+    api.link!.ctl.add(<String, dynamic>{'kind': 'granted', 'lease_epoch': 1, 'max_vx': 1.0,
+      'max_wz': 1.5, 'speeds': {'slow': 0.3, 'mid': 0.6, 'fast': 1.0}});
+    await t.pump();
+    await t.pump();
+    expect(find.byKey(SiteTeleopPage.tierKey('fast')), findsOneWidget);
+    await t.sendKeyDownEvent(LogicalKeyboardKey.keyW);
+    await t.sendKeyDownEvent(LogicalKeyboardKey.keyA);
+    await t.pump(const Duration(milliseconds: 250));
+    expect(api.link!.sent.last[0], closeTo(0.3, 1e-9), reason: '默认慢档');
+    expect(api.link!.sent.last[1], closeTo(1.5 * 0.3, 1e-9), reason: '转向按同比例');
+    await t.tap(find.byKey(SiteTeleopPage.tierKey('fast')));
+    await t.pump(const Duration(milliseconds: 250));
+    expect(api.link!.sent.last[0], closeTo(1.0, 1e-9));
+    expect(teleopTierPick, 'fast', reason: '记住，下次进来还是快档');
+    await t.sendKeyUpEvent(LogicalKeyboardKey.keyW);
+    await t.sendKeyUpEvent(LogicalKeyboardKey.keyA);
+    await t.pumpWidget(Container());
+    teleopTierPick = null;
+  });
+
+  testWidgets('POC 速度档：老站点不给档，不显示切换，照旧按站点限速', (t) async {
+    final api = FakeApi('guard');
+    await _open(t, api);
+    expect(find.byKey(SiteTeleopPage.tierKey('slow')), findsNothing);
+    await t.pumpWidget(Container());
+  });
+
   testWidgets('键盘（W15）：W 前进、A 左转、松开就停；没拿到遥控之前按键不动', (t) async {
     final api = FakeApi('guard');
     await t.pumpWidget(MaterialApp(home: SiteTeleopPage(key: UniqueKey(), api: api, robotId: 'A')));

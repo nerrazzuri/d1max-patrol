@@ -95,6 +95,8 @@ class Session:
     need_zero: bool = False
     #: 硬禁区守卫(决策 65)最近告诉手机的那一份;老狗不守、图上有硬禁区时开场就是 ``unsupported``。
     zone_told: dict | None = None
+    #: POC 速度档:慢/中/快(m/s),都夹到 ``max_vx`` 以内。
+    speeds: dict = field(default_factory=dict)
 
 
 class TeleopDesk:
@@ -163,12 +165,12 @@ class TeleopDesk:
     def _grant(self, robot_id: str, name: str, takeover_reason: str, t0: float) -> Session:
         if not self._video_ok(robot_id):
             raise TeleopRefused(409, f"{robot_id} 没有画面:无画面不许动", "no_video")
-        caps = self._caps(robot_id)
+        caps, send_mps = self._limits(robot_id)
         epoch, row_id = self._new_lease_row(robot_id, name, takeover_reason)
         try:
             r = self.loop.call(lambda: self.dispatcher.teleop_grant(
                 robot_id, lease_epoch=epoch, operator=name, lease_ttl_ms=self.lease_ttl_ms,
-                issued_by=name), timeout_s=self.dispatcher.ack_timeout_s + 5)
+                issued_by=name, max_vx_mps=send_mps), timeout_s=self.dispatcher.ack_timeout_s + 5)
         except DispatchRefused as exc:
             self._end_row(row_id, "refused")
             raise TeleopRefused(409, str(exc)) from exc
@@ -186,7 +188,8 @@ class TeleopDesk:
         s = Session(robot_id=robot_id, epoch=epoch, operator=name, max_vx=caps[0],
                     max_wz=caps[1], max_vy=caps[2], started_ms=self._now(), row_id=row_id,
                     video_told=True,
-                    zone_told=self._hard_unsupported(robot_id))
+                    zone_told=self._hard_unsupported(robot_id),
+                    speeds={k: round(min(v, caps[0]), 2) for k, v in self._speeds().items()})
         with self._lock:
             self._sessions[robot_id] = s
         self._audit(name, "teleop_start", robot_id, {"lease_epoch": epoch,
@@ -240,6 +243,27 @@ class TeleopDesk:
             self._audit(s.operator, "teleop_zone_guard", s.robot_id,
                         {"lease_epoch": s.epoch, "state": zg.get("state"),
                          "zone": zg.get("zone", "")})
+
+    def _speeds(self) -> dict[str, float]:
+        from nexwar_site.site_settings import SiteSettings
+        return SiteSettings(self.dispatcher.db).teleop_speeds()
+
+    def _limits(self, robot_id: str) -> tuple[tuple[float, float, float], float | None]:
+        """这次遥控的 (max_vx, max_wz, max_vy) 和要带给机器人的快档。机器人报了机身上限
+        (``max_vx_hal``,POC 速度档)才带:上限 = min(快档, 机身),转向、横移同比例;
+        老机器人不带、照它报的一半。"""
+        vx, wz, vy = self._caps(robot_id)
+        c = self.dispatcher.clients.get(robot_id)
+        t = (c.capabilities.tasks.get("teleop") if c is not None and c.capabilities else None) or {}
+        hx, hw, hy = t.get("max_vx_hal"), t.get("max_wz_hal"), t.get("max_vy_hal")
+        if not all(isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
+                   and v > 0 for v in (hx, hw)):
+            return (vx, wz, vy), None
+        fast = self._speeds()["fast"]
+        k = min(1.0, fast / float(hx))
+        ok_hy = isinstance(hy, (int, float)) and not isinstance(hy, bool) and math.isfinite(hy) \
+            and hy > 0 and vy > 0
+        return (float(hx) * k, float(hw) * k, float(hy) * k if ok_hy else 0.0), fast
 
     def _caps(self, robot_id: str) -> tuple[float, float, float]:
         """(max_vx, max_wz, max_vy);``max_vy`` 没报、不成形都是 0(不横移)。"""

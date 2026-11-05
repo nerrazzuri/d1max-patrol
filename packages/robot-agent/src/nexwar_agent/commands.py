@@ -44,6 +44,7 @@ from nexwar_contract.teleop import (
     TeleopFrame,
     parse_teleop_grant,
     parse_teleop_lease,
+    parse_teleop_speed,
 )
 from nexwar_contract.topics import Topics
 from nexwar_contract.video import parse_video_payload
@@ -324,6 +325,7 @@ class CommandProcessor:
         if cmd.kind == "teleop":
             try:
                 parse_teleop_grant(cmd.payload)
+                parse_teleop_speed(cmd.payload)
             except ContractError as exc:
                 return f"payload: {exc}"
             return ""

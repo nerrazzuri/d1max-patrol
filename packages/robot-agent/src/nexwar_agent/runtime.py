@@ -604,14 +604,15 @@ class AgentRuntime:
         if cmd.kind == "teleop":
             from nexwar_agent.tasks.teleop import TeleopTask
             from nexwar_agent.zone_guard import TeleopZoneGuard
-            from nexwar_contract.teleop import parse_teleop_grant
+            from nexwar_contract.teleop import parse_teleop_grant, parse_teleop_speed
             epoch, operator, ttl = parse_teleop_grant(cmd.payload)
+            vmax = parse_teleop_speed(cmd.payload)
             guard = TeleopZoneGuard(zones=self._hard_zones, locate=self._teleop_locate,
                                     deadband_vx=self.hal.hal_capabilities().deadband_vx)
             return TeleopTask(task_id=cmd.task_id, lease_epoch=epoch, operator=operator,
                               lease_ttl_ms=ttl, hal=self.hal, now_ms=self._mono_ms,
                               video_live=self._video_live, events=self.events,
-                              priority=cmd.priority, zone_guard=guard)
+                              priority=cmd.priority, zone_guard=guard, max_vx_mps=vmax)
         if cmd.kind == "dock":
             from nexwar_agent.tasks.dock import DockTask
             from nexwar_contract.charging import parse_dock
