@@ -27,6 +27,9 @@
 #   NEXWAR_AGENT_ARGS=其余参数(比如 --mapping、--sidecar 127.0.0.1:8090 --mps-per-unit …)
 set -eu
 here=$(cd "$(dirname "$0")/.." && pwd -P)
+# 11-05:钟对了再起。开机没对时钟是 1970,TLS 握不上站点,以前只报「等了 30s 超时」反复重启
+# (开机守卫在数这些重启);现在在日志里说「钟还不对(1970…)」,等着,不崩
+"$here/deploy/nexwar_wait_clock"
 # W68:这一版编的 Super-LIO 在哪(远程升级按版本记,外审 r2 #7);没记的老槽用 current
 if [ -z "${NEXWAR_SUPERLIO_ROOT:-}" ] && [ -f "$here/venv/superlio-root" ]; then
   NEXWAR_SUPERLIO_ROOT=$(cat "$here/venv/superlio-root")
