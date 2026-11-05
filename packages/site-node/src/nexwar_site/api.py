@@ -499,6 +499,30 @@ class _Handler(TlsHandlerMixin):
         self.end_headers()
         self.wfile.write(raw)
 
+    def _read(self, n: int) -> bytes:
+        """读请求体(记着读了多少:没读完的 :meth:`_drain` 收尾)。"""
+        raw = self.rfile.read(n)
+        self._consumed += len(raw)
+        return raw
+
+    def _drain(self) -> None:
+        """现场 11-05:处理完了请求体还没读走(带体的 GET、不看体的 POST)→ 读掉丢了;太大就不复用连接。
+        不然留在连接里跟下一个请求粘在一起(手机上整页「501 Unsupported method ('{}GET')」)。"""
+        try:
+            n = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            n = 0
+        left = n - self._consumed
+        if left <= 0 or self.close_connection:
+            return
+        if left > MAX_BODY:
+            self.close_connection = True
+            return
+        try:
+            self._read(left)
+        except OSError:
+            self.close_connection = True
+
     def _body(self) -> dict[str, Any]:
         try:
             n = int(self.headers.get("Content-Length") or 0)
@@ -508,7 +532,7 @@ class _Handler(TlsHandlerMixin):
             raise HttpError(400, "Content-Length 不能是负的")
         if n > MAX_BODY:
             raise HttpError(413, f"请求体超过 {MAX_BODY} 字节")
-        raw = self.rfile.read(n) if n else b"{}"
+        raw = self._read(n) if n else b"{}"
         try:
             d = json.loads(raw or b"{}")
         except (ValueError, UnicodeDecodeError) as exc:
@@ -556,11 +580,13 @@ class _Handler(TlsHandlerMixin):
         self._actor, self._status, self._resp = "", 0, {}
         self._audit_target, self._audit_detail = "", {}
         self._method, self._via_cookie, self._extra_headers = method, False, []
+        self._consumed = 0
         #: 这一次请求不进审计(W00c6i:续着的监护心跳每秒一条,只记开始与结束)。
         self._skip_audit = False
         path = self.path.split("?", 1)[0]
         try:
             self._route(method, path)
+            self._drain()
         finally:
             # 未登录的乱请求(401/413/400,不是登录也不是事件回调)不进审计:谁都能发,
             # 记下来只会把表撑满(内部评审)。登录失败、事件回调照记。
@@ -1814,7 +1840,7 @@ class _Handler(TlsHandlerMixin):
             raise HttpError(400, "Content-Length 不能是负的")
         if n > MAX_BODY:
             raise HttpError(413, f"请求体超过 {MAX_BODY} 字节")
-        return self.rfile.read(n) if n else b""
+        return self._read(n) if n else b""
 
     def _src_hdr(self, name: str) -> str | None:
         """事件源回调的请求头 ``X-Nexwar-<name>``;改名前就配好的设备还发 ``X-D1MAX-<name>``,
@@ -3123,7 +3149,7 @@ class _Handler(TlsHandlerMixin):
         left = n
         with open(dest, "wb") as fh:
             while left > 0:
-                chunk = self.rfile.read(min(left, 1 << 20))
+                chunk = self._read(min(left, 1 << 20))
                 if not chunk:
                     dest.unlink(missing_ok=True)
                     raise HttpError(400, "文件未传完")
@@ -3181,7 +3207,7 @@ class _Handler(TlsHandlerMixin):
                     raise HttpError(413 if n > 0 else 400, "安装包为空或过大")
                 buf = bytearray()
                 while len(buf) < n:
-                    chunk = self.rfile.read(min(n - len(buf), 1 << 20))
+                    chunk = self._read(min(n - len(buf), 1 << 20))
                     if not chunk:
                         raise HttpError(400, "文件未传完")
                     buf += chunk
@@ -3872,7 +3898,7 @@ class _Handler(TlsHandlerMixin):
             left = n
             with open(raw, "wb") as fh:
                 while left > 0:
-                    chunk = self.rfile.read(min(left, 1 << 20))
+                    chunk = self._read(min(left, 1 << 20))
                     if not chunk:
                         raise HttpError(400, "文件未传完")
                     fh.write(chunk)
