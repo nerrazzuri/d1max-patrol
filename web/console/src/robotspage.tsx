@@ -258,6 +258,7 @@ function Controls({ r, role, say, onChanged }: { r: RobotCard; role: string; say
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [ask, setAsk] = useState<Posture | null>(null);
+  const [askHome, setAskHome] = useState(false);
   const patrol = canPatrol(role);
   const dispatch = canDispatch(role);
   useEffect(() => {
@@ -327,6 +328,11 @@ function Controls({ r, role, say, onChanged }: { r: RobotCard; role: string; say
       <div class="rd-actions">
         {dispatch && <button type="button" class="btn sm" disabled={busy || off}
           onClick={() => void send(() => api("POST", path("standby/return"), {}), t("rdSent", { id, what: t("rdReturn") }))}>{t("rdReturn")}</button>}
+        {dispatch && <button type="button" class="btn sm" disabled={busy || off || !!r.task}
+          title={r.task ? t("rdHomeBusy") : undefined}
+          onClick={() => void send(() => api("POST", path("home/return"), {}), t("rdSent", { id, what: t("rdHome") }))}>{t("rdHome")}</button>}
+        {dispatch && r.task && <button type="button" class="btn sm rd-danger" disabled={busy || off}
+          onClick={() => setAskHome(true)}>{t("rdAbortHome")}</button>}
         {dispatch && <button type="button" class="btn sm" disabled={busy || off}
           onClick={() => void send(() => api("POST", path("relocalize"), { global: true }), t("rdSent", { id, what: t("rdAutoLoc") }))}>{t("rdAutoLoc")}</button>}
         {patrol && <button type="button" class="btn sm rd-danger" disabled={busy} onClick={() => void abort()}>{t("rdAbort")}</button>}
@@ -343,6 +349,14 @@ function Controls({ r, role, say, onChanged }: { r: RobotCard; role: string; say
           </div>
           {r.task && <p class="muted small">{t("rdPostureBusy", { task: r.task })}</p>}
         </div>
+      )}
+      {askHome && (
+        <Confirm text={t("rdAbortHomeAsk", { id, task: r.task ?? "" })} yes={t("rdAbortHome")} danger
+          onNo={() => setAskHome(false)}
+          onYes={() => {
+            setAskHome(false);
+            void send(() => api("POST", path("home/return"), { abort: true }), t("rdSent", { id, what: t("rdAbortHome") }));
+          }} />
       )}
       {ask && (
         <Confirm text={t("rdPostureAsk", { id, what: t(POSTURE_KEY[ask]) })} yes={t(POSTURE_KEY[ask])}

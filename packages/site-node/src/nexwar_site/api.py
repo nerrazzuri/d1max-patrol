@@ -180,7 +180,8 @@ TEMP_ROUTE_MAX = 20
 TRACK_SPAN_MAX_MS = 86_400_000
 _ROBOT = re.compile(
     r"^/api/robots/([^/]+)"
-    r"(?:/(goto|abort|patrol|patrol-plan|standby|standby/return|standby/here|intercept/here))?$")
+    r"(?:/(goto|abort|patrol|patrol-plan|standby|standby/return|standby/here|intercept/here"
+    r"|home/return))?$")
 
 
 def _cam_frames(v: Any) -> Iterator[bytes]:
@@ -1236,6 +1237,10 @@ class _Handler(TlsHandlerMixin):
             return self._send_json(200, view)
         if action in ("standby", "standby/return"):
             return self._standby(method, robot_id, action, user)
+        if action == "home/return":
+            if method != "POST":
+                raise HttpError(405, "只支持 POST")
+            return self._home_return(robot_id, user)
         if action == "standby/here":
             if method != "POST":
                 raise HttpError(405, "只支持 POST")
@@ -1413,6 +1418,27 @@ class _Handler(TlsHandlerMixin):
         if got is None:
             raise HttpError(404, "此地图上没有能派的机器人")
         return self._send_json(200, got)
+
+    def _home_return(self, robot_id: str, user: str) -> None:
+        """回原点、中止并回原点(POC):``{"abort"?: bool}``。``dispatch`` 权限;
+        要人监护的狗没人监护不派。"""
+        stb = self.site.standby
+        if stb is None:
+            raise HttpError(404, "此站点未启用待命点")
+        why = self.site.supervision.refusal(robot_id)
+        if why:
+            from nexwar_site.refusals import extra_for
+            raise HttpError(409, why, extra=extra_for(why))
+        d = self._body() or {}
+        abort = d.get("abort", False) if isinstance(d, dict) else None
+        if not isinstance(abort, bool):
+            raise HttpError(400, "abort 要是 true/false")
+        self._audit_detail = {"abort": abort}
+        # 带中止的要多等一会儿:中止回执 + 等上一趟停下(最多 15 s) + 去原点的回执
+        result = self.site.dispatch(lambda: stb.return_home(robot_id, issued_by=str(user),
+                                                            abort=abort),
+                                    timeout_s=self.site.dispatcher.ack_timeout_s * 2 + 25)
+        return self._send_json(200, result)
 
     def _standby(self, method: str, robot_id: str, action: str, user: str) -> None:
         from nexwar_site.standby import StandbyError
