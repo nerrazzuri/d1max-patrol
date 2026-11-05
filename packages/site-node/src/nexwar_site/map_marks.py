@@ -25,6 +25,8 @@ EXIT_MIN_M, EXIT_MAX_M = 0.5, 60.0
 #: 跟丢以后看多远以内的易藏点(米,设计 §六,我定的)、最多看几个。
 #: 离出口线这么近(米)算「在线上」:不算哪一边(定位、测距误差以内;外审 r1 #12)。
 LINE_BAND_M = 0.3
+#: 每条出口线最多记这么多个「线上」的点(人在线上站着不动也不会越记越多)。
+_BAND_KEEP = 50
 HIDE_NEAR_M = 30.0
 HIDE_MAX = 6
 #: 人越过出口线以后,机器人停在线内多远(米,设计 §七)。
@@ -112,24 +114,33 @@ class MapMarks:
         """被跟的人走到 ``pt``:越过了哪条出口线 → ``(那条线, 越线前最后确定在另一边的点)``;没有
         ``None``。
 
-        外审 r2 #7:每条线各自记最后一个**确定**在哪一边的点(``last``,按线的 id;调用方存着,
-        这里就地改):离线 :data:`LINE_BAND_M` 以内(算不清哪一边)的点不算、也不盖掉它;换到另一边、
-        而且这一段穿过线段本身才算越线(从端点外面绕过去不算)。"""
-        best: tuple[float, dict[str, Any], tuple[float, float]] | None = None
+        外审 r2 #7 / r3 #3:每条线各自记最后一个**确定**在哪一边的点,和那以后离线
+        :data:`LINE_BAND_M` 以内(算不清哪一边)走过的点(``last``,按线的 id;调用方存着,这里就地改)。
+        换到另一边才判,而且按实际走过的折线:其中有一段穿过线段本身才算越线(从端点外面绕过去不算)。"""
+        best: tuple[int, dict[str, Any], tuple[float, float]] | None = None
+        x, y = float(pt[0]), float(pt[1])
         for m in self.list(map_id, version, "exit"):
             p, q = m["points"][0], m["points"][1]
+            k = str(m["id"])
+            st = last.get(k)
+            if not isinstance(st, dict) or not isinstance(st.get("d"), list) \
+                    or len(st["d"]) != 3:
+                st = None
             side = _side(pt, p, q)
             if side == 0:
+                if st is not None:                       # 线上的点:记进折线,不盖掉确定的那一边
+                    last[k] = {"d": st["d"], "p": [*(st.get("p") or [])[-(_BAND_KEEP - 1):],
+                                                    [x, y]]}
                 continue
-            k = str(m["id"])
-            prev = last.get(k)
-            last[k] = [float(pt[0]), float(pt[1]), side]
-            if not isinstance(prev, list) or len(prev) != 3 or prev[2] == side:
+            last[k] = {"d": [x, y, side], "p": []}
+            if st is None or st["d"][2] == side:
                 continue
-            a = (float(prev[0]), float(prev[1]))
-            t = _cross(a, pt, p, q)
-            if t is not None and (best is None or t < best[0]):
-                best = (t, m, a)
+            chain = [(float(st["d"][0]), float(st["d"][1])),
+                     *((float(b[0]), float(b[1])) for b in st.get("p") or []), (x, y)]
+            hit = next((i for i, (a, b) in enumerate(zip(chain, chain[1:], strict=False))
+                        if _cross(a, b, p, q) is not None), None)
+            if hit is not None and (best is None or hit < best[0]):
+                best = (hit, m, chain[0])
         return (best[1], best[2]) if best is not None else None
 
     def hide_near(self, map_id: str, version: str, x: float, y: float,
