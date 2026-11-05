@@ -801,3 +801,21 @@ def test_现场1104_贴着机身前沿那一排偶尔看不见_不掐许可_挡�
     k2 = bytearray(classify(场景(), H, cfg)[1])
     k2[_cell(cfg, 0.85, 0.0)] = 0                        # 贴身那段以外的看不见:照样当挡
     assert clear_distance(occ, bytes(k2), cfg) < 0.45
+
+
+def test_现场1105_机头下挂的线_机身歪了读高到012_不当挡_机头两边的东西照样挡():
+    """11-05 商场 P2:机器人一侧压在草坪上、机身歪了 6°,机头正下方那根挂着的线(平时读 0.05 m)读到
+    0.11–0.12 m,正前 0.55 m 两格挡了 5 分钟(回放:96% / 85% 的帧)。机身自滤在机头那一窄条往前多管
+    ``nose_ext``;两边、再往前的照样挡。"""
+    cfg = Config()
+    front = cfg.body_len / 2 + cfg.margin
+    cable = np.array([[front + 0.03, 0.0, -H + 0.12], [front + 0.04, -0.04, -H + 0.11]])
+    occ, _ = classify(np.vstack([场景(), cable]), H, cfg)
+    assert not occ[_cell(cfg, front + 0.03, 0.0)], "机头下挂的线:自己的,不挡"
+    def 一小块(x, y):                                            # 真东西好几个点(单点当雨滴滤掉)
+        return np.array([[x + dx, y + dy, -H + 0.12] for dx in (0.0, 0.02) for dy in (0.0, 0.02)])
+    side = 一小块(front + 0.02, -0.26)                            # 机头右前(草坪边、箱子角)
+    ahead = 一小块(front + cfg.nose_ext + 0.02, -0.01)
+    occ, _ = classify(np.vstack([场景(), side, ahead]), H, cfg)
+    assert occ[_cell(cfg, front + 0.03, -0.25)], "两边的照样挡"
+    assert occ[_cell(cfg, front + cfg.nose_ext + 0.03, 0.0)], "再往前的照样挡"
