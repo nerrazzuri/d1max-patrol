@@ -334,3 +334,44 @@ def test_1105_现场旁路单元认不出来_不瞎写_说清楚要手工填(tmp
     assert r.returncode == 0
     assert "NEXWAR_SIDECAR" not in (root / "etc/nexwar/env").read_text()
     assert "NEXWAR_SIDECAR_" in r.stdout and "手工" in r.stdout, r.stdout
+
+
+def test_1105_SuperLIO库里编着老目录_迁完建兼容链_重跑不当冲突(tmp_path):
+    """11-05 商场:liblio.so 里编着 /opt/d1max/...(它拼地图路径的基准),目录搬走了载不了图。
+    迁完建 /opt/d1max → nexwar 的兼容链;以后再跑迁移(装机脚本每次都跑),这条链不算「新旧都有」。"""
+    root = tmp_path / "root"
+    _老机器(root)
+    lib = root / "opt/d1max/superlio/f89f48d/install/super_lio/lib"
+    lib.mkdir(parents=True)
+    (lib / "liblio.so").write_bytes(
+        b"\x7fELF\x00\xbf/opt/d1max/superlio/f89f48d/ws/src/Super-LIO/src/super_lio/\x00")
+    stub = _stub(tmp_path, set())
+    r = _run(root, stub, "prepare")
+    assert r.returncode == 0, r.stderr
+    link = root / "opt/d1max"
+    assert link.is_symlink() and os.readlink(link) == "nexwar"
+    assert (link / "superlio/f89f48d/install/super_lio/lib/liblio.so").is_file()
+    assert "兼容链" in r.stdout
+    r2 = _run(root, stub, "prepare")
+    assert r2.returncode == 0, r2.stderr
+    assert link.is_symlink(), "重跑不动它"
+
+
+def test_1105_现场手建的兼容链_绝对路径指着新目录_也不算冲突(tmp_path):
+    root = tmp_path / "root"
+    (root / "opt/nexwar/bin").mkdir(parents=True)
+    (root / "opt/nexwar/bin/x").write_text("x")
+    (root / "opt/d1max").symlink_to(root / "opt/nexwar")
+    stub = _stub(tmp_path, set())
+    r = _run(root, stub, "prepare")
+    assert r.returncode == 0, r.stderr
+    assert (root / "opt/d1max").is_symlink()
+
+
+def test_1105_库里没编老目录_不建兼容链(tmp_path):
+    root = tmp_path / "root"
+    _老机器(root)
+    stub = _stub(tmp_path, set())
+    r = _run(root, stub, "prepare")
+    assert r.returncode == 0, r.stderr
+    assert not (root / "opt/d1max").exists() and not (root / "opt/d1max").is_symlink()
