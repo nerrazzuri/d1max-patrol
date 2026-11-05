@@ -38,6 +38,8 @@ CHECK_FRAMES = 20
 GIVE_UP_FRAMES = 100
 REFIT_EVERY = 5
 MAX_TILT_DEG = 5.0
+#: 歪得不到这么多(°)多半是姿态(趴着、遥控器压着),不是外参装错:原因里这么说(11-05 现场)。
+TILT_POSTURE_DEG = 15.0
 HEIGHT_RANGE_M = (0.2, 1.0)
 #: W71(11-03 商场,左前腿下了 5 cm 台阶,机身歪着,前方平地被判成凸起,四面都是挡):
 #: 地面每帧按眼前 :data:`LOCAL_GROUND_R_M` 以内的点重新拟合,高度按「离这一帧的地面多高」算,
@@ -276,9 +278,10 @@ class SelfCheck:
             if got is not None:
                 n, h, frac = got
                 tilt = math.degrees(math.acos(max(-1.0, min(1.0, n[2]))))
-                self._again.append((tilt, h, frac))
+                # 11-05:按最近一轮滚着判(原来攒满一整轮才判、判完清空:站起来后最多要等两轮 ≈ 20 s)
+                self._again = (self._again + [(tilt, h, frac)])[-self.need:]
             if len(self._again) >= self.need:
-                self.fits, self._again = self._again, []
+                self.fits = list(self._again)
                 self._judge()
             return
         if self.check == "ok":
@@ -313,7 +316,9 @@ class SelfCheck:
         tilt, h, frac = med(0), med(1), med(2)
         why = []
         if tilt > MAX_TILT_DEG:
-            why.append(f"地面跟外参的「上」差 {tilt:.1f}°(> {MAX_TILT_DEG:g}°)")
+            why.append(f"地面跟外参的「上」差 {tilt:.1f}°(> {MAX_TILT_DEG:g}°)"
+                       + ("。多半是机身姿态不正(还趴着、手持遥控器在控制):站稳、放开遥控器后"
+                          "几秒内自动再判" if tilt < TILT_POSTURE_DEG else ""))
         if not HEIGHT_RANGE_M[0] <= h <= HEIGHT_RANGE_M[1]:
             why.append(f"雷达离地 {h:.2f} m(不在 {HEIGHT_RANGE_M[0]}–{HEIGHT_RANGE_M[1]} m)")
         if frac < MIN_GROUND_FRAC:
