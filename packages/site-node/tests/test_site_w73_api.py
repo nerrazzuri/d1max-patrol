@@ -193,3 +193,31 @@ def test_W73第五期_设备登记在图上_管理员登记_密钥只给一次_�
     assert code == 200 and len(d["secret"]) == 64
     assert s.req("POST", "/api/devices", {"id": "door-1", "remove": True}, token=admin)[0] == 200
     assert s.req("GET", "/api/devices", token=gina)[1]["devices"] == []
+
+
+def test_W74三期_出口线易藏点跟防区一起给_管理员能画能删_保安只能看(站点):
+    s = 站点
+    alice, gina = _登(s, "alice"), _登(s, "gina")
+    code, d = s.req("GET", "/api/maps/shop/1/areas", token=gina)
+    assert code == 200 and d["marks"] == []
+    door = {"mark": {"kind": "exit", "name": "东门", "points": [[9.0, 0.5], [9.0, 3.5]]}}
+    assert s.req("POST", "/api/maps/shop/1/areas", door, token=gina)[0] == 403
+    code, d = s.req("POST", "/api/maps/shop/1/areas", door, token=alice)
+    assert code == 200, d
+    [m] = d["marks"]
+    assert m["kind"] == "exit" and m["name"] == "东门" and m["id"]
+    assert [a["zone"] for a in d["areas"]] == ["东区", "西区"], "画标注不动防区"
+    code, d = s.req("POST", "/api/maps/shop/1/areas",
+                    {"mark": {"kind": "hide", "name": "", "points": [[1, 1]]}}, token=alice)
+    assert code == 400
+    code, d = s.req("POST", "/api/maps/shop/1/areas",
+                    {"mark": {"kind": "hide", "name": "楼梯间", "points": [[2, 2]], "yaw": 1.0}},
+                    token=alice)
+    assert code == 200 and len(d["marks"]) == 2
+    code, d = s.req("POST", "/api/maps/shop/1/areas", {"mark_id": m["id"], "remove": True},
+                    token=alice)
+    assert code == 200 and [x["name"] for x in d["marks"]] == ["楼梯间"]
+    code, d = s.req("POST", "/api/maps/shop/1/areas", {"mark_id": m["id"], "remove": True},
+                    token=alice)
+    assert code == 404
+    assert s.req("GET", "/api/maps/shop/2/areas", token=gina)[1]["marks"] == []

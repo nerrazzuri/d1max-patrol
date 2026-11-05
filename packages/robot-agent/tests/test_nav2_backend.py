@@ -1289,3 +1289,50 @@ async def test_现场1105_站在禁行区边上_Nav2说起点致命_说先挪出
     why = t.nav.fail_reason
     assert "禁行区" in why and "挪" in why and "残影" not in why, why
     assert not link.kinds("map")[-1].get("clear"), "禁行区不擦"
+
+
+# ------------------------------------------------------------ W74 跟随:走着换目标
+
+
+async def test_W74_走着换目标_Nav2收到新目标号_旧的取消_不在走就不换(tmp_path):
+    link = 假转接()
+    t = _台(tmp_path, link)
+    await t.start(1.5, 4.0)
+    assert await t.nav.retarget(Pose.from_xy_yaw(5.0, 4.0)) is False, "没在走:不换(要 goto)"
+    await t.nav.goto(Pose.from_xy_yaw(6.0, 4.0, 0.0))
+    await t.跑(0.3)
+    g1 = link.kinds("goal")[-1]
+    assert await t.nav.retarget(Pose.from_xy_yaw(7.0, 5.0, 0.5)) is True
+    g2 = link.kinds("goal")[-1]
+    assert g2["goal_id"] > g1["goal_id"] and (g2["x"], g2["y"], g2["yaw"]) == (7.0, 5.0, 0.5)
+    assert "via" not in g2, "跟人不走路网"
+    assert link.kinds("cancel")[-1]["goal_id"] == g1["goal_id"]
+    assert t.nav._target.position.x == 7.0
+    assert NavStatus.FAILED not in t.status
+
+
+async def test_W74_换的新目标在禁行区里_不换(tmp_path):
+    from nexwar_contract.zones import ZoneSet
+    link = 假转接()
+    t = _台(tmp_path, link)
+    await t.start(1.5, 4.0)
+    await t.nav.set_zones(ZoneSet.from_wire({"map_id": "m", "map_version": "1", "revision": 1,
+                                             "zones": [
+        {"id": "z", "kind": "nogo", "polygon": [[8, 3], [9, 3], [9, 5], [8, 5]]}]}))
+    await t.nav.goto(Pose.from_xy_yaw(6.0, 4.0, 0.0))
+    await t.跑(0.3)
+    n = len(link.kinds("goal"))
+    assert await t.nav.retarget(Pose.from_xy_yaw(8.5, 4.0)) is False
+    assert len(link.kinds("goal")) == n
+
+
+async def test_W74_自己的规划_走着换目标_从这儿重新规划过去(tmp_path):
+    t = 台子(tmp_path)
+    await t.start(1.5, 4.0)
+    assert await t.nav.retarget(Pose.from_xy_yaw(5.0, 4.0)) is False
+    await t.nav.goto(Pose.from_xy_yaw(6.0, 4.0, 0.0))
+    await t.跑(1.0)
+    assert await t.nav.retarget(Pose.from_xy_yaw(4.0, 6.0, 1.5)) is True
+    await t.跑(40.0)
+    assert NavStatus.SUCCEED in t.status and not t.crashed
+    assert math.dist((t.r.x, t.r.y), (4.0, 6.0)) < 0.4, "到的是新目标"

@@ -1032,3 +1032,132 @@ async def test_W74_恢复值守后_最后位置那个防区和相邻的加密巡
     t.clock.advance(INTENSE_MS // 1000 + 1)
     await _跑(t, 25)
     assert _log(t, "intense_end")
+
+
+def _follows(t):
+    return [c for c in reversed(t.site.commands("A", 500)) if c["kind"] == "follow"]
+
+
+async def test_W74_看见人_停下以后派跟人_一回只派一次_机器人不会跟就只盯着(站):
+    t = 站
+    _方案(t)
+    await _跑(t, 1.5)
+    t.duty.alerts.raise_alert(kind="dog_sees_person", robot="A", title="看见人")
+    await _跑(t, 3)
+    assert _follows(t) == [], "机器人能力里没有 follow:照旧原地盯着"
+    t.duty.alerts.resolve_all("A", "dog_sees_person", who="gina")
+    await _跑(t, 3)
+    t.site.clients["A"].capabilities.tasks["follow"] = {"state": "idle"}
+    t.duty.alerts.raise_alert(kind="dog_sees_person", robot="A", title="又看见人")
+    await _跑(t, 3)
+    [f] = _follows(t)
+    assert f["task_id"].startswith("follow-") and f["priority"] == 80
+    assert _log(t, "follow_start")
+    await _跑(t, 5)
+    assert len(_follows(t)) == 1, "这一回只派一次"
+
+
+async def _跟着(t):
+    """布防、看见人、派了跟人;回那一趟的任务号。"""
+    from nexwar_site.map_marks import MapMarks
+    t.duty.marks = MapMarks(t.db, now_ms=t.clock)
+    _方案(t)
+    await _跑(t, 1.5)
+    t.site.clients["A"].capabilities.tasks["follow"] = {"state": "idle"}
+    t.duty.alerts.raise_alert(kind="dog_sees_person", robot="A", title="看见人")
+    await _跑(t, 3)
+    return t.duty._followed["A"]
+
+
+def _事(kind, **data):
+    from types import SimpleNamespace
+    return SimpleNamespace(kind=kind, data=data)
+
+
+async def test_W74三期_人越过出口线_报人离开值守区_机器人回线内3米朝出口(站):
+    t = 站
+    tid = await _跟着(t)
+    t.duty.marks.set(MAP[0], MAP[1], {"kind": "exit", "name": "东门",
+                                      "points": [[3.0, -2.0], [3.0, 2.0]]}, by="alice")
+    t.duty._on_event("A", _事("follow_track", task_id="别的", points=[
+        {"x": 2.0, "y": 0.0, "at_ms": 1}, {"x": 4.0, "y": 0.0, "at_ms": 2}]))
+    assert not t.duty.alerts.has_open("A", "person_left"), "不是这一回派的跟人:不管"
+    t.duty._on_event("A", _事("follow_track", task_id=tid, points=[
+        {"x": 1.0, "y": 0.5, "at_ms": 1}, {"x": 2.5, "y": 0.5, "at_ms": 2}]))
+    assert not t.duty.alerts.has_open("A", "person_left")
+    t.duty._on_event("A", _事("follow_track", task_id=tid, points=[
+        {"x": 3.5, "y": 0.5, "at_ms": 3}], last={"x": 3.5, "y": 0.5, "at_ms": 3},
+        heading_deg=0.0))
+    [a] = [a for a in t.duty.alerts.open if a["kind"] == "person_left"]
+    assert "东门" in a["title"] and a["context"]["exit"] == "东门"
+    await _跑(t, 3)
+    [g] = _gotos(t, "follow-exit-")
+    p = g["payload"]["target"]
+    assert abs(p["x"] - 0.0) < 1e-6 and abs(p["y"] - 0.5) < 1e-6 and abs(p["yaw"]) < 1e-6
+    assert g["priority"] == 80
+    assert _log(t, "person_left")
+    t.duty._on_event("A", _事("follow_track", task_id=tid, points=[
+        {"x": 2.0, "y": 0.5, "at_ms": 4}, {"x": 4.0, "y": 0.5, "at_ms": 5}]))
+    await _跑(t, 2)
+    assert len(_gotos(t, "follow-exit-")) == 1, "这一回只报一次、只回一次"
+    t.duty._on_event("A", _事("follow_lost", task_id=tid, result="lost",
+                              last={"x": 3.5, "y": 0.5, "at_ms": 3}, heading_deg=0.0))
+    await _跑(t, 3)
+    assert not [c for c in _patrols(t) if c["task_id"].startswith("follow-sweep-")], \
+        "人出去了:不去看易藏点"
+
+
+async def test_W74三期_跟丢了_去附近易藏点看一圈_去向那边先看_看完回最后位置(站):
+    t = 站
+    tid = await _跟着(t)
+    for n, p in (("北楼梯", [4.0, 1.5]), ("南门后", [4.0, -1.5]), ("太远", [40.0, 0.0])):
+        t.duty.marks.set(MAP[0], MAP[1], {"kind": "hide", "name": n, "points": [p], "yaw": 0.5},
+                         by="alice")
+    t.duty._on_event("A", _事("follow_lost", task_id=tid, result="lost",
+                              last={"x": 3.0, "y": 0.0, "at_ms": 3}, heading_deg=90.0))
+    await _跑(t, 3)
+    [s] = [c for c in _patrols(t) if c["task_id"].startswith("follow-sweep-")]
+    assert _names(s) == ["易藏点1-北楼梯", "易藏点2-南门后", "最后位置"]
+    w = s["payload"]["mission"]["waypoints"]
+    assert {"type": "dwell", "seconds": 10} in w[0]["actions"]
+    assert abs(w[-1]["pose"]["position"]["x"] - 3.0) < 1e-6 and s["priority"] == 80
+    assert _log(t, "sweep_start")
+    t.duty.alerts.resolve_all("A", "dog_sees_person", who="gina")
+    await _跑(t, 3)
+    assert any(c["kind"] == "abort" and c["task_id"] == s["task_id"]
+               for c in t.site.commands("A", 500)), "保安处理了:看易藏点的那一趟停掉,接着值守"
+
+
+async def test_W74三期_跟丢了附近没易藏点_或到上限_不去看(站):
+    t = 站
+    tid = await _跟着(t)
+    t.duty._on_event("A", _事("follow_lost", task_id=tid, result="lost",
+                              last={"x": 3.0, "y": 0.0, "at_ms": 3}, heading_deg=90.0))
+    await _跑(t, 3)
+    t.duty.marks.set(MAP[0], MAP[1], {"kind": "hide", "name": "北", "points": [[3.0, 1.0]]},
+                     by="alice")
+    t.duty._on_event("A", _事("follow_lost", task_id=tid, result="limit",
+                              last={"x": 3.0, "y": 0.0, "at_ms": 3}, heading_deg=90.0))
+    await _跑(t, 3)
+    assert not [c for c in _patrols(t) if c["task_id"].startswith("follow-sweep-")]
+    assert _log(t, "follow_lost")
+
+
+async def test_W74三期_加密巡查_那几个防区里的易藏点先看(站):
+    from nexwar_site.map_marks import MapMarks
+    t = 站
+    t.duty.marks = MapMarks(t.db, now_ms=t.clock)
+    for n, p in (("西楼梯", [8.0, 1.0]), ("东仓库", [3.0, 1.0]), ("区外", [30.0, 0.0])):
+        t.duty.marks.set(MAP[0], MAP[1], {"kind": "hide", "name": n, "points": [p]}, by="alice")
+    _方案(t, gap_min=10)
+    for _ in range(30):                                   # 走到西区(x > 5.5)
+        await _跑(t, 0.5)
+        if t.dog.x > 5.5:
+            break
+    t.duty.alerts.raise_alert(kind="dog_sees_person", robot="A", title="看见人")
+    await _跑(t, 3)
+    t.duty.alerts.resolve_all("A", "dog_sees_person", who="gina")
+    await _跑(t, 3)
+    names = _names(_patrols(t)[-1])
+    assert names[:3] == ["加密-易藏点1-西楼梯", "加密-易藏点2-东仓库", "C"], names
+    assert not any("区外" in n for n in names)

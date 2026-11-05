@@ -701,6 +701,27 @@ class Nav2NavBackend(PlannedNavBackend):
         await self._send(0.0, 0.0, dt_s)
         self._edge = {**e, "phase": "back", "t": now, "from": (here.x, here.y)}
 
+    async def retarget(self, pose: Pose) -> bool:
+        """走着换目标(W74 跟人):这一段走的是 Nav2 → 换一个目标号交给它(Nav2 收新目标就放下旧的),
+        不经路网(跟人走直的);走的是自己的规划 → 按自己的规划换。只原地转、没在走、新目标在禁行区里
+        → 不换。"""
+        if self._nav2_goal is None:
+            if self._turn_only is not None:
+                return False
+            return await super().retarget(pose)
+        if self._status not in (NavStatus.INITIALIZING, NavStatus.ACTIVE) or self.link is None:
+            return False
+        if self.nogo_at(pose.position.x, pose.position.y) is not None:
+            return False
+        self._target = pose
+        self._goal_msg = {"type": "goal", "goal_id": self._goal_id, "x": pose.position.x,
+                          "y": pose.position.y, "yaw": pose.yaw}
+        self._resend_goal()
+        self._resends = 0
+        self._prog_reset()
+        self._near_best = None
+        return True
+
     def _resend_goal(self) -> None:
         """把这次 goto 的目标重新交给 Nav2(新目标号)。"""
         msg = getattr(self, "_goal_msg", None)

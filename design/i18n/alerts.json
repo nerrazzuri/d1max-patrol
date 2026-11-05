@@ -332,6 +332,10 @@
     "en": "Person detected, no guard on site",
     "zh": "发现人员无人到场"
   },
+  "person_left": {
+    "en": "Person left the guarded area",
+    "zh": "人离开值守区"
+  },
   "swap_soon": {
     "en": "Battery swap coming up",
     "zh": "即将换电"

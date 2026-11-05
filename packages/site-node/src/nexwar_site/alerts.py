@@ -106,6 +106,7 @@ LEVEL_OF: dict[str, Level] = {
     # 布防中狗没在驱离时自己看见人(W33,决策 48):保安看现场、决定要不要就地驱离。
     "dog_sees_person": Level.P1,
     "person_overdue": Level.P1,          # W74:看见人 10 分钟没人到场 → 经理
+    "person_left": Level.P1,             # W74 三期:被跟的人越过出口线
     # W30b(决策 51):狗上的照片、录像没加密(没装站点公钥);狗封好的证据站点解不开(私钥不对、没配)。
     "evidence_plain": Level.P2,
     "evidence_unopened": Level.P2,

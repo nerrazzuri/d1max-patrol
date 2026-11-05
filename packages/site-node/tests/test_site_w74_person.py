@@ -236,3 +236,46 @@ def test_相邻防区_边界相距3米以内_自己在第一个_别的图不算(
     b.set("m", "2", "别图", sq(0, 0), by="t")
     assert b.neighbours("m", "1", "大厅") == ["大厅", "东门", "走廊"]
     assert b.neighbours("m", "1", "没有") == ["没有"]
+
+
+# ------------------------------------------------- 二期:跟人的轨迹进告警
+
+
+def _事件(kind, **data):
+    return SimpleNamespace(kind=kind, data=data)
+
+
+def test_跟人的轨迹_进告警现场_人最后在哪_方向_轨迹有上限(看):
+    from nexwar_site.sightings import PERSON_TRACK_KEEP
+    t = 看
+    t.w.on_event("A", _事件("follow_track", task_id="follow-1",
+                            points=[{"x": 1.0, "y": 2.0, "at_ms": 1}]))
+    assert _开着的(t) == [], "没有开着的告警:不记"
+    t.d.persons(present=True, count=1)
+    t.w.tick()
+    t.w.on_event("A", _事件("follow_track", task_id="follow-1",
+                            points=[{"x": 1.0, "y": 2.0, "at_ms": 1},
+                                    {"x": 1.5, "y": 2.5, "at_ms": 2}],
+                            last={"x": 1.5, "y": 2.5, "at_ms": 2}, heading_deg=45.0))
+    [a] = _开着的(t)
+    assert a.context["person_track"] == [[1.0, 2.0, 1], [1.5, 2.5, 2]]
+    assert a.context["person"] == {"x": 1.5, "y": 2.5, "at_ms": 2, "heading_deg": 45.0}
+    assert a.context["follow"] == "follow"
+    many = [{"x": float(i), "y": 0.0, "at_ms": 10 + i} for i in range(PERSON_TRACK_KEEP + 50)]
+    t.w.on_event("A", _事件("follow_track", task_id="follow-1", points=many))
+    [a] = _开着的(t)
+    assert len(a.context["person_track"]) == PERSON_TRACK_KEEP
+    assert a.context["person_track"][-1][0] == float(PERSON_TRACK_KEEP + 49), "留最新的"
+    assert a.count == 1, "不加次数"
+
+
+def test_跟丢了_告警写跟丢_带最后位置和方向(看):
+    t = 看
+    t.d.persons(present=True, count=1)
+    t.w.tick()
+    t.w.on_event("A", _事件("follow_lost", task_id="follow-1", result="lost",
+                            last={"x": 4.0, "y": 4.0, "at_ms": 9}, heading_deg=90.0))
+    [a] = _开着的(t)
+    assert a.context["follow"] == "lost"
+    assert a.context["person"] == {"x": 4.0, "y": 4.0, "at_ms": 9, "heading_deg": 90.0}
+    t.w.on_event("A", _事件("patrol_waypoint", task_id="x"))   # 别的事件不管

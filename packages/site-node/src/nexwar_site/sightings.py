@@ -29,6 +29,7 @@ W74 一期(设计 docs/W74-看见人处置-设计.md §六、§九):
 from __future__ import annotations
 
 import logging
+import math
 from collections.abc import Callable
 from typing import Any
 
@@ -43,6 +44,8 @@ OVERDUE_KIND = "person_overdue"
 TRACK_EVERY_MS = 5_000
 #: 看见人以后这么多分钟没人到场 → 报经理。
 OVERDUE_MIN = 10
+#: W74 二期:告警现场里最多留这么多个人的轨迹点(``[x, y, at_ms]``,留最新的)。
+PERSON_TRACK_KEEP = 300
 
 
 class PersonWatch:
@@ -62,6 +65,40 @@ class PersonWatch:
         self.alerts: Any = None
         #: 每台最后一次记最后位置的时刻(内存;站点重启了下一拍重记)。
         self._tracked: dict[str, int] = {}
+        reg = getattr(dispatcher, "on_event", None)
+        if callable(reg):
+            reg(self.on_event)
+
+    def on_event(self, rid: str, e: Any) -> None:
+        """W74 二期:机器人跟人路上发的轨迹(``follow_track``)、跟丢 / 到上限(``follow_lost``)
+        进这台开着的「看见人」告警的现场:人最后在哪、往哪走、轨迹。没有开着的告警不记。"""
+        if e.kind not in ("follow_track", "follow_lost") or not isinstance(e.data, dict):
+            return
+        try:
+            a = self._open(rid)
+            if a is None:
+                return
+            d = e.data
+            ctx: dict[str, Any] = {"follow": "follow" if e.kind == "follow_track"
+                                   else str(d.get("result") or "lost")}
+            last = d.get("last")
+            if isinstance(last, dict) and _num(last.get("x")) and _num(last.get("y")):
+                person = {"x": float(last["x"]), "y": float(last["y"]),
+                          "at_ms": int(last.get("at_ms") or self._now())}
+                if _num(d.get("heading_deg")):
+                    person["heading_deg"] = float(d["heading_deg"])
+                ctx["person"] = person
+            pts = d.get("points")
+            if isinstance(pts, list) and pts:
+                old = a.context.get("person_track") or []
+                new = [[float(p["x"]), float(p["y"]), int(p.get("at_ms") or 0)] for p in pts
+                       if isinstance(p, dict) and _num(p.get("x")) and _num(p.get("y"))]
+                seen = {tuple(p) for p in old}
+                track = list(old) + [p for p in new if tuple(p) not in seen]
+                ctx["person_track"] = track[-PERSON_TRACK_KEEP:]
+            self.alerts.amend_open(rid, PERSON_KIND, context=ctx)
+        except Exception:
+            log.exception("%s 跟人的 %s 记不进告警", rid, e.kind)
 
     def armed_now(self, rid: str) -> bool:
         """这台机器人此刻所在的地方布不布防(受力警报响不响警笛也问这里)。"""
@@ -295,3 +332,7 @@ class PersonWatch:
                   detail="布防中,机器人不在驱离;看现场照片,要驱离就点「就地驱离」",
                   context=context, now_ms=now)
         log.info("%s 看见人了(布防中):%s", rid, title)
+
+
+def _num(v: Any) -> bool:
+    return isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)

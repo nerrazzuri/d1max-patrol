@@ -309,8 +309,10 @@ class RunSnapshot:
 class _Command:
     """用户命令也走队列 —— 直接改状态就把并发修改放回来了。"""
 
-    kind: str          # pause / suspend / resume / abort
+    kind: str          # pause / suspend / resume / abort / retarget
     reason: str = ""
+    #: ``retarget`` 换去的地图位姿(W74 跟人)。
+    pose: Pose | None = None
 
 
 class _AbortRun(Exception):
@@ -664,6 +666,12 @@ class MissionEngine(EventEmitter[RunSnapshot]):
 
     async def abort(self, reason: str) -> None:
         await self._queue.put(_Command("abort", reason))
+
+    async def retarget(self, pose: Pose) -> None:
+        """W74 跟人:正在走的这一段改去 ``pose``(不停车、不另起一趟)。只在 ``RUNNING`` 时有用;
+        导航换不了(在规划、没在走、后端不支持)就当没说 —— 调用方下一拍再说一次。"""
+        if self.running:
+            await self._queue.put(_Command("retarget", pose=pose))
 
     async def wait_done(self, timeout_s: float | None = None) -> RunState:
         await asyncio.wait_for(self._done.wait(), timeout_s)
@@ -1468,6 +1476,11 @@ class MissionEngine(EventEmitter[RunSnapshot]):
     async def _handle_command(self, cmd: _Command) -> None:
         if cmd.kind == "abort":
             raise _AbortRun(cmd.reason or "人工中止")
+        if cmd.kind == "retarget":
+            # 只换正在走的那个点;返航、暂停、挂起中不换(返航那一段不许被改去别处)
+            if cmd.pose is not None and self._state is RunState.RUNNING:
+                await self._nav.retarget(cmd.pose)
+            return
         if cmd.kind == "pause":
             await self._pause_until_resumed()
         if cmd.kind == "suspend":

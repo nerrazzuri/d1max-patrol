@@ -158,7 +158,7 @@ BATTERY_FLOOR_PCT = 15.0
 #: 要人监护(W00c6i)时,只有这几种任务受监护租约约束(遥控、叫停、换图、发布照常)。
 #: W55:要空闲才做、做的时候不接新任务的远程运维命令(外审 W55-1 第 8、16 条)。
 _OPS_HOLD = frozenset({"ops_reboot", "cert_install", "ops_restart"})
-_AUTONOMOUS_KINDS = frozenset({"goto", "patrol", "standoff", "dock"})
+_AUTONOMOUS_KINDS = frozenset({"goto", "patrol", "standoff", "dock", "follow"})
 #: 放了、过期的监护会话留多久(秒):挡同一会话里迟到的旧心跳(站点的命令有效期 30 s,再多留一点)。
 _SESSION_MEMORY_S = 60.0
 
@@ -518,6 +518,8 @@ class AgentRuntime:
             kinds.add("teleop")                    # W00c5c:遥控不要地图
         if self._standoff_ok():
             kinds.add("standoff")                  # W25:要规划后端(避障守卫、禁行区)+ 人员检测
+            if "goto" in kinds:
+                kinds.add("follow")                # W74:跟人 = 一段段 goto + 人员检测
         if caps.recharge_mode != "none":
             kinds.add("dock")                      # W13:HAL 会对桩(厂家回充;以后自己认二维码)
         return kinds
@@ -525,6 +527,16 @@ class AgentRuntime:
     def _standoff_ok(self) -> bool:
         return (self._planned and self.obs_view is not None and self.person_view is not None
                 and self.hal.hal_capabilities().max_vx > 0)
+
+    def _follow_task(self) -> Any:
+        cur = self.processor.current
+        return cur if cur is not None and cur.kind == "follow" and not cur.done else None
+
+    def _follow_caps(self) -> dict[str, Any]:
+        t = self._follow_task()
+        if t is None:
+            return {"state": "idle"}
+        return {**t.caps(), "task_id": t.task_id}
 
     def _standoff_task(self) -> Any:
         cur = self.processor.current
@@ -630,6 +642,14 @@ class AgentRuntime:
                                                      nav._odom_pose),
                 here=self._standoff_here, nogo=self._standoff_nogo, priority=cmd.priority)
         assert self.parts is not None, "有 loaded_map 就一定装了引擎"
+        if cmd.kind == "follow":
+            from nexwar_agent.tasks.follow import FollowTask
+            from nexwar_contract.follow import parse_follow
+            assert self.loaded_map is not None
+            return FollowTask(task_id=cmd.task_id, req=parse_follow(cmd.payload), parts=self.parts,
+                              events=self.events, now_ms=self._mono_ms, wall_ms=self._now,
+                              target=self.person_view.target, here=self._standoff_here,
+                              map_ref=self.loaded_map, priority=cmd.priority)
         if cmd.kind == "patrol":
             from nexwar_agent.tasks.patrol import PatrolTask
             from nexwar_contract.mission import parse_mission
@@ -665,11 +685,11 @@ class AgentRuntime:
         if cmd.kind in _AUTONOMOUS_KINDS and self.autonomy == "supervised" \
                 and not self._supervised_now():
             return "unsupervised"                 # W00c6i:没人现场监护,真狗不自己动
-        if cmd.kind in ("goto", "patrol") and self._map_busy():
+        if cmd.kind in ("goto", "patrol", "follow") and self._map_busy():
             return "map_switching"
         if cmd.kind in _AUTONOMOUS_KINDS and self.parts is not None and self._head_key()[1]:
             return "head_not_forward"             # W11a、W09i:头尾不知道,或狗尾为前但后面看不清
-        if cmd.kind in ("goto", "patrol", "standoff"):
+        if cmd.kind in ("goto", "patrol", "standoff", "follow"):
             hot = self._overheat_refusal(cmd.kind)
             if hot:
                 return hot
@@ -709,7 +729,7 @@ class AgentRuntime:
         lvl = getattr(self.board, "level", "ok")
         if kind in ("mapping", "map_build") and lvl in ("shed", "critical"):
             return "overheat"
-        if kind in ("goto", "patrol", "standoff") and lvl == "critical":
+        if kind in ("goto", "patrol", "standoff", "follow") and lvl == "critical":
             return "overheat"
         return ""
 
@@ -962,6 +982,8 @@ class AgentRuntime:
             out["persons"] = self.person_view.caps()  # W24:人员检测在不在看(站点据此联动驱离)
         if self._standoff_ok():
             out["standoff"] = self._standoff_caps()   # W25:在不在守、在不在退、是不是无路可退
+        if self._standoff_ok() and "follow" in self._supported():
+            out["follow"] = self._follow_caps()       # W74:在不在跟、在不在回最后位置
         if self.parts is not None:
             out["speed_cap"] = self._speed_cap_caps()  # W29:全狗限速(站点下雨、雷暴时发)
         if self.hal.hal_capabilities().recharge_mode != "none":
@@ -2967,7 +2989,8 @@ class AgentRuntime:
             self._pers_srv.tick()                # 本机人员桥:检测节点没声就当它断了
             self.person_view.tick()              # 人走了没有
             pst = self.person_view.key() + (
-                tuple(self._standoff_caps().values()) if self._standoff_ok() else ())
+                tuple(self._standoff_caps().values()) if self._standoff_ok() else ()) + (
+                (self._follow_caps().get("state"),) if self._standoff_ok() else ())
             if pst != self._pers_state_told:     # 在不在看、有没有人、近不近变了:站点据此对账驱离
                 self._pers_state_told = pst
                 if self.transport.connected:

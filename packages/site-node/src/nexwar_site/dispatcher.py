@@ -847,6 +847,15 @@ class Dispatcher:
         return await self._send(c, robot_id, "standoff", req.to_payload(), issued_by=issued_by,
                                 priority=STANDOFF_PRIORITY, task_id=task_id)
 
+    async def follow(self, robot_id: str, task_id: str, req: Any, *,
+                     issued_by: str) -> dict[str, Any]:
+        """跟人(W74 二期):值守看见人停下以后派;跟报警出动同一档优先级。"""
+        from nexwar_contract.follow import FOLLOW_PRIORITY
+        c = self._client_for(robot_id)
+        self._check_dispatchable(robot_id, c, "follow")
+        return await self._send(c, robot_id, "follow", req.to_payload(), issued_by=issued_by,
+                                priority=FOLLOW_PRIORITY, task_id=task_id)
+
     async def abort(self, robot_id: str, task_id: str, *, issued_by: str) -> dict[str, Any]:
         """abort 只要求登记有效:不在线也发(QoS 1 持久会话,重连后补投)。"""
         c = self._client_for(robot_id)

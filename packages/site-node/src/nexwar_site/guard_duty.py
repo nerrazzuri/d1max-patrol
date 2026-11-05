@@ -76,6 +76,8 @@ PERSON_HOLD_MS = 30 * 60_000
 #: W74 §九:看见人以后接着值守的头这么久**加密巡查** —— 一圈只跑最后看见人那个防区和相邻的
 #: (:meth:`~nexwar_site.areas.AreaBook.neighbours`),从那个防区先跑,每圈之间不歇(不去值守位)。
 INTENSE_MS = 60 * 60_000
+#: W74 三期:跟丢以后看易藏点、加密巡查先看易藏点时每个点停几秒(设计 §六)。
+SWEEP_DWELL_S = 10
 PERSON_KIND = "dog_sees_person"
 #: 撤防时停下这一圈以后,过这么久按还布防着的接着跑(等狗上停稳)。
 SETTLE_MS = 3_000
@@ -178,6 +180,19 @@ class GuardDuty:
         #: W74 加密巡查:机器人 → (到什么时候, 地图, 版本, 防区们(最后看见人的在第一个))。
         #: 只在内存:站点重启就回到平常的值守。
         self._intense: dict[str, tuple[int, str, str, list[str]]] = {}
+        #: W74 二期:这一回看见人派了跟人的(机器人 → 那一趟的任务号;内存)。
+        self._followed: dict[str, str] = {}
+        #: W74 三期:地图上的出口线、易藏点(:class:`~nexwar_site.map_marks.MapMarks`)。站点主程序
+        #: 接上;没接就不判越线、不去看易藏点。
+        self.marks: Any = None
+        #: 这一回看见人是哪条值守方案的(机器人 → 方案条目;记值守记录用)。
+        self._fentry: dict[str, int] = {}
+        #: 这一回派的回线内 / 看易藏点那一趟(恢复值守之前停掉)。
+        self._own: dict[str, str] = {}
+        #: 被跟的人上一个位置(判越线)、这一回已经越过出口线的、下一拍要办的(越线 / 看易藏点)。
+        self._trail: dict[str, tuple[float, float]] = {}
+        self._left: set[str] = set()
+        self._todo: dict[str, tuple[Any, ...]] = {}
         dispatcher.on_event(self._on_event)
 
     # ------------------------------------------------------------ 方案
@@ -771,7 +786,10 @@ class GuardDuty:
         eid, rid, now = e["id"], run["robot_id"], self._now()
         if run["state"] == "held":
             if self._person_open(rid) and now < run["until_ms"]:
+                await self._maybe_follow(eid, rid)
+                await self._follow_todo(eid, rid)
                 return True
+            await self._end_follow(rid)
             if now >= run["until_ms"]:
                 self._person_done.add(rid)
             self._log("person_resume", robot=rid, entry=eid,
@@ -793,6 +811,214 @@ class GuardDuty:
         else:
             self._set_run(eid, state="held", until_ms=now + PERSON_HOLD_MS)
         return True
+
+    async def _maybe_follow(self, eid: int, rid: str) -> None:
+        """W74 二期:停下盯着以后派跟人(机器人能力里有 ``follow`` 才派;一回只派一次)。人在不在动、
+        跟丢了怎么办都在机器人上判(设计 §三)。"""
+        if rid in self._followed:
+            return
+        c = self._client(rid)
+        caps = getattr(getattr(c, "capabilities", None), "tasks", None) or {}
+        if "follow" not in caps:
+            return
+        from nexwar_contract.follow import TASK_PREFIX, FollowRequest
+        tid = f"{TASK_PREFIX}{eid}-{uuid.uuid4().hex[:10]}"
+        self._followed[rid] = tid                       # 先记:派不出去也不每拍重派
+        self._fentry[rid] = eid
+        self._log("follow_start", robot=rid, entry=eid, detail="看见人:跟上去,边跟边拍")
+        from nexwar_site.dispatcher import DispatchRefused
+        try:
+            await self.dispatcher.follow(rid, tid, FollowRequest(), issued_by="guard")
+        except DispatchRefused as exc:
+            self._log("follow_refused", robot=rid, entry=eid, detail=str(exc)[:200])
+        except Exception:
+            log.exception("%s 派跟人没成(回执没到?)", rid)
+
+    async def _end_follow(self, rid: str) -> None:
+        """接着值守之前:还在跟人、回线内、看易藏点的那一趟先停(它们的优先级比值守的一圈高,
+        不停下一圈派不上)。"""
+        mine = {self._followed.pop(rid, None), self._own.pop(rid, None)} - {None}
+        for d in (self._fentry, self._todo, self._trail):
+            d.pop(rid, None)                              # type: ignore[attr-defined]
+        self._left.discard(rid)
+        running = self._running(rid)
+        if running not in mine:
+            return
+        try:
+            await self.dispatcher.abort(rid, running, issued_by="guard")
+        except Exception:
+            log.exception("%s 停跟人没成", rid)
+
+    # ------------------------------------------------------------ W74 三期:越线、易藏点
+
+    def _on_follow(self, rid: str, e: Any) -> None:
+        """机器人跟人路上的轨迹(判越过出口线)、跟丢(去附近易藏点看一圈)。只认这一回派的那一趟。"""
+        d = e.data if isinstance(e.data, dict) else {}
+        tid = self._followed.get(rid)
+        if tid is None or d.get("task_id") != tid:
+            return
+        try:
+            ref = self._map_of(rid)
+            if e.kind == "follow_lost":
+                self._follow_lost(rid, d, ref)
+                return
+            if self.marks is None or ref is None or rid in self._left:
+                return
+            pts = sorted((p for p in d.get("points") or [] if isinstance(p, dict)
+                          and _num(p.get("x")) and _num(p.get("y"))),
+                         key=lambda p: p.get("at_ms") if _num(p.get("at_ms")) else 0)
+            for p in pts:
+                cur = (float(p["x"]), float(p["y"]))
+                prev = self._trail.get(rid)
+                self._trail[rid] = cur
+                if prev is None:
+                    continue
+                mark = self.marks.crossed(ref[0], ref[1], prev, cur)
+                if mark is not None:
+                    self._crossed(rid, mark, prev, cur, d, ref)
+                    return
+        except Exception:
+            log.exception("%s 跟人的 %s 处理不了", rid, e.kind)
+
+    def _map_of(self, rid: str) -> tuple[str, str] | None:
+        pose = getattr(getattr(self._client(rid), "telemetry", None), "pose", None)
+        return (pose.map_id, pose.map_version) if pose is not None else None
+
+    def _crossed(self, rid: str, mark: dict[str, Any], prev: tuple[float, float],
+                 cur: tuple[float, float], d: dict[str, Any], ref: tuple[str, str]) -> None:
+        """人越过出口线(设计 §七):报 P1「人离开值守区」;下一拍停跟人、回线内 3 m 朝出口看。"""
+        from nexwar_site.map_marks import INSIDE_M, inside_pose
+        self._left.add(rid)
+        x, y, yaw = inside_pose(mark, prev, cur)
+        pose = MapPose(map_id=ref[0], map_version=ref[1], frame_id="map", x=x, y=y, yaw=yaw)
+        self._todo[rid] = ("exit", pose.to_wire(), mark["name"])
+        h = d.get("heading_deg")
+        ctx: dict[str, Any] = {"exit": mark["name"], "exit_id": mark["id"],
+                               "at": {"x": round(cur[0], 2), "y": round(cur[1], 2),
+                                      "at_ms": self._now()}}
+        if _num(h):
+            ctx["heading_deg"] = float(h)
+        self.alerts.raise_alert(
+            kind="person_left", robot=rid, title=f"人离开值守区:{mark['name']}",
+            detail=f"被跟的人越过了出口线「{mark['name']}」。机器人回到出口线内 {INSIDE_M:g} m、"
+                   "朝出口看着;请保安到出口查看", context=ctx)
+        self._log("person_left", robot=rid, entry=self._fentry.get(rid),
+                  detail=f"被跟的人越过出口线「{mark['name']}」,回线内 {INSIDE_M:g} m 朝出口看")
+
+    def _follow_lost(self, rid: str, d: dict[str, Any], ref: tuple[str, str] | None) -> None:
+        """跟丢了 / 到上限(机器人自己回最后位置)。跟丢了、附近有易藏点:等它回到最后位置,
+        挨个去看一圈(设计 §六,用户 11-04 定)。到上限的人还在眼前,不去。"""
+        result = d.get("result")
+        self._log("follow_lost", robot=rid, entry=self._fentry.get(rid),
+                  detail="跟丢了:回最后看见人的地方" if result == "lost"
+                  else "跟到上限了:停在人后面")
+        last = d.get("last")
+        if result != "lost" or rid in self._left or self.marks is None or ref is None \
+                or not isinstance(last, dict) or not _num(last.get("x")) or not _num(last.get("y")):
+            return
+        h = d.get("heading_deg")
+        heading = float(h) if _num(h) else None
+        lx, ly = float(last["x"]), float(last["y"])
+        spots = self.marks.hide_near(ref[0], ref[1], lx, ly, heading)
+        if spots:
+            self._todo[rid] = ("sweep", ref, (lx, ly, heading), spots)
+
+    async def _follow_todo(self, eid: int, rid: str) -> None:
+        """越线了 / 跟丢了要去看易藏点:跟人那一趟还在跑就先停它(越线)或等它回到最后位置(跟丢)。"""
+        todo = self._todo.get(rid)
+        if todo is None:
+            return
+        ftid = self._followed.get(rid)
+        running = self._running(rid)
+        if ftid is not None and running == ftid:
+            if todo[0] == "exit" and not (len(todo) > 3 and todo[3]):
+                self._todo[rid] = (*todo[:3], True)        # 中止只发一次;停了下一拍再派
+                try:
+                    await self.dispatcher.abort(rid, ftid, issued_by="guard")
+                except Exception:
+                    log.exception("%s 停跟人没成", rid)
+            return
+        del self._todo[rid]
+        from nexwar_contract.follow import FOLLOW_PRIORITY, TASK_PREFIX
+        from nexwar_site.dispatcher import DispatchRefused
+        if todo[0] == "exit":
+            tid = f"{TASK_PREFIX}exit-{eid}-{uuid.uuid4().hex[:10]}"
+            self._own[rid] = tid
+            try:
+                await self.dispatcher.goto(rid, todo[1], None, issued_by="guard",
+                                           priority=FOLLOW_PRIORITY, task_id=tid)
+            except DispatchRefused as exc:
+                self._log("exit_refused", robot=rid, entry=eid,
+                          detail=f"回出口线内没派成:{str(exc)[:160]}")
+            except Exception:
+                log.exception("%s 回出口线内没派成", rid)
+            return
+        _, (m, v), (lx, ly, heading), spots = todo
+        tid = f"{TASK_PREFIX}sweep-{eid}-{uuid.uuid4().hex[:10]}"
+        mission = self._sweep_mission(rid, m, v, lx, ly, heading, spots)
+        self._own[rid] = tid
+        names = "、".join(s["name"] for s in spots)
+        self._log("sweep_start", robot=rid, entry=eid,
+                  detail=f"跟丢了:去附近的易藏点看一圈({names}),每个停 {SWEEP_DWELL_S} 秒,"
+                         "看完回最后位置")
+        try:
+            await self.dispatcher.patrol(rid, mission, issued_by="guard",
+                                         priority=FOLLOW_PRIORITY, task_id=tid)
+        except DispatchRefused as exc:
+            self._log("sweep_refused", robot=rid, entry=eid,
+                      detail=f"看易藏点没派成:{str(exc)[:160]}")
+        except Exception:
+            log.exception("%s 看易藏点没派成", rid)
+
+    def _hide_waypoints(self, rid: str, spots: list[dict[str, Any]],
+                        prefix: str = "易藏点") -> list[dict[str, Any]]:
+        """易藏点 → 巡检点位:站在那里朝标的方向,停 :data:`SWEEP_DWELL_S` 秒,机器人能拍就拍一张。"""
+        caps = getattr(getattr(self._client(rid), "capabilities", None), "tasks", None) or {}
+        cams = (caps.get("goto_photo") or {}).get("cameras") or []
+        out = []
+        for i, sp in enumerate(spots, 1):
+            name = f"{prefix}{i}-{sp['name']}"
+            for bad in ("/", "\\", "..", "\x00"):
+                name = name.replace(bad, "_")
+            acts: list[dict[str, Any]] = [{"type": "dwell", "seconds": SWEEP_DWELL_S}]
+            if cams:
+                acts.append({"type": "photo", "camera": cams[0]})
+            x, y = sp["points"][0]
+            out.append({"name": name, "pose": Pose.from_xy_yaw(x, y, float(sp["yaw"])).to_wire(),
+                        "actions": acts})
+        return out
+
+    def _hot_hides(self, rid: str, info: dict[str, Any], hot: list[str],
+                   n: int) -> list[dict[str, Any]]:
+        """W74 三期:加密巡查这一圈先看那几个防区里的易藏点(最后看见人的那个防区的先看);
+        连上这一圈的点不超过派遣的上限(留一个给回待命点)。"""
+        if self.marks is None:
+            return []
+        from nexwar_site.dispatcher import MAX_PATROL_WAYPOINTS
+        room = MAX_PATROL_WAYPOINTS - n - 1
+        if room <= 0:
+            return []
+        m, v = info["map_id"], info["map_version"]
+        try:
+            got = []
+            for sp in self.marks.list(m, v, "hide"):
+                z = self.areas.zone_at(m, v, *sp["points"][0])
+                if z in hot:
+                    got.append((hot.index(z), sp["name"], sp))
+        except Exception:                                # 算不出来:照常跑这一圈
+            log.exception("%s 加密巡查的易藏点算不出来", rid)
+            return []
+        got.sort(key=lambda t: (t[0], t[1]))
+        taken = {w["name"] for w in info["wire"]["waypoints"]}
+        return [w for w in self._hide_waypoints(rid, [t[2] for t in got[:room]], "加密-易藏点")
+                if w["name"] not in taken]
+
+    def _sweep_mission(self, rid: str, m: str, v: str, lx: float, ly: float,
+                       heading: float | None, spots: list[dict[str, Any]]) -> dict[str, Any]:
+        wps = self._hide_waypoints(rid, spots)
+        yaw = math.radians(heading) if heading is not None else 0.0
+        wps.append({"name": "最后位置", "pose": Pose.from_xy_yaw(lx, ly, yaw).to_wire()})
+        return {"mission": "跟丢后看易藏点", "map_id": m, "map_version": v, "waypoints": wps}
 
     def _zone_now(self, rid: str, run: dict[str, Any]) -> tuple[str, str, str] | None:
         """机器人此刻在哪个防区:站在值守位上按它看着的;不然按位置算。说不清 ``None``。"""
@@ -1069,8 +1295,9 @@ class GuardDuty:
         self._retry_at[eid] = now + RETRY_MS              # 派成了再清
         names = [p["name"] for p in pts]
         by_name = {w["name"]: w for w in info["wire"]["waypoints"]}
-        mission = {**info["wire"], "waypoints": [by_name[n] for n in names]
-                   + self._standby_tail(e, info, rid, by_name, len(names))}
+        hide = self._hot_hides(rid, info, hot, len(names)) if hot else []
+        mission = {**info["wire"], "waypoints": hide + [by_name[n] for n in names]
+                   + self._standby_tail(e, info, rid, by_name, len(names) + len(hide))}
         tid = f"{GUARD_PREFIX}{eid}-{uuid.uuid4().hex[:10]}"
         lap = (run["lap"] if run else 0) + (0 if resume else 1)
         started = run["lap_started_ms"] if (resume and run) else now
@@ -1240,6 +1467,9 @@ class GuardDuty:
     # ------------------------------------------------------------ 看着
 
     def _on_event(self, robot_id: str, e: Any) -> None:
+        if e.kind in ("follow_track", "follow_lost"):
+            self._on_follow(robot_id, e)                    # W74 三期
+            return
         if e.kind != "patrol_waypoint" or not isinstance(e.data, dict):
             return
         tid = str(e.data.get("task_id") or "")
@@ -1491,3 +1721,7 @@ class GuardDuty:
             "SELECT at_ms, robot_id, entry, kind, zone, point, detail FROM guard_log "
             "WHERE duty_id=? ORDER BY id LIMIT 5000", (duty_id,))]
         return out
+
+
+def _num(v: Any) -> bool:
+    return isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)

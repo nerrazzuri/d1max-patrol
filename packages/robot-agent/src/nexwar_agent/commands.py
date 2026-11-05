@@ -336,6 +336,13 @@ class CommandProcessor:
             except ContractError as exc:
                 return f"payload: {exc}"
             return ""
+        if cmd.kind == "follow":
+            from nexwar_contract.follow import parse_follow
+            try:
+                parse_follow(cmd.payload)
+            except ContractError as exc:
+                return f"payload: {exc}"
+            return ""
         if cmd.kind == "standoff":
             from nexwar_contract.standoff import parse_standoff
             try:
@@ -616,7 +623,7 @@ class CommandProcessor:
 
 
 #: 叫停栅栏立着的时候拒收的命令(会让狗动的任务)。
-_MOTION_KINDS = frozenset({"goto", "patrol", "teleop", "standoff", "dock"})
+_MOTION_KINDS = frozenset({"goto", "patrol", "teleop", "standoff", "dock", "follow"})
 
 
 def _event_for(state: TaskState) -> str:
