@@ -75,6 +75,28 @@ class DeterDesk:
             self._sound = None
         return self._sound
 
+    async def auto_sound(self, clip: str, *, priority: int, max_s: float, why: str) -> bool:
+        """机器人自己按情况放一段录好的话术(POC 11-05,:mod:`nexwar_agent.autovoice`)。
+        这台没有这段、没接喇叭、正在放的不比它低:不放(回 False,不报错)。放了记一条 ``deter`` 事件,
+        带 ``auto`` = 为什么放的。"""
+        if "speaker" not in self.outputs():
+            return False
+        clips = getattr(self.hal, "sound_clips", None)
+        if not callable(clips) or clip not in clips():
+            return False
+        cur = self.playing()
+        if cur is not None and cur[0] >= priority:
+            return False
+        try:
+            await self.hal.sound(clip, max_s)
+        except Exception as exc:                     # noqa: BLE001 - 自己放的没放成:记日志,不打断别的
+            log.warning("自动放 %s 没放成: %s", clip, exc)
+            return False
+        self._sound = (priority, self._mono() + max_s)
+        self._emit("deter", {"output": "speaker", "on": True, "max_s": max_s, "clip": clip,
+                             "priority": priority, "auto": why})
+        return True
+
     async def handle(self, cmd: Command) -> str:
         """回空串 = 做了;否则拒收的理由。"""
         try:

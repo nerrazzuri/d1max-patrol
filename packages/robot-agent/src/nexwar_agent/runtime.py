@@ -382,6 +382,9 @@ class AgentRuntime:
         from nexwar_agent.deter import DeterDesk
         self.deter = DeterDesk(self.hal, emit=self.events.emit,
                                monotonic=monotonic or time.monotonic)
+        # POC 11-05:被挡、有人太近、人多时自己放录好的话术(有那段才放)
+        from nexwar_agent.autovoice import AutoVoice
+        self.autovoice = AutoVoice(self.deter, monotonic=monotonic or time.monotonic)
         self.processor.deter_hook = self.deter.handle
         #: 站立、趴下、蹲下(POC 2026-11):适配器报了能做哪几种才接。
         if self.hal.hal_capabilities().postures:
@@ -2277,6 +2280,7 @@ class AgentRuntime:
             await self._publish_caps()
 
     def _nav_event(self, kind: str, data: dict) -> None:
+        self.autovoice.on_nav_event(kind, data)
         m = self.loaded_map or ("", "")
         self.events.emit(kind, dict(data) | {"map_id": m[0], "map_version": m[1]})
 
@@ -2972,6 +2976,14 @@ class AgentRuntime:
                 self._pers_state_told = pst
                 if self.transport.connected:
                     await self._publish_caps()
+        pv = self.person_view
+        try:
+            await self.autovoice.tick(
+                moving=not self._tasks_idle(),
+                persons=getattr(pv, "count", None) if pv is not None else None,
+                nearest_m=getattr(pv, "nearest_m", None) if pv is not None else None)
+        except Exception:                                # 自动放话术坏了不拖每拍
+            log.exception("自动放话术出错")
         if self.processor.motion_gate is not None:
             await self._sense_dock()             # W13 外审:实测在不在桩上、摘桩上危险
             dt = (self._on_dock, self._dock_hazard)

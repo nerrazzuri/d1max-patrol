@@ -328,3 +328,15 @@ async def test_W40_HAL不报左右_颜色_代理回unsupported_不碰设备():
     assert calls == []
     assert await desk.handle(cmd({"output": "strobe", "on": True, "max_s": 5})) == ""
     assert calls == [("strobe", "warn")]
+
+
+async def test_POC1105_接上了_导航报被挡_有任务在跑_每拍里自己放blocked(tmp_path, monkeypatch):
+    broker, c, ears, dog, rt = await _台(tmp_path)
+    monkeypatch.setattr(dog, "clips", ("warn-zh", "warn-en", "blocked"))
+    monkeypatch.setattr(rt, "_tasks_idle", lambda: False)
+    rt._nav_event("nav_blocked", {"reason": "x"})
+    await rt.step(0.1)
+    await broker.drain()
+    auto = [d for d in _事件(ears) if d.get("auto")]
+    assert auto and auto[0]["clip"] == "blocked" and auto[0]["auto"] == "nav_blocked"
+    await rt.close()
