@@ -28,6 +28,7 @@ import '../l10n.dart';
 import '../net/site_client.dart';
 import 'nw/nw_theme.dart';
 import 'nw/nw_widgets.dart';
+import 'site_robot.dart' show postureIcon, postureLabel;
 import 'site_video.dart';
 import 'orientation.dart';
 import 'widget/joystick.dart';
@@ -44,6 +45,9 @@ String? teleopZoneText(Map<String, dynamic>? zg) {
         '前方为硬禁区「$name」：禁止继续前进，可后退或转向'),
     'inside' => tr('At or inside hard no-go zone "$name": only moves that lead out are allowed',
         '机器人位于硬禁区「$name」边缘或内部：只能向外移动'),
+    'untrusted' when zg['in_sight'] == true => tr(
+        'Position not trusted. You are on site watching the robot: speed allowed up to $v m/s. Hard no-go zones are not checked; middle gear needs a trusted position',
+        '位置不可信，你在现场看着：放开到 $v m/s；不再自动避开硬禁区，中速档要位置可信'),
     'untrusted' => tr(
         'Position not trusted: hard no-go zones (water, drops) cannot be checked. Speed limited to $v m/s, watch the video',
         '位置不可信：无法保证避开硬禁区（水体、落差），限速 $v m/s，请看着画面操作'),
@@ -160,6 +164,8 @@ class SiteTeleopPage extends StatefulWidget {
   static Key speedKey(double v) => Key('teleop-speed-${v.toStringAsFixed(1)}');
   static const Key speedHintKey = Key('teleop-speed-hint');
   static const Key dropKey = Key('teleop-drop');
+  static const Key inSightKey = Key('teleop-insight');
+  static Key postureKey(String mode) => Key('teleop-posture-$mode');
 
   @override
   State<SiteTeleopPage> createState() => _SiteTeleopPageState();
@@ -194,6 +200,14 @@ class _SiteTeleopPageState extends State<SiteTeleopPage> with WidgetsBindingObse
 
   /// 硬禁区守卫这会儿说的（决策 65）；null = 没什么要说的。
   String? _zoneNote;
+  String _zoneState = '';
+
+  /// POC 11-05「我在现场，看得见机器人」：站点回过来的为准；只管这一次遥控（重新拿到遥控就关）。
+  bool _inSight = false;
+
+  /// 这台机器人能换哪几种姿势（遥控页里的站起、趴下、蹲下；POC 11-05）。
+  List<String> _postures = const [];
+  bool _posturing = false;
 
   /// POC：机器人刚丢了指令的原因；几秒没新增就收起。
   String? _dropNote;
@@ -220,6 +234,7 @@ class _SiteTeleopPageState extends State<SiteTeleopPage> with WidgetsBindingObse
     // App V2：别的页面竖屏横屏都行，遥控只许横屏（两根杆在两边、画面在中间）；离开放开。
     unawaited(lockLandscape());
     unawaited(_open());
+    unawaited(_loadPostures());
   }
 
   @override
@@ -348,6 +363,8 @@ class _SiteTeleopPageState extends State<SiteTeleopPage> with WidgetsBindingObse
           _status = tr('You are in control (speed limit ${_maxVx.toStringAsFixed(2)} m/s)',
               '遥控中（限速 ${_maxVx.toStringAsFixed(2)} m/s）');
           _zoneNote = teleopZoneText(m['zone_guard'] as Map<String, dynamic>?);
+          _zoneState = '${(m['zone_guard'] as Map?)?['state'] ?? ''}';
+          _inSight = false;
         });
         _tick ??= Timer.periodic(const Duration(milliseconds: 100), (_) => _sendNow());
       case 'drops':
@@ -369,7 +386,12 @@ class _SiteTeleopPageState extends State<SiteTeleopPage> with WidgetsBindingObse
         setState(() => _video = ok);
       case 'zone_guard':
         // 只是告诉人为什么截了（截速度是狗那头的事）：杆、定时器、键盘一概不动
-        setState(() => _zoneNote = teleopZoneText(m));
+        setState(() {
+          _zoneNote = teleopZoneText(m);
+          _zoneState = '${m['state'] ?? ''}';
+        });
+      case 'in_sight':
+        setState(() => _inSight = m['on'] == true);
       case 'ended':
         _stopTicking();
         _clearKeys();
@@ -390,6 +412,97 @@ class _SiteTeleopPageState extends State<SiteTeleopPage> with WidgetsBindingObse
   }
 
   bool get _canDrive => _granted && !_ended && _video;
+
+  Future<void> _loadPostures() async {
+    try {
+      final v = await widget.api.robot(widget.robotId);
+      if (mounted) setState(() => _postures = robotPostures(v));
+    } on Object {
+      return; // 读不到就不摆按钮（不挡遥控）
+    }
+  }
+
+  bool get _sticksIdle => _fwd == 0 && _turn == 0 && _lat == 0;
+
+  /// 屏上姿势按钮按的「松着杆」（杆、键盘改杆值不重画；发帧那一拍对一下）。
+  bool _idleShown = true;
+
+  /// 「我在现场」：开要两次确认（用户 11-05）；关直接关。
+  Future<void> _toggleInSight() async {
+    final link = _link;
+    if (link == null) return;
+    if (_inSight) {
+      link.setInSight(false);
+      return;
+    }
+    Future<bool> ask(String title, String body, String okKey, String ok) async =>
+        await showDialog<bool>(
+            context: context,
+            builder: (ctx) => AlertDialog(
+                  title: Text(title),
+                  content: Text(body),
+                  actions: [
+                    TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(tr('Cancel', '取消'))),
+                    FilledButton(key: Key(okKey), onPressed: () => Navigator.pop(ctx, true), child: Text(ok)),
+                  ],
+                )) ==
+        true;
+    if (!await ask(
+        tr('Are you on site and can you see the robot?', '你在现场、看得见机器人吗？'),
+        tr('Only turn this on when you are next to the robot and can see it with your own eyes. The robot does not know where it is right now.',
+            '只有你本人就在机器人旁边、亲眼看得见它的时候才打开。机器人现在不知道自己在哪。'),
+        'teleop-insight-ok1',
+        tr('I am on site', '我在现场'))) {
+      return;
+    }
+    if (!mounted) return;
+    if (!await ask(
+        tr('Confirm again', '再确认一次'),
+        tr('Speed goes up to 1.0 m/s and hard no-go zones (water, drops) are no longer avoided automatically. Only for this remote-control session; your name is recorded.',
+            '限速放开到 1.0 m/s，不再自动避开硬禁区（水体、落差）。只管这一次遥控，会记下是你打开的。'),
+        'teleop-insight-ok2',
+        tr('Turn on', '确认打开'))) {
+      return;
+    }
+    if (mounted && !_ended) _link?.setInSight(true);
+  }
+
+  /// 遥控页里换姿势（用户 11-05）：确认才发；推着杆不能按（机器人那头也拒）。
+  Future<void> _posture(String mode) async {
+    final what = postureLabel(mode);
+    final yes = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+              title: Text(what),
+              content: Text(tr('The robot will move its body right away. Make sure nobody is next to it.',
+                  '机器人会马上动起来，先确认旁边没有人。')),
+              actions: [
+                TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(tr('Cancel', '取消'))),
+                FilledButton(
+                    key: const Key('posture-confirm'),
+                    onPressed: () => Navigator.pop(ctx, true),
+                    child: Text(what)),
+              ],
+            ));
+    if (yes != true || !mounted) return;
+    setState(() => _posturing = true);
+    String? bad;
+    try {
+      final r = await widget.api.posture(widget.robotId, mode);
+      final ack = r['ack'];
+      if (ack is Map && ack['result'] != 'accepted' && ack['result'] != 'duplicate') {
+        bad = ackReasonText('${ack['reason'] ?? ack['result']}');
+      }
+    } on SiteError catch (e) {
+      bad = refusalText(e);
+    }
+    if (!mounted) return;
+    setState(() => _posturing = false);
+    if (bad != null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(tr('$what failed: $bad', '$what 失败：$bad'))));
+    }
+  }
 
   /// 键盘（W15）：按着的方向键 → 杆值。只认按下、松开（系统连发不算）；松开就是零。
   final Set<LogicalKeyboardKey> _keys = <LogicalKeyboardKey>{};
@@ -440,6 +553,9 @@ class _SiteTeleopPageState extends State<SiteTeleopPage> with WidgetsBindingObse
   }
 
   void _sendNow() {
+    if (_postures.isNotEmpty && _sticksIdle != _idleShown && mounted) {
+      setState(() => _idleShown = _sticksIdle);
+    }
     final link = _link;
     if (link == null || !_granted || _ended || !_video) return;
     if (_inactive) {
@@ -713,6 +829,39 @@ class _SiteTeleopPageState extends State<SiteTeleopPage> with WidgetsBindingObse
                         right: stick + Nw.s16,
                         top: 64 + Nw.s16,
                         child: widget.overlay!),
+                  // 底下两根杆中间：「我在现场」、站起 / 趴下 / 蹲下（POC 11-05）
+                  Positioned(
+                    left: stick + Nw.s16,
+                    right: stick + Nw.s16,
+                    bottom: Nw.s8,
+                    child: Wrap(
+                        alignment: WrapAlignment.center,
+                        spacing: Nw.s4,
+                        runSpacing: Nw.s4,
+                        verticalDirection: VerticalDirection.up,
+                        children: [
+                          if (_postures.isNotEmpty && !_ended)
+                            for (final p in _postures)
+                              FilledButton.tonalIcon(
+                                key: SiteTeleopPage.postureKey(p),
+                                style: FilledButton.styleFrom(
+                                    visualDensity: VisualDensity.compact,
+                                    padding: const EdgeInsets.symmetric(horizontal: Nw.s8)),
+                                icon: Icon(postureIcon(p), size: 18),
+                                label: Text(postureLabel(p)),
+                                onPressed: _posturing || !_idleShown || !_sticksIdle ? null : () => unawaited(_posture(p)),
+                              ),
+                          if (_granted && !_ended && (_zoneState == 'untrusted' || _inSight))
+                            FilterChip(
+                              key: SiteTeleopPage.inSightKey,
+                              visualDensity: VisualDensity.compact,
+                              avatar: const Icon(Icons.visibility_rounded, size: 18),
+                              label: Text(tr('I am on site, I can see the robot', '我在现场，看得见机器人')),
+                              selected: _inSight,
+                              onSelected: (_) => unawaited(_toggleInSight()),
+                            ),
+                        ]),
+                  ),
                   // 左下：前后 + 横移（能横移的狗）；右下：转向。半透明，浮在画面上
                   Positioned(
                     left: Nw.s8,

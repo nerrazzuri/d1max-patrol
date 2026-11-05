@@ -760,4 +760,60 @@ void main() {
     await t.sendKeyUpEvent(LogicalKeyboardKey.keyE);
     await t.pumpWidget(Container());
   });
+
+  testWidgets('POC 11-05「我在现场，看得见机器人」：位置不可信才出现；两次确认才开；开着说放开到 1.0；'
+      '关不用确认；站点回话为准', (t) async {
+    final api = FakeApi('guard');
+    await _open(t, api);
+    expect(find.byKey(SiteTeleopPage.inSightKey), findsNothing, reason: '位置可信用不着');
+    Future<void> say(Map<String, dynamic> m) async {
+      api.link!.ctl.add(m);
+      await t.pump();
+      await t.pump();
+    }
+    await say({'kind': 'zone_guard', 'state': 'untrusted', 'max_vx': 0.2});
+    expect(find.byKey(SiteTeleopPage.inSightKey), findsOneWidget);
+    await t.tap(find.byKey(SiteTeleopPage.inSightKey));
+    await t.pumpAndSettle();
+    await t.tap(find.text('取消').last);              // 第一次就取消：不开
+    await t.pumpAndSettle();
+    expect(api.link!.inSight, isEmpty);
+    await t.tap(find.byKey(SiteTeleopPage.inSightKey));
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('teleop-insight-ok1')));
+    await t.pumpAndSettle();
+    expect(api.link!.inSight, isEmpty, reason: '还要第二次确认');
+    expect(find.textContaining('硬禁区'), findsWidgets);
+    await t.tap(find.byKey(const Key('teleop-insight-ok2')));
+    await t.pumpAndSettle();
+    expect(api.link!.inSight, [true]);
+    await say({'kind': 'in_sight', 'on': true});
+    await say({'kind': 'zone_guard', 'state': 'untrusted', 'max_vx': 1.0, 'in_sight': true});
+    expect(find.textContaining('你在现场看着'), findsOneWidget);
+    expect(find.textContaining('1.0 m/s'), findsOneWidget);
+    await t.tap(find.byKey(SiteTeleopPage.inSightKey));
+    await t.pumpAndSettle();
+    expect(api.link!.inSight, [true, false], reason: '关掉不用确认');
+    await t.pumpWidget(Container());
+  });
+
+  testWidgets('POC 11-05 遥控页里站起、趴下、蹲下：机器人报了哪几种摆哪几种；确认才发；推着杆不能按', (t) async {
+    final api = FakeApi('guard');
+    await _open(t, api);
+    await t.pump();
+    for (final m in ['stand', 'lie', 'crawl']) {
+      expect(find.byKey(SiteTeleopPage.postureKey(m)), findsOneWidget);
+    }
+    await t.tap(find.byKey(SiteTeleopPage.postureKey('lie')));
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('posture-confirm')));
+    await t.pumpAndSettle();
+    expect(api.calls, contains('posture A lie'));
+    await t.sendKeyDownEvent(LogicalKeyboardKey.keyW);
+    await t.pump(const Duration(milliseconds: 250));
+    final b = t.widget<ButtonStyleButton>(find.byKey(SiteTeleopPage.postureKey('stand')));
+    expect(b.onPressed, isNull, reason: '推着杆不换姿势');
+    await t.sendKeyUpEvent(LogicalKeyboardKey.keyW);
+    await t.pumpWidget(Container());
+  });
 }

@@ -916,6 +916,10 @@ abstract class TeleopLink {
   /// [vmax]：手机上选的速度档（m/s，POC 11-05），机器人按它夹、超过 1.0 自己换中速档；老站点不认。
   void send(double vx, double wz, {double vy = 0, double? vmax});
 
+  /// 「我在现场，看得见机器人」（POC 11-05）：开了以后位置不可信时机器人放开到正常档（不进中速档）。
+  /// 只管这一次遥控；站点记审计，回 `{kind: in_sight, on}`。老站点不认（照旧限速）。
+  void setInSight(bool on);
+
   /// 我不遥控了（放租）。
   void release();
   Future<void> close();
@@ -978,6 +982,12 @@ class WsTeleopLink implements TeleopLink {
       if (vy != 0) 'vy': vy,
       'vmax': ?vmax,
     }));
+  }
+
+  @override
+  void setInSight(bool on) {
+    if (_closed || _closing) return;
+    _ws.add(jsonEncode(<String, dynamic>{'kind': 'in_sight', 'on': on}));
   }
 
   @override

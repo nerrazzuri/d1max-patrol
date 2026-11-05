@@ -61,6 +61,9 @@ class TeleopFrame:
     #: 手机上选的速度档(m/s,POC 2026-11-05):代理按它夹前进、决定要不要换到中速档。
     #: 不带 = 老手机 / 老站点(不换档)。老代理不认这个键也照旧。
     vmax: float | None = None
+    #: 「我在现场,看得见机器人」(POC 11-05,用户定:手机上两次确认、只管这一次遥控、站点记审计):
+    #: 位置不可信时代理把 0.2 / 0.4 限速放开到正常档(不进中速档)。不带 = 没开。老代理不认也照旧。
+    in_sight: bool = False
 
     def to_wire(self) -> dict[str, Any]:
         d: dict[str, Any] = {"lease_epoch": self.lease_epoch, "seq": self.seq,
@@ -70,6 +73,8 @@ class TeleopFrame:
             d["vy"] = self.vy
         if self.vmax is not None:
             d["vmax"] = self.vmax
+        if self.in_sight:
+            d["in_sight"] = True
         return d
 
     @classmethod
@@ -83,7 +88,8 @@ class TeleopFrame:
                    sent_at=_pos_int(d, "sent_at", lo=0), ttl_ms=ttl,
                    vx=_speed(d, "vx"), wz=_speed(d, "wz"),
                    vy=_speed(d, "vy") if "vy" in d else 0.0,
-                   vmax=_vmax(d["vmax"]) if "vmax" in d else None)
+                   vmax=_vmax(d["vmax"]) if "vmax" in d else None,
+                   in_sight=d.get("in_sight") is True)
 
 
 def _vmax(v: Any) -> float:

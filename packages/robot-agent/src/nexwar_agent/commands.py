@@ -540,6 +540,10 @@ class CommandProcessor:
             return self._rej(cmd, "halting")
         for t in (self.current, *self.pending):            # 排着队、马上要跑的也算
             if t is not None and not t.done:
+                if t.kind == "teleop":                     # 用户 11-05:遥控页里能换姿势(人看着)
+                    if getattr(t, "driving", False):
+                        return self._rej(cmd, "busy: 遥控正在走,先松开摇杆、停下再换姿势")
+                    continue
                 return self._rej(cmd, f"busy: 正在执行任务 {t.task_id}")
         for gate in (self.force_gate, self.motion_gate):
             why = gate() if gate is not None else ""
