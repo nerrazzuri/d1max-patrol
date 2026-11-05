@@ -13,6 +13,7 @@ import pytest
 np = pytest.importorskip("numpy")
 
 from nexwar_localizer.obstacles import (  # noqa: E402
+    CHECK_FRAMES,
     GRADED_CLEAR_PROTO,
     REFIT_EVERY,
     Config,
@@ -559,6 +560,28 @@ def test_W35_自检没过之后_趴着站着的帧掺在一起_不算过():
     for i in range(12 * REFIT_EVERY):                           # 每一轮都是 3 次歪的、1 次正的
         c.feed(场景() if (i // REFIT_EVERY) % 4 == 3 else lying)
         assert c.check == "extrinsic_bad"
+
+
+def test_现场1105_没过之后按最近一轮滚着判_站稳几秒就过_原因说人话():
+    """11-05 商场:开机趴着判没过(9.5°),站起来后用户拿着手持遥控器(机身歪 6.6°)一直没过,幻影障碍
+    挡在正前方。没过之后按最近 20 次拟合滚着判:站稳后一半多是正的就过(约 5.5 s),不用等两整轮。"""
+    lying = 场景()
+    lying[:, 2] += lying[:, 0] * math.tan(math.radians(9.5))
+    c = SelfCheck()
+    for _ in range(CHECK_FRAMES):
+        c.feed(lying)
+    assert c.check == "extrinsic_bad"
+    assert "姿态" in c.reason and "遥控器" in c.reason, c.reason
+    for _ in range(3 * CHECK_FRAMES * REFIT_EVERY):              # 一直趴着:滚着判也一直没过
+        c.feed(lying)
+    assert c.check == "extrinsic_bad"
+    n = 0
+    while c.check != "ok":
+        c.feed(场景())
+        n += 1
+        assert n <= 3 * CHECK_FRAMES * REFIT_EVERY
+    assert n <= (CHECK_FRAMES // 2 + 1) * REFIT_EVERY, n
+    assert abs(c.height - H) < 0.05
 
 
 def test_W41_墙那一层_攒一秒发一条wall_合契约_只要离地04到18米的():
