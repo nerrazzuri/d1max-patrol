@@ -65,13 +65,44 @@ interface Pairing { code: string; name: string; url: string; fingerprint: string
 
 /** 配对码 = 站点名 + 手机要连的地址 + 证书指纹(没有账号口令)。地址缺省是值班台现在的地址,
  * 手机走别的地址(VPN、另一个网段)就改一下。 */
+/** 网页是不是在站点主机本机打开的(手机连不了这个地址)。 */
+export function isLoopbackOrigin(origin: string): boolean {
+  try {
+    const h = new URL(origin).hostname.replace(/^\[|\]$/g, "");
+    return h === "localhost" || h === "::1" || /^127\./.test(h);
+  } catch {
+    return false;
+  }
+}
+
+/** 二维码里放哪个地址(POC):网页地址手机能连就用它;本机打开的换成站点报的第一个局域网地址;
+ * 一个都没有回 null(页面说清楚,不给 127.0.0.1)。 */
+export function pickPairUrl(origin: string, lan: string[]): string | null {
+  if (!isLoopbackOrigin(origin)) return origin;
+  return lan[0] ?? null;
+}
+
 export function PairPhone() {
   const [url, setUrl] = useState(window.location.origin);
-  const [asked, setAsked] = useState(window.location.origin);
+  const [asked, setAsked] = useState(isLoopbackOrigin(window.location.origin) ? "" : window.location.origin);
   const [pair, setPair] = useState<Pairing | null>(null);
   const [err, setErr] = useState("");
+  const [lan, setLan] = useState<string[] | null>(null);
   useEffect(() => {
     let live = true;
+    api<{ addresses: string[] }>("GET", "/api/pairing/addresses")
+      .then((d) => {
+        if (!live) return;
+        setLan(d.addresses);
+        const u = pickPairUrl(window.location.origin, d.addresses);
+        if (u && isLoopbackOrigin(window.location.origin)) { setUrl(u); setAsked(u); }
+      })
+      .catch(() => { if (live) setLan([]); });
+    return () => { live = false; };
+  }, []);
+  useEffect(() => {
+    let live = true;
+    if (!asked) { setPair(null); return; }
     api<Pairing>("GET", `/api/pairing?url=${enc(asked)}`)
       .then((d) => { if (live) { setPair(d); setErr(""); } })
       .catch((e) => { if (live) { setPair(null); setErr(e instanceof ApiError ? e.message : String(e)); } });
@@ -93,6 +124,17 @@ export function PairPhone() {
         )}
         <div class="pair-text">
           <p>{t("pairHint")}</p>
+          {isLoopbackOrigin(window.location.origin) && lan !== null && lan.length === 0 && (
+            <p class="error small" role="alert" data-pair-nolan="1">{t("pairNoLan")}</p>
+          )}
+          {lan !== null && lan.length > 0 && (
+            <div class="row wrap" data-pair-lan="1">
+              {lan.map((a) => (
+                <button key={a} type="button" class={a === asked ? "btn sm primary" : "btn sm"}
+                  onClick={() => { setUrl(a); setAsked(a); }}>{a}</button>
+              ))}
+            </div>
+          )}
           <form class="row" onSubmit={(e) => { e.preventDefault(); setAsked(url.trim()); }}>
             <label class="field grow">
               <span>{t("pairUrl")}</span>

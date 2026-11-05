@@ -4,12 +4,14 @@ import { cleanup, fireEvent, render, waitFor } from "@testing-library/preact";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { DiagPage, deviceText } from "./advdiag";
 import { SystemPage2 } from "./advsystem";
+import { isLoopbackOrigin, pickPairUrl } from "./admin";
 import { UpgradePage } from "./advupgrade";
 import { setFetch } from "./api";
 import { lang } from "./i18n";
 
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
 let health: unknown;
+let lanAddrs: string[] = [];
 let uploads: { url: string; headers: Record<string, string> }[];
 let posted: { url: string; body: unknown }[];
 
@@ -29,6 +31,7 @@ beforeEach(() => {
       return Promise.resolve(json({}));
     }
     if (url === "/api/health") return Promise.resolve(json(health));
+    if (url === "/api/pairing/addresses") return Promise.resolve(json({ addresses: lanAddrs }));
     if (url === "/api/teleop-speeds") return Promise.resolve(json({ slow: 0.3, mid: 0.6, fast: 1.0 }));
     if (url === "/api/robots") return Promise.resolve(json({ robots: [{ robot_id: "A", fresh: true, revoked: false, devices: { items: [{ id: "camera:front", state: "online" }, { id: "rtk", state: "degraded", detail: "浮点解" }] } }] }));
     if (url === "/api/releases") return Promise.resolve(json({ releases: [{ name: "v1.4.0", note: "" }], robots: { A: "v1.4.0" } }));
@@ -67,6 +70,25 @@ describe("系统", () => {
     expect(c.querySelector(".sys-backup")!.textContent).toContain("9 天");
     expect(c.querySelector(".sys-vpn")!.textContent).toContain("未安装");
     expect(c.textContent).toContain("翠湖庄园");
+  });
+});
+
+describe("POC 配对码地址", () => {
+  it("本机打开(127.0.0.1/localhost)换成局域网地址;没有就不给", () => {
+    expect(isLoopbackOrigin("https://127.0.0.1:8443")).toBe(true);
+    expect(isLoopbackOrigin("https://localhost:8443")).toBe(true);
+    expect(isLoopbackOrigin("https://[::1]:8443")).toBe(true);
+    expect(isLoopbackOrigin("https://192.168.1.5:8443")).toBe(false);
+    expect(pickPairUrl("https://127.0.0.1:8443", ["https://192.168.1.5:8443"])).toBe("https://192.168.1.5:8443");
+    expect(pickPairUrl("https://10.0.0.2:8443", ["https://192.168.1.5:8443"])).toBe("https://10.0.0.2:8443");
+    expect(pickPairUrl("https://localhost:8443", [])).toBeNull();
+  });
+
+  it("列出局域网地址可点", async () => {
+    lanAddrs = ["https://192.168.1.5:8443", "https://10.0.0.7:8443"];
+    const { container: c } = render(<SystemPage2 me={{ name: "a", role: "admin", display_name: "", site_name: "x" }} now={0} say={() => {}} />);
+    await waitFor(() => expect(c.querySelectorAll("[data-pair-lan] button").length).toBe(2));
+    lanAddrs = [];
   });
 });
 

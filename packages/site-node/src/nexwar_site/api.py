@@ -639,6 +639,9 @@ class _Handler(TlsHandlerMixin):
                     setup_view, disp.db, disp, skip=skip)))
             if path == "/api/map-wizard":
                 return self._map_wizard(method, user)       # W54 建图向导
+            if method == "GET" and path == "/api/pairing/addresses":
+                self._need(user, VIEW)
+                return self._pairing_addresses()
             if method == "GET" and path == "/api/pairing":
                 self._need(user, VIEW)
                 return self._pairing()
@@ -1648,6 +1651,21 @@ class _Handler(TlsHandlerMixin):
             except AuthzError as exc:
                 raise HttpError(400, str(exc)) from exc
         return self._send_json(200, {"authorizations": book.list(with_active=True)})
+
+    def _pairing_addresses(self) -> None:
+        """手机可能连得上的站点地址(POC):手配的主机名 + 主机网卡的局域网 IPv4,端口是这个接口的端口。
+        网页在站点主机上打开(地址是 127.0.0.1)时拿它当二维码里的地址;一个都没有就是空列表。"""
+        from nexwar_site import pairing
+        home = self.site.home
+        if home is None:
+            raise HttpError(404, "此站点未接入站点目录")
+        try:
+            cfg = json.loads((home / "site.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            cfg = {}
+        names = [h for h in cfg.get("hostnames", []) if isinstance(h, str)]
+        port = int(self.server.server_address[1])
+        self._send_json(200, {"addresses": pairing.lan_addresses(hostnames=names, port=port)})
 
     def _pairing(self) -> None:
         """手机扫码添加站点的配对码(App V2):站点名 + 手机要连的地址 + 站点服务证书指纹,没有秘密。
