@@ -1,11 +1,12 @@
 """机器人被遮挡(W74 四期,设计 ``docs/W74-看见人处置-设计.md`` §八)。
 
 被人用东西罩住:雷达一帧有效点太少(定位器报 :data:`~nexwar_contract.locbridge.LIDAR_BLOCKED_REASON`,
-W34 的判据),**而且**至少一路相机画面全黑或几乎单色(前后相机分开判),两样同时、连着
-:data:`HOLD_S` 秒 → 报 ``robot_covered``(带哪几路相机),回调 ``on_change(True)``(运行时停车、不收
-会动的任务);雷达恢复了报 ``robot_uncovered``。
+W34 的判据),**而且每一路相机**画面都全黑或几乎单色(外审 r1 #11:每一路各自连着 :data:`HOLD_S`
+秒,不同相机不接力;哪一路取不到图就说不清、不判)→ 报 ``robot_covered``,回调 ``on_change(True)``
+(运行时停车、不收会动的任务);雷达恢复了报 ``robot_uncovered``。
 
-只有一样不算:暗处、对着白墙相机会黑 / 单色;人从雷达跟前过一下雷达会挡一下。
+只有一样不算:暗处、对着白墙相机会黑 / 单色;人从雷达跟前过一下雷达会挡一下。只有一路黑也不算
+(另一路看得见,多半是那一路对着暗处)。
 
 取图跟热像镜头检测一样起 ffmpeg 缩成 64×48 灰度(:func:`~nexwar_agent.lens.ffmpeg_gray`);只在雷达
 挡着的时候取(平时不起 ffmpeg),最快每 :data:`GRAB_EVERY_S` 秒一次。取不到图不算黑。
@@ -50,20 +51,21 @@ class CoverWatch:
         self.emit = emit or (lambda k, d: None)
         self.on_change = on_change
         self.covered = False
-        self._since: float | None = None
+        #: 每一路相机从什么时候起连着黑(取到图、看着黑才有)。
+        self._since: dict[str, float] = {}
         self._last: float | None = None
         self._blind: list[str] = []
 
     def due(self) -> bool:
         """该看一眼了:雷达挡着(到点取图)、或者之前报了被遮挡(看揭开没有)。"""
         if not self.lidar_blocked():
-            return self.covered or self._since is not None
+            return self.covered or bool(self._since)
         return self._last is None or self._mono() - self._last >= GRAB_EVERY_S
 
     async def step(self) -> None:
         now = self._mono()
         if not self.lidar_blocked():
-            self._since, self._blind = None, []
+            self._since, self._blind = {}, []
             if self.covered:
                 self.covered = False
                 log.warning("机器人不再被遮挡(雷达恢复了)")
@@ -74,13 +76,15 @@ class CoverWatch:
         names = list(self.grabs)
         got = await asyncio.gather(*(self.grabs[n]() for n in names), return_exceptions=True)
         dark = [n for n, g in zip(names, got, strict=True) if isinstance(g, bytes) and _blind(g)]
-        if not dark:
-            self._since, self._blind = None, []
-            return
+        for n in names:
+            if n in dark:
+                self._since.setdefault(n, now)
+            else:
+                self._since.pop(n, None)                 # 看得见、或取不到图:这一路重新算
         self._blind = dark
-        if self._since is None:
-            self._since = now
-        if not self.covered and now - self._since >= HOLD_S:
+        if not names or len(dark) < len(names):
+            return
+        if not self.covered and all(now - self._since[n] >= HOLD_S for n in names):
             self.covered = True
             log.warning("机器人被遮挡:雷达被挡、相机 %s 看不见", "、".join(dark))
             self.emit("robot_covered", {"cameras": sorted(dark),

@@ -17,7 +17,9 @@
   ``snapshot``:这一帧存下来的图(检测节点的截图目录里的文件名,空 = 没存)。
 - ``hb {seq}``:心跳,每秒一条。
 
-代理 → 检测节点:``hello {proto}``、``error {reason}``(握手不对,说完就断)。
+代理 → 检测节点:``hello {proto}``、``error {reason}``(握手不对,说完就断)、
+``policy {faces}``(W74 外审 r1 #2:能不能拍人脸补拍 —— 证据加密配好了才 ``true``;检测节点缺省不拍,
+断了回到不拍;老检测节点不认这一行,记一条警告跳过)。
 
 **跨板(2026-10-27 用户定)**:我们的服务搬到自带的 RK3588 上,人员检测留在厂家 Orin(用它的 GPU)。
 这时桥走 TCP(狗内网),多三种报文,本机套接字照旧不用:
@@ -170,6 +172,16 @@ def unseal(ks: bytes, direction: str, line: bytes, last_seq: int) -> tuple[int, 
 
 
 @dataclass(frozen=True)
+class Policy:
+    """代理 → 检测节点:能不能拍人脸补拍(W74 外审 r1 #2)。"""
+    T: ClassVar[str] = "policy"
+    faces: bool
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.faces, bool):
+            raise ContractError("人员桥:policy 的 faces 要是 true / false")
+
+@dataclass(frozen=True)
 class Hello:
     T: ClassVar[str] = "hello"
     proto: int
@@ -305,9 +317,9 @@ class Error:
         _text(self.reason, "reason", 200)
 
 
-Message = Hello | Persons | Heartbeat | Error | Challenge | Snap | FramesMsg
+Message = Hello | Persons | Heartbeat | Error | Challenge | Snap | FramesMsg | Policy
 _TYPES: dict[str, type] = {c.T: c for c in (Hello, Persons, Heartbeat, Error, Challenge, Snap,
-                                            FramesMsg)}
+                                            FramesMsg, Policy)}
 
 
 def encode(msg: Message) -> bytes:

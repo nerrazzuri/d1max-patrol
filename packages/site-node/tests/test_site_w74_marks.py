@@ -60,6 +60,14 @@ def test_越过出口线_才算_两头都在一边不算(标):
     assert 标.crossed("m", "2", (9, 2), (11, 2)) is None
 
 
+def test_外审r1_12_走到线上停住或折返_不算越线_过线够远才算(标):
+    标.set("m", "1", {"kind": "exit", "name": "门", "points": [[-1, 0], [1, 0]]}, by="g")
+    assert 标.crossed("m", "1", (0, 1), (0, 0)) is None, "走到线上"
+    assert 标.crossed("m", "1", (0, 0), (0, 1)) is None, "从线上回来"
+    assert 标.crossed("m", "1", (0, 1), (0, -0.1)) is None, "过线一点点(定位误差以内)"
+    assert 标.crossed("m", "1", (0, 1), (0, -0.5)) is not None
+
+
 def test_出口线内3米_朝出口(标):
     m = 标.set("m", "1", {"kind": "exit", "name": "东门", "points": [[10, 0], [10, 4]]}, by="g")
     x, y, yaw = inside_pose(m, (9, 2), (11, 2))

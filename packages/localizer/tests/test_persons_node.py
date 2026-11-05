@@ -351,10 +351,10 @@ class _假代理:
     (握手以后两边都封好,复查 P212-I1)。``knows_key=False``:不知道密钥的冒充者,只发挑战、
     回一个不带签名的 hello。"""
 
-    def __init__(self, key, knows_key=True):
+    def __init__(self, key, knows_key=True, policy=None):
         import socket
         import threading
-        self.key, self.knows_key = key, knows_key
+        self.key, self.knows_key, self.policy = key, knows_key, policy
         self.raw: list[bytes] = []
         self.srv = socket.create_server(("127.0.0.1", 0))
         self.port = self.srv.getsockname()[1]
@@ -386,6 +386,8 @@ class _假代理:
                                                                     "ab" * 16))))
         f.write(pb.seal(ks, pb.TO_DETECTOR, 1,
                         pb.encode(pb.FramesMsg(ref="m:1", frames={"lidar": {"x": 0.4}}))))
+        if self.policy is not None:
+            f.write(pb.seal(ks, pb.TO_DETECTOR, 2, pb.encode(pb.Policy(faces=self.policy))))
         f.flush()
         rx = 0
         for line in f:
@@ -514,6 +516,7 @@ def test_W74_有正脸够大_连拍3张_同一台相机10秒最多一轮_文件�
     face = 假人脸([(900.0, 300.0, FACE_MIN_PX + 10.0, FACE_MIN_PX + 20.0, 0.95)])
     n = PersonNode(假检测器([Box(860, 300, 1060, 900, 0.88)]), snapshot_dir=tmp_path,
                    monotonic=c, settings=Settings(snapshot_every_s=1000), faces=face)
+    n.faces_allowed = True                               # 代理说了证据加密配好了
     shots = []
     for i in range(6):
         c.t += 0.5
@@ -530,10 +533,12 @@ def test_W74_脸太小_没人_没装人脸模型_都不补拍():
     small = 假人脸([(900.0, 300.0, 20.0, 24.0, 0.95)])
     n = PersonNode(假检测器([Box(860, 300, 1060, 900, 0.88)]), monotonic=c, faces=small,
                    remote_snapshots=True, settings=Settings(snapshot_every_s=1000))
+    n.faces_allowed = True
     snaps = [_过契约(n.on_image("front", b"x", i + 1)).snapshot for i in range(3)]
     assert not any(s.startswith("face-") for s in snaps)
     nobody = 假人脸([(900.0, 300.0, 100.0, 120.0, 0.95)])
     n = PersonNode(假检测器([]), monotonic=c, faces=nobody, remote_snapshots=True)
+    n.faces_allowed = True
     assert _过契约(n.on_image("front", b"x", 1)).snapshot == "" and nobody.calls == 0, \
         "画面里没人:不跑人脸模型"
 
@@ -542,3 +547,35 @@ def test_W74_人脸模型文件没有_就不开(tmp_path):
     from nexwar_localizer.persons import DetectorUnavailable, YunetFaces
     with pytest.raises(DetectorUnavailable):
         YunetFaces(tmp_path / "没有.onnx")
+
+
+def test_外审r1_2_代理没说可以_有人脸模型也不补拍_不跑人脸模型(tmp_path):
+    c = 钟()
+    face = 假人脸([(900.0, 300.0, 200.0, 220.0, 0.95)])
+    n = PersonNode(假检测器([Box(860, 300, 1060, 900, 0.88)]), snapshot_dir=tmp_path,
+                   monotonic=c, settings=Settings(snapshot_every_s=1000), faces=face)
+    for i in range(4):
+        c.t += 0.5
+        assert not _过契约(n.on_image("front", b"x", i + 1)).snapshot.startswith("face-")
+    assert face.calls == 0 and not list(tmp_path.glob("face-*")), "老代理 / 没加密:人脸照片不落盘"
+
+
+def test_外审r1_2_代理说可以拍才拍_断了就不拍():
+    import socket
+    import time as _t
+
+    from nexwar_localizer.persons import PersonLink
+    key = bytes(range(32))
+    agent = _假代理(key, policy=True)
+    said: list = []
+    link = PersonLink(lambda: socket.create_connection(("127.0.0.1", agent.port), timeout=1),
+                      key=key, on_policy=said.append)
+    assert link.send({"t": "hb", "seq": 1})
+    for _ in range(50):
+        link.poll()
+        if said:
+            break
+        _t.sleep(0.02)
+    assert said == [True]
+    link.close()
+    assert said == [True, False], "断了:回到不拍"

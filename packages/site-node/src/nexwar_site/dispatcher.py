@@ -462,11 +462,14 @@ class Dispatcher:
             return None
         return caps["map_id"], caps["map_version"]
 
+    #: 会自己走的任务:区域、狗上正在跑的配置都要核(外审 W74 r1 #1:跟人也是)。
+    AUTONOMOUS_KINDS = ("goto", "patrol", "standoff", "follow")
+
     def _check_zones(self, robot_id: str, c: DispatchClient, kind: str) -> None:
         """区域(W10):这一版区域要人工确认过(外审 2);狗上的区域修订要跟站点的一致;这张图上有区域,
         狗的导航就得守;规划后端没有规划栅格不派。只管会自己走的(goto、巡检,排程、事件派遣、回待命点
         都经过它)。"""
-        if kind not in ("goto", "patrol", "standoff"):
+        if kind not in self.AUTONOMOUS_KINDS:
             return
         head = c.capabilities.tasks.get("head") if c.capabilities is not None else None
         if head is not None and not head.get("autonomy", head.get("direction") == "head"):
@@ -578,7 +581,7 @@ class Dispatcher:
 
     def _check_running(self, robot_id: str, c: DispatchClient, kind: str) -> None:
         """会自己走的任务:狗实际在跑的图、区域内容跟站点登记的对不上不派(R3、R4)。"""
-        if kind not in ("goto", "patrol", "standoff"):
+        if kind not in self.AUTONOMOUS_KINDS:
             return
         v = self.running_view(c)
         if v is not None and v["problems"]:

@@ -324,3 +324,39 @@ async def test_外审Minor_截图按字节限速_大图一口气只收几张(tmp
         c.w.close()
     finally:
         await srv.close()
+
+
+async def test_外审r1_2_人脸照片_证据没加密不落盘_加密了才告诉检测节点可以拍(tmp_path):
+    srv, sink = await _起(tmp_path)
+    sink.faces_ok = lambda: False
+    try:
+        c = await _连(srv)
+        assert isinstance(await c.read(), pb.Hello)
+        c.send(pb.Snap.of("face-20261029T120000Z-front-3.jpg", JPEG))
+        c.send(pb.Persons(seq=3, stamp_ns=1, camera="front",
+                          snapshot="face-20261029T120000Z-front-3.jpg"))
+        await c.w.drain()
+        for _ in range(50):
+            if sink.got:
+                break
+            await asyncio.sleep(0.02)
+        assert not list((tmp_path / "snaps").glob("face-*")), "没加密:人脸照片不写盘"
+        with pytest.raises(asyncio.TimeoutError):
+            await asyncio.wait_for(c.r.readline(), 0.2)  # 没加密:不说可以拍(检测节点缺省不拍)
+        sink.faces_ok = lambda: True
+        srv.tick()
+        m = await c.read()
+        assert isinstance(m, pb.Policy) and m.faces is True
+        srv.tick()
+        with pytest.raises(asyncio.TimeoutError):
+            await asyncio.wait_for(c.r.readline(), 0.2)  # 没变不重发
+        c.send(pb.Snap.of("face-20261029T120001Z-front-4.jpg", JPEG))
+        await c.w.drain()
+        for _ in range(50):
+            if list((tmp_path / "snaps").glob("face-*")):
+                break
+            await asyncio.sleep(0.02)
+        assert list((tmp_path / "snaps").glob("face-*"))
+        c.w.close()
+    finally:
+        await srv.close()

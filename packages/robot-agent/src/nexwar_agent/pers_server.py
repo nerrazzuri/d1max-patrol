@@ -114,6 +114,7 @@ class PersonBridgeServer(ObsBridgeServer):
         super().tick()
         if self.connected:
             self._push_frames()
+            self._push_policy()
 
     # ---- 跨板换的几步
 
@@ -189,7 +190,39 @@ class PersonBridgeServer(ObsBridgeServer):
 
     def _greeted(self) -> None:
         self._frames_ref = None
+        self._faces_told = False                         # 检测节点连上缺省不拍
         self._push_frames()
+        self._push_policy()
+
+    # ---- 人脸补拍(W74 外审 r1 #2)
+
+    def _faces_ok(self) -> bool:
+        """证据加密配好了才能拍、才收人脸照片(``sink.faces_ok``;没接 = 不能)。"""
+        f = getattr(self.sink, "faces_ok", None)
+        try:
+            return bool(f()) if callable(f) else False
+        except Exception:
+            log.exception("人员桥:能不能拍人脸问不出来(按不能)")
+            return False
+
+    def _push_policy(self) -> None:
+        """能不能拍变了(连上时检测节点缺省不拍)就告诉检测节点;老检测节点不认,跳过这一行。"""
+        if self._writer is None:
+            return
+        ok = self._faces_ok()
+        if ok == getattr(self, "_faces_told", False):
+            return
+        msg = persbridge.Policy(faces=ok)
+        try:
+            if self.listen is None:
+                self._writer.write(persbridge.encode(msg))
+            else:
+                self._send(msg)
+        except Exception as exc:                         # noqa: BLE001 - 写不过去下一拍再试
+            log.warning("人员桥:能不能拍人脸说不过去:%s", exc)
+            return
+        self._faces_told = ok
+        log.info("人员桥:告诉人员检测节点%s拍人脸补拍", "可以" if ok else "不要")
 
     def _other(self, msg: Any) -> None:
         if isinstance(msg, persbridge.Snap):
@@ -221,6 +254,9 @@ class PersonBridgeServer(ObsBridgeServer):
     def _save_snap(self, m: Any) -> None:
         d = getattr(self.sink, "snapshot_dir", None)
         if d is None:
+            return
+        if m.name.startswith("face-") and not self._faces_ok():
+            log.warning("人员桥:证据没加密,人脸照片 %s 不落盘", m.name)
             return
         d = Path(d)
         try:

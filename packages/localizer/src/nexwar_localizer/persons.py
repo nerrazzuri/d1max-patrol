@@ -22,7 +22,8 @@
 - **人脸补拍**(W74 五期,设计 §四):装了人脸检测模型(``--face-model``,OpenCV 的 YuNet,只检测不识别)
   时,一帧里有人就再看有没有正脸;有、而且够大(:data:`FACE_MIN_PX`),这台相机连拍
   :data:`FACE_BURST` 张(接下来送检的几帧),同一台相机 :data:`FACE_EVERY_S` 秒最多一轮。文件名
-  ``face-`` 开头:**证据没加密的狗,代理收到就删、不传**(人脸照片不许明文放着)。
+  ``face-`` 开头。**代理说了能拍(``policy {faces: true}``,它那头证据加密配好了)才拍**:缺省不拍、
+  断了回到不拍、老代理不说就一直不拍(外审 r1 #2:人脸照片不许明文落盘、明文过桥)。
 """
 
 from __future__ import annotations
@@ -308,6 +309,8 @@ class PersonNode:
         self.detector = detector
         #: W74 五期:人脸检测(没装 = 不补拍);每台相机还要连拍几张、上一轮开始的时刻。
         self.faces = faces
+        #: 代理说能拍(:class:`PersonLink` 收到 ``policy``)才拍;缺省不拍。
+        self.faces_allowed = False
         self._face_left: dict[str, int] = {}
         self._face_at: dict[str, float] = {}
         #: 跨板(人员检测在厂家 Orin、代理在 RK3588):截图不写本地盘,攒着交给桥发
@@ -403,7 +406,8 @@ class PersonNode:
 
     def _face_due(self, camera: str, jpeg: bytes) -> bool:
         """这一帧要不要当人脸补拍:在连拍里就要;不然离上一轮够久、看到够大的脸就开一轮。"""
-        if self.faces is None:
+        if self.faces is None or not self.faces_allowed:
+            self._face_left.pop(camera, None)
             return False
         left = self._face_left.get(camera, 0)
         if left > 0:
@@ -474,12 +478,15 @@ class PersonLink:
     def __init__(self, connect: Callable[[], socket.socket], *, key: bytes | None = None,
                  name: str = "nexwar_persons", version: str = "",
                  on_frames: Callable[[str, dict], Any] | None = None,
+                 on_policy: Callable[[bool], Any] | None = None,
                  reconnect_s: float = 1.0, timeout_s: float = 2.0,
                  monotonic: Callable[[], float] = time.monotonic) -> None:
         self._connect = connect
         self.key = key
         self.name, self.version = name, version
         self.on_frames = on_frames
+        #: 代理说能不能拍人脸补拍(外审 r1 #2);断了按不能。
+        self.on_policy = on_policy
         self.reconnect_s, self.timeout_s = reconnect_s, timeout_s
         self._mono = monotonic
         self._sock: socket.socket | None = None
@@ -603,6 +610,9 @@ class PersonLink:
                     self.on_frames(m.ref, m.frames)
                 except Exception:
                     log.exception("外参用不上(图 %s)", m.ref)
+            elif isinstance(m, pb.Policy):
+                log.info("代理说%s拍人脸补拍", "可以" if m.faces else "不要")
+                self._tell_policy(m.faces)
             elif isinstance(m, pb.Error):
                 log.warning("代理说:%s", m.reason)
 
@@ -615,6 +625,15 @@ class PersonLink:
         self._sock = None
         self._buf = b""
         self._ks = None
+        self._tell_policy(False)                         # 断了:回到不拍
+
+    def _tell_policy(self, faces: bool) -> None:
+        if self.on_policy is None:
+            return
+        try:
+            self.on_policy(faces)
+        except Exception:
+            log.exception("能不能拍人脸交不出去")
 
 
 # ------------------------------------------------------------ ROS 节点
@@ -731,12 +750,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         cur["rear"] = RearMount.from_lidars(front, f, a.lidars) if a.rear_lidar_topic else None
         log.info("用上图 %s 的外参", ref)
 
+    def on_policy(faces: bool) -> None:                 # 外审 r1 #2:代理说能拍才拍
+        node_logic.faces_allowed = bool(faces)
+
     if a.connect:
         host, _, port = a.connect.rpartition(":")
         client = PersonLink(lambda: socket.create_connection((host, int(port)), timeout=2.0),
-                            key=key, on_frames=on_frames)
+                            key=key, on_frames=on_frames, on_policy=on_policy)
     else:
-        client = PersonLink(lambda: _unix(a.socket))
+        client = PersonLink(lambda: _unix(a.socket), on_policy=on_policy)
     from nexwar_localizer import rosinit
     rosinit.init(rclpy)
     stop = rosinit.stop_flag()                           # W41:正常停止退出码 0
