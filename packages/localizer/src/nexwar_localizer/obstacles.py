@@ -469,21 +469,29 @@ class LineClient:
         self.reconnect_s = reconnect_s
         self.sent = 0
 
-    def send(self, obj: dict) -> bool:
+    def _ensure(self) -> bool:
+        """没连着就(按 :attr:`reconnect_s` 的间隔)连,连上先发 ``hello``。连着返回 True。"""
+        if self._sock is not None:
+            return True
         now = time.monotonic()
-        if self._sock is None:
-            if now < self._next_try:
-                return False
-            self._next_try = now + self.reconnect_s
-            try:
-                self._sock = self._connect()
-                self._sock.setblocking(False)
-                if self._hello is not None:
-                    self._sock.sendall(_line(self._hello))
-            except OSError as exc:
-                log.debug("连不上:%s", exc)
-                self._close()
-                return False
+        if now < self._next_try:
+            return False
+        self._next_try = now + self.reconnect_s
+        try:
+            self._sock = self._connect()
+            self._sock.setblocking(False)
+            if self._hello is not None:
+                self._sock.sendall(_line(self._hello))
+        except OSError as exc:
+            log.debug("连不上:%s", exc)
+            self._close()
+            return False
+        return True
+
+    def send(self, obj: dict) -> bool:
+        if not self._ensure():
+            return False
+        assert self._sock is not None
         try:
             self._sock.sendall(_line(obj))
             self._drain()
@@ -496,8 +504,11 @@ class LineClient:
 
     def poll(self) -> None:
         """连着就把对面发来的读空(内审阻断 3:旁路进程每秒给所有客户端广播几十条遥测,不读的话它那头
-        的发送阻塞、攥着锁,所有客户端一起卡死)。**每帧都调**,不管这一帧发没发东西。"""
-        if self._sock is None:
+        的发送阻塞、攥着锁,所有客户端一起卡死)。**每帧都调**,不管这一帧发没发东西。
+
+        没连着也按间隔去连(11-05 现场:只在发的时候才连,重启后不知道旁路协议号、老许可一条都
+        不发,就一直连不上、一直拿不到 hello 里的协议号)。"""
+        if not self._ensure():
             return
         try:
             self._drain()
