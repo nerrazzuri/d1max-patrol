@@ -471,3 +471,25 @@ def test_横移_不成形的vy整帧丢掉(desk):
     k.on_messages(s, ['{"seq": 5, "t": 1, "vx": 0, "wz": 0, "vy": "left"}'], rx=1.0)
     k.on_messages(s, ['{"seq": 6, "t": 1, "vx": 0, "wz": 0, "vy": true}'], rx=1.1)
     assert d.frames == []
+
+
+def test_POC_丢帧原因_机器人在续租回执里说_有新增才转给手机(desk):
+    """POC 第 3 项:``drops``(累计数、最近一条、时刻)原样转给手机;累计数没变不再说。"""
+    k, d = desk
+    s = k.open("A", _u("gina", "guard"))
+    told = []
+    s.ws = SimpleNamespace(send_text=lambda t: told.append(json.loads(t)), close=lambda *a: None)
+    d.lease_data = None
+    k.step()
+    n1 = {"counts": {"epoch": 0, "seq": 0, "late": 2, "no_video": 0, "video_recovered": 0},
+          "last": "late", "at_ms": 100}
+    d.lease_data = {"drops": n1}
+    k.step()
+    k.step()                                             # 没新增:不再说
+    n2 = {"counts": {**n1["counts"], "video_recovered": 1}, "last": "video_recovered", "at_ms": 900}
+    d.lease_data = {"drops": n2, "zone_guard": {"state": "ok"}}
+    k.step()
+    got = [m for m in told if m.get("kind") == "drops"]
+    assert [m["last"] for m in got] == ["late", "video_recovered"], got
+    assert got[1]["counts"]["video_recovered"] == 1
+    assert any(m.get("kind") == "zone_guard" for m in told), "两样一起带也都转"

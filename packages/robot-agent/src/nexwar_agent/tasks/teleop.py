@@ -46,6 +46,9 @@ _MIN_TTL_MS = 50
 
 
 class TeleopTask(Task):
+    #: 遥控帧被丢的原因(POC 第 3 项):帧闸三条 + 没画面 + 画面刚恢复、杆还没回中。
+    DROP_CODES = ("epoch", "seq", "late", "no_video", "video_recovered")
+
     def __init__(self, *, task_id: str, lease_epoch: int, operator: str, lease_ttl_ms: int,
                  hal: RobotHAL, now_ms: Callable[[], int], video_live: Callable[[], bool],
                  events: EventBook, priority: int = TELEOP_PRIORITY,
@@ -80,6 +83,12 @@ class TeleopTask(Task):
         #: 硬禁区(决策 65);``None`` = 不守(没载图、老测试)。
         self._guard = zone_guard
         self._guard_state = "ok"
+        #: 画面断过、还没收到回中的那一帧(POC):回中之前的帧都丢(``video_recovered``)。
+        self._need_neutral = False
+        #: 最近一次丢帧:(原因, 狗钟毫秒)。
+        self._last_drop: tuple[str, int] | None = None
+        self.gate.dropped.setdefault("no_video", 0)
+        self.gate.dropped.setdefault("video_recovered", 0)
 
     async def _read_head(self) -> str:
         try:
@@ -103,8 +112,30 @@ class TeleopTask(Task):
             return "ended"
         why = self.gate.accept(frame, rx_ms=rx_ms)
         if not why:
-            self._cmd = (frame.vx, frame.wz, rx_ms + frame.ttl_ms, frame.ttl_ms, frame.vy)
+            neutral = frame.vx == 0.0 and frame.wz == 0.0 and frame.vy == 0.0
+            if not self._video_live():
+                self._need_neutral = True
+                why = "no_video"
+            elif self._need_neutral and not neutral:
+                why = "video_recovered"      # 画面刚回来、手还推着:先松手
+            else:
+                self._need_neutral = False
+            if why:
+                self.gate.dropped[why] += 1
+                self._cmd = None
+        if why:
+            self._last_drop = (why, rx_ms)
+            return why
+        self._cmd = (frame.vx, frame.wz, rx_ms + frame.ttl_ms, frame.ttl_ms, frame.vy)
         return why
+
+    def drops_note(self) -> dict[str, Any] | None:
+        """丢帧的累计数、最近一条原因和时刻(狗钟)。续租回执里带给站点、站点转给手机。
+        没丢过回 None。"""
+        if self._last_drop is None:
+            return None
+        return {"counts": dict(self.gate.dropped), "last": self._last_drop[0],
+                "at_ms": self._last_drop[1]}
 
     def renew(self, lease_ttl_ms: int) -> None:
         if self._ending is None:
@@ -147,7 +178,10 @@ class TeleopTask(Task):
             await self._finish(dt_s)
             return
         c = self._cmd
-        live = c is not None and now < c[2] and self._video_live()
+        video = self._video_live()
+        if not video:
+            self._need_neutral = True        # 画面断过:回来之后要先收到一帧回中的
+        live = c is not None and now < c[2] and video
         vx = wz = vy = 0.0
         if live:
             vx = max(-self._vmax, min(self._vmax, c[0]))

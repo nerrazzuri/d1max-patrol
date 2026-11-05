@@ -98,6 +98,15 @@ String teleopTierLabel(String tier) => switch (tier) {
       _ => tr('Fast', '快'),
     };
 
+/// POC 第 3 项：机器人为什么丢了遥控指令（站点转来的 `drops.last`），说人话。
+String teleopDropText(String code) => switch (code) {
+      'late' => tr('Command judged late: clock offset or network', '指令被判迟到：钟差或网络'),
+      'video_recovered' => tr('Video just came back: release the sticks first', '画面刚恢复，请先松开摇杆'),
+      'no_video' => tr('No video', '无画面'),
+      'seq' || 'epoch' => tr('Commands out of order (reconnecting)', '指令顺序不对（重连中）'),
+      _ => tr('Command dropped ($code)', '指令被丢弃（$code）'),
+    };
+
 class SiteTeleopPage extends StatefulWidget {
   final SiteApi api;
   final String robotId;
@@ -117,6 +126,7 @@ class SiteTeleopPage extends StatefulWidget {
   static const Key keysKey = Key('teleop-keys');
   static const Key zoneKey = Key('teleop-zone');
   static Key tierKey(String tier) => Key('teleop-tier-$tier');
+  static const Key dropKey = Key('teleop-drop');
 
   @override
   State<SiteTeleopPage> createState() => _SiteTeleopPageState();
@@ -149,6 +159,10 @@ class _SiteTeleopPageState extends State<SiteTeleopPage> with WidgetsBindingObse
 
   /// 硬禁区守卫这会儿说的（决策 65）；null = 没什么要说的。
   String? _zoneNote;
+
+  /// POC：机器人刚丢了指令的原因；几秒没新增就收起。
+  String? _dropNote;
+  Timer? _dropTimer;
 
   /// 通知栏拉下来、来电盖住这一类：手指多半被系统收走了，这段时间只发零速。
   bool _inactive = false;
@@ -260,6 +274,13 @@ class _SiteTeleopPageState extends State<SiteTeleopPage> with WidgetsBindingObse
           _zoneNote = teleopZoneText(m['zone_guard'] as Map<String, dynamic>?);
         });
         _tick ??= Timer.periodic(const Duration(milliseconds: 100), (_) => _sendNow());
+      case 'drops':
+        // 站点只在累计数有新增时才转：来一条就是这几秒里又丢了
+        _dropTimer?.cancel();
+        setState(() => _dropNote = teleopDropText('${m['last'] ?? ''}'));
+        _dropTimer = Timer(const Duration(seconds: 4), () {
+          if (mounted) setState(() => _dropNote = null);
+        });
       case 'video':
         final ok = m['ok'] == true;
         _clearKeys(); // 画面断了、回来了：按着的键都不算，回来之后要重新按下
@@ -386,6 +407,7 @@ class _SiteTeleopPageState extends State<SiteTeleopPage> with WidgetsBindingObse
     unawaited(unlockOrientation());
     WidgetsBinding.instance.removeObserver(this);
     _stopTicking();
+    _dropTimer?.cancel();
     _keys.clear();
     _sub?.cancel();
     final link = _link;
@@ -493,6 +515,21 @@ class _SiteTeleopPageState extends State<SiteTeleopPage> with WidgetsBindingObse
                                 child: Text(_zoneNote!,
                                     key: SiteTeleopPage.zoneKey,
                                     maxLines: 3,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: NwText.bodySmall.copyWith(color: Colors.black, fontWeight: FontWeight.w600)),
+                              ),
+                            ),
+                          if (_dropNote != null && !_ended)
+                            Padding(
+                              padding: const EdgeInsets.only(top: Nw.s4),
+                              child: Container(
+                                key: SiteTeleopPage.dropKey,
+                                padding: const EdgeInsets.symmetric(horizontal: Nw.s8, vertical: Nw.s4),
+                                decoration: BoxDecoration(
+                                    color: c.fg(NwTone.warning).withValues(alpha: 0.85),
+                                    borderRadius: BorderRadius.circular(Nw.r8)),
+                                child: Text(_dropNote!,
+                                    maxLines: 2,
                                     overflow: TextOverflow.ellipsis,
                                     style: NwText.bodySmall.copyWith(color: Colors.black, fontWeight: FontWeight.w600)),
                               ),
