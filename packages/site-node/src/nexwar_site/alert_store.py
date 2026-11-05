@@ -20,6 +20,9 @@ from nexwar_site.db import SiteDB
 
 log = logging.getLogger(__name__)
 
+#: 告警测试模式(POC):最长多少分钟;标题前缀。
+TEST_MAX_MIN = 120
+TEST_PREFIX = "测试："
 #: 开张时内存里读回多少条最近的(已解决的也算);未解决的全读回。
 RESTORE_RECENT = 200
 
@@ -92,9 +95,55 @@ class AlertDesk:
 
     # ------------------------------------------------------------ 操作
 
+    # ------------------------------------------------------------ POC:告警测试模式
+
+    def test_mode(self) -> dict[str, Any] | None:
+        """开着的告警测试模式 ``{"until_ms", "by"}``;没开、到点了(自动结束,不删)是 None。"""
+        from nexwar_site.site_settings import SiteSettings
+        got = SiteSettings(self.db).get("alert_test")
+        if not isinstance(got, dict) or not isinstance(got.get("until_ms"), int):
+            return None
+        return got if self._now() < got["until_ms"] else None
+
+    def start_test(self, minutes: Any, *, by: str) -> dict[str, Any]:
+        from nexwar_site.site_settings import SiteSettings
+        if isinstance(minutes, bool) or not isinstance(minutes, int) \
+                or not 1 <= minutes <= TEST_MAX_MIN:
+            raise ValueError(f"测试时长要是 1–{TEST_MAX_MIN} 分钟")
+        mode = {"until_ms": self._now() + minutes * 60_000, "by": by}
+        SiteSettings(self.db).put("alert_test", mode)
+        return mode
+
+    def end_test(self, *, clear: bool) -> int:
+        """结束测试;``clear`` 就删掉所有带测试标记的告警(没标记的不动)。回删了几条。"""
+        from nexwar_site.site_settings import SiteSettings
+        SiteSettings(self.db).put("alert_test", None)
+        if not clear:
+            return 0
+        rows = self.db.query("SELECT key FROM alerts WHERE json_extract(context, '$.test') = 1")
+        keys = {r["key"] for r in rows}
+        if keys:
+            with self.db.tx() as c:
+                c.executemany("DELETE FROM alerts WHERE key=?", [(k,) for k in keys])
+            self.book.forget(keys)
+            if self._publish is not None:
+                try:
+                    self._publish({"kind": "alerts_cleared", "keys": sorted(keys)})
+                except Exception:
+                    log.exception("清掉测试告警推不出去")
+        return len(keys)
+
     def raise_alert(self, *, kind: str, robot: str, title: str, detail: str = "",
                     context: dict[str, Any] | None = None, merge: bool = True,
                     record: str = "") -> Alert:
+        if self.test_mode() is not None:
+            # POC 告警测试模式:打标记、标题前加「测试」;不合进真告警(清掉时别把真的一起删了)
+            cur = self.book.absorbing(robot, kind, now_ms=self._now())
+            if cur is not None and not cur.context.get("test"):
+                merge = False
+            context = {**(context or {}), "test": True}
+            if not title.startswith(TEST_PREFIX):
+                title = TEST_PREFIX + title
         ctx: dict[str, Any] = {}
         if self.context_for is not None:
             try:

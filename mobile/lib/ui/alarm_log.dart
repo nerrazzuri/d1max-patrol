@@ -29,6 +29,9 @@ class _AlarmLogPageState extends State<AlarmLogPage> {
   List<Alert>? _rows;
   String? _error;
 
+  /// POC 告警测试模式开着：到几点、谁开的。没开 / 老站点 = null。
+  Map<String, dynamic>? _test;
+
   @override
   void initState() {
     super.initState();
@@ -38,6 +41,14 @@ class _AlarmLogPageState extends State<AlarmLogPage> {
   Future<void> _load() async {
     try {
       final all = await widget.api.alerts(all: true);
+      Map<String, dynamic>? test;
+      try {
+        final m = await widget.api.alertTest();
+        test = m['active'] == true ? m : null;
+      } on SiteError {
+        test = null; // 老站点没有这个接口
+      }
+      if (mounted) setState(() => _test = test);
       if (mounted) setState(() => _rows = all.where((a) => a.level != 'P3').toList());
     } on SiteError catch (e) {
       if (mounted) setState(() => _error = refusalText(e));
@@ -58,6 +69,13 @@ class _AlarmLogPageState extends State<AlarmLogPage> {
     return RefreshIndicator(
       onRefresh: _load,
       child: NwListView(children: [
+        if (_test != null)
+          NwNotice(
+              key: const Key('alarm-test-mode'),
+              tone: NwTone.warning,
+              text: tr(
+                  'Alert test mode until ${_test!['until_ms'] is num ? hhmm((_test!['until_ms'] as num).toInt()) : '?'} (started by ${_test!['by']}): alerts now are marked "测试：".',
+                  '告警测试模式中，到 ${_test!['until_ms'] is num ? hhmm((_test!['until_ms'] as num).toInt()) : '?'} 结束（${_test!['by']} 开的）：这期间的告警标题带「测试：」。')),
         if (_error != null) NwNotice(text: _error!, tone: NwTone.error),
         if (rows == null && _error == null) const Center(child: CircularProgressIndicator()),
         if (rows != null && rows.isEmpty)
