@@ -172,6 +172,27 @@ void main() {
     await t.scrollUntilVisible(find.byKey(const Key('robot-devices')), 200);
     expect(find.text('设备（长时间未更新）'), findsOneWidget);
   });
+
+  testWidgets('POC 11-05 喇叭回执收下了、后来机器人报没放出来：面板上说「喊话没放出来」和原因；别的机器人的不管', (t) async {
+    final api = FakeApi('guard');
+    await _open(t, api);
+    expect(api.eventsOpened, 1);
+    await t.tap(find.byKey(const Key('deter-play')));
+    await t.pumpAndSettle();
+    expect(find.textContaining('已开始'), findsOneWidget, reason: '收下不等于放出来了');
+    api.sse.add(<String, dynamic>{'kind': 'alert', 'alert': <String, dynamic>{
+      'kind': 'deter_failed', 'robot': 'B', 'title': '喊话没放出来', 'detail': '别的'}});
+    await t.pump();
+    await t.pump();
+    expect(find.textContaining('别的'), findsNothing);
+    api.sse.add(<String, dynamic>{'kind': 'alert', 'alert': <String, dynamic>{
+      'kind': 'deter_failed', 'robot': 'A', 'title': '喊话没放出来', 'detail': '竞品主控连不上'}});
+    await t.pump();
+    await t.pump();
+    expect(find.textContaining('喊话没放出来'), findsOneWidget);
+    expect(find.textContaining('竞品主控连不上'), findsOneWidget);
+    await t.pumpWidget(Container());
+  });
 }
 
 void pocClipNames() {

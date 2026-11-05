@@ -140,12 +140,13 @@ def test_同名待命点在别的图上_409_明说替换才搬(站点):
     _能标(s)
     s.api.standby.set("A", "home", map_id="other", map_version="9", x=1.0, y=1.0, yaw=0.0,
                       default=False)
-    code, d = s.req("POST", "/api/robots/A/home/here", {}, token=alice)
+    code, d = s.req("POST", "/api/robots/A/home/here", {"name": "home"}, token=alice)
     assert code == 409 and d["name_taken"] == {"map_id": "other", "map_version": "9"}, (code, d)
     assert not s.db.query("SELECT 1 FROM commands WHERE kind='mark_home'"), "未发给机器人"
     [p] = s.stb_list("A")
     assert (p["map_id"], p["x"]) == ("other", 1.0)
-    code, d = s.req("POST", "/api/robots/A/home/here", {"replace": True}, token=alice)
+    code, d = s.req("POST", "/api/robots/A/home/here", {"name": "home", "replace": True},
+                    token=alice)
     assert code == 200, d
     [p] = s.stb_list("A")
     assert p["map_id"] != "other" and p["default"]
@@ -373,3 +374,22 @@ def test_W23_在这儿设拦截点_走不到就不收_409带原因(站点):
     code, d = s.req("POST", "/api/robots/A/intercept/here", {"name": "gate"}, token=alice)
     assert code == 409 and "门太窄" in d["error"], d
     assert s.api.incidents.intercept("gate") is None
+
+
+def test_POC1105_没给名字_home在别的图上_自动叫home加图名_不409_老的留着(站点):
+    """现场 11-05:换了一张新图,标原点回 409「home 登记在别的图上」。
+    没给名字(App、网页默认)就自动换名,
+    别的图上那个 home 留着(换回老图还要用);给了名字的照旧 409。"""
+    s = 站点
+    alice = _登(s, "alice")
+    _能标(s)
+    s.api.standby.set("A", "home", map_id="other", map_version="9", x=1.0, y=1.0, yaw=0.0,
+                      default=False)
+    code, d = s.req("POST", "/api/robots/A/home/here", {}, token=alice)
+    assert code == 200, d
+    got = d["standby"]
+    assert got["name"].startswith("home-") and got["map_id"] != "other" and got["default"], got
+    names = {p["name"]: p["map_id"] for p in s.stb_list("A")}
+    assert names["home"] == "other", "别的图上的 home 留着"
+    code, d2 = s.req("POST", "/api/robots/A/home/here", {}, token=alice)
+    assert code == 200 and d2["standby"]["name"] == got["name"], "同一张图再标:改同一个"

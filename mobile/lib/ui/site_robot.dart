@@ -4,6 +4,7 @@
 /// 权限在站点上（站点回 403），这里只是不给人一个注定被拒的按钮。
 library;
 
+import 'dart:async';
 import 'dart:math';
 
 import 'package:flutter/material.dart';
@@ -83,10 +84,36 @@ class _SiteRobotPageState extends State<SiteRobotPage> {
   Map<String, dynamic>? _view;
   String? _msg;
 
+  /// POC 11-05：任务派出去站点收下了，机器人后来报失败（起飞前检查没过之类）—— 这里听事件流，
+  /// 是这台的就在页面上说原因；不然人只看到「没动」。
+  StreamSubscription<Map<String, dynamic>>? _events;
+
   @override
   void initState() {
     super.initState();
     _reload();
+    _events = widget.api.events().listen(_onFeed, onError: (Object _) {}, cancelOnError: true);
+  }
+
+  @override
+  void dispose() {
+    unawaited(_events?.cancel());
+    super.dispose();
+  }
+
+  void _onFeed(Map<String, dynamic> f) {
+    final e = f['event'];
+    if (f['kind'] != 'event' || f['robot_id'] != widget.robotId || e is! Map) return;
+    if (e['kind'] != 'task_failed' || !mounted) return;
+    final d = e['data'];
+    final tid = d is Map ? '${d['task_id'] ?? ''}' : '';
+    final why = d is Map ? '${d['reason'] ?? ''}' : '';
+    final fix = why.contains('未标原点')
+        ? tr(' Drive the robot to the dock, set its position, then tap "Mark origin here".',
+            '把机器人开到充电桩前，设好位置后点「在这儿标原点」。')
+        : '';
+    setState(() => _msg = tr('Task $tid did not run: $why.$fix', '任务 $tid 没走成：$why。$fix'));
+    unawaited(_reload());
   }
 
   Future<void> _reload() async {

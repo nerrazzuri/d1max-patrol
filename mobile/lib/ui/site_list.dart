@@ -76,6 +76,51 @@ class _SiteListPageState extends State<SiteListPage> {
     if (mounted) setState(() => _sites = next);
   }
 
+  /// 备用地址（POC 11-05）：一行一个，`https://` 开头；证书指纹同一个，所以只是换个路走到同一台站点主机。
+  Future<void> _editAlts(SiteEntry s) async {
+    final ctl = TextEditingController(text: s.alts.join('\n'));
+    String? err;
+    final got = await showDialog<List<String>>(
+        context: context,
+        builder: (ctx) => StatefulBuilder(
+            builder: (ctx, set) => AlertDialog(
+                  title: Text(tr('Other addresses of ${s.name}', '${s.name} 的其他地址')),
+                  content: SingleChildScrollView(
+                      child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Text(tr('Same site on other networks (e.g. robot hotspot, office Wi-Fi). One per line. '
+                            'Login tries ${s.url} first, then these in order.',
+                        '同一个站点在别的网里的地址（比如机器人热点、办公室 Wi-Fi），一行一个。登录时先试 ${s.url}，连不上按顺序试这些。')),
+                    TextField(
+                        key: const Key('site-alts-field'),
+                        controller: ctl,
+                        minLines: 2,
+                        maxLines: 5,
+                        decoration: InputDecoration(hintText: 'https://192.168.1.10:8443', errorText: err)),
+                  ])),
+                  actions: [
+                    TextButton(onPressed: () => Navigator.pop(ctx), child: Text(tr('Cancel', '取消'))),
+                    FilledButton(
+                        key: const Key('site-alts-save'),
+                        onPressed: () {
+                          final lines = ctl.text.split('\n').map((l) => l.trim()).where((l) => l.isNotEmpty).toList();
+                          final bad = lines.where((l) => Uri.tryParse(l)?.scheme != 'https' || Uri.parse(l).host.isEmpty);
+                          if (bad.isNotEmpty) {
+                            set(() => err = tr('Must start with https:// : ${bad.first}', '要以 https:// 开头：${bad.first}'));
+                            return;
+                          }
+                          Navigator.pop(ctx, lines);
+                        },
+                        child: Text(tr('Save', '保存'))),
+                  ],
+                )));
+    // 控制器不当场 dispose：对话框关的动画还在用它（等回收）
+    if (got == null || !mounted) return;
+    final upd = s.copyWith(alts: got.where((u) => u != s.url).toList());
+    final next = [for (final x in _sites) identical(x, s) ? upd : x];
+    await widget.store.save(next);
+    if (mounted) setState(() => _sites = next);
+  }
+
   /// 添加站点（App V2）：扫码、粘贴配对码或手填，都在 `SiteAddPage`；这里只管存。
   Future<void> _add() async {
     final entry = await Navigator.push<SiteEntry>(context,
@@ -88,6 +133,7 @@ class _SiteListPageState extends State<SiteListPage> {
 
   Future<void> _open(SiteEntry s) async {
     String? account0;
+    String? used;
     final messenger = ScaffoldMessenger.of(context);
     final nav = Navigator.of(context);
     // 口令在登录页上收（2026-10-14 重做：原来是弹窗）。登录不了人留在那一页、原因摆在那一页上，
@@ -96,16 +142,27 @@ class _SiteListPageState extends State<SiteListPage> {
         builder: (_) => SiteLoginPage(
             site: s,
             signIn: (account, password) async {
-              SiteApi? api;
-              try {
-                api = widget.apiFactory(s);
-                await api.login(account, password);
-              } catch (_) {
-                api?.close();
-                rethrow;
+              // POC 11-05：同一个站点几个地址（不同网）：按顺序试，连不上（状态 0）换下一个
+              final errs = <String>[];
+              for (final u in s.urls) {
+                SiteApi? api;
+                try {
+                  api = widget.apiFactory(s.copyWith(url: u));
+                  await api.login(account, password);
+                } on SiteError catch (e) {
+                  api?.close();
+                  if (e.status != 0 || s.urls.length == 1) rethrow;
+                  errs.add(tr('$u: ${e.message}', '$u：${e.message}'));
+                  continue;
+                } catch (_) {
+                  api?.close();
+                  rethrow;
+                }
+                account0 = account;
+                used = u;
+                return api;
               }
-              account0 = account;
-              return api;
+              throw SiteError(0, errs.join('\n'));
             },
             // W52：没有账号就在这里申请（不用登录），管理员批了直接用这个账号登录
             apply: (name, display, password) async {
@@ -118,9 +175,9 @@ class _SiteListPageState extends State<SiteListPage> {
             })));
     if (api == null) return;
     final a = api;
-    // 记下这次登录用的账号（下次登录页自动填好）
-    if (account0 != null && account0 != s.username) {
-      final upd = SiteEntry(name: s.name, url: s.url, fingerprint: s.fingerprint, username: account0!);
+    // 记下这次登录用的账号（下次登录页自动填好）、登上的地址（下次先试它）
+    if ((account0 != null && account0 != s.username) || (used != null && used != s.url)) {
+      final upd = (used == null ? s : s.preferring(used!)).copyWith(username: account0);
       final next = [for (final x in _sites) identical(x, s) ? upd : x];
       await widget.store.save(next);
       if (mounted) setState(() => _sites = next);
@@ -238,11 +295,15 @@ class _SiteListPageState extends State<SiteListPage> {
           key: Key('site-menu-${s.name}'),
           tooltip: tr('More', '更多'),
           icon: Icon(Icons.more_vert_rounded, color: c.textSecondary),
-          onSelected: (_) => _remove(s),
+          onSelected: (alts) => alts ? _editAlts(s) : _remove(s),
           itemBuilder: (_) => [
                 PopupMenuItem<bool>(
-                    key: Key('site-remove-${s.name}'),
+                    key: Key('site-alts-${s.name}'),
                     value: true,
+                    child: Text(tr('Other addresses of this site…', '这个站点的其他地址…'))),
+                PopupMenuItem<bool>(
+                    key: Key('site-remove-${s.name}'),
+                    value: false,
                     child: Text(
                         tr('Remove (after the certificate is reissued, remove and add again)',
                             '删除（证书重签后需删除重加）'),

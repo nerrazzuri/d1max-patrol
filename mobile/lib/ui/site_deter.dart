@@ -8,6 +8,8 @@
 /// `strobe_colors` 警灯那一行多一个颜色下拉框（开的时候带上）。
 library;
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../l10n.dart';
@@ -97,9 +99,28 @@ class _SiteDeterPageState extends State<SiteDeterPage> {
         ],
       ];
 
+  /// POC 11-05：回执收下了不等于放出来了 —— 机器人后来报没放出来，站点起一条 `deter_failed` 告警；
+  /// 这里听事件流，是这台的就在面板上说。
+  StreamSubscription<Map<String, dynamic>>? _events;
+
+  void _listen() {
+    _events = widget.api.events().listen((f) {
+      final a = f['alert'];
+      if (f['kind'] != 'alert' || a is! Map || a['kind'] != 'deter_failed' || a['robot'] != widget.robotId) {
+        return;
+      }
+      if (a['resolved_ms'] != null || !mounted) return;
+      final why = '${a['detail'] ?? ''}';
+      setState(() => _msg = why.isEmpty
+          ? tr('Announcement not played', '喊话没放出来')
+          : tr('Announcement not played: $why', '喊话没放出来：$why'));
+    }, onError: (Object _) {}, cancelOnError: true);
+  }
+
   @override
   void initState() {
     super.initState();
+    _listen();
     _clip = _clips.isEmpty ? null : _clips.first;
     final def = '${widget.caps['strobe_default'] ?? ''}';
     _color = _colors.isEmpty ? null : (_colors.contains(def) ? def : _colors.first);
@@ -107,6 +128,7 @@ class _SiteDeterPageState extends State<SiteDeterPage> {
 
   @override
   void dispose() {
+    unawaited(_events?.cancel());
     _tts.dispose();
     super.dispose();
   }
@@ -124,7 +146,9 @@ class _SiteDeterPageState extends State<SiteDeterPage> {
           maxS: on ? secs : null, clip: clip, side: side, color: color);
       final ack = r['ack'];
       final res = ack is Map ? '${ack['result']}' : 'accepted';
-      if (res == 'accepted') {
+      if (res == 'accepted' && output == 'speaker' && on) {
+        msg = tr('$what: started (if it does not play, it will say so here)', '$what：已开始（放不出来会在这里说）');
+      } else if (res == 'accepted') {
         msg = tr('$what: done', '$what：完成');
       } else {
         final why = deterReasonText(ack is Map ? '${ack['reason'] ?? res}' : res);
