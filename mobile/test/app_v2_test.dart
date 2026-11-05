@@ -120,6 +120,8 @@ void main() {
       expect(tr('Stop all', '全部急停'), 'Stop all');
       expect(alertTitle('dog_sees_person', '机器人看见人了:2 个人'), 'Person detected');
       expect(alertTitle('from_the_future', '新告警'), '新告警');
+      expect(alertTitle('dog_sees_person', '测试：机器人看见人了'), 'TEST: Person detected',
+          reason: '外审 r1 #9:演练要看得出来');
       appLang.value = AppLang.zh;
       expect(tr('Stop all', '全部急停'), '全部急停');
       expect(alertTitle('dog_sees_person', '机器人看见人了:2 个人'), '机器人看见人了:2 个人');

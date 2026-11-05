@@ -321,9 +321,18 @@ class SimAgentServer:
 
     def want_level(self) -> int:
         """现在要哪一档:没过期的遥控临时档,不然 ``speed_level_want``(同 ``Gate::WantLevel``)。"""
-        if self._gear and time.monotonic() - self._gear_seen < GEAR_IDLE_S:
-            return self._gear
-        return self.speed_level_want
+        self._expire_gear()
+        return self._gear or self.speed_level_want
+
+    def _expire_gear(self) -> None:
+        """同 vel_gate.hpp 的 ExpireGearLocked + OnState(外审 r1 #2、#3):临时档过期就永久作废,
+        机身急停、趴下等不安全也作废;要的档变了作废速度目标和许可。"""
+        if not self._gear:
+            return
+        if time.monotonic() - self._gear_seen >= GEAR_IDLE_S or self._vel_unsafe():
+            self._gear = 0
+            self._vel_until = 0.0
+            self._clear_until = [-math.inf, -math.inf]
 
     def _speed_wrong(self) -> bool:
         return self.speed_level_want > 0 and self.speed_level != self.want_level()
@@ -573,6 +582,7 @@ class SimAgentServer:
             raise _Rejected("前进比例超过 --max-fraction")
         if not VEL_TTL_MIN_MS <= ttl <= VEL_TTL_MAX_MS:
             raise _Rejected(f"ttl_ms 要在 [{VEL_TTL_MIN_MS}, {VEL_TTL_MAX_MS}] 内")
+        self._expire_gear()                           # 过期的先作废,这条 vel 不能把它续活
         self._vel = (fwd, lat, yaw)
         self._vel_until = time.monotonic() + ttl / 1000.0
         if self._gear:
@@ -710,12 +720,12 @@ class SimAgentServer:
         if isinstance(level, bool) or not isinstance(level, int) \
                 or not 1 <= level <= self.teleop_max_gear:
             raise _Rejected(f"档位要在 [1, {self.teleop_max_gear}](--teleop-max-gear)")
-        if self.estop_software is EmergencyStatus.STOP:
-            raise _Rejected("急停生效中,不换档")
         before = self.want_level()
         if level == self.speed_level_want:
-            self._gear = 0
+            self._gear = 0                            # 回原档:急停中也收
         else:
+            if self._vel_unsafe():
+                raise _Rejected("急停生效或状态未知,不换档")
             self._gear, self._gear_conn = level, int(args.get("_conn", 0))
             self._gear_seen = time.monotonic()
         if self.want_level() != before:

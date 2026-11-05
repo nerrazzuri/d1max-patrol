@@ -308,10 +308,9 @@ static std::atomic<uint64_t> g_cancel_gen{0};
 // 同一把锁。速度线程每次要发 Move 之前都现问它。
 static velgate::Gate g_gate;
 
-static double PermitMpsPerUnit() {
-  // 按**现在要的**档(遥控临时换到中速时比例 1.0 快一倍)。--permit-mps-per-unit 给的是 --speed-level
-  // 那一档的,别的档按 SDK 文档的倍数(低 1、中 2、高 3)换。
-  const int want = g_gate.WantLevel(std::chrono::steady_clock::now());
+static double PermitMpsPerUnit(int want) {
+  // 按**现在要的**档 want(遥控临时换到中速时比例 1.0 快一倍)。--permit-mps-per-unit 给的是
+  // --speed-level 那一档的,别的档按 SDK 文档的倍数(低 1、中 2、高 3)换。
   auto mul = [](int level) { return level == 1 ? 1.0 : level == 2 ? 2.0 : 3.0; };
   if (g_permit_mps > 0) return g_permit_mps * mul(want) / mul(g_speed_want);
   return 1.1 * mul(want);
@@ -764,10 +763,12 @@ static Outcome RunCommand(const std::string& cmd, const std::string& line,
     JsonField(line, "end", &end);
     if (end != "head" && end != "tail") return Reject("end 要是 head 或 tail");
     double cap = velgate::kLegacyFraction;                 // 老许可:不带速度
+    int level = -1;                                         // 换算按的档(外审 r1 #1,安全门锁里再核)
     if (line.find("\"vmax\"") != std::string::npos) {
       const double vmax = JsonNumField(line, "vmax", -1.0);
       if (!std::isfinite(vmax) || vmax < 0 || vmax > 5) return Reject("vmax 要在 [0, 5] m/s 内");
-      cap = vmax / PermitMpsPerUnit();
+      level = g_gate.WantLevel(std::chrono::steady_clock::now());
+      cap = vmax / PermitMpsPerUnit(level);
     }
     // #208 首审 G1、复查 H1:按连接认(conn 是这条连接的号);seq 是感知节点的帧序号,不带 = 老感知节点。
     // src(感知进程启动时刻)只记着,不拿来排先后 —— 钟会往回拨。
@@ -779,7 +780,7 @@ static Outcome RunCommand(const std::string& cmd, const std::string& line,
     const auto now = std::chrono::steady_clock::now();
     uint64_t prev = 0;
     const int got = g_gate.SetClearance(now + std::chrono::milliseconds(static_cast<int>(ms)), e,
-                                        cap, conn, static_cast<uint64_t>(seq), now, &prev);
+                                        cap, conn, static_cast<uint64_t>(seq), now, &prev, level);
     if (got == velgate::kPermitTookOver && prev > 0 && prev != conn) {
       // 新连接接管了许可(两头一起):旧的那条关掉;它在途、缓冲里还没读的旧许可本来也不认了
       std::lock_guard<std::mutex> lk(g_clients_mtx);

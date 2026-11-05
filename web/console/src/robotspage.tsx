@@ -343,11 +343,12 @@ function Controls({ r, role, say, onChanged }: { r: RobotCard; role: string; say
           <span class="rd-label">{t("rdPosture")}</span>
           <div class="rd-actions">
             {(r.postures ?? []).map((m) => (
-              <button key={m} type="button" class="btn sm" disabled={busy || off || !!r.task}
+              <button key={m} type="button" class="btn sm" disabled={busy || off || !!r.task || !!r.held}
                 onClick={() => setAsk(m)}>{t(POSTURE_KEY[m])}</button>
             ))}
           </div>
           {r.task && <p class="muted small">{t("rdPostureBusy", { task: r.task })}</p>}
+          {!r.task && r.held && <p class="muted small">{t("rdPostureHeld")}</p>}
         </div>
       )}
       {askHome && (

@@ -160,6 +160,11 @@ class _SiteRobotPageState extends State<SiteRobotPage> {
           '正在执行任务 $tid：先停止它再换姿态。'));
       return;
     }
+    if (v?['held'] is Map) {
+      setState(() => _msg = tr('Stopped: press Resume before changing posture.',
+          '已叫停：先点「恢复」再换姿态。'));
+      return;
+    }
     final modes = robotPostures(v);
     final mode = await showModalBottomSheet<String>(
         context: context,

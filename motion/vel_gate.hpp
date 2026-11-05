@@ -86,6 +86,7 @@ class Gate {
     if (estop_latched_) return "急停生效中,拒绝动作";
     if (std::string why = UnsafeLocked(); !why.empty()) return why;
     if (after_check_hook_for_test) after_check_hook_for_test();  // 仍在锁里
+    ExpireGearLocked(now);  // 过期的先作废(外审 r1 #2:不然这条 vel 把它续活)
     target_ = Target{fwd, lat, yaw,
                      now + std::chrono::milliseconds(static_cast<int>(ttl_ms)), epoch_};
     if (gear_ > 0) gear_seen_ = now;  // 遥控临时档:有 vel 就算续
@@ -121,7 +122,10 @@ class Gate {
     motion_ = motion;
     estop_sw_ = estop_sw;
     estop_hw_ = estop_hw;
-    if (!UnsafeLocked().empty()) InvalidateLocked();
+    if (!UnsafeLocked().empty()) {
+      InvalidateLocked();
+      gear_ = 0;  // 外审 r1 #3:机身急停、趴下等也回 --speed-level
+    }
   }
 
   /// 现在该按哪条目标走;不该走就是空。每次要发 Move 之前都问。
@@ -132,6 +136,7 @@ class Gate {
       gear_ = 0;
       return std::nullopt;
     }
+    ExpireGearLocked(now);
     if (estop_latched_ || !UnsafeLocked().empty()) return std::nullopt;
     if (speed_want_ > 0 && speed_level_ != WantLocked(now)) return std::nullopt;  // 档位不对:不走
     if (!target_ || target_->epoch != epoch_ || now >= target_->until) return std::nullopt;
@@ -180,11 +185,13 @@ class Gate {
     if (speed_want_ <= 0) return "旁路不管档位(--speed-level 0),不能换档";
     if (level < 1 || level > max_gear)
       return "档位要在 [1, " + std::to_string(max_gear) + "](--teleop-max-gear)";
-    if (estop_latched_) return "急停生效中,不换档";
+    ExpireGearLocked(now);
     const int before = WantLocked(now);
     if (level == speed_want_) {
-      gear_ = 0;
+      gear_ = 0;  // 回原档:急停中也收
     } else {
+      if (estop_latched_) return "急停生效中,不换档";
+      if (std::string why = UnsafeLocked(); !why.empty()) return why;
       gear_ = level;
       gear_conn_ = conn;
       gear_seen_ = now;
@@ -209,6 +216,7 @@ class Gate {
   /// 现在要哪一档:有没过期的临时档就是它,不然是 --speed-level 那一档(0 = 不管档位)。
   int WantLevel(Clock::time_point now) {
     std::lock_guard<std::mutex> lk(mtx_);
+    ExpireGearLocked(now);
     return WantLocked(now);
   }
 
@@ -234,15 +242,19 @@ class Gate {
   /// 同一条连接里同一头带序号的要往上走;更新的连接发许可就接管(回 kPermitTookOver,``*retired`` 填被
   /// 退役的那条,调用方把它关掉)。判断和接管在同一把锁里(原来先问持有者再设,两条新连接能交错)。
   /// ``conn`` 0 = 不分连接(测试、老调用),照旧收。
+  ///
+  /// ``level`` = 调用方把 m/s 换成比例 ``cap`` 时按的那一档(外审 r1 #1:换算在锁外,中间可能换了档);
+  /// 跟锁里现在要的档不一样就不认。-1 = 不查(老许可不带速度、测试)。
   int SetClearance(Clock::time_point until, int end = kEndHead, double cap = kLegacyFraction,
                    uint64_t conn = 0, uint64_t seq = 0, Clock::time_point now = Clock::now(),
-                   uint64_t* retired = nullptr) {
-    (void)now;
+                   uint64_t* retired = nullptr, int level = -1) {
     if (retired != nullptr) *retired = 0;
     if (end != kEndHead && end != kEndTail) return kPermitRejected;
     if (!std::isfinite(cap)) return kPermitRejected;
     cap = std::max(0.0, std::min(cap, kMaxForwardCeiling));
     std::lock_guard<std::mutex> lk(mtx_);
+    ExpireGearLocked(now);
+    if (level >= 0 && level != WantLocked(now)) return kPermitRejected;
     int got = kPermitAccepted;
     if (conn > 0) {
       if (conn < permit_conn_) return kPermitRejected;
@@ -306,6 +318,17 @@ class Gate {
   void InvalidateLocked() {
     ++epoch_;
     target_.reset();
+  }
+
+  /// 临时档 ``kGearIdleMs`` 没续:永久作废(外审 r1 #2),要的档变了跟 SetGear 一样作废目标和许可。
+  void ExpireGearLocked(Clock::time_point now) {
+    if (gear_ == 0 || now - gear_seen_ < std::chrono::milliseconds(kGearIdleMs)) return;
+    gear_ = 0;
+    if (speed_want_ != 0) {
+      InvalidateLocked();
+      clear_until_[kEndHead] = clear_until_[kEndTail] = Clock::time_point{};
+      clear_cap_[kEndHead] = clear_cap_[kEndTail] = 0.0;
+    }
   }
 
   /// SDK 的「往前」走向哪一头;头尾不知道 -1。

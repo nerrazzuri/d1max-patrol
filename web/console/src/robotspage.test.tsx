@@ -305,6 +305,14 @@ describe("W71 Nav2 没起来", () => {
     expect(d2.textContent).toContain("正在执行任务 patrol-7");
     expect(Array.from(d2.querySelectorAll("button")).some((b) => b.textContent?.trim() === "蹲下")).toBe(false);
     cleanup();
+    robots[0] = card({ postures: ["stand", "lie"], task: null, held: { by: "bob", at_ms: NOW - 1000 } });
+    const { container: c4 } = render(<RobotsPage say={(s) => said.push(s)} now={NOW} role="guard" />);
+    await waitFor(() => expect(cardOf(c4, "A")).not.toBeNull());
+    fireEvent.click(cardOf(c4, "A"));
+    const d4 = c4.querySelector(".robot-detail")!;
+    expect(btn(d4, "趴下").disabled).toBe(true);
+    expect(d4.textContent).toContain("先点「恢复」再换姿态");
+    cleanup();
     const { container: c3 } = render(<RobotsPage say={(s) => said.push(s)} now={NOW} role="owner" />);
     await waitFor(() => expect(cardOf(c3, "A")).not.toBeNull());
     fireEvent.click(cardOf(c3, "A"));

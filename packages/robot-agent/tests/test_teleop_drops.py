@@ -44,3 +44,16 @@ async def test_老的三种也算进去(台):  # noqa: F811
 
 def test_丢帧原因码齐全():
     assert {"epoch", "seq", "late", "no_video", "video_recovered"} <= set(TeleopTask.DROP_CODES)
+
+
+async def test_外审r1_画面短断又回来_手上那帧没过期也不复活(台):  # noqa: F811
+    c, r, t, video = 台
+    await _走(c, r, t, 1, frame=lambda: _帧(c, vx=0.4, ttl=1000))
+    await _走(c, r, t, 2)
+    video["live"] = False
+    await _走(c, r, t, 1)                                  # 断一拍
+    video["live"] = True
+    r.tick(0.5)
+    x0 = (await r.odometry()).x
+    await _走(c, r, t, 3)                                  # 那帧还在有效期里,没有新帧
+    assert (await r.odometry()).vx == 0.0 and (await r.odometry()).x == x0, "没回中没新帧:不许走"

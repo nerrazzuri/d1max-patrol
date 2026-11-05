@@ -68,6 +68,8 @@ STANDBY_TRANSIENT_RETRIES = 7
 STANDBY_RETRY_EVERY_S = 2.0
 
 _RETURN_AFTER = frozenset({"task_done"})
+#: 任务的终态事件(中止并回原点等的就是它)。
+_TASK_END = frozenset({"task_done", "task_failed", "task_aborted", "task_preempted"})
 #: 中止并回原点(POC):中止之后最多等这么久让上一趟停下(秒)。
 HOME_ABORT_WAIT_S = 15.0
 
@@ -100,6 +102,8 @@ class StandbyManager:
         #: 这一趟跑完先别自动回(W22:到了拦截点要驱离,驱离结束时派回程)。
         #: ``(狗, 任务号) → 真 = 先别回``。
         self.hold: Callable[[str, str], bool] | None = None
+        #: 中止并回原点(外审 r1 #6):最近结束的任务 ``(狗, 任务号) → 结束原因``,判上一趟停没停稳。
+        self._ended: dict[tuple[str, str], str] = {}
         dispatcher.on_event(self._on_event)
 
     # ------------------------------------------------------------ 登记
@@ -322,14 +326,20 @@ class StandbyManager:
             ack = r.get("ack", {}) if isinstance(r, dict) else {}
             if ack.get("result") not in ("accepted", "duplicate"):
                 raise DispatchRefused(f"中止没成功:{ack.get('reason') or ack.get('result')}")
+            # 外审 r1 #6:要等到那一趟的**结束事件**(状态里没了不算),而且结束原因里没有
+            # stop_unconfirmed(代理停车确认等不到也会进终态)
             t0 = asyncio.get_running_loop().time()
-            while True:
-                now = c.status.task if c.status is not None else None
-                if now is None or now.task_id != cur.task_id:
-                    break
+            key = (robot_id, cur.task_id)
+            while key not in self._ended:
                 if asyncio.get_running_loop().time() - t0 > HOME_ABORT_WAIT_S:
                     raise DispatchRefused(f"中止后 {HOME_ABORT_WAIT_S:.0f} 秒还没停下,没派回原点")
                 await asyncio.sleep(0.2)
+            why = self._ended.pop(key)
+            if "stop_unconfirmed" in why:
+                raise DispatchRefused("上一趟中止了,但机器人停车没确认:没派回原点,先看现场画面")
+            now = c.status.task if c.status is not None else None
+            if now is not None and now.task_id != cur.task_id:
+                raise DispatchRefused(f"等停车时又派了任务 {now.task_id}:没派回原点")
             aborted = cur.task_id
         target = MapPose(map_id=mid, map_version=ver, frame_id="map",
                          x=h["x"], y=h["y"], yaw=h["yaw"]).to_wire()
@@ -358,6 +368,11 @@ class StandbyManager:
         if e.kind == "home_marked" and isinstance(e.data, dict):
             return self._on_home_marked(robot_id, e.data)
         task_id = e.data.get("task_id") if isinstance(e.data, dict) else None
+        if task_id and e.kind in _TASK_END:
+            reason = e.data.get("reason")
+            self._ended[(robot_id, task_id)] = reason if isinstance(reason, str) else ""
+            while len(self._ended) > 64:              # 只留最近的
+                self._ended.pop(next(iter(self._ended)))
         if e.kind not in _RETURN_AFTER or not task_id or task_id.startswith(STANDBY_PREFIX):
             return
         if self.hold is not None and self.hold(robot_id, task_id):

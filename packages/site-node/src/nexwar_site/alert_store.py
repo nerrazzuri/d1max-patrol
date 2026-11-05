@@ -68,6 +68,12 @@ class AlertDesk:
             group, _, seq = key.rpartition("#")
             if seq.isdigit():
                 max_seq[group] = max(max_seq.get(group, 0), int(seq))
+        # 外审 r1 #8:清掉的测试告警的号不许再用(推送队列按告警号去重,重用了真告警推不出去)
+        from nexwar_site.site_settings import SiteSettings
+        floor = SiteSettings(db).get("alert_seq_floor")
+        for group, seq in (floor.items() if isinstance(floor, dict) else ()):
+            if isinstance(seq, int) and not isinstance(seq, bool):
+                max_seq[group] = max(max_seq.get(group, 0), seq)
         rows = db.query("SELECT * FROM alerts WHERE resolved_ms IS NULL UNION "
                         "SELECT * FROM (SELECT * FROM alerts ORDER BY last_ms DESC LIMIT ?)",
                         (RESTORE_RECENT,))
@@ -123,6 +129,14 @@ class AlertDesk:
         rows = self.db.query("SELECT key FROM alerts WHERE json_extract(context, '$.test') = 1")
         keys = {r["key"] for r in rows}
         if keys:
+            st = SiteSettings(self.db)
+            floor = st.get("alert_seq_floor")
+            floor = dict(floor) if isinstance(floor, dict) else {}
+            for k in keys:
+                group, _, seq = k.rpartition("#")
+                if seq.isdigit():
+                    floor[group] = max(int(floor.get(group, 0) or 0), int(seq))
+            st.put("alert_seq_floor", floor)
             with self.db.tx() as c:
                 c.executemany("DELETE FROM alerts WHERE key=?", [(k,) for k in keys])
             self.book.forget(keys)
@@ -144,6 +158,11 @@ class AlertDesk:
             context = {**(context or {}), "test": True}
             if not title.startswith(TEST_PREFIX):
                 title = TEST_PREFIX + title
+        else:
+            # 外审 r1 #7:反过来也一样 —— 测试结束后的真告警不合进还在吸收的测试告警
+            cur = self.book.absorbing(robot, kind, now_ms=self._now())
+            if cur is not None and cur.context.get("test"):
+                merge = False
         ctx: dict[str, Any] = {}
         if self.context_for is not None:
             try:

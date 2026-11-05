@@ -322,12 +322,34 @@ void main() {
       await t.pumpWidget(MaterialApp(home: Scaffold(body: AlarmLogPage(api: api))));
       await t.pumpAndSettle();
       expect(find.byKey(const Key('alarm-test-mode')), findsNothing);
-      api.alertTestMode = <String, dynamic>{'active': true, 'until_ms': DateTime(2026, 11, 5, 22, 30).millisecondsSinceEpoch, 'by': 'alice'};
+      final end = DateTime.now().add(const Duration(hours: 1)); // 写死钟点过了那天就坏
+      api.alertTestMode = <String, dynamic>{'active': true, 'until_ms': end.millisecondsSinceEpoch, 'by': 'alice'};
       await t.pumpWidget(Container());
       await t.pumpWidget(MaterialApp(home: Scaffold(body: AlarmLogPage(api: api))));
       await t.pumpAndSettle();
       expect(find.byKey(const Key('alarm-test-mode')), findsOneWidget);
-      expect(find.textContaining('22:30'), findsOneWidget);
+      expect(find.textContaining('${end.hour.toString().padLeft(2, '0')}:${end.minute.toString().padLeft(2, '0')}'),
+          findsOneWidget);
+      await t.pumpWidget(Container());
+    });
+
+    testWidgets('外审 r1 #10：页面开着时别人开了测试，过一会儿条幅自己出来；关了自己收', (t) async {
+      final api = FakeApi('guard');
+      await t.pumpWidget(MaterialApp(home: Scaffold(body: AlarmLogPage(api: api))));
+      await t.pumpAndSettle();
+      expect(find.byKey(const Key('alarm-test-mode')), findsNothing);
+      api.alertTestMode = <String, dynamic>{
+        'active': true,
+        'until_ms': DateTime.now().add(const Duration(hours: 1)).millisecondsSinceEpoch,
+        'by': 'alice'
+      };
+      await t.pump(AlarmLogPage.testPoll + const Duration(milliseconds: 100));
+      await t.pump();
+      expect(find.byKey(const Key('alarm-test-mode')), findsOneWidget);
+      api.alertTestMode = <String, dynamic>{'active': false, 'until_ms': null, 'by': ''};
+      await t.pump(AlarmLogPage.testPoll + const Duration(milliseconds: 100));
+      await t.pump();
+      expect(find.byKey(const Key('alarm-test-mode')), findsNothing);
       await t.pumpWidget(Container());
     });
   });

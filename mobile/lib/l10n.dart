@@ -25,11 +25,16 @@ String tr(String en, String zh) => appLang.value == AppLang.zh ? zh : en;
 
 /// 告警标题：英文界面按种类查词条；中文界面用站点给的原文（它带着当时的细节，比如「(授权已不适用)」）。
 /// 种类不认识（站点比 app 新）也用站点原文。
+/// 站点给告警测试模式期间的告警标题加的前缀（站点 alert_store.TEST_PREFIX）；英文界面换成 "TEST: "，
+/// 不然演练看着跟真告警一样（外审 r1 #9）。
+const String kAlertTestPrefix = '测试：';
+
 String alertTitle(String kind, String siteTitle) {
   if (appLang.value == AppLang.zh && siteTitle.isNotEmpty) return siteTitle;
   final e = alertTitles[kind];
   if (e == null) return siteTitle;
-  return appLang.value == AppLang.zh ? e.$2 : e.$1;
+  final title = appLang.value == AppLang.zh ? e.$2 : e.$1;
+  return siteTitle.startsWith(kAlertTestPrefix) ? 'TEST: $title' : title;
 }
 
 /// App 用的那一份语言存储（`main()` 里设）；测试不设（不落盘）。
