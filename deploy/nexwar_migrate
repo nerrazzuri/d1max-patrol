@@ -53,8 +53,16 @@ old_units() {
   return 0
 }
 
+# 老目录是指着新目录的兼容链(11-05:编好的 Super-LIO 库里写死了 /opt/d1max,见 compat_link):不算老东西
+compat() {
+  [ -L "$1" ] && [ -e "$2" ] && [ "$(readlink -f "$1")" = "$(readlink -f "$2")" ]
+}
+
 anything_old() {
-  for pair in $DIRS $FILES; do [ -e "$R${pair%%:*}" ] && return 0; done
+  for pair in $DIRS $FILES; do
+    old="$R${pair%%:*}"; new="$R${pair#*:}"
+    [ -e "$old" ] && ! compat "$old" "$new" && return 0
+  done
   for f in $DROP; do [ -e "$R$f" ] && return 0; done
   [ -n "$(old_units)" ] && return 0
   return 1
@@ -75,6 +83,7 @@ TOPICX='s#/d1max/#/nexwar/#g'
 conflicts() {
   for pair in $DIRS; do
     old="$R${pair%%:*}"; new="$R${pair#*:}"
+    compat "$old" "$new" && continue
     if [ -e "$old" ] && [ -e "$new" ] && [ -n "$(ls -A "$new" 2>/dev/null)" ]; then echo "$old 和 $new"; fi
   done
   for pair in $FILES; do
@@ -134,6 +143,19 @@ relocate() {
 # 跟缺省一样的不写(程序写了会盖住装机时按版本编的那个);--fifo、--token-file 不带(新旧缺省路径代理都认)。
 SIDECAR_CARRY="$R/var/backups/nexwar-migrate.sidecar"
 SIDECAR_UNIT="$R/etc/systemd/system/d1max-field-sidecar.service"
+# 11-05 商场:Super-LIO 把编译时的源码目录编进 liblio.so,地图路径拼在它后面;目录搬了它就载不了图
+# (Global ICP 一直失败)。二进制改不了:库里编着 /opt/d1max 的,留一条 /opt/d1max → nexwar 的兼容链,
+# 重编(deploy/nexwar_superlio_build)以后就用不着了。
+compat_link() {
+  [ -d "$R/opt/nexwar/superlio" ] || return 0
+  [ -e "$R/opt/d1max" ] || [ -L "$R/opt/d1max" ] && return 0
+  find "$R/opt/nexwar/superlio" -name liblio.so -type f 2>/dev/null | while read -r f; do
+    if grep -qa '/opt/d1max/' "$f"; then echo y; break; fi
+  done | grep -q y || return 0
+  ln -s nexwar "$R/opt/d1max"
+  say "Super-LIO 库里编着 /opt/d1max:留兼容链 /opt/d1max → /opt/nexwar(重编 Super-LIO 后可删)"
+}
+
 sidecar_note() {
   [ -f "$SIDECAR_UNIT" ] || return 0
   [ -f "$SIDECAR_CARRY" ] && return 0
@@ -213,6 +235,7 @@ prepare() {
   for pair in $DIRS $FILES; do
     old="$R${pair%%:*}"; new="$R${pair#*:}"
     [ -e "$old" ] || continue
+    compat "$old" "$new" && continue
     if [ -d "$new" ] && [ -z "$(ls -A "$new")" ]; then rmdir "$new"; fi
     [ -f "$new" ] && [ ! -s "$new" ] && rm -f "$new"
     mkdir -p "$(dirname "$new")"
@@ -227,6 +250,7 @@ prepare() {
       say "改了 ${f#"$R"} 里的键名、路径(值不打印)"
   done
   relocate
+  compat_link
   sidecar_apply
   if [ -z "$R" ] && id -u d1max-site >/dev/null 2>&1 && ! id -u nexwar_site >/dev/null 2>&1; then
     $USERMOD -l nexwar_site -d /var/lib/nexwar_site d1max-site
