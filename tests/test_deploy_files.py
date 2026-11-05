@@ -2010,3 +2010,35 @@ def test_1105_代理也等钟对了再起_不再因为1970握不上TLS反复重�
     start = (DEPLOY / "nexwar_agent_start").read_text(encoding="utf-8")
     assert '"$here/deploy/nexwar_wait_clock"' in start
     assert start.index("nexwar_wait_clock") < start.index('exec "$here/venv/bin/nexwar_agent"')
+
+
+def test_POC1105_等钟等久了放提示_代理的启动脚本配了才放(tmp_path):
+    """开机就绪播报 ``not_ready_time``(用户听过):钟不对时代理还没起来,由等钟的脚本按间隔调提示。"""
+    import os
+    import subprocess
+    wait = DEPLOY / "nexwar_wait_clock"
+    fake = tmp_path / "bin"
+    fake.mkdir()
+    n = tmp_path / "n"
+    n.write_text("0")
+    (fake / "date").write_text(f"""#!/bin/sh
+k=$(cat {n}); echo $((k+1)) > {n}
+case "$1" in +%s) if [ "$k" -lt 7 ]; then echo 5; else echo 1793760000; fi;; *) echo T;; esac
+""")
+    (fake / "sleep").write_text("#!/bin/sh\nexit 0\n")
+    for f in fake.iterdir():
+        f.chmod(0o755)
+    said = tmp_path / "said"
+    env = {**os.environ, "PATH": f"{fake}:{os.environ['PATH']}", "NEXWAR_CLOCK_POLL_S": "2",
+           "NEXWAR_CLOCK_HINT_S": "4", "NEXWAR_CLOCK_HINT": f"echo hint >> {said}"}
+    r = subprocess.run(["sh", str(wait)], env=env, capture_output=True, text=True, timeout=10)
+    assert r.returncode == 0 and "钟对了" in r.stdout, r.stdout + r.stderr
+    assert said.read_text().splitlines() == ["hint", "hint", "hint"], "等了 6 轮 × 2 s:4 s 一次"
+    n.write_text("0")
+    said.unlink()
+    env["NEXWAR_CLOCK_HINT"] = "exit 3"
+    r = subprocess.run(["sh", str(wait)], env=env, capture_output=True, text=True, timeout=10)
+    assert r.returncode == 0, "提示失败不挡开机"
+    start = (DEPLOY / "nexwar_agent_start").read_text(encoding="utf-8")
+    assert "nexwar_adapter_d1max.say not_ready_time" in start
+    assert start.index("NEXWAR_CLOCK_HINT") < start.index('"$here/deploy/nexwar_wait_clock"')

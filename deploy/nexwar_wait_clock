@@ -2,14 +2,24 @@
 # 等机器人的钟可信了再往下走(11-04 现场)。C40221 没有保钟的电池,开机是 1970;Nav2 用仿真钟(时钟由
 # 代理按墙钟送),先起来、钟再往前跳 56 年,两次都一直不认 odom、不就绪,要重启 nexwar_nav2 才好。
 # 钟过了下限(NEXWAR_CLOCK_FLOOR,默认 2026-01-01)才返回;钟本来就对一声不吭。
+# POC 11-05 开机就绪播报:给了 NEXWAR_CLOCK_HINT(一条命令),每等 NEXWAR_CLOCK_HINT_S 秒(默认 300)
+# 跑一次(喇叭放「时间没对上」);它失败了不挡开机。
 floor="${NEXWAR_CLOCK_FLOOR:-1767225600}"
+poll="${NEXWAR_CLOCK_POLL_S:-2}"
+hint_s="${NEXWAR_CLOCK_HINT_S:-300}"
 told=0
+waited=0
 while [ "$(date +%s)" -lt "$floor" ]; do
   if [ "$told" = 0 ]; then
     echo "nexwar_wait_clock: 钟还不对($(date -u +%Y-%m-%dT%H:%M:%SZ)),等对时以后再起"
     told=1
   fi
-  sleep "${NEXWAR_CLOCK_POLL_S:-2}"
+  sleep "$poll"
+  waited=$((waited + poll))
+  if [ -n "${NEXWAR_CLOCK_HINT:-}" ] && [ "$waited" -ge "$hint_s" ]; then
+    waited=0
+    sh -c "$NEXWAR_CLOCK_HINT" || echo "nexwar_wait_clock: 提示没放成(接着等)"
+  fi
 done
 [ "$told" = 0 ] || echo "nexwar_wait_clock: 钟对了($(date -u +%Y-%m-%dT%H:%M:%SZ)),接着起"
 exit 0

@@ -487,3 +487,24 @@ def test_密码登录_env里只配了一半_说清楚(tmp_path):
         load_payload(a, env={"NEXWAR_ANBOT_SSH_HOST": "1.2.3.4", "NEXWAR_ANBOT_SSH_USER": "f"})
     p = load_payload(a, env={})
     assert p.cfg.audio_host == "" and p.cfg.clips_dir == ""
+
+
+def test_POC1105_钟不对时代理没起来_单独放一段话术_放完退出(tmp_path):
+    """开机就绪播报的 ``not_ready_time``:``nexwar_wait_clock`` 等钟时调它(代理还没起来)。"""
+    import json as _json
+
+    from nexwar_adapter_d1max.say import main
+    ssh, log, got = _假ssh(tmp_path, sleep=0.05)
+    clips = _clips(tmp_path)
+    (clips / "not_ready_time.wav").write_bytes(b"RIFFtime")
+    cfg = tmp_path / "payload.json"
+    cfg.write_text(_json.dumps({"kind": "anbot_ros1", "master": "http://127.0.0.1:9/",
+                                "host": "127.0.0.1", "clips_dir": str(clips), "ssh": str(ssh),
+                                "audio_host": "firefly@192.168.113.101",
+                                "ssh_key": "/home/robot/.nexwar/anbot_ssh"}))
+    assert main(["not_ready_time"], env={"NEXWAR_PAYLOAD": str(cfg)}) == 0
+    assert got.read_bytes() == b"RIFFtime"
+    log.unlink()
+    assert main(["no_such_clip"], env={"NEXWAR_PAYLOAD": str(cfg)}) == 0, "没有这段:不放、不算错"
+    assert main(["ready"], env={"NEXWAR_PAYLOAD": str(tmp_path / "none.json")}) == 0, "没装上装"
+    assert not log.exists()

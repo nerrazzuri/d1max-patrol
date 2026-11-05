@@ -385,6 +385,10 @@ class AgentRuntime:
         # POC 11-05:被挡、有人太近、人多时自己放录好的话术(有那段才放)
         from nexwar_agent.autovoice import AutoVoice
         self.autovoice = AutoVoice(self.deter, monotonic=monotonic or time.monotonic)
+        from nexwar_agent.bootvoice import BootVoice
+        self.bootvoice = BootVoice(self.deter, monotonic=monotonic or time.monotonic)
+        self._bootvoice_at = -1e9
+        self._bootvoice_mono = monotonic or time.monotonic
         self.processor.deter_hook = self.deter.handle
         #: 站立、趴下、蹲下(POC 2026-11):适配器报了能做哪几种才接。
         if self.hal.hal_capabilities().postures:
@@ -2984,6 +2988,7 @@ class AgentRuntime:
                 nearest_m=getattr(pv, "nearest_m", None) if pv is not None else None)
         except Exception:                                # 自动放话术坏了不拖每拍
             log.exception("自动放话术出错")
+        await self._boot_voice()
         if self.processor.motion_gate is not None:
             await self._sense_dock()             # W13 外审:实测在不在桩上、摘桩上危险
             dt = (self._on_dock, self._dock_hazard)
@@ -3149,6 +3154,22 @@ class AgentRuntime:
         elif policy.on_disconnect == "stop_and_wait":
             await cur.on_offline(False)
         # execute_locally:什么都不做
+
+    async def _boot_voice(self) -> None:
+        """开机就绪播报(POC 11-05,:mod:`nexwar_agent.bootvoice`):一秒判一次,报完就不再判。"""
+        bv = self.bootvoice
+        now = self._bootvoice_mono()
+        if bv.done or now - self._bootvoice_at < 1.0:
+            return
+        self._bootvoice_at = now
+        try:
+            h = await self.hal.health()
+            n2 = self._nav2_caps()
+            await bv.tick(site=bool(self.transport.connected), control=bool(h.control),
+                          loc=await self._loc_ok(h) is True,
+                          nav2=n2 is None or bool(n2.get("ready")))
+        except Exception:                                # 播报坏了不拖每拍
+            log.exception("开机就绪播报出错")
 
     async def _loc_ok(self, h) -> bool | None:
         """定位可不可信(W00c6e):看锚定;没有引擎零件(没加载地图)就是 ``None``(按运控的里程新鲜)。"""
