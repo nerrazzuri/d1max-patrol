@@ -987,6 +987,8 @@ class FakeApi implements SiteApi {
   Map<String, dynamic> routesBody = <String, dynamic>{
     'revision': 1, 'timezone': 'Asia/Kuala_Lumpur', 'routes': <dynamic>[], 'schedules': <dynamic>[]};
   SiteError? routeError;
+  /// 11-05 现场第 15、35 条：存下了，站点回的「要原地转又贴墙」提醒。
+  List<Map<String, dynamic>> routeWarnings = const [];
   final List<Map<String, dynamic>> savedRoutes = <Map<String, dynamic>>[];
   final List<Map<String, dynamic>> gotos = <Map<String, dynamic>>[];
   @override
@@ -1001,7 +1003,7 @@ class FakeApi implements SiteApi {
     savedRoutes.add(<String, dynamic>{'id': id, ...body});
     return <String, dynamic>{'id': id, 'revision': (body['base_revision'] as int) + 1, 'bound': true,
       'map_id': body['map_id'], 'map_version': body['map_version'], 'waypoints': body['waypoints'],
-      'policy': body['policy'] ?? <String, dynamic>{}};
+      'policy': body['policy'] ?? <String, dynamic>{}, 'warnings': routeWarnings};
   }
   @override
   Future<void> deleteRoute(String id, int baseRevision) async {

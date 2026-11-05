@@ -655,3 +655,26 @@ def test_都走得通不报(台):
 def test_没接规划不查(台):
     out = 台.store.put_route("r", body("wide", [pt("左", 1.0, 2.0), pt("右", 6.0, 2.0)]), by="a")
     assert out["revision"] == 1
+
+
+# ------------------------------------------------------------ 11-05 现场第 15、35 条
+
+
+def test_现场15_35_要原地转的点离墙太近_提醒不挡_直着穿过的不提醒(台):
+    """11-05:Patrol1 第 1 点贴墙,原地转被守卫拦、Nav2 规划不出;广场 1.3 m 通道尽头掉头转不了。
+    存路线时照存,但对要原地转(头一个、最后一个、拐 60° 以上)又离墙不到 0.65 m 的点提醒。"""
+    pts = [pt("起点贴墙", 1.0, 0.5), pt("贴墙直走", 2.0, 0.5), pt("拐角贴墙", 3.0, 0.5),
+           pt("屋中间", 3.0, 2.0), pt("尽头贴墙", 1.0, 3.5)]
+    r = 台.store.put_route("r", body(pts=pts), by="a")
+    assert r["problems"] == []
+    got = {w["index"]: w for w in r["warnings"]}
+    assert set(got) == {0, 2, 4}, r["warnings"]
+    assert "0.4 m" in got[0]["warning"] and "0.65" in got[0]["warning"], got[0]
+    assert got[2]["name"] == "拐角贴墙"
+    assert 台.store.get("r")["warnings"] == r["warnings"]
+
+
+def test_现场15_35_没有栅格的老版本不提醒(台):
+    r = 台.store.put_route("r", body(version="old", pts=[pt("a", 0.1, 0.1), pt("b", 0.2, 0.1)]),
+                           by="a")
+    assert r["warnings"] == []
