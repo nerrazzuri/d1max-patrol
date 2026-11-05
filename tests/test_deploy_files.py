@@ -1978,3 +1978,26 @@ case "$1" in +%s) if [ "$k" -lt 2 ]; then echo 5; else echo 1793760000; fi;; *) 
     n.write_text("9")                                    # 钟本来就对:一声不吭直接过
     r = subprocess.run(["sh", str(wait)], env=env, capture_output=True, text=True, timeout=10)
     assert r.returncode == 0 and r.stdout == ""
+
+
+def test_1105_定位器source_SuperLIO工作区_告诉colcon工作区在哪_搬过目录也起得来(tmp_path):
+    """11-05 C40221:改名迁移把 Super-LIO 工作区从 /opt/d1max 挪到 /opt/nexwar,colcon 的 setup.sh
+    里写死的编译时路径没了,不给 COLCON_CURRENT_PREFIX 就报错退出、定位器起不来。拿启动脚本里
+    source 那一段,配一个照 colcon 样子写的 setup.sh 跑。"""
+    import subprocess
+    text = (DEPLOY / "nexwar_localizer_start").read_text(encoding="utf-8")
+    head = text.index("# Super-LIO 的工作区")
+    block = text[head:text.index("set -u", head)]
+    ws = tmp_path / "slio" / "install"
+    ws.mkdir(parents=True)
+    (ws / "setup.sh").write_text(
+        '_p="/opt/d1max/superlio/x/install"\n'
+        'if [ -n "$COLCON_CURRENT_PREFIX" ]; then _p="$COLCON_CURRENT_PREFIX"\n'
+        'elif [ ! -d "$_p" ]; then\n'
+        '  echo "The build time path \\"$_p\\" doesn\'t exist" >&2; return 1\nfi\n'
+        'export SLIO_SEEN="$_p"\n')
+    script = (f"set +u\nNEXWAR_SUPERLIO_ROOT={tmp_path / 'slio'}\n{block}\n"
+              'echo "seen=$SLIO_SEEN left=${COLCON_CURRENT_PREFIX:-}"\n')
+    r = subprocess.run(["sh", "-ec", script], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    assert f"seen={ws} left=" in r.stdout, r.stdout + r.stderr
