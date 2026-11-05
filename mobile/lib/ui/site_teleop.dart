@@ -16,6 +16,8 @@
 library;
 
 import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -63,6 +65,39 @@ String teleopEndText(String reason) => switch (reason) {
       _ => tr('Remote control ended ($reason)', '遥控结束（$reason）'),
     };
 
+/// POC 速度档：上次选的那一档（`slow`/`mid`/`fast`；null = 没选过，按慢档）。进程里记着，
+/// [teleopTierFile] 设了（`main()` 里）就也存到本机文件，下次开 App 还是它。
+String? teleopTierPick;
+File? teleopTierFile;
+
+Future<void> loadTeleopTier(File f) async {
+  teleopTierFile = f;
+  try {
+    if (await f.exists()) {
+      final v = jsonDecode(await f.readAsString());
+      final tier = v is Map ? v['tier'] : null;
+      if (tier is String && kTeleopTiers.contains(tier)) teleopTierPick = tier;
+    }
+  } catch (_) {
+    // 文件坏了当没选过
+  }
+}
+
+void _saveTier(String tier) {
+  teleopTierPick = tier;
+  final f = teleopTierFile;
+  if (f == null) return;
+  unawaited(f.writeAsString(jsonEncode(<String, String>{'tier': tier})).then((_) {}, onError: (_) {}));
+}
+
+const List<String> kTeleopTiers = ['slow', 'mid', 'fast'];
+
+String teleopTierLabel(String tier) => switch (tier) {
+      'slow' => tr('Slow', '慢'),
+      'mid' => tr('Medium', '中'),
+      _ => tr('Fast', '快'),
+    };
+
 class SiteTeleopPage extends StatefulWidget {
   final SiteApi api;
   final String robotId;
@@ -81,6 +116,7 @@ class SiteTeleopPage extends StatefulWidget {
   static const Key turnStickKey = Key('teleop-turn');
   static const Key keysKey = Key('teleop-keys');
   static const Key zoneKey = Key('teleop-zone');
+  static Key tierKey(String tier) => Key('teleop-tier-$tier');
 
   @override
   State<SiteTeleopPage> createState() => _SiteTeleopPageState();
@@ -95,6 +131,17 @@ class _SiteTeleopPageState extends State<SiteTeleopPage> with WidgetsBindingObse
   bool _video = true;
   bool _ended = false;
   double _maxVx = 0, _maxWz = 0, _maxVy = 0;
+
+  /// POC 速度档：站点给的三档（m/s）；老站点不给 = 空，照旧按 [_maxVx]。
+  Map<String, double> _speeds = const {};
+  String _tier = teleopTierPick ?? 'slow';
+
+  /// 推满走多快：选的档占上限的几成（转向、横移同比例）。
+  double get _scale {
+    final v = _speeds[_tier];
+    if (v == null || _maxVx <= 0) return 1.0;
+    return (v / _maxVx).clamp(0.0, 1.0);
+  }
   double _fwd = 0, _turn = 0;
 
   /// 横移杆值（右为正，跟杆的 dx 一样；发出去换成机身系左为正）。
@@ -200,6 +247,14 @@ class _SiteTeleopPageState extends State<SiteTeleopPage> with WidgetsBindingObse
           _maxVx = (m['max_vx'] as num?)?.toDouble() ?? 0;
           _maxWz = (m['max_wz'] as num?)?.toDouble() ?? 0;
           _maxVy = (m['max_vy'] as num?)?.toDouble() ?? 0;
+          final sp = m['speeds'];
+          _speeds = sp is Map
+              ? {
+                  for (final k in kTeleopTiers)
+                    if (sp[k] is num && (sp[k] as num) > 0) k: (sp[k] as num).toDouble(),
+                }
+              : const {};
+          if (_speeds.length != kTeleopTiers.length) _speeds = const {};
           _status = tr('You are in control (speed limit ${_maxVx.toStringAsFixed(2)} m/s)',
               '遥控中（限速 ${_maxVx.toStringAsFixed(2)} m/s）');
           _zoneNote = teleopZoneText(m['zone_guard'] as Map<String, dynamic>?);
@@ -289,7 +344,8 @@ class _SiteTeleopPageState extends State<SiteTeleopPage> with WidgetsBindingObse
     // 右推 = 顺时针 = wz 为负；横移右推 = 往右 = vy 为负（机身系左为正）。前后、横移只走大的那一个。
     final fwd = _fwd.abs() >= _lat.abs() ? _fwd : 0.0;
     final lat = _fwd.abs() >= _lat.abs() ? 0.0 : _lat;
-    link.send(fwd * _maxVx, -_turn * _maxWz, vy: -lat * _maxVy);
+    final k = _scale;
+    link.send(fwd * _maxVx * k, -_turn * _maxWz * k, vy: -lat * _maxVy * k);
   }
 
   void _stopTicking() {
@@ -440,6 +496,27 @@ class _SiteTeleopPageState extends State<SiteTeleopPage> with WidgetsBindingObse
                                     overflow: TextOverflow.ellipsis,
                                     style: NwText.bodySmall.copyWith(color: Colors.black, fontWeight: FontWeight.w600)),
                               ),
+                            ),
+                          if (_speeds.isNotEmpty && !_ended)
+                            Padding(
+                              padding: const EdgeInsets.only(top: Nw.s4),
+                              child: Row(mainAxisSize: MainAxisSize.min, children: [
+                                for (final tier in kTeleopTiers)
+                                  Padding(
+                                    padding: const EdgeInsets.only(right: Nw.s4),
+                                    child: ChoiceChip(
+                                      key: SiteTeleopPage.tierKey(tier),
+                                      visualDensity: VisualDensity.compact,
+                                      label: Text(
+                                          '${teleopTierLabel(tier)} ${_speeds[tier]!.toStringAsFixed(1)}'),
+                                      selected: _tier == tier,
+                                      onSelected: (_) => setState(() {
+                                        _tier = tier;
+                                        _saveTier(tier);
+                                      }),
+                                    ),
+                                  ),
+                              ]),
                             ),
                           if (desktop)
                             Padding(

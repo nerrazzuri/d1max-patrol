@@ -5,7 +5,8 @@
 - **按帧走**:每帧先过 :class:`~nexwar_agent.teleop_frames.FrameGate`(代次、序号、在途),收下的那一帧
   在它自己的有效期(默认 300 ms)里按 ``set_velocity`` 执行;**帧不来了就停**(这边一拍一看,HAL 与
   旁路进程两层到期也自停)。
-- **限速**:HAL 能力的一半(决策 7 追加条件),站点也夹一次。
+- **限速**:站点授予时带了 ``max_vx_mps``(POC 速度档的快档)就按 min(HAL 能力, 它),转向、横移同比例;
+  没带(老站点)是 HAL 能力的一半(决策 7 追加条件)。站点也夹一次。
 - **人眼里的「往前」**(W09i):HAL 是机身系(x 朝狗头);遥控的「往前」朝**会话开始时**被选作头的那一头
   —— 狗尾为前时往狗尾那头走(跟 W09i 之前一样:那时 HAL 直接用 SDK 的「往前」)。
 - **一次会话里头尾不许变**(W11/W11a/W09i 外审阻断):有人拿厂家遥控器、App 调了头(包括变成「不知道」),
@@ -48,7 +49,7 @@ class TeleopTask(Task):
     def __init__(self, *, task_id: str, lease_epoch: int, operator: str, lease_ttl_ms: int,
                  hal: RobotHAL, now_ms: Callable[[], int], video_live: Callable[[], bool],
                  events: EventBook, priority: int = TELEOP_PRIORITY,
-                 zone_guard: Any = None) -> None:
+                 zone_guard: Any = None, max_vx_mps: float | None = None) -> None:
         super().__init__(task_id=task_id, kind="teleop", priority=priority)
         self.lease_epoch = lease_epoch
         self.operator = operator
@@ -59,8 +60,10 @@ class TeleopTask(Task):
         self._events = events
         self._lease_ttl = lease_ttl_ms
         caps = hal.hal_capabilities()
-        self._vmax, self._wmax = caps.max_vx / 2.0, caps.max_wz / 2.0
-        self._vymax = caps.max_vy / 2.0 if caps.lateral else 0.0
+        # 限速:站点给了快档(POC 速度档)就按 min(机身, 快档),转向、横移同比例;没给是老规矩一半。
+        k = 0.5 if max_vx_mps is None or caps.max_vx <= 0 else min(1.0, max_vx_mps / caps.max_vx)
+        self._vmax, self._wmax = caps.max_vx * k, caps.max_wz * k
+        self._vymax = caps.max_vy * k if caps.lateral else 0.0
         self._deadband = caps.deadband_vx
         self._until: int | None = None
         #: 最近收下的那一帧:(vx, wz, 有效到哪一刻(狗钟), 帧的有效期, vy)。

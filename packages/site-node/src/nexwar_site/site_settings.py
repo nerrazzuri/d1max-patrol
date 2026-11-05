@@ -10,6 +10,9 @@ import json
 from typing import Any
 
 DEFAULT_DUTY: dict[str, Any] = {"shift_hours": [7, 19], "stale_hours": 2}
+#: 遥控速度档(POC 2026-11,m/s):手机摇杆满推 = 这一档。要 0 < 慢 ≤ 中 ≤ 快 ≤ 1.5。
+DEFAULT_TELEOP_SPEEDS: dict[str, float] = {"slow": 0.3, "mid": 0.6, "fast": 1.0}
+TIERS = ("slow", "mid", "fast")
 
 
 class SettingsError(ValueError):
@@ -75,3 +78,38 @@ class SiteSettings:
             cur["stale_hours"] = st
         self.put("duty", cur)
         return cur
+
+    def teleop_speeds(self) -> dict[str, float]:
+        got = self.get("teleop_speeds", {})
+        out = dict(DEFAULT_TELEOP_SPEEDS)
+        if isinstance(got, dict):
+            cand = {k: got.get(k, out[k]) for k in TIERS}
+            if _speeds_ok(cand):
+                out = {k: float(cand[k]) for k in TIERS}
+        return out
+
+    def set_teleop_speeds(self, d: Any, *, by: str) -> dict[str, float]:
+        """改一档或几档(没给的保持原样);改完整组要满足 0 < 慢 ≤ 中 ≤ 快 ≤ 1.5。"""
+        if not isinstance(d, dict):
+            raise SettingsError("要一个对象")
+        cur: dict[str, Any] = self.teleop_speeds()
+        for k in TIERS:
+            if k in d:
+                cur[k] = d[k]
+        if not _speeds_ok(cur):
+            from nexwar_contract.teleop import TELEOP_SPEED_MAX_MPS
+            raise SettingsError(f"速度档要是数字,且 0 < 慢 ≤ 中 ≤ 快 ≤ {TELEOP_SPEED_MAX_MPS} m/s")
+        out = {k: round(float(cur[k]), 2) for k in TIERS}
+        self.put("teleop_speeds", out)
+        return out
+
+
+def _speeds_ok(d: dict[str, Any]) -> bool:
+    import math
+
+    from nexwar_contract.teleop import TELEOP_SPEED_MAX_MPS
+    vs = [d.get(k) for k in TIERS]
+    if not all(isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
+               for v in vs):
+        return False
+    return 0 < vs[0] <= vs[1] <= vs[2] <= TELEOP_SPEED_MAX_MPS

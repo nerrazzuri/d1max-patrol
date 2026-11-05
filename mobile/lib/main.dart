@@ -28,6 +28,7 @@ import 'store/paths.dart';
 import 'store/site_store.dart';
 import 'ui/nw/nw_theme.dart';
 import 'ui/site_page.dart';
+import 'ui/site_teleop.dart' show loadTeleopTier;
 
 export 'ui/orientation.dart' show landscapeOnly, lockLandscape, unlockOrientation;
 
@@ -50,6 +51,7 @@ Future<void> main() async {
   final langStore = await openLangStore();
   langStoreRef = langStore;
   appLang.value = await langStore.load();
+  await loadTeleopTier(await teleopTierFilePath()); // POC 速度档：上次选的那一档
   runApp(PatrolApp(siteStore: await openSiteStore(), langStore: langStore));
 }
 

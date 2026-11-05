@@ -79,9 +79,30 @@ class TeleopFrame:
                    vy=_speed(d, "vy") if "vy" in d else 0.0)
 
 
-def teleop_grant_payload(*, lease_epoch: int, operator: str, lease_ttl_ms: int) -> dict[str, Any]:
-    """``teleop`` 命令(授予租约、起遥控任务)的载荷。"""
-    return {"lease_epoch": lease_epoch, "operator": operator, "lease_ttl_ms": lease_ttl_ms}
+#: 遥控速度档的上限(m/s,POC 2026-11):站点设置、租约里带的快档都不许超过它。
+TELEOP_SPEED_MAX_MPS = 1.5
+
+
+def teleop_grant_payload(*, lease_epoch: int, operator: str, lease_ttl_ms: int,
+                         max_vx_mps: float | None = None) -> dict[str, Any]:
+    """``teleop`` 命令(授予租约、起遥控任务)的载荷。``max_vx_mps``(POC 速度档):这次遥控最快多少;
+    不带 = 老规矩(机身能力的一半)。"""
+    out: dict[str, Any] = {"lease_epoch": lease_epoch, "operator": operator,
+                           "lease_ttl_ms": lease_ttl_ms}
+    if max_vx_mps is not None:
+        out["max_vx_mps"] = max_vx_mps
+    return out
+
+
+def parse_teleop_speed(p: Any) -> float | None:
+    """授予载荷里的 ``max_vx_mps``:没有回 None;有就要是 (0, TELEOP_SPEED_MAX_MPS] 的数。"""
+    if not isinstance(p, dict) or "max_vx_mps" not in p:
+        return None
+    v = p["max_vx_mps"]
+    if isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v) \
+            or not 0 < v <= TELEOP_SPEED_MAX_MPS:
+        raise ContractError(f"teleop: max_vx_mps 要在 (0, {TELEOP_SPEED_MAX_MPS}]")
+    return float(v)
 
 
 def _lease_ttl(d: dict, *, default: int | None = None) -> int:
