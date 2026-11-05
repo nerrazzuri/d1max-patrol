@@ -810,8 +810,12 @@ def test_现场1105_机头下挂的线_机身歪了读高到012_不当挡_机头
     cfg = Config()
     front = cfg.body_len / 2 + cfg.margin
     cable = np.array([[front + 0.03, 0.0, -H + 0.20], [front + 0.04, -0.04, -H + 0.19]])
-    occ, _ = classify(np.vstack([场景(), cable]), H, cfg)
+    occ, known = classify(np.vstack([场景(), cable]), H, cfg)
     assert not occ[_cell(cfg, front + 0.03, 0.0)], "机头下挂的线:自己的,不挡"
+    assert known[_cell(cfg, front + 0.03, 0.0)], "那一格算看见了(守卫对看不见的格不放行)"
+    occ, known = classify(cable, H, cfg)
+    assert known[_cell(cfg, front + 0.03, 0.0)] and not occ[_cell(cfg, front + 0.03, 0.0)], \
+        "只打到线、没打到地面:也算看见了、不挡"
     def 一小块(x, y):                                            # 真东西好几个点(单点当雨滴滤掉)
         return np.array([[x + dx, y + dy, -H + 0.20] for dx in (0.0, 0.02) for dy in (0.0, 0.02)])
     side = 一小块(front + 0.02, -0.26)                            # 机头右前(草坪边、箱子角)

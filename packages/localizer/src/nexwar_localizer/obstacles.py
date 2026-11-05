@@ -357,15 +357,16 @@ def classify_full(pts_base: Any, height: float, cfg: Config = DEFAULT,
     h = (p @ np.asarray(normal, dtype=float) if normal is not None else p[:, 2]) + height
     hl, hw = cfg.body_len / 2 + cfg.margin, cfg.body_wid / 2 + cfg.margin
     body = (np.abs(p[:, 0]) <= hl) & (np.abs(p[:, 1]) <= hw) & (h < cfg.h_hi)
-    body |= ((p[:, 0] > hl) & (p[:, 0] <= hl + cfg.nose_ext)
-             & (np.abs(p[:, 1]) <= cfg.nose_half_w) & (h < cfg.h_hi))
+    # 机头那一窄条:打到的是自己挂的线 —— 算看见了、不挡(不能当没看见:守卫对看不见的格不放行)
+    nose = ((p[:, 0] > hl) & (p[:, 0] <= hl + cfg.nose_ext)
+            & (np.abs(p[:, 1]) <= cfg.nose_half_w) & (h < cfg.h_hi))
     r = np.floor(p[:, 0] / cfg.res + n / 2).astype(int)
     c = np.floor(p[:, 1] / cfg.res + n / 2).astype(int)
     inside = (r >= 0) & (r < n) & (c >= 0) & (c < n) & ~body
     idx = r * n + c
     ground = inside & (np.abs(h) <= cfg.ground_tol)
     low = inside & (h > cfg.ground_tol) & (h < cfg.h_lo)            # 矮草、碎石:看见了、不挡
-    bump = inside & (h >= cfg.h_lo) & (h <= cfg.h_hi)
+    bump = inside & ~nose & (h >= cfg.h_lo) & (h <= cfg.h_hi)
     lone = None
     if cfg.speckle and bump.any():
         cnt = np.bincount(idx[bump], minlength=n * n).reshape(n, n)
@@ -376,7 +377,7 @@ def classify_full(pts_base: Any, height: float, cfg: Config = DEFAULT,
         bump = bump & ~lone[np.where(inside, idx, 0)]
     dist = np.hypot(p[:, 0], p[:, 1])
     drop = inside & (h < -cfg.drop) & (dist <= cfg.near)
-    known[idx[ground | low | bump | drop]] = 1
+    known[idx[ground | low | bump | drop | (inside & nose)]] = 1
     occ[idx[bump | drop]] = 1
     if lone is not None:
         # 滤掉的格子**算没看见**(W29 外审 4):那一格打到了地面也不能当空 —— 可能是稀疏的真东西
