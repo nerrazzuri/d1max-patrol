@@ -809,13 +809,27 @@ def test_现场1105_机头下挂的线_机身歪了读高到012_不当挡_机头
     ``nose_ext``;两边、再往前的照样挡。"""
     cfg = Config()
     front = cfg.body_len / 2 + cfg.margin
-    cable = np.array([[front + 0.03, 0.0, -H + 0.12], [front + 0.04, -0.04, -H + 0.11]])
+    cable = np.array([[front + 0.03, 0.0, -H + 0.20], [front + 0.04, -0.04, -H + 0.19]])
     occ, _ = classify(np.vstack([场景(), cable]), H, cfg)
     assert not occ[_cell(cfg, front + 0.03, 0.0)], "机头下挂的线:自己的,不挡"
     def 一小块(x, y):                                            # 真东西好几个点(单点当雨滴滤掉)
-        return np.array([[x + dx, y + dy, -H + 0.12] for dx in (0.0, 0.02) for dy in (0.0, 0.02)])
+        return np.array([[x + dx, y + dy, -H + 0.20] for dx in (0.0, 0.02) for dy in (0.0, 0.02)])
     side = 一小块(front + 0.02, -0.26)                            # 机头右前(草坪边、箱子角)
     ahead = 一小块(front + cfg.nose_ext + 0.02, -0.01)
     occ, _ = classify(np.vstack([场景(), side, ahead]), H, cfg)
     assert occ[_cell(cfg, front + 0.03, -0.25)], "两边的照样挡"
     assert occ[_cell(cfg, front + cfg.nose_ext + 0.03, 0.0)], "再往前的照样挡"
+
+
+def test_现场1105_小台阶13cm不挡_16cm的箱子照挡():
+    """用户 11-05:P2 草坪边那个小台阶(实测 8–13 cm)是展示越障的地方,运控能过(厂家:连续攀爬台阶
+    25 cm),避障不该挡。凸起下沿 0.10 → 0.15 m。"""
+    cfg = Config()
+    assert cfg.h_lo == pytest.approx(0.15)
+    step = np.array([[x, y, -H + 0.13] for x in np.arange(1.0, 1.4, 0.03)
+                     for y in np.arange(-0.4, 0.4, 0.03)])
+    box = np.array([[x, y, -H + 0.16] for x in np.arange(2.0, 2.3, 0.03)
+                    for y in np.arange(-0.15, 0.15, 0.03)])
+    occ, known = classify(np.vstack([场景(), step, box]), H, cfg)
+    assert known[_cell(cfg, 1.2, 0.0)] and not occ[_cell(cfg, 1.2, 0.0)], "13 cm 台阶:看见了、不挡"
+    assert occ[_cell(cfg, 2.15, 0.0)], "16 cm 的箱子照挡"
