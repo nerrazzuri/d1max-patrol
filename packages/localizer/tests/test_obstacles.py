@@ -833,3 +833,21 @@ def test_现场1105_小台阶13cm不挡_16cm的箱子照挡():
     occ, known = classify(np.vstack([场景(), step, box]), H, cfg)
     assert known[_cell(cfg, 1.2, 0.0)] and not occ[_cell(cfg, 1.2, 0.0)], "13 cm 台阶:看见了、不挡"
     assert occ[_cell(cfg, 2.15, 0.0)], "16 cm 的箱子照挡"
+
+
+def test_现场1105_机身歪了_后雷达用自己的地面_身后平地不当挡_箱子照挡():
+    """11-05 P2:机身歪 6°,后雷达的点套前雷达拟合的地面,往后外推 2 m 差出 10 cm(平着站时 1 cm),
+    门槛 0.10 时身后一大片 90–100% 的帧挡着。后雷达自己拟合地面;拟合不认就退回前面的。"""
+    m = Mount.from_frames(AIRY)
+    rear = _后雷达(m, True)
+    per = Perception(m, rear=rear, clock=lambda: 0.0)
+    per.check = SelfCheck(frames=1)
+    front = 场景()
+    front[:, 2] += 0.12 * front[:, 0]                  # 眼前的地面:往后外推到 -1.5 m 高出 0.18 m
+    back = 场景(back=True, box=((-2.4, -2.0), (-0.2, 0.2), 0.5))
+    per.on_rear(_后雷达系(rear, back[back[:, 0] < -0.5]))
+    g = per.on_front(到雷达系(m, front), 1)
+    occ = unpack_bits(g["occ"], 80)
+    cfg = Config()
+    assert not occ[_cell(cfg, -1.5, 0.3)], "身后平地:不挡"
+    assert occ[_cell(cfg, -2.2, 0.0)], "身后的箱子照挡"
