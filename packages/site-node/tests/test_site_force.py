@@ -164,3 +164,54 @@ async def test_外审R2_时间表部分布防_在布防的防区被抱起来响_
     t.d.force("lifted")
     await t.w.tick()
     assert t.d.sent == []
+
+
+# ------------------------------------------------- W74 四期:被遮挡、推倒也报、也响
+
+
+def _罩(t, on=True):
+    t.d.clients["A"].capabilities.tasks["cover"] = {"state": "covered" if on else "ok"}
+
+
+async def test_W74_布防时被遮挡_报P1_警灯警笛响30秒_揭开了这一回完了(台):
+    from nexwar_site.force import COVER_SIREN_S
+    assert COVER_SIREN_S == 30
+    t = 台
+    t.arming.set_mode("armed", by="gina")
+    _罩(t)
+    await t.w.tick()
+    [a] = t.w.alerts.raised
+    assert a["kind"] == "force_covered" and a["context"]["force"] == "covered"
+    assert "警笛" in a["detail"] and "30" in a["detail"]
+    assert {p["output"] for p in t.d.sent} == {"siren", "strobe"}
+    assert all(p["on"] and p["max_s"] == 30 for p in t.d.sent)
+    _罩(t, False)
+    await t.w.tick()
+    assert not t.db.query("SELECT 1 FROM force_episodes")
+
+
+async def test_W74_站点设了只开灯_被遮挡只开警灯不鸣笛(台):
+    t = 台
+    t.w.siren_allowed = lambda: False
+    t.arming.set_mode("armed", by="gina")
+    _罩(t)
+    await t.w.tick()
+    assert [p["output"] for p in t.d.sent] == ["strobe"]
+    assert "只开警灯" in t.w.alerts.raised[0]["detail"]
+
+
+async def test_W74_布防时推倒_也响30秒_抱起来照旧45秒_抱起来比被遮挡要紧(台):
+    t = 台
+    t.arming.set_mode("armed", by="gina")
+    t.d.force("flipped")
+    await t.w.tick()
+    assert {p["output"] for p in t.d.sent} == {"siren", "strobe"}
+    assert all(p["max_s"] == 30 for p in t.d.sent)
+    t.d.force("ok")
+    await t.w.tick()
+    t.d.sent.clear()
+    _罩(t)
+    t.d.force("lifted")
+    await t.w.tick()
+    assert t.w.alerts.raised[-1]["kind"] == "force_lifted"
+    assert all(p["max_s"] == 45 for p in t.d.sent)

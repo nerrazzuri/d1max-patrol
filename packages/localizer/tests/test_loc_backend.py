@@ -489,3 +489,16 @@ async def test_W34外审_两回挡住之间正常换过图_第二回恢复起的
     await be.check()
     await _settle()
     assert sup.started[-1] == b / PRIOR_FILE, sup.started
+
+
+async def test_W74_雷达被挡住_核心自己就报_不管哪个后端_代理认得出(tmp_path):
+    """W74 四期判「被遮挡」要用它:Super-LIO 后端不走 MOLA 那条停进程的路,核心也要报出来。"""
+    from nexwar_contract.locbridge import LIDAR_BLOCKED_REASON
+    c, core, sup, svc, be = _台(tmp_path)
+    await be.load_prior(M, str(_先验(tmp_path)))
+    await _settle()
+    await _跟踪着(c, core, be)
+    _扫(c, core, 100, 1.2)                                # 不叫 be.check():只看核心
+    core.tick()
+    st = [m for m in core.drain() if isinstance(m, State)][-1]
+    assert st.state == "lost" and st.reason.startswith(LIDAR_BLOCKED_REASON), st

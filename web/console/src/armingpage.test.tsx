@@ -142,6 +142,18 @@ describe("布防时间页", () => {
     await waitFor(() => expect(posted.find((p) => p.url === "/api/duty-settings")?.body).toEqual({ shift_hours: [8, 20], stale_hours: 2 }));
   });
 
+  it("W74 四期:被遮挡、推倒时只开灯不鸣笛", async () => {
+    const { container: c } = page();
+    await waitFor(() => expect(c.querySelector('input[name="siren"]')).not.toBeNull());
+    await new Promise((r) => setTimeout(r, 20));          // 等站点的设置读回来
+    const box = c.querySelector('input[name="siren"]') as HTMLInputElement;
+    expect(box.checked).toBe(true);
+    fireEvent.click(box);
+    fireEvent.click(c.querySelector(".arm-save")!);
+    await waitFor(() => expect(posted.find((p) => p.url === "/api/duty-settings")?.body).toEqual(
+      { shift_hours: [7, 19], stale_hours: 2, self_protect_siren: false }));
+  });
+
   it("没存离开有提示", async () => {
     const { container: c } = page();
     await waitFor(() => expect(row(c, 0).querySelector(".armblock")).not.toBeNull());

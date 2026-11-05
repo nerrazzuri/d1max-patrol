@@ -86,7 +86,8 @@ export function useSiteData(): [SiteData | null, () => Promise<void>, Conn] {
 }
 
 /** 值班设置(W44 第二期,站点 /api/duty-settings):交班时间、多久没巡过算「没巡过」。 */
-export interface DutySettings { shift_hours: [number, number]; stale_hours: number }
+/** ``self_protect_siren``(W74 四期):布防时被遮挡、推倒、抱起来自动鸣笛;false = 只开警灯。老站点没有。 */
+export interface DutySettings { shift_hours: [number, number]; stale_hours: number; self_protect_siren?: boolean }
 export const DEFAULT_DUTY: DutySettings = { shift_hours: [7, 19], stale_hours: 2 };
 
 /** 读一次站点的值班设置;拿不到用默认(7:00 / 19:00、2 小时)。 */

@@ -12,6 +12,11 @@
 - 说不清(狗掉线、状态不新鲜、老代理不报)不报、不删。
 
 被撞(P2)是一下一下的事,走事件(``alert_sources`` 的 ``force_bump``)。
+
+W74 四期(设计 §八,用户 11-04 定):**被遮挡**(狗能力里 ``cover.state == "covered"``,狗上判:雷达被挡
++ 相机全黑 / 单色连着 3 秒)也按这一套报 P1;布防时被遮挡、被推倒,警灯警笛响 :data:`COVER_SIREN_S` 秒
+(被抱起来照旧 :data:`SIREN_S`)。站点设置「只开灯」(值班设置 ``self_protect_siren`` 关)时只开警灯,
+被抱起来也一样。翻倒、抱起来比被遮挡要紧:同时报的按它们。
 """
 
 from __future__ import annotations
@@ -30,11 +35,15 @@ SIREN_S = 45
 #: 响着的时候隔多久再发一次「开」(PR #87 复查 R4:狗重启、上装重新初始化会全关,站点不知道;
 #: 定时按剩余时长再开一次,最多晚这么久补回来;过了 45 秒就不发)。
 RENEW_S = 5
+#: 被遮挡、被推倒时警灯警笛响多久(W74 四期,用户 11-04 定)。
+COVER_SIREN_S = 30
+_SIREN_S = {"lifted": SIREN_S, "flipped": COVER_SIREN_S, "covered": COVER_SIREN_S}
 
-_TITLES = {"flipped": "机器人翻倒", "lifted": "机器人被抱起"}
+_TITLES = {"flipped": "机器人翻倒", "lifted": "机器人被抱起", "covered": "机器人被遮挡"}
 _DETAILS = {
     "flipped": "机器人已停下、软急停(不让它自己乱蹬);派人去扶起来,确认无损再在手机上解除急停",
     "lifted": "四条腿上不承重:有人把机器人抱起来了(可能是偷机器人)。机器人已停下;看现场、录像",
+    "covered": "雷达、相机都看不见:有人把机器人罩住了。机器人已停下,揭开之前不会动;看现场、录像",
 }
 
 
@@ -50,6 +59,8 @@ class ForceWatch:
         #: 这台机器人此刻所在的地方布不布防(W44 外审 R2:时间表部分布防时按防区)。站点主程序接
         #: :meth:`PersonWatch.armed_now`;没接按全站模式。
         self.armed_for: Callable[[str], bool] | None = None
+        #: W74 四期:能不能自动鸣笛(值班设置 ``self_protect_siren``;关了只开警灯)。没接 = 能。
+        self.siren_allowed: Callable[[], bool] | None = None
 
     def _armed(self, rid: str) -> bool:
         if self.armed_for is not None:
@@ -76,6 +87,9 @@ class ForceWatch:
             return None
         f = c.capabilities.tasks.get("force")
         st = f.get("state") if isinstance(f, dict) else None
+        cv = c.capabilities.tasks.get("cover")
+        if isinstance(cv, dict) and cv.get("state") == "covered" and st in (None, "ok"):
+            return "covered"                              # W74 四期:翻倒、抱起来比它要紧
         return st if st in ("ok", "flipped", "lifted") else None
 
     async def tick(self) -> None:
@@ -105,8 +119,8 @@ class ForceWatch:
         每拍发;响着的(``siren=2``)每 :data:`RENEW_S` 秒按剩余时长再发一次(R4)。"""
         now = self._now()
         for row in [dict(r) for r in self.db.query(
-                "SELECT * FROM force_episodes WHERE state='lifted' AND siren IN (1, 2)")]:
-            if now - row["started_ms"] >= SIREN_S * 1000:
+                "SELECT * FROM force_episodes WHERE siren IN (1, 2)")]:
+            if now - row["started_ms"] >= _SIREN_S.get(row["state"], SIREN_S) * 1000:
                 with self.db.tx() as tx:                  # 过了点:不响了,也不再归它
                     tx.execute("UPDATE force_episodes SET siren=0 WHERE robot_id=? "
                                "AND started_ms=?", (row["robot_id"], row["started_ms"]))
@@ -122,38 +136,54 @@ class ForceWatch:
         if pose is not None:
             context["pose"] = {"map_id": pose.map_id, "map_version": pose.map_version,
                                "x": round(pose.x, 2), "y": round(pose.y, 2), "at_ms": now}
-        # 被抱起来、又在布防:要响警笛(1 = 要响还没响成,0 = 不响或者响过了)
-        siren = 1 if st == "lifted" and self._armed(rid) else 0
+        # 被抱起来、被推倒、被遮挡,又在布防:要响警笛(1 = 要响还没响成,0 = 不响或者响过了)
+        siren = 1 if self._armed(rid) else 0
         with self.db.tx() as tx:
             tx.execute("INSERT INTO force_episodes(robot_id, state, started_ms, siren) "
                        "VALUES (?,?,?,?) ON CONFLICT(robot_id) DO UPDATE SET state=excluded.state, "
                        "started_ms=excluded.started_ms, siren=excluded.siren",
                        (rid, st, now, siren))
             queue(tx, kind=f"force_{st}", robot=rid, title=_TITLES[st],
-                  detail=_DETAILS[st] + (";布防中,机器人上警笛、警灯响 45 秒" if siren else ""),
+                  detail=_DETAILS[st] + (self._sound_note(st) if siren else ""),
                   context=context, now_ms=now)
         log.warning("%s %s", rid, _TITLES[st])
         return {"robot_id": rid, "state": st, "started_ms": now, "siren": siren}
+
+    def _loud(self) -> bool:
+        if self.siren_allowed is None:
+            return True
+        try:
+            return bool(self.siren_allowed())
+        except Exception:
+            log.exception("能不能自动鸣笛读不出来:当能(宁可多响)")
+            return True
+
+    def _sound_note(self, st: str) -> str:
+        secs = _SIREN_S[st]
+        return (f";布防中,机器人上警笛、警灯响 {secs} 秒" if self._loud()
+                else f";布防中,机器人只开警灯 {secs} 秒(站点设了不自动鸣笛)")
 
     def held(self, rid: str) -> set[str]:
         """这台狗此刻归受力警报的输出(布防中被抱起来、这一回开始后 ``SIREN_S`` 秒内)。驱离收场、
         换级关灯时问它(系统审查 S04)。"""
         rows = self.db.query("SELECT state, started_ms, siren FROM force_episodes "
                              "WHERE robot_id=?", (rid,))
-        if not rows or rows[0]["state"] != "lifted" or rows[0]["siren"] not in (1, 2) \
-                or self._now() - rows[0]["started_ms"] >= SIREN_S * 1000:
+        if not rows or rows[0]["siren"] not in (1, 2) or self._now() - rows[0]["started_ms"] \
+                >= _SIREN_S.get(rows[0]["state"], SIREN_S) * 1000:
             return set()
         return {"siren", "strobe"}
 
     def _outputs(self, rid: str) -> list[str]:
         c = self.dispatcher.clients.get(rid)
         caps = c.capabilities.tasks.get("deter", {}) if c and c.capabilities else {}
-        return [o for o in ("siren", "strobe") if o in caps.get("outputs", [])]
+        outs = ("siren", "strobe") if self._loud() else ("strobe",)
+        return [o for o in outs if o in caps.get("outputs", [])]
 
     async def _siren(self, rid: str, row: dict[str, Any], now: int) -> None:
         """警笛、警灯开到这一回开始后 ``SIREN_S`` 秒;都开成了(或者没有上装、过了点)就不再发。"""
         from nexwar_site.priorities import EVENT
-        left = SIREN_S - (now - row["started_ms"]) / 1000
+        secs = _SIREN_S.get(row["state"], SIREN_S)
+        left = secs - (now - row["started_ms"]) / 1000
         outs = self._outputs(rid)
         ok = left <= 1 or not outs
         if not ok:
@@ -161,10 +191,10 @@ class ForceWatch:
             for out in outs:
                 # PR #88 复查:前一路等回执可能等了好几秒 —— 每一路发之前按**此刻**重算剩余时长、
                 # 重核这一回还在(没放下、没换一回),过了点就不发
-                left = SIREN_S - (self._now() - row["started_ms"]) / 1000
+                left = secs - (self._now() - row["started_ms"]) / 1000
                 cur = self.db.query("SELECT state, started_ms FROM force_episodes "
                                     "WHERE robot_id=?", (rid,))
-                if left <= 1 or not cur or cur[0]["state"] != "lifted" \
+                if left <= 1 or not cur or cur[0]["state"] != row["state"] \
                         or cur[0]["started_ms"] != row["started_ms"]:
                     break
                 try:

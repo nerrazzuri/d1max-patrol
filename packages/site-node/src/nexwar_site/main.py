@@ -923,6 +923,9 @@ class Server:
         from nexwar_site.force import ForceWatch
         #: 狗翻倒、被抱起来(W26,决策 52):按狗能力里的状态对账报 P1,布防时被抱起来响警笛。
         self.force = ForceWatch(self.db, self.dispatcher, now_ms=wall_ms, arming=self.arming)
+        from nexwar_site.site_settings import SiteSettings
+        _st = SiteSettings(self.db)
+        self.force.siren_allowed = lambda: bool(_st.duty()["self_protect_siren"])   # W74 四期
         self.force.alerts = self.alerts
         self.deterrence.held_by_others = self.force.held   # 系统审查 S04:驱离不关受力警报的灯
         self.charge.busy = self.deterrence.busy

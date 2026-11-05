@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Any
 
 from nexwar_contract.errors import ContractError
+from nexwar_contract.locbridge import LIDAR_BLOCKED_REASON
 from nexwar_localizer.core import Estimate, LocalizerCore, RelocWant
 from nexwar_localizer.frames import Frames
 
@@ -190,7 +191,7 @@ class MolaBackend:
         ch = self.core.take_lidar_change()
         if ch is True:
             # 雷达被挡(W34):不喂 MOLA(挡着它会段错误、反复重启),停掉等雷达恢复
-            why = f"雷达被挡住了(一帧有效点只有 {self.core.lidar_points}):定位程序先停"
+            why = f"{LIDAR_BLOCKED_REASON}(一帧有效点只有 {self.core.lidar_points}):定位程序先停"
             self.core.backend_down(why)
             self._resume_pending = True
             self._spawn(self.supervisor.stop(), "停 MOLA")

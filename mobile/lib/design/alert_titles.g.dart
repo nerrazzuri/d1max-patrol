@@ -21,6 +21,7 @@ const Map<String, (String, String)> alertTitles = <String, (String, String)>{
   'evidence_seal_failed': ('Evidence could not be sealed', '证据加密失败'),
   'force_flipped': ('Robot flipped over', '机器人翻倒'),
   'force_lifted': ('Robot was lifted', '机器人被抬起'),
+  'force_covered': ('Robot was covered', '机器人被遮挡'),
   'force_bump': ('Robot was bumped', '机器人受到撞击'),
   'force_config_bad': ('Force thresholds unreadable, using defaults', '受力阈值配置无效，已使用默认值'),
   'purged_incoming_stuck': ('Deleted evidence could not be removed', '已删除的证据未能清除'),

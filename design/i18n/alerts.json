@@ -76,6 +76,10 @@
     "en": "Robot was lifted",
     "zh": "机器人被抬起"
   },
+  "force_covered": {
+    "en": "Robot was covered",
+    "zh": "机器人被遮挡"
+  },
   "force_bump": {
     "en": "Robot was bumped",
     "zh": "机器人受到撞击"
