@@ -109,6 +109,10 @@ class Config:
     body_len: float = 0.93
     body_wid: float = 0.48
     margin: float = 0.05
+    #: 机头那一窄条(``|y| ≤ nose_half_w``)自滤再往前管这么多(11-05 商场:机头下挂的线平时读 0.05 m,
+    #: 机身一歪读到 0.12 m,正前 0.55 m 挡了 5 分钟)。两边不管:草坪边、箱子角照样挡。
+    nose_ext: float = 0.06
+    nose_half_w: float = 0.10
     #: 滤雨点(W29):凸起的格子里只有一个点、周围 8 格也都没有凸起 → 当雨滴、飞虫:不算挡,那一格也不算
     #: 看见(未知,W29 外审 4)。
     #: 真的东西(杆子、人)竖着有好几线打到,不会只剩孤零零一个点。
@@ -351,6 +355,8 @@ def classify_full(pts_base: Any, height: float, cfg: Config = DEFAULT,
     h = (p @ np.asarray(normal, dtype=float) if normal is not None else p[:, 2]) + height
     hl, hw = cfg.body_len / 2 + cfg.margin, cfg.body_wid / 2 + cfg.margin
     body = (np.abs(p[:, 0]) <= hl) & (np.abs(p[:, 1]) <= hw) & (h < cfg.h_hi)
+    body |= ((p[:, 0] > hl) & (p[:, 0] <= hl + cfg.nose_ext)
+             & (np.abs(p[:, 1]) <= cfg.nose_half_w) & (h < cfg.h_hi))
     r = np.floor(p[:, 0] / cfg.res + n / 2).astype(int)
     c = np.floor(p[:, 1] / cfg.res + n / 2).astype(int)
     inside = (r >= 0) & (r < n) & (c >= 0) & (c < n) & ~body
