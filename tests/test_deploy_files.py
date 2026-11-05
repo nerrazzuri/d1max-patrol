@@ -1034,6 +1034,7 @@ def _启动脚本跑一遍(tmp_path, env: dict[str, str]) -> subprocess.Complete
     (slot / "deploy").mkdir(parents=True)
     (slot / "venv" / "bin").mkdir(parents=True)
     _sh.copy2(DEPLOY / "nexwar_agent_start", slot / "deploy" / "nexwar_agent_start")
+    _sh.copy2(DEPLOY / "nexwar_wait_clock", slot / "deploy" / "nexwar_wait_clock")  # 11-05:先等钟
     fake = slot / "venv" / "bin" / "nexwar_agent"
     fake.write_text('#!/bin/sh\necho "$0"\nfor a in "$@"; do echo "$a"; done\n')
     fake.chmod(0o755)
