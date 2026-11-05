@@ -309,3 +309,27 @@ async def test_接到HAL上_能力里有警灯喇叭能TTS_没有录好的话术
     acts = hal.hal_capabilities().actuators
     assert acts["strobe"] and acts["speaker"] and not acts["siren"] and not acts["spotlight"]
     assert hal.sound_tts() and hal.sound_clips() == ()
+
+
+def test_现场1105_代理和HAL用到的上装属性_竞品转接都有():
+    """11-05 现场:代理入口读 ``payload.cfg.inputs_reg``(继电器板输入,W56 风扇报警),竞品转接没有,
+    代理起不来。把代理入口、HAL 里所有 ``payload.X`` / ``payload.cfg.Y`` 拿出来逐个对。"""
+    import re
+    from pathlib import Path
+
+    import nexwar_adapter_d1max.hal as hal_mod
+    root = Path(hal_mod.__file__).resolve().parents[4]
+    main = root / "packages/robot-agent/src/nexwar_agent/main.py"
+    used: set[tuple[str, ...]] = set()
+    for f, pat in ((main, r"(?<![\w./])payload\.([a-z_]+)(?:\.([a-z_]+))?"),
+                   (Path(hal_mod.__file__), r"\b_payload\.([a-z_]+)(?:\.([a-z_]+))?")):
+        for m in re.finditer(pat, f.read_text(encoding="utf-8")):
+            used.add(tuple(x for x in m.groups() if x))
+    assert ("cfg", "inputs_reg") in used, "找属性的正则还管用"
+    p = AnbotPayload(AnbotConfig(master="http://127.0.0.1:1/", host="127.0.0.1"))
+    for path in sorted(used):
+        obj: object = p
+        for name in path:
+            assert hasattr(obj, name), f"竞品转接缺 payload.{'.'.join(path)}"
+            obj = getattr(obj, name)
+    assert p.cfg.inputs_reg < 0 and p.input_bits() is None, "没有继电器板输入:不接风扇报警"

@@ -255,6 +255,8 @@ class AnbotConfig:
     # HAL 看这两个:能 TTS、没有录好的话术
     tts_command: str = "anbot"
     clips_dir: str = ""
+    #: 代理入口看这个:没有继电器板输入(W56 风扇报警不接)
+    inputs_reg: int = -1
 
     def __post_init__(self) -> None:
         u = urlsplit(self.master)
@@ -311,6 +313,9 @@ class AnbotPayload:
 
     def options(self) -> dict[str, Any]:
         return {}
+
+    def input_bits(self) -> int | None:
+        return None
 
     def connections(self, topic: str) -> int:
         return sum(p.connections() for p in self._pubs if p.topic == topic)
