@@ -421,4 +421,40 @@ void main() {
     await t.pumpAndSettle();
     expect(api.calls, contains('map A main:20261031-1'));
   });
+
+  test('POC 换图进度：已下多少 MB、估还要多久、在载入、换好、没换成写原因', () {
+    const now = 1000000;
+    Map<String, dynamic> a(String state, {Map<String, dynamic>? d, String reason = '', String? confirmed}) =>
+        {'state': state, 'reason': reason, 'confirmed': confirmed, 'download': d};
+    expect(mapSwitchText(a('pending'), nowMs: now), contains('等机器人开始下载'));
+    final d = {'bytes': 20e6, 'total': 80e6, 'at_ms': now - 1000};
+    expect(mapSwitchText(a('pending', d: d), nowMs: now), contains('已下载 20 / 80 MB'));
+    final t = mapSwitchText(a('pending', d: d), nowMs: now, rateBps: 2e6);
+    expect(t, contains('约还要 30 秒'));
+    expect(mapSwitchText(a('pending', d: {...d, 'at_ms': now - 20000}), nowMs: now), contains('在载入定位'));
+    expect(mapSwitchText(a('confirmed', confirmed: 'localizer'), nowMs: now), contains('定位已确认'));
+    expect(mapSwitchText(a('failed', reason: '校验不对'), nowMs: now), contains('校验不对'));
+    expect(mapSwitchText(a('timeout'), nowMs: now), contains('太久'));
+  });
+
+  testWidgets('POC 换图进度：机器人那一行显示进度', (t) async {
+    _size(t);
+    final api = FakeApi('admin')
+      ..overview = <String, dynamic>{
+        'now_ms': 1000000,
+        'maps': <dynamic>[],
+        'robots': <dynamic>[
+          <String, dynamic>{'robot_id': 'A', 'can_activate': true, 'loaded': null,
+            'activation': <String, dynamic>{'map_id': 'main', 'version': '2', 'state': 'pending', 'reason': '',
+              'download': <String, dynamic>{'bytes': 5e6, 'total': 50e6, 'at_ms': 999000}}},
+        ],
+      };
+    await t.pumpWidget(MaterialApp(home: MapManagePage(api: api)));
+    await t.pump();
+    await t.pump();
+    expect(find.byKey(MapManagePage.progressKey('A')), findsOneWidget);
+    expect(find.textContaining('main:2'), findsWidgets);
+    expect(find.textContaining('5.0 / 50 MB'), findsOneWidget);
+    await t.pumpWidget(Container());
+  });
 }

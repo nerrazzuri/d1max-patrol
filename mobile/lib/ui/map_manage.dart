@@ -28,6 +28,7 @@ class MapManagePage extends StatefulWidget {
   static Key deleteKey(String m, String v) => Key('mapver-delete-$m-$v');
   static Key rollbackKey(String r) => Key('map-rollback-$r');
   static const Key bagsKey = Key('maps-bags');
+  static Key progressKey(String r) => Key('map-progress-$r');
 
   @override
   State<MapManagePage> createState() => _MapManagePageState();
@@ -40,7 +41,85 @@ String _when(Object? ms) {
   return '${d.year}-${two(d.month)}-${two(d.day)} ${two(d.hour)}:${two(d.minute)}';
 }
 
+String _mb(num bytes) => bytes >= 1e9
+    ? '${(bytes / 1e9).toStringAsFixed(1)} GB'
+    : '${(bytes / 1e6).toStringAsFixed(bytes >= 1e7 ? 0 : 1)} MB';
+
+String _left(num s) {
+  final n = s.round();
+  if (n < 60) return tr('$n s', '$n 秒');
+  return tr('${n ~/ 60} min ${n % 60} s', '${n ~/ 60} 分 ${n % 60} 秒');
+}
+
+/// POC 第 6 项：换图走到哪了（站点的换图记录 `activation`）。[rateBps]：最近两次刷新算出来的下载速度。
+String mapSwitchText(Map<String, dynamic> a, {required int nowMs, double? rateBps}) {
+  final reason = '${a['reason'] ?? ''}';
+  switch (a['state']) {
+    case 'pending':
+      final d = a['download'];
+      if (d is! Map) return tr('Sent: waiting for the robot to start downloading', '已发出，等机器人开始下载');
+      final bytes = (d['bytes'] as num?) ?? 0, total = (d['total'] as num?) ?? 0;
+      final at = (d['at_ms'] as num?)?.toInt() ?? nowMs;
+      final idle = ((nowMs - at) / 1000).round();
+      final total0 = total > 0 ? total : bytes;
+      final got = '${_mb(bytes).replaceAll(' MB', '')} / ${_mb(total0)}';
+      if (idle > 15) {
+        return tr('Downloaded $got; nothing for $idle s: loading the localizer, or the link is down',
+            '已下载 $got；$idle 秒没再下：在载入定位，或者网断了');
+      }
+      final eta = rateBps != null && rateBps > 0 && total > bytes ? (total - bytes) / rateBps : null;
+      return tr('Downloaded $got${eta != null ? ', about ${_left(eta)} left' : ''}',
+          '已下载 $got${eta != null ? '，约还要 ${_left(eta)}' : ''}');
+    case 'confirmed':
+      return a['confirmed'] == 'localizer'
+          ? tr('Switched; localizer confirmed', '已换好，定位已确认')
+          : tr('Switched (loaded)', '已换好（已载入）');
+    case 'failed':
+      return tr('Not switched${reason.isEmpty ? '' : ': $reason'}', '没换成${reason.isEmpty ? '' : '：$reason'}');
+    default:
+      return tr('No answer for too long: treat as not switched', '太久没动静，当作没换成');
+  }
+}
+
 class _MapManagePageState extends State<MapManagePage> {
+  /// 每台机器人上一次看到的下载量（字节、站点时刻），用来算速度。
+  final Map<String, (num, int)> _lastDl = {};
+  final Map<String, double> _rate = {};
+  Timer? _poll;
+
+  @override
+  void dispose() {
+    _poll?.cancel();
+    super.dispose();
+  }
+
+  /// 有机器人在换图就 2 秒刷一次；都换完了停。
+  void _track(Map<String, dynamic> ov) {
+    var pending = false;
+    for (final r in (ov['robots'] as List? ?? const [])) {
+      if (r is! Map) continue;
+      final a = r['activation'];
+      if (a is! Map || a['state'] != 'pending') continue;
+      pending = true;
+      final d = a['download'];
+      if (d is! Map) continue;
+      final id = '${r['robot_id']}';
+      final bytes = (d['bytes'] as num?) ?? 0;
+      final at = (d['at_ms'] as num?)?.toInt() ?? 0;
+      final prev = _lastDl[id];
+      if (prev != null && at > prev.$2 && bytes >= prev.$1) {
+        _rate[id] = (bytes - prev.$1) / ((at - prev.$2) / 1000);
+      }
+      _lastDl[id] = (bytes, at);
+    }
+    if (pending) {
+      _poll ??= Timer.periodic(const Duration(seconds: 2), (_) => unawaited(_load()));
+    } else {
+      _poll?.cancel();
+      _poll = null;
+    }
+  }
+
   SiteApi get api => widget.api;
   Map<String, dynamic>? _ov;
   bool _wizardActive = false;
@@ -56,6 +135,7 @@ class _MapManagePageState extends State<MapManagePage> {
     try {
       final got = await Future.wait([api.mapsOverview(), api.mapWizard()]);
       if (!mounted) return;
+      _track(got[0]);
       setState(() {
         _ov = got[0];
         _wizardActive = got[1]['wizard'] is Map;
@@ -270,7 +350,8 @@ class _MapManagePageState extends State<MapManagePage> {
                 for (final r in robots)
                   Padding(
                     padding: const EdgeInsets.symmetric(vertical: Nw.s4),
-                    child: Row(children: [
+                    child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                    Row(children: [
                       Expanded(
                           child: Text(
                               '${r['robot_id']}  ${r['loaded'] is Map ? '${r['loaded']['map_id']}:${r['loaded']['version']}' : tr('(no map)', '（没有图）')}',
@@ -282,6 +363,17 @@ class _MapManagePageState extends State<MapManagePage> {
                             size: NwButtonSize.small,
                             variant: NwButtonVariant.outline,
                             onPressed: () => _rollback('${r['robot_id']}', r['rollback'] as Map)),
+                    ]),
+                    // POC 第 6 项：换图进度（下了多少、还要多久、在载入、换好、没换成的原因）
+                    if (r['activation'] is Map && (r['activation'] as Map)['state'] != null)
+                      Padding(
+                        padding: const EdgeInsets.only(top: Nw.s4),
+                        child: Text(
+                            '${(r['activation'] as Map)['map_id']}:${(r['activation'] as Map)['version']}  '
+                            '${mapSwitchText((r['activation'] as Map).cast<String, dynamic>(), nowMs: (ov?['now_ms'] as num?)?.toInt() ?? DateTime.now().millisecondsSinceEpoch, rateBps: _rate['${r['robot_id']}'])}',
+                            key: MapManagePage.progressKey('${r['robot_id']}'),
+                            style: NwText.bodySmall.copyWith(color: c.textSecondary)),
+                      ),
                     ]),
                   ),
               ]),
