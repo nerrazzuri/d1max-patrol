@@ -124,6 +124,11 @@ class TeleopTask(Task):
 
     # ------------------------------------------------------------ 进来的东西
 
+    @property
+    def driving(self) -> bool:
+        """这会儿在按杆开着(换姿势要等松杆、停下)。"""
+        return self._moving
+
     def on_frame(self, frame: TeleopFrame, *, rx_ms: int) -> str:
         """一帧遥控。收下返回空串,丢掉返回原因(不回执)。"""
         if self.state is not TaskState.RUNNING or self._ending is not None:
@@ -154,12 +159,16 @@ class TeleopTask(Task):
             self._last_drop = (why, rx_ms)
             return why
         self._cmd = (frame.vx, frame.wz, rx_ms + frame.ttl_ms, frame.ttl_ms, frame.vy, frame.vmax)
+        self._in_sight = frame.in_sight
         return why
 
     def _want_gear(self, vmax: float | None) -> int:
         """选中的速度要哪一档:超过低速档最快(不低于 1.0 m/s)且能换中速档 → 2。"""
         if self._vmax2 <= 0 or vmax is None:
             return 1
+        last = getattr(self._guard, "last", None) if self._guard is not None else None
+        if getattr(last, "state", "") == "untrusted":
+            return 1                                     # 中速档要位置可信(我在现场也不进)
         return 2 if vmax > max(self._vmax, 1.0) + 1e-6 else 1
 
     async def _gear_tick(self, now: int) -> None:
@@ -291,7 +300,8 @@ class TeleopTask(Task):
         守卫自己出错不许让遥控开着冲:当零速、记下来。"""
         try:
             o = await self._hal.odometry()
-            v = self._guard.check(vx, wz, (o.x, o.y, o.yaw), float(getattr(o, "vx", 0.0) or 0.0))
+            v = self._guard.check(vx, wz, (o.x, o.y, o.yaw), float(getattr(o, "vx", 0.0) or 0.0),
+                                  in_sight=getattr(self, "_in_sight", False))
         except Exception:
             log.exception("硬禁区守卫出错:这一拍按零速")
             return 0.0, 0.0

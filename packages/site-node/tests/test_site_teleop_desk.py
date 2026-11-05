@@ -515,3 +515,30 @@ def test_现场1105_遥控那一趟被中止_站点当场结束_说清是谁停�
     assert s.end_reason == "aborted"
     end = [m for m in told if m.get("kind") == "ended"][-1]
     assert end["reason"] == "aborted" and end["by"] == "site:swap"
+
+
+def test_POC1105_我在现场_手机开了_之后的帧都带上_记审计_回手机_新会话不带(desk):
+    """用户 11-05:「我在现场,看得见机器人」只管这一次遥控;保安 / 管理员;审计记谁、什么时候。"""
+    k, d = desk
+    rec = []
+    k.audit = SimpleNamespace(record=lambda **kw: rec.append(kw))
+    s = k.open("A", _u("gina", "guard"))
+    told = []
+    s.ws = SimpleNamespace(send_text=told.append, close=lambda *a: None)
+    ph = _手机()
+    _发(k, s, ph, 0.3)
+    assert d.frames[-1].in_sight is False
+    k.on_message(s, '{"kind": "in_sight", "on": true}')
+    assert json.loads(told[-1]) == {"kind": "in_sight", "on": True}
+    _发(k, s, ph, 0.3)
+    assert d.frames[-1].in_sight is True
+    assert [r["action"] for r in rec if r["action"] == "teleop_in_sight"] == ["teleop_in_sight"]
+    r = [r for r in rec if r["action"] == "teleop_in_sight"][0]
+    assert r["actor"] == "gina" and r["detail"]["on"] is True
+    k.on_message(s, '{"kind": "in_sight", "on": false}')
+    _发(k, s, ph, 0.3)
+    assert d.frames[-1].in_sight is False
+    k.close(s, "released")
+    d.status.task = None
+    s2 = k.open("A", _u("gina", "guard"))
+    assert s2.in_sight is False, "新会话不带"
