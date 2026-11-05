@@ -48,25 +48,32 @@ export function SystemPage2({ me, now, say }: { me: Me; now: number; say: (s: st
   );
 }
 
-type Tier = "slow" | "mid" | "fast";
-const TIERS: Tier[] = ["slow", "mid", "fast"];
-const TIER_KEY: Record<Tier, Key> = { slow: "tsSlow", mid: "tsMid", fast: "tsFast" };
-/** 速度档上限(m/s),跟站点、机器人一致。 */
-const SPEED_MAX = 1.5;
+/** 速度档上限(m/s),跟站点、机器人一致(用户 11-05:目前最高到 SDK 中速档)。 */
+const SPEED_MAX = 2.0;
+const SPEED_MAX_N = 8;
 
-/** POC 遥控速度档:手机摇杆满推按哪一档走。管理员改;要 0 < 慢 ≤ 中 ≤ 快 ≤ 1.5。 */
+/** 管理员填的速度表:逗号或空格隔开的数;不合规回 null。 */
+export function parseSpeeds(text: string): number[] | null {
+  const parts = text.split(/[,，\s]+/).filter((p) => p !== "");
+  if (parts.length < 1 || parts.length > SPEED_MAX_N) return null;
+  const n = parts.map(Number);
+  if (!n.every((x) => Number.isFinite(x) && x > 0 && x <= SPEED_MAX)) return null;
+  return n.every((x, i) => i === 0 || x > n[i - 1]) ? n : null;
+}
+
+/** POC 遥控速度档(11-05 按速度分):手机上一个数一个按钮。管理员改。 */
 function TeleopSpeeds({ say }: { say: (s: string) => void }) {
-  const [got] = useLoad<Record<Tier, number>>("/api/teleop-speeds");
-  const [v, setV] = useState<Record<Tier, string> | null>(null);
+  const [got] = useLoad<{ speeds: number[] }>("/api/teleop-speeds");
+  const [v, setV] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
-  useEffect(() => { if (got) setV({ slow: String(got.slow), mid: String(got.mid), fast: String(got.fast) }); }, [got]);
-  if (!v) return null;
-  const n = TIERS.map((k) => Number(v[k]));
-  const ok = n.every((x) => Number.isFinite(x)) && n[0] > 0 && n[0] <= n[1] && n[1] <= n[2] && n[2] <= SPEED_MAX;
+  useEffect(() => { if (got?.speeds) setV(got.speeds.join(", ")); }, [got]);
+  if (v === null) return null;
+  const n = parseSpeeds(v);
   const save = async () => {
+    if (!n) return;
     setErr(null);
     try {
-      await api("POST", "/api/teleop-speeds", { slow: n[0], mid: n[1], fast: n[2] });
+      await api("POST", "/api/teleop-speeds", { speeds: n });
       say(t("tsSaved"));
     } catch (e) {
       setErr(e instanceof ApiError ? e.message : String(e));
@@ -76,18 +83,13 @@ function TeleopSpeeds({ say }: { say: (s: string) => void }) {
     <section class="panel sys-teleop">
       <h2>{t("tsTitle")}</h2>
       <p class="muted small">{t("tsHint")}</p>
-      <div class="rd-inline">
-        {TIERS.map((k) => (
-          <label key={k} class="field">
-            {t(TIER_KEY[k])}
-            <input name={k} type="number" step="0.1" min="0.1" max={String(SPEED_MAX)} value={v[k]}
-              onInput={(e) => setV({ ...v, [k]: e.currentTarget.value })} />
-          </label>
-        ))}
-      </div>
-      {!ok && <p class="error small" role="alert">{t("tsBad", { max: SPEED_MAX })}</p>}
+      <label class="field">
+        {t("tsList")}
+        <input name="speeds" value={v} onInput={(e) => setV(e.currentTarget.value)} />
+      </label>
+      {!n && <p class="error small" role="alert">{t("tsBad", { n: SPEED_MAX_N, max: SPEED_MAX })}</p>}
       {err && <p class="error small" role="alert">{err}</p>}
-      <button type="button" class="btn sm primary" disabled={!ok} onClick={() => void save()}>{t("tsSave")}</button>
+      <button type="button" class="btn sm primary" disabled={!n} onClick={() => void save()}>{t("tsSave")}</button>
     </section>
   );
 }

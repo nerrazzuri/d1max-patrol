@@ -37,6 +37,8 @@ from nexwar_patrol.backends.base import (
 )
 from nexwar_patrol.protocol.agent_frames import (
     AUTH_PROTO_VERSION,
+    GEAR_IDLE_S,
+    GEAR_PROTO_VERSION,
     LEGACY_MAX_FRACTION,
     MIN_PROTO_VERSION,
     PROTO_VERSION,
@@ -161,6 +163,9 @@ class SidecarDeviceBackend(DeviceBackend):
         self._shock_peak = 0.0
         #: 最近的故障帧(有界),带到达时刻(``time.monotonic``)。事件流里的 ``FaultEvent`` 丢了
         #: code,HAL 要原样的;HAL 要的是「当前」故障,按到达时刻判(见 :meth:`current_faults`)。
+        #: 遥控临时档(协议 12;0 = 没有)和最近一次续的时刻(``time.monotonic``)。
+        self._gear = 0
+        self._gear_at = 0.0
         self._faults: deque[tuple[float, FaultFrame]] = deque(maxlen=RECENT_FAULTS)
 
     # -------------------------------------------------------------- 生命周期
@@ -180,6 +185,31 @@ class SidecarDeviceBackend(DeviceBackend):
         没连上、老旁路 0.5。
         后退、横移、转向一直 0.5。"""
         return self._hello.max_fraction if self._hello is not None else LEGACY_MAX_FRACTION
+
+    @property
+    def gear_want(self) -> int | None:
+        """旁路进程现在要的档:我们要的遥控临时档(没过期)或者 ``hello.speed_level_want``。"""
+        if self._gear and time.monotonic() - self._gear_at < GEAR_IDLE_S:
+            return self._gear
+        return self._hello.speed_level_want if self._hello is not None else None
+
+    @property
+    def teleop_max_gear(self) -> int:
+        """遥控最高能临时换到几档:12 号起的旁路进程报的 ``--teleop-max-gear``;老的 1。"""
+        h = self._hello
+        if h is None or h.proto < GEAR_PROTO_VERSION or not h.speed_level_want:
+            return 1
+        return h.teleop_max_gear
+
+    async def gear(self, level: int) -> None:
+        """遥控临时换档 / 续档(协议 12)。旁路 3 s 没续、急停、丢控制权、连接断了自己回原档。"""
+        await self._require_control("换档")
+        if level > self.teleop_max_gear or level < 1:
+            raise DeviceBackendError(f"旁路进程不让换到 {level} 档(--teleop-max-gear)")
+        await self._command("gear", timeout_s=URGENT_ACK_TIMEOUT_S, level=int(level))
+        want = self._hello.speed_level_want if self._hello is not None else None
+        self._gear = 0 if level == want else int(level)
+        self._gear_at = time.monotonic()
 
     @property
     def authorized(self) -> bool:
@@ -277,6 +307,7 @@ class SidecarDeviceBackend(DeviceBackend):
         self._hello = hello
         self._held = hello.held
         self._authorized = False
+        self._gear = 0                                 # 新连接:旁路那头没有我们要的临时档
         self._pump = asyncio.create_task(self._pump_frames())
         await self._authenticate(hello)
 
@@ -393,6 +424,7 @@ class SidecarDeviceBackend(DeviceBackend):
             return
         if isinstance(frame, ControlLostFrame):
             self._held = False
+            self._gear = 0                             # 同 Gate::OnControlLost:临时档作废
             self.emit(ControlLostEvent(
                 reason=frame.reason or "旁路进程报告控制权丢失(SDK 未给原因)"))
             return
@@ -550,6 +582,8 @@ class SidecarDeviceBackend(DeviceBackend):
                 f"ttl_ms 要在 [{VEL_TTL_MIN_MS}, {VEL_TTL_MAX_MS}] 内,收到 {ttl_ms}")
         await self._command("vel", timeout_s=timeout_s, fwd=forward, lat=lateral,
                             yaw=yaw, ttl_ms=int(ttl_ms))
+        if self._gear:
+            self._gear_at = time.monotonic()           # 同旁路:有 vel 就算续临时档
 
     async def halt(self) -> None:
         """停车。旁路进程**插队**执行:不排在还没走完的 walk 后面。
@@ -565,6 +599,8 @@ class SidecarDeviceBackend(DeviceBackend):
         **软急停不能替代机身上那个硬急停按钮。** 它走的是同一条 SDK 链路,
         链路本身出问题时它也没了。
         """
+        if on:
+            self._gear = 0                             # 同 LatchEstop:临时档作废
         await self._command("estop", timeout_s=URGENT_ACK_TIMEOUT_S, on=on)
 
     async def set_light(self, on: bool) -> None:

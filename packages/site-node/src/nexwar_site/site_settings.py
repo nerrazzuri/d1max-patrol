@@ -11,8 +11,10 @@ from typing import Any
 
 DEFAULT_DUTY: dict[str, Any] = {"shift_hours": [7, 19], "stale_hours": 2}
 #: 遥控速度档(POC 2026-11,m/s):手机摇杆满推 = 这一档。要 0 < 慢 ≤ 中 ≤ 快 ≤ 1.5。
-DEFAULT_TELEOP_SPEEDS: dict[str, float] = {"slow": 0.3, "mid": 0.6, "fast": 1.0}
-TIERS = ("slow", "mid", "fast")
+#: 遥控速度表(m/s,POC;用户 11-05:按速度分档,目前最高到 SDK 中速档 2.0)。超过 1.0 的机器人自己换
+#: 中速档;机器人到不了的档手机上不显示。
+DEFAULT_TELEOP_SPEEDS: tuple[float, ...] = (0.3, 0.6, 1.0, 1.3, 1.6, 2.0)
+TELEOP_SPEEDS_MAX_N = 8
 
 
 class SettingsError(ValueError):
@@ -79,37 +81,32 @@ class SiteSettings:
         self.put("duty", cur)
         return cur
 
-    def teleop_speeds(self) -> dict[str, float]:
-        got = self.get("teleop_speeds", {})
-        out = dict(DEFAULT_TELEOP_SPEEDS)
-        if isinstance(got, dict):
-            cand = {k: got.get(k, out[k]) for k in TIERS}
-            if _speeds_ok(cand):
-                out = {k: float(cand[k]) for k in TIERS}
-        return out
+    def teleop_speeds(self) -> list[float]:
+        """遥控速度表(m/s,升序)。没设、存的不成形(包括改版前的慢 / 中 / 快)按缺省。"""
+        got = self.get("teleop_speeds", None)
+        return [float(v) for v in got] if _speeds_ok(got) else list(DEFAULT_TELEOP_SPEEDS)
 
-    def set_teleop_speeds(self, d: Any, *, by: str) -> dict[str, float]:
-        """改一档或几档(没给的保持原样);改完整组要满足 0 < 慢 ≤ 中 ≤ 快 ≤ 1.5。"""
-        if not isinstance(d, dict):
-            raise SettingsError("要一个对象")
-        cur: dict[str, Any] = self.teleop_speeds()
-        for k in TIERS:
-            if k in d:
-                cur[k] = d[k]
-        if not _speeds_ok(cur):
-            from nexwar_contract.teleop import TELEOP_SPEED_MAX_MPS
-            raise SettingsError(f"速度档要是数字,且 0 < 慢 ≤ 中 ≤ 快 ≤ {TELEOP_SPEED_MAX_MPS} m/s")
-        out = {k: round(float(cur[k]), 2) for k in TIERS}
+    def set_teleop_speeds(self, d: Any, *, by: str) -> list[float]:
+        """整张换掉:``{"speeds": [...]}``,1–8 个,严格升序,每个 0 < v ≤ 2.0。"""
+        from nexwar_contract.teleop import TELEOP_SPEED_MAX_MPS
+        got = d.get("speeds") if isinstance(d, dict) else None
+        if _speeds_ok(got):
+            got = [round(float(v), 2) for v in got]     # 取整之后还要不重复
+        if not _speeds_ok(got):
+            raise SettingsError(f"速度表要 1–{TELEOP_SPEEDS_MAX_N} 个数字,从小到大不重复,"
+                                f"每个在 0–{TELEOP_SPEED_MAX_MPS} m/s")
+        out = list(got)
         self.put("teleop_speeds", out)
         return out
 
 
-def _speeds_ok(d: dict[str, Any]) -> bool:
+def _speeds_ok(vs: Any) -> bool:
     import math
 
     from nexwar_contract.teleop import TELEOP_SPEED_MAX_MPS
-    vs = [d.get(k) for k in TIERS]
-    if not all(isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
-               for v in vs):
+    if not isinstance(vs, list) or not 1 <= len(vs) <= TELEOP_SPEEDS_MAX_N:
         return False
-    return 0 < vs[0] <= vs[1] <= vs[2] <= TELEOP_SPEED_MAX_MPS
+    if not all(isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
+               and 0 < v <= TELEOP_SPEED_MAX_MPS for v in vs):
+        return False
+    return all(a < b for a, b in zip(vs, vs[1:], strict=False))

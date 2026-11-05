@@ -26,29 +26,57 @@ Future<void> _open(WidgetTester t, FakeApi api) async {
 bool _stickEnabled(WidgetTester t, int i) => t.widget<Joystick>(find.byType(Joystick).at(i)).enabled;
 
 void main() {
-  testWidgets('POC 速度档：站点给了三档才显示；默认慢档；切快档推满按快档走、转向同比例；记住选的档', (t) async {
-    teleopTierPick = null;
+  testWidgets('POC 速度档（11-05 按速度分）：站点给几档显示几档；默认 0.6；选 1.6 推满按 1.6 走、带 vmax、'
+      '转向不跟着变快、提示中速档；记住选的速度', (t) async {
+    teleopSpeedPick = null;
+    final api = FakeApi('guard');
+    await t.pumpWidget(MaterialApp(home: SiteTeleopPage(key: UniqueKey(), api: api, robotId: 'A')));
+    await t.pump();
+    api.link!.ctl.add(<String, dynamic>{'kind': 'granted', 'lease_epoch': 1, 'max_vx': 2.0,
+      'max_wz': 1.5, 'speeds': [0.3, 0.6, 1.0, 1.3, 1.6, 2.0]});
+    await t.pump();
+    await t.pump();
+    for (final v in [0.3, 0.6, 1.0, 1.3, 1.6, 2.0]) {
+      expect(find.byKey(SiteTeleopPage.speedKey(v)), findsOneWidget);
+    }
+    expect(find.byKey(SiteTeleopPage.speedHintKey), findsNothing);
+    await t.sendKeyDownEvent(LogicalKeyboardKey.keyW);
+    await t.sendKeyDownEvent(LogicalKeyboardKey.keyA);
+    await t.pump(const Duration(milliseconds: 250));
+    expect(api.link!.sent.last[0], closeTo(0.6, 1e-9), reason: '默认 0.6');
+    expect(api.link!.sent.last[1], closeTo(1.5 * 0.6, 1e-9), reason: '1.0 以下转向同比例');
+    expect(api.link!.sentVmax.last, 0.6);
+    await t.tap(find.byKey(SiteTeleopPage.speedKey(1.6)));
+    await t.pump(const Duration(milliseconds: 250));
+    expect(api.link!.sent.last[0], closeTo(1.6, 1e-9));
+    expect(api.link!.sent.last[1], closeTo(1.5, 1e-9), reason: '转向最多到站点给的,不跟着中速档变快');
+    expect(api.link!.sentVmax.last, 1.6);
+    expect(find.byKey(SiteTeleopPage.speedHintKey), findsOneWidget);
+    expect(find.textContaining('换档要先松开摇杆'), findsOneWidget);
+    expect(teleopSpeedPick, 1.6, reason: '记住，下次进来还是它');
+    await t.sendKeyUpEvent(LogicalKeyboardKey.keyW);
+    await t.sendKeyUpEvent(LogicalKeyboardKey.keyA);
+    await t.pumpWidget(Container());
+    teleopSpeedPick = null;
+  });
+
+  testWidgets('POC 速度档：上次选的这台到不了，就用到得了的最快那档', (t) async {
+    teleopSpeedPick = 1.6;
     final api = FakeApi('guard');
     await t.pumpWidget(MaterialApp(home: SiteTeleopPage(key: UniqueKey(), api: api, robotId: 'A')));
     await t.pump();
     api.link!.ctl.add(<String, dynamic>{'kind': 'granted', 'lease_epoch': 1, 'max_vx': 1.0,
-      'max_wz': 1.5, 'speeds': {'slow': 0.3, 'mid': 0.6, 'fast': 1.0}});
+      'max_wz': 1.5, 'speeds': [0.3, 0.6, 1.0]});
     await t.pump();
     await t.pump();
-    expect(find.byKey(SiteTeleopPage.tierKey('fast')), findsOneWidget);
+    expect(find.byKey(SiteTeleopPage.speedKey(1.6)), findsNothing);
     await t.sendKeyDownEvent(LogicalKeyboardKey.keyW);
-    await t.sendKeyDownEvent(LogicalKeyboardKey.keyA);
-    await t.pump(const Duration(milliseconds: 250));
-    expect(api.link!.sent.last[0], closeTo(0.3, 1e-9), reason: '默认慢档');
-    expect(api.link!.sent.last[1], closeTo(1.5 * 0.3, 1e-9), reason: '转向按同比例');
-    await t.tap(find.byKey(SiteTeleopPage.tierKey('fast')));
     await t.pump(const Duration(milliseconds: 250));
     expect(api.link!.sent.last[0], closeTo(1.0, 1e-9));
-    expect(teleopTierPick, 'fast', reason: '记住，下次进来还是快档');
+    expect(teleopSpeedPick, 1.6, reason: '没手动改，不覆盖记住的');
     await t.sendKeyUpEvent(LogicalKeyboardKey.keyW);
-    await t.sendKeyUpEvent(LogicalKeyboardKey.keyA);
     await t.pumpWidget(Container());
-    teleopTierPick = null;
+    teleopSpeedPick = null;
   });
 
   testWidgets('POC 丢帧原因：站点转来机器人说的原因，显示几秒就收；原因说人话', (t) async {
@@ -67,6 +95,8 @@ void main() {
       ('no_video', '无画面'),
       ('seq', '指令顺序不对（重连中）'),
       ('epoch', '指令顺序不对（重连中）'),
+      ('gear_wait', '换档要先松开摇杆'),
+      ('gear_switching', '正在换档，稍等'),
     ]) {
       expect(teleopDropText(code), text);
     }
@@ -76,7 +106,9 @@ void main() {
   testWidgets('POC 速度档：老站点不给档，不显示切换，照旧按站点限速', (t) async {
     final api = FakeApi('guard');
     await _open(t, api);
-    expect(find.byKey(SiteTeleopPage.tierKey('slow')), findsNothing);
+    expect(find.byKey(SiteTeleopPage.speedKey(0.3)), findsNothing);
+    await t.pump(const Duration(milliseconds: 250));
+    expect(api.link!.sentVmax.every((v) => v == null), isTrue, reason: '老站点不带 vmax');
     await t.pumpWidget(Container());
   });
 

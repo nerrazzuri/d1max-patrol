@@ -478,7 +478,76 @@ static void 分档许可_接管是整条连接退役_另一头在途的旧报文
   CHECK(r.gate.PermitConn() == 2);
 }
 
+
+// 遥控临时换档(协议 12,POC 11-05):代理要中速档 → 档位报上来之前不走、旧许可作废(比例按旧档换的);
+// 3 s 没续(换档命令或 vel)、急停、丢控制权、发它的连接断了都回 --speed-level 那一档;halt 不回(松杆就是 halt)。
+static void 遥控换档_报到中速才走_旧许可作废() {
+  Rig r;
+  r.gate.SetSpeedWant(1);
+  r.gate.OnSpeedLevel(1);
+  r.gate.RequireClearance(true);
+  r.gate.OnHead(1);
+  r.gate.SetClearance(r.now + std::chrono::milliseconds(800), velgate::kEndHead, 1.0);
+  CHECK(r.gate.SetGear(2, 2, 7, r.now) == "");
+  CHECK(r.gate.WantLevel(r.now) == 2);
+  CHECK(r.vel(0.3, 1000) == "");
+  CHECK(!r.gate.Live(true, r.now));             // 还是低速档:不走
+  r.gate.OnSpeedLevel(2);
+  CHECK(r.gate.Live(true, r.now) && r.gate.Live(true, r.now)->fwd == 0);  // 旧许可作废:不许往前
+  r.gate.SetClearance(r.now + std::chrono::milliseconds(800), velgate::kEndHead, 0.6);
+  CHECK(r.gate.Live(true, r.now)->fwd == 0.3);
+  CHECK(r.gate.SetGear(1, 2, 7, r.now) == "" && r.gate.WantLevel(r.now) == 1);   // 要回低速
+}
+
+static void 遥控换档_超上限_不管档位_急停时拒() {
+  Rig r;
+  r.gate.SetSpeedWant(1);
+  CHECK(r.gate.SetGear(2, 1, 7, r.now) != "");  // --teleop-max-gear 1:不让换
+  CHECK(r.gate.SetGear(3, 2, 7, r.now) != "");
+  CHECK(r.gate.SetGear(0, 2, 7, r.now) != "");
+  r.gate.LatchEstop(true);
+  CHECK(r.gate.SetGear(2, 2, 7, r.now) != "");
+  r.gate.LatchEstop(false);
+  CHECK(r.gate.WantLevel(r.now) == 1);
+  Rig q;                                        // 不管档位(0):不能换
+  CHECK(q.gate.SetGear(2, 2, 7, q.now) != "");
+}
+
+static void 遥控换档_3秒没续就回低速_续了不回_halt不回() {
+  Rig r;
+  r.gate.SetSpeedWant(1);
+  r.gate.OnSpeedLevel(2);
+  const auto t0 = r.now;
+  CHECK(r.gate.SetGear(2, 2, 7, t0) == "");
+  r.gate.Cancel();                              // 松杆 = halt:还是中速档
+  CHECK(r.gate.WantLevel(t0 + std::chrono::milliseconds(2900)) == 2);
+  CHECK(r.gate.WantLevel(t0 + std::chrono::milliseconds(3100)) == 1);
+  CHECK(r.gate.SetGear(2, 2, 7, t0 + std::chrono::milliseconds(2000)) == "");   // 续
+  CHECK(r.gate.WantLevel(t0 + std::chrono::milliseconds(4500)) == 2);
+  r.now = t0 + std::chrono::milliseconds(4000);
+  CHECK(r.vel(0.3, 300) == "");                 // vel 也算续
+  CHECK(r.gate.WantLevel(t0 + std::chrono::milliseconds(6500)) == 2);
+  CHECK(r.gate.WantLevel(t0 + std::chrono::milliseconds(7100)) == 1);
+}
+
+static void 遥控换档_急停_丢控制权_连接断了都回低速() {
+  for (int k = 0; k < 4; ++k) {
+    Rig r;
+    r.gate.SetSpeedWant(1);
+    CHECK(r.gate.SetGear(2, 2, 7, r.now) == "");
+    if (k == 0) r.gate.LatchEstop(true);
+    if (k == 1) r.gate.OnControlLost();
+    if (k == 2) { CHECK(!r.gate.DropGear(8)); CHECK(r.gate.WantLevel(r.now) == 2); CHECK(r.gate.DropGear(7)); }
+    if (k == 3) r.gate.Live(false, r.now);      // 看到一次没控制权
+    CHECK(r.gate.WantLevel(r.now) == 1);
+  }
+}
+
 int main() {
+  遥控换档_报到中速才走_旧许可作废();
+  遥控换档_超上限_不管档位_急停时拒();
+  遥控换档_3秒没续就回低速_续了不回_halt不回();
+  遥控换档_急停_丢控制权_连接断了都回低速();
   分档许可_接管是整条连接退役_另一头在途的旧报文也不认();
   分档许可_按连接认_旧连接的永远不认_新连接接管();
   分档许可_按许可限前进_最新的说了算();

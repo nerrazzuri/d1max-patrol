@@ -18,6 +18,7 @@ library;
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -65,9 +66,9 @@ String teleopEndText(String reason) => switch (reason) {
       _ => tr('Remote control ended ($reason)', '遥控结束（$reason）'),
     };
 
-/// POC 速度档：上次选的那一档（`slow`/`mid`/`fast`；null = 没选过，按慢档）。进程里记着，
+/// POC 速度档（用户 11-05：按速度分）：上次选的速度（m/s；null = 没选过，按 0.6）。进程里记着，
 /// [teleopTierFile] 设了（`main()` 里）就也存到本机文件，下次开 App 还是它。
-String? teleopTierPick;
+double? teleopSpeedPick;
 File? teleopTierFile;
 
 Future<void> loadTeleopTier(File f) async {
@@ -75,28 +76,49 @@ Future<void> loadTeleopTier(File f) async {
   try {
     if (await f.exists()) {
       final v = jsonDecode(await f.readAsString());
-      final tier = v is Map ? v['tier'] : null;
-      if (tier is String && kTeleopTiers.contains(tier)) teleopTierPick = tier;
+      final sp = v is Map ? v['speed'] : null; // 改版前存的 {'tier': 'fast'} 不认，当没选过
+      if (sp is num && sp > 0) teleopSpeedPick = sp.toDouble();
     }
   } catch (_) {
     // 文件坏了当没选过
   }
 }
 
-void _saveTier(String tier) {
-  teleopTierPick = tier;
+void _saveSpeed(double v) {
+  teleopSpeedPick = v;
   final f = teleopTierFile;
   if (f == null) return;
-  unawaited(f.writeAsString(jsonEncode(<String, String>{'tier': tier})).then((_) {}, onError: (_) {}));
+  unawaited(f.writeAsString(jsonEncode(<String, double>{'speed': v})).then((_) {}, onError: (_) {}));
 }
 
-const List<String> kTeleopTiers = ['slow', 'mid', 'fast'];
+/// 没选过时的速度档。
+const double kTeleopDefaultSpeed = 0.6;
 
-String teleopTierLabel(String tier) => switch (tier) {
-      'slow' => tr('Slow', '慢'),
-      'mid' => tr('Medium', '中'),
-      _ => tr('Fast', '快'),
-    };
+/// 低速档最快（m/s）：超过它机器人要换 SDK 中速档（不能横移、转向变慢，换档要先松杆）。
+const double kLowGearMax = 1.0;
+
+/// 站点 `granted` 里的速度档：一组升序的数（改版前的站点给 `{slow, mid, fast}` 也认，取值排序）。
+List<double> teleopSpeedsOf(Object? sp) {
+  final raw = sp is List ? sp : (sp is Map ? sp.values.toList() : const <Object?>[]);
+  final out = <double>{
+    for (final v in raw)
+      if (v is num && v > 0) v.toDouble(),
+  }.toList()
+    ..sort();
+  return out;
+}
+
+/// 选哪一档：记住的那档在就用它；不在就用不超过它的最快那档；都没有用第一档。
+double teleopSpeedFor(List<double> speeds, double? pick) {
+  final want = pick ?? kTeleopDefaultSpeed;
+  double? best;
+  for (final v in speeds) {
+    if (v <= want + 1e-9) best = v;
+  }
+  return best ?? speeds.first;
+}
+
+String teleopSpeedLabel(double v) => '${v.toStringAsFixed(1)} m/s';
 
 /// POC 第 3 项：机器人为什么丢了遥控指令（站点转来的 `drops.last`），说人话。
 String teleopDropText(String code) => switch (code) {
@@ -104,6 +126,8 @@ String teleopDropText(String code) => switch (code) {
       'video_recovered' => tr('Video just came back: release the sticks first', '画面刚恢复，请先松开摇杆'),
       'no_video' => tr('No video', '无画面'),
       'seq' || 'epoch' => tr('Commands out of order (reconnecting)', '指令顺序不对（重连中）'),
+      'gear_wait' => tr('Release the stick to change gear', '换档要先松开摇杆'),
+      'gear_switching' => tr('Changing gear, one moment', '正在换档，稍等'),
       _ => tr('Command dropped ($code)', '指令被丢弃（$code）'),
     };
 
@@ -125,7 +149,8 @@ class SiteTeleopPage extends StatefulWidget {
   static const Key turnStickKey = Key('teleop-turn');
   static const Key keysKey = Key('teleop-keys');
   static const Key zoneKey = Key('teleop-zone');
-  static Key tierKey(String tier) => Key('teleop-tier-$tier');
+  static Key speedKey(double v) => Key('teleop-speed-${v.toStringAsFixed(1)}');
+  static const Key speedHintKey = Key('teleop-speed-hint');
   static const Key dropKey = Key('teleop-drop');
 
   @override
@@ -142,15 +167,17 @@ class _SiteTeleopPageState extends State<SiteTeleopPage> with WidgetsBindingObse
   bool _ended = false;
   double _maxVx = 0, _maxWz = 0, _maxVy = 0;
 
-  /// POC 速度档：站点给的三档（m/s）；老站点不给 = 空，照旧按 [_maxVx]。
-  Map<String, double> _speeds = const {};
-  String _tier = teleopTierPick ?? 'slow';
+  /// POC 速度档：站点给的这台能用的几档（m/s，升序）；老站点不给 = 空，照旧按 [_maxVx]。
+  List<double> _speeds = const [];
+  double _speed = 0;
 
-  /// 推满走多快：选的档占上限的几成（转向、横移同比例）。
-  double get _scale {
-    final v = _speeds[_tier];
-    if (v == null || _maxVx <= 0) return 1.0;
-    return (v / _maxVx).clamp(0.0, 1.0);
+  /// 推满前进多快：选的那档（不超过站点限速）；老站点 = 站点限速。
+  double get _vTop => _speeds.isEmpty ? _maxVx : math.min(_speed, _maxVx);
+
+  /// 转向、横移占站点上限的几成：跟着选的速度走，到 1.0 m/s 就满（中速档不更快）。
+  double get _turnScale {
+    if (_speeds.isEmpty || _maxVx <= 0) return 1.0;
+    return (_speed / math.min(_maxVx, kLowGearMax)).clamp(0.0, 1.0);
   }
   double _fwd = 0, _turn = 0;
 
@@ -261,14 +288,8 @@ class _SiteTeleopPageState extends State<SiteTeleopPage> with WidgetsBindingObse
           _maxVx = (m['max_vx'] as num?)?.toDouble() ?? 0;
           _maxWz = (m['max_wz'] as num?)?.toDouble() ?? 0;
           _maxVy = (m['max_vy'] as num?)?.toDouble() ?? 0;
-          final sp = m['speeds'];
-          _speeds = sp is Map
-              ? {
-                  for (final k in kTeleopTiers)
-                    if (sp[k] is num && (sp[k] as num) > 0) k: (sp[k] as num).toDouble(),
-                }
-              : const {};
-          if (_speeds.length != kTeleopTiers.length) _speeds = const {};
+          _speeds = teleopSpeedsOf(m['speeds']);
+          if (_speeds.isNotEmpty) _speed = teleopSpeedFor(_speeds, teleopSpeedPick);
           _status = tr('You are in control (speed limit ${_maxVx.toStringAsFixed(2)} m/s)',
               '遥控中（限速 ${_maxVx.toStringAsFixed(2)} m/s）');
           _zoneNote = teleopZoneText(m['zone_guard'] as Map<String, dynamic>?);
@@ -365,8 +386,9 @@ class _SiteTeleopPageState extends State<SiteTeleopPage> with WidgetsBindingObse
     // 右推 = 顺时针 = wz 为负；横移右推 = 往右 = vy 为负（机身系左为正）。前后、横移只走大的那一个。
     final fwd = _fwd.abs() >= _lat.abs() ? _fwd : 0.0;
     final lat = _fwd.abs() >= _lat.abs() ? 0.0 : _lat;
-    final k = _scale;
-    link.send(fwd * _maxVx * k, -_turn * _maxWz * k, vy: -lat * _maxVy * k);
+    final k = _turnScale;
+    link.send(fwd * _vTop, -_turn * _maxWz * k,
+        vy: -lat * _maxVy * k, vmax: _speeds.isEmpty ? null : _speed);
   }
 
   void _stopTicking() {
@@ -537,23 +559,29 @@ class _SiteTeleopPageState extends State<SiteTeleopPage> with WidgetsBindingObse
                           if (_speeds.isNotEmpty && !_ended)
                             Padding(
                               padding: const EdgeInsets.only(top: Nw.s4),
-                              child: Row(mainAxisSize: MainAxisSize.min, children: [
-                                for (final tier in kTeleopTiers)
-                                  Padding(
-                                    padding: const EdgeInsets.only(right: Nw.s4),
-                                    child: ChoiceChip(
-                                      key: SiteTeleopPage.tierKey(tier),
-                                      visualDensity: VisualDensity.compact,
-                                      label: Text(
-                                          '${teleopTierLabel(tier)} ${_speeds[tier]!.toStringAsFixed(1)}'),
-                                      selected: _tier == tier,
-                                      onSelected: (_) => setState(() {
-                                        _tier = tier;
-                                        _saveTier(tier);
-                                      }),
-                                    ),
+                              child: Wrap(spacing: Nw.s4, runSpacing: Nw.s4, children: [
+                                for (final v in _speeds)
+                                  ChoiceChip(
+                                    key: SiteTeleopPage.speedKey(v),
+                                    visualDensity: VisualDensity.compact,
+                                    label: Text(teleopSpeedLabel(v)),
+                                    selected: _speed == v,
+                                    onSelected: (_) => setState(() {
+                                      _speed = v;
+                                      _saveSpeed(v);
+                                    }),
                                   ),
                               ]),
+                            ),
+                          if (_speeds.isNotEmpty && !_ended && _speed > kLowGearMax + 1e-9)
+                            Padding(
+                              key: SiteTeleopPage.speedHintKey,
+                              padding: const EdgeInsets.only(top: Nw.s4),
+                              child: Text(
+                                  tr('Above 1.0 m/s the robot uses its middle gear: no sideways, slower turning; release the stick to change gear',
+                                      '超过 1.0 m/s 用中速档：不能横移、转向变慢；换档要先松开摇杆'),
+                                  style: NwText.bodySmall.copyWith(
+                                      color: Colors.white, shadows: const [Shadow(blurRadius: 3)])),
                             ),
                           if (desktop)
                             Padding(

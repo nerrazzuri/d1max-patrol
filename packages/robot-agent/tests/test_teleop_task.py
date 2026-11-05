@@ -94,7 +94,8 @@ async def test_别的代次的帧不执行(台):
     t.release()
     await _走(c, r, t, 2)
     assert t.detail == {"reason": "released", "dropped": {"epoch": 5, "seq": 0, "late": 0,
-                                                          "no_video": 0, "video_recovered": 0}}, \
+                                                          "no_video": 0, "video_recovered": 0,
+                                                          "gear_wait": 0, "gear_switching": 0}}, \
         "丢帧计数随终态上站点(真机项 3c.9)"
 
 

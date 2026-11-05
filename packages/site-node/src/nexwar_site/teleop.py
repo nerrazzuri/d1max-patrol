@@ -38,6 +38,7 @@ from nexwar_contract.messages import AckResult
 from nexwar_contract.teleop import (
     FRAME_TTL_DEFAULT_MS,
     LEASE_TTL_DEFAULT_MS,
+    TELEOP_SPEED_MAX_MPS,
     TeleopFrame,
     TeleopLease,
 )
@@ -51,6 +52,19 @@ PHONE_BASELINE_WINDOW = 50
 #: 转发频率上限:两帧运动之间至少隔这么久(毫秒)。手机 100 ms 一帧;更密的是坏客户端。
 MIN_FORWARD_GAP_MS = 50
 
+
+
+#: 速度表里的档跟机器人上限差不到这么多也给(低速档实测 0.98 m/s 也算 1.0 档)。
+SPEED_SLACK_MPS = 0.05
+
+
+def usable_speeds(table: list[float], top: float) -> list[float]:
+    """这台这次能用的速度档:表里不超过 ``top``(差 :data:`SPEED_SLACK_MPS` 以内也算)的;剩下最快的
+    那档比 ``top`` 慢得多(老机器人只有一半)就把 ``top`` 补上,让满推能用到这台的上限。"""
+    out = [v for v in table if v <= top + SPEED_SLACK_MPS]
+    if not out or out[-1] < top - SPEED_SLACK_MPS:
+        out.append(round(top, 2))
+    return out
 
 class _NoRelease(Exception):
     """(内部)这一次收尾不放租。"""
@@ -95,8 +109,8 @@ class Session:
     need_zero: bool = False
     #: 硬禁区守卫(决策 65)最近告诉手机的那一份;老狗不守、图上有硬禁区时开场就是 ``unsupported``。
     zone_told: dict | None = None
-    #: POC 速度档:慢/中/快(m/s),都夹到 ``max_vx`` 以内。
-    speeds: dict = field(default_factory=dict)
+    #: POC 速度档(用户 11-05:按速度分):这台这次能用的那几档(m/s,升序),见 :func:`usable_speeds`。
+    speeds: list = field(default_factory=list)
     #: POC:最近告诉手机的丢帧累计数(没新增不再说)。
     drops_told: dict | None = None
 
@@ -191,7 +205,7 @@ class TeleopDesk:
                     max_wz=caps[1], max_vy=caps[2], started_ms=self._now(), row_id=row_id,
                     video_told=True,
                     zone_told=self._hard_unsupported(robot_id),
-                    speeds={k: round(min(v, caps[0]), 2) for k, v in self._speeds().items()})
+                    speeds=usable_speeds(self._speeds(), caps[0]))
         with self._lock:
             self._sessions[robot_id] = s
         self._audit(name, "teleop_start", robot_id, {"lease_epoch": epoch,
@@ -257,14 +271,14 @@ class TeleopDesk:
                         {"lease_epoch": s.epoch, "state": zg.get("state"),
                          "zone": zg.get("zone", "")})
 
-    def _speeds(self) -> dict[str, float]:
+    def _speeds(self) -> list[float]:
         from nexwar_site.site_settings import SiteSettings
         return SiteSettings(self.dispatcher.db).teleop_speeds()
 
     def _limits(self, robot_id: str) -> tuple[tuple[float, float, float], float | None]:
-        """这次遥控的 (max_vx, max_wz, max_vy) 和要带给机器人的快档。机器人报了机身上限
-        (``max_vx_hal``,POC 速度档)才带:上限 = min(快档, 机身),转向、横移同比例;
-        老机器人不带、照它报的一半。"""
+        """这次遥控的 (max_vx, max_wz, max_vy) 和要带给机器人的上限(速度表里最快的)。机器人报了机身
+        上限(``max_vx_hal``)才带:前进上限 = min(表里最快, 机身;能换中速档按
+        ``max_vx_teleop``),转向、横移按低速档同比例(不跟着中速档变快);老机器人不带、照它报的一半。"""
         vx, wz, vy = self._caps(robot_id)
         c = self.dispatcher.clients.get(robot_id)
         t = (c.capabilities.tasks.get("teleop") if c is not None and c.capabilities else None) or {}
@@ -272,11 +286,14 @@ class TeleopDesk:
         if not all(isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
                    and v > 0 for v in (hx, hw)):
             return (vx, wz, vy), None
-        fast = self._speeds()["fast"]
+        fast = max(self._speeds())
+        ht = t.get("max_vx_teleop")
+        top = float(ht) if (isinstance(ht, (int, float)) and not isinstance(ht, bool)
+                            and math.isfinite(ht) and ht > hx) else float(hx)
         k = min(1.0, fast / float(hx))
         ok_hy = isinstance(hy, (int, float)) and not isinstance(hy, bool) and math.isfinite(hy) \
             and hy > 0 and vy > 0
-        return (float(hx) * k, float(hw) * k, float(hy) * k if ok_hy else 0.0), fast
+        return (min(fast, top), float(hw) * k, float(hy) * k if ok_hy else 0.0), fast
 
     def _caps(self, robot_id: str) -> tuple[float, float, float]:
         """(max_vx, max_wz, max_vy);``max_vy`` 没报、不成形都是 0(不横移)。"""
@@ -351,12 +368,17 @@ class TeleopDesk:
             self._drive(s, *latest, rx_s)
 
     def _phone_frame(self, s: Session, d: dict, rx_ms: float
-                     ) -> tuple[float, float, float] | None:
+                     ) -> tuple[float, float, float, float | None] | None:
         """手机那一段的判帧(跟狗那头同一套规矩):序号严格递增;在途时间(站点单调钟 − 手机单调钟)
         比滑动最小值多出 ``PHONE_MAX_TRANSIT_MS`` 就是积压,丢掉。
         收下返回夹过限速的 (vx, wz, vy)。"""
         seq, t, vx, wz = d.get("seq"), d.get("t"), d.get("vx"), d.get("wz")
         vy = d.get("vy", 0.0)
+        # 手机上选的速度档(POC 11-05);老手机不带。不成形的整帧不认(同其余字段)。
+        vmax = d.get("vmax")
+        if vmax is not None and not (isinstance(vmax, (int, float)) and not isinstance(vmax, bool)
+                                     and math.isfinite(vmax) and vmax > 0):
+            return None
         if isinstance(seq, bool) or not isinstance(seq, int) or seq < 1:
             return None
         if not all(isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
@@ -371,11 +393,14 @@ class TeleopDesk:
         if offset - min(s.phone_offsets) > PHONE_MAX_TRANSIT_MS:
             s.phone_dropped["late"] += 1
             return None
-        return (max(-s.max_vx, min(s.max_vx, float(vx))),
+        cap = s.max_vx if vmax is None else min(s.max_vx, float(vmax))
+        return (max(-cap, min(cap, float(vx))),
                 max(-s.max_wz, min(s.max_wz, float(wz))),
-                max(-s.max_vy, min(s.max_vy, float(vy))))
+                max(-s.max_vy, min(s.max_vy, float(vy))),
+                None if vmax is None else round(min(float(vmax), TELEOP_SPEED_MAX_MPS), 3))
 
-    def _drive(self, s: Session, vx: float, wz: float, vy: float, rx_s: float) -> None:
+    def _drive(self, s: Session, vx: float, wz: float, vy: float, vmax: float | None,
+               rx_s: float) -> None:
         zero = vx == 0.0 and wz == 0.0 and vy == 0.0
         ok = self._video_ok(s.robot_id)
         if ok != s.video_told:
@@ -385,7 +410,7 @@ class TeleopDesk:
             # 没画面不许动:不转发运动;在动的话发一次零速。画面回来之后要先收到一帧零速(松手)。
             s.need_zero = True
             if s.moving:
-                self._send_frame(s, 0.0, 0.0)
+                self._send_frame(s, 0.0, 0.0, vmax=vmax)
             return
         if s.need_zero:
             if not zero:
@@ -395,17 +420,17 @@ class TeleopDesk:
             s.phone_dropped["rate"] += 1           # 太密的运动帧不转;停的那一帧不压
             return
         s.last_fwd = rx_s
-        self._send_frame(s, vx, wz, vy)
+        self._send_frame(s, vx, wz, vy, vmax=vmax)
 
     def _send_frame(self, s: Session, vx: float, wz: float, vy: float = 0.0, *,
-                    final: bool = False) -> None:
+                    final: bool = False, vmax: float | None = None) -> None:
         """发一帧。序号与发出在同一把锁里(先编号的先发);结束之后只有 ``final``(那一帧零速)能发。"""
         with s.send_lock:
             if s.ended.is_set() and not final:
                 return
             s.seq += 1
             f = TeleopFrame(lease_epoch=s.epoch, seq=s.seq, sent_at=self._now(),
-                            ttl_ms=self.frame_ttl_ms, vx=vx, wz=wz, vy=vy)
+                            ttl_ms=self.frame_ttl_ms, vx=vx, wz=wz, vy=vy, vmax=vmax)
             s.moving = bool(vx or wz or vy)
             try:
                 self.loop.call(lambda: self.dispatcher.teleop_frame(s.robot_id, f), timeout_s=2.0)

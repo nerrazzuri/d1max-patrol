@@ -36,6 +36,8 @@ class FakeTeleopLink implements TeleopLink {
   final List<List<double>> sent = <List<double>>[];
   /// 每帧的横移（跟 [sent] 一一对应；老测试只看前后、转向）。
   final List<double> sentVy = <double>[];
+  /// 每帧带的速度档（POC 11-05；null = 没带）。
+  final List<double?> sentVmax = <double?>[];
   bool released = false;
   bool isClosed = false;
   @override
@@ -43,9 +45,10 @@ class FakeTeleopLink implements TeleopLink {
   @override
   bool get closed => isClosed;
   @override
-  void send(double vx, double wz, {double vy = 0}) {
+  void send(double vx, double wz, {double vy = 0, double? vmax}) {
     sent.add(<double>[vx, wz]);
     sentVy.add(vy);
+    sentVmax.add(vmax);
   }
   @override
   void release() => released = true;

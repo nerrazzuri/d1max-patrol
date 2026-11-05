@@ -60,6 +60,8 @@ constexpr int kPermitRejected = 0;
 constexpr int kPermitAccepted = 1;
 constexpr int kPermitTookOver = 2;
 constexpr int kTtlMinMs = 50;
+/// 遥控临时档位多久没续(换档命令或 vel)就回 --speed-level 那一档(协议 12)。
+constexpr int kGearIdleMs = 3000;
 constexpr int kTtlMaxMs = 1000;
 
 struct Target {
@@ -86,6 +88,7 @@ class Gate {
     if (after_check_hook_for_test) after_check_hook_for_test();  // 仍在锁里
     target_ = Target{fwd, lat, yaw,
                      now + std::chrono::milliseconds(static_cast<int>(ttl_ms)), epoch_};
+    if (gear_ > 0) gear_seen_ = now;  // 遥控临时档:有 vel 就算续
     return "";
   }
 
@@ -99,13 +102,17 @@ class Gate {
   void LatchEstop(bool on) {
     std::lock_guard<std::mutex> lk(mtx_);
     estop_latched_ = on;
-    if (on) InvalidateLocked();
+    if (on) {
+      InvalidateLocked();
+      gear_ = 0;  // 急停:临时档作废,回 --speed-level
+    }
   }
 
   /// 控制权丢了(SDK OnControlLost):作废目标。旁路进程会自动重新 TakeControl,旧目标不许跟着复活。
   void OnControlLost() {
     std::lock_guard<std::mutex> lk(mtx_);
     InvalidateLocked();
+    gear_ = 0;
   }
 
   /// SDK 状态回调。不安全(任一路急停不是明确的 Recover、趴着、锁死、姿态未知)就作废目标。
@@ -122,10 +129,11 @@ class Gate {
     std::lock_guard<std::mutex> lk(mtx_);
     if (!held) {
       InvalidateLocked();  // 看到过一次没控制权就作废:OnControlLost 回调漏了也兜得住
+      gear_ = 0;
       return std::nullopt;
     }
     if (estop_latched_ || !UnsafeLocked().empty()) return std::nullopt;
-    if (speed_want_ > 0 && speed_level_ != speed_want_) return std::nullopt;  // 档位不对:不走
+    if (speed_want_ > 0 && speed_level_ != WantLocked(now)) return std::nullopt;  // 档位不对:不走
     if (!target_ || target_->epoch != epoch_ || now >= target_->until) return std::nullopt;
     Target t = *target_;
     if (t.fwd > 0) {
@@ -161,6 +169,47 @@ class Gate {
   void SetSpeedWant(int level) {
     std::lock_guard<std::mutex> lk(mtx_);
     speed_want_ = level;
+  }
+
+  /// 遥控临时换档(协议 12,参数 --teleop-max-gear):``level`` 要在 [1, max_gear];要的就是
+  /// --speed-level 那一档 = 取消临时档。要的档变了就作废速度目标**和净空许可**(许可的比例是按旧档的
+  /// m/s 换的,换到快档同一个比例就快一倍)。``kGearIdleMs`` 没续、急停、丢控制权、``DropGear`` 回原档。
+  /// 返回空串 = 收下。
+  std::string SetGear(int level, int max_gear, uint64_t conn, Clock::time_point now) {
+    std::lock_guard<std::mutex> lk(mtx_);
+    if (speed_want_ <= 0) return "旁路不管档位(--speed-level 0),不能换档";
+    if (level < 1 || level > max_gear)
+      return "档位要在 [1, " + std::to_string(max_gear) + "](--teleop-max-gear)";
+    if (estop_latched_) return "急停生效中,不换档";
+    const int before = WantLocked(now);
+    if (level == speed_want_) {
+      gear_ = 0;
+    } else {
+      gear_ = level;
+      gear_conn_ = conn;
+      gear_seen_ = now;
+    }
+    if (WantLocked(now) != before) {
+      InvalidateLocked();
+      clear_until_[kEndHead] = clear_until_[kEndTail] = Clock::time_point{};
+      clear_cap_[kEndHead] = clear_cap_[kEndTail] = 0.0;
+    }
+    return "";
+  }
+
+  /// 这条连接要的临时档作废(连接断了;``conn`` 0 = 不论谁的)。作废了回 true。
+  bool DropGear(uint64_t conn) {
+    std::lock_guard<std::mutex> lk(mtx_);
+    if (gear_ == 0 || (conn != 0 && conn != gear_conn_)) return false;
+    gear_ = 0;
+    InvalidateLocked();
+    return true;
+  }
+
+  /// 现在要哪一档:有没过期的临时档就是它,不然是 --speed-level 那一档(0 = 不管档位)。
+  int WantLevel(Clock::time_point now) {
+    std::lock_guard<std::mutex> lk(mtx_);
+    return WantLocked(now);
   }
 
   /// SDK 状态回调报的当前档位(0 未知)。
@@ -249,6 +298,11 @@ class Gate {
     return "";
   }
 
+  int WantLocked(Clock::time_point now) const {
+    if (gear_ > 0 && now - gear_seen_ < std::chrono::milliseconds(kGearIdleMs)) return gear_;
+    return speed_want_;
+  }
+
   void InvalidateLocked() {
     ++epoch_;
     target_.reset();
@@ -272,6 +326,9 @@ class Gate {
   bool follows_head_ = true;
   int speed_want_ = 0;
   int speed_level_ = 0;
+  int gear_ = 0;  // 遥控临时档(0 = 没有)
+  uint64_t gear_conn_ = 0;
+  Clock::time_point gear_seen_{};
   Clock::time_point clear_until_[2]{};
   double clear_cap_[2]{0.0, 0.0};
   uint64_t permit_conn_ = 0;

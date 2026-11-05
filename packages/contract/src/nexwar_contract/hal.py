@@ -161,8 +161,13 @@ class HalCapabilities:
     max_vy: float = 0.0
     #: 能换哪几种姿态(POC 2026-11):``POSTURES`` 的子集;不报 = 都不能(老适配器)。
     postures: tuple[str, ...] = ()
+    #: 遥控临时换到中速档时前进最快多少(m/s,POC 2026-11-05);0 = 不能换档(老适配器、旁路不让换)。
+    #: 能换的 HAL 另有 ``teleop_gear() -> int``(此刻报的档)和 ``async set_teleop_gear(level)``。
+    max_vx_teleop: float = 0.0
 
     def __post_init__(self) -> None:
+        if not (math.isfinite(self.max_vx_teleop) and self.max_vx_teleop >= 0):
+            raise ContractError("HalCapabilities: max_vx_teleop 要是非负的有限数")
         if not (math.isfinite(self.max_vy) and self.max_vy >= 0):
             raise ContractError("HalCapabilities: max_vy 要是非负的有限数")
         if not isinstance(self.postures, tuple) or any(p not in POSTURES for p in self.postures):
@@ -182,7 +187,8 @@ class HalCapabilities:
                 "recharge_mode": self.recharge_mode, "sensing": dict(self.sensing),
                 "actuators": dict(self.actuators),
                 **({"max_vy": self.max_vy} if self.lateral else {}),
-                **({"postures": list(self.postures)} if self.postures else {})}
+                **({"postures": list(self.postures)} if self.postures else {}),
+                **({"max_vx_teleop": self.max_vx_teleop} if self.max_vx_teleop > 0 else {})}
 
     @classmethod
     def from_wire(cls, d: Any) -> HalCapabilities:
@@ -195,7 +201,9 @@ class HalCapabilities:
                    recharge_mode=as_str(d, "recharge_mode", w),
                    sensing=as_dict(d, "sensing", w), actuators=as_dict(d, "actuators", w),
                    max_vy=as_float(d, "max_vy", w) if "max_vy" in d else 0.0,
-                   postures=tuple(d["postures"]) if isinstance(d.get("postures"), list) else ())
+                   postures=tuple(d["postures"]) if isinstance(d.get("postures"), list) else (),
+                   max_vx_teleop=(as_float(d, "max_vx_teleop", w) if "max_vx_teleop" in d
+                                  else 0.0))
 
 
 class RobotHAL(Protocol):

@@ -20,7 +20,7 @@ def test_协议是v10_跟C加加旁路进程的常量一致():
     src = (ROOT / "motion" / "patrol_agent.cpp").read_text(encoding="utf-8")
     m = re.search(r"static const int kProtoVersion = (\d+);", src)
     # W12:state 带 speed_level、hello 带 speed_level_want;W26:imu 帧;S11:auth;W47:分档许可
-    assert m and int(m.group(1)) == PROTO_VERSION == 11
+    assert m and int(m.group(1)) == PROTO_VERSION == 12
 
 
 def test_CPP只收代理的运动命令_行为测试编译并通过(tmp_path):
@@ -391,7 +391,7 @@ async def test_分档许可_hello报比例上限_按许可夹前进_最新的说
     换成比例上限。"""
     async with _client(require_clearance=True, max_fraction=1.0) as (sim, client):
         hello = await client.recv()
-        assert hello.proto == 11 and hello.max_fraction == 1.0
+        assert hello.proto == 12 and hello.max_fraction == 1.0
         assert (await client.call("stand", timeout_s=10)).ok
         assert (await client.call("clear", ms=800, dist=0.9, vmax=0.36)).ok
         assert (await client.call("vel", fwd=0.8, lat=0.0, yaw=0.0, ttl_ms=300)).ok
@@ -436,7 +436,7 @@ async def test_老许可不带vmax_按0点5算():
 
 def test_CPP的分档许可_参数与hello():
     src = (ROOT / "motion" / "patrol_agent.cpp").read_text(encoding="utf-8")
-    assert "kProtoVersion = 11" in src and PROTO_VERSION == 11
+    assert "kProtoVersion = 12" in src and PROTO_VERSION == 12
     assert '"--max-fraction"' in src and '"--permit-mps-per-unit"' in src
     assert '\\"max_fraction\\":' in src and '"\\"vmax\\""' in src
 
@@ -504,3 +504,16 @@ def test_CPP里程IMU断流就重订_行为测试编译并通过_两路回调都
     got = subprocess.run([str(exe)], capture_output=True, text=True, timeout=60)
     assert got.returncode == 0, got.stdout + got.stderr
     assert "data_watch: ok" in got.stdout
+
+
+def test_CPP的遥控换档_参数_插队_hello_跟仿真一致():
+    """协议 12(POC 11-05):``gear`` 插队、要认证;``--teleop-max-gear`` 只认 1、2;hello 带它;
+    临时档过期时长 C++ 与 Python 一致。"""
+    from nexwar_patrol.protocol.agent_frames import GEAR_IDLE_S
+    from nexwar_sim.agent_server import URGENT_COMMANDS, open_command
+    src = (ROOT / "motion" / "patrol_agent.cpp").read_text(encoding="utf-8")
+    gate = (ROOT / "motion" / "vel_gate.hpp").read_text(encoding="utf-8")
+    assert '"--teleop-max-gear"' in src and '\\"teleop_max_gear\\":' in src
+    assert 'cmd == "gear") return DoGear(' in src and '|| cmd == "gear";' in src
+    assert "gear" in URGENT_COMMANDS and not open_command("gear", {"level": 2})
+    assert f"kGearIdleMs = {int(GEAR_IDLE_S * 1000)};" in gate
