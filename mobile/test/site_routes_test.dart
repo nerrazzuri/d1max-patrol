@@ -304,6 +304,12 @@ void main() {
     await _tapKey(t, SiteRouteEditorPage.sendKey);
     await t.tap(find.byKey(const Key('route-send-A')));
     await t.pumpAndSettle();
+    // POC 第 5 项:派之前先看预计多久、派给谁、要不要排队,确认了才派
+    expect(api.calls, contains('patrolPlan A loop'));
+    expect(api.calls, isNot(contains('patrol A loop')));
+    expect(find.textContaining('10 min'), findsWidgets);
+    await t.tap(find.byKey(const Key('route-send-go')));
+    await t.pumpAndSettle();
     expect(api.calls, contains('patrol A loop'));
     expect(find.textContaining('Patrol sent to A'), findsOneWidget);
   });

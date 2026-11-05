@@ -10,6 +10,7 @@ import { t } from "./i18n";
 import type { OwnLayer } from "./layoutpage";
 import { MapCanvas } from "./mapcanvas";
 import { PoseMarker } from "./posemarker";
+import { DispatchOnce } from "./routedispatch";
 import { toPx, type PreviewMeta } from "./mapview";
 import "./routes.css";
 import {
@@ -472,6 +473,7 @@ export function RoutesPage({ say, embed, kind = "patrol" }: { say: Say; embed?: 
                   {!embed && <button type="button" class="btn primary" disabled={!canSave} onClick={() => void save()}>{rt("routeSave")}</button>}
                   <button type="button" class="btn" disabled={!dirty} onClick={() => (draft.isNew ? setDraft(null) : orig && edit(orig))}>{rt("routeDiscard")}</button>
                   {!draft.isNew && <button type="button" class="btn stop" onClick={() => setRemoving(true)}>{rt("routeDelete")}</button>}
+                  {!draft.isNew && !dirty && !guardKind && <DispatchOnce route={draft.id} say={say} />}
                 </div>
                 {!draft.isNew && !guardKind && (
                   <SchedulePanel route={draft.id} view={view} schedules={mySchedules} say={say} reload={load} />
