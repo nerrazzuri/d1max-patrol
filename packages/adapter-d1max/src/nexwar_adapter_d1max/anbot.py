@@ -37,10 +37,11 @@ import re
 import signal
 import socket
 import struct
+import tempfile
 import threading
 import time
 import xmlrpc.client
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -60,6 +61,9 @@ log = logging.getLogger(__name__)
 BOOL_MD5 = "8b94c1b53db61fb6aed406028ad6332a"
 STRING_MD5 = "992ce8a1687cec8c8bd883ec73ca41d1"
 KIND = "anbot_ros1"
+HOST_ENV = "NEXWAR_ANBOT_SSH_HOST"
+USER_ENV = "NEXWAR_ANBOT_SSH_USER"
+PASSWORD_ENV = "NEXWAR_ANBOT_SSH_PASSWORD"
 _HOST = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.-]{0,31}@[A-Za-z0-9][A-Za-z0-9_.-]{0,63}")
 _DEV = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_:,.-]{0,63}")
 _CLIP = re.compile(r"[A-Za-z0-9_-][A-Za-z0-9_.-]{0,63}")
@@ -299,7 +303,7 @@ class AnbotConfig:
     def from_dict(cls, d: dict[str, Any]) -> AnbotConfig:
         known = {"master", "host", "strobe_topic", "voice_topic", "caller", "secs_per_char",
                  "republish_s", "reregister_s", "audio_host", "ssh_key", "aplay_device",
-                 "clips_dir"}
+                 "clips_dir", "ssh"}
         extra = set(d) - known - {"kind"}
         if extra:
             raise PayloadError(f"竞品上装配置里有不认识的项: {', '.join(sorted(extra))}")
@@ -314,8 +318,12 @@ class AnbotConfig:
 class AnbotPayload:
     """竞品上装的异步入口(HAL 调它,跟 :class:`Payload` 同一套方法)。"""
 
-    def __init__(self, cfg: AnbotConfig) -> None:
+    def __init__(self, cfg: AnbotConfig, *, password: str = "") -> None:
         self.cfg = cfg
+        #: 登录竞品主控的密码(11-05 用户定:不改竞品,POC 存密码)。只放内存、只经环境变量交给
+        #: SSH_ASKPASS;不进命令行、不进日志、不进 ``cfg``(repr 不带)。空 = 用 ``ssh_key``。
+        self._password = password
+        self._askpass: Path | None = None
         self.on_sound_end: Callable[[bool, str], Any] | None = None
         self._strobe = Ros1Publisher(master=cfg.master, host=cfg.host, caller=cfg.caller,
                                      topic=cfg.strobe_topic, mtype="std_msgs/Bool",
@@ -455,17 +463,39 @@ class AnbotPayload:
         if not 0 < max_s <= MAX_ON_S:
             raise PayloadError(f"max_s 要在 0–{MAX_ON_S:.0f} 秒之间")
         await self.stop_sound()
-        cmd = [self.cfg.ssh, "-i", self.cfg.ssh_key, "-o", "BatchMode=yes",
-               "-o", "ConnectTimeout=3", "-o", "StrictHostKeyChecking=accept-new",
-               self.cfg.audio_host, f"aplay -q -D {self.cfg.aplay_device} -"]
+        common = ["-o", "ConnectTimeout=3", "-o", "StrictHostKeyChecking=accept-new"]
+        env = None
+        if self._password:
+            # 密码:ssh 没有终端(新会话)时找 SSH_ASKPASS 要;那个小脚本从环境变量里念出来
+            auth = ["-o", "PubkeyAuthentication=no",
+                    "-o", "PreferredAuthentications=password,keyboard-interactive",
+                    "-o", "NumberOfPasswordPrompts=1"]
+            env = dict(os.environ) | {"SSH_ASKPASS": str(self._askpass_script()),
+                                      "SSH_ASKPASS_REQUIRE": "force",
+                                      "DISPLAY": os.environ.get("DISPLAY", ":0"),
+                                      PASSWORD_ENV: self._password}
+        else:
+            auth = ["-i", self.cfg.ssh_key, "-o", "BatchMode=yes"]
+        cmd = [self.cfg.ssh, *auth, *common, self.cfg.audio_host,
+               f"aplay -q -D {self.cfg.aplay_device} -"]
         try:
             with path.open("rb") as f:
                 proc = await asyncio.create_subprocess_exec(
                     *cmd, stdin=f, stdout=asyncio.subprocess.DEVNULL,
-                    stderr=asyncio.subprocess.PIPE, start_new_session=True)
+                    stderr=asyncio.subprocess.PIPE, start_new_session=True, env=env)
         except OSError as exc:
             raise PayloadError(f"放不了录好的话术(ssh 起不来): {exc}") from exc
         self._speech = asyncio.get_running_loop().create_task(self._clip_end(proc, max_s))
+
+    def _askpass_script(self) -> Path:
+        """只念环境变量的小脚本(私有临时目录,0700)。密码本身不落盘。"""
+        if self._askpass is None or not self._askpass.exists():
+            d = Path(tempfile.mkdtemp(prefix="nexwar_askpass-"))
+            p = d / "askpass"
+            p.write_text(f'#!/bin/sh\nprintf \'%s\\n\' "${PASSWORD_ENV}"\n', encoding="utf-8")
+            p.chmod(0o700)
+            self._askpass = p
+        return self._askpass
 
     async def _clip_end(self, proc: Any, max_s: float) -> None:
         try:
@@ -536,8 +566,15 @@ class AnbotPayload:
         return [device("link:anbot", "online", "竞品主控上的警灯、播音程序都连上了")]
 
 
-def load_payload(path: str | Path) -> Payload | AnbotPayload:
-    """按 ``kind`` 选上装:``anbot_ros1`` 是竞品转接,没写就是 W21 继电器上装。"""
+def load_payload(path: str | Path,
+                 env: Mapping[str, str] | None = None) -> Payload | AnbotPayload:
+    """按 ``kind`` 选上装:``anbot_ros1`` 是竞品转接,没写就是 W21 继电器上装。
+
+    竞品转接放录好的话术要登录竞品主控:``/etc/nexwar/env`` 里的 ``NEXWAR_ANBOT_SSH_HOST``、
+    ``NEXWAR_ANBOT_SSH_USER``、``NEXWAR_ANBOT_SSH_PASSWORD``(systemd 交给代理;
+    仓库里、日志里都没有)。
+    三样要么都给,要么都不给(不给 = 只念文字,或者 payload.json 里写 ``audio_host`` 用钥匙)。"""
+    env = os.environ if env is None else env
     try:
         d = json.loads(Path(path).read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
@@ -546,7 +583,14 @@ def load_payload(path: str | Path) -> Payload | AnbotPayload:
         raise PayloadError("上装配置要是 JSON 对象")
     kind = d.get("kind", "relay")
     if kind == KIND:
-        return AnbotPayload(AnbotConfig.from_dict(d))
+        keys = (HOST_ENV, USER_ENV, PASSWORD_ENV)
+        have = [k for k in keys if env.get(k)]
+        if have and len(have) != len(keys):
+            raise PayloadError("登录竞品主控要 " + "、".join(keys) + " 三样都给,缺 "
+                               + "、".join(k for k in keys if k not in have))
+        if have:
+            d = d | {"audio_host": f"{env[USER_ENV]}@{env[HOST_ENV]}"}
+        return AnbotPayload(AnbotConfig.from_dict(d), password=env.get(PASSWORD_ENV, ""))
     if kind != "relay":
         raise PayloadError(f"上装 kind 只认 relay、{KIND}: {kind!r}")
     return Payload(PayloadConfig.load(path))

@@ -438,3 +438,48 @@ def test_配置_audio_host_ssh_key(tmp_path):
             {"kind": "anbot_ros1", "master": "http://a:1", "host": "h"} | bad))
         with pytest.raises(PayloadError):
             load_payload(tmp_path / "b.json")
+
+
+# ---------------------------------------------------------------- 11-05:用户定不改竞品,密码登录
+
+
+async def test_密码登录_走SSH_ASKPASS_密码只在环境变量里_不进命令行和日志(master, tmp_path, caplog):
+    """竞品 /home/firefly 是 777,sshd 不认钥匙;改它就是改竞品,用户不同意。密码在 /etc/nexwar/env
+    (systemd 交给代理),ssh 从 SSH_ASKPASS 要;Orin 上没有 sshpass,不用装。"""
+    log = tmp_path / "ssh.log"
+    pw_seen = tmp_path / "pw"
+    s = tmp_path / "ssh"
+    s.write_text("#!/bin/sh\n"
+                 f'echo "$@" >> "{log}"\n'
+                 f'echo "REQ=$SSH_ASKPASS_REQUIRE" >> "{log}"\n'
+                 f'"$SSH_ASKPASS" "firefly@h\'s password: " > "{pw_seen}"\n'
+                 "cat > /dev/null\n")
+    s.chmod(0o755)
+    env = {"NEXWAR_ANBOT_SSH_HOST": "192.168.113.101", "NEXWAR_ANBOT_SSH_USER": "firefly",
+           "NEXWAR_ANBOT_SSH_PASSWORD": "pa ss'w$rd"}
+    a = tmp_path / "anbot.json"
+    a.write_text(json.dumps({"kind": "anbot_ros1", "master": master.url, "host": "127.0.0.1",
+                             "clips_dir": str(_clips(tmp_path)), "ssh": str(s)}))
+    caplog.set_level("DEBUG")
+    p = load_payload(a, env=env)
+    assert p.cfg.audio_host == "firefly@192.168.113.101"
+    ends: list = []
+    p.on_sound_end = lambda ok, why: ends.append((ok, why))
+    await p.sound("restricted", 30)
+    await _等(lambda: ends)
+    assert ends == [(True, "放完了")]
+    assert pw_seen.read_text() == "pa ss'w$rd\n"
+    args = log.read_text()
+    assert "pa ss" not in args and "BatchMode=yes" not in args
+    assert "REQ=force" in args and "PubkeyAuthentication=no" in args
+    assert "pa ss" not in caplog.text and "pa ss" not in repr(p.cfg)
+    await p.close()
+
+
+def test_密码登录_env里只配了一半_说清楚(tmp_path):
+    a = tmp_path / "anbot.json"
+    a.write_text(json.dumps({"kind": "anbot_ros1", "master": "http://a:1", "host": "h"}))
+    with pytest.raises(PayloadError, match="NEXWAR_ANBOT_SSH_PASSWORD"):
+        load_payload(a, env={"NEXWAR_ANBOT_SSH_HOST": "1.2.3.4", "NEXWAR_ANBOT_SSH_USER": "f"})
+    p = load_payload(a, env={})
+    assert p.cfg.audio_host == "" and p.cfg.clips_dir == ""
