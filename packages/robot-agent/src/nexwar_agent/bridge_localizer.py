@@ -322,6 +322,11 @@ class BridgeLocalizer:
     def on_state(self, s: State) -> None:
         self._state, self._state_reason = s.state, s.reason
 
+    def lidar_blocked(self) -> bool:
+        """定位器说雷达被挡住了(W34 判据;W74 四期判被遮挡用)。"""
+        from nexwar_contract.locbridge import LIDAR_BLOCKED_REASON
+        return self._state == "lost" and self._state_reason.startswith(LIDAR_BLOCKED_REASON)
+
     def on_pose(self, p: Pose) -> None:
         if (p.map_id, p.map_version) != self._map:
             self._wrong_map = True

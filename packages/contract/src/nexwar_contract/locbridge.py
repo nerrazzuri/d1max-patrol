@@ -46,6 +46,8 @@ STATES = ("initializing", "tracking", "lost")
 #: 定位器载好图、没有初值(新图、没人给过位置)时 ``initializing`` 的原因:代理见到它就不等,
 #: 马上自动找位置(W68,用户 11-02:开机自己找位置)。
 WAIT_INIT_REASON = "等人给初始位置"
+#: 雷达被挡住(一帧有效点太少,W34)时 ``lost`` 的原因开头:代理据此判「机器人被遮挡」(W74 四期)。
+LIDAR_BLOCKED_REASON = "雷达被挡住了"
 
 
 def _pos_int(v: Any, what: str, *, zero: bool = False) -> None:

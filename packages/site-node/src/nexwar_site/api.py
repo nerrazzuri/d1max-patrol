@@ -1232,7 +1232,8 @@ class _Handler(TlsHandlerMixin):
             raise HttpError(405, "只支持 GET/POST")
         self._need(user, MANAGE)
         d = self._body()
-        self._audit_detail = {k: d.get(k) for k in ("shift_hours", "stale_hours") if k in d}
+        self._audit_detail = {k: d.get(k) for k in ("shift_hours", "stale_hours",
+                                                     "self_protect_siren") if k in d}
         try:
             return self._send_json(200, st.set_duty(d, by=str(user)))
         except SettingsError as exc:

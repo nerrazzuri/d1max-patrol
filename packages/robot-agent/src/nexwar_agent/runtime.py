@@ -436,6 +436,11 @@ class AgentRuntime:
         #: 热像镜头被挡(W46;装机入口 :meth:`attach_lens` 接上)。
         self.lens: Any = None
         self._lens_task: asyncio.Task | None = None
+        #: W74 四期:被遮挡检测(:class:`~nexwar_agent.cover.CoverWatch`);被遮挡了欠一次撤任务、停车。
+        self.cover: Any = None
+        self._cover_task: asyncio.Task | None = None
+        self._cover_owed = False
+        self._cover_told: bool | None = None
         self._link_job: asyncio.Task | None = None
         self._link_down_at: float | None = None
         self._reclaim_left = 0                           # 重连后还要再拿几次控制权
@@ -716,6 +721,45 @@ class AgentRuntime:
         if self.devices is not None:
             self.devices.lens = lens
 
+    def attach_cover(self, cover: Any) -> None:
+        """接上被遮挡检测(W74 四期):事件进事件簿;被遮挡了撤会动的任务、停车、不收新的。"""
+        self.cover = cover
+        cover.emit = self.events.emit
+        cover.on_change = self._on_cover
+
+    def _on_cover(self, covered: bool) -> None:
+        if covered:
+            self._cover_owed = True
+
+    async def _cover_check(self) -> None:
+        try:
+            await self.cover.step()
+        except asyncio.CancelledError:
+            raise
+        except Exception:                         # 遮挡检测出毛病不许带走代理
+            log.exception("被遮挡检测这一次炸了")
+
+    async def _watch_cover(self) -> None:
+        if self.cover is None:
+            return
+        if self._cover_told != self.cover.covered and self.transport.connected:
+            self._cover_told = self.cover.covered          # 能力变了:这一拍发给站点
+            await self._publish_caps()
+        if self._cover_owed:
+            from nexwar_agent.commands import _MOTION_KINDS
+            why = "机器人被遮挡"
+            try:
+                await self.processor.abort_kinds(_MOTION_KINDS, why)
+                await self._stop_motion()
+                cur = self.processor.current
+                if cur is None or cur.done or cur.kind not in _MOTION_KINDS or cur.aborting:
+                    self._cover_owed = False
+            except Exception:
+                log.exception("被遮挡:撤任务、停车没成(下一拍再来)")
+        if self.cover.due() and (self._cover_task is None or self._cover_task.done()):
+            # 取图要起 ffmpeg:放后台,不卡这一拍
+            self._cover_task = asyncio.get_running_loop().create_task(self._cover_check())
+
     async def _lens_check(self) -> None:
         try:
             await self.lens.step()
@@ -990,6 +1034,9 @@ class AgentRuntime:
             out["dock"] = self._dock_caps()         # W13:会对桩;在不在桩上、桩上危险
         if self.evidence_sealed is not None:
             out["evidence"] = {"sealed": self.evidence_sealed}   # W30b:没封站点报 P2
+        if self.cover is not None:
+            # W74 四期:被遮挡(站点按它对账报 P1、开声光)
+            out["cover"] = {"state": "covered" if self.cover.covered else "ok"}
         if self.force is not None:
             out["force"] = self.force.caps()        # W26:翻倒、被抱起来(站点按它对账报 P1)
         end = self._tls_expires_ms()
@@ -1129,7 +1176,10 @@ class AgentRuntime:
         return sc[0]
 
     def _force_gate(self) -> str:
-        """W26:翻倒、被抱起来时不收、不起跑会让狗动的任务。"""
+        """W26:翻倒、被抱起来时不收、不起跑会让狗动的任务。W74 四期:被遮挡时也是。"""
+        cover = getattr(self, "cover", None)
+        if cover is not None and cover.covered:
+            return "covered: 机器人被遮挡(雷达、相机都看不见):揭开之后才能动"
         if getattr(self, "force", None) is None:
             return ""
         st = self.force.state
@@ -2615,6 +2665,8 @@ class AgentRuntime:
             await _step("停录像", _rec_off)
         if self._lens_task is not None and not self._lens_task.done():
             self._lens_task.cancel()
+        if self._cover_task is not None and not self._cover_task.done():
+            self._cover_task.cancel()
         if self._link_job is not None and not self._link_job.done():
             self._link_job.cancel()
         if self.board is not None:
@@ -3014,6 +3066,10 @@ class AgentRuntime:
             await self._watch_force()
         except Exception:                         # 受力检测出毛病不许带走这一拍
             log.exception("受力检测这一拍炸了")
+        try:
+            await self._watch_cover()
+        except Exception:                         # 遮挡检测出毛病不许带走这一拍
+            log.exception("被遮挡检测这一拍炸了")
         await self._feed_trail()
         try:
             self._log_rtk()

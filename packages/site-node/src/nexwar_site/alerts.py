@@ -113,6 +113,7 @@ LEVEL_OF: dict[str, Level] = {
     "evidence_seal_failed": Level.P2,
     "force_flipped": Level.P1,
     "force_lifted": Level.P1,
+    "force_covered": Level.P1,           # W74 四期:被人罩住(雷达、相机都看不见)
     "force_bump": Level.P2,
     "force_config_bad": Level.P2,
     "purged_incoming_stuck": Level.P2,

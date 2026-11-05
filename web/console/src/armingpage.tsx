@@ -208,6 +208,11 @@ export function ArmingPage({ say, now, role = "admin" }: { say: Say; now: number
               onInput={(e) => setDuty({ ...duty, stale_hours: Number(e.currentTarget.value) })} />
           </label>
         </div>
+        <label class="row">
+          <input name="siren" type="checkbox" checked={duty.self_protect_siren !== false}
+            onChange={(e) => setDuty({ ...duty, self_protect_siren: e.currentTarget.checked })} />
+          {t("armSelfSiren")}
+        </label>
         <p class="muted small">{t("armDutyHint")}</p>
       </section>}
     </section>

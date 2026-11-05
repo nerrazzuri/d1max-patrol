@@ -51,22 +51,29 @@ def test_一天的开始():
 
 def test_值班设置_默认(tmp_path):
     assert SiteSettings(SiteDB(tmp_path / "s.db")).duty() == {"shift_hours": [7, 19],
-                                                              "stale_hours": 2}
+                                                              "stale_hours": 2,
+                                                              "self_protect_siren": True}
 
 
 def test_值班设置_存了读回来(tmp_path):
     db = SiteDB(tmp_path / "s.db")
     SiteSettings(db).set_duty({"shift_hours": [20, 8], "stale_hours": 3}, by="alice")
-    assert SiteSettings(db).duty() == {"shift_hours": [8, 20], "stale_hours": 3}
+    assert SiteSettings(db).duty() == {"shift_hours": [8, 20], "stale_hours": 3,
+                                       "self_protect_siren": True}
     # 只给一样,另一样不动
     SiteSettings(db).set_duty({"stale_hours": 4}, by="alice")
-    assert SiteSettings(db).duty() == {"shift_hours": [8, 20], "stale_hours": 4}
+    assert SiteSettings(db).duty() == {"shift_hours": [8, 20], "stale_hours": 4,
+                                       "self_protect_siren": True}
+    # W74 四期:被遮挡、推倒、抱起来只开灯不鸣笛
+    SiteSettings(db).set_duty({"self_protect_siren": False}, by="alice")
+    assert SiteSettings(db).duty()["self_protect_siren"] is False
 
 
 @pytest.mark.parametrize("bad", [{"shift_hours": [7, 7]}, {"shift_hours": [7, 24]},
                                  {"shift_hours": [7]}, {"shift_hours": "7,19"},
                                  {"shift_hours": [7.5, 19]}, {"stale_hours": 0},
-                                 {"stale_hours": 49}, {"stale_hours": True}])
+                                 {"stale_hours": 49}, {"stale_hours": True},
+                                 {"self_protect_siren": 1}])
 def test_值班设置_不合规矩(tmp_path, bad):
     with pytest.raises(SettingsError):
         SiteSettings(SiteDB(tmp_path / "s.db")).set_duty(bad, by="alice")
@@ -79,10 +86,11 @@ def test_值班设置_接口权限(tmp_path):
         gina = s.req("POST", "/api/login", {"name": "gina", "password": PW})[1]["token"]
         alice = s.login()
         assert s.req("GET", "/api/duty-settings", token=gina) == (
-            200, {"shift_hours": [7, 19], "stale_hours": 2})
+            200, {"shift_hours": [7, 19], "stale_hours": 2, "self_protect_siren": True})
         assert s.req("POST", "/api/duty-settings", {"stale_hours": 3}, token=gina)[0] == 403
         code, d = s.req("POST", "/api/duty-settings", {"shift_hours": [8, 20]}, token=alice)
-        assert code == 200 and d == {"shift_hours": [8, 20], "stale_hours": 2}
+        assert code == 200 and d == {"shift_hours": [8, 20], "stale_hours": 2,
+                                    "self_protect_siren": True}
         assert s.req("POST", "/api/duty-settings", {"stale_hours": 0}, token=alice)[0] == 400
         audit = s.req("GET", "/api/audit", token=alice)[1]["audit"]
         assert any(r["actor"] == "alice" and "/api/duty-settings" in r["action"]
