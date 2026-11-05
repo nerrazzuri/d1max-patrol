@@ -74,6 +74,8 @@ class SiteDutyPage extends StatefulWidget {
   const SiteDutyPage({super.key, required this.api, this.title, this.onReady});
 
   static const Key modeKey = Key('duty-mode');
+  /// 11-05 现场第 36 条：连不上站点主机的横幅。
+  static const Key siteDownKey = Key('duty-site-down');
   static const Key modeChangeKey = Key('duty-mode-change');
   static Key p1Key(String key) => Key('duty-p1-$key');
   static Key chipKey(String id) => Key('duty-chip-$id');
@@ -124,6 +126,10 @@ class _SiteDutyPageState extends State<SiteDutyPage> {
   bool _loaded = false;
   bool _ready = false;
   String? _error;
+  /// 11-05 现场第 36 条：从什么时候起连不上站点（null = 连得上）；这一轮重读有没有连不上、有没有别的错。
+  DateTime? _downSince;
+  bool _downNow = false;
+  String? _errNow;
   StreamSubscription<Map<String, dynamic>>? _sub;
   Timer? _debounce;
   Timer? _poll;
@@ -165,7 +171,11 @@ class _SiteDutyPageState extends State<SiteDutyPage> {
     try {
       return await f();
     } on SiteError catch (e) {
-      if (e.status != 404 && mounted) setState(() => _error = refusalText(e));
+      if (e.status == 0) {
+        _downNow = true;
+      } else if (e.status != 404) {
+        _errNow = refusalText(e);
+      }
       return null;
     } on FormatException {
       return null;
@@ -173,6 +183,8 @@ class _SiteDutyPageState extends State<SiteDutyPage> {
   }
 
   Future<void> _reload() async {
+    _downNow = false;
+    _errNow = null;
     final got = await Future.wait<Object?>([
       _try(widget.api.robots),
       _try(() => widget.api.alerts()),
@@ -184,6 +196,9 @@ class _SiteDutyPageState extends State<SiteDutyPage> {
     if (!mounted) return;
     final robots = got[0] is List ? dutyOrder((got[0] as List).cast<Map<String, dynamic>>()) : _robots;
     setState(() {
+      // 11-05 现场第 36 条：这一轮都连上了就清掉旧的错误、横幅
+      _downSince = _downNow ? (_downSince ?? DateTime.now()) : null;
+      _error = _errNow;
       _robots = robots;
       if (got[1] is List) _alerts = (got[1] as List).cast<Alert>();
       if (got[2] is Map) {
@@ -212,8 +227,19 @@ class _SiteDutyPageState extends State<SiteDutyPage> {
   Future<void> _loadView() async {
     final id = _sel;
     if (id == null) return;
-    final v = await _try(() => widget.api.robot(id));
-    if (mounted && v != null && _sel == id) setState(() => _view = v);
+    try {
+      final v = await widget.api.robot(id);
+      if (mounted && _sel == id) setState(() => _view = v);
+    } on SiteError catch (e) {
+      if (!mounted) return;
+      if (e.status == 0) {
+        setState(() => _downSince ??= DateTime.now());
+      } else if (e.status != 404) {
+        setState(() => _error = refusalText(e));
+      }
+    } on FormatException {
+      return;
+    }
   }
 
   void _select(String id) {
@@ -690,6 +716,16 @@ class _SiteDutyPageState extends State<SiteDutyPage> {
           child: RefreshIndicator(
             onRefresh: _reload,
             child: ListView(padding: const EdgeInsets.all(Nw.s16), children: [
+              if (_downSince != null) ...[
+                NwNotice(
+                    key: SiteDutyPage.siteDownKey,
+                    tone: NwTone.error,
+                    icon: Icons.cloud_off_rounded,
+                    text: tr(
+                        "Can't reach the site host since ${_hm(_downSince!)}. Robot status here is out of date and alerts won't arrive. Check the site host is on and this phone is on the site's network.",
+                        '从 ${_hm(_downSince!)} 起连不上站点主机：这里机器人的状态是旧的，报警也收不到。请检查站点主机是否开着、手机是否连在站点的网络上。')),
+                nwGap8,
+              ],
               if (_error != null) ...[NwNotice(text: _error!, tone: NwTone.error), nwGap8],
               _modeRow(c),
               ..._p1(c),
@@ -741,3 +777,5 @@ class _SiteDutyPageState extends State<SiteDutyPage> {
     );
   }
 }
+
+String _hm(DateTime t) => '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
