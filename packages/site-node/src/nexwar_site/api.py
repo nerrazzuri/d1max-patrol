@@ -731,6 +731,8 @@ class _Handler(TlsHandlerMixin):
             m = _TRACK.match(path)
             if m is not None or path == "/api/coverage":
                 return self._track(method, unquote(m.group(1)) if m else None, user)
+            if path == "/api/alert-test":
+                return self._alert_test(method, user)
             if path == "/api/alerts" or path == "/api/watch/summary" or _ALERT.match(path):
                 return self._alerts(method, path, user)
             if method == "POST" and path == "/api/bundles":
@@ -867,6 +869,42 @@ class _Handler(TlsHandlerMixin):
         self._handle("POST")
 
     # ------------------------------------------------------------ 路由
+
+    def _alert_test(self, method: str, user) -> None:
+        """告警测试模式(POC):``GET`` 谁都能看(页面上挂条幅);``POST`` 管理员
+        ``{"action": "start", "minutes"}`` / ``{"action": "end", "clear"?: bool}``。"""
+        desk = self.site.alerts
+        if desk is None:
+            raise HttpError(404, "此站点未启用告警")
+
+        def view() -> dict[str, Any]:
+            m = desk.test_mode()
+            return {"active": m is not None, "until_ms": (m or {}).get("until_ms"),
+                    "by": (m or {}).get("by", "")}
+        if method == "GET":
+            self._need(user, VIEW)
+            return self._send_json(200, self.site.loop.call(lambda: _sync(view)))
+        if method != "POST":
+            raise HttpError(405, "只支持 GET/POST")
+        self._need(user, MANAGE)
+        d = self._body()
+        act = d.get("action") if isinstance(d, dict) else None
+        if act == "start":
+            self._audit_detail = {"action": "start", "minutes": d.get("minutes")}
+            try:
+                self.site.loop.call(lambda: _sync(desk.start_test, d.get("minutes"),
+                                                  by=str(user)))
+            except ValueError as exc:
+                raise HttpError(400, str(exc)) from exc
+            return self._send_json(200, self.site.loop.call(lambda: _sync(view)))
+        if act == "end":
+            clear = d.get("clear", False)
+            if not isinstance(clear, bool):
+                raise HttpError(400, "clear 要是 true/false")
+            n = self.site.loop.call(lambda: _sync(desk.end_test, clear=clear))
+            self._audit_detail = {"action": "end", "clear": clear, "cleared": n}
+            return self._send_json(200, {**self.site.loop.call(lambda: _sync(view)), "cleared": n})
+        raise HttpError(400, "action 要是 start 或 end")
 
     def _alerts(self, method: str, path: str, user) -> None:
         """告警与值守(W00c5a)。看:``view``;确认、解决:``handle_alerts``,人取登录账号。"""

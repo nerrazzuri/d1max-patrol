@@ -210,6 +210,9 @@ class FakeApi implements SiteApi {
     calls.add(name == null ? 'standby $id' : 'standby $id $name');
     return {'ack': {'result': 'accepted'}};
   }
+  Map<String, dynamic> alertTestMode = <String, dynamic>{'active': false};
+  @override
+  Future<Map<String, dynamic>> alertTest() async => alertTestMode;
   @override
   Future<Map<String, dynamic>> returnHome(String robotId, {bool abort = false}) async {
     calls.add(abort ? 'home $robotId abort' : 'home $robotId');

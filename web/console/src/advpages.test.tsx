@@ -4,7 +4,7 @@ import { cleanup, fireEvent, render, waitFor } from "@testing-library/preact";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { DiagPage, deviceText } from "./advdiag";
 import { SystemPage2 } from "./advsystem";
-import { isLoopbackOrigin, pickPairUrl } from "./admin";
+import { isLoopbackOrigin, pairChoices, pickPairUrl } from "./admin";
 import { UpgradePage } from "./advupgrade";
 import { setFetch } from "./api";
 import { lang } from "./i18n";
@@ -82,6 +82,10 @@ describe("POC 配对码地址", () => {
     expect(pickPairUrl("https://127.0.0.1:8443", ["https://192.168.1.5:8443"])).toBe("https://192.168.1.5:8443");
     expect(pickPairUrl("https://10.0.0.2:8443", ["https://192.168.1.5:8443"])).toBe("https://10.0.0.2:8443");
     expect(pickPairUrl("https://localhost:8443", [])).toBeNull();
+    // 用户 11-05:二维码默认就是网页自己的地址(不只是局域网地址),它排在可选的最前
+    expect(pairChoices("https://site.example:8443", ["https://192.168.1.5:8443"])).toEqual(["https://site.example:8443", "https://192.168.1.5:8443"]);
+    expect(pairChoices("https://192.168.1.5:8443", ["https://192.168.1.5:8443"])).toEqual(["https://192.168.1.5:8443"]);
+    expect(pairChoices("https://127.0.0.1:8443", ["https://192.168.1.5:8443"])).toEqual(["https://192.168.1.5:8443"]);
   });
 
   it("列出局域网地址可点", async () => {

@@ -2,6 +2,7 @@
 // 下班前可以给下一班留话。筛选:本班 / 今天 / 选日期 × 全部 / 有人闯入 / 机器人需要帮忙 / 机器人掉线 × 只看没处理的。
 // 每行:抓拍(录像那一刻的一帧)、时间、什么事、结论和谁处理的、看录像 / 去处理。技术类(给管理员的)不列。
 import { useEffect, useState } from "preact/hooks";
+import { AlertTestBar } from "./alerttest";
 import { api, ApiError } from "./api";
 import { hm, useDutySettings } from "./data";
 import { alertTitle, lang, t, type Key } from "./i18n";
@@ -72,6 +73,7 @@ export function AlarmLogPage(props: { now: number; role: string }) {
   const kinds: { v: Kind; key: Key }[] = [{ v: "all", key: "alAll" }, { v: "intrusion", key: "alIntrusion" }, { v: "help", key: "alHelp" }, { v: "offline", key: "alOffline" }];
   return (
     <div class="alarmlog">
+      <AlertTestBar role={props.role} onCleared={() => setAlerts((a) => (a ?? []).filter((x) => !x.title.startsWith("测试：")))} />
       <div class="sum">
         <div class="box"><b>{inShift.length}</b><span>{t("alSumShift", { t: hm(shift) })}</span></div>
         <div class="box o"><b>{inShift.filter((a) => a.resolved_ms == null).length}</b><span>{t("alSumOpen")}</span></div>

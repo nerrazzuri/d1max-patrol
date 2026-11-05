@@ -82,6 +82,13 @@ export function pickPairUrl(origin: string, lan: string[]): string | null {
   return lan[0] ?? null;
 }
 
+/** 可选的地址:网页自己的地址在最前(手机能连的话),再是站点报的主机名和局域网地址;去重。 */
+export function pairChoices(origin: string, lan: string[]): string[] {
+  const out = isLoopbackOrigin(origin) ? [] : [origin];
+  for (const a of lan) if (!out.includes(a)) out.push(a);
+  return out;
+}
+
 export function PairPhone() {
   const [url, setUrl] = useState(window.location.origin);
   const [asked, setAsked] = useState(isLoopbackOrigin(window.location.origin) ? "" : window.location.origin);
@@ -127,9 +134,9 @@ export function PairPhone() {
           {isLoopbackOrigin(window.location.origin) && lan !== null && lan.length === 0 && (
             <p class="error small" role="alert" data-pair-nolan="1">{t("pairNoLan")}</p>
           )}
-          {lan !== null && lan.length > 0 && (
+          {lan !== null && pairChoices(window.location.origin, lan).length > 1 && (
             <div class="row wrap" data-pair-lan="1">
-              {lan.map((a) => (
+              {pairChoices(window.location.origin, lan).map((a) => (
                 <button key={a} type="button" class={a === asked ? "btn sm primary" : "btn sm"}
                   onClick={() => { setUrl(a); setAsked(a); }}>{a}</button>
               ))}

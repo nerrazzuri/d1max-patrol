@@ -316,6 +316,20 @@ void main() {
       expect(find.byType(AlarmLogPage), findsOneWidget);
       await t.pumpWidget(Container());
     });
+
+    testWidgets('POC 告警测试模式：开着时报警记录页顶上挂条幅；没开不挂', (t) async {
+      final api = FakeApi('guard');
+      await t.pumpWidget(MaterialApp(home: Scaffold(body: AlarmLogPage(api: api))));
+      await t.pumpAndSettle();
+      expect(find.byKey(const Key('alarm-test-mode')), findsNothing);
+      api.alertTestMode = <String, dynamic>{'active': true, 'until_ms': DateTime(2026, 11, 5, 22, 30).millisecondsSinceEpoch, 'by': 'alice'};
+      await t.pumpWidget(Container());
+      await t.pumpWidget(MaterialApp(home: Scaffold(body: AlarmLogPage(api: api))));
+      await t.pumpAndSettle();
+      expect(find.byKey(const Key('alarm-test-mode')), findsOneWidget);
+      expect(find.textContaining('22:30'), findsOneWidget);
+      await t.pumpWidget(Container());
+    });
   });
 
   group('管理栏', () {

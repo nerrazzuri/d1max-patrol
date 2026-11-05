@@ -741,6 +741,8 @@ abstract class SiteApi {
   /// 告警（W00c5a）。默认只要未解决的，[all] 为真时连已解决的一起（最近的在前）。
   /// **读不懂就抛 `FormatException`，绝不退回一份空名单**（见 `alertsFromWire`）。
   Future<List<Alert>> alerts({bool all = false});
+  /// 告警测试模式（POC）：`{active, until_ms, by}`。谁都能看；开、结束在网页上（管理员）。
+  Future<Map<String, dynamic>> alertTest();
   Future<Map<String, dynamic>> ackAlert(String key);
   Future<Map<String, dynamic>> resolveAlert(String key);
   Future<Map<String, dynamic>> watchSummary();
@@ -1331,6 +1333,9 @@ class SiteClient implements SiteApi {
         .whereType<Map<String, dynamic>>()
         .toList();
   }
+
+  @override
+  Future<Map<String, dynamic>> alertTest() async => _map(await _send('GET', '/api/alert-test'));
 
   @override
   Future<List<Alert>> alerts({bool all = false}) async =>

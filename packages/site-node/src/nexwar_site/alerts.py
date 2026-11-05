@@ -473,6 +473,14 @@ class AlertBook:
         self._by_key[alert.key] = alert
         return alert
 
+    def forget(self, keys: set[str]) -> None:
+        """从内存里拿掉这些告警(POC 告警测试模式:库里已经删了)。正吸收着的那一条也放掉。"""
+        for k in keys:
+            self._by_key.pop(k, None)
+        for g, k in list(self._active.items()):
+            if k in keys:
+                del self._active[g]
+
     def absorbing(self, robot: str, kind: str, *, now_ms: int) -> Alert | None:
         """这一刻再报 ``(robot, kind)`` 会合进哪一条;会另起一条就是 ``None``。
 
