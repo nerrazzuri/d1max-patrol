@@ -141,6 +141,34 @@ void main() {
     });
   }
 
+  for (final lang in AppLang.values) {
+    testWidgets('最窄的手机（568 宽）：六档速度 + 位置不可信 + 我在现场 + 姿势按钮全摆上（$lang）也不溢出、'
+        '都在屏幕里', (t) async {
+      appLang.value = lang;
+      addTearDown(() => appLang.value = AppLang.zh);
+      final api = FakeApi('guard');
+      _phone(t, w: 568);
+      await t.pumpWidget(MaterialApp(home: SiteTeleopPage(api: api, robotId: 'A')));
+      await t.pump();
+      api.link!.ctl.add(<String, dynamic>{'kind': 'granted', 'lease_epoch': 1, 'max_vx': 2.0,
+        'max_wz': 1.5, 'speeds': [0.3, 0.6, 1.0, 1.3, 1.6, 2.0]});
+      await t.pump();
+      api.link!.ctl.add(<String, dynamic>{'kind': 'in_sight', 'on': true});
+      api.link!.ctl.add(<String, dynamic>{'kind': 'zone_guard', 'state': 'untrusted', 'max_vx': 1.0,
+        'in_sight': true});
+      await t.pump();
+      await t.pump();
+      expect(t.takeException(), isNull);
+      for (final k in [SiteTeleopPage.inSightKey, SiteTeleopPage.postureKey('crawl'),
+          SiteTeleopPage.zoneKey, SiteTeleopPage.statusKey, SiteTeleopPage.stopKey]) {
+        final r = t.getRect(find.byKey(k));
+        expect(r.bottom, lessThanOrEqualTo(_h), reason: '$k');
+        expect(r.right, lessThanOrEqualTo(568), reason: '$k');
+      }
+      await t.pumpWidget(Container());
+    });
+  }
+
   testWidgets('最窄的手机（568 宽）：两边的杆还放得下一整个圈', (t) async {
     _phone(t, w: 568);
     await t.pumpWidget(MaterialApp(home: SiteTeleopPage(api: FakeApi('guard'), robotId: 'A')));

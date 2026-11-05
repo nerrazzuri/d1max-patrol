@@ -81,11 +81,12 @@ class 台:
         await self.r.acquire_control()
         await self.t.start()
 
-    async def 开(self, vx=0.0, wz=0.0, secs=1.0, dt=0.1):
+    async def 开(self, vx=0.0, wz=0.0, secs=1.0, dt=0.1, in_sight=False):
         for _ in range(int(round(secs / dt))):
             self.seq += 1
             self.t.on_frame(TeleopFrame(lease_epoch=1, seq=self.seq, sent_at=self.c.ms - 30,
-                                        ttl_ms=300, vx=vx, wz=wz), rx_ms=self.c.ms)
+                                        ttl_ms=300, vx=vx, wz=wz, in_sight=in_sight),
+                            rx_ms=self.c.ms)
             await self.t.step(dt)
             for _ in range(5):
                 self.r.tick(dt / 5)
@@ -262,3 +263,24 @@ async def test_守卫出错_当零速(tmp_path):
     s.guard._locate = 坏
     await s.开(vx=0.5, secs=1.0)
     assert s.max_v == 0.0
+
+
+
+async def test_POC1105_我在现场看得见_位置不可信也放开到低速档最快_转向不夹_手机看得到(tmp_path):
+    """用户 11-05:遥控页「我在现场,看得见机器人」(两次确认、只管这一次遥控):位置不可信时的 0.2 / 0.4
+    限速放开到正常档(最快 1.0 m/s,不进中速档);硬禁区照样守不了,手机上照样说。"""
+    from nexwar_agent.zone_guard import IN_SIGHT_VX, UNTRUSTED_WZ
+    s = 台(tmp_path, [_zone()], x=-20.0)
+    s.loc.trusted = False
+    await s.start()
+    await s.开(vx=0.9, wz=0.0, secs=4.0, in_sight=True)
+    assert s.max_v > 0.4, s.max_v                    # 台子的租约上限 0.5;原来夹在 0.2
+    note = s.t.zone_note()
+    assert note["state"] == "untrusted" and note["in_sight"] is True
+    assert note["max_vx"] == IN_SIGHT_VX == 1.0 and "现场" in note["reason"]
+    v = s.guard.check(0.0, 1.2, (s.r.x, s.r.y, s.r.yaw), in_sight=True)
+    assert v.wz == 1.2 > UNTRUSTED_WZ
+    v = s.guard.check(1.6, 0.0, (s.r.x, s.r.y, s.r.yaw), in_sight=True)
+    assert v.vx == IN_SIGHT_VX, "中速档要位置可信"
+    await s.开(vx=0.9, secs=2.0)                       # 开关没带(老站点、新会话):照旧 0.2
+    assert s.guard.last.vx <= UNTRUSTED_VX + 1e-6

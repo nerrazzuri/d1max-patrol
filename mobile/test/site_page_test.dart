@@ -50,6 +50,10 @@ class FakeTeleopLink implements TeleopLink {
     sentVy.add(vy);
     sentVmax.add(vmax);
   }
+  /// 「我在现场」开关发了几次、开还是关（POC 11-05）。
+  final List<bool> inSight = <bool>[];
+  @override
+  void setInSight(bool on) => inSight.add(on);
   @override
   void release() => released = true;
   @override

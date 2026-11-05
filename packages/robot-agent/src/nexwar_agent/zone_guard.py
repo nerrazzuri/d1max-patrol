@@ -53,6 +53,9 @@ MAX_SIGMA_M = 0.5
 #: 定位不可信、图上有硬禁区时的限速(m/s、rad/s)。
 UNTRUSTED_VX = 0.2
 UNTRUSTED_WZ = 0.4
+#: 「我在现场,看得见机器人」(POC 11-05,用户定):位置不可信也放开到低速档最快(正常档 0.3 / 0.6 / 1.0),
+#: 转向不夹;中速档(≥ 1.3)照样要位置可信。
+IN_SIGHT_VX = 1.0
 #: 扫过区的采样间距:平移(米)、转(弧度)。外接圆 0.523 m,转 0.08 rad 角点挪 4 cm,小于余量。
 STEP_M = 0.05
 STEP_RAD = 0.08
@@ -237,20 +240,30 @@ class TeleopZoneGuard:
         if v.reason:
             out["reason"] = v.reason
         if v.state == "untrusted":
-            out["max_vx"] = max(UNTRUSTED_VX, self._deadband)
+            out["max_vx"] = IN_SIGHT_VX if self._in_sight else max(UNTRUSTED_VX, self._deadband)
+            out["in_sight"] = self._in_sight
         return out
 
-    def check(self, vx: float, wz: float, odom: Pose, v_meas: float = 0.0) -> Verdict:
-        self.last = v = self._check(vx, wz, odom, v_meas)
+    _in_sight = False
+
+    def check(self, vx: float, wz: float, odom: Pose, v_meas: float = 0.0, *,
+              in_sight: bool = False) -> Verdict:
+        self._in_sight = in_sight
+        self.last = v = self._check(vx, wz, odom, v_meas, in_sight)
         return v
 
-    def _check(self, vx: float, wz: float, odom: Pose, v_meas: float) -> Verdict:
+    def _check(self, vx: float, wz: float, odom: Pose, v_meas: float,
+               in_sight: bool = False) -> Verdict:
         # 抹掉区(地图台账 44)只有也标了硬的才守,跟普通禁行区一样
         hard = boxed(z for z in self._zones() if z.keep_out and z.hard)
         if not hard:
             return Verdict(vx, wz, "ok")
         est, trusted, why = self._locate(odom)
         if est is None or not trusted:
+            if in_sight:
+                return Verdict(max(-IN_SIGHT_VX, min(IN_SIGHT_VX, vx)), wz, "untrusted", None,
+                               f"位置不可信({why or '没有位置'}):你在现场看着,放开到 "
+                               f"{IN_SIGHT_VX:.1f} m/s;硬禁区无法保证,中速档要位置可信")
             cap = max(UNTRUSTED_VX, self._deadband)
             return Verdict(max(-cap, min(cap, vx)), max(-UNTRUSTED_WZ, min(UNTRUSTED_WZ, wz)),
                            "untrusted", None,

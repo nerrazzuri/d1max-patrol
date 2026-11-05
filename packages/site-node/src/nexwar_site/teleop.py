@@ -94,6 +94,9 @@ class Session:
     seq: int = 0
     #: 上一帧有没有在动(用来在「没画面」时只发一次零速)。
     moving: bool = False
+    #: 「我在现场,看得见机器人」(POC 11-05,用户定):手机上两次确认后开,只管这一次遥控;
+    #: 之后的帧都带上,代理据此放开位置不可信时的限速(不进中速档)。
+    in_sight: bool = False
     video_told: bool | None = None
     renew_failures: int = 0
     ended: threading.Event = field(default_factory=threading.Event)
@@ -361,6 +364,15 @@ class TeleopDesk:
             if d.get("kind") == "release":
                 self.close(s, "released")
                 return
+            if d.get("kind") == "in_sight" and isinstance(d.get("on"), bool):
+                if d["on"] != s.in_sight:
+                    s.in_sight = d["on"]
+                    self._audit(s.operator, "teleop_in_sight", s.robot_id,
+                                {"lease_epoch": s.epoch, "on": s.in_sight})
+                    log.info("遥控「我在现场」%s:%s(%s)", "开" if s.in_sight else "关",
+                             s.robot_id, s.operator)
+                self._tell(s, {"kind": "in_sight", "on": s.in_sight})
+                continue
             v = self._phone_frame(s, d, rx_ms)
             if v is not None:
                 latest = v
@@ -430,7 +442,8 @@ class TeleopDesk:
                 return
             s.seq += 1
             f = TeleopFrame(lease_epoch=s.epoch, seq=s.seq, sent_at=self._now(),
-                            ttl_ms=self.frame_ttl_ms, vx=vx, wz=wz, vy=vy, vmax=vmax)
+                            ttl_ms=self.frame_ttl_ms, vx=vx, wz=wz, vy=vy, vmax=vmax,
+                            in_sight=s.in_sight)
             s.moving = bool(vx or wz or vy)
             try:
                 self.loop.call(lambda: self.dispatcher.teleop_frame(s.robot_id, f), timeout_s=2.0)

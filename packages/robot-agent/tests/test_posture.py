@@ -83,3 +83,47 @@ async def test_重投同一条_回原来的回执_不再做一次(tmp_path):
         assert await dog.motion_status() is MotionStatus.READY, "重投不再趴一次"
     finally:
         await rt.close()
+
+
+async def test_POC1105_遥控中停着_能换姿势_推着杆不换(tmp_path):
+    """用户 11-05:站起、趴下、蹲下放进遥控页 —— 遥控这一个「任务」不挡换姿势(人在看着);
+    推着杆的时候不换(先松杆);别的任务照旧不让。"""
+    import json
+
+    from test_runtime import T
+
+    from nexwar_contract.messages import Command
+    from nexwar_contract.teleop import TeleopFrame, teleop_grant_payload
+    from nexwar_contract.transport import Message
+    broker, c, ears, dog, rt = await _台(tmp_path)
+    rt._video_live = lambda: True
+    try:
+        g = Command(command_id="g1", task_id="teleop-1", kind="teleop", issued_at=c.ms,
+                    expires_at=c.ms + 60_000, control_epoch=1, priority=100,
+                    payload=teleop_grant_payload(lease_epoch=1, operator="gina",
+                                                 lease_ttl_ms=5000))
+        await rt._on_cmd(Message(T.cmd, json.dumps(g.to_wire()).encode(), 1, False))
+        for _ in range(3):
+            await rt.step(0.1)
+            dog.tick(0.1)
+            c.ms += 100
+            c.mono += 0.1
+        assert rt.processor.current is not None and rt.processor.current.kind == "teleop"
+        f = TeleopFrame(lease_epoch=1, seq=1, sent_at=5, ttl_ms=300, vx=0.3, wz=0.0)
+        await rt._on_teleop(Message(T.teleop, json.dumps(f.to_wire()).encode(), 0, False))
+        await rt.step(0.1)
+        dog.tick(0.1)
+        c.ms += 100
+        c.mono += 0.1
+        ack = await _姿(rt, broker, ears, "lie", "p1", c)
+        assert ack["result"] == "rejected" and "松" in ack["reason"], ack
+        for _ in range(10):                                # 不推了(帧过期)、停稳
+            await rt.step(0.1)
+            dog.tick(0.1)
+            c.ms += 100
+            c.mono += 0.1
+        ack = await _姿(rt, broker, ears, "lie", "p2", c)
+        assert ack["result"] == "accepted", ack
+        assert await dog.motion_status() is MotionStatus.LYING
+    finally:
+        await rt.close()

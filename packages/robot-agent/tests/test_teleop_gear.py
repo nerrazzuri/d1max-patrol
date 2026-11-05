@@ -112,3 +112,23 @@ def test_能力里报遥控最快():
     caps1 = compose_capabilities(robot_id="r", adapter_id="sim", hal_caps=r1.hal_capabilities(),
                                  loaded_map=None, nav_path="builtin", autonomy="full")
     assert "max_vx_teleop" not in caps1.tasks["teleop"]
+
+
+
+async def test_POC1105_位置不可信_我在现场也不进中速档(tmp_path):
+    from nexwar_agent.zone_guard import Verdict
+    c, r, t = await _台(tmp_path)
+    class _不可信:
+        last = Verdict(1.0, 0.0, "untrusted")
+
+        def check(self, vx, wz, odom, v=0.0, **k):
+            return Verdict(min(vx, 1.0), wz, "untrusted")
+
+        def lateral(self, vy, odom):
+            return vy
+
+        def note(self):
+            return {"state": "untrusted"}
+    t._guard = _不可信()
+    await _走(c, r, t, 5, frame=lambda: _帧(c, vmax=1.6))
+    assert r.teleop_gear() == 1, "位置不可信:中速档不换"
