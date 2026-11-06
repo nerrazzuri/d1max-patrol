@@ -4,8 +4,9 @@
 
 - **取图**:订厂商的压缩图话题(``/front_camera/image_compressed``,JPEG,约 10 Hz;2026-09 勘察量过),
   不解 H.264。每个相机最多 ``--fps`` 帧/秒送去检测(默认 2:够判有没有人,不抢 Orin)。
-- **检测**:可换的检测器(:class:`Detector`)。真狗用 ONNX 模型(YOLO 系、COCO 的 person 类,
-  ``onnxruntime`` + OpenCV 解图)—— 模型文件、推理环境都是真机项;没装上就报 ``check: no_model``,
+- **检测**:可换的检测器(:class:`Detector`)。真狗用 ONNX 模型(COCO 的 person 类,
+  ``onnxruntime`` + OpenCV 解图;用户 11-06 定用 Apache-2.0 的 YOLOX —— 样机的 YOLOv8n 是 AGPL,
+  还认,按输出形状自动分)—— 模型文件、推理环境都是真机项;没装上就报 ``check: no_model``,
   代理据此不判「人走了」。开发机上用假检测器跑通整条链。
 - **方向**:框的水平中点 + 相机水平视场角(厂商:111°)→ 狗身系方向(朝前 0°、朝左为正)。不要相机内参:
   广角镜头按等距模型(``--lens equidistant``,默认)或针孔模型算,误差在几度,够挑雷达点。
@@ -139,7 +140,53 @@ def yolo_people(out: Any, *, score: float = 0.5, iou: float = 0.45, scale: float
     if not keep.any():
         return []
     cx, cy, w, h = (a[i][keep] for i in range(4))
-    s = s[keep]
+    return _nms(cx, cy, w, h, s[keep], iou=iou, scale=scale, pad=pad)
+
+
+#: 缺省分数线。YOLOX 的分数(有物体 × 人)比 YOLOv8 的低一截:现场 1889 张人员截图(C40221,
+#: 2026-11-06)上黑色办公椅、人形机器人被认成人的在 0.5–0.67,0.7 以上全是真人。
+SCORE = {"yolox": 0.7, "yolov8": 0.5}
+#: YOLOX 的三层步长(官方模型)。
+YOLOX_STRIDES = (8, 16, 32)
+
+
+def yolox_people(out: Any, *, size: int, score: float = 0.5, iou: float = 0.45,
+                 scale: float = 1.0, pad: tuple[float, float] = (0.0, 0.0)) -> list[Box]:
+    """YOLOX 官方 ONNX 输出 ``(1, 格子数, 5 + 类数)``,没解码:
+    每格 (dx, dy, log w, log h, 有物体, 各类),步长 8/16/32
+    → person(第 0 类,分数 = 有物体 × 人)的框,换回原图坐标,做 NMS。
+
+    用户 2026-11-06:YOLOv8n 是 AGPL-3.0,换许可证允许商用的 YOLOX(Apache-2.0)。"""
+    import numpy as np
+    a = np.asarray(out, dtype=float)
+    if a.ndim == 3:
+        a = a[0]
+    if a.ndim != 2 or a.shape[1] < 6:
+        raise ValueError(f"检测输出形状错误:{a.shape}")
+    grids = []
+    for st in YOLOX_STRIDES:
+        n = size // st
+        ys, xs = np.mgrid[0:n, 0:n]
+        grids.append(np.stack((xs.ravel(), ys.ravel(), np.full(n * n, st)), 1))
+    g = np.concatenate(grids).astype(float)
+    if g.shape[0] != a.shape[0]:
+        raise ValueError(f"检测输出 {a.shape[0]} 格,跟输入边长 {size} 对不上")
+    s = a[:, 4] * a[:, 5]
+    keep = s >= score
+    if not keep.any():
+        return []
+    a, g = a[keep], g[keep]
+    cx = (a[:, 0] + g[:, 0]) * g[:, 2]
+    cy = (a[:, 1] + g[:, 1]) * g[:, 2]
+    w = np.exp(np.minimum(a[:, 2], 20.0)) * g[:, 2]
+    h = np.exp(np.minimum(a[:, 3], 20.0)) * g[:, 2]
+    return _nms(cx, cy, w, h, s[keep], iou=iou, scale=scale, pad=pad)
+
+
+def _nms(cx: Any, cy: Any, w: Any, h: Any, s: Any, *, iou: float, scale: float,
+         pad: tuple[float, float]) -> list[Box]:
+    """中心、宽高(模型输入坐标)→ 按 letterbox 的缩放、补边换回原图,按分数做 NMS。"""
+    import numpy as np
     x1 = (cx - w / 2 - pad[0]) / scale
     y1 = (cy - h / 2 - pad[1]) / scale
     x2 = (cx + w / 2 - pad[0]) / scale
@@ -170,7 +217,8 @@ TRT_CACHE = Path("/var/lib/nexwar/agent/trt-cache")
 
 
 class OnnxDetector:
-    """ONNX 模型(YOLO 系,输入 ``(1, 3, size, size)``、RGB、0–1)。要 ``onnxruntime`` 与 OpenCV:
+    """ONNX 模型(YOLOX 官方模型,或样机的 YOLOv8;输入 ``(1, 3, size, size)``,按输出形状自动认)。
+    要 ``onnxruntime`` 与 OpenCV:
     **都是真机项**,开发机上没装。装不上、模型读不了抛 :class:`DetectorUnavailable`。
 
     后端缺省按 CUDA → CPU 的顺序挑装了的(Orin 上要 Jetson 版 ``onnxruntime-gpu``;C40221 实测
@@ -178,7 +226,7 @@ class OnnxDetector:
     分钟、换模型或升级 TensorRT 要重建 —— 每秒几帧的用量下不值(2026-10-08 用户定)。实际用上的记在
     :attr:`backend`。"""
 
-    def __init__(self, model: Path, *, size: int = 640, score: float = 0.5,
+    def __init__(self, model: Path, *, size: int = 640, score: float | None = None,
                  providers: Sequence[str] = ("CUDAExecutionProvider", "CPUExecutionProvider"),
                  threads: int = THREADS, trt: bool = False,
                  trt_cache: Path | None = TRT_CACHE) -> None:
@@ -214,8 +262,14 @@ class OnnxDetector:
             raise DetectorUnavailable(f"模型无法读取:{exc}") from exc
         #: 实际用上的后端(``TensorrtExecutionProvider`` / ``CUDA…`` / ``CPU…``)。
         self.backend = (self.sess.get_providers() or ["?"])[0]
-        self.input = self.sess.get_inputs()[0].name
-        self.size, self.score = size, score
+        inp = self.sess.get_inputs()[0]
+        self.input = inp.name
+        #: 模型的输入边长(固定尺寸的模型按模型的,YOLOX-tiny 是 416;动态的用 ``size``)。
+        dims = list(getattr(inp, "shape", None) or [])
+        self.size = dims[2] if len(dims) == 4 and isinstance(dims[2], int) else size
+        #: ``yolox``(输出 (1, N, 5+类数);BGR、0–255)或 ``yolov8``(输出 (1, 4+类数, N);RGB、0–1)。
+        self.kind = _model_kind(self.sess)
+        self.score = float(score) if score is not None else SCORE[self.kind]
 
     def detect(self, jpeg: bytes) -> tuple[list[Box], int, int]:
         import cv2
@@ -231,9 +285,26 @@ class OnnxDetector:
         canvas = np.full((self.size, self.size, 3), 114, dtype=np.uint8)
         px, py = (self.size - nw) // 2, (self.size - nh) // 2
         canvas[py:py + nh, px:px + nw] = cv2.resize(img, (nw, nh))
+        if self.kind == "yolox":
+            x = canvas.transpose(2, 0, 1)[None].astype(np.float32)
+            out = self.sess.run(None, {self.input: x})[0]
+            return yolox_people(out, size=self.size, score=self.score, scale=scale,
+                                pad=(px, py)), w, h
         x = canvas[:, :, ::-1].transpose(2, 0, 1)[None].astype(np.float32) / 255.0
         out = self.sess.run(None, {self.input: x})[0]
         return yolo_people(out, score=self.score, scale=scale, pad=(px, py)), w, h
+
+
+def _model_kind(sess: Any) -> str:
+    """按输出形状认模型:最后一维是 5+类数、比格子数小 → YOLOX;否则当老的 YOLOv8。"""
+    try:
+        dims = list(sess.get_outputs()[0].shape or [])
+    except Exception:  # noqa: BLE001 — 拿不到输出形状(老的、假的会话):当老模型
+        return "yolov8"
+    if len(dims) == 3 and isinstance(dims[2], int) and dims[2] >= 6 and (
+            not isinstance(dims[1], int) or dims[1] > dims[2]):
+        return "yolox"
+    return "yolov8"
 
 
 class FaceFinder(Protocol):
@@ -638,11 +709,21 @@ class PersonLink:
 
 # ------------------------------------------------------------ ROS 节点
 
+def _score(v: str) -> float:
+    try:
+        f = float(v)
+    except ValueError:
+        f = -1.0
+    if not 0.0 < f < 1.0:
+        raise argparse.ArgumentTypeError(f"分数线要在 0 到 1 之间:{v}")
+    return f
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """ROS 节点(系统 Python;``nexwar_persons.service``)。"""
     ap = argparse.ArgumentParser(prog="nexwar_persons")
     ap.add_argument("--model", type=Path, default=Path("/etc/nexwar/person.onnx"),
-                    help="ONNX 检测模型(YOLO 系,COCO person 类);没有就报 no_model")
+                    help="ONNX 检测模型(YOLOX 官方模型,COCO person 类);没有就报 no_model")
     ap.add_argument("--face-model", type=Path, default=Path("/etc/nexwar/face.onnx"),
                     help="W74 五期:人脸检测模型(OpenCV YuNet);没有就不补拍人脸")
     ap.add_argument("--socket", type=Path, default=Path("/var/lib/nexwar/agent/persons.sock"))
@@ -672,6 +753,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                     help="先用 TensorRT(更快;第一次建引擎要好几分钟,换模型、升级要重建;缺省 CUDA)")
     ap.add_argument("--trt-cache", type=Path, default=TRT_CACHE,
                     help="TensorRT 引擎缓存目录(--trt 才用)")
+    ap.add_argument("--score", type=_score, default=None,
+                    help="人的分数线(0–1);缺省按模型:YOLOX 0.7、YOLOv8 0.5")
     ap.add_argument("--hfov", type=float, default=HFOV_DEG)
     ap.add_argument("--lens", choices=("equidistant", "pinhole"), default="equidistant")
     ap.add_argument("--z-min", type=float, default=Z_MIN)
@@ -708,8 +791,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     detector: Detector | None = None
     why = ""
     try:
-        detector = OnnxDetector(a.model, threads=a.threads, trt=a.trt, trt_cache=a.trt_cache)
-        log.info("检测器后端:%s", detector.backend)
+        detector = OnnxDetector(a.model, threads=a.threads, trt=a.trt, trt_cache=a.trt_cache,
+                                score=a.score)
+        log.info("检测器后端:%s;模型 %s,输入 %d,分数线 %.2f", detector.backend, detector.kind,
+                 detector.size, detector.score)
     except DetectorUnavailable as exc:
         why = str(exc)
         log.error("检测器起不来(报 no_model):%s", why)
