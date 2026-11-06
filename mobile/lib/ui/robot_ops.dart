@@ -21,7 +21,24 @@ const List<String> opsUnits = <String>[
 /// 机器人报的全部运维能力（测试、版面矩阵用）。
 const Set<String> robotOpsAll = <String>{
   'ops_diag', 'ops_journal', 'ops_restart', 'ops_reboot', 'ops_debug', 'ops_timesync', 'ops_cleanup', 'cert_csr',
+  'ops_settings',
 };
+
+/// 11-06 不靠 SSH：站点能改的机器人设置（跟 nexwar_contract.robot_settings 一样）：键 → 名字。
+Map<String, String> get robotSettingNames => <String, String>{
+      'NEXWAR_PERSONS': tr('Person detection', '人员检测'),
+      'NEXWAR_OBS_PERMIT': tr('Obstacle clearance permit', '障碍净空许可'),
+      'NEXWAR_MAX_FRACTION': tr('Forward speed cap', '前进速度上限'),
+      'NEXWAR_VENDOR_PAUSE': tr('Pause vendor processes at boot', '开机暂停厂家进程'),
+      'NEXWAR_VENDOR_AUTOSTART': tr("Vendor services we don't use start at boot", '厂家用不上的服务开机自启'),
+    };
+
+/// 设置的取值说人话。
+String robotSettingValue(String k, String v) => k == 'NEXWAR_MAX_FRACTION'
+    ? '${((double.tryParse(v) ?? 0) * 100).round()}%'
+    : (v == 'bridge' || v == '1')
+        ? tr('On', '开')
+        : tr('Off', '关');
 
 /// 字节数说人话（诊断快照里的内存、磁盘）。
 String opsBytes(Object? n) {
@@ -91,6 +108,10 @@ class RobotOpsPage extends StatefulWidget {
   static const Key certKey = Key('ops-cert');
   static const Key rebootPwKey = Key('ops-reboot-pw');
   static const Key rebootGoKey = Key('ops-reboot-go');
+  static const Key settingsKey = Key('ops-settings');
+  static const Key settingsSaveKey = Key('ops-settings-save');
+  static const Key settingsPwKey = Key('ops-settings-pw');
+  static const Key settingsGoKey = Key('ops-settings-go');
 
   @override
   State<RobotOpsPage> createState() => _RobotOpsPageState();
@@ -104,6 +125,62 @@ class _RobotOpsPageState extends State<RobotOpsPage> {
   bool _busy = false;
   String? _msg;
   bool _msgBad = false;
+  Map<String, String>? _sets;
+  Map<String, List<String>> _choices = const {};
+  Map<String, String> _draft = <String, String>{};
+
+  Map<String, String> get _changed =>
+      {for (final e in _draft.entries) if (_sets?[e.key] != e.value) e.key: e.value};
+  bool get _setConflict =>
+      (_draft['NEXWAR_MAX_FRACTION'] ?? '0.5') != '0.5' && _draft['NEXWAR_OBS_PERMIT'] != '1';
+
+  Future<void> _loadSettings() => _run(() async {
+        final d = await widget.api.robotOps(widget.robotId, 'settings');
+        final cur = ((d['settings'] as Map?) ?? const {}).map((k, v) => MapEntry('$k', '$v'));
+        final ch = ((d['choices'] as Map?) ?? const {})
+            .map((k, v) => MapEntry('$k', ((v as List?) ?? const []).map((e) => '$e').toList()));
+        if (mounted) {
+          setState(() {
+            _sets = cur;
+            _choices = ch;
+            _draft = Map<String, String>.of(cur);
+          });
+        }
+      });
+
+  Future<void> _saveSettings() async {
+    final pw = TextEditingController();
+    final ok = await showDialog<bool>(
+        context: context,
+        builder: (c) => AlertDialog(
+              title: Text(tr('Change settings of ${widget.robotId}?', '修改 ${widget.robotId} 的设置？')),
+              content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text(tr('The robot must be idle. Enter your password to confirm.', '机器人要空闲。请输入你的密码确认。')),
+                TextField(
+                    key: RobotOpsPage.settingsPwKey,
+                    controller: pw,
+                    obscureText: true,
+                    decoration: InputDecoration(labelText: tr('Your password', '你的密码'))),
+              ]),
+              actions: [
+                TextButton(onPressed: () => Navigator.pop(c, false), child: Text(tr('Cancel', '取消'))),
+                FilledButton(
+                    key: RobotOpsPage.settingsGoKey,
+                    onPressed: () => Navigator.pop(c, true),
+                    child: Text(tr('Save', '保存'))),
+              ],
+            ));
+    final p = pw.text;
+    if (ok != true) return;
+    final changes = _changed;
+    await _run(() async {
+      await widget.api.robotOps(widget.robotId, 'settings',
+          body: <String, dynamic>{'set': changes, 'confirm_password': p});
+      if (mounted) setState(() => _sets = null);
+    },
+        ok: tr('Settings saved. The robot restarts its services and is back in about 1 minute.',
+            '设置已保存，机器人重启相关服务，约 1 分钟后恢复。'));
+  }
 
   bool _has(String k) => widget.tasks.contains(k);
 
@@ -233,6 +310,11 @@ class _RobotOpsPageState extends State<RobotOpsPage> {
                     : () => _run(() => widget.api.robotOps(widget.robotId, 'cert-renew', body: const <String, dynamic>{}),
                         ok: tr('Certificate renewed; the robot reconnects in a few seconds.', '证书已续签，机器人几秒后重新连接。')),
                 child: Text(tr('Renew certificate now', '立即续签证书'))),
+          if (_has('ops_settings'))
+            OutlinedButton(
+                key: RobotOpsPage.settingsKey,
+                onPressed: _busy ? null : _loadSettings,
+                child: Text(tr('Robot settings', '机器人设置'))),
           if (_has('ops_reboot'))
             OutlinedButton(
                 key: RobotOpsPage.rebootKey,
@@ -240,6 +322,43 @@ class _RobotOpsPageState extends State<RobotOpsPage> {
                 onPressed: _busy ? null : _reboot,
                 child: Text(tr('Restart robot', '重启机器人'))),
         ]),
+        if (_sets != null) ...[
+          nwGap16,
+          NwSectionLabel(tr('Robot settings', '机器人设置')),
+          nwGap8,
+          NwListCard(children: [
+            for (final e in robotSettingNames.entries)
+              if (_choices[e.key] != null)
+                ListTile(
+                    dense: true,
+                    title: Text(e.value, style: NwText.bodyMedium.copyWith(color: nw.text)),
+                    trailing: DropdownButton<String>(
+                      key: Key('set-${e.key}'),
+                      value: _draft[e.key],
+                      items: [
+                        for (final v in _choices[e.key]!)
+                          DropdownMenuItem(value: v, child: Text(robotSettingValue(e.key, v))),
+                      ],
+                      onChanged: (v) => setState(() => _draft = {..._draft, e.key: v ?? _draft[e.key]!}),
+                    )),
+          ]),
+          if (_setConflict) ...[
+            nwGap8,
+            NwNotice(tone: NwTone.error, text: tr('A forward cap above 0.5 needs the obstacle clearance permit on first.',
+                '前进上限超过 0.5 要先开障碍净空许可。')),
+          ],
+          nwGap8,
+          Text(tr('Saving restarts the affected services and the agent on the robot (offline for about 1 minute).',
+              '保存后机器人上相关服务和代理会重启（约 1 分钟离线）。'),
+              style: NwText.bodySmall.copyWith(color: nw.textSecondary)),
+          nwGap8,
+          Align(
+              alignment: Alignment.centerRight,
+              child: FilledButton(
+                  key: RobotOpsPage.settingsSaveKey,
+                  onPressed: _busy || _changed.isEmpty || _setConflict ? null : _saveSettings,
+                  child: Text(tr('Save settings', '保存设置')))),
+        ],
         if (d != null) ...[
           nwGap16,
           NwSectionLabel(tr('Diagnostics', '诊断')),

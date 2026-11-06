@@ -2010,3 +2010,38 @@ def test_1105_代理也等钟对了再起_不再因为1970握不上TLS反复重�
     start = (DEPLOY / "nexwar_agent_start").read_text(encoding="utf-8")
     assert '"$here/deploy/nexwar_wait_clock"' in start
     assert start.index("nexwar_wait_clock") < start.index('exec "$here/venv/bin/nexwar_agent"')
+
+
+def _旁路参数(tmp_path, **env):
+    import subprocess
+    fake = tmp_path / "patrol_agent"
+    fake.write_text('#!/bin/sh\necho "$@" > "$HOME/args"\n')
+    fake.chmod(0o755)
+    r = subprocess.run(["sh", str(DEPLOY / "nexwar_sidecar_start")],
+                       env={"PATH": "/usr/bin:/bin", "HOME": str(tmp_path),
+                            "NEXWAR_SIDECAR_BIN": str(fake)} | env,
+                       capture_output=True, text=True, timeout=10)
+    assert r.returncode == 0, r.stderr
+    return (tmp_path / "args").read_text().split()
+
+
+def test_不靠SSH_站点设置的障碍许可和速度上限_旁路按它拼参数_站点的设置盖过手写的(tmp_path):
+    a = _旁路参数(tmp_path, NEXWAR_OBS_PERMIT="1", NEXWAR_MAX_FRACTION="0.7")
+    assert "--require-clearance" in a and a[a.index("--max-fraction") + 1] == "0.7"
+    a = _旁路参数(tmp_path, NEXWAR_OBS_PERMIT="0",
+                  NEXWAR_SIDECAR_ARGS="--require-clearance --max-fraction 1.0 --speed-level 1",
+                  NEXWAR_MAX_FRACTION="0.5")
+    assert "--require-clearance" not in a, "站点关了许可:手写在 ARGS 里的也去掉"
+    assert a[len(a) - 1 - a[::-1].index("--max-fraction") + 1] == "0.5", "站点的放在最后,盖过手写的"
+    assert "--speed-level" in a
+    a = _旁路参数(tmp_path, NEXWAR_SIDECAR_ARGS="--require-clearance")
+    assert "--require-clearance" in a, "没设站点设置:手写的照旧"
+
+
+def test_不靠SSH_感知按障碍许可连旁路_代理按速度上限():
+    import subprocess
+    obs = (DEPLOY / "nexwar_obstacles_start").read_text(encoding="utf-8")
+    subprocess.run(["sh", "-n", str(DEPLOY / "nexwar_obstacles_start")], check=True)
+    assert 'NEXWAR_OBS_PERMIT:-}" = 1' in obs and 'NEXWAR_OBS_PERMIT:-}" = 0' in obs
+    agent = (DEPLOY / "nexwar_agent_start").read_text(encoding="utf-8")
+    assert '${NEXWAR_MAX_FRACTION:+ --max-fraction $NEXWAR_MAX_FRACTION}' in agent

@@ -31,6 +31,10 @@ beforeEach(() => {
       return Promise.resolve(json({ at_ms: 0, services: [{ unit: "nexwar_agent.service", active: "active", sub: "running", enabled: "enabled", restarts: 2, since: "" }],
         release: { current: "v1.5.0" }, memory: { MemTotal: 8 * 1048576 * 1024, MemAvailable: 1048576 * 1024 }, env: { NEXWAR_PIN: "***" } }));
     }
+    if (url === "/api/robots/A/ops/settings") {
+      return Promise.resolve(json({ settings: { NEXWAR_PERSONS: "none", NEXWAR_OBS_PERMIT: "0", NEXWAR_MAX_FRACTION: "0.5", NEXWAR_VENDOR_PAUSE: "0" },
+        choices: { NEXWAR_PERSONS: ["bridge", "none"], NEXWAR_OBS_PERMIT: ["0", "1"], NEXWAR_MAX_FRACTION: ["0.5", "0.7", "1.0"], NEXWAR_VENDOR_PAUSE: ["0", "1"] } }));
+    }
     if (url.startsWith("/api/robots/A/ops/journal")) return Promise.resolve(json({ unit: "nexwar_agent", text: "line1\nline2", truncated: true }));
     if (url === "/api/system/vpn") {
       return Promise.resolve(json({ ready: true, peers: [{ name: "eng-1", kind: "engineer", address: "10.77.0.200", public: "K", expires_ms: 1 }],
@@ -90,6 +94,32 @@ describe("机器人远程运维", () => {
     fireEvent.change(c.querySelector('select[aria-label="服务"]')!, { target: { value: "nexwar_localizer" } });
     fireEvent.click(btn(c, "重启服务"));
     await waitFor(() => expect(posted[0]).toMatchObject({ url: "/api/robots/A/ops/restart", body: { unit: "nexwar_localizer" } }));
+  });
+});
+
+describe("机器人设置(11-06 不靠 SSH)", () => {
+  it("报了才有;读出现在的值;只发改了的那几项,要再输密码;上限超过一半要先开许可", async () => {
+    const said: string[] = [];
+    const { container: c } = render(<RobotOps robotId="A" tasks={[...ALL, "ops_settings"]} say={(s) => said.push(s)} />);
+    fireEvent.click(btn(c, "机器人设置"));
+    const sel = (k: string) => c.querySelector(`select[name="${k}"]`) as HTMLSelectElement;
+    await waitFor(() => expect(sel("NEXWAR_PERSONS")).not.toBeNull());
+    expect(sel("NEXWAR_PERSONS").value).toBe("none");
+    expect(btn(c, "保存设置").disabled).toBe(true);
+    fireEvent.change(sel("NEXWAR_MAX_FRACTION"), { target: { value: "1.0" } });
+    expect(c.textContent).toContain("前进上限超过 0.5 要先开障碍净空许可");
+    expect(btn(c, "保存设置").disabled).toBe(true);
+    fireEvent.change(sel("NEXWAR_OBS_PERMIT"), { target: { value: "1" } });
+    fireEvent.change(sel("NEXWAR_PERSONS"), { target: { value: "bridge" } });
+    fireEvent.click(btn(c, "保存设置"));
+    fireEvent.input(document.querySelector('form.confirm-pw input[type="password"]')!, { target: { value: "pw" } });
+    fireEvent.submit(document.querySelector("form.confirm-pw")!);
+    await waitFor(() => expect(posted.at(-1)).toMatchObject({ url: "/api/robots/A/ops/settings",
+      body: { set: { NEXWAR_PERSONS: "bridge", NEXWAR_OBS_PERMIT: "1", NEXWAR_MAX_FRACTION: "1.0" }, confirm_password: "pw" } }));
+    await waitFor(() => expect(said.join()).toContain("约 1 分钟"));
+    cleanup();
+    const { container: c2 } = render(<RobotOps robotId="A" tasks={ALL} say={() => {}} />);
+    expect(btn(c2, "机器人设置")).toBeUndefined();
   });
 });
 

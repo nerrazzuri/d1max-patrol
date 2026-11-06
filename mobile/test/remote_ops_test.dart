@@ -84,6 +84,45 @@ void main() {
     expect(find.textContaining('机器人正在重启'), findsOneWidget);
   });
 
+  testWidgets('机器人设置（11-06 不靠 SSH）：读出现在的值；只发改了的；上限超过一半要先开许可；要再输密码', (t) async {
+    final api = FakeApi('admin')
+      ..opsReply = (a, b) => a == 'settings' && b == null
+          ? <String, dynamic>{
+              'settings': <String, dynamic>{'NEXWAR_PERSONS': 'none', 'NEXWAR_OBS_PERMIT': '0',
+                  'NEXWAR_MAX_FRACTION': '0.5', 'NEXWAR_VENDOR_PAUSE': '0'},
+              'choices': <String, dynamic>{'NEXWAR_PERSONS': <String>['bridge', 'none'],
+                  'NEXWAR_OBS_PERMIT': <String>['0', '1'], 'NEXWAR_MAX_FRACTION': <String>['0.5', '0.7', '1.0'],
+                  'NEXWAR_VENDOR_PAUSE': <String>['0', '1']},
+            }
+          : <String, dynamic>{};
+    await _open(t, api);
+    await t.tap(find.byKey(RobotOpsPage.settingsKey));
+    await t.pumpAndSettle();
+    Future<void> pick(String k, String label) async {
+      await t.ensureVisible(find.byKey(Key('set-$k')));
+      await t.tap(find.byKey(Key('set-$k')));
+      await t.pumpAndSettle();
+      await t.tap(find.text(label).last);
+      await t.pumpAndSettle();
+    }
+    await pick('NEXWAR_MAX_FRACTION', '100%');
+    expect(find.textContaining('前进上限超过 0.5 要先开障碍净空许可'), findsOneWidget);
+    expect(t.widget<FilledButton>(find.byKey(RobotOpsPage.settingsSaveKey)).onPressed, isNull);
+    await pick('NEXWAR_OBS_PERMIT', '开');
+    await t.ensureVisible(find.byKey(RobotOpsPage.settingsSaveKey));
+    await t.tap(find.byKey(RobotOpsPage.settingsSaveKey));
+    await t.pumpAndSettle();
+    await t.enterText(find.byKey(RobotOpsPage.settingsPwKey), 'my-pw');
+    await t.tap(find.byKey(RobotOpsPage.settingsGoKey));
+    await t.pumpAndSettle();
+    expect(api.opsCalls.last.$2, 'settings');
+    expect(api.opsCalls.last.$3, <String, dynamic>{
+      'set': <String, dynamic>{'NEXWAR_MAX_FRACTION': '1.0', 'NEXWAR_OBS_PERMIT': '1'},
+      'confirm_password': 'my-pw',
+    });
+    expect(find.textContaining('约 1 分钟'), findsOneWidget);
+  });
+
   testWidgets('机器人忙、拒绝：把原因写出来', (t) async {
     final api = FakeApi('admin')..opsError = SiteError(409, '机器人未执行:busy');
     await _open(t, api);

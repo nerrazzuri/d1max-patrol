@@ -685,6 +685,10 @@ def build(args: argparse.Namespace) -> Assembled:
                 {c: ffmpeg_gray(source(c), args.ffmpeg) for c in STANDARD_CAMERAS},
                 lidar_blocked=anchor.lidar_blocked, monotonic=time.monotonic))
         runtime.attach_ops(_ops(args, registration, runtime))   # W55 远程运维
+        if args.hal == "d1max":
+            # 11-06 不靠 SSH:设置里开了「开机暂停厂家进程」才做(默认关)
+            runtime._vendor_pause_task = asyncio.get_running_loop().create_task(
+                runtime.ops.boot_vendor_pause())
         return hal, parts, runtime, pump
 
     async def _in_loop():

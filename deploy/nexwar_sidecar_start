@@ -10,6 +10,9 @@
 #   NEXWAR_SIDECAR_LISTEN=<HOST:端口>     代理连它的地址,缺省 127.0.0.1:8090(代理 --sidecar 同一个)
 #   NEXWAR_SIDECAR_DIR=<目录>             FIFO、日志放这儿,缺省 ~/nexwar_sidecar
 #   NEXWAR_SIDECAR_ARGS=其余参数
+#   NEXWAR_OBS_PERMIT=1|0                 站点设置(11-06 不靠 SSH):障碍净空许可门开 / 关;设了就盖过
+#                                         ARGS 里手写的 --require-clearance
+#   NEXWAR_MAX_FRACTION=0.5|0.7|1.0       站点设置:前进比例上限(放在最后,盖过 ARGS 里手写的)
 # 令牌照旧写 ~/.nexwar/sidecar.token(代理的 --sidecar-token-file 缺省同一个)。
 set -eu
 # W55:升级时在机器人上编好的那个(跟着这一版走)优先;没有再用现场编的老位置
@@ -33,6 +36,20 @@ esac
 # 2026-10-28:现场手写的单元缺 runs/ 目录,FIFO 建不出来
 mkdir -p "$dir/runs"
 cd "$dir"
-# shellcheck disable=SC2086  # NEXWAR_SIDECAR_ARGS 要按空白拆成几个参数
+# 站点设置的障碍许可:关了就把手写的 --require-clearance 去掉,开了就加上
+args=""
+for a in ${NEXWAR_SIDECAR_ARGS:-}; do
+  if [ "$a" = "--require-clearance" ] && [ -n "${NEXWAR_OBS_PERMIT:-}" ]; then
+    continue
+  fi
+  args="$args $a"
+done
+if [ "${NEXWAR_OBS_PERMIT:-}" = 1 ]; then
+  args="$args --require-clearance"
+fi
+if [ -n "${NEXWAR_MAX_FRACTION:-}" ]; then
+  args="$args --max-fraction $NEXWAR_MAX_FRACTION"
+fi
+# shellcheck disable=SC2086  # 参数要按空白拆成几个
 exec "$bin" "${robot%:*}" "${robot##*:}" --listen "$listen" --fifo "$dir/runs/nexwar_agent.fifo" \
-  ${NEXWAR_SIDECAR_ARGS:-}
+  $args

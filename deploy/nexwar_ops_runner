@@ -36,11 +36,13 @@ from __future__ import annotations
 import argparse
 import hashlib
 import io
+import ipaddress
 import json
 import os
 import pwd
 import re
 import shutil
+import signal
 import stat
 import subprocess
 import sys
@@ -78,6 +80,48 @@ BIND_FILES = {
        for m in ("__init__", "binding", "device_id", "ed25519", "oldenv")},
 }
 SITE_UNITS = ("nexwar_site", "nexwar_mosquitto")
+
+#: 不靠 SSH(11-06,用户定):站点能改的 ``/etc/nexwar/env`` 设置 —— 只有这几个键、只认这几个值。
+#: 文件里别的行(设备 PIN 等)不读出、不改;改完重启用到它的服务,代理最后、不等。
+ENV_SETTINGS: dict[str, tuple[str, ...]] = {
+    "NEXWAR_PERSONS": ("bridge", "none"),          # 人员检测
+    "NEXWAR_OBS_PERMIT": ("0", "1"),               # 障碍净空许可(感知发、旁路按它管前进)
+    "NEXWAR_MAX_FRACTION": ("0.5", "0.7", "1.0"),  # 前进比例上限(代理、旁路都用)
+    "NEXWAR_VENDOR_PAUSE": ("0", "1"),             # 开机暂停厂家进程(默认关)
+    "NEXWAR_VENDOR_AUTOSTART": ("0", "1"),         # 厂家用不上的服务开机自启(默认关,第 32 条)
+}
+#: 改了哪个键要重启哪些服务(``nexwar_persons`` 另按开关 enable / disable)。
+ENV_UNITS: dict[str, tuple[str, ...]] = {
+    "NEXWAR_PERSONS": (),
+    "NEXWAR_OBS_PERMIT": ("nexwar_obstacles", "nexwar_sidecar"),
+    "NEXWAR_MAX_FRACTION": ("nexwar_sidecar",),
+    "NEXWAR_VENDOR_PAUSE": (),
+    "NEXWAR_VENDOR_AUTOSTART": (),
+}
+#: 固定路由(第 25 条):网段至少 /8(不许默认路由),最多几条。
+ROUTE_MIN_PREFIX = 8
+ROUTE_MAX = 8
+ENV_MAX = 64 * 1024
+#: 开机暂停的厂家进程(命令行里含这一段;连它们的子进程一起)。只在这里改,请求给不了。11-05 现场
+#: 手动停过的那些;**不含** ``image_decode``(我们的人员检测要它解出来的相机画面)。
+VENDOR_PAUSE_MATCH = (
+    "/opt/robot/perception/install/perception/bin/perception_jobs",
+    "/opt/robot/robot_slam/install/robot_slam/lib/robot_slam/robot_localization",
+    "/opt/robot/robot_slam/install/robot_slam/lib/robot_slam/robot_slam",
+    "apriltag_localization_node",
+    "/opt/robot/robot_arc/install/arc_mapping/",
+    "navigo_charging_alignment",
+    "launch robot_nav2 ",
+)
+#: 第 32 条(用户 11-06:「先默认关掉,直到我们 V2 上装有了」):关自启时记下关了哪些(开回去、卸载按它)。
+VENDOR_OFF_RECORD = "vendor-autostart-off.json"
+#: 进程所在的 systemd 单元(``/proc/<pid>/cgroup`` 里 ``….service`` 结尾的那一段)。
+UNIT_RE = re.compile(r"/([A-Za-z0-9@._-]+\.service)$")
+#: 开机准备(:func:`boot`)最多几回、每回隔多久(网卡、网关、厂家的进程都起得晚)。
+BOOT_ROUNDS = 10
+BOOT_EVERY_S = 60
+#: 站点主机名只认这些字符(同 nexwar_timesync_conf)。
+HOST_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.-]*$")
 ID_RE = re.compile(r"^[0-9a-f]{8,32}$")
 NAME_RE = re.compile(r"^\d{4}-\d{2}-\d{2}-[0-9a-f]{6,12}$")      # 版本目录名(同 engine/release)
 PKG_RE = re.compile(r"^[A-Za-z0-9._-]{1,80}\.tar\.gz$")
@@ -416,9 +460,13 @@ def install_bind(files: dict[str, bytes], lib_dir: Path) -> bool:
 
 class Ops:
     def __init__(self, cfg: dict[str, Any], *, run: Runner = run_cmd,
-                 etc: Path = Path("/etc"), systemd_dir: Path = Path("/etc/systemd/system")) -> None:
+                 etc: Path = Path("/etc"), systemd_dir: Path = Path("/etc/systemd/system"),
+                 proc: Path = Path("/proc"),
+                 kill: Callable[[int, int], None] = os.kill) -> None:
         self.cfg = cfg
         self.run = run
+        self.proc = proc
+        self.kill = kill
         self.etc = etc
         self.systemd_dir = systemd_dir
         self.profile = cfg["profile"]
@@ -476,6 +524,236 @@ class Ops:
         if u not in MAPPING_PAUSE_UNITS:
             raise OpError(f"建图时只能暂停 {'、'.join(MAPPING_PAUSE_UNITS)},不认 {u!r}")
         return str(u)
+
+    # ---------------------------------------------------------------- 不靠 SSH(11-06)
+    def env_set(self, args: dict[str, Any]) -> dict[str, Any]:
+        """改 ``/etc/nexwar/env`` 里白名单的几个设置(:data:`ENV_SETTINGS`),再重启用到的服务。"""
+        changes = args.get("changes")
+        if not isinstance(changes, dict) or not changes:
+            raise OpError("changes 要是非空的对象")
+        for k, v in changes.items():
+            if k not in ENV_SETTINGS:
+                raise OpError(f"这个设置不能远程改:{str(k)[:40]!r}")
+            if not isinstance(v, str) or v not in ENV_SETTINGS[k]:
+                raise OpError(f"{k} 只能是 {'/'.join(ENV_SETTINGS[k])}")
+        path = self.etc / "nexwar" / "env"
+        try:
+            fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+        except OSError as exc:
+            raise OpError(f"打不开 env:{exc}") from exc
+        try:
+            st = os.fstat(fd)
+        finally:
+            os.close(fd)
+        data = read_nofollow(path, limit=ENV_MAX, owner=0 if os.geteuid() == 0 else None)
+        lines = data.decode("utf-8").splitlines()
+        out: list[str] = []
+        done: set[str] = set()
+        for ln in lines:
+            key = ln.split("=", 1)[0].strip() if "=" in ln and not ln.lstrip().startswith("#") \
+                else ""
+            if key in changes:
+                if key not in done:
+                    out.append(f"{key}={changes[key]}")
+                    done.add(key)
+                continue                               # 同一个键写了几遍:留一行
+            out.append(ln)
+        out += [f"{k}={v}" for k, v in changes.items() if k not in done]
+        write_atomic(path, ("\n".join(out) + "\n").encode("utf-8"), mode=stat.S_IMODE(st.st_mode),
+                     uid=st.st_uid, gid=st.st_gid)
+        done_units: list[str] = []
+        if "NEXWAR_VENDOR_AUTOSTART" in changes:
+            self.vendor_autostart({"on": changes["NEXWAR_VENDOR_AUTOSTART"] == "1"})
+        if "NEXWAR_PERSONS" in changes:
+            on = changes["NEXWAR_PERSONS"] == "bridge"
+            self._sys("systemctl", "enable" if on else "disable", "--now",
+                      "nexwar_persons.service", timeout=120)
+            done_units.append("nexwar_persons")
+        for u in dict.fromkeys(u for k in changes for u in ENV_UNITS[k]):
+            self._sys("systemctl", "try-restart", f"{u}.service", timeout=180)
+            done_units.append(u)
+        self._sys("systemctl", "--no-block", "restart", "nexwar_agent.service")
+        return {"changed": dict(changes), "restarted": done_units + ["nexwar_agent"]}
+
+    def _env_value(self, key: str) -> str:
+        """``/etc/nexwar/env`` 里某一个键的值(最后一行算;不跟符号链接;别的键不往外带)。"""
+        path = self.etc / "nexwar" / "env"
+        try:
+            data = read_nofollow(path, limit=ENV_MAX, owner=0 if os.geteuid() == 0 else None)
+        except OSError as exc:
+            raise OpError(f"打不开 env:{exc}") from exc
+        val = ""
+        for ln in data.decode("utf-8", "replace").splitlines():
+            if not ln.lstrip().startswith("#") and "=" in ln and ln.split("=", 1)[0].strip() == key:
+                val = ln.split("=", 1)[1].strip().strip('"').strip("'")
+        return val
+
+    def routes_apply(self, args: dict[str, Any]) -> dict[str, Any]:
+        """开机加装机时写好的固定路由(11-05 现场第 25 条:视频经狗的路由器回站点,以前每次开机 SSH
+        手工加)。``NEXWAR_ROUTES=<网段> via <网关>[; ...]``,只认 IPv4、不许默认路由;写错一条整条不加。
+        ``ip route replace``:加过再加不出错。某条加不上(网关一时不通)记进 ``failed``,别的照加。"""
+        if args:
+            raise OpError("加路由不带参数(加哪些只看 env 里的 NEXWAR_ROUTES)")
+        raw = self._env_value("NEXWAR_ROUTES")
+        routes: list[tuple[str, str]] = []
+        for item in (x.strip() for x in raw.replace(",", ";").split(";")):
+            if not item:
+                continue
+            parts = item.split()
+            if len(parts) != 3 or parts[1] != "via":
+                raise OpError(f"NEXWAR_ROUTES 每条要写成 <网段> via <网关>:{item[:60]!r}")
+            try:
+                net = ipaddress.IPv4Network(parts[0], strict=True)
+                gw = ipaddress.IPv4Address(parts[2])
+            except ValueError as exc:
+                raise OpError(f"NEXWAR_ROUTES 写错了:{item[:60]!r}({exc})") from exc
+            if net.prefixlen < ROUTE_MIN_PREFIX:
+                raise OpError(f"NEXWAR_ROUTES 不许改默认路由、也不许太大的网段:{item[:60]!r}")
+            routes.append((str(net), str(gw)))
+        if len(routes) > ROUTE_MAX:
+            raise OpError(f"NEXWAR_ROUTES 最多 {ROUTE_MAX} 条")
+        applied: list[str] = []
+        failed: list[dict[str, str]] = []
+        for net, gw in routes:
+            rc, out = self.run(["ip", "route", "replace", net, "via", gw], 30)
+            if rc == 0:
+                applied.append(f"{net} via {gw}")
+            else:
+                failed.append({"route": f"{net} via {gw}", "error": out.strip()[-200:]})
+        return {"applied": applied, "failed": failed}
+
+    def chrony_site(self, args: dict[str, Any]) -> dict[str, Any]:
+        """第 4 条(用户 11-06:改,要能改回来,不动竞品和厂家的设置):厂家的 chrony 在跑,就给它**运行时**
+        加一个源 —— 站点主机(``chronyc add server … prefer trust``)。不写厂家的配置文件,重启 chrony 或
+        整机就没了(每次开机由 :func:`boot` 再加)。站点主机按 env:``NEXWAR_SITE_NTP``,没有从
+        ``NEXWAR_SITE_MQTT`` 取;本机回环(经隧道)对时过不去,不加。"""
+        if args:
+            raise OpError("向站点对时不带参数")
+        rc, _ = self.run(["systemctl", "is-active", "--quiet", "chrony"], 20)
+        if rc != 0:
+            return {"chrony": "inactive"}
+        host = self._env_value("NEXWAR_SITE_NTP")
+        if not host:
+            mqtt = self._env_value("NEXWAR_SITE_MQTT")
+            host = mqtt.split("://", 1)[-1].split("/", 1)[0].rsplit(":", 1)[0] if mqtt else ""
+            if host.startswith("127.") or host == "localhost":
+                host = ""
+        if not host:
+            return {"chrony": "no_site"}
+        if not HOST_RE.fullmatch(host) or len(host) > 253:
+            raise OpError(f"站点主机写错了:{host[:60]!r}")
+        rc, out = self.run(["chronyc", "add", "server", host, "iburst", "prefer", "trust"], 30)
+        if rc == 0:
+            return {"chrony": "added", "host": host}
+        if "already" in out.lower():
+            return {"chrony": "present", "host": host}
+        return {"chrony": "failed", "host": host, "error": out.strip()[-200:]}
+
+    def _unit_of(self, pid: int) -> str:
+        try:
+            text = (self.proc / str(pid) / "cgroup").read_text()
+        except OSError:
+            return ""
+        for ln in text.splitlines():
+            m = UNIT_RE.search(ln.strip())
+            if m:
+                return m.group(1)
+        return ""
+
+    def vendor_autostart(self, args: dict[str, Any]) -> dict[str, Any]:
+        """第 32 条:厂家用不上的服务开机自启 关(``{"on": false}``)/ 开回去(``{"on": true}``)。
+        关:按 :data:`VENDOR_PAUSE_MATCH` 找到厂家的进程,看它们在哪个 systemd 单元;**整个单元的进程
+        都是这些**(连子进程)才 ``disable --now``,跟别的(图像解码等)同一个单元的不碰;我们自己的
+        不碰。关了哪些记下来(:data:`VENDOR_OFF_RECORD`),开回去、卸载都按它,厂家的单元文件不改。"""
+        on = args.get("on")
+        if set(args) != {"on"} or not isinstance(on, bool):
+            raise OpError("要给 on: true / false,别的不收")
+        rec_path = Path(self.cfg.get("data_root", "/var/lib/nexwar")) / VENDOR_OFF_RECORD
+        try:
+            had = json.loads(rec_path.read_text(encoding="utf-8")).get("units") or []
+        except (OSError, ValueError, AttributeError):
+            had = []
+        had = [u for u in had if isinstance(u, str) and UNIT_RE.fullmatch("/" + u)]
+        if on:
+            done = []
+            for u in had:
+                self._sys("systemctl", "enable", "--now", u, timeout=120)
+                done.append(u)
+            rec_path.unlink(missing_ok=True)
+            return {"enabled": done}
+        vendor = {p for p, _ in self._vendor_pids()}
+        units: dict[str, set[int]] = {}
+        for d in self.proc.iterdir():
+            if d.name.isdigit():
+                u = self._unit_of(int(d.name))
+                if u:
+                    units.setdefault(u, set()).add(int(d.name))
+        disabled: list[str] = []
+        skipped: list[dict[str, str]] = []
+        for u in sorted(units):
+            pids = units[u]
+            if not pids & vendor:
+                continue
+            if u.startswith("nexwar") or u.startswith("user@"):
+                skipped.append({"unit": u, "why": "ours_or_session"})
+                continue
+            if pids - vendor:
+                skipped.append({"unit": u, "why": "shared"})
+                continue
+            rc, out = self.run(["systemctl", "is-enabled", u], 20)
+            if out.strip() != "enabled":
+                continue
+            self._sys("systemctl", "disable", "--now", u, timeout=120)
+            disabled.append(u)
+        if disabled:
+            rec_path.parent.mkdir(parents=True, exist_ok=True)
+            write_atomic(rec_path, json.dumps({"units": sorted(set(had) | set(disabled))}).encode(),
+                         mode=0o644)
+        return {"disabled": disabled, "skipped": skipped}
+
+    def _vendor_pids(self) -> list[tuple[int, str]]:
+        """命令行含 :data:`VENDOR_PAUSE_MATCH` 某一段的进程,连它们的子孙。"""
+        cmds: dict[int, str] = {}
+        parent: dict[int, int] = {}
+        for d in self.proc.iterdir():
+            if not d.name.isdigit():
+                continue
+            try:
+                cmd = (d / "cmdline").read_bytes().replace(b"\0", b" ").decode("utf-8", "replace")
+                st = (d / "stat").read_text()
+                parent[int(d.name)] = int(st.rsplit(")", 1)[1].split()[1])
+            except (OSError, ValueError, IndexError):
+                continue
+            cmds[int(d.name)] = cmd.strip()
+        hit = {p for p, c in cmds.items() if any(m in c for m in VENDOR_PAUSE_MATCH)}
+        grew = True
+        while grew:
+            more = {p for p, pp in parent.items() if pp in hit and p not in hit}
+            hit |= more
+            grew = bool(more)
+        me = os.getpid()
+        return sorted((p, cmds[p][:120]) for p in hit if p not in (1, me))
+
+    def vendor_pause(self, args: dict[str, Any]) -> dict[str, Any]:
+        """开机暂停厂家进程(``kill -STOP``,能恢复;自启不动)。只按代码里的单子找。"""
+        if args:
+            raise OpError("暂停厂家进程不带参数(要停哪些只在执行器里写)")
+        return {"paused": self._signal_vendor(signal.SIGSTOP)}
+
+    def vendor_resume(self, args: dict[str, Any]) -> dict[str, Any]:
+        if args:
+            raise OpError("恢复厂家进程不带参数")
+        return {"resumed": self._signal_vendor(signal.SIGCONT)}
+
+    def _signal_vendor(self, sig: int) -> list[dict[str, Any]]:
+        out = []
+        for pid, cmd in self._vendor_pids():
+            try:
+                self.kill(pid, sig)
+            except ProcessLookupError:
+                continue
+            out.append({"pid": pid, "cmd": cmd})
+        return out
 
     def restart_all(self, args: dict[str, Any]) -> dict[str, Any]:
         """换版本以后:我们的服务里已启用或正在跑的,全重启;代理最后、不等。"""
@@ -1009,6 +1287,9 @@ ROBOT_ACTIONS: dict[str, Callable[[Ops, dict[str, Any]], dict[str, Any]]] = {
     "timesync": Ops.timesync, "journal_vacuum": Ops.journal_vacuum,
     "cert_install": Ops.cert_install, "units_apply": Ops.units_apply,
     "pause": Ops.pause, "resume": Ops.resume,
+    "env_set": Ops.env_set, "vendor_pause": Ops.vendor_pause, "vendor_resume": Ops.vendor_resume,
+    "routes_apply": Ops.routes_apply, "chrony_site": Ops.chrony_site,
+    "vendor_autostart": Ops.vendor_autostart,
 }
 SITE_ACTIONS: dict[str, Callable[[Ops, dict[str, Any]], dict[str, Any]]] = {
     "restart": Ops.restart, "restart_site": Ops.restart_site, "restore": Ops.restore,
@@ -1099,12 +1380,52 @@ def process(cfg: dict[str, Any], ops: Ops, *, uid: int, gid: int) -> int:
     return n
 
 
+def boot(ops: Ops, *, sleep: Callable[[float], Any] = time.sleep) -> None:
+    """开机准备(``nexwar_boot.service``,root;不等代理 —— 代理要等钟对上才起,钟要经路由向站点对):
+    加固定路由(第 25 条)、给厂家的 chrony 加站点这个源(第 4 条)、厂家用不上的服务关自启(第 32 条,
+    缺省关;``NEXWAR_VENDOR_AUTOSTART=1`` 开回去)。网卡、网关、厂家的进程都起得晚:没齐每分钟再来,
+    最多 :data:`BOOT_ROUNDS` 回;出错只记一笔,不拦开机。"""
+    routes_ok = chrony_ok = False
+    for i in range(BOOT_ROUNDS):
+        try:
+            on = ops._env_value("NEXWAR_VENDOR_AUTOSTART") == "1"
+        except OpError as exc:
+            print(f"开机准备:{exc}", flush=True)
+            return
+        steps = []
+        if not routes_ok:
+            steps.append(("routes", lambda: ops.routes_apply({})))
+        if not chrony_ok:
+            steps.append(("chrony", lambda: ops.chrony_site({})))
+        if not on or i == 0:
+            steps.append(("vendor", lambda: ops.vendor_autostart({"on": on})))
+        for name, fn in steps:
+            try:
+                out = fn()
+            except (OpError, OSError) as exc:
+                print(f"开机准备 {name}:{exc}", flush=True)
+                if name == "routes":
+                    routes_ok = True            # 写错了:再试也没用
+                continue
+            print(f"开机准备 {name}:{json.dumps(out, ensure_ascii=False)}", flush=True)
+            if name == "routes":
+                routes_ok = not out.get("failed")
+            elif name == "chrony":
+                chrony_ok = out.get("chrony") != "failed"
+        if routes_ok and chrony_ok and on:
+            return
+        if i < BOOT_ROUNDS - 1:
+            sleep(BOOT_EVERY_S)
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="D1 Max 特权执行器(W55)")
     ap.add_argument("--config", default="/etc/nexwar_ops.json")
     ap.add_argument("--install-bind", metavar="包目录",
                     help="装机脚本用:把包里配网服务的代码装进 root 独占目录(装机是人在现场、包是人拿来的)")
     ap.add_argument("--lib-dir", default="/usr/local/lib/nexwar")
+    ap.add_argument("--boot", action="store_true",
+                    help="开机准备(nexwar_boot.service):固定路由、向站点对时、厂家用不上的服务关自启")
     a = ap.parse_args(argv)
     if a.install_bind:
         pkg = Path(a.install_bind)
@@ -1117,6 +1438,10 @@ def main(argv: list[str] | None = None) -> int:
         print("  配网服务的代码" + ("装好了" if done else "没变") + f":{a.lib_dir}/bind/")
         return 0
     cfg = json.loads(Path(a.config).read_text(encoding="utf-8"))
+    if a.boot:
+        if cfg.get("profile") == "robot":
+            boot(Ops(cfg))
+        return 0
     pw = pwd.getpwnam(cfg["requester"])
     process(cfg, Ops(cfg), uid=pw.pw_uid, gid=pw.pw_gid)
     return 0

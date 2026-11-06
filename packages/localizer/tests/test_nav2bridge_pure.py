@@ -5,9 +5,18 @@ from __future__ import annotations
 import math
 
 import numpy as np
+import pytest
 from nexwar_localizer.nav2bridge import grid_points, occupancy
 
 from nexwar_contract.obsbridge import pack_bits
+
+
+@pytest.fixture(autouse=True)
+def _不许真退出(monkeypatch):
+    """现场第 5 条:转接节点连着两回重来不成会 ``os._exit(75)``(让 systemd 整个重启 Nav2)。别的测试
+    走到那一步时不能真把 pytest 退掉(11-06 全量跑到 96% 静悄悄退出,退出码 75)。"""
+    from nexwar_localizer.nav2bridge import Nav2Bridge
+    monkeypatch.setattr(Nav2Bridge, "_full_restart", lambda self: None)
 
 
 def _grid(size, res, occ_cells, known_all=True):
