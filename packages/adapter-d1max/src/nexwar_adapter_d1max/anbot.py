@@ -77,6 +77,8 @@ USER_ENV = "NEXWAR_ANBOT_SSH_USER"
 PASSWORD_ENV = "NEXWAR_ANBOT_SSH_PASSWORD"
 _HOST = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.-]{0,31}@[A-Za-z0-9][A-Za-z0-9_.-]{0,63}")
 _DEV = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_:,.-]{0,63}")
+_PATH = re.compile(r"[A-Za-z0-9_./-]{0,200}")
+_CTL = re.compile(r"[A-Za-z0-9][A-Za-z0-9 _-]{0,63}")
 _CLIP = re.compile(r"[A-Za-z0-9_-][A-Za-z0-9_.-]{0,63}")
 
 
@@ -278,6 +280,11 @@ class AnbotConfig:
     #: 没配登录(``audio_host``)就不盯。
     sos_log: str = "/logs/current/can.log"
     estop_log: str = "/logs/current/led_control.log"
+    #: POC 11-06(第 7、30 条):竞品重启后音量偏小,我们起来时登录竞品主控调一次(``amixer -q [-c 卡]
+    #: sset <控件> <百分比>%``)。空 = 不调(控件名按现场 ``amixer`` 列出来的填)。
+    volume_control: str = ""
+    volume_percent: int = 70
+    volume_card: str = ""
     caller: str = "/nexwar_agent"
     #: 念一个字大约多久(现场 11-05:12 个字约 3 秒)。
     secs_per_char: float = 0.25
@@ -320,6 +327,15 @@ class AnbotConfig:
             v = getattr(self, k)
             if not isinstance(v, str) or any(ch.isspace() for ch in v) or v.startswith("-"):
                 raise PayloadError(f"{k} 写错了: {v!r}")
+        for k in ("sos_log", "estop_log"):
+            if not _PATH.fullmatch(getattr(self, k)):
+                raise PayloadError(f"{k} 只许字母、数字、_ . / -: {getattr(self, k)!r}")
+        if self.volume_control and not _CTL.fullmatch(str(self.volume_control)):
+            raise PayloadError(f"volume_control 只许字母、数字、空格、_ -: {self.volume_control!r}")
+        if self.volume_card and not str(self.volume_card).isalnum():
+            raise PayloadError(f"volume_card 只许字母、数字: {self.volume_card!r}")
+        if not isinstance(self.volume_percent, int) or not 0 <= self.volume_percent <= 100:
+            raise PayloadError(f"volume_percent 要在 0–100: {self.volume_percent!r}")
         if not self.audio_host:
             object.__setattr__(self, "clips_dir", "")
 
@@ -327,7 +343,8 @@ class AnbotConfig:
     def from_dict(cls, d: dict[str, Any]) -> AnbotConfig:
         known = {"master", "host", "strobe_topic", "voice_topic", "caller", "secs_per_char",
                  "republish_s", "reregister_s", "audio_host", "ssh_key", "aplay_device",
-                 "clips_dir", "ssh", "ptz_topic", "wiper_topic", "sos_log", "estop_log"}
+                 "clips_dir", "ssh", "ptz_topic", "wiper_topic", "sos_log", "estop_log",
+                 "volume_control", "volume_percent", "volume_card"}
         extra = set(d) - known - {"kind"}
         if extra:
             raise PayloadError(f"竞品上装配置里有不认识的项: {', '.join(sorted(extra))}")
@@ -367,6 +384,7 @@ class AnbotPayload:
         #: POC 11-06:竞品的求助、急停按钮按下了(``"sos"`` / ``"estop"``);HAL 挂上。
         self.on_button: Callable[[str], Any] | None = None
         self._buttons_task: asyncio.Task[None] | None = None
+        self._volume_task: asyncio.Task[None] | None = None
         self._button_at: dict[str, float] = {}
         self._guard: asyncio.Task[None] | None = None
         self._speech: asyncio.Task[None] | None = None
@@ -395,8 +413,11 @@ class AnbotPayload:
         await self._publish_strobe(False)
         if self._guard is None or self._guard.done():
             self._guard = asyncio.get_running_loop().create_task(self._watch())
-        if self.cfg.audio_host and (self._buttons_task is None or self._buttons_task.done()):
+        if self.cfg.audio_host and (self.cfg.sos_log or self.cfg.estop_log) \
+                and (self._buttons_task is None or self._buttons_task.done()):
             self._buttons_task = asyncio.get_running_loop().create_task(self._buttons())
+        if self.cfg.audio_host and self.cfg.volume_control and self._volume_task is None:
+            self._volume_task = asyncio.get_running_loop().create_task(self._set_volume())
 
     async def _ensure(self) -> None:
         now = time.monotonic()
@@ -434,7 +455,7 @@ class AnbotPayload:
 
     async def close(self) -> None:
         """全关:警灯发「关」,不再估喊话,注销,关端口。"""
-        for t in (self._guard, self._buttons_task):
+        for t in (self._guard, self._buttons_task, self._volume_task):
             if t is not None:
                 t.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
@@ -505,7 +526,8 @@ class AnbotPayload:
     async def _buttons(self) -> None:
         """登录竞品主控 ``tail -F`` 两份日志,认出按下就回调 ``on_button``;断了 5 秒后重连。"""
         while True:
-            cmd, env = self._ssh_cmd(f"tail -n0 -F {self.cfg.sos_log} {self.cfg.estop_log}")
+            logs = " ".join(x for x in (self.cfg.sos_log, self.cfg.estop_log) if x)
+            cmd, env = self._ssh_cmd(f"tail -n0 -F {logs}")
             proc = None
             try:
                 proc = await asyncio.create_subprocess_exec(
@@ -525,6 +547,29 @@ class AnbotPayload:
                     with contextlib.suppress(Exception):
                         await proc.wait()
             await asyncio.sleep(5.0)
+
+    async def _set_volume(self) -> None:
+        """起来时调一次竞品音量(第 7、30 条:竞品重启后偏小);连不上 1 分钟后再试,最多 10 回。"""
+        card = f"-c {self.cfg.volume_card} " if self.cfg.volume_card else ""
+        ctl = self.cfg.volume_control.replace("'", "")
+        remote = f"amixer -q {card}sset '{ctl}' {self.cfg.volume_percent}%"
+        for _ in range(10):
+            cmd, env = self._ssh_cmd(remote)
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    *cmd, stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.DEVNULL,
+                    stderr=asyncio.subprocess.PIPE, start_new_session=True, env=env)
+                _, err = await asyncio.wait_for(proc.communicate(), 20)
+                if proc.returncode == 0:
+                    log.info("竞品音量调到 %d%%", self.cfg.volume_percent)
+                    return
+                log.warning("调竞品音量没成(退出码 %s): %s", proc.returncode,
+                            err.decode("utf-8", "replace").strip()[-200:])
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                log.exception("调竞品音量出错")
+            await asyncio.sleep(60)
 
     def _button_line(self, line: str) -> None:
         name = "sos" if SOS_LINE in line else "estop" if ESTOP_LINE in line else ""

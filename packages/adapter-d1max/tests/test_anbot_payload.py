@@ -626,3 +626,27 @@ async def test_POC1106_继电器上装没有云台雨刷():
     with pytest.raises(HalUnsupported):
         await hal.ptz(0.0, 0.0)
     hal.set_button_listener(lambda b: None)            # 没上装:不报错
+
+
+async def test_POC1106_开机调竞品音量_配了才调_登录竞品主控跑amixer(master, tmp_path):
+    log = tmp_path / "ssh.log"
+    s = tmp_path / "ssh-vol"
+    s.write_text(f'#!/bin/sh\necho "$@" >> "{log}"\n')
+    s.chmod(0o755)
+    p = AnbotPayload(_cfg(master.url, audio_host="anbot@192.168.113.101", ssh=str(s),
+                          volume_control="DACL", volume_percent=70, sos_log="", estop_log=""))
+    await p.start()
+    await _等(lambda: log.exists() and "amixer" in log.read_text())
+    assert "amixer -q sset 'DACL' 70%" in log.read_text()
+    await p.close()
+
+
+def test_POC1106_音量配置_控件名只认字母数字_百分比在范围里():
+    for bad in ({"volume_control": "DACL; rm -rf /"},
+                {"volume_control": "DACL", "volume_percent": 150},
+                {"volume_control": "DACL", "volume_card": "0 && x"}):
+        with pytest.raises(PayloadError):
+            AnbotConfig.from_dict({"master": "http://127.0.0.1:1/", "host": "127.0.0.1"} | bad)
+    c = AnbotConfig.from_dict({"master": "http://127.0.0.1:1/", "host": "127.0.0.1",
+                               "volume_control": "Speaker Playback", "volume_card": "1"})
+    assert c.volume_percent == 70
