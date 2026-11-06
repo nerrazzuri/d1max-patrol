@@ -14,8 +14,9 @@
 - **一圈跑完**:离下一圈还有 :data:`WATCH_MIN_S` 秒以上 → 去这一圈最早看的那个防区的**值守位**
   站着盯(``guard-watch-…``,优先级低一点,到点下一圈直接抢下来);没空档直接下一圈。
   站在值守位上算看着那个防区。
-- **被打断**(事件派遣、人手动派的抢走了,§5.3):机器人空了以后接着跑。这一圈已经看过的防区
-  不重复,从剩下的里面最久没看的开始;都看过了就是新的一圈。人中止的:歇 :data:`PAUSE_MS`。
+- **被打断**(事件派遣、人手动派的抢走了,§5.3):机器人空了以后接着跑。**按点**(用户 11-06):
+  这一圈已经到过的点不重复,没到的按这一圈原来的顺序接着走;都到过了就是新的一圈。
+  人中止的:歇 :data:`PAUSE_MS`。
   派了、狗上没在跑、也没终态事件,过了 :data:`LOST_S` 当被打断。连着 :data:`FAIL_ALERT` 圈
   跑不成报 P2。
 - **收队**:这条路线经过的防区全撤防了(或方案删了、换了机器人)→ 手上这一趟停下,回待命点
@@ -1453,10 +1454,16 @@ class GuardDuty:
                 return mine[start:] + mine[:start]
         seen = self._seen(info["map_id"], info["map_version"])
         if resume and run is not None:
-            done = {z for z, t in seen.items() if t >= run["lap_started_ms"]}
-            rest = [p for p in keep if not p["zone"] or p["zone"] not in done]
+            # 用户 11-06 定:按点接着跑。这一圈(可能跨几趟任务)到过的点不重复,没到的照样去,
+            # 按这一圈原来的顺序接着走。原来按防区:看了东区 A、还没到 B 就被抢走,回来 B 也跳过了。
+            passed = {str(r["point"]) for r in self.db.query(
+                "SELECT point FROM guard_log WHERE entry=? AND kind='point' AND at_ms>=?",
+                (run["entry"], run["lap_started_ms"]))}
+            rest = [p for p in keep if p["name"] not in passed]
             if any(p["zone"] for p in rest):
-                keep = rest
+                order = {str(q.get("name")): i
+                         for i, q in enumerate(json.loads(run["plan"] or "[]"))}
+                return sorted(rest, key=lambda p: order.get(p["name"], len(order)))
         zones = [p["zone"] for p in keep if p["zone"]]
         if not zones:
             return []

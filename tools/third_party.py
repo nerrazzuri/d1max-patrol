@@ -51,8 +51,8 @@ EXTERNAL = (
 
 #: 人员检测模型:不随包分发,由工程师放到 /etc/nexwar/person.onnx
 MODEL_NOTE = ("人员检测模型(/etc/nexwar/person.onnx)不随软件包分发,由工程师按现场放置。"
-              "样机阶段用的是 YOLOv8n,其许可证为 AGPL-3.0;商用前须换用许可证允许商用的模型,"
-              "或取得模型权利人的商业授权。")
+              "用 YOLOX 官方模型(Megvii,Apache-2.0,允许商用;用户 2026-11-06 定)。"
+              "样机阶段用过的 YOLOv8n 许可证为 AGPL-3.0,不得用于交付。")
 
 
 def _norm(name: str) -> str:
