@@ -14,6 +14,7 @@
 | ``ops_timesync`` | 立即对时 |
 | ``cert_csr`` | 新私钥留在机器人上,回证书申请 |
 | ``cert_install`` | ``{cert, registration}`` 核对后换上,代理随后重启 |
+| ``ops_settings`` | ``{}`` → 站点能改的几项设置;``{set: {...}}`` → 改(空闲才改,代理随后重启) |
 """
 
 from __future__ import annotations
@@ -45,7 +46,10 @@ RESTART_UNITS = OUR_UNITS
 #: 能看日志的:我们的 + 远程运维相关的系统服务(谁 SSH 进来过、VPN、对时)。
 JOURNAL_UNITS = OUR_UNITS + ("ssh", "wg-quick@nexwar", "chrony", "systemd-timesyncd")
 KINDS = ("ops_journal", "ops_diag", "ops_restart", "ops_reboot", "ops_debug", "ops_cleanup",
-         "ops_timesync", "cert_csr", "cert_install")
+         "ops_timesync", "cert_csr", "cert_install", "ops_settings")
+#: 开机暂停厂家进程(11-06,默认关):起来以后每分钟补一次,补这么多回(厂家的进程起得比我们晚)。
+VENDOR_PAUSE_ROUNDS = 10
+VENDOR_PAUSE_EVERY_S = 60.0
 #: 回执走 MQTT,站点 broker 单包上限 256 KB:日志最多 128 KiB,按编码后的大小再裁(同 proc_logs)。
 MAX_JOURNAL = 128 * 1024
 MAX_HOURS = 168
@@ -129,7 +133,7 @@ class OpsDesk:
     @staticmethod
     def _gone(action: str, unit: str) -> bool:
         """做成了以后代理(或整机)会被重启的动作。"""
-        return action in ("reboot", "cert_install") or unit == "nexwar_agent"
+        return action in ("reboot", "cert_install", "env_set") or unit == "nexwar_agent"
 
     def resume_hold(self) -> tuple[str, bool] | None:
         """代理起来时:上一个进程留下的未决特权请求。要接着保持维护 → (请求号, 做成了要不要放开);
@@ -160,7 +164,8 @@ class OpsDesk:
             "ops_journal": {"units": list(JOURNAL_UNITS)}, "ops_diag": {},
             "ops_debug": {"max_minutes": DEBUG_MAX_MIN}, "ops_cleanup": {}}
         if self.priv is not None:
-            for k in ("ops_restart", "ops_reboot", "ops_timesync", "cert_csr", "cert_install"):
+            for k in ("ops_restart", "ops_reboot", "ops_timesync", "cert_csr", "cert_install",
+                      "ops_settings"):
                 out[k] = {}
             out["ops_restart"] = {"units": list(OUR_UNITS)}
             # W70:认站点时刻,NTP 没对上按它拨;probe = 先量一次往返(链路堵的时候不按它拨)
@@ -333,6 +338,65 @@ class OpsDesk:
             return f"busy: {why}"
         got = self._priv("restart", {"unit": unit}, timeout_s=200, hold=True)
         return got if isinstance(got, str) else ("", {"unit": unit, **_no_restart(got)})
+
+    # ------------------------------------------------------------ 设置(11-06 不靠 SSH)
+    def _env_now(self) -> dict[str, str]:
+        """``/etc/nexwar/env`` 里站点能改的那几项此刻算什么(读不到就按代理自己起来时的环境)。"""
+        from nexwar_contract.robot_settings import effective
+        raw: dict[str, str] = {}
+        try:
+            for ln in self.env_file.read_text(encoding="utf-8").splitlines():
+                if "=" in ln and not ln.lstrip().startswith("#"):
+                    k, _, v = ln.partition("=")
+                    raw[k.strip()] = v.strip().strip('"').strip("'")
+        except OSError:
+            raw = dict(os.environ)
+        return effective(raw)
+
+    def _ops_settings(self, p: dict[str, Any]) -> str | tuple[str, dict[str, Any]]:
+        from nexwar_contract.robot_settings import SETTINGS, check, conflict
+        now = self._env_now()
+        if "set" not in p:
+            return "", {"settings": now, "choices": {k: list(v) for k, v in SETTINGS.items()}}
+        try:
+            changes = check(p.get("set"))
+        except ValueError as exc:
+            return f"payload: {exc}"
+        why = conflict(now, changes)
+        if why:
+            return f"payload: {why}"
+        why = self.busy()                          # 改完要重启旁路、感知、代理:走着的时候不改
+        if why:
+            return f"busy: {why}"
+        if changes.get("NEXWAR_VENDOR_PAUSE") == "0" and now["NEXWAR_VENDOR_PAUSE"] == "1":
+            got = self._priv("vendor_resume", {}, timeout_s=60)   # 先把停着的放开
+            if isinstance(got, str):
+                return got
+        got = self._priv("env_set", {"changes": changes}, timeout_s=300, hold=True)
+        if isinstance(got, str):
+            return got
+        return "", {"changed": changes, **_no_restart(got)}
+
+    async def boot_vendor_pause(self, env: dict[str, str] | None = None, *,
+                                sleep: Callable[[float], Any] | None = None) -> None:
+        """开机暂停厂家进程(11-06,设置 ``NEXWAR_VENDOR_PAUSE=1`` 才做):厂家的进程起得比我们晚,
+        前十分钟每分钟补一次。停哪些只在特权执行器里写。"""
+        import asyncio
+        env = dict(os.environ) if env is None else env
+        if (env.get("NEXWAR_VENDOR_PAUSE") or "").strip() != "1" or self.priv is None:
+            return
+        sleep = sleep or asyncio.sleep
+        for _ in range(VENDOR_PAUSE_ROUNDS):
+            try:
+                got = await asyncio.to_thread(self.priv.call, "vendor_pause", {}, timeout_s=60)
+                n = len((got.get("result") or got).get("paused") or []) if got.get("ok") else -1
+                if n < 0:
+                    log.warning("暂停厂家进程没成:%s", got.get("error"))
+                elif n:
+                    log.info("暂停了厂家进程 %d 个", n)
+            except PrivOpsError as exc:
+                log.warning("暂停厂家进程没成:%s", exc)
+            await sleep(VENDOR_PAUSE_EVERY_S)
 
     def _ops_reboot(self, p: dict[str, Any]) -> str | tuple[str, dict[str, Any]]:
         why = self.busy()

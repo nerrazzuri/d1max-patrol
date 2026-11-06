@@ -58,7 +58,8 @@ MAP_KINDS = frozenset({"map_activate", "mapping", "map_build",
                        "zones_set", "route_net_set", "unbind", "wifi_confirm",
                        # W55 远程运维里动手的那几样:进幂等记录(重投的一条不许再重启一次机器人)
                        "ops_restart", "ops_reboot", "ops_debug", "ops_cleanup", "ops_timesync",
-                       "cert_csr", "cert_install"})
+                       "cert_csr", "cert_install",
+                       "ops_settings"})                # 11-06 不靠 SSH:改设置(读也走这条)
 
 #: 只读查询(W00c6g 建图进程日志、W00c6h 录包轨迹、W09f 建图预览):也交给 ``map_hook``,但**不进幂等
 #: 记录** —— 回执里带着上百 KB 的日志、轨迹每 2 s 查一次,记下来代理起来要全量重放;重投的再查一次

@@ -604,3 +604,69 @@ def test_W70_对时先量往返_probe只回自己的钟不拨_step按相对量�
     reason, data = d.handle("ops_timesync", {"step_ms": 1500})
     assert reason == "" and s.calls[-1] == ("timesync", {"offset_ms": 1500})
     assert d.handle("ops_timesync", {"step_ms": 1.5}).startswith("payload")
+
+
+# ---------------------------------------------------------------- 不靠 SSH(11-06,用户定)
+
+
+def test_不靠SSH_设置名单跟特权执行器一致():
+    from nexwar_contract.robot_settings import SETTINGS
+    loader = importlib.machinery.SourceFileLoader("r2", str(ROOT / "deploy" / "nexwar_ops_runner"))
+    spec = importlib.util.spec_from_loader("r2", loader)
+    r = importlib.util.module_from_spec(spec)
+    loader.exec_module(r)
+    assert r.ENV_SETTINGS == SETTINGS and set(r.ENV_UNITS) == set(SETTINGS)
+
+
+def test_不靠SSH_读设置_只回这几项_老写法也认_PIN不出去(tmp_path):
+    env = tmp_path / "env"
+    env.write_text("NEXWAR_PIN=123456\nNEXWAR_PERSONS=bridge\nNEXWAR_OBS_SIDECAR=127.0.0.1:8090\n"
+                   "NEXWAR_AGENT_ARGS=--max-fraction 0.7 --x\n")
+    d = _desk(tmp_path, priv=SimOps(), env_file=env)
+    assert "ops_settings" in d.kinds()
+    err, out = d.handle("ops_settings", {})
+    assert err == "" and out["settings"] == {
+        "NEXWAR_PERSONS": "bridge", "NEXWAR_OBS_PERMIT": "1", "NEXWAR_MAX_FRACTION": "0.7",
+        "NEXWAR_VENDOR_PAUSE": "0", "NEXWAR_VENDOR_AUTOSTART": "0"}
+    assert "123456" not in json.dumps(out)
+    assert out["choices"]["NEXWAR_MAX_FRACTION"] == ["0.5", "0.7", "1.0"]
+
+
+def test_不靠SSH_改设置_忙着不改_值不对拒_上限超过一半要开许可_交给执行器(tmp_path):
+    env = tmp_path / "env"
+    env.write_text("NEXWAR_PERSONS=none\n")
+    s = SimOps()
+    d = _desk(tmp_path, priv=s, env_file=env, busy="在跑巡逻")
+    assert d.handle("ops_settings", {"set": {"NEXWAR_PERSONS": "bridge"}}).startswith("busy")
+    d = _desk(tmp_path, priv=s, env_file=env)
+    assert d.handle("ops_settings", {"set": {"NEXWAR_PIN": "1"}}).startswith("payload")
+    assert d.handle("ops_settings", {"set": {"NEXWAR_MAX_FRACTION": "1.0"}}).startswith("payload")
+    assert s.calls == []
+    err, out = d.handle("ops_settings", {"set": {"NEXWAR_OBS_PERMIT": "1",
+                                                "NEXWAR_MAX_FRACTION": "1.0"}})
+    assert err == "" and out["changed"] == {"NEXWAR_OBS_PERMIT": "1", "NEXWAR_MAX_FRACTION": "1.0"}
+    assert s.calls[-1][0] == "env_set"
+    assert s.calls[-1][1] == {"changes": {"NEXWAR_OBS_PERMIT": "1", "NEXWAR_MAX_FRACTION": "1.0"}}
+
+
+def test_不靠SSH_关掉开机暂停_先把停着的厂家进程恢复(tmp_path):
+    env = tmp_path / "env"
+    env.write_text("NEXWAR_VENDOR_PAUSE=1\n")
+    s = SimOps()
+    d = _desk(tmp_path, priv=s, env_file=env)
+    d.handle("ops_settings", {"set": {"NEXWAR_VENDOR_PAUSE": "0"}})
+    assert [c[0] for c in s.calls] == ["vendor_resume", "env_set"]
+
+
+async def test_不靠SSH_开机暂停厂家进程_开着才做_前十分钟每分钟补一次(tmp_path):
+    s = SimOps()
+    t = [0.0]
+    d = _desk(tmp_path, priv=s)
+
+    async def sleep(x):
+        t[0] += x
+    await d.boot_vendor_pause({"NEXWAR_VENDOR_PAUSE": "0"}, sleep=sleep)
+    assert s.calls == []
+    await d.boot_vendor_pause({"NEXWAR_VENDOR_PAUSE": "1"}, sleep=sleep)
+    assert [c[0] for c in s.calls] == ["vendor_pause"] * 10 and t[0] == 600
+

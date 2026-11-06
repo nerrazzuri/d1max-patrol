@@ -82,6 +82,8 @@ set -euo pipefail
 # @删除 /etc/systemd/system/nexwar_ops.path                               特权执行器的路径单元(W55)
 # @删除 /etc/systemd/system/nexwar_ops.service                            特权执行器(W55)
 # @删除 /etc/systemd/system/paths.target.wants/nexwar_ops.path            路径单元的自启链
+# @删除 /etc/systemd/system/nexwar_boot.service                           开机准备(11-06)
+# @删除 /etc/systemd/system/multi-user.target.wants/nexwar_boot.service   开机准备的自启链
 # @删除 /etc/systemd/journald.conf.d/nexwar.conf                          日志留盘设置(W55;删了回到系统原来的设置)
 # @删除 /etc/systemd/system/nexwar_bootguard.service                      老的守卫单元(多数机器上没有)
 # @删除 /etc/systemd/system/nexwar_patrol.service                         老服务(W00c5e 退役;没重跑过装机脚本的老机器上还在)
@@ -468,6 +470,23 @@ stop_service() {
   if [ "$DO_IT" = 1 ]; then
     systemctl try-restart chrony >/dev/null 2>&1 || true
   fi
+  # 11-06 开机准备:先停;它关过自启的厂家服务(第 32 条,记在 vendor-autostart-off.json)按记录开回去
+  if [ "$DO_IT" = 1 ]; then
+    systemctl disable --now nexwar_boot.service >/dev/null 2>&1 || true
+  fi
+  VENDOR_OFF=/var/lib/nexwar/vendor-autostart-off.json
+  if [ -f "$VENDOR_OFF" ]; then
+    for u in $(grep -oE '"[A-Za-z0-9@._-]+\.service"' "$VENDOR_OFF" | tr -d '"'); do
+      if [ "$DO_IT" = 1 ]; then
+        systemctl enable --now "$u" >/dev/null 2>&1 || true
+        say "  厂家的 $u 开机自启开回去了"
+      else
+        say "  会把厂家的 $u 开机自启开回去"
+      fi
+    done
+  fi
+  rm_sys "/etc/systemd/system/multi-user.target.wants/nexwar_boot.service" "开机准备的自启链"
+  rm_sys "$UNIT_DIR/nexwar_boot.service" "开机准备(11-06)"
   # W55 特权执行器:先停路径单元(不再拉起),再删单元、执行器、配置、目录
   if [ "$DO_IT" = 1 ]; then
     systemctl disable --now nexwar_ops.path >/dev/null 2>&1 || true

@@ -2957,7 +2957,8 @@ class _Handler(TlsHandlerMixin):
     _OPS_ACTIONS = {"journal": ("GET", "ops_journal"), "diag": ("GET", "ops_diag"),
                     "cleanup": (None, "ops_cleanup"), "restart": ("POST", "ops_restart"),
                     "reboot": ("POST", "ops_reboot"), "debug": ("POST", "ops_debug"),
-                    "timesync": ("POST", "ops_timesync")}
+                    "timesync": ("POST", "ops_timesync"),
+                    "settings": (None, "ops_settings")}     # 11-06 不靠 SSH:机器人设置
 
     def _robot_ops(self, method: str, robot_id: str, action: str, user) -> None:
         """W55:``/api/robots/<id>/ops/<动作>`` —— 日志、诊断、清理、重启服务、重启整机(再输密码)、
@@ -2995,9 +2996,19 @@ class _Handler(TlsHandlerMixin):
             if action == "reboot":
                 self._confirm(user, payload)
                 payload = {}
+            if action == "settings":
+                # 改人员检测、障碍许可、速度上限:跟重启整机一样再输密码;值不对站点先拒
+                from nexwar_contract.robot_settings import check
+                self._confirm(user, payload)
+                try:
+                    payload = {"set": check(payload.get("set"))}
+                except ValueError as exc:
+                    raise HttpError(400, str(exc)) from exc
+                self._audit_detail = {"set": dict(payload["set"])}
             payload.pop("confirm_password", None)
-            self._audit_detail = {k: v for k, v in payload.items()
-                                  if isinstance(v, (str, int, list))}
+            if action != "settings":
+                self._audit_detail = {k: v for k, v in payload.items()
+                                      if isinstance(v, (str, int, list))}
         if isinstance(payload.get("unit"), str):
             from nexwar_site.remote_ops import robot_unit
             c = getattr(self.site.dispatcher, "clients", {}).get(robot_id)

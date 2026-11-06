@@ -31,6 +31,15 @@ const UNITS = ["nexwar_agent", "nexwar_localizer", "nexwar_obstacles", "nexwar_p
 /** 能远程重启的:全部(配网服务的代码在 root 独占目录里)。 */
 const RESTARTABLE = UNITS;
 
+/** 11-06 不靠 SSH:站点能改的机器人设置(跟 nexwar_contract.robot_settings 一样)。 */
+interface Settings { settings: Record<string, string>; choices: Record<string, string[]> }
+const SETTING_KEYS: [string, Key][] = [["NEXWAR_PERSONS", "setPersons"], ["NEXWAR_OBS_PERMIT", "setObsPermit"],
+  ["NEXWAR_MAX_FRACTION", "setMaxFraction"], ["NEXWAR_VENDOR_PAUSE", "setVendorPause"],
+  ["NEXWAR_VENDOR_AUTOSTART", "setVendorAutostart"]];
+const choiceText = (k: string, v: string) =>
+  k === "NEXWAR_MAX_FRACTION" ? `${Math.round(Number(v) * 100)}%`
+    : (v === "bridge" || v === "1") ? t("setOn") : t("setOff");
+
 export function RobotOps({ robotId, tasks, say }: { robotId: string; tasks: string[]; say: Say }) {
   const base = `/api/robots/${enc(robotId)}/ops`;
   const [diag, setDiag] = useState<Diag | null>(null);
@@ -41,6 +50,9 @@ export function RobotOps({ robotId, tasks, say }: { robotId: string; tasks: stri
   const [rebooting, setRebooting] = useState(false);
   const [clean, setClean] = useState<{ items: Record<string, { bytes: number | null; detail?: string[] }> } | null>(null);
   const [busy, setBusy] = useState(false);
+  const [sets, setSets] = useState<Settings | null>(null);
+  const [draft, setDraft] = useState<Record<string, string>>({});
+  const [saving, setSaving] = useState(false);
   const has = (k: string) => tasks.includes(k);
   if (!has("ops_diag")) return <p class="muted small">{t("opsUnsupported")}</p>;
 
@@ -60,6 +72,13 @@ export function RobotOps({ robotId, tasks, say }: { robotId: string; tasks: stri
   const loadDiag = () => run(async () => setDiag(await api<Diag>("GET", `${base}/diag`)));
   const loadLog = () => run(async () => setLog(await api("GET", `${base}/journal?unit=${enc(unit)}&hours=${hours}`)));
   const debugOn = (diag?.debug_until_ms ?? 0) > Date.now();
+  const loadSets = () => run(async () => {
+    const s = await api<Settings>("GET", `${base}/settings`);
+    setSets(s);
+    setDraft({ ...s.settings });
+  });
+  const changed = sets ? Object.fromEntries(Object.entries(draft).filter(([k, v]) => sets.settings[k] !== v)) : {};
+  const setConflict = draft.NEXWAR_MAX_FRACTION && draft.NEXWAR_MAX_FRACTION !== "0.5" && draft.NEXWAR_OBS_PERMIT !== "1";
 
   return (
     <div class="robot-ops" data-ops={robotId}>
@@ -84,7 +103,25 @@ export function RobotOps({ robotId, tasks, say }: { robotId: string; tasks: stri
         {has("ops_timesync") && <button type="button" class="btn" disabled={busy} onClick={() => void run(() => api("POST", `${base}/timesync`), t("opsTimesynced"))}>{t("opsTimesync")}</button>}
         {has("cert_csr") && <button type="button" class="btn" disabled={busy} onClick={() => void run(() => api("POST", `${base}/cert-renew`), t("opsCertRenewed"))}>{t("opsCertRenew")}</button>}
         {has("ops_cleanup") && <button type="button" class="btn" disabled={busy} onClick={() => void run(async () => setClean(await api("GET", `${base}/cleanup`)))}>{t("opsCleanup")}</button>}
+        {has("ops_settings") && <button type="button" class="btn" disabled={busy} onClick={() => void loadSets()}>{t("setTitle")}</button>}
       </div>
+
+      {sets && (
+        <div class="ops-settings">
+          {SETTING_KEYS.filter(([k]) => sets.choices[k]).map(([k, label]) => (
+            <div key={k} class="sys-row">
+              <span class="muted">{t(label)}</span>
+              <select name={k} aria-label={t(label)} value={draft[k]} onChange={(e) => setDraft({ ...draft, [k]: e.currentTarget.value })}>
+                {sets.choices[k].map((v) => <option key={v} value={v}>{choiceText(k, v)}</option>)}
+              </select>
+            </div>
+          ))}
+          {setConflict && <p class="error small">{t("setNeedPermit")}</p>}
+          <p class="muted small">{t("setRestartNote")}</p>
+          <button type="button" class="btn primary" disabled={busy || !Object.keys(changed).length || !!setConflict}
+            onClick={() => setSaving(true)}>{t("setSave")}</button>
+        </div>
+      )}
 
       {diag && <DiagView d={diag} />}
 
@@ -121,6 +158,15 @@ export function RobotOps({ robotId, tasks, say }: { robotId: string; tasks: stri
         </div>
       )}
 
+      {saving && (
+        <ConfirmPassword title={t("setConfirm", { id: robotId })} onClose={() => setSaving(false)}
+          onConfirm={async (pw) => {
+            await api("POST", `${base}/settings`, { set: changed, confirm_password: pw });
+            setSaving(false);
+            setSets(null);
+            say(t("setSaved", { id: robotId }));
+          }} />
+      )}
       {rebooting && (
         <ConfirmPassword title={t("opsRebootConfirm", { id: robotId })} onClose={() => setRebooting(false)}
           onConfirm={async (pw) => {
