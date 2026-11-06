@@ -35,7 +35,8 @@ class 告警台:
 
     def raise_alert(self, **kw):
         inspect.signature(AlertDesk.raise_alert).bind(None, **kw)   # 跟真的告警台同一个签名
-        self.open.append(kw)
+        self.n = getattr(self, "n", 0) + 1
+        self.open.append({**kw, "key": f"k{self.n}"})
 
     def has_open(self, robot, kind):
         return any(a["robot"] == robot and a["kind"] == kind for a in self.open)
@@ -45,6 +46,30 @@ class 告警台:
         self.open = [a for a in self.open if a not in hit]
         self.done += hit
         return len(hit)
+
+    def open_of(self, robot, kind):
+        from types import SimpleNamespace
+        cur = [a for a in self.open if a["robot"] == robot and a["kind"] == kind]
+        return SimpleNamespace(key=cur[-1]["key"], context=dict(cur[-1].get("context") or {})) \
+            if cur else None
+
+    def amend(self, key, *, title=None, detail=None, context=None):
+        inspect.signature(AlertDesk.amend).bind(None, key, title=title, detail=detail,
+                                                context=context)
+        cur = [a for a in self.open if a["key"] == key]
+        if not cur:
+            return None
+        cur[0]["context"] = {**(cur[0].get("context") or {}), **(context or {})}
+        return cur[0]
+
+    def amend_open(self, robot, kind, *, title=None, detail=None, context=None):
+        inspect.signature(AlertDesk.amend_open).bind(None, robot, kind, title=title,
+                                                     detail=detail, context=context)
+        cur = [a for a in self.open if a["robot"] == robot and a["kind"] == kind]
+        if not cur:
+            return None
+        cur[-1]["context"] = {**(cur[-1].get("context") or {}), **(context or {})}
+        return cur[-1]
 
     def resolve_except(self, kind, prefix, keep, *, who):
         hit = [a for a in self.open if a["kind"] == kind and a["robot"].startswith(prefix)
@@ -538,13 +563,18 @@ async def test_外审_看见人_原地停下盯着_保安处理了接着值守(�
     assert len(_patrols(t)) == 2 and _log(t, "person_resume")
 
 
-async def test_外审_看见人盯满10分钟没人管_接着值守_同一条不再拦(站):
+async def test_外审_看见人盯满时限没人管_接着值守_同一条不再拦(站):
+    from nexwar_site.guard_duty import PERSON_HOLD_MS
+    assert PERSON_HOLD_MS == 30 * 60_000, "W74 §九:30 分钟(原来 10 分钟,10 分钟改成报经理)"
     t = 站
     _方案(t)
     await _跑(t, 1.5)
     t.duty.alerts.raise_alert(kind="dog_sees_person", robot="A", title="看见人")
     await _跑(t, 2)
-    t.clock.advance(601)
+    t.clock.advance(PERSON_HOLD_MS // 1000 - 60)
+    await _跑(t, 2)
+    assert len(_patrols(t)) == 1, "还没到时限:盯着"
+    t.clock.advance(61)
     await _跑(t, 4)
     assert len(_patrols(t)) == 2, "没人管:接着值守"
     assert t.duty.status()["runs"][0]["state"] != "held"
@@ -998,3 +1028,511 @@ async def test_外审r3_8_路线已经500个点_不接待命点_照样派(站):
     assert _patrols(t), "合法的 500 点路线照样派"
     assert len(_names(_patrols(t)[0])) == 500
     assert _log(t, "no_standby")
+
+
+
+async def test_W74_恢复值守后_最后位置那个防区和相邻的加密巡查一小时_每圈不歇_之后照旧(站):
+    from nexwar_site.guard_duty import INTENSE_MS
+    assert INTENSE_MS == 60 * 60_000
+    t = 站
+    t.areas.set(MAP[0], MAP[1], "远区", [[20.0, -2.0], [25.0, -2.0], [25.0, 2.0], [20.0, 2.0]],
+                by="alice")
+    _方案(t, gap_min=10)
+    for _ in range(30):                                   # 走到西区(x > 5.5)
+        await _跑(t, 0.5)
+        if t.dog.x > 5.5:
+            break
+    assert t.dog.x > 5.5
+    t.duty.alerts.raise_alert(kind="dog_sees_person", robot="A", title="看见人")
+    await _跑(t, 3)
+    t.duty.alerts.resolve_all("A", "dog_sees_person", who="gina")
+    await _跑(t, 3)
+    [lg] = _log(t, "intense_start")
+    assert "西区" in lg["detail"] and "东区" in lg["detail"] and "远区" not in lg["detail"]
+    assert _names(_patrols(t)[-1])[:1] == ["C"], "从最后看见人的那个防区先跑"
+    n = len(_patrols(t))
+    await _跑(t, 25)
+    assert len(_patrols(t)) >= n + 1, "每圈之间不歇(方案本来隔 10 分钟,会去值守位)"
+    assert not _gotos(t, "guard-watch"), "加密巡查时不去值守位站着"
+    t.clock.advance(INTENSE_MS // 1000 + 1)
+    await _跑(t, 25)
+    assert _log(t, "intense_end")
+
+
+def _follows(t):
+    return [c for c in reversed(t.site.commands("A", 500)) if c["kind"] == "follow"]
+
+
+async def test_W74_看见人_停下以后派跟人_一回只派一次_机器人不会跟就只盯着(站):
+    t = 站
+    _方案(t)
+    await _跑(t, 1.5)
+    t.duty.alerts.raise_alert(kind="dog_sees_person", robot="A", title="看见人")
+    await _跑(t, 3)
+    assert _follows(t) == [], "机器人能力里没有 follow:照旧原地盯着"
+    t.duty.alerts.resolve_all("A", "dog_sees_person", who="gina")
+    await _跑(t, 3)
+    t.site.clients["A"].capabilities.tasks["follow"] = {"state": "idle"}
+    t.duty.alerts.raise_alert(kind="dog_sees_person", robot="A", title="又看见人")
+    await _跑(t, 3)
+    [f] = _follows(t)
+    assert f["task_id"].startswith("follow-") and f["priority"] == 80
+    assert _log(t, "follow_start")
+    await _跑(t, 5)
+    assert len(_follows(t)) == 1, "这一回只派一次"
+
+
+class _盒(dict):
+    on_run = None
+
+    def __setitem__(self, k, v):
+        super().__setitem__(k, v)
+        if k == "run" and self.on_run is not None:
+            self.on_run()
+
+
+def _假跟(t):
+    """派遣器的 follow 当成机器人接了(仿真代理不会跟人,回 unsupported);机器人手上在跑什么由测试
+    说了算(``box["run"]``:``None`` = 照仿真狗报的)。``refuse`` 拒、``boom`` 回执没到。"""
+    sent, box = [], _盒(run=None, refuse=False, boom=False)
+    box.on_run = lambda: t.duty._note_status("A")       # 改了手上在跑什么 = 机器人发来了新状态
+
+    async def follow(rid, tid, req, *, issued_by):
+        sent.append(tid)
+        if box["boom"]:
+            raise RuntimeError("回执没到")
+        if box["refuse"]:
+            return {"task_id": tid, "ack": {"result": "rejected", "reason": "busy"}}
+        box["run"] = tid
+        return {"task_id": tid, "ack": {"result": "accepted"}}
+    t.site.follow = follow
+    real = t.duty._running
+    t.duty._running = lambda rid: box["run"] if box["run"] is not None else real(rid)
+    t.sent, t.box = sent, box
+    return sent, box
+
+
+async def _跟着(t):
+    """布防、看见人、派了跟人(机器人接了、在跟);回那一趟的任务号。"""
+    from nexwar_site.map_marks import MapMarks
+    t.duty.marks = MapMarks(t.db, now_ms=t.clock)
+    _假跟(t)
+    _方案(t)
+    await _跑(t, 1.5)
+    t.site.clients["A"].capabilities.tasks["follow"] = {"state": "idle"}
+    t.duty.alerts.raise_alert(kind="dog_sees_person", robot="A", title="看见人")
+    await _跑(t, 3)
+    return _在跟(t)
+
+
+def _在跟(t, d=None):
+    """值守记着的这一回跟人那一趟(落在值守进度里)。"""
+    return (d or t.duty)._fs("A").get("task") or None
+
+
+def _事(kind, **data):
+    from types import SimpleNamespace
+    return SimpleNamespace(kind=kind, data=data)
+
+
+async def test_W74三期_人越过出口线_报人离开值守区_机器人回线内3米朝出口(站):
+    t = 站
+    tid = await _跟着(t)
+    t.duty.marks.set(MAP[0], MAP[1], {"kind": "exit", "name": "东门",
+                                      "points": [[3.0, -2.0], [3.0, 2.0]]}, by="alice")
+    t.duty._on_event("A", _事("follow_track", task_id="别的", points=[
+        {"x": 2.0, "y": 0.0, "at_ms": 1}, {"x": 4.0, "y": 0.0, "at_ms": 2}]))
+    assert not t.duty.alerts.has_open("A", "person_left"), "不是这一回派的跟人:不管"
+    t.duty._on_event("A", _事("follow_track", task_id=tid, points=[
+        {"x": 1.0, "y": 0.5, "at_ms": 1}, {"x": 2.5, "y": 0.5, "at_ms": 2}]))
+    assert not t.duty.alerts.has_open("A", "person_left")
+    t.duty._on_event("A", _事("follow_track", task_id=tid, points=[
+        {"x": 3.5, "y": 0.5, "at_ms": 3}], last={"x": 3.5, "y": 0.5, "at_ms": 3},
+        heading_deg=0.0))
+    [a] = [a for a in t.duty.alerts.open if a["kind"] == "person_left"]
+    assert "东门" in a["title"] and a["context"]["exit"] == "东门"
+    await _跑(t, 1)
+    assert any(c["kind"] == "abort" and c["task_id"] == tid for c in t.site.commands("A", 500))
+    t.box["run"] = ""                                    # 跟人那一趟停了
+    await _跑(t, 3)
+    [g] = _gotos(t, "follow-exit-")
+    p = g["payload"]["target"]
+    assert abs(p["x"] - 0.0) < 1e-6 and abs(p["y"] - 0.5) < 1e-6 and abs(p["yaw"]) < 1e-6
+    assert g["priority"] == 80
+    assert _log(t, "person_left")
+    t.duty._on_event("A", _事("follow_track", task_id=tid, points=[
+        {"x": 2.0, "y": 0.5, "at_ms": 4}, {"x": 4.0, "y": 0.5, "at_ms": 5}]))
+    await _跑(t, 2)
+    assert len(_gotos(t, "follow-exit-")) == 1, "这一回只报一次、只回一次"
+    t.duty._on_event("A", _事("follow_lost", task_id=tid, result="lost",
+                              last={"x": 3.5, "y": 0.5, "at_ms": 3}, heading_deg=0.0))
+    await _跑(t, 3)
+    assert not [c for c in _patrols(t) if c["task_id"].startswith("follow-sweep-")], \
+        "人出去了:不去看易藏点"
+
+
+async def test_W74三期_跟丢了_去附近易藏点看一圈_去向那边先看_看完回最后位置(站):
+    t = 站
+    tid = await _跟着(t)
+    for n, p in (("北楼梯", [4.0, 1.5]), ("南门后", [4.0, -1.5]), ("太远", [40.0, 0.0])):
+        t.duty.marks.set(MAP[0], MAP[1], {"kind": "hide", "name": n, "points": [p], "yaw": 0.5},
+                         by="alice")
+    t.duty._on_event("A", _事("follow_lost", task_id=tid, result="lost",
+                              last={"x": 3.0, "y": 0.0, "at_ms": 3}, heading_deg=90.0))
+    await _跑(t, 1)
+    assert not [c for c in _patrols(t) if c["task_id"].startswith("follow-sweep-")], \
+        "机器人还在回最后位置:等它那一趟结束"
+    t.box["run"] = ""
+    await _跑(t, 3)
+    [s] = [c for c in _patrols(t) if c["task_id"].startswith("follow-sweep-")]
+    assert _names(s) == ["易藏点1-北楼梯", "易藏点2-南门后", "最后位置"]
+    w = s["payload"]["mission"]["waypoints"]
+    assert {"type": "dwell", "seconds": 10} in w[0]["actions"]
+    assert abs(w[-1]["pose"]["position"]["x"] - 3.0) < 1e-6 and s["priority"] == 80
+    assert _log(t, "sweep_start")
+    t.box["run"] = s["task_id"]                          # 机器人在看易藏点
+    t.duty.alerts.resolve_all("A", "dog_sees_person", who="gina")
+    await _跑(t, 3)
+    assert any(c["kind"] == "abort" and c["task_id"] == s["task_id"]
+               for c in t.site.commands("A", 500)), "保安处理了:看易藏点的那一趟停掉,接着值守"
+
+
+async def test_W74三期_跟丢了附近没易藏点_或到上限_不去看(站):
+    t = 站
+    tid = await _跟着(t)
+    t.duty._on_event("A", _事("follow_lost", task_id=tid, result="lost",
+                              last={"x": 3.0, "y": 0.0, "at_ms": 3}, heading_deg=90.0))
+    await _跑(t, 3)
+    t.duty.marks.set(MAP[0], MAP[1], {"kind": "hide", "name": "北", "points": [[3.0, 1.0]]},
+                     by="alice")
+    t.duty._on_event("A", _事("follow_lost", task_id=tid, result="limit",
+                              last={"x": 3.0, "y": 0.0, "at_ms": 3}, heading_deg=90.0))
+    await _跑(t, 3)
+    assert not [c for c in _patrols(t) if c["task_id"].startswith("follow-sweep-")]
+    assert _log(t, "follow_lost")
+
+
+async def test_W74三期_加密巡查_那几个防区里的易藏点先看(站):
+    from nexwar_site.map_marks import MapMarks
+    t = 站
+    t.duty.marks = MapMarks(t.db, now_ms=t.clock)
+    for n, p in (("西楼梯", [8.0, 1.0]), ("东仓库", [3.0, 1.0]), ("区外", [30.0, 0.0])):
+        t.duty.marks.set(MAP[0], MAP[1], {"kind": "hide", "name": n, "points": [p]}, by="alice")
+    _方案(t, gap_min=10)
+    for _ in range(30):                                   # 走到西区(x > 5.5)
+        await _跑(t, 0.5)
+        if t.dog.x > 5.5:
+            break
+    t.duty.alerts.raise_alert(kind="dog_sees_person", robot="A", title="看见人")
+    await _跑(t, 3)
+    t.duty.alerts.resolve_all("A", "dog_sees_person", who="gina")
+    await _跑(t, 3)
+    names = _names(_patrols(t)[-1])
+    assert names[:3] == ["加密-易藏点1-西楼梯", "加密-易藏点2-东仓库", "C"], names
+    assert not any("区外" in n for n in names)
+
+
+
+async def test_外审r1_3_跟人和派生的那几趟_盯着的时候跑完不自动回待命点(站):
+    t = 站
+    tid = await _跟着(t)
+    for x in (tid, "follow-sweep-1-ab", "follow-exit-1-ab"):
+        assert t.duty.holds("A", x), x
+    t.box["run"] = ""                                    # 那一趟结束了
+    t.duty.alerts.resolve_all("A", "dog_sees_person", who="gina")
+    await _跑(t, 6)
+    assert not t.duty.holds("A", tid), "接着值守了:不再拦"
+
+
+async def test_外审r1_4_撤防_跟人那一趟先停_停了才收队(站):
+    t = 站
+    tid = await _跟着(t)
+    t.arming.set_zone_home("东区", False)
+    t.arming.set_zone_home("西区", False)
+    t.arming.set_mode("home", by="olga")
+    await _跑(t, 3)
+    assert any(c["kind"] == "abort" and c["task_id"] == tid for c in t.site.commands("A", 500))
+    assert t.duty.status()["runs"], "还在跟:先别删进度"
+    t.box["run"] = ""
+    await _跑(t, 8)
+    assert t.duty.status()["runs"] == [], "停了:收队"
+
+
+async def test_外审r1_5_站点重启_认回还在跑的跟人_不另派_越线照办(站):
+    t = 站
+    tid = await _跟着(t)
+    t.duty.marks.set(MAP[0], MAP[1], {"kind": "exit", "name": "东门",
+                                      "points": [[3.0, -2.0], [3.0, 2.0]]}, by="alice")
+    d2 = _值守(t)
+    d2.alerts, d2.marks, d2._running = t.duty.alerts, t.duty.marks, t.duty._running
+    t.duty = d2
+    await _跑(t, 6)
+    assert t.sent == [tid], "重启了:认回还在跑的那一趟,不另派"
+    d2._on_event("A", _事("follow_track", task_id=tid, points=[
+        {"x": 2.0, "y": 0.5, "at_ms": 1}, {"x": 3.5, "y": 0.5, "at_ms": 2}]))
+    assert d2.alerts.has_open("A", "person_left"), "认回来的那一趟的轨迹照样判越线"
+
+
+async def test_外审r1_6_保安处理了_停跟人没发成_到点再发_停了才接着值守(站):
+    from nexwar_site.guard_duty import STOP_RETRY_MS
+    t = 站
+    tid = await _跟着(t)
+    calls = _中止先失败(t, 1)
+    n = len(_patrols(t))
+    t.duty.alerts.resolve_all("A", "dog_sees_person", who="gina")
+    await _跑(t, STOP_RETRY_MS / 1000 + 2)
+    assert calls.count(tid) >= 2, calls
+    assert len(_patrols(t)) == n, "跟人还没停:不派下一圈"
+    t.box["run"] = ""
+    await _跑(t, 12)
+    assert len(_patrols(t)) > n, "停了:接着值守"
+
+
+async def _会跟着跑(t, secs):
+    """跑着的时候一直补上能力里的 follow(仿真代理不会跟人,每次重发能力都会把它盖掉)。"""
+    for _ in range(int(secs * 2)):
+        t.site.clients["A"].capabilities.tasks["follow"] = {"state": "idle"}
+        await _跑(t, 0.5)
+
+
+async def test_外审r1_7_派跟人被拒_过一会儿再试_回执没到的过一会儿对账(站):
+    from nexwar_site.guard_duty import FOLLOW_RETRY_MS
+    t = 站
+    sent, box = _假跟(t)
+    box["refuse"] = True
+    _方案(t)
+    await _跑(t, 1.5)
+    t.site.clients["A"].capabilities.tasks["follow"] = {"state": "idle"}
+    t.duty.alerts.raise_alert(kind="dog_sees_person", robot="A", title="看见人")
+    await _跑(t, 3)
+    assert len(sent) == 1 and _在跟(t) is None
+    assert _log(t, "follow_refused")
+    box["refuse"], box["boom"] = False, True
+    await _会跟着跑(t, FOLLOW_RETRY_MS / 1000 + 2)
+    assert len(sent) == 2, "被拒过一阵再试"
+    assert _在跟(t) == sent[-1], "回执没到:先当派出去了(不重复派)"
+    box["boom"] = False
+    await _会跟着跑(t, FOLLOW_RETRY_MS / 1000 + 2)
+    assert len(sent) == 3 and _在跟(t) == sent[-1], \
+        "回执没到、机器人手上也不是它:当没派成,再派"
+
+
+async def test_外审r1_10_加密巡查_撤防的防区里的易藏点不去_去的易藏点记进这一圈(站):
+    from nexwar_site.map_marks import MapMarks
+    t = 站
+    t.duty.marks = MapMarks(t.db, now_ms=t.clock)
+    for n, p in (("西楼梯", [8.0, 1.0]), ("东仓库", [3.0, 1.0])):
+        t.duty.marks.set(MAP[0], MAP[1], {"kind": "hide", "name": n, "points": [p]}, by="alice")
+    t.arming.set_zone_home("东区", False)
+    t.arming.set_mode("home", by="olga")
+    _方案(t, gap_min=10)
+    for _ in range(30):
+        await _跑(t, 0.5)
+        if t.dog.x > 5.5:
+            break
+    t.duty.alerts.raise_alert(kind="dog_sees_person", robot="A", title="看见人")
+    await _跑(t, 3)
+    t.duty.alerts.resolve_all("A", "dog_sees_person", who="gina")
+    await _跑(t, 3)
+    names = _names(_patrols(t)[-1])
+    assert names[:2] == ["加密-易藏点1-西楼梯", "C"], names
+    assert not any("东仓库" in n for n in names), "东区撤防了:不去"
+    plan = json.loads(t.duty.status()["runs"][0]["plan"]) if "plan" in t.duty.status()["runs"][0] \
+        else json.loads(t.db.query("SELECT plan FROM guard_runs")[0]["plan"])
+    assert {"name": "加密-易藏点1-西楼梯", "zone": "西区"} in plan, plan
+
+
+# ---------------------------------------------------------------- 外审 r2
+
+
+def _听得见(t):
+    """机器人在不在线由测试说了算(``t.box["heard"]``)。"""
+    real = t.duty._heard
+    t.box["heard"] = True
+    t.duty._heard = lambda rid: t.box["heard"] and real(rid)
+
+
+def _重启(t):
+    d2 = _值守(t)
+    d2.alerts, d2.marks, d2._running = t.duty.alerts, t.duty.marks, t.duty._running
+    if "heard" in t.box:
+        real = d2._heard
+        d2._heard = lambda rid: t.box["heard"] and real(rid)
+    t.duty = d2
+    return d2
+
+
+async def test_外审r2_2_保安处理时机器人掉线_手上看不出在跟_照样停跟人_确认停了才接着值守(站):
+    t = 站
+    tid = await _跟着(t)
+    _听得见(t)
+    n = len(_patrols(t))
+    t.box["heard"], t.box["run"] = False, ""             # 掉线:状态里手上没任务
+    t.duty.alerts.resolve_all("A", "dog_sees_person", who="gina")
+    await _跑(t, 3)
+    _重启(t)                                             # 告警已经关了,站点又重启
+    t.box["heard"], t.box["run"] = True, tid             # 连回来:原来还在跟
+    await _跑(t, 8)
+    assert any(c["kind"] == "abort" and c["task_id"] == tid for c in t.site.commands("A", 500)), \
+        "掉线时没看出在跟,告警关了、站点重启了,连回来照样停跟人"
+    assert len(_patrols(t)) == n, "还在跟:不派下一圈"
+    t.box["run"] = ""
+    await _跑(t, 12)
+    assert len(_patrols(t)) > n, "停了:接着值守"
+
+
+async def test_外审r2_3_越线后停跟人没发成_站点重启_接着停_停了派回线内(站):
+    from nexwar_site.guard_duty import STOP_RETRY_MS
+    t = 站
+    tid = await _跟着(t)
+    t.duty.marks.set(MAP[0], MAP[1], {"kind": "exit", "name": "东门",
+                                      "points": [[3.0, -2.0], [3.0, 2.0]]}, by="alice")
+    calls = _中止先失败(t, 1)
+    t.duty._on_event("A", _事("follow_track", task_id=tid, points=[
+        {"x": 2.0, "y": 0.5, "at_ms": 1}, {"x": 3.5, "y": 0.5, "at_ms": 2}]))
+    await _跑(t, 1)
+    assert calls.count(tid) == 1
+    _重启(t)
+    await _跑(t, STOP_RETRY_MS / 1000 + 2)
+    assert calls.count(tid) >= 2, ("重启了照样接着停", calls)
+    t.box["run"] = ""
+    await _跑(t, 3)
+    assert len(_gotos(t, "follow-exit-")) == 1, "停了:派回线内"
+
+
+async def test_外审r2_4_派跟人回执没到_站点重启_照样过一阵对账再派(站):
+    from nexwar_site.guard_duty import FOLLOW_RETRY_MS
+    t = 站
+    sent, box = _假跟(t)
+    box["boom"] = True
+    _方案(t)
+    await _跑(t, 1.5)
+    t.site.clients["A"].capabilities.tasks["follow"] = {"state": "idle"}
+    t.duty.alerts.raise_alert(kind="dog_sees_person", robot="A", title="看见人")
+    await _跑(t, 3)
+    assert len(sent) == 1
+    box["boom"] = False
+    _重启(t)
+    await _会跟着跑(t, FOLLOW_RETRY_MS / 1000 + 2)
+    assert len(sent) == 2, "重启前回执没到的那一趟,重启后照样对账:机器人手上一直不是它,再派"
+
+
+async def test_外审r2_5_旧告警刚关就来新告警_旧那一趟先停_旧事件不进新告警_新告警另派(站):
+    t = 站
+    tid = await _跟着(t)
+    t.duty.marks.set(MAP[0], MAP[1], {"kind": "exit", "name": "东门",
+                                      "points": [[3.0, -2.0], [3.0, 2.0]]}, by="alice")
+    t.duty.alerts.resolve_all("A", "dog_sees_person", who="gina")
+    t.duty.alerts.raise_alert(kind="dog_sees_person", robot="A", title="又看见人")
+    t.duty._on_event("A", _事("follow_track", task_id=tid, points=[
+        {"x": 2.0, "y": 0.5, "at_ms": 1}, {"x": 3.5, "y": 0.5, "at_ms": 2}]))
+    assert not t.duty.alerts.has_open("A", "person_left"), "上一回的轨迹:不判越线"
+    [a] = [a for a in t.duty.alerts.open if a["kind"] == "dog_sees_person"]
+    assert not (a.get("context") or {}).get("follow_left"), "上一回的事不记进新告警"
+    await _跑(t, 3)
+    assert any(c["kind"] == "abort" and c["task_id"] == tid for c in t.site.commands("A", 500)), \
+        "上一回的跟人先停"
+    t.box["run"] = ""
+    await _会跟着跑(t, 12)
+    assert len(t.sent) == 2 and t.sent[-1] != tid, "新告警:另派一趟"
+    assert a["context"].get("follow_task") == t.sent[-1]
+
+
+async def test_外审r2_6_盯满没人管接着值守_告警还开着_站点重启_不再盯不再跟(站):
+    t = 站
+    await _跟着(t)
+    t.box["run"] = ""
+    with t.db.tx() as c:                                 # 盯满了
+        c.execute("UPDATE guard_runs SET until_ms=?", (t.clock(),))
+    await _跑(t, 6)
+    assert _log(t, "person_resume")
+    holds = len(_log(t, "person_hold"))
+    _重启(t)
+    await _会跟着跑(t, 8)
+    assert len(t.sent) == 1, "同一条告警盯满过了:重启后不再跟"
+    assert len(_log(t, "person_hold")) == holds, "也不再停下盯着"
+
+
+# ---------------------------------------------------------------- 外审 r3
+
+
+async def test_外审r3_1_跟人那一趟有结果了状态还挂着它_看易藏点那一趟照样先停(站):
+    t = 站
+    tid = await _跟着(t)
+    t.duty.marks.set(MAP[0], MAP[1], {"kind": "hide", "name": "北", "points": [[4.0, 1.5]]},
+                     by="alice")
+    t.duty._on_event("A", _事("follow_lost", task_id=tid, result="lost",
+                              last={"x": 3.0, "y": 0.0, "at_ms": 3}, heading_deg=90.0))
+    t.box["run"] = ""
+    for _ in range(30):
+        await _跑(t, 0.1)
+        if [c for c in _patrols(t) if c["task_id"].startswith("follow-sweep-")]:
+            break
+    [sw] = [c for c in _patrols(t) if c["task_id"].startswith("follow-sweep-")]
+    real = t.duty._terminal
+    t.duty._terminal = lambda rid, x: ("task_done", {}) if x == tid else real(rid, x)
+    t.duty._note_status = lambda rid: None               # 外审 r4 #1:派出去以后一直没收到新状态
+    t.box["run"] = tid                                   # 跟人有结果了,状态还挂着它(滞后)
+    await _跑(t, 8)                                      # 过了好几秒也一样
+    t.duty.alerts.resolve_all("A", "dog_sees_person", who="gina")
+    await _跑(t, 2)
+    assert any(c["kind"] == "abort" and c["task_id"] == sw["task_id"]
+               for c in t.site.commands("A", 500)), "刚派的看易藏点那一趟没确认停下:先停它"
+
+
+async def test_外审r3_2_回线内还没派出去站点就重启_重启后照样派(站):
+    from nexwar_site.guard_duty import FOLLOW_RETRY_MS
+    t = 站
+    tid = await _跟着(t)
+    t.duty.marks.set(MAP[0], MAP[1], {"kind": "exit", "name": "东门",
+                                      "points": [[3.0, -2.0], [3.0, 2.0]]}, by="alice")
+    real, calls = t.site.goto, []
+
+    async def goto(*a, **kw):
+        calls.append(kw.get("task_id"))
+        if len(calls) == 1:
+            raise RuntimeError("回执没到")
+        return await real(*a, **kw)
+    t.site.goto = goto
+    t.duty._on_event("A", _事("follow_track", task_id=tid, points=[
+        {"x": 2.0, "y": 0.5, "at_ms": 1}, {"x": 3.5, "y": 0.5, "at_ms": 2}]))
+    t.box["run"] = ""
+    await _跑(t, 3)
+    assert len(calls) == 1
+    _重启(t)
+    await _跑(t, FOLLOW_RETRY_MS / 1000 + 4)
+    assert len(calls) == 2 and calls[1] != calls[0], ("回执没到、机器人手上也不是它:再派", calls)
+    await _跑(t, FOLLOW_RETRY_MS / 1000 + 4)
+    assert len(calls) == 2, "派成了:不再派"
+
+
+# ---------------------------------------------------------------- 外审 r5
+
+
+async def test_外审r5_1_派之前那一会儿收到的状态_不算派出去以后的(站):
+    t = 站
+    tid = await _跟着(t)
+    t.duty.marks.set(MAP[0], MAP[1], {"kind": "hide", "name": "北", "points": [[4.0, 1.5]]},
+                     by="alice")
+    real = t.site.patrol
+
+    async def patrol(*a, **kw):
+        t.duty._status_at["A"] = t.clock() + 1           # 查地图那一会儿收到一份(派出之前的)状态
+        t.duty._note_status = lambda rid: None           # 派出去以后没再收到状态
+        return await real(*a, **kw)
+    t.site.patrol = patrol
+    t.duty._on_event("A", _事("follow_lost", task_id=tid, result="lost",
+                              last={"x": 3.0, "y": 0.0, "at_ms": 3}, heading_deg=90.0))
+    t.box["run"] = ""
+    for _ in range(30):
+        await _跑(t, 0.1)
+        if [c for c in _patrols(t) if c["task_id"].startswith("follow-sweep-")]:
+            break
+    [sw] = [c for c in _patrols(t) if c["task_id"].startswith("follow-sweep-")]
+    real_t = t.duty._terminal
+    t.duty._terminal = lambda rid, x: ("task_done", {}) if x == tid else real_t(rid, x)
+    t.box["run"] = tid
+    t.duty.alerts.resolve_all("A", "dog_sees_person", who="gina")
+    await _跑(t, 2)
+    assert any(c["kind"] == "abort" and c["task_id"] == sw["task_id"]
+               for c in t.site.commands("A", 500)), "派之前收到的状态不能证明它停了"

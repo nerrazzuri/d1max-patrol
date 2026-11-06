@@ -19,7 +19,9 @@ Audience = Literal["intrusion", "fire", "help", "offline", "owner"]
 GUARD_AUDIENCES: frozenset[str] = frozenset({"intrusion", "fire", "help", "offline"})
 
 _INTRUSION = ("intrusion", "intrusion_unanswered", "intrusion_person", "dog_sees_person",
+              "person_left",             # W74 三期:被跟的人越过出口线
               "force_lifted",            # 被抱起来了:可能有人偷机器人
+              "force_covered",           # W74 四期:被人罩住了
               "authorized_person")       # 授权的人在场(P3,只记进报警记录,不弹横幅)
 _HELP = ("stuck", "nav_blocked", "fallen", "force_flipped", "deter_cornered", "battery_abort",
          "run_abort", "charge_failed", "dock_stuck", "loc_lost_paused", "loc_lost_idle",
@@ -35,6 +37,7 @@ _OFFLINE = ("robot_offline", "robot_offline_idle", "cctv_offline")
 _OWNER = ("agent_args_skipped", "agent_too_old", "archive_failed", "backup_stale", "board_hot",
           "bind_request", "wifi_change",
           "swap_overdue",                      # W73 第四期:换电等了 20 分钟没人来 → 经理
+          "person_overdue",                    # W74:看见人 10 分钟没人到场 → 经理
           # W53 / W52:临时巡逻的通知、账号申请 —— 不进保安的报警列表(保安在「今天的巡逻」里看)
           "adhoc_patrol", "adhoc_queue", "account_request",
           "lens_blocked", "backup_verify_failed", "bundle_lag", "cert_expiring",

@@ -179,6 +179,12 @@ def test_已经开通成别的编号_不换_force才换(tmp_path):
     assert dog.provision(code, etc=etc, user=None, force=True, claimer=lambda c: files) == "B"
 
 
+def _半盘(_p):
+    """盘那一项别看测试机的真盘(开发机盘快满时,整套跑下来会掉到 15% 以下)。"""
+    from types import SimpleNamespace
+    return SimpleNamespace(total=100, used=50, free=50)
+
+
 def test_出厂自检_缺什么说什么(tmp_path):
     etc = tmp_path / "etc"
     rows = {c.name: c for c in dog.selfcheck(etc=etc, user=None, run=lambda c: (1, "inactive"))}
@@ -194,15 +200,16 @@ def test_出厂自检_缺什么说什么(tmp_path):
     def 跑(cmd):
         return (0, "yes") if cmd[0] == "timedatectl" else (0, "active")
     rows = {c.name: c for c in dog.selfcheck(etc=etc, user=None, run=跑,
-                                              mqtt_probe=lambda u, e: "")}
+                                              mqtt_probe=lambda u, e: "", disk_usage=_半盘)}
     assert rows["私钥权限"].level == "FAIL"
     (etc / "tls/robot.key").chmod(0o600)
     rows = {c.name: c for c in dog.selfcheck(etc=etc, user=None, run=跑,
-                                              mqtt_probe=lambda u, e: "")}
+                                              mqtt_probe=lambda u, e: "", disk_usage=_半盘)}
     assert all(c.level == "PASS" for k, c in rows.items() if k != "证据公钥"), rows
     assert rows["证据公钥"].level == "WARN"
     rows = {c.name: c for c in dog.selfcheck(etc=etc, user=None, run=跑,
-                                              mqtt_probe=lambda u, e: "握手失败")}
+                                              mqtt_probe=lambda u, e: "握手失败",
+                                              disk_usage=_半盘)}
     assert rows["连站点"].level == "FAIL" and "握手失败" in rows["连站点"].detail
 
 

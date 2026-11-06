@@ -264,6 +264,25 @@ void main() {
     expect(find.textContaining('P2 is not a drivable spot'), findsNothing);
   });
 
+  testWidgets('存下了、有点要原地转又贴墙（11-05 现场第 15、35 条）：提醒列出来、点换色，照样存了', (t) async {
+    final api = RoutesApi('admin')
+      ..routeWarnings = [
+        {'index': 0, 'name': 'P1', 'warning': 'P1 离墙或障碍只有 0.3 m，机器人在这里要原地转'},
+      ];
+    await _open(t, api, route: _route('loop', [[-3.29, 6.1], [-1.5, 8.4], [0.4, 7.7]]));
+    final c = _Canvas(t, SiteRouteEditorPage.canvasKey, MapGeo.fromPreview(rot23Preview()));
+    await _tapMap(t, c, 8.0, -10.0);
+    await _tapKey(t, SiteRouteEditorPage.saveKey);
+    expect(api.savedRoutes, hasLength(1));
+    expect(find.textContaining('P1 离墙或障碍只有 0.3 m'), findsOneWidget);
+    Color? dot(int i) => (t
+            .widget<CustomPaint>(
+                find.descendant(of: find.byKey(SiteRouteEditorPage.pointKey(i)), matching: find.byType(CustomPaint)))
+            .painter as PoseMarkerPainter)
+        .accent;
+    expect(dot(0), isNot(dot(1)), reason: '要提醒的点换了颜色');
+  });
+
   testWidgets('别人改过（409）：提示、给重新拉取；拉取后是站点上的样子', (t) async {
     final api = RoutesApi('admin')..routeError = const SiteError(409, 'Route loop has been changed by someone else');
     final two = _route('loop', [[-3.29, 6.1], [-1.5, 8.4]]);

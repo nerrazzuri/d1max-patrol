@@ -23,6 +23,8 @@ TASK_RESOURCES: dict[str, frozenset[str]] = {
     "standoff": frozenset({"motion"}),
     # W13:对桩、充电、出桩。只占 motion(对桩、出桩都要动腿)。
     "dock": frozenset({"motion"}),
+    # W74:跟人。一段段 goto,跟 goto 占的一样。
+    "follow": frozenset({"motion"}),
 }
 
 

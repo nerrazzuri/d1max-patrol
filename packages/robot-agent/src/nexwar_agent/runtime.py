@@ -158,7 +158,7 @@ BATTERY_FLOOR_PCT = 15.0
 #: 要人监护(W00c6i)时,只有这几种任务受监护租约约束(遥控、叫停、换图、发布照常)。
 #: W55:要空闲才做、做的时候不接新任务的远程运维命令(外审 W55-1 第 8、16 条)。
 _OPS_HOLD = frozenset({"ops_reboot", "cert_install", "ops_restart"})
-_AUTONOMOUS_KINDS = frozenset({"goto", "patrol", "standoff", "dock"})
+_AUTONOMOUS_KINDS = frozenset({"goto", "patrol", "standoff", "dock", "follow"})
 #: 放了、过期的监护会话留多久(秒):挡同一会话里迟到的旧心跳(站点的命令有效期 30 s,再多留一点)。
 _SESSION_MEMORY_S = 60.0
 
@@ -316,6 +316,8 @@ class AgentRuntime:
                 snapshot_dir=persons_snapshots or store_dir / "person-snapshots",
                 save_snapshot=self._save_person_snapshot)
             self.person_view.ignore = self._person_ignored     # W41:人员检测忽略区
+            # W74 五期:证据加密配好了(主程序设 evidence_sealed)才留人脸补拍
+            self.person_view.faces_ok = lambda: self.evidence_sealed is True
             self._pers_srv = PersonBridgeServer(persons_socket or store_dir / "persons.sock",
                                                 self.person_view,
                                                 monotonic=monotonic or time.monotonic,
@@ -443,6 +445,11 @@ class AgentRuntime:
         #: 热像镜头被挡(W46;装机入口 :meth:`attach_lens` 接上)。
         self.lens: Any = None
         self._lens_task: asyncio.Task | None = None
+        #: W74 四期:被遮挡检测(:class:`~nexwar_agent.cover.CoverWatch`);被遮挡了欠一次撤任务、停车。
+        self.cover: Any = None
+        self._cover_task: asyncio.Task | None = None
+        self._cover_owed = False
+        self._cover_told: bool | None = None
         self._link_job: asyncio.Task | None = None
         self._link_down_at: float | None = None
         self._reclaim_left = 0                           # 重连后还要再拿几次控制权
@@ -525,6 +532,8 @@ class AgentRuntime:
             kinds.add("teleop")                    # W00c5c:遥控不要地图
         if self._standoff_ok():
             kinds.add("standoff")                  # W25:要规划后端(避障守卫、禁行区)+ 人员检测
+            if "goto" in kinds:
+                kinds.add("follow")                # W74:跟人 = 一段段 goto + 人员检测
         if caps.recharge_mode != "none":
             kinds.add("dock")                      # W13:HAL 会对桩(厂家回充;以后自己认二维码)
         return kinds
@@ -532,6 +541,16 @@ class AgentRuntime:
     def _standoff_ok(self) -> bool:
         return (self._planned and self.obs_view is not None and self.person_view is not None
                 and self.hal.hal_capabilities().max_vx > 0)
+
+    def _follow_task(self) -> Any:
+        cur = self.processor.current
+        return cur if cur is not None and cur.kind == "follow" and not cur.done else None
+
+    def _follow_caps(self) -> dict[str, Any]:
+        t = self._follow_task()
+        if t is None:
+            return {"state": "idle"}
+        return {**t.caps(), "task_id": t.task_id}
 
     def _standoff_task(self) -> Any:
         cur = self.processor.current
@@ -651,6 +670,14 @@ class AgentRuntime:
                                                      nav._odom_pose),
                 here=self._standoff_here, nogo=self._standoff_nogo, priority=cmd.priority)
         assert self.parts is not None, "有 loaded_map 就一定装了引擎"
+        if cmd.kind == "follow":
+            from nexwar_agent.tasks.follow import FollowTask
+            from nexwar_contract.follow import parse_follow
+            assert self.loaded_map is not None
+            return FollowTask(task_id=cmd.task_id, req=parse_follow(cmd.payload), parts=self.parts,
+                              events=self.events, now_ms=self._mono_ms, wall_ms=self._now,
+                              targets=self.person_view.targets, here=self._standoff_here,
+                              map_ref=self.loaded_map, priority=cmd.priority)
         if cmd.kind == "patrol":
             from nexwar_agent.tasks.patrol import PatrolTask
             from nexwar_contract.mission import parse_mission
@@ -686,11 +713,11 @@ class AgentRuntime:
         if cmd.kind in _AUTONOMOUS_KINDS and self.autonomy == "supervised" \
                 and not self._supervised_now():
             return "unsupervised"                 # W00c6i:没人现场监护,真狗不自己动
-        if cmd.kind in ("goto", "patrol") and self._map_busy():
+        if cmd.kind in ("goto", "patrol", "follow") and self._map_busy():
             return "map_switching"
         if cmd.kind in _AUTONOMOUS_KINDS and self.parts is not None and self._head_key()[1]:
             return "head_not_forward"             # W11a、W09i:头尾不知道,或狗尾为前但后面看不清
-        if cmd.kind in ("goto", "patrol", "standoff"):
+        if cmd.kind in ("goto", "patrol", "standoff", "follow"):
             hot = self._overheat_refusal(cmd.kind)
             if hot:
                 return hot
@@ -717,6 +744,45 @@ class AgentRuntime:
         if self.devices is not None:
             self.devices.lens = lens
 
+    def attach_cover(self, cover: Any) -> None:
+        """接上被遮挡检测(W74 四期):事件进事件簿;被遮挡了撤会动的任务、停车、不收新的。"""
+        self.cover = cover
+        cover.emit = self.events.emit
+        cover.on_change = self._on_cover
+
+    def _on_cover(self, covered: bool) -> None:
+        if covered:
+            self._cover_owed = True
+
+    async def _cover_check(self) -> None:
+        try:
+            await self.cover.step()
+        except asyncio.CancelledError:
+            raise
+        except Exception:                         # 遮挡检测出毛病不许带走代理
+            log.exception("被遮挡检测这一次炸了")
+
+    async def _watch_cover(self) -> None:
+        if self.cover is None:
+            return
+        if self._cover_told != self.cover.covered and self.transport.connected:
+            self._cover_told = self.cover.covered          # 能力变了:这一拍发给站点
+            await self._publish_caps()
+        if self._cover_owed:
+            from nexwar_agent.commands import _MOTION_KINDS
+            why = "机器人被遮挡"
+            try:
+                await self.processor.abort_kinds(_MOTION_KINDS, why)
+                await self._stop_motion()
+                cur = self.processor.current
+                if cur is None or cur.done or cur.kind not in _MOTION_KINDS or cur.aborting:
+                    self._cover_owed = False
+            except Exception:
+                log.exception("被遮挡:撤任务、停车没成(下一拍再来)")
+        if self.cover.due() and (self._cover_task is None or self._cover_task.done()):
+            # 取图要起 ffmpeg:放后台,不卡这一拍
+            self._cover_task = asyncio.get_running_loop().create_task(self._cover_check())
+
     async def _lens_check(self) -> None:
         try:
             await self.lens.step()
@@ -730,7 +796,7 @@ class AgentRuntime:
         lvl = getattr(self.board, "level", "ok")
         if kind in ("mapping", "map_build") and lvl in ("shed", "critical"):
             return "overheat"
-        if kind in ("goto", "patrol", "standoff") and lvl == "critical":
+        if kind in ("goto", "patrol", "standoff", "follow") and lvl == "critical":
             return "overheat"
         return ""
 
@@ -983,12 +1049,20 @@ class AgentRuntime:
             out["persons"] = self.person_view.caps()  # W24:人员检测在不在看(站点据此联动驱离)
         if self._standoff_ok():
             out["standoff"] = self._standoff_caps()   # W25:在不在守、在不在退、是不是无路可退
+        if self._standoff_ok() and "follow" in self._supported():
+            out["follow"] = self._follow_caps()       # W74:在不在跟、在不在回最后位置
         if self.parts is not None:
             out["speed_cap"] = self._speed_cap_caps()  # W29:全狗限速(站点下雨、雷暴时发)
         if self.hal.hal_capabilities().recharge_mode != "none":
             out["dock"] = self._dock_caps()         # W13:会对桩;在不在桩上、桩上危险
         if self.evidence_sealed is not None:
             out["evidence"] = {"sealed": self.evidence_sealed}   # W30b:没封站点报 P2
+        if self.cover is not None:
+            # W74 四期:被遮挡(站点按它对账报 P1、开声光)
+            out["cover"] = {"state": "covered" if self.cover.covered else "ok"}
+        else:
+            # 外审 r1:没开遮挡检测(定位器不报雷达被挡、或不是 RTSP 相机)要说出来
+            out["cover"] = {"state": "off"}
         if self.force is not None:
             out["force"] = self.force.caps()        # W26:翻倒、被抱起来(站点按它对账报 P1)
         end = self._tls_expires_ms()
@@ -1128,7 +1202,10 @@ class AgentRuntime:
         return sc[0]
 
     def _force_gate(self) -> str:
-        """W26:翻倒、被抱起来时不收、不起跑会让狗动的任务。"""
+        """W26:翻倒、被抱起来时不收、不起跑会让狗动的任务。W74 四期:被遮挡时也是。"""
+        cover = getattr(self, "cover", None)
+        if cover is not None and cover.covered:
+            return "covered: 机器人被遮挡(雷达、相机都看不见):揭开之后才能动"
         if getattr(self, "force", None) is None:
             return ""
         st = self.force.state
@@ -2615,6 +2692,8 @@ class AgentRuntime:
             await _step("停录像", _rec_off)
         if self._lens_task is not None and not self._lens_task.done():
             self._lens_task.cancel()
+        if self._cover_task is not None and not self._cover_task.done():
+            self._cover_task.cancel()
         if self._link_job is not None and not self._link_job.done():
             self._link_job.cancel()
         if self.board is not None:
@@ -2989,7 +3068,8 @@ class AgentRuntime:
             self._pers_srv.tick()                # 本机人员桥:检测节点没声就当它断了
             self.person_view.tick()              # 人走了没有
             pst = self.person_view.key() + (
-                tuple(self._standoff_caps().values()) if self._standoff_ok() else ())
+                tuple(self._standoff_caps().values()) if self._standoff_ok() else ()) + (
+                (self._follow_caps().get("state"),) if self._standoff_ok() else ())
             if pst != self._pers_state_told:     # 在不在看、有没有人、近不近变了:站点据此对账驱离
                 self._pers_state_told = pst
                 if self.transport.connected:
@@ -3022,6 +3102,10 @@ class AgentRuntime:
             await self._watch_force()
         except Exception:                         # 受力检测出毛病不许带走这一拍
             log.exception("受力检测这一拍炸了")
+        try:
+            await self._watch_cover()
+        except Exception:                         # 遮挡检测出毛病不许带走这一拍
+            log.exception("被遮挡检测这一拍炸了")
         await self._feed_trail()
         try:
             self._log_rtk()

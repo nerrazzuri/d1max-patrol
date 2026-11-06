@@ -676,7 +676,20 @@ def build(args: argparse.Namespace) -> Assembled:
             from nexwar_agent.lens import LensWatch, ffmpeg_gray
             runtime.attach_lens(LensWatch(ffmpeg_gray(source("thermal"), args.ffmpeg),
                                           emit=lambda k, d: None))
+        anchor = getattr(parts.nav, "anchor", None) if parts is not None else None
+        if kind == "rtsp" and hasattr(anchor, "lidar_blocked"):
+            # W74 四期:被遮挡 = 雷达被挡(定位器报)+ 前 / 后相机全黑或单色,连着 3 秒
+            from nexwar_agent.cover import CoverWatch
+            from nexwar_agent.lens import ffmpeg_gray
+            from nexwar_contract.video import STANDARD_CAMERAS
+            runtime.attach_cover(CoverWatch(
+                {c: ffmpeg_gray(source(c), args.ffmpeg) for c in STANDARD_CAMERAS},
+                lidar_blocked=anchor.lidar_blocked, monotonic=time.monotonic))
         runtime.attach_ops(_ops(args, registration, runtime))   # W55 远程运维
+        if args.hal == "d1max":
+            # 11-06 不靠 SSH:设置里开了「开机暂停厂家进程」才做(默认关)
+            runtime._vendor_pause_task = asyncio.get_running_loop().create_task(
+                runtime.ops.boot_vendor_pause())
         return hal, parts, runtime, pump
 
     async def _in_loop():

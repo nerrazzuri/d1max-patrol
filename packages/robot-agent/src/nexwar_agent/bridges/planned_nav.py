@@ -723,6 +723,20 @@ class PlannedNavBackend(HalNavBackend):
                 self._replan_out = ("ok", (path, cm), self._epoch)
         self._replan = asyncio.get_running_loop().create_task(run())
 
+    async def retarget(self, pose: Pose) -> bool:
+        """走着换目标(W74):从此刻的位置后台重新规划到新目标(不算偏离重规划的次数),规划期间原地等
+        —— 跟绕障一样。正在规划、没在走、新目标在禁行区里 → 不换。"""
+        if self._status not in (NavStatus.INITIALIZING, NavStatus.ACTIVE) \
+                or self._planning or self._path is None:
+            return False
+        if self._replan is not None and not self._replan.done():
+            return False
+        if self.nogo_at(pose.position.x, pose.position.y) is not None:
+            return False
+        self._target = pose
+        self._start_replan(free=True, why="retarget")
+        return True
+
     async def stop(self) -> None:
         self._gen += 1
         if self._replan is not None:

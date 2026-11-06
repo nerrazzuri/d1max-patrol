@@ -76,3 +76,47 @@ describe("布置 → 防区", () => {
     await waitFor(() => expect(posted.find((p) => p.url === "/api/maps/home/3/areas")?.body).toEqual({ zone: "北区", remove: true }));
   });
 });
+
+describe("布置 → 防区:出口线、易藏点(W74 三期)", () => {
+  let k = 0;
+  /** 每点一下往右挪 1 m(预览像素 10 → 地图 1 m)。 */
+  const Walk = (o: OwnLayer) => <div class="fakemap"><button type="button" class="pick" onClick={() => { k += 1; o.onPick?.(10 * k, 20); }}>pick</button></div>;
+  const withMarks = (marks: LayerData["marks"]): TabProps => ({ ...props(), Map: Walk, data: { ...data, marks } });
+  beforeEach(() => { k = 0; });
+
+  it("画出口线:点两头、起名,存的时候发给站点", async () => {
+    const { container: c } = render(<ZonesTab {...withMarks([])} />);
+    expect(c.querySelector(".ly-marks")!.textContent).toContain("还没有出口线、易藏点");
+    fireEvent.click(btn(c, "画出口线"));
+    fireEvent.click(c.querySelector(".pick")!);
+    fireEvent.click(c.querySelector(".pick")!);
+    fireEvent.input(document.querySelector('.modal input[name="mark"]')!, { target: { value: "东门" } });
+    fireEvent.submit(document.querySelector(".modal form")!);
+    expect(dirty).toBe(true);
+    expect(c.querySelector(".ly-marks")!.textContent).toContain("东门");
+    await save!();
+    expect(posted.find((p) => p.url === "/api/maps/home/3/areas" && p.body.mark)?.body)
+      .toEqual({ mark: { kind: "exit", name: "东门", points: [[1, 8], [2, 8]], yaw: 0 } });
+  });
+
+  it("标易藏点:先点站的位置、再点朝哪看", async () => {
+    const { container: c } = render(<ZonesTab {...withMarks([])} />);
+    fireEvent.click(btn(c, "标易藏点"));
+    fireEvent.click(c.querySelector(".pick")!);
+    expect(c.querySelector(".ly-marks")!.textContent).toContain("再点它朝哪看");
+    fireEvent.click(c.querySelector(".pick")!);
+    fireEvent.input(document.querySelector('.modal input[name="mark"]')!, { target: { value: "楼梯间" } });
+    fireEvent.submit(document.querySelector(".modal form")!);
+    await save!();
+    expect(posted.find((p) => p.body.mark)?.body).toEqual({ mark: { kind: "hide", name: "楼梯间", points: [[1, 8]], yaw: 0 } });
+  });
+
+  it("删一个已有的", async () => {
+    const { container: c } = render(<ZonesTab {...withMarks([{ id: "m1", kind: "hide", name: "仓库", points: [[3, 3]], yaw: 1 }])} />);
+    const row = Array.from(c.querySelectorAll(".ly-marks li")).find((li) => li.textContent?.includes("仓库"))!;
+    fireEvent.click(btn(row, "删除"));
+    expect(c.querySelector(".ly-marks")!.textContent).not.toContain("仓库");
+    await save!();
+    expect(posted.find((p) => p.body.mark_id)?.body).toEqual({ mark_id: "m1", remove: true });
+  });
+});

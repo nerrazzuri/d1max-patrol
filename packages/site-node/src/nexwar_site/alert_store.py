@@ -50,6 +50,14 @@ def _context(raw: Any) -> dict[str, Any]:
     return got if isinstance(got, dict) else {}
 
 
+#: 这几种告警要保安点过「已到场」才能关(W74:看见人以后人跑了,远程看一眼就关等于没人去)。
+ARRIVAL_KINDS: frozenset[str] = frozenset({"dog_sees_person"})
+
+
+class ArrivalNeeded(ValueError):
+    """这条要保安先到场(点「已到场」)才能关。"""
+
+
 class AlertDesk:
     def __init__(self, db: SiteDB, *, now_ms: Callable[[], int],
                  publish: Callable[[dict[str, Any]], None] | None = None) -> None:
@@ -180,7 +188,40 @@ class AlertDesk:
         return self.book.ack(key, who=who, now_ms=self._now())
 
     def resolve(self, key: str, *, who: str, verdict: str = "") -> Alert:
+        a = self.book.get(key)
+        if a is not None and a.kind in ARRIVAL_KINDS and a.resolved_ms is None \
+                and a.context.get("arrived_ms") is None:
+            raise ArrivalNeeded("要保安先到场:到了现场点「已到场」,再处置完成或标误报")
         return self.book.resolve(key, who=who, verdict=verdict, now_ms=self._now())
+
+    def arrive(self, key: str, *, who: str) -> Alert:
+        return self.book.arrive(key, who=who, now_ms=self._now())
+
+    def amend_open(self, robot: str, kind: str, *, title: str | None = None,
+                   detail: str | None = None,
+                   context: dict[str, Any] | None = None) -> Alert | None:
+        """这一位这一种还开着的那条(最新的)改标题 / 内容、合进现场;没有开着的回 ``None``。"""
+        cur = [a for a in self.book.open() if a.robot == robot and a.kind == kind]
+        if not cur:
+            return None
+        a = max(cur, key=lambda x: x.first_ms)
+        return self.book.amend(a.key, now_ms=self._now(), title=title, detail=detail,
+                               context=context)
+
+    def amend(self, key: str, *, title: str | None = None, detail: str | None = None,
+              context: dict[str, Any] | None = None) -> Alert | None:
+        """按 key 改那一条(还开着才改;关了、没有回 ``None``)。值守记跟人的账用:不会记到同一位
+        后来开的另一条上(外审 W74 r2 #5)。"""
+        a = self.book.get(key)
+        if a is None or a.resolved_ms is not None:
+            return None
+        return self.book.amend(key, now_ms=self._now(), title=title, detail=detail,
+                               context=context)
+
+    def open_of(self, robot: str, kind: str) -> Alert | None:
+        """这一位这一种还开着的那条(最新的);没有 ``None``。"""
+        cur = [a for a in self.book.open() if a.robot == robot and a.kind == kind]
+        return max(cur, key=lambda x: x.first_ms) if cur else None
 
     def shelve(self, key: str, *, who: str, until_ms: int, reason: str) -> Alert:
         return self.book.shelve(key, who=who, until_ms=until_ms, reason=reason, now_ms=self._now())

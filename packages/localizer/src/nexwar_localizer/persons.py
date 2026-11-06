@@ -19,6 +19,11 @@
 - **截图**:一帧里有人、离上一张超过 ``--snapshot-every`` 秒,就把这一帧 JPEG 存进截图目录(最多
   :data:`MAX_SNAPSHOTS` 张,多了删最旧的:代理那头存不下时不许一直攒),文件名随报文报给代理
   (代理存成归档传站点,存完删掉)。
+- **人脸补拍**(W74 五期,设计 §四):装了人脸检测模型(``--face-model``,OpenCV 的 YuNet,只检测不识别)
+  时,一帧里有人就再看有没有正脸;有、而且够大(:data:`FACE_MIN_PX`),这台相机连拍
+  :data:`FACE_BURST` 张(接下来送检的几帧),同一台相机 :data:`FACE_EVERY_S` 秒最多一轮。文件名
+  ``face-`` 开头。**代理说了能拍(``policy {faces: true}``,它那头证据加密配好了)才拍**:缺省不拍、
+  断了回到不拍、老代理不说就一直不拍(外审 r1 #2:人脸照片不许明文落盘、明文过桥)。
 """
 
 from __future__ import annotations
@@ -45,6 +50,12 @@ CLOUD_MAX_AGE_S = 1.0
 CLOUD_MAX_SKEW_NS = 500_000_000
 MAX_SNAPSHOTS = 30
 CLUSTER_M = 0.5
+#: 人脸补拍(W74 五期):脸框高至少这么多像素(原图)、连拍几张、同一台相机多久最多一轮(秒)。
+FACE_MIN_PX = 48
+FACE_BURST = 3
+FACE_EVERY_S = 10.0
+#: 人脸补拍文件名的开头(代理按它认:证据没加密就不留)。
+FACE_PREFIX = "face-"
 
 
 # ------------------------------------------------------------ 几何
@@ -225,6 +236,46 @@ class OnnxDetector:
         return yolo_people(out, score=self.score, scale=scale, pad=(px, py)), w, h
 
 
+class FaceFinder(Protocol):
+    def faces(self, jpeg: bytes) -> list[tuple[float, float, float, float, float]]:
+        """一帧里的人脸:``(x, y, w, h, score)``,原图像素。"""
+        ...
+
+
+class YunetFaces:
+    """OpenCV 的 YuNet 人脸检测(``cv2.FaceDetectorYN``,模型几百 KB,CPU 就够)。只检测,不识别。"""
+
+    def __init__(self, model: Path, *, score: float = 0.8) -> None:
+        if not Path(model).is_file():
+            raise DetectorUnavailable(f"没有人脸模型文件 {model}")
+        try:
+            import cv2
+        except ImportError as exc:
+            raise DetectorUnavailable(f"OpenCV 没装上:{exc}") from exc
+        if not hasattr(cv2, "FaceDetectorYN"):
+            raise DetectorUnavailable("OpenCV 太老,没有 FaceDetectorYN(要 4.5.4 以上)")
+        self.cv2 = cv2
+        self.model, self.score = str(model), score
+        self.det: Any = None
+
+    def faces(self, jpeg: bytes) -> list[tuple[float, float, float, float, float]]:
+        import numpy as np
+        cv2 = self.cv2
+        img = cv2.imdecode(np.frombuffer(jpeg, dtype=np.uint8), cv2.IMREAD_REDUCED_COLOR_2)
+        if img is None:
+            return []
+        h, w = img.shape[:2]
+        if self.det is None:
+            self.det = cv2.FaceDetectorYN.create(self.model, "", (w, h), self.score)
+        else:
+            self.det.setInputSize((w, h))
+        _, found = self.det.detect(img)
+        if found is None:
+            return []
+        return [(float(f[0]) * 2, float(f[1]) * 2, float(f[2]) * 2, float(f[3]) * 2, float(f[-1]))
+                for f in found]                          # 按一半分辨率解的:换回原图像素
+
+
 # ------------------------------------------------------------ 一帧
 
 @dataclass
@@ -234,7 +285,13 @@ class Settings:
     z_min: float = Z_MIN
     z_max: float = Z_MAX
     max_range: float = MAX_RANGE_M
-    snapshot_every_s: float = 10.0
+    #: 截图节奏(W74 一期):同一台相机连着看到人的头 ``snapshot_burst_s`` 秒每 ``snapshot_every_s``
+    #: 秒一张(留证),之后 ``snapshot_slow_s`` 一张(商场白天一直有人,量不涨);断开
+    #: ``snapshot_gap_s`` 秒以上没看到人,再看到重新算。前后相机各拍各的。
+    snapshot_every_s: float = 3.0
+    snapshot_slow_s: float = 10.0
+    snapshot_burst_s: float = 180.0
+    snapshot_gap_s: float = 20.0
     #: 测距只用框中间这一段宽度(比例)。人的身子在框中间,框边上常是挡在前面的别的东西:
     #: 2026-10-08 C40221 上人坐在人形机器人斜后方,框右边缘跟机器人重叠一条,整框量到的是
     #: 2 m 的机器人,不是 3 m 的人。
@@ -248,8 +305,14 @@ class PersonNode:
                  settings: Settings | None = None, unavailable: str = "",
                  monotonic: Callable[[], float] = time.monotonic,
                  wall_ns: Callable[[], int] = time.time_ns,
-                 remote_snapshots: bool = False) -> None:
+                 remote_snapshots: bool = False, faces: FaceFinder | None = None) -> None:
         self.detector = detector
+        #: W74 五期:人脸检测(没装 = 不补拍);每台相机还要连拍几张、上一轮开始的时刻。
+        self.faces = faces
+        #: 代理说能拍(:class:`PersonLink` 收到 ``policy``)才拍;缺省不拍。
+        self.faces_allowed = False
+        self._face_left: dict[str, int] = {}
+        self._face_at: dict[str, float] = {}
         #: 跨板(人员检测在厂家 Orin、代理在 RK3588):截图不写本地盘,攒着交给桥发
         #: (:meth:`take_snapshot`)。
         self.remote_snapshots = remote_snapshots
@@ -260,7 +323,10 @@ class PersonNode:
         self._mono = monotonic
         self._wall_ns = wall_ns
         self.seq = 0
-        self._snap_at = -1e18
+        #: 每台相机:上一张截图的时刻、这一段连着看到人从什么时候起、最后一次看到人的时刻。
+        self._snap_at: dict[str, float] = {}
+        self._seen_since: dict[str, float] = {}
+        self._seen_last: dict[str, float] = {}
         #: 每台雷达最近一帧点云(狗身系):``雷达 → (点, 话题时间戳 ns, 收到时刻)``。
         self.clouds: dict[str, tuple[Any, int, float]] = {}
 
@@ -319,24 +385,62 @@ class PersonNode:
                            "range_m": None if r is None else round(r, 2),
                            "score": round(min(1.0, max(0.0, b.score)), 3)})
         snap = ""
-        if people and (self.snapshot_dir is not None or self.remote_snapshots) \
-                and self._mono() - self._snap_at >= self.cfg.snapshot_every_s:
-            snap = self._save_remote(camera, jpeg) if self.remote_snapshots \
-                else self._save(camera, jpeg)
+        if people and (self.snapshot_dir is not None or self.remote_snapshots):
+            face = self._face_due(camera, jpeg)
+            if self._snap_due(camera) or face:
+                snap = self._save_remote(camera, jpeg, face) if self.remote_snapshots \
+                    else self._save(camera, jpeg, face)
         return base | {"check": "ok", "people": people, "snapshot": snap}
 
-    def _name(self, camera: str) -> str:
-        return f"{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime(self._wall_ns() / 1e9))}" \
+    def _snap_due(self, camera: str) -> bool:
+        """这一帧(看到人了)该不该截图:见 :class:`Settings` 的截图节奏。"""
+        now = self._mono()
+        last = self._seen_last.get(camera)
+        if last is None or now - last > self.cfg.snapshot_gap_s:
+            self._seen_since[camera] = now                # 新的一段
+        self._seen_last[camera] = now
+        burst = now - self._seen_since[camera] < self.cfg.snapshot_burst_s
+        every = self.cfg.snapshot_every_s if burst else max(self.cfg.snapshot_every_s,
+                                                             self.cfg.snapshot_slow_s)
+        return now - self._snap_at.get(camera, -1e18) >= every
+
+    def _face_due(self, camera: str, jpeg: bytes) -> bool:
+        """这一帧要不要当人脸补拍:在连拍里就要;不然离上一轮够久、看到够大的脸就开一轮。"""
+        if self.faces is None or not self.faces_allowed:
+            self._face_left.pop(camera, None)
+            return False
+        left = self._face_left.get(camera, 0)
+        if left > 0:
+            self._face_left[camera] = left - 1
+            return True
+        now = self._mono()
+        if now - self._face_at.get(camera, -1e18) < FACE_EVERY_S:
+            return False
+        try:
+            found = self.faces.faces(jpeg)
+        except Exception:                                # 一帧坏了不补拍
+            log.exception("人脸检测这一帧没做成")
+            return False
+        if not any(h >= FACE_MIN_PX for _x, _y, _w, h, _s in found):
+            return False
+        self._face_at[camera] = now
+        self._face_left[camera] = FACE_BURST - 1
+        log.info("%s 相机看到正脸:连拍 %d 张", camera, FACE_BURST)
+        return True
+
+    def _name(self, camera: str, face: bool = False) -> str:
+        return f"{FACE_PREFIX if face else ''}" \
+               f"{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime(self._wall_ns() / 1e9))}" \
                f"-{camera}-{self.seq}.jpg"
 
-    def _save_remote(self, camera: str, jpeg: bytes) -> str:
+    def _save_remote(self, camera: str, jpeg: bytes, face: bool = False) -> str:
         from nexwar_contract.persbridge import MAX_SNAP_BYTES
         if len(jpeg) > MAX_SNAP_BYTES:
             log.warning("截图 %d 字节,超过桥的上限 %d:这一张不发", len(jpeg), MAX_SNAP_BYTES)
             return ""
-        name = self._name(camera)
+        name = self._name(camera, face)
         self._pending_snap = (name, jpeg)
-        self._snap_at = self._mono()
+        self._snap_at[camera] = self._mono()
         return name
 
     def take_snapshot(self) -> tuple[str, bytes] | None:
@@ -344,8 +448,8 @@ class PersonNode:
         got, self._pending_snap = self._pending_snap, None
         return got
 
-    def _save(self, camera: str, jpeg: bytes) -> str:
-        name = self._name(camera)
+    def _save(self, camera: str, jpeg: bytes, face: bool = False) -> str:
+        name = self._name(camera, face)
         try:
             assert self.snapshot_dir is not None
             self.snapshot_dir.mkdir(parents=True, exist_ok=True)
@@ -358,7 +462,7 @@ class PersonNode:
         except OSError:
             log.exception("截图存不下")
             return ""
-        self._snap_at = self._mono()
+        self._snap_at[camera] = self._mono()
         return name
 
 
@@ -374,12 +478,15 @@ class PersonLink:
     def __init__(self, connect: Callable[[], socket.socket], *, key: bytes | None = None,
                  name: str = "nexwar_persons", version: str = "",
                  on_frames: Callable[[str, dict], Any] | None = None,
+                 on_policy: Callable[[bool], Any] | None = None,
                  reconnect_s: float = 1.0, timeout_s: float = 2.0,
                  monotonic: Callable[[], float] = time.monotonic) -> None:
         self._connect = connect
         self.key = key
         self.name, self.version = name, version
         self.on_frames = on_frames
+        #: 代理说能不能拍人脸补拍(外审 r1 #2);断了按不能。
+        self.on_policy = on_policy
         self.reconnect_s, self.timeout_s = reconnect_s, timeout_s
         self._mono = monotonic
         self._sock: socket.socket | None = None
@@ -503,6 +610,9 @@ class PersonLink:
                     self.on_frames(m.ref, m.frames)
                 except Exception:
                     log.exception("外参用不上(图 %s)", m.ref)
+            elif isinstance(m, pb.Policy):
+                log.info("代理说%s拍人脸补拍", "可以" if m.faces else "不要")
+                self._tell_policy(m.faces)
             elif isinstance(m, pb.Error):
                 log.warning("代理说:%s", m.reason)
 
@@ -515,6 +625,15 @@ class PersonLink:
         self._sock = None
         self._buf = b""
         self._ks = None
+        self._tell_policy(False)                         # 断了:回到不拍
+
+    def _tell_policy(self, faces: bool) -> None:
+        if self.on_policy is None:
+            return
+        try:
+            self.on_policy(faces)
+        except Exception:
+            log.exception("能不能拍人脸交不出去")
 
 
 # ------------------------------------------------------------ ROS 节点
@@ -524,6 +643,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="nexwar_persons")
     ap.add_argument("--model", type=Path, default=Path("/etc/nexwar/person.onnx"),
                     help="ONNX 检测模型(YOLO 系,COCO person 类);没有就报 no_model")
+    ap.add_argument("--face-model", type=Path, default=Path("/etc/nexwar/face.onnx"),
+                    help="W74 五期:人脸检测模型(OpenCV YuNet);没有就不补拍人脸")
     ap.add_argument("--socket", type=Path, default=Path("/var/lib/nexwar/agent/persons.sock"))
     ap.add_argument("--connect", default=None, metavar="HOST:PORT",
                     help="跨板:代理在另一块板(自带的 RK3588)上,经机器人内网 TCP 连它的人员桥"
@@ -592,8 +713,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     except DetectorUnavailable as exc:
         why = str(exc)
         log.error("检测器起不来(报 no_model):%s", why)
+    faces: FaceFinder | None = None
+    try:
+        faces = YunetFaces(a.face_model)
+        log.info("人脸补拍开着(%s)", a.face_model)
+    except DetectorUnavailable as exc:
+        log.info("人脸补拍不开:%s", exc)
     node_logic = PersonNode(detector, snapshot_dir=None if a.connect else a.snapshots,
-                            unavailable=why, remote_snapshots=bool(a.connect),
+                            unavailable=why, remote_snapshots=bool(a.connect), faces=faces,
                             settings=Settings(hfov_deg=a.hfov, lens=a.lens, z_min=a.z_min,
                                               z_max=a.z_max))
 
@@ -623,12 +750,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         cur["rear"] = RearMount.from_lidars(front, f, a.lidars) if a.rear_lidar_topic else None
         log.info("用上图 %s 的外参", ref)
 
+    def on_policy(faces: bool) -> None:                 # 外审 r1 #2:代理说能拍才拍
+        node_logic.faces_allowed = bool(faces)
+
     if a.connect:
         host, _, port = a.connect.rpartition(":")
         client = PersonLink(lambda: socket.create_connection((host, int(port)), timeout=2.0),
-                            key=key, on_frames=on_frames)
+                            key=key, on_frames=on_frames, on_policy=on_policy)
     else:
-        client = PersonLink(lambda: _unix(a.socket))
+        client = PersonLink(lambda: _unix(a.socket), on_policy=on_policy)
     from nexwar_localizer import rosinit
     rosinit.init(rclpy)
     stop = rosinit.stop_flag()                           # W41:正常停止退出码 0

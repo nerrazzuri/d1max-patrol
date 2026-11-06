@@ -9,7 +9,10 @@ from __future__ import annotations
 import json
 from typing import Any
 
-DEFAULT_DUTY: dict[str, Any] = {"shift_hours": [7, 19], "stale_hours": 2}
+#: ``self_protect_siren``(W74 四期):布防时被遮挡、推倒、抱起来自动鸣笛;关了只开警灯
+#: (现场不许自动鸣笛)。
+DEFAULT_DUTY: dict[str, Any] = {"shift_hours": [7, 19], "stale_hours": 2,
+                                "self_protect_siren": True}
 #: 遥控速度档(POC 2026-11,m/s):手机摇杆满推 = 这一档。要 0 < 慢 ≤ 中 ≤ 快 ≤ 1.5。
 #: 遥控速度表(m/s,POC;用户 11-05:按速度分档,目前最高到 SDK 中速档 2.0)。超过 1.0 的机器人自己换
 #: 中速档;机器人到不了的档手机上不显示。
@@ -59,6 +62,8 @@ class SiteSettings:
             st = got.get("stale_hours")
             if _int(st) and 1 <= st <= 48:
                 out["stale_hours"] = st
+            if isinstance(got.get("self_protect_siren"), bool):
+                out["self_protect_siren"] = got["self_protect_siren"]
         return out
 
     def set_duty(self, d: Any, *, by: str) -> dict[str, Any]:
@@ -78,6 +83,10 @@ class SiteSettings:
             if not _int(st) or not 1 <= st <= 48:
                 raise SettingsError("多久未巡过要是 1–48 小时的整数")
             cur["stale_hours"] = st
+        if "self_protect_siren" in d:
+            if not isinstance(d["self_protect_siren"], bool):
+                raise SettingsError("自动鸣笛要是 true / false")
+            cur["self_protect_siren"] = d["self_protect_siren"]
         self.put("duty", cur)
         return cur
 

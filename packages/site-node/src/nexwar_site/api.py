@@ -116,7 +116,7 @@ _ROBOT_WIFI = re.compile(r"^/api/robots/([^/]{1,64})/wifi$")
 #: ``GET /api/alerts?all=1&limit=`` 的上限。
 ALERTS_LIMIT_MAX = 2000
 #: 告警键 ``robot/kind#seq`` 里有 ``/`` 与 ``#``:客户端整个键编码成一段(``%2F``、``%23``)。
-_ALERT = re.compile(r"^/api/alerts/([^/]{1,256})/(ack|resolve|shelve|unshelve)$")
+_ALERT = re.compile(r"^/api/alerts/([^/]{1,256})/(ack|arrive|resolve|shelve|unshelve)$")
 #: W00c5c:``/api/robots/<id>/teleop``(WebSocket)与 ``/api/robots/<id>/halt``。
 _TELEOP = re.compile(r"^/api/robots/([^/]{1,64})/"
                      r"(teleop|halt|resume|supervise|relocalize|home/here|deter|service|posture)$")
@@ -304,6 +304,7 @@ class SiteApi:
         self.authz: Any = None
         #: W73:防区的查看点、值守位(``guard_plan.ZonePosts``;第一次用时按防区、路线库的规划现建)。
         self._zone_posts: Any = None
+        self._marks: Any = None
         #: W73 第二期:布防值守(``guard_duty.GuardDuty``,站点主程序接上)。
         self.guard: Any = None
         #: W44:位置轨迹(录像页那一刻在哪、地图页多久没巡过;站点主程序接上)。
@@ -476,6 +477,14 @@ def zone_posts(site: SiteApi) -> Any:
                                      getattr(site.routes, "reach", None), site.areas,
                                      now_ms=site._now)
     return site._zone_posts
+
+
+def map_marks(site: SiteApi) -> Any:
+    """W74 三期:地图上的出口线、易藏点台(第一次用时现建);没接防区的站点是 None。"""
+    if site._marks is None and site.areas is not None:
+        from nexwar_site.map_marks import MapMarks
+        site._marks = MapMarks(site.areas.db, now_ms=site._now)
+    return site._marks
 
 
 class _Handler(TlsHandlerMixin):
@@ -937,6 +946,7 @@ class _Handler(TlsHandlerMixin):
         """告警与值守(W00c5a)。看:``view``;确认、解决:``handle_alerts``,人取登录账号。"""
         if self.site.alerts is None:
             raise HttpError(404, "此站点未启用告警")
+        from nexwar_site.alert_store import ArrivalNeeded
         from nexwar_site.alerts import AlertNotFound
         if method == "GET" and path == "/api/alerts":
             self._need(user, VIEW)
@@ -980,6 +990,9 @@ class _Handler(TlsHandlerMixin):
                 a = self.site.loop.call(lambda: _sync(self.site.alerts.unshelve, key))
             elif m.group(2) == "ack":
                 a = self.site.loop.call(lambda: _sync(self.site.alerts.ack, key, who=str(user)))
+            elif m.group(2) == "arrive":
+                # W74:保安到场(看见人的那几种要先到场才能关);到场人取登录账号
+                a = self.site.loop.call(lambda: _sync(self.site.alerts.arrive, key, who=str(user)))
             else:
                 # W44:结论(确认有人 / 误报 / 处理好了);不给 = 空(老客户端照旧能用),别的值 400
                 verdict = d.get("verdict", "")
@@ -990,6 +1003,8 @@ class _Handler(TlsHandlerMixin):
                     lambda: _sync(self.site.alerts.resolve, key, who=str(user), verdict=verdict))
         except AlertNotFound as exc:
             raise HttpError(404, "没有此条告警") from exc
+        except ArrivalNeeded as exc:
+            raise HttpError(409, str(exc)) from exc
         except ValueError as exc:
             raise HttpError(400, str(exc)) from exc
         return self._send_json(200, {"alert": a.to_wire()})
@@ -1217,7 +1232,8 @@ class _Handler(TlsHandlerMixin):
             raise HttpError(405, "只支持 GET/POST")
         self._need(user, MANAGE)
         d = self._body()
-        self._audit_detail = {k: d.get(k) for k in ("shift_hours", "stale_hours") if k in d}
+        self._audit_detail = {k: d.get(k) for k in ("shift_hours", "stale_hours",
+                                                     "self_protect_siren") if k in d}
         try:
             return self._send_json(200, st.set_duty(d, by=str(user)))
         except SettingsError as exc:
@@ -1648,11 +1664,13 @@ class _Handler(TlsHandlerMixin):
             raise HttpError(404, "此站点未启用防区")
         from nexwar_site.guard_plan import GuardPlanError
         posts = zone_posts(self.site)
+        marks = map_marks(self.site)
 
         def view() -> dict:
             out: dict = {"areas": book.list(map_id, version)}
             if posts is not None:
                 out["posts"] = posts.view(map_id, version)     # W73:查看点、值守位
+            out["marks"] = marks.list(map_id, version)         # W74:出口线、易藏点
             return out
         if method == "GET":
             self._need(user, VIEW)
@@ -1661,6 +1679,24 @@ class _Handler(TlsHandlerMixin):
             raise HttpError(405, "只支持 GET/POST")
         self._need(user, MANAGE)
         d = self._body()
+        if "mark" in d or "mark_id" in d:
+            # W74 三期:画出口线、易藏点(``mark: {kind, name, points[, yaw, id]}``);
+            # ``{mark_id, remove: true}`` 删
+            from nexwar_site.map_marks import MarkError
+            try:
+                if d.get("remove") is True:
+                    mid = str(d.get("mark_id"))
+                    self._audit_target = f"{map_id}:{version}/mark:{mid[:32]}"
+                    if not marks.remove(map_id, version, mid):
+                        raise HttpError(404, "此地图上没有这个标注")
+                    self._audit_detail = {"mark": "removed"}
+                else:
+                    m = marks.set(map_id, version, d.get("mark"), by=str(user))
+                    self._audit_target = f"{map_id}:{version}/mark:{m['id']}"
+                    self._audit_detail = {"mark": {k: m[k] for k in ("kind", "name", "points")}}
+            except MarkError as exc:
+                raise HttpError(400, str(exc)) from exc
+            return self._send_json(200, view())
         zone = d.get("zone")
         self._audit_target = f"{map_id}:{version}/{str(zone)[:64]}"
         if "posts" in d:
@@ -2922,7 +2958,8 @@ class _Handler(TlsHandlerMixin):
     _OPS_ACTIONS = {"journal": ("GET", "ops_journal"), "diag": ("GET", "ops_diag"),
                     "cleanup": (None, "ops_cleanup"), "restart": ("POST", "ops_restart"),
                     "reboot": ("POST", "ops_reboot"), "debug": ("POST", "ops_debug"),
-                    "timesync": ("POST", "ops_timesync")}
+                    "timesync": ("POST", "ops_timesync"),
+                    "settings": (None, "ops_settings")}     # 11-06 不靠 SSH:机器人设置
 
     def _robot_ops(self, method: str, robot_id: str, action: str, user) -> None:
         """W55:``/api/robots/<id>/ops/<动作>`` —— 日志、诊断、清理、重启服务、重启整机(再输密码)、
@@ -2960,9 +2997,19 @@ class _Handler(TlsHandlerMixin):
             if action == "reboot":
                 self._confirm(user, payload)
                 payload = {}
+            if action == "settings":
+                # 改人员检测、障碍许可、速度上限:跟重启整机一样再输密码;值不对站点先拒
+                from nexwar_contract.robot_settings import check
+                self._confirm(user, payload)
+                try:
+                    payload = {"set": check(payload.get("set"))}
+                except ValueError as exc:
+                    raise HttpError(400, str(exc)) from exc
+                self._audit_detail = {"set": dict(payload["set"])}
             payload.pop("confirm_password", None)
-            self._audit_detail = {k: v for k, v in payload.items()
-                                  if isinstance(v, (str, int, list))}
+            if action != "settings":
+                self._audit_detail = {k: v for k, v in payload.items()
+                                      if isinstance(v, (str, int, list))}
         if isinstance(payload.get("unit"), str):
             from nexwar_site.remote_ops import robot_unit
             c = getattr(self.site.dispatcher, "clients", {}).get(robot_id)
@@ -3525,6 +3572,16 @@ class _Handler(TlsHandlerMixin):
             raise HttpError(409, f"{ref.map_id}:{ref.version} 的禁行区尚未确认(或改过之后"
                                  "未重新确认):先在地图页画好、确认再下发",
                             extra={"reason": "zones_unconfirmed"})
+        # 11-05 现场第 10 条:带定位器的机器人收到缺定位文件的版本会拒;站点当场拒、说清缺什么
+        c = self.site.dispatcher.clients.get(robot_id)
+        rc = (c.capabilities.tasks.get("running_config")
+              if c is not None and c.capabilities is not None else None)
+        if isinstance(rc, dict) and rc.get("confirms") == "localizer":
+            from nexwar_contract.maps import prior_missing
+            why = prior_missing(f.name for f in ref.files)
+            if why:
+                raise HttpError(409, f"{ref.map_id}:{ref.version} 不能下发到 {robot_id}:{why}",
+                                extra={"reason": "map_unusable"})
         payload = ref.to_wire()
         # 这台狗在这张图上的原点:站点原点表里的是权威(W13a),有就下发、盖过图里的 home.json
         # (W00c6f 内审应修 4);没有才按图里带的。**都没有**(新建的图、新版本):照常下发、审计里记

@@ -14,6 +14,8 @@
 #   NEXWAR_OBS_SIDECAR=127.0.0.1:8090  给旁路进程发净空许可(空着 = 不发;旁路进程要带 --require-clearance
 #                                     才按许可管前进,W11 真机验收之前不开)
 #   NEXWAR_OBS_ARGS=其余参数
+#   NEXWAR_OBS_PERMIT=1|0         站点设置(11-06 不靠 SSH):1 = 给旁路发许可(地址同旁路的
+#                                 NEXWAR_SIDECAR_LISTEN),0 = 不发;设了就盖过 NEXWAR_OBS_SIDECAR
 set -eu
 here=$(cd "$(dirname "$0")/.." && pwd -P)
 set +u
@@ -24,6 +26,11 @@ export RMW_IMPLEMENTATION="${NEXWAR_LOC_RMW:-rmw_zenoh_cpp}"
 # numpy 的线性代数库(OpenBLAS)缺省开跟核数一样多的线程:一帧里的小矩阵运算用不着,C40221 上
 # 8 个线程各吃 23–35%,跟定位器抢 CPU(2026-10-08)。
 export OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1
+if [ "${NEXWAR_OBS_PERMIT:-}" = 1 ]; then
+  NEXWAR_OBS_SIDECAR="${NEXWAR_SIDECAR_LISTEN:-127.0.0.1:8090}"
+elif [ "${NEXWAR_OBS_PERMIT:-}" = 0 ]; then
+  NEXWAR_OBS_SIDECAR=""
+fi
 export PYTHONPATH="$here/packages/localizer/src:$here/packages/contract/src${PYTHONPATH:+:$PYTHONPATH}"
 # shellcheck disable=SC2086  # NEXWAR_OBS_ARGS 要按空白拆成几个参数
 exec /usr/bin/python3 -m nexwar_localizer.obstacles \

@@ -746,6 +746,9 @@ abstract class SiteApi {
   Future<Map<String, dynamic>> alertTest();
   Future<Map<String, dynamic>> ackAlert(String key);
   Future<Map<String, dynamic>> resolveAlert(String key);
+
+  /// W74：保安到场了（看见人那一类要先到场才能关）。
+  Future<Map<String, dynamic>> arriveAlert(String key);
   Future<Map<String, dynamic>> watchSummary();
 
   /// 视频经站点（W00c5b）：每路画面健康（`{cameras: {front: {online, …}}}`）。
@@ -1364,6 +1367,10 @@ class SiteClient implements SiteApi {
   @override
   Future<Map<String, dynamic>> resolveAlert(String key) async => _map(await _send(
       'POST', '/api/alerts/${Uri.encodeComponent(key)}/resolve', <String, dynamic>{}));
+
+  @override
+  Future<Map<String, dynamic>> arriveAlert(String key) async => _map(await _send(
+      'POST', '/api/alerts/${Uri.encodeComponent(key)}/arrive', <String, dynamic>{}));
 
   @override
   Future<Map<String, dynamic>> watchSummary() async =>

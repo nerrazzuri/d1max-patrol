@@ -304,6 +304,24 @@ describe("路线页:站点的回答", () => {
     await waitFor(() => expect(r.container.querySelectorAll("[data-point].bad").length).toBe(0));
   });
 
+  it("存下了、但有点要原地转又贴墙(11-05 现场第 15、35 条):黄字提醒、点标出来,不挡存", async () => {
+    installScreenCTM();
+    routesApi({ meta: META, routes: [ROUTE], post: (_u, body) => json({ id: "loop", map_id: "m1", map_version: "1", revision: 5, bound: true,
+      waypoints: body.waypoints, policy: {}, updated_by: "a", updated_ms: 0,
+      warnings: [{ index: 0, name: "a", warning: "a 离墙或障碍只有 0.3 m,机器人在这里要原地转" }] }) });
+    const r = render(<RoutesPage say={() => {}} />);
+    await ready(r.container);
+    await waitFor(() => expect(r.getByText("loop")).toBeTruthy());
+    fireEvent.click(r.getByText("loop"));
+    await tick();
+    fireEvent.click(r.container.querySelector("svg.map")!, clientOf(r.container, META, 5, 5));
+    await tick();
+    fireEvent.click(r.getByText("Save route"));
+    await waitFor(() => expect(r.container.textContent).toContain("a 离墙或障碍只有 0.3 m"));
+    expect(r.container.querySelectorAll("[data-point].warn").length).toBe(1);
+    expect(r.container.querySelectorAll("[data-point].bad").length).toBe(0);
+  });
+
   it("别人改过(409):提示重新拉取,不覆盖;拉取后是站点上的样子", async () => {
     installScreenCTM();
     let first = true;

@@ -38,8 +38,7 @@ set -euo pipefail
 # @写盘 /etc/systemd/system/nexwar_bind.service                            配网服务(W42;只装,factory burn 才 enable;没烧写不起)
 # @写盘 /etc/systemd/timesyncd.conf.d/nexwar.conf                          对时配置:向站点主机对时(W09d)
 # @写盘 /etc/chrony/conf.d/nexwar.conf                                     对时归 chrony 管的狗:向站点主机对时(决策 61)
-# (另:厂家 /etc/chrony/chrony.conf 里指向厂家板的 server/pool/peer 行注释掉,第一次改之前原文件留在
-#  /etc/nexwar/chrony.conf.orig;用户 2026-11-03 同意,W70)
+# (厂家的 /etc/chrony/chrony.conf 不改;以前 W70 改过、留了 /etc/nexwar/chrony.conf.orig 的,放回去 —— 用户 11-06)
 # @写盘 /usr/local/lib/nexwar                                             特权执行器和它验签用的模块(W55;root 属主,不从版本目录跑代码)
 # @写盘 /etc/nexwar/unbind-pub.d                                          随发行新增的解绑公钥(W57;换钥匙用)
 # @写盘 /etc/nexwar/unbind-revoked.txt                                    作废的解绑公钥编号(W57)
@@ -50,6 +49,8 @@ set -euo pipefail
 # @写盘 /etc/systemd/system/nexwar_ops.path                               特权执行器的路径单元(W55)
 # @写盘 /etc/systemd/system/nexwar_ops.service                            特权执行器(W55;root、一次性)
 # @写盘 /etc/systemd/system/paths.target.wants/nexwar_ops.path            上面路径单元的自启链
+# @写盘 /etc/systemd/system/nexwar_boot.service                           开机准备(11-06:固定路由、向站点对时、厂家自启)
+# @写盘 /etc/systemd/system/multi-user.target.wants/nexwar_boot.service   上面开机准备的自启链
 # @写盘 /etc/systemd/journald.conf.d/nexwar.conf                          日志留盘 14 天、最多 500 MB(W55:远程取日志、重启不丢)
 #
 # 这份脚本不写、但 uninstall.sh 要负责收掉的(老机器上可能还在;这里只 rm/disable 它们,从来不写):
@@ -487,6 +488,12 @@ NEXWAR_RELEASE_ROOT=/opt/nexwar
 # 狗向站点主机对时(W09d;装机脚本按这个地址写 timesyncd 的配置,填了之后再跑一遍装机脚本)。
 # 时间服务器不是这台主机的话另写:
 #   NEXWAR_SITE_NTP=<主机>
+# 固定路由(11-05 现场第 25 条):视频、站点要经狗的路由器绕到别的网段时,装机时写好,开机代理自己加
+# (经特权执行器 ip route replace;只认 IPv4 网段 via 网关,不许默认路由,最多 8 条,分号隔开):
+#   NEXWAR_ROUTES=192.168.234.0/24 via 192.168.168.168
+# 厂家用不上的服务(厂家 Nav2、建图、感知等)开机自启:缺省关(用户 11-06,直到 V2 上装有了);
+# 关了哪些记在 /var/lib/nexwar/vendor-autostart-off.json,卸载时开回去。要开回去写 1(网页、App 的机器人设置也能改):
+#   NEXWAR_VENDOR_AUTOSTART=1
 # 证书包(ca.crt、robot.crt、robot.key)拷到 /etc/nexwar/tls/,注册文件拷成
 # /etc/nexwar/registration.json。**没有注册文件代理就不起**(单元的 ConditionPathExists)。
 NEXWAR_SITE_MQTT=
@@ -593,8 +600,12 @@ cat > /etc/nexwar_ops.json <<OPS
 OPS
 chmod 0644 /etc/nexwar_ops.json
 install -m 0644 "$PKG/deploy/nexwar_ops.path" "$PKG/deploy/nexwar_ops.service" /etc/systemd/system/
+install -m 0644 "$PKG/deploy/nexwar_boot.service" /etc/systemd/system/
 systemctl daemon-reload
 systemctl enable --now nexwar_ops.path
+# 11-06(现场第 4、25、32 条):开机准备 —— 固定路由、给厂家的 chrony 运行时加站点这个源、厂家用不上的
+# 服务关自启(缺省关,记下关了哪些,卸载开回去)。只 enable,下次开机才跑(装机时不动厂家的服务)。
+systemctl enable nexwar_boot.service
 # ② 日志留在盘上(重启不丢)、留 14 天、最多 500 MB;代理的账号进 systemd-journal 组,站点远程能取日志。
 install -d -m 0755 /etc/systemd/journald.conf.d
 cat > /etc/systemd/journald.conf.d/nexwar.conf <<'JOURNAL'
@@ -676,21 +687,17 @@ if [[ "$(systemctl show -p LoadState --value systemd-timesyncd 2>/dev/null)" != 
   # 装的是 chrony / ntp 的话 timedatectl 管的是它们,这份配置不生效(W09d 内审):说清楚,不假装配上了。
   rm -f "$TIMESYNC_CONF"
   if [[ -f "$CHRONY_MAIN" ]]; then
-    # W70(用户 2026-11-03 同意「有站点时站点说了算」):厂家板(上装电脑)的钟不准 —— C40221 上慢 28 s,
-    # chrony 跟它对、站点往回拨,一分钟拉锯一次。主配置里指向它的 server/pool/peer 行注释掉;第一次改之前
-    # 原文件留一份,卸载时放回去。厂家板地址按 env 的 NEXWAR_VENDOR_TIME_HOSTS(逗号分隔),默认 .19。
+    # 11-06(用户:要能改回来,**不动竞品和厂家的设置**;取代 W70):厂家的 chrony.conf 一个字都不改。
+    # 以前(W70)注释掉过指向厂家板的行、原文件留在 /etc/nexwar/chrony.conf.orig 的:放回去。
+    # 站点这个源靠下面的单独片段(prefer trust,对不上听站点的),片段不载入时开机准备(nexwar_boot)
+    # 运行时用 chronyc 加,都不写厂家的文件。
     chrony_changed=0
-    vendor_hosts=$(sed -n 's/^NEXWAR_VENDOR_TIME_HOSTS=//p' /etc/nexwar/env 2>/dev/null | tail -1)
-    vendor_hosts=${vendor_hosts:-192.168.168.19}
-    for vh in ${vendor_hosts//,/ }; do
-      vre=${vh//./\\.}
-      if grep -Eq "^[[:space:]]*(server|pool|peer)[[:space:]]+${vre}([[:space:]]|\$)" "$CHRONY_MAIN"; then
-        [[ -e /etc/nexwar/chrony.conf.orig ]] || cp -p "$CHRONY_MAIN" /etc/nexwar/chrony.conf.orig
-        sed -i -E "s/^([[:space:]]*(server|pool|peer)[[:space:]]+${vre}([[:space:]]|\$))/# nexwar W70 厂家板的钟不准,不跟它对时: \1/" "$CHRONY_MAIN"
-        chrony_changed=1
-        echo "  对时:机器人的 chrony 不再跟厂家板 $vh 对时(原文件在 /etc/nexwar/chrony.conf.orig)"
-      fi
-    done
+    if [[ -f /etc/nexwar/chrony.conf.orig ]]; then
+      cp -p /etc/nexwar/chrony.conf.orig "$CHRONY_MAIN"
+      rm -f /etc/nexwar/chrony.conf.orig
+      chrony_changed=1
+      echo "  对时:厂家的 $CHRONY_MAIN 放回原样了(以前装机注释掉过指向厂家板的行)"
+    fi
     # 对时归厂家的 chrony 管(决策 61,2026-10-13,改掉决策 47 的「不动」):厂家配的源是 RTK 秒脉冲(没天线
     # 就没信号)和上装电脑(C40221 上慢 15 s;裸机上没有这台),狗的钟一直不准,站点按钟差拒发命令;整机
     # 断电再开是 1970 年。加**一个单独的片段**把站点主机设成首选、可信的源;厂家那份 chrony.conf 不改,
@@ -737,11 +744,8 @@ if [[ "$(systemctl show -p LoadState --value systemd-timesyncd 2>/dev/null)" != 
         fi
       else
         [[ $chrony_changed == 1 ]] && { systemctl try-restart chrony >/dev/null 2>&1 || true; }
-        echo "  !! 对时片段写好了($CHRONY_CONF),但厂家的 $CHRONY_MAIN 不读 conf.d:" >&2
-        echo "     我们不替它加这一行。要生效,在它末尾加一行再 sudo systemctl restart chrony:" >&2
-        echo "       chrony 4 及以上(chronyd --version 看):  confdir $CHRONY_DROPIN_DIR" >&2
-        echo "       chrony 3.x(没有 confdir):              include $CHRONY_CONF" >&2
-        echo "     这两行没在这只狗上验过(真机项 3f.20):加完看 chronyc sources 里有没有站点那一行。" >&2
+        echo "  对时:厂家的 $CHRONY_MAIN 不读 conf.d,我们不改它;开机准备(nexwar_boot)每次开机用" \
+             "chronyc 给它运行时加 $ts_host 这个源(重启 chrony 就没了,下次开机再加)。"
       fi
     else
       rm -f "$CHRONY_CONF"

@@ -1,0 +1,17 @@
+# nexwar 开机准备(11-06 不靠 SSH;现场第 4、25、32 条):root 跑特权执行器的 --boot,一次性做完就退。
+# - 固定路由:/etc/nexwar/env 的 NEXWAR_ROUTES(视频、站点经狗的路由器绕到别的网段);
+# - 对时:厂家的 chrony 在跑,运行时给它加站点主机这个源(不改厂家的配置文件);
+# - 厂家用不上的服务关自启(缺省关;NEXWAR_VENDOR_AUTOSTART=1 开回去),关了哪些记在
+#   /var/lib/nexwar/vendor-autostart-off.json,卸载时按它开回去。
+# 不等代理:代理要等钟对上才起,钟要经路由向站点对。Type=simple:不拖住开机(没齐要再等最多十分钟)。
+[Unit]
+Description=nexwar 开机准备(路由、对时、厂家自启)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /usr/local/lib/nexwar/ops-runner --config /etc/nexwar_ops.json --boot
+
+[Install]
+WantedBy=multi-user.target

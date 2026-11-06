@@ -47,6 +47,9 @@ class SiteAlertScenePage extends StatefulWidget {
   static const Key videoKey = Key('scene-video');
   static const Key deterKey = Key('scene-deter-here');
   static const Key ackKey = Key('scene-ack');
+  static const Key arriveKey = Key('scene-arrive');
+  static const Key doneKey = Key('scene-done');
+  static const Key doneGoKey = Key('scene-done-go');
   static const Key sirenKey = Key('scene-siren');
   static const Key falseKey = Key('scene-false');
   static const Key falseGoKey = Key('scene-false-go');
@@ -66,7 +69,7 @@ class SiteAlertScenePage extends StatefulWidget {
 /// 不是一张图）各算各的。回 `(图 id, 版本, 点)`；一个都没有回 null。
 (String, String, List<MapMark>)? sceneMarks(Alert a) {
   final ctx = a.context;
-  final pose = ctx['pose'];
+  final pose = ctx['last_seen'] ?? ctx['pose']; // W74：最后看见人时机器人在哪（每 5 秒更新）
   final point = ctx['intercept'];
   String? mapId;
   String? version;
@@ -83,6 +86,12 @@ class SiteAlertScenePage extends StatefulWidget {
   }
 
   add(pose, a.robot == 'site' ? tr('Robot', '机器人') : tr('Robot ${a.robot}', '机器人 ${a.robot}'), Colors.red);
+  // W74 二期：人最后在哪（机器人跟人时算的，跟机器人同一张图）
+  final person = ctx['person'];
+  if (person is Map && mapId != null) {
+    add(<String, dynamic>{'map_id': mapId, 'map_version': version, ...person.cast<String, dynamic>()},
+        tr('Person last seen', '人最后在这'), Colors.orange);
+  }
   if (point is Map) add(point, tr('Intercept point ${point['name'] ?? ''}', '拦截点 ${point['name'] ?? ''}'), Colors.purple);
   if (marks.isEmpty) return null;
   return (mapId!, version!, marks);
@@ -158,6 +167,11 @@ class _SiteAlertScenePageState extends State<SiteAlertScenePage> {
   bool get _isRobot => _a.robot != 'site' && _a.robot.isNotEmpty;
   bool get _acked => _a.ackedMs != null || _ackedHere != null;
   bool get _open => _a.resolvedMs == null;
+
+  /// W74：看见人那一类要保安点过「已到场」才能处置完成 / 标误报（站点也这么拦）。
+  bool get _needsArrive => _a.kind == 'dog_sees_person';
+  (String, int)? _arrivedHere;
+  bool get _arrived => _a.context['arrived_ms'] != null || _arrivedHere != null;
   bool get _flashing => _a.level == 'P1' && _open && !_acked;
 
   @override
@@ -189,6 +203,7 @@ class _SiteAlertScenePageState extends State<SiteAlertScenePage> {
       // 「记成误报？」都作废（外审 I3）
       _gen++;
       _ackedHere = null;
+      _arrivedHere = null;
       _deter = null;
       _deterKnown = false;
       _msg = '';
@@ -304,6 +319,48 @@ class _SiteAlertScenePageState extends State<SiteAlertScenePage> {
       });
     } on SiteError catch (e) {
       if (mounted && gen == _gen) setState(() => _msg = tr("Siren didn't start: $e", '警笛开启失败：$e'));
+    }
+  }
+
+  Future<void> _arrive() async {
+    final gen = _gen, key = _a.key;
+    try {
+      final r = await widget.api.arriveAlert(key);
+      if (!mounted || gen != _gen) return;
+      final got = r['alert'] is Map ? Alert.fromWire(Map<String, dynamic>.from(r['alert'] as Map)) : null;
+      setState(() {
+        if (got != null && got.key == key) {
+          _a = got;
+        } else {
+          _arrivedHere = (widget.api.session?.name ?? '', widget.now().millisecondsSinceEpoch);
+        }
+        _msg = '';
+      });
+    } on SiteError catch (e) {
+      if (mounted && gen == _gen) setState(() => _msg = tr('Not recorded: $e', '到场没记上：$e'));
+    }
+  }
+
+  Future<void> _done() async {
+    final gen = _gen, key = _a.key;
+    final ok = await showDialog<bool>(
+        context: context,
+        builder: (c) => AlertDialog(
+              content: Text(tr('Close this alarm as handled?', '处置完成，关闭此告警？')),
+              actions: [
+                TextButton(onPressed: () => Navigator.pop(c, false), child: Text(tr('Cancel', '取消'))),
+                FilledButton(
+                    key: SiteAlertScenePage.doneGoKey,
+                    onPressed: () => Navigator.pop(c, true),
+                    child: Text(tr('Handled', '处置完成'))),
+              ],
+            ));
+    if (ok != true || !mounted || gen != _gen) return;
+    try {
+      await widget.api.resolveAlert(key);
+      if (mounted && gen == _gen) Navigator.pop(context);
+    } on SiteError catch (e) {
+      if (mounted && gen == _gen) setState(() => _msg = tr('Not closed: $e', '关闭失败：$e'));
     }
   }
 
@@ -567,8 +624,18 @@ class _SiteAlertScenePageState extends State<SiteAlertScenePage> {
     final first = _big(SiteAlertScenePage.ackKey, tr("I'll handle it", '我来处理'),
         handle && _open && !_acked ? _ack : null,
         primary: true);
-    final third = _big(SiteAlertScenePage.falseKey, tr('False alarm', '误报'), handle && _open ? _falseAlarm : null);
-    final fourth = _big(null, tr('Talk: not available', '对讲：暂不支持'), null);
+    final canClose = !_needsArrive || _arrived;
+    final third = _big(SiteAlertScenePage.falseKey, tr('False alarm', '误报'),
+        handle && _open && canClose ? _falseAlarm : null);
+    // W74 看见人：第四个位置是「已到场」→「处置完成」（到场了才能关）；别的告警还是对讲占位
+    final Widget fourth;
+    if (!_needsArrive) {
+      fourth = _big(null, tr('Talk: not available', '对讲：暂不支持'), null);
+    } else if (!_arrived) {
+      fourth = _big(SiteAlertScenePage.arriveKey, tr("I'm on site", '已到场'), handle && _open ? _arrive : null);
+    } else {
+      fourth = _big(SiteAlertScenePage.doneKey, tr('Handled', '处置完成'), handle && _open ? _done : null);
+    }
     const gap = SizedBox(width: Nw.s8);
     if (oneRow) {
       return Row(children: [
@@ -618,6 +685,29 @@ class _SiteAlertScenePageState extends State<SiteAlertScenePage> {
     if (at != null) {
       final by = _a.ackedBy.isNotEmpty ? _a.ackedBy : (_ackedHere?.$1 ?? '');
       rows.add((at, tr('Acknowledged by $by.', '$by 已确认。')));
+    }
+    final lost = _a.context['lost_ms'];
+    if (lost is num) {
+      rows.add((lost.toInt(), tr('Person no longer seen: whereabouts unknown.', '看不到人了，去向不明。')));
+    }
+    // W74 二期：机器人在跟 / 跟丢了（人最后在哪）
+    final follow = _a.context['follow'];
+    final person = _a.context['person'] is Map ? _a.context['person'] as Map : null;
+    final pAt = person?['at_ms'] is num ? (person!['at_ms'] as num).toInt() : _a.lastMs;
+    if (follow == 'follow') {
+      rows.add((pAt, tr('The robot is following this person.', '机器人正跟着这个人。')));
+    } else if (follow == 'lost' || follow == 'limit') {
+      final w = person?['where'] is String ? person!['where'] as String : '';
+      rows.add((pAt, w.isEmpty
+          ? tr('Robot stopped following.', '机器人不跟了，回到人最后出现的地方。')
+          : tr('Lost the person, last seen near $w.', '跟丢了，人最后在 $w。')));
+    }
+    final arrivedMs = _a.context['arrived_ms'] is num
+        ? (_a.context['arrived_ms'] as num).toInt()
+        : _arrivedHere?.$2;
+    if (arrivedMs != null) {
+      final by = _a.context['arrived_by'] is String ? _a.context['arrived_by'] as String : (_arrivedHere?.$1 ?? '');
+      rows.add((arrivedMs, tr('$by is on site.', '$by 已到场。')));
     }
     if (_a.resolvedMs != null) rows.add((_a.resolvedMs!, tr('Closed.', '已关闭。')));
     rows.sort((x, y) => x.$1.compareTo(y.$1));
@@ -727,6 +817,13 @@ class _SiteAlertScenePageState extends State<SiteAlertScenePage> {
                             child: Text(_msg,
                                 key: SiteAlertScenePage.msgKey,
                                 style: NwText.bodyMedium.copyWith(color: c.text, fontWeight: FontWeight.w600)))),
+                  if (_needsArrive && _open && !_arrived)
+                    Padding(
+                        padding: const EdgeInsets.only(bottom: Nw.s8),
+                        child: Text(
+                            tr('Go to the scene first: the alarm can only be closed after you tap "I\'m on site".',
+                                '先到现场：点「已到场」后才能关闭此告警。'),
+                            style: NwText.bodySmall.copyWith(color: c.textSecondary))),
                   _actions(oneRow: oneRow),
                 ]))));
   }
@@ -735,7 +832,8 @@ class _SiteAlertScenePageState extends State<SiteAlertScenePage> {
   Widget build(BuildContext context) {
     final c = Nw.of(context);
     final ctx = _a.context;
-    final pose = ctx['pose'] is Map ? ctx['pose'] as Map : null;
+    final seenAt = ctx['last_seen'] ?? ctx['pose']; // W74：最后看见人时机器人在哪
+    final pose = seenAt is Map ? seenAt : null;
     final point = ctx['intercept'] is Map ? ctx['intercept'] as Map : null;
     final taskId = ctx['task_id'] is String ? ctx['task_id'] as String : null;
     final marks = sceneMarks(_a);

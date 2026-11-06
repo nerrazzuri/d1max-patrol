@@ -643,3 +643,28 @@ def test_改名外审r1_15_还没升级的机器人报老服务名_站点按它�
     assert s.req("POST", "/api/robots/A/ops/restart", {"unit": "nexwar_lidar_merge"},
                  token=alice)[0] == 200
     assert sent[-1][2]["unit"] == "nexwar_lidar_merge", "新机器人照原样"
+
+
+def test_不靠SSH_机器人设置_读不要密码_改要再输密码_值不对站点先拒_进审计(站点, monkeypatch):
+    s = 站点
+    alice, gina = _登(s, "alice"), _登(s, "gina")
+    cur = {"settings": {"NEXWAR_PERSONS": "none"},
+           "choices": {"NEXWAR_PERSONS": ["bridge", "none"]}}
+    sent = _假狗(s, monkeypatch, {"result": "accepted", "reason": "", "data": cur})
+    assert s.req("GET", "/api/robots/A/ops/settings", token=gina)[0] == 403
+    code, d = s.req("GET", "/api/robots/A/ops/settings", token=alice)
+    assert code == 200 and d == cur and sent[-1][1:3] == ("ops_settings", {})
+    body = {"set": {"NEXWAR_PERSONS": "bridge"}}
+    assert s.req("POST", "/api/robots/A/ops/settings", body, token=alice)[0] == 403
+    for bad in ({"set": {"NEXWAR_PIN": "1"}}, {"set": {"NEXWAR_PERSONS": "on"}}, {"set": {}}):
+        code, d = s.req("POST", "/api/robots/A/ops/settings", bad | {"confirm_password": PW},
+                        token=alice)
+        assert code == 400, (bad, d)
+    n = len(sent)
+    code, _ = s.req("POST", "/api/robots/A/ops/settings", body | {"confirm_password": PW},
+                    token=alice)
+    assert code == 200 and len(sent) == n + 1
+    assert sent[-1][1:3] == ("ops_settings", body), "密码不往机器人那边带"
+    rows = [r for r in s.api.audit.list() if r["action"] == "POST /api/robots/A/ops/settings"]
+    ok = [r for r in rows if r["status"] == 200]
+    assert ok and ok[0]["detail"]["set"] == {"NEXWAR_PERSONS": "bridge"}

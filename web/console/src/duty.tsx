@@ -21,6 +21,8 @@ import { TodayPatrols } from "./todaypatrols";
 
 /** 迷路了的两种(站点 alerts.LEVEL_OF):横幅上多一个「帮它找位置」。 */
 const LOST = new Set(["loc_lost_paused", "loc_lost_idle"]);
+/** W74:要保安先到场才能关的告警(站点 alert_store.ARRIVAL_KINDS)。 */
+const ARRIVE = new Set(["dog_sees_person"]);
 
 interface FixedCam { name: string; zone: string }
 
@@ -74,6 +76,9 @@ export function DutyPage(props: {
   }
   const ack = (a: Alert) => post(`/api/alerts/${enc(a.key)}/ack`, {});
   const resolve = (a: Alert, verdict: string) => post(`/api/alerts/${enc(a.key)}/resolve`, { verdict });
+  const arrive = (a: Alert) => post(`/api/alerts/${enc(a.key)}/arrive`, {});
+  /** W74:看见人那一类要保安点过「已到场」才能关(站点也这么拦)。 */
+  const mustArrive = (a: Alert) => ARRIVE.has(a.kind) && a.context?.arrived_ms == null;
 
   const pin = (i: 0 | 1, robot: string) => setPins((p) => {
     const n: [string | null, string | null] = [p[0], p[1]];
@@ -108,15 +113,21 @@ export function DutyPage(props: {
           <div class="banner-text">
             <b>{alertTitle(lang.value, top.kind, top.title)}</b>
             <span>{[top.context?.zone ?? (top.context?.where ? t("atWhere", { w: top.context.where }) : ""), hm(top.first_ms)].filter(Boolean).join(" · ")}</span>
-            {top.acked_ms != null && top.acked_by && <span class="banner-who">{t("dutyTakenBy", { who: top.acked_by })}</span>}
+            {top.context?.lost_ms != null && <span class="banner-who">{t("dutyLost")}</span>}
+            {top.context?.follow === "follow" && <span class="banner-who">{t("dutyFollowing")}</span>}
+            {top.context?.follow !== "follow" && top.context?.person?.where && <span class="banner-who">{t("dutyLastAt", { w: top.context.person.where })}</span>}
+            {top.context?.arrived_by ? <span class="banner-who">{t("dutyArrived", { who: top.context.arrived_by })}</span>
+              : mustArrive(top) ? <span class="banner-who">{t("dutyArriveFirst")}</span>
+              : top.acked_ms != null && top.acked_by && <span class="banner-who">{t("dutyTakenBy", { who: top.acked_by })}</span>}
             {alarms.length > 1 && <span class="banner-more">{t("dutyMore", { n: alarms.length - 1 })}</span>}
           </div>
           <div class="banner-acts">
             {top.acked_ms == null && <button type="button" class="btn onsolid" onClick={() => ack(top)}>{t("dutyTake")}</button>}
+            {mustArrive(top) && <button type="button" class="btn onsolid" onClick={() => arrive(top)}>{t("dutyArrive")}</button>}
             {LOST.has(top.kind) && (
               <button type="button" class="btn onsolid" onClick={() => { setFinding(top.robot); setSelected(top.robot); }}>{t("dutyFindPose")}</button>
             )}
-            {top.audience === "intrusion" ? (
+            {mustArrive(top) ? null : top.audience === "intrusion" ? (
               <>
                 <button type="button" class="btn onsolid" onClick={() => resolve(top, "intruder")}>{t("dutyIntruder")}</button>
                 <button type="button" class="btn onsolid" onClick={() => setConfirmFalse(top)}>{t("dutyFalse")}</button>

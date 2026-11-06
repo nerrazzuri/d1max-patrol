@@ -24,7 +24,7 @@ import logging
 from typing import Any
 
 from nexwar_contract.errors import ContractError
-from nexwar_contract.maps import MapRef, check_name
+from nexwar_contract.maps import MapRef, check_name, prior_missing
 from nexwar_site.map_wizard import read_quality
 
 log = logging.getLogger(__name__)
@@ -213,7 +213,9 @@ class MapAdmin:
                     "loaded_on": in_use.get(key, []),
                     "previous_on": previous_on.get(key, []),
                     "thumbnail": f"/api/maps/{_q(map_id)}/{_q(m['version'])}/preview.png",
-                    "has_raster": any(f["name"] == "floor.yaml" for f in m["files"])})
+                    "has_raster": any(f["name"] == "floor.yaml" for f in m["files"]),
+                    # 11-05 现场第 10 条:缺定位文件的老图发不到带定位器的机器人(空串 = 齐了)
+                    "unusable": prior_missing(f["name"] for f in m["files"])})
             out_maps.append({"map_id": map_id, "versions": versions})
         return {"maps": out_maps, "robots": robots, "now_ms": self._now()}
 

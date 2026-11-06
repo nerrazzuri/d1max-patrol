@@ -59,4 +59,4 @@ exec "$here/venv/bin/nexwar_agent" \
   --outbox "${NEXWAR_OUTBOX:?单元里应该有 NEXWAR_OUTBOX}" \
   --map "${NEXWAR_MAP:?/etc/nexwar/env 里没有 NEXWAR_MAP(地图号:版本)}" \
   --home "${NEXWAR_HOME:?/etc/nexwar/env 里没有 NEXWAR_HOME(x,y,yaw)}" \
-  "--env-args=${NEXWAR_AGENT_ARGS:-}"
+  "--env-args=${NEXWAR_AGENT_ARGS:-}${NEXWAR_MAX_FRACTION:+ --max-fraction $NEXWAR_MAX_FRACTION}"

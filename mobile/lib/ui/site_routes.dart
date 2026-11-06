@@ -358,6 +358,8 @@ class _SiteRouteEditorPageState extends State<SiteRouteEditorPage> {
   int? _sel;
   _Mode _mode = _Mode.add;
   final Map<int, String> _problems = {};
+  /// 11-05 现场第 15、35 条：刚存下的这一版里要原地转又贴墙的点（只提醒；一改就清掉）。
+  final Map<int, String> _warns = {};
   String? _msg;
   bool _conflict = false;
   bool _busy = false;
@@ -387,6 +389,7 @@ class _SiteRouteEditorPageState extends State<SiteRouteEditorPage> {
     _saved = _snapshot;
     _sel = null;
     _problems.clear();
+    _warns.clear();
     _conflict = false;
     _formGen++;
   }
@@ -431,6 +434,7 @@ class _SiteRouteEditorPageState extends State<SiteRouteEditorPage> {
           _pts[i].x = x;
           _pts[i].y = y;
           _problems.clear();
+          _warns.clear();
         }
         return;
       }
@@ -443,6 +447,7 @@ class _SiteRouteEditorPageState extends State<SiteRouteEditorPage> {
       _sel = _pts.length - 1;
       _formGen++;
       _problems.clear();
+      _warns.clear();
     });
   }
 
@@ -452,6 +457,7 @@ class _SiteRouteEditorPageState extends State<SiteRouteEditorPage> {
         _sel = j;
         _formGen++;
         _problems.clear();
+        _warns.clear();
       });
 
   void _remove(int i) => setState(() {
@@ -459,6 +465,7 @@ class _SiteRouteEditorPageState extends State<SiteRouteEditorPage> {
         _sel = null;
         _formGen++;
         _problems.clear();
+        _warns.clear();
       });
 
   // ---- 存、删、派
@@ -470,6 +477,7 @@ class _SiteRouteEditorPageState extends State<SiteRouteEditorPage> {
       _msg = null;
       _conflict = false;
       _problems.clear();
+      _warns.clear();
     });
     try {
       final r = await widget.api.saveRoute(_id, <String, dynamic>{
@@ -483,6 +491,9 @@ class _SiteRouteEditorPageState extends State<SiteRouteEditorPage> {
       setState(() {
         _revision = (r['revision'] as num).toInt();
         _saved = _snapshot;
+        for (final x in (r['warnings'] as List? ?? const [])) {
+          if (x is Map && x['index'] is num) _warns[(x['index'] as num).toInt()] = '${x['warning']}';
+        }
         _busy = false;
         _msg = tr('Route saved (revision $_revision)', '路线已保存（第 $_revision 版）');
       });
@@ -629,6 +640,7 @@ class _SiteRouteEditorPageState extends State<SiteRouteEditorPage> {
       _busy = true;
       _msg = null;
       _problems.clear();
+      _warns.clear();
     });
     try {
       final r = await widget.api.patrolPoints(rid, [for (final p in _pts) (p.x, p.y)], widget.mapId, widget.version);
@@ -761,7 +773,7 @@ class _SiteRouteEditorPageState extends State<SiteRouteEditorPage> {
                                                         label: '${i + 1}',
                                                         labelAngle: -rad,
                                                         selected: i == _sel,
-                                                        accent: _problems.containsKey(i) ? c.error : c.tertiary,
+                                                        accent: _problems.containsKey(i) ? c.error : _warns.containsKey(i) ? c.warning : c.tertiary,
                                                         surface: c.surface,
                                                         text: c.text))))),
                                 ]))))))));
@@ -836,6 +848,10 @@ class _SiteRouteEditorPageState extends State<SiteRouteEditorPage> {
             for (final e in _problems.entries)
               Text('${e.key + 1}. ${e.key < _pts.length ? _pts[e.key].name : ''}: ${e.value}',
                   style: NwText.bodySmall.copyWith(color: c.error)),
+          ],
+          if (_warns.isNotEmpty) ...[
+            nwGap8,
+            for (final e in _warns.entries) Text(e.value, style: NwText.bodySmall.copyWith(color: c.warning)),
           ],
           if (sel != null && !_temp) _pointForm(context, sel),
           nwGap16,

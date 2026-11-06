@@ -1121,6 +1121,12 @@ details.ops > summary { cursor: pointer; font-weight: 600; padding: 6px 0; }
 .zone-posts:not(.on) { opacity: .7; }
 .zone-posts-box { display: flex; flex-direction: column; gap: 6px; border: 1px solid var(--c-outline); border-radius: 8px; padding: 8px 10px; }
 .zone-posts-box p { margin: 0; }
+.ly-marks { display: flex; flex-direction: column; gap: 6px; border: 1px solid var(--c-outline); border-radius: 8px; padding: 8px 10px; }
+.ly-marks p { margin: 0; }
+.ly-marks li { gap: 8px; align-items: center; }
+/* W74 三期:出口线(红,虚线)、易藏点(带朝向的小标) */
+.mark-exit { stroke: var(--c-error); stroke-width: 4; stroke-dasharray: 8 4; stroke-linecap: round; }
+.mark-hide .pm-body { fill: var(--c-error); }
 .guard-gen { display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; }
 .guard-gen h3 { margin: 0; }
 .guard-gen-zones { width: 100%; border-collapse: collapse; }

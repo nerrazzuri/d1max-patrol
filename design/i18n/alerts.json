@@ -76,6 +76,10 @@
     "en": "Robot was lifted",
     "zh": "机器人被抬起"
   },
+  "force_covered": {
+    "en": "Robot was covered",
+    "zh": "机器人被遮挡"
+  },
   "force_bump": {
     "en": "Robot was bumped",
     "zh": "机器人受到撞击"
@@ -331,6 +335,14 @@
   "guard_stuck": {
     "en": "Zone route keeps failing",
     "zh": "防区路线连着跑不成"
+  },
+  "person_overdue": {
+    "en": "Person detected, no guard on site",
+    "zh": "发现人员无人到场"
+  },
+  "person_left": {
+    "en": "Person left the guarded area",
+    "zh": "人离开值守区"
   },
   "swap_soon": {
     "en": "Battery swap coming up",

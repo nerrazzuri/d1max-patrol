@@ -150,6 +150,7 @@ def test_狗报证据没封_报P2一台一次_装好了清_老代理不报(tmp_p
     w.tick()
     w.tick()
     assert [(a["kind"], a["robot"]) for a in w.alerts.raised] == [("evidence_plain", "A")]
+    assert "人脸" in w.alerts.raised[0]["detail"], "W74 五期:没加密就不拍人脸,要说出来"
     d.clients["A"] = _caps(True)
     w.tick()
     assert not db.query("SELECT 1 FROM evidence_plain")

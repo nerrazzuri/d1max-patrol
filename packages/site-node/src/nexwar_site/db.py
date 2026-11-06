@@ -22,7 +22,9 @@ from typing import Any
 #: 72 W73 第二期:布防值守 —— 值守方案 guard_plan、各防区超时线 guard_zone_limits、每条方案的进度
 #:    guard_runs、每一段布防 guard_duties、防区最后看过 zone_seen、值守记录 guard_log(只加表)。
 #: 73 W73 第五期:外部设备按位置绑定 ext_devices(只加表)。
-SCHEMA_VERSION = 73
+#: 74 W74 三期:地图标注 map_marks —— 出口线、易藏点(只加表);外审 r2:值守进度 guard_runs.follow
+#:    记看见人这一回的跟人(只加列)。
+SCHEMA_VERSION = 74
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -820,7 +822,8 @@ CREATE TABLE IF NOT EXISTS guard_runs (
     until_ms    INTEGER NOT NULL DEFAULT 0,
     plan        TEXT NOT NULL DEFAULT '[]',
     watch_zone  TEXT NOT NULL DEFAULT '',
-    fails       INTEGER NOT NULL DEFAULT 0
+    fails       INTEGER NOT NULL DEFAULT 0,
+    follow      TEXT NOT NULL DEFAULT '{}'
 );
 -- 一段布防(有方案的防区布防着的这一段):值守记录按段翻。
 CREATE TABLE IF NOT EXISTS guard_duties (
@@ -853,6 +856,18 @@ CREATE TABLE IF NOT EXISTS guard_log (
 CREATE INDEX IF NOT EXISTS guard_log_duty ON guard_log(duty_id, at_ms);
 -- W73 第五期(库 73):外部设备(摄像头、报警主机、门磁)登记在图上(devices.py)。查看点、所在防区
 -- 是站点按位置算的;回调用自己的事件源 dev-<id>(incident_sources),拦截点 dev-<id>(intercepts)。
+-- W74 三期(库 74):地图标注(map_marks.py)。出口线(两点)、易藏点(一点 + 朝向),按图按版。
+CREATE TABLE IF NOT EXISTS map_marks (
+    id          TEXT PRIMARY KEY,
+    map_id      TEXT NOT NULL,
+    map_version TEXT NOT NULL,
+    kind        TEXT NOT NULL,
+    name        TEXT NOT NULL,
+    points      TEXT NOT NULL,
+    yaw         REAL NOT NULL DEFAULT 0,
+    updated_by  TEXT NOT NULL DEFAULT '',
+    updated_ms  INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS ext_devices (
     id          TEXT PRIMARY KEY,
     kind        TEXT NOT NULL,
@@ -895,6 +910,7 @@ CREATE TABLE IF NOT EXISTS company_reports (
 
 #: 建表之后才加的列:(表, 列, 声明)。老库打开时补上。
 _ADDED_COLUMNS = (
+    ("guard_runs", "follow", "TEXT NOT NULL DEFAULT '{}'"),          # W74 外审 r2:跟人的账
     ("guard_plan", "end_standby", "INTEGER NOT NULL DEFAULT 1"),      # 11-04 每圈回待命点
     ("commands", "priority", "INTEGER NOT NULL DEFAULT 0"),          # W00c2b
     ("standby_points", "map_version", "TEXT NOT NULL DEFAULT ''"),   # W00c2b 内部评审

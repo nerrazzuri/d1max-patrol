@@ -40,7 +40,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
-from nexwar_contract.locbridge import WAIT_INIT_REASON, Pose, State
+from nexwar_contract.locbridge import LIDAR_BLOCKED_REASON, WAIT_INIT_REASON, Pose, State
 from nexwar_localizer.frames import Frames
 
 log = logging.getLogger(__name__)
@@ -493,6 +493,8 @@ class LocalizerCore:
         was = "lost" if self._good is not None else "initializing"
         if self._down:
             return was, self._down                       # 起不来、退了:先说这个(在载图也一样)
+        if self.lidar_blocked:                           # W74 四期:不管哪个后端都报(代理判被遮挡)
+            return was, f"{LIDAR_BLOCKED_REASON}(一帧有效点只有 {self.lidar_points})"
         if self._loading or self._frames is None:
             return "initializing", "在载入先验"
         if self._restart or self._restarting:

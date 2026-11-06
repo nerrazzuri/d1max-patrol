@@ -392,3 +392,293 @@ def test_W70_NTP说对上了可跟站点差很多_不拨_回报打架(tmp_path, 
     assert got["stepped"] is False and got.get("conflict") is True and "厂家板" in got["why"]
     got = ops.timesync({"offset_ms": 3_000})
     assert got["stepped"] is False and "conflict" not in got
+
+
+# ---------------------------------------------------------------- 不靠 SSH(11-06,用户定)
+
+
+def _env(tmp: Path, text: str) -> Path:
+    p = tmp / "etc" / "nexwar" / "env"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(text)
+    p.chmod(0o640)
+    return p
+
+
+def test_不靠SSH_改设置_只认白名单的键和值_别的行原样_PIN不出现在回执里(tmp_path):
+    cfg = _cfg(tmp_path)
+    env = _env(tmp_path, "NEXWAR_PIN=123456\n# 注释\nNEXWAR_PERSONS=none\nNEXWAR_PERSONS=none\n"
+                         "NEXWAR_SIDECAR_ARGS=--x 1\n")
+    rec = Rec()
+    ops = R.Ops(cfg, run=rec, etc=tmp_path / "etc")
+    out = ops.do("env_set", {"changes": {"NEXWAR_PERSONS": "bridge", "NEXWAR_MAX_FRACTION": "0.7"}})
+    text = env.read_text()
+    assert text == ("NEXWAR_PIN=123456\n# 注释\nNEXWAR_PERSONS=bridge\n"
+                    "NEXWAR_SIDECAR_ARGS=--x 1\nNEXWAR_MAX_FRACTION=0.7\n")
+    assert (env.stat().st_mode & 0o777) == 0o640
+    assert "123456" not in json.dumps(out)
+    assert ["systemctl", "enable", "--now", "nexwar_persons.service"] in rec.calls
+    assert ["systemctl", "try-restart", "nexwar_sidecar.service"] in rec.calls
+    assert rec.calls[-1] == ["systemctl", "--no-block", "restart", "nexwar_agent.service"], \
+        "代理最后、不等(它是请求方)"
+    for bad in ({"NEXWAR_PIN": "1"}, {"NEXWAR_PERSONS": "bridge\nNEXWAR_PIN=0"},
+                {"NEXWAR_MAX_FRACTION": "2.0"}, {}, {"NEXWAR_OBS_PERMIT": 1}):
+        with pytest.raises(R.OpError):
+            ops.do("env_set", {"changes": bad})
+    assert env.read_text() == text, "被拒的一个字都不改"
+
+
+def test_不靠SSH_关人员检测_停它的服务_开障碍许可重启感知和旁路(tmp_path):
+    cfg = _cfg(tmp_path)
+    env = _env(tmp_path, "NEXWAR_PERSONS=bridge\n")
+    rec = Rec()
+    ops = R.Ops(cfg, run=rec, etc=tmp_path / "etc")
+    ops.do("env_set", {"changes": {"NEXWAR_PERSONS": "none", "NEXWAR_OBS_PERMIT": "1"}})
+    assert env.read_text() == "NEXWAR_PERSONS=none\nNEXWAR_OBS_PERMIT=1\n"
+    assert ["systemctl", "disable", "--now", "nexwar_persons.service"] in rec.calls
+    assert ["systemctl", "try-restart", "nexwar_obstacles.service"] in rec.calls
+    assert ["systemctl", "try-restart", "nexwar_sidecar.service"] in rec.calls
+
+
+def test_不靠SSH_env是符号链接_不改(tmp_path):
+    cfg = _cfg(tmp_path)
+    real = tmp_path / "real-env"
+    real.write_text("NEXWAR_PERSONS=none\n")
+    (tmp_path / "etc" / "nexwar").mkdir(parents=True)
+    (tmp_path / "etc" / "nexwar" / "env").symlink_to(real)
+    with pytest.raises(R.OpError):
+        R.Ops(cfg, run=Rec(), etc=tmp_path / "etc").do(
+            "env_set", {"changes": {"NEXWAR_PERSONS": "bridge"}})
+    assert real.read_text() == "NEXWAR_PERSONS=none\n"
+
+
+def _proc(tmp: Path, procs: dict[int, tuple[int, str]]) -> Path:
+    root = tmp / "proc"
+    for pid, (ppid, cmd) in procs.items():
+        d = root / str(pid)
+        d.mkdir(parents=True)
+        (d / "cmdline").write_bytes(cmd.replace(" ", "\0").encode() + b"\0")
+        (d / "stat").write_text(f"{pid} (x y) S {ppid} 1 1 0")
+    (root / "self").mkdir()
+    return root
+
+
+def test_不靠SSH_暂停厂家进程_只按代码里的单子_连子进程_我们的不碰_恢复发CONT(tmp_path):
+    import signal
+    procs = {
+        100: (1, "/usr/bin/python3 /opt/ros/humble/bin/ros2 launch robot_nav2 "
+                 "navigation_bringup.launch.py"),
+        101: (100, "/opt/ros/humble/lib/rclcpp_components/component_container_isolated --x"),
+        200: (1, "/opt/robot/robot_slam/install/robot_slam/lib/robot_slam/robot_slam"),
+        300: (1, "/opt/robot/robot-driver/install/image_decode/lib/image_decode/image_decode_node"),
+        400: (1, "/usr/bin/python3 -m nexwar_localizer.persons"),
+        401: (1, "/opt/ros/humble/lib/nav2_controller/controller_server --ros-args"),
+        500: (1, "./bin/apriltag_localization_node ./config/x.yaml"),
+    }
+    killed: list = []
+    ops = R.Ops(_cfg(tmp_path), run=Rec(), proc=_proc(tmp_path, procs),
+                kill=lambda pid, sig: killed.append((pid, sig)))
+    out = ops.do("vendor_pause", {})
+    assert sorted(p for p, _ in killed) == [100, 101, 200, 500]
+    assert {s for _, s in killed} == {signal.SIGSTOP}
+    assert sorted(x["pid"] for x in out["paused"]) == [100, 101, 200, 500]
+    assert all(len(x["cmd"]) <= 120 for x in out["paused"])
+    killed.clear()
+    ops.do("vendor_resume", {})
+    assert sorted(p for p, _ in killed) == [100, 101, 200, 500]
+    assert {s for _, s in killed} == {signal.SIGCONT}
+    with pytest.raises(R.OpError):
+        ops.do("vendor_pause", {"pids": [400]})
+
+
+def test_不靠SSH_开机加固定路由_按env里写的_只认网段via网关(tmp_path):
+    """第 25 条:视频走的 192.168.234.0/24 经 192.168.168.168,以前每次开机 SSH 手工加。"""
+    cfg = _cfg(tmp_path)
+    _env(tmp_path, "NEXWAR_PIN=123456\n"
+                   "NEXWAR_ROUTES=192.168.234.0/24 via 192.168.168.168;"
+                   " 10.8.0.0/16 via 192.168.168.1\n")
+    rec = Rec()
+    out = R.Ops(cfg, run=rec, etc=tmp_path / "etc").do("routes_apply", {})
+    assert ["ip", "route", "replace", "192.168.234.0/24", "via", "192.168.168.168"] in rec.calls
+    assert ["ip", "route", "replace", "10.8.0.0/16", "via", "192.168.168.1"] in rec.calls
+    assert out["applied"] == ["192.168.234.0/24 via 192.168.168.168",
+                              "10.8.0.0/16 via 192.168.168.1"]
+    assert out["failed"] == []
+    assert "123456" not in json.dumps(out)
+
+
+def test_不靠SSH_固定路由_没写就什么都不做_写错了整条不加_不许改默认路由(tmp_path):
+    cfg = _cfg(tmp_path)
+    _env(tmp_path, "NEXWAR_PIN=1\n")
+    rec = Rec()
+    assert R.Ops(cfg, run=rec, etc=tmp_path / "etc").do("routes_apply", {}) == \
+        {"applied": [], "failed": []}
+    assert rec.calls == []
+    for bad in ("0.0.0.0/0 via 192.168.168.1", "default via 192.168.168.1",
+                "192.168.234.0/24 via 192.168.168.168 dev eth0", "192.168.234.0/24 via x;rm",
+                "192.168.234.0/33 via 1.2.3.4", "fe80::/64 via fe80::1"):
+        _env(tmp_path, f"NEXWAR_ROUTES={bad}\n")
+        rec = Rec()
+        with pytest.raises(R.OpError):
+            R.Ops(cfg, run=rec, etc=tmp_path / "etc").do("routes_apply", {})
+        assert rec.calls == [], bad
+    with pytest.raises(R.OpError):
+        R.Ops(cfg, run=Rec(), etc=tmp_path / "etc").do("routes_apply", {"routes": "x"})
+
+
+def test_不靠SSH_固定路由_网关一时不通_记成没加上_别的照加(tmp_path):
+    cfg = _cfg(tmp_path)
+    _env(tmp_path, "NEXWAR_ROUTES=192.168.234.0/24 via 192.168.168.168,10.8.0.0/16 via 10.9.0.1\n")
+
+    def run(argv, timeout=120.0):
+        return (2, "Nexthop has invalid gateway") if "10.9.0.1" in argv else (0, "")
+    out = R.Ops(cfg, run=run, etc=tmp_path / "etc").do("routes_apply", {})
+    assert out["applied"] == ["192.168.234.0/24 via 192.168.168.168"]
+    assert out["failed"] == [{"route": "10.8.0.0/16 via 10.9.0.1",
+                              "error": "Nexthop has invalid gateway"}]
+
+
+def _proc_cg(tmp: Path, procs: dict[int, tuple[int, str, str]]) -> Path:
+    """``pid → (父 pid, 命令行, 所在的 systemd 单元)``。"""
+    (tmp / "proc").mkdir(exist_ok=True)
+    root = _proc(tmp, {p: (pp, cmd) for p, (pp, cmd, _u) in procs.items()})
+    for p, (_pp, _cmd, unit) in procs.items():
+        (root / str(p) / "cgroup").write_text(f"0::/system.slice/{unit}\n")
+    return root
+
+
+class Sys(Rec):
+    """假 systemctl:``is-enabled`` 按 ``enabled`` 回。"""
+
+    def __init__(self, enabled=()):
+        super().__init__()
+        self.enabled = set(enabled)
+
+    def __call__(self, argv, timeout):
+        self.calls.append(argv)
+        if argv[:2] == ["systemctl", "is-enabled"]:
+            return (0, "enabled\n") if argv[2] in self.enabled else (1, "disabled\n")
+        return 0, ""
+
+
+def test_第32条_厂家用不上的服务_关自启_只关整个单元都是厂家那几样的_记下来能开回去(tmp_path):
+    cfg = _cfg(tmp_path)
+    proc = _proc_cg(tmp_path, {
+        10: (1, "/opt/robot/robot_slam/install/robot_slam/lib/robot_slam/robot_slam",
+             "robot_slam.service"),
+        11: (1, "/usr/bin/python3 /opt/ros/humble/bin/ros2 launch robot_nav2 "
+                "navigation_bringup.launch.py",
+             "robot_nav2.service"),
+        12: (11, "/opt/ros/humble/lib/nav2_controller/controller_server", "robot_nav2.service"),
+        20: (1, "/opt/robot/perception/install/perception/bin/perception_jobs /x",
+             "robot_perception.service"),
+        21: (1, "/opt/robot/robot-driver/install/image_decode/lib/image_decode/image_decode_node",
+             "robot_perception.service"),
+        30: (1, "/usr/bin/python3 -m nexwar_agent.main", "nexwar_agent.service"),
+    })
+    sysd = Sys(enabled={"robot_slam.service", "robot_nav2.service", "robot_perception.service"})
+    ops = R.Ops(cfg, run=sysd, etc=tmp_path / "etc", proc=proc)
+    out = ops.do("vendor_autostart", {"on": False})
+    assert out["disabled"] == ["robot_nav2.service", "robot_slam.service"]
+    assert ["systemctl", "disable", "--now", "robot_slam.service"] in sysd.calls
+    assert not any("robot_perception" in " ".join(c) and "disable" in c for c in sysd.calls), \
+        "图像解码跟它同一个单元:关了人员检测就没画面"
+    assert {"unit": "robot_perception.service", "why": "shared"} in out["skipped"]
+    assert not any("nexwar_agent" in " ".join(c) for c in sysd.calls)
+    rec = json.loads((tmp_path / "data" / "vendor-autostart-off.json").read_text())
+    assert rec["units"] == ["robot_nav2.service", "robot_slam.service"]
+    # 再跑一遍(下次开机):已经关了的不重复记,记录不丢
+    sysd2 = Sys(enabled=set())
+    R.Ops(cfg, run=sysd2, etc=tmp_path / "etc", proc=proc).do("vendor_autostart", {"on": False})
+    assert json.loads((tmp_path / "data" / "vendor-autostart-off.json").read_text())["units"] == \
+        ["robot_nav2.service", "robot_slam.service"]
+    # 开回去:按记录开,记录删掉
+    sysd3 = Sys()
+    out = R.Ops(cfg, run=sysd3, etc=tmp_path / "etc", proc=proc).do("vendor_autostart",
+                                                                     {"on": True})
+    assert out["enabled"] == ["robot_nav2.service", "robot_slam.service"]
+    assert ["systemctl", "enable", "--now", "robot_slam.service"] in sysd3.calls
+    assert not (tmp_path / "data" / "vendor-autostart-off.json").exists()
+    for bad in ({}, {"on": "yes"}, {"on": False, "units": ["ssh.service"]}):
+        with pytest.raises(R.OpError):
+            ops.do("vendor_autostart", bad)
+
+
+def test_第4条_向站点对时_只在chrony运行时加一个运行时的源_不改厂家的配置文件(tmp_path):
+    cfg = _cfg(tmp_path)
+    _env(tmp_path, "NEXWAR_SITE_MQTT=mqtts://192.168.234.10:8883\n")
+    rec = Rec()
+    out = R.Ops(cfg, run=rec, etc=tmp_path / "etc").do("chrony_site", {})
+    assert out == {"chrony": "added", "host": "192.168.234.10"}
+    assert ["chronyc", "add", "server", "192.168.234.10", "iburst", "prefer", "trust"] in rec.calls
+    assert not any(c[:2] == ["systemctl", "restart"] for c in rec.calls)
+
+    def already(argv, timeout):
+        return (1, "511 Source already present\n") if argv[0] == "chronyc" else (0, "")
+    got = R.Ops(cfg, run=already, etc=tmp_path / "etc").do("chrony_site", {})
+    assert got["chrony"] == "present"
+
+    def off(argv, timeout):
+        return (3, "inactive\n") if argv[:2] == ["systemctl", "is-active"] else (0, "")
+    assert R.Ops(cfg, run=off, etc=tmp_path / "etc").do("chrony_site", {}) == {"chrony": "inactive"}
+    _env(tmp_path, "NEXWAR_SITE_MQTT=mqtts://127.0.0.1:8883\n")
+    rec = Rec()
+    assert R.Ops(cfg, run=rec, etc=tmp_path / "etc").do("chrony_site", {}) == {"chrony": "no_site"}
+    assert not any(c[0] == "chronyc" for c in rec.calls), "经隧道的回环地址对时过不去"
+    _env(tmp_path, "NEXWAR_SITE_NTP=site.lan;reboot\n")
+    with pytest.raises(R.OpError):
+        R.Ops(cfg, run=Rec(), etc=tmp_path / "etc").do("chrony_site", {})
+
+
+def test_开机准备_路由_对时_厂家自启_一起做_没齐每分钟再来_最多十回(tmp_path):
+    cfg = _cfg(tmp_path)
+    _env(tmp_path, "NEXWAR_ROUTES=192.168.234.0/24 via 192.168.168.168\n"
+                   "NEXWAR_SITE_NTP=192.168.234.10\n")
+    slept: list[float] = []
+    tries = {"n": 0}
+
+    def run(argv, timeout):
+        if argv[:2] == ["ip", "route"]:
+            tries["n"] += 1
+            return (2, "Network is unreachable") if tries["n"] < 3 else (0, "")
+        return 0, ""
+    proc = _proc_cg(tmp_path, {})
+    _env(tmp_path, "NEXWAR_ROUTES=192.168.234.0/24 via 192.168.168.168\n"
+                   "NEXWAR_SITE_NTP=192.168.234.10\nNEXWAR_VENDOR_AUTOSTART=1\n")
+    R.boot(R.Ops(cfg, run=run, etc=tmp_path / "etc", proc=proc), sleep=slept.append)
+    assert tries["n"] == 3 and slept == [60, 60], "路由、对时齐了;厂家自启开着:不用再看"
+    # 厂家自启关着(缺省):厂家的进程起得晚,十分钟里每分钟看一回;路由加上了就不再加
+    _env(tmp_path, "NEXWAR_ROUTES=192.168.234.0/24 via 192.168.168.168\n"
+                   "NEXWAR_SITE_NTP=192.168.234.10\n")
+    tries["n"] = 0
+    slept.clear()
+    R.boot(R.Ops(cfg, run=run, etc=tmp_path / "etc", proc=proc), sleep=slept.append)
+    assert tries["n"] == 3 and len(slept) == 9
+    # 一直不通:十回后放弃,不卡开机
+    tries["n"] = -100
+    slept.clear()
+    R.boot(R.Ops(cfg, run=run, etc=tmp_path / "etc", proc=proc), sleep=slept.append)
+    assert len(slept) == 9 and tries["n"] == -90
+
+
+def test_POC1106_暂停厂家进程也停竞品的ros1桥_关自启不碰竞品的单元(tmp_path):
+    """POC 网络(竞品上装,没有 V2):竞品的 ros1_bridge 在 Orin 上跟我们抢话题,以前 SSH 手工停。
+    跟着「开机暂停厂家进程」一起暂停(能恢复);关自启只管厂家的,竞品的设置不动(用户 11-06)。"""
+    import signal
+    cfg = _cfg(tmp_path)
+    proc = _proc_cg(tmp_path, {
+        10: (1, "/bin/bash /home/anbot/bridge_start.sh", "anbot_bridge.service"),
+        11: (10, "/opt/ros/foxy/lib/ros1_bridge/parameter_bridge __name:=x",
+             "anbot_bridge.service"),
+        20: (1, "/opt/robot/robot_slam/install/robot_slam/lib/robot_slam/robot_slam",
+             "robot_slam.service"),
+    })
+    killed: list = []
+    ops = R.Ops(cfg, run=Rec(), proc=proc, kill=lambda pid, sig: killed.append((pid, sig)))
+    ops.do("vendor_pause", {})
+    assert sorted(p for p, s in killed if s == signal.SIGSTOP) == [10, 11, 20]
+    sysd = Sys(enabled={"anbot_bridge.service", "robot_slam.service"})
+    out = R.Ops(cfg, run=sysd, etc=tmp_path / "etc", proc=proc).do("vendor_autostart",
+                                                                    {"on": False})
+    assert out["disabled"] == ["robot_slam.service"]
+    assert not any("anbot_bridge" in " ".join(c) for c in sysd.calls), "竞品的自启不动"

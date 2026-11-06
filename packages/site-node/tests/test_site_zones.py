@@ -177,6 +177,10 @@ def test_派单门槛_修订对不上拒_补发之后放行(站点):
     assert s.loop.call(lambda: s.disp.sync_zones()) == [], "都是第 0 版:不发"
     code, d = s.req("POST", "/api/robots/A/goto", {"target": target(1.0)}, token=alice)
     assert code == 409 and "安全确认" in d["error"], "W10 之前就在用的图(修订 0)也要确认(外审 2)"
+    from nexwar_site.dispatcher import DispatchRefused
+    with pytest.raises(DispatchRefused, match="安全确认"):          # W74 外审 r1 #1:跟人也自己走
+        s.disp._check_zones("A", s.disp.clients["A"], "follow")
+    assert s.disp._check_running.__doc__ and "follow" in s.disp.AUTONOMOUS_KINDS
     # 站点这头改了、没发出去(直接写库):狗上还是第 0 版
     s.disp.zones.put(MAP[0], MAP[1], [SLOW], base_revision=0, by="alice")
     code, d = s.req("POST", "/api/robots/A/goto", {"target": target(1.0)}, token=alice)

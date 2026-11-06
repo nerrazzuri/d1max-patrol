@@ -11,13 +11,25 @@ W24 的人员检测原来只在驱离里用:狗待命、巡检时看见人,站�
 - **布防时间表管着、部分防区布防**(W44 外审 R2):按机器人**可靠的现在位置**
   (:meth:`PersonWatch._where`)看它那个防区此刻布不布防,布防就报;位置可靠但不在任何画过的防区里,
   按「全部防区一样」那一份;位置说不清(定位丢了、位置停更、没接防区)宁可报。
-- **一回看见只报一次**:记在 ``person_sightings``,跟待报告警同一个事务落库;狗确认人走了(``present``
-  是假:连续 20 秒没看到)才删,再看见再报。说不清(检测断了、狗掉线)就留着,不重报也不删。
+- **一回看见只报一次**:记在 ``person_sightings``,跟待报告警同一个事务落库;说不清(检测断了、狗掉线)
+  就留着,不重报也不删。
+
+W74 一期(设计 docs/W74-看见人处置-设计.md §六、§九):
+
+- **最后位置**:人在的时候,每 :data:`TRACK_EVERY_MS` 把机器人此刻的位置记进那条 P1 的现场
+  (``last_seen``)。人的方向这一期没有(代理只在有没有人、近不近变了时才重发人员状态),二期跟随时做。
+- **看不到了 ≠ 人走了**:狗确认人走了(``present`` 是假:连续 20 秒没看到)时那条 P1 还开着 → 改成
+  「看不到了,去向不明」(``lost_ms``),这一回记成 ``'lost'``、不删;同一回又看见 → 改回「又看见人了」,
+  还是那一条。那条关了(要保安先到场,:data:`~nexwar_site.alert_store.ARRIVAL_KINDS`)、人也走了才删,
+  再看见另起一条。
+- **没人到场升级**:那条开了 :data:`OVERDUE_MIN` 分钟还没人点「已到场」→ 报 P1 ``person_overdue``
+  给经理(一次);有人到场、那条关了,经理那条跟着收掉。
 """
 
 from __future__ import annotations
 
 import logging
+import math
 from collections.abc import Callable
 from typing import Any
 
@@ -26,6 +38,18 @@ from nexwar_site.pending_alerts import flush, queue
 
 log = logging.getLogger(__name__)
 
+PERSON_KIND = "dog_sees_person"
+OVERDUE_KIND = "person_overdue"
+#: 人在的时候,最后位置多久记一次(毫秒)。
+TRACK_EVERY_MS = 5_000
+#: 看见人以后这么多分钟没人到场 → 报经理。
+OVERDUE_MIN = 10
+#: W74 二期:告警现场里最多留这么多个人的轨迹点(``[x, y, at_ms]``,留最新的)。
+PERSON_TRACK_KEEP = 300
+
+
+#: 任务结果事件(跟人那一趟结束了)。
+_TASK_END = ("task_done", "task_failed", "task_aborted", "task_preempted")
 
 class PersonWatch:
     def __init__(self, db: SiteDB, dispatcher: Any, *, now_ms: Callable[[], int],
@@ -42,6 +66,62 @@ class PersonWatch:
         self.watching: Callable[[str], str | None] | None = None
         #: 告警台。站点主程序接上;没接就只落库(下一拍有了再报)。
         self.alerts: Any = None
+        #: 每台最后一次记最后位置的时刻(内存;站点重启了下一拍重记)。
+        self._tracked: dict[str, int] = {}
+        #: W74 二期:地图上一个点在哪(命名区域、没命名用防区名;``{map_id, map_version, x, y}``)。
+        #: 站点主程序接上;没接就不说。
+        self.where_of: Callable[[dict[str, Any]], str | None] | None = None
+        reg = getattr(dispatcher, "on_event", None)
+        if callable(reg):
+            reg(self.on_event)
+
+    def on_event(self, rid: str, e: Any) -> None:
+        """W74 二期:机器人跟人路上发的轨迹(``follow_track``)、跟丢 / 到上限(``follow_lost``)
+        进这台开着的「看见人」告警的现场:人最后在哪、往哪走、轨迹。没有开着的告警不记。"""
+        if e.kind not in ("follow_track", "follow_lost", *_TASK_END) \
+                or not isinstance(e.data, dict):
+            return
+        try:
+            a = self._open(rid)
+            if a is None:
+                return
+            d = e.data
+            # 外审 r1 #14:只收值守给这一条派的那一趟(派的时候记进 ``follow_task``);断网积压的
+            # 上一回的事件、别的任务的不收
+            if not d.get("task_id") or d.get("task_id") != a.context.get("follow_task"):
+                return
+            cur = a.context.get("follow")
+            if e.kind in _TASK_END:                      # 那一趟结束了:不再说在跟(#13)
+                if cur == "follow":
+                    self.alerts.amend_open(rid, PERSON_KIND, context={"follow": "ended"})
+                return
+            ctx: dict[str, Any] = {}
+            if e.kind == "follow_lost":
+                ctx["follow"] = str(d.get("result") or "lost")
+            elif d.get("phase") == "follow" or (d.get("phase") is None
+                                                and cur not in ("lost", "limit", "ended")):
+                ctx["follow"] = "follow"                 # 收尾时的轨迹不把跟丢改回在跟(#13)
+            last = d.get("last")
+            if isinstance(last, dict) and _num(last.get("x")) and _num(last.get("y")):
+                person = {"x": float(last["x"]), "y": float(last["y"]),
+                          "at_ms": int(last.get("at_ms") or self._now())}
+                if _num(d.get("heading_deg")):
+                    person["heading_deg"] = float(d["heading_deg"])
+                where = self._place(rid, person)
+                if where:
+                    person["where"] = where
+                ctx["person"] = person
+            pts = d.get("points")
+            if isinstance(pts, list) and pts:
+                old = a.context.get("person_track") or []
+                new = [[float(p["x"]), float(p["y"]), int(p.get("at_ms") or 0)] for p in pts
+                       if isinstance(p, dict) and _num(p.get("x")) and _num(p.get("y"))]
+                seen = {tuple(p) for p in old}
+                track = list(old) + [p for p in new if tuple(p) not in seen]
+                ctx["person_track"] = track[-PERSON_TRACK_KEEP:]
+            self.alerts.amend_open(rid, PERSON_KIND, context=ctx)
+        except Exception:
+            log.exception("%s 跟人的 %s 记不进告警", rid, e.kind)
 
     def armed_now(self, rid: str) -> bool:
         """这台机器人此刻所在的地方布不布防(受力警报响不响警笛也问这里)。"""
@@ -82,12 +162,24 @@ class PersonWatch:
                 continue                                  # 说不清:不报、不删
             present = p.get("present")
             if present is False and rid in seen:
-                with self.db.tx() as tx:                  # 人走了:这一回完了,再看见再报
-                    tx.execute("DELETE FROM person_sightings WHERE robot_id=?", (rid,))
+                open_ = self._open(rid)
+                if seen[rid] == "p1" and open_ is not None:
+                    self._lost(rid, now)                  # W74:看不到了 ≠ 人走了
+                elif seen[rid] == "lost" and open_ is not None:
+                    pass                                  # 还在等保安到场
+                else:
+                    self._done(rid)                       # 人走了、那条也关了:再看见再报
             elif present is True and rid not in busy and self._armed_for(rid):
                 kind = seen.get(rid)
+                if kind == "lost":
+                    if self._open(rid) is not None:
+                        self._found(rid, now)
+                        continue
+                    self._done(rid)                       # 那条关了:另起一回
+                    kind = None
                 if kind == "p1":
-                    continue                                  # 这一回报过 P1 了
+                    self._track(rid, now)                 # 这一回报过 P1 了:记最后位置
+                    continue
                 who = self._authorized(rid)          # B1c:名单(每拍按当前授权、当前位置重核)
                 if kind is None and who is not None:
                     self._authorized_seen(rid, p, who, now)
@@ -96,6 +188,100 @@ class PersonWatch:
                     # 而人还在 → 补报一次 P1(B 阶段外审 I1)
                     self._raise(rid, p, now, lapsed=kind == "authorized")
         flush(self.db, self.alerts)
+        self._overdue(now)
+
+    # ------------------------------------------------------------ W74 一期
+
+    def _place(self, rid: str, p: dict[str, Any]) -> str | None:
+        c = self.dispatcher.clients.get(rid)
+        pose = c.telemetry.pose if c is not None and c.telemetry is not None else None
+        if self.where_of is None or pose is None:
+            return None
+        try:
+            return self.where_of({"map_id": pose.map_id, "map_version": pose.map_version,
+                                  "x": p["x"], "y": p["y"]})
+        except Exception:
+            log.exception("%s 人在哪说不出来", rid)
+            return None
+
+    def _open(self, rid: str) -> Any:
+        """这台还开着的那条 P1(告警台不支持就 ``None``:按老规矩,人走了就清)。"""
+        f = getattr(self.alerts, "open_of", None)
+        return f(rid, PERSON_KIND) if callable(f) else None
+
+    def _done(self, rid: str) -> None:
+        with self.db.tx() as tx:
+            tx.execute("DELETE FROM person_sightings WHERE robot_id=?", (rid,))
+        self._tracked.pop(rid, None)
+
+    def _set_kind(self, rid: str, kind: str) -> None:
+        with self.db.tx() as tx:
+            tx.execute("UPDATE person_sightings SET kind=? WHERE robot_id=?", (kind, rid))
+
+    def _pose(self, rid: str, now: int) -> dict[str, Any] | None:
+        c = self.dispatcher.clients.get(rid)
+        pose = c.telemetry.pose if c is not None and c.telemetry is not None else None
+        if pose is None:
+            return None
+        return {"at_ms": now, "map_id": pose.map_id, "map_version": pose.map_version,
+                "x": round(pose.x, 2), "y": round(pose.y, 2), "yaw": round(pose.yaw, 2)}
+
+    def _track(self, rid: str, now: int) -> None:
+        if now - self._tracked.get(rid, -TRACK_EVERY_MS) < TRACK_EVERY_MS:
+            return
+        here = self._pose(rid, now)
+        if here is None or self._open(rid) is None:
+            return
+        self.alerts.amend_open(rid, PERSON_KIND, context={"last_seen": here})
+        self._tracked[rid] = now
+
+    def _lost(self, rid: str, now: int) -> None:
+        a = self._open(rid)
+        last = a.context.get("last_seen") or {}
+        where = (f",最后在 ({last['x']}, {last['y']})" if "x" in last else "")
+        self.alerts.amend_open(
+            rid, PERSON_KIND, title=f"看不到了,去向不明{where}",
+            detail="机器人一段时间没看到这个人了,人可能躲到别处或离开了。请保安到场查看,"
+                   "到了点「已到场」,再处置完成或标误报",
+            context={"lost_ms": now})
+        self._set_kind(rid, "lost")
+        log.info("%s 看不到人了:改成去向不明", rid)
+
+    def _found(self, rid: str, now: int) -> None:
+        self.alerts.amend_open(rid, PERSON_KIND, title="又看见人了(这一回还没处理完)",
+                               context={"lost_ms": None})
+        self._set_kind(rid, "p1")
+        self._tracked.pop(rid, None)
+        self._track(rid, now)
+        log.info("%s 又看见人了", rid)
+
+    def _overdue(self, now: int) -> None:
+        book = getattr(self.alerts, "book", None)
+        if book is None:
+            return
+        for a in list(book.open()):
+            if a.kind != PERSON_KIND:
+                continue
+            arrived = a.context.get("arrived_ms") is not None
+            if arrived:
+                self._resolve_overdue(a.robot)
+            elif now - a.first_ms >= OVERDUE_MIN * 60_000 and not a.context.get("overdue_ms"):
+                last = a.context.get("last_seen") or a.context.get("pose") or {}
+                self.alerts.raise_alert(
+                    kind=OVERDUE_KIND, robot=a.robot,
+                    title=f"{a.robot} 看见人 {OVERDUE_MIN} 分钟没人到场",
+                    detail=f"「{a.title}」开了 {OVERDUE_MIN} 分钟,还没有保安点「已到场」。"
+                           "请安排人去现场",
+                    context={"alert": a.key, **({"pose": last} if last else {})})
+                book.amend(a.key, now_ms=now, context={"overdue_ms": now})
+                log.warning("%s 看见人 %d 分钟没人到场:报经理", a.robot, OVERDUE_MIN)
+        for o in list(book.open()):                      # 那条关了:经理那条跟着收
+            if o.kind == OVERDUE_KIND and self._open(o.robot) is None:
+                self._resolve_overdue(o.robot)
+
+    def _resolve_overdue(self, rid: str) -> None:
+        if any(o.kind == OVERDUE_KIND and o.robot == rid for o in self.alerts.book.open()):
+            self.alerts.resolve_all(rid, OVERDUE_KIND, who="")
 
     def _zone(self, rid: str) -> str | None:
         """狗现在在哪个防区(B1c:按地图上画的防区多边形算);说不清、不在防区里都是 ``None``。"""
@@ -169,6 +355,11 @@ class PersonWatch:
         if pose is not None:
             context["pose"] = {"map_id": pose.map_id, "map_version": pose.map_version,
                                "x": round(pose.x, 2), "y": round(pose.y, 2), "at_ms": now}
+            context["last_seen"] = self._pose(rid, now)
+            self._tracked[rid] = now
+        zone = self._zone(rid)
+        if zone:
+            context["zone"] = zone                       # W74:恢复值守后按它加密巡查
         with self.db.tx() as tx:
             tx.execute("INSERT INTO person_sightings(robot_id, started_ms, kind) VALUES (?,?,'p1') "
                        "ON CONFLICT(robot_id) DO UPDATE SET kind='p1'", (rid, now))
@@ -176,3 +367,7 @@ class PersonWatch:
                   detail="布防中,机器人不在驱离;看现场照片,要驱离就点「就地驱离」",
                   context=context, now_ms=now)
         log.info("%s 看见人了(布防中):%s", rid, title)
+
+
+def _num(v: Any) -> bool:
+    return isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)

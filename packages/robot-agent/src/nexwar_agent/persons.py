@@ -55,6 +55,8 @@ class _Cam:
     nearest: float | None = None
     bearing: float = 0.0
     near: bool = False
+    #: 这一帧测到距离的每个人 ``(方向°, 距离 m)``(跟人挑同一个人用,外审 r1 #9)。
+    ranged: list = field(default_factory=list)
 
     def sees(self) -> bool:
         return sum(self.win) >= NEED and bool(self.win and self.win[-1])
@@ -70,6 +72,9 @@ class PersonView:
         self.snapshot_dir = snapshot_dir
         #: 把截图存成一趟归档(代理接上):``(截图路径, 相机) → 那一趟的名字``(空 = 没存成)。
         self.save_snapshot = save_snapshot
+        #: W74 五期:人脸补拍(``face-`` 开头的截图)能不能留 —— 证据加密配好了才能(运行时接上)。
+        #: 没接 = 不能:收到就删、不传(人脸照片不许明文放着)。
+        self.faces_ok: Callable[[], bool] | None = None
         self.connected = False
         self.reason = ""
         self._last_check = ""
@@ -145,6 +150,14 @@ class PersonView:
         ranged = [c for c in sure if c.nearest is not None]
         return min(ranged, key=lambda c: c.nearest).bearing if ranged else sure[0].bearing
 
+    def targets(self) -> list[tuple[float, float]]:
+        """此刻看到的每一个测到距离的人 ``(方向°, 距离 m)``(跟人用:先认原来跟的那个,外审 r1 #9)。
+        不是「有人」回空。"""
+        if self.present is not True:
+            return []
+        return [t for k, c in self._cams.items() if self._healthy(k) and c.sees()
+                for t in c.ranged]
+
     def key(self) -> tuple:
         """能力该重发的时候(这几样变了)。人数、距离天天变,不在里面(站点按 ``near`` 判)。"""
         return (self.state(), self.present, self.present is True and self.near)
@@ -169,6 +182,7 @@ class PersonView:
         if not c.ok:
             c.win.clear()
             c.count, c.nearest, c.near, c.bearing = 0, None, False, 0.0
+            c.ranged = []
         else:
             self._watch.add(m.camera)
             people = m.people
@@ -183,6 +197,7 @@ class PersonView:
             near = (min(ranged, key=lambda p: p.range_m) if ranged
                     else max(people, key=lambda p: p.score) if people else None)
             c.count = len(people)
+            c.ranged = [(p.bearing_deg, p.range_m) for p in ranged]
             c.nearest = near.range_m if near is not None else None
             c.bearing = near.bearing_deg if near is not None else 0.0
             if c.nearest is not None and c.nearest <= NEAR_M:
@@ -249,6 +264,13 @@ class PersonView:
 
     def _take_snapshot(self, m: Persons) -> None:
         if self.snapshot_dir is None or self.save_snapshot is None:
+            return
+        if m.snapshot.startswith("face-") and not (self.faces_ok is not None and self.faces_ok()):
+            try:
+                (self.snapshot_dir / m.snapshot).unlink(missing_ok=True)
+            except OSError:
+                log.exception("人脸照片 %s 删不掉", m.snapshot)
+            log.warning("证据没加密:人脸照片 %s 删掉、不传", m.snapshot)
             return
         try:
             run = self.save_snapshot(self.snapshot_dir / m.snapshot, m.camera)

@@ -137,6 +137,9 @@ export function RoutesPage({ say, embed, kind = "patrol" }: { say: Say; embed?: 
   const bad = new Map<number, string>();
   for (const p of problems) if (p.index !== null) bad.set(p.index, p.problem);
   const wholeProblems = problems.filter((p) => p.index === null);
+  // 11-05 现场第 15、35 条:刚存下的这一版里要原地转又贴墙的点(改了以后不算,存了再看)
+  const warns = new Map<number, string>();
+  if (!dirty && draft && orig && orig.id === draft.id) for (const w of orig.warnings ?? []) warns.set(w.index, w.warning);
   // W44 第三期:两点之间走不通(站点逐段查,``segment: [i, i+1]``)
   const badSegs = problems.filter((p) => Array.isArray(p.segment)).map((p) => p.segment as [number, number]);
 
@@ -363,11 +366,11 @@ export function RoutesPage({ say, embed, kind = "patrol" }: { say: Say; embed?: 
                       const h = handleAt(meta, s, p.x, p.y, p.yaw, HANDLE_PX);
                       return (
                         <PoseMarker key={i} x={h.x} y={h.y} hx={h.hx} hy={h.hy} r={PT_R} label={i + 1} selected={i === pi}
-                          class={`route-pt${i === pi ? " on" : ""}${bad.has(i) ? " bad" : ""}`}
+                          class={`route-pt${i === pi ? " on" : ""}${bad.has(i) ? " bad" : warns.has(i) ? " warn" : ""}`}
                           attrs={{ "data-point": String(i), onPointerDown: dragPoint(i),
                             onClick: (e: MouseEvent) => { e.stopPropagation(); setPi(i); } } as Record<string, unknown>}
                           handle={i === pi ? { data: i, onPointerDown: dragHandle(i) } : undefined}>
-                          <title>{`${i + 1}. ${p.name}${bad.has(i) ? ` — ${bad.get(i)}` : ""}`}</title>
+                          <title>{`${i + 1}. ${p.name}${bad.has(i) ? ` — ${bad.get(i)}` : warns.has(i) ? ` — ${warns.get(i)}` : ""}`}</title>
                         </PoseMarker>
                       );
                     })}
@@ -434,6 +437,7 @@ export function RoutesPage({ say, embed, kind = "patrol" }: { say: Say; embed?: 
                 )}
                 {problems.length > 0 && <p class="small bad" role="alert">{rt("routeProblems", { n: problems.length })}</p>}
                 {wholeProblems.map((p, i) => <p key={i} class="small bad">{p.problem}</p>)}
+                {[...warns.values()].map((w, i) => <p key={`w${i}`} class="small warn" data-route-warn={i}>{w}</p>)}
                 {genNotes.map((n, i) => <p key={`g${i}`} class="muted small" data-gen-note={i}>{n}</p>)}
                 {draft && pts.length > 1 && (eta && !dirty ? (
                   <p class="small route-eta" data-eta-total="1" title={rt("etaBasis", { v: eta.speed_mps })}>

@@ -63,7 +63,8 @@ def test_能力_控制权不可释放_没有横移_只有灯():
     assert math.isclose(caps.max_vx, 0.2) and math.isclose(caps.max_wz, 0.5)
     assert caps.deadband_vx == 0.05
     assert caps.actuators == {"light": True, "strobe": False, "siren": False, "speaker": False,
-                              "spotlight": False, "head": False}
+                              "spotlight": False, "head": False, "ptz": False,
+                              "wiper": False}
     assert [k for k, v in caps.sensing.items() if v is True] == ["imu"], "W26:姿态与受力走旁路进程"
     assert caps.sensing["imu_hz"] == 20, "W41:报姿态帧的频率"
 

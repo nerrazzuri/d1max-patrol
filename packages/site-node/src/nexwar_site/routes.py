@@ -47,6 +47,10 @@ MAX_WAYPOINTS = 500
 MAX_BYTES = 200_000
 #: 逐段查走不走得通:每一段都查(W73:自动生成的防区路线常常上百段;原来只查前 100 段)。
 MAX_SEGMENT_CHECKS = MAX_WAYPOINTS - 1
+#: 11-05 现场第 15、35 条:机身 1.03 × 0.58 m 原地转一圈半径约 0.59 m,加 6 cm 余量;
+#: 拐这么多度以上算要原地转。
+TURN_CLEAR_M = 0.65
+TURN_DEG = 60.0
 #: W73 第一期:路线的类别。``patrol`` 巡逻路线(巡逻排程、手动巡逻用);
 #: ``guard`` 防区路线(只给布防值守用,
 #: 不进 :func:`nexwar_site.catalog.active_bundle`,排程不许挂)。
@@ -88,6 +92,16 @@ def flat_waypoint(w: MissionWaypoint) -> dict[str, Any]:
 
 def _num(v: Any) -> bool:
     return isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
+
+
+def _turn_deg(a: tuple[float, float], b: tuple[float, float], c: tuple[float, float]) -> float:
+    """在 ``b`` 拐多少度(从 a→b 的方向转到 b→c 的方向);有两点重合算要转(180)。"""
+    u, v = (b[0] - a[0], b[1] - a[1]), (c[0] - b[0], c[1] - b[1])
+    nu, nv = math.hypot(*u), math.hypot(*v)
+    if nu < 1e-6 or nv < 1e-6:
+        return 180.0
+    cos = max(-1.0, min(1.0, (u[0] * v[0] + u[1] * v[1]) / (nu * nv)))
+    return math.degrees(math.acos(cos))
 
 
 def _wire_waypoints(raw: Any) -> list[dict[str, Any]]:
@@ -184,6 +198,32 @@ class RouteStore:
             "SELECT * FROM route_schedules ORDER BY entry_id")
             if json.loads(r["definition"]).get("mission") == route_id]
         out["problems"] = self.problems(m.map_id, m.map_version, m.waypoints)
+        out["warnings"] = self.warnings(m.map_id, m.map_version, m.waypoints)
+        return out
+
+    def warnings(self, map_id: str, version: str, waypoints: Any) -> list[dict[str, Any]]:
+        """不挡存、只提醒(11-05 现场第 15、35 条):要原地转的点(头一个、最后一个、拐
+        :data:`TURN_DEG` 度以上)离墙不到 :data:`TURN_CLEAR_M` —— 原地转机身会扫到墙,守卫拦、Nav2
+        规划不出,到了那里就卡住。``{"index", "name", "warning"}``。"""
+        if self.maps is None or not version:
+            return []
+        from nexwar_site.maps import MapError
+        pts = [(w.name, w.pose.position.x, w.pose.position.y) for w in waypoints]
+        out: list[dict[str, Any]] = []
+        for i, (name, x, y) in enumerate(pts[:MAX_SEGMENT_CHECKS + 1]):
+            if 0 < i < len(pts) - 1 and _turn_deg(pts[i - 1][1:], (x, y), pts[i + 1][1:]) \
+                    < TURN_DEG:
+                continue
+            try:
+                gap = self.maps.clearance(map_id, version, x, y, TURN_CLEAR_M)
+            except MapError:
+                return []
+            if gap is None:
+                return []
+            if gap < TURN_CLEAR_M:
+                out.append({"index": i, "name": name, "warning": (
+                    f"{name} 离墙或障碍只有 {gap:.1f} m,机器人在这里要原地转,要离开 "
+                    f"{TURN_CLEAR_M:g} m 才转得开:往空处挪一点(窄通道的尽头别放点,掉不了头)")})
         return out
 
     # ------------------------------------------------------------ 校验

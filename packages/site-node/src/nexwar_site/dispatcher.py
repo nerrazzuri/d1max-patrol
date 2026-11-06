@@ -462,11 +462,14 @@ class Dispatcher:
             return None
         return caps["map_id"], caps["map_version"]
 
+    #: 会自己走的任务:区域、狗上正在跑的配置都要核(外审 W74 r1 #1:跟人也是)。
+    AUTONOMOUS_KINDS = ("goto", "patrol", "standoff", "follow")
+
     def _check_zones(self, robot_id: str, c: DispatchClient, kind: str) -> None:
         """区域(W10):这一版区域要人工确认过(外审 2);狗上的区域修订要跟站点的一致;这张图上有区域,
         狗的导航就得守;规划后端没有规划栅格不派。只管会自己走的(goto、巡检,排程、事件派遣、回待命点
         都经过它)。"""
-        if kind not in ("goto", "patrol", "standoff"):
+        if kind not in self.AUTONOMOUS_KINDS:
             return
         head = c.capabilities.tasks.get("head") if c.capabilities is not None else None
         if head is not None and not head.get("autonomy", head.get("direction") == "head"):
@@ -578,7 +581,7 @@ class Dispatcher:
 
     def _check_running(self, robot_id: str, c: DispatchClient, kind: str) -> None:
         """会自己走的任务:狗实际在跑的图、区域内容跟站点登记的对不上不派(R3、R4)。"""
-        if kind not in ("goto", "patrol", "standoff"):
+        if kind not in self.AUTONOMOUS_KINDS:
             return
         v = self.running_view(c)
         if v is not None and v["problems"]:
@@ -846,6 +849,15 @@ class Dispatcher:
         self._check_dispatchable(robot_id, c, "standoff")
         return await self._send(c, robot_id, "standoff", req.to_payload(), issued_by=issued_by,
                                 priority=STANDOFF_PRIORITY, task_id=task_id)
+
+    async def follow(self, robot_id: str, task_id: str, req: Any, *,
+                     issued_by: str) -> dict[str, Any]:
+        """跟人(W74 二期):值守看见人停下以后派;跟报警出动同一档优先级。"""
+        from nexwar_contract.follow import FOLLOW_PRIORITY
+        c = self._client_for(robot_id)
+        self._check_dispatchable(robot_id, c, "follow")
+        return await self._send(c, robot_id, "follow", req.to_payload(), issued_by=issued_by,
+                                priority=FOLLOW_PRIORITY, task_id=task_id)
 
     async def abort(self, robot_id: str, task_id: str, *, issued_by: str) -> dict[str, Any]:
         """abort 只要求登记有效:不在线也发(QoS 1 持久会话,重连后补投)。"""

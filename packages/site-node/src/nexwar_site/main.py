@@ -923,6 +923,9 @@ class Server:
         from nexwar_site.force import ForceWatch
         #: 狗翻倒、被抱起来(W26,决策 52):按狗能力里的状态对账报 P1,布防时被抱起来响警笛。
         self.force = ForceWatch(self.db, self.dispatcher, now_ms=wall_ms, arming=self.arming)
+        from nexwar_site.site_settings import SiteSettings
+        _st = SiteSettings(self.db)
+        self.force.siren_allowed = lambda: bool(_st.duty()["self_protect_siren"])   # W74 四期
         self.force.alerts = self.alerts
         self.deterrence.held_by_others = self.force.held   # 系统审查 S04:驱离不关受力警报的灯
         self.charge.busy = self.deterrence.busy
@@ -1060,6 +1063,7 @@ class Server:
         self.api.arming = self.arming
         self.api.areas, self.api.authz = self.areas, self.authz      # B1c
         self.sightings.areas = self.areas
+        self.sightings.where_of = self.alert_sources.where_of   # W74 二期:人最后在哪
         self.force.armed_for = self.sightings.armed_now          # W44 外审 R2
         self.api.deterrence = self.deterrence
         # W73 第二期:布防值守。布防着自己一圈圈跑防区路线、两圈之间站值守位;值守中的任务
@@ -1071,6 +1075,8 @@ class Server:
             posts=lambda m, v: {p["zone"]: p for p in zone_posts(self.api).view(m, v)},
             now_ms=wall_ms)
         self.guard.alerts = self.alerts
+        from nexwar_site.api import map_marks
+        self.guard.marks = map_marks(self.api)                # W74 三期:出口线、易藏点
         self.guard.busy = self.deterrence.busy
         self.guard.charging = lambda rid: bool(self.db.query(
             "SELECT 1 FROM charge_cycles WHERE robot_id=?", (rid,)))

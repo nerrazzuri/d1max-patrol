@@ -5,9 +5,18 @@ from __future__ import annotations
 import math
 
 import numpy as np
+import pytest
 from nexwar_localizer.nav2bridge import grid_points, occupancy
 
 from nexwar_contract.obsbridge import pack_bits
+
+
+@pytest.fixture(autouse=True)
+def _不许真退出(monkeypatch):
+    """现场第 5 条:转接节点连着两回重来不成会 ``os._exit(75)``(让 systemd 整个重启 Nav2)。别的测试
+    走到那一步时不能真把 pytest 退掉(11-06 全量跑到 96% 静悄悄退出,退出码 75)。"""
+    from nexwar_localizer.nav2bridge import Nav2Bridge
+    monkeypatch.setattr(Nav2Bridge, "_full_restart", lambda self: None)
 
 
 def _grid(size, res, occ_cells, known_all=True):
@@ -791,3 +800,123 @@ def test_现场1105_机身底下临时擦掉_残影没了_禁行区照烧(tmp_pa
     assert occ[20, 30] == 0, "残影擦了"
     assert occ[20, 50] == 100, "机身外面的不动"
     assert occ[20, 28] == 100, "禁行区照烧"
+
+
+def _就绪桥(now):
+    from types import SimpleNamespace as NS
+    b = _生命周期桥(now)
+    b._poll_active = b._lifecycle_retry = lambda: None
+    b.status_sync_until, b.cleanup_pending, b.map_sent = 0.0, True, True
+    b.nav = b.thru = NS(server_is_ready=lambda: False)
+    b._ready, b._unready_since = None, None
+    b.send = b.sent.append
+    return b
+
+
+def test_现场1105_47_Nav2卡在启动_就绪原因说卡在启动_不说等取消上一次目标():
+    """11-05 冷启动:bt_navigator 没配置起来,取消服务也就一直不在,就绪原因一直写「等 Nav2 取消上一次
+    留下的导航目标」,看不出是 Nav2 自己没起来。先说根上的原因;等过一分钟写等了多久。"""
+    now = [100.0]
+    b = _就绪桥(now)
+    b.check_ready()
+    why = b.sent[-1]["reason"]
+    assert "还在启动" in why and "取消" not in why, why
+    assert "已等" not in why
+    now[0] += 61
+    b.check_ready()
+    assert "已等 1 分钟" in b.sent[-1]["reason"], b.sent[-1]
+    n = len(b.sent)
+    now[0] += 5
+    b.check_ready()
+    assert len(b.sent) == n, "同一分钟里不重复发"
+
+
+def test_现场1105_47_没收到地图_一分钟后提示看定位():
+    now = [0.0]
+    b = _就绪桥(now)
+    b.map_sent = False
+    b.check_ready()
+    assert b.sent[-1]["reason"] == "尚未收到地图"
+    now[0] += 120
+    b.check_ready()
+    why = b.sent[-1]["reason"]
+    assert "已等 2 分钟" in why and "定位" in why, why
+
+
+def test_现场1105_47_Nav2都起来了_只剩取消上一次目标():
+    from types import SimpleNamespace as NS
+    now = [0.0]
+    b = _就绪桥(now)
+    b.nav2_active = True
+    b.nav = b.thru = NS(server_is_ready=lambda: True)
+    b.check_ready()
+    assert "取消上一次" in b.sent[-1]["reason"]
+    b.cleanup_pending = False
+    b.check_ready()
+    assert b.sent[-1] == {"type": "ready", "ok": True, "reason": ""}
+    assert b._unready_since is None
+
+
+def test_现场1105_5_Nav2自己重来连着两回都不成_整个Nav2服务重启():
+    """11-05 现场第 5 条:bt_navigator 卡在 unconfigured,生命周期管理器 reset 一直失败,只有
+    重启 nexwar_nav2 才好。连着两回重来不成,转接节点用约定的退出码退出,启动文件据此整个关掉,
+    systemd 把服务拉起来。"""
+    from types import SimpleNamespace as NS
+
+    from nexwar_localizer import nav2bridge as nb
+    now = [0.0]
+    b = _生命周期桥(now)
+    full: list = []
+    b._full_restart = lambda: full.append(now[0])
+
+    class _坏:
+        def add_done_callback(self, cb):
+            cb(self)
+
+        def result(self):
+            return NS(success=False)
+    b.manage.call_async = lambda req: (b.sent.append(req.command), _坏())[1]
+    b._lifecycle_retry()
+    now[0] += nb.LIFECYCLE_RETRY_S + 1
+    b._lifecycle_retry()
+    assert full == [], "一回不成先再试"
+    now[0] += nb.LIFECYCLE_RETRY_S + 1
+    b._lifecycle_retry()
+    assert len(full) == 1, "连着两回不成:整个重启"
+
+
+def test_现场1105_5_重来成了一回_计数清零():
+    from types import SimpleNamespace as NS
+
+    from nexwar_localizer import nav2bridge as nb
+    now = [0.0]
+    b = _生命周期桥(now)
+    full: list = []
+    b._full_restart = lambda: full.append(now[0])
+    oks = iter([False, True, True, False, True, True])
+
+    class _F:
+        def __init__(self):
+            self.ok = next(oks)
+
+        def add_done_callback(self, cb):
+            cb(self)
+
+        def result(self):
+            return NS(success=self.ok)
+    b.manage.call_async = lambda req: (b.sent.append(req.command), _F())[1]
+    b._lifecycle_retry()
+    for _ in range(4):
+        now[0] += nb.LIFECYCLE_RETRY_S + 1
+        b._lifecycle_retry()
+    assert full == [], "中间成过一回(还没激活):不算连着失败"
+
+
+def test_现场1105_5_启动文件_转接节点用约定退出码退出就整个关掉():
+    from pathlib import Path
+
+    from nexwar_localizer.nav2bridge import FULL_RESTART_RC
+    launch = (Path(__file__).resolve().parents[3] / "deploy" / "nav2"
+              / "nexwar_nav2.launch.py").read_text(encoding="utf-8")
+    assert "OnProcessExit" in launch and "Shutdown" in launch
+    assert f"== {FULL_RESTART_RC}" in launch
