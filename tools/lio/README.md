@@ -78,7 +78,7 @@ LIO 出的是 6DoF pose + 3D 点云。给 Nav2 用时：**去地面 → 高度�
 **最快：抄竞争对手的标定**（他们的 LIO 用的就是这两颗 Airy，早标好了）：
 ```bash
 # 狗上线后
-sshpass -p 1 ssh robot@192.168.168.100 'grep -niA3 -iE "extrinsic|T_imu|R_imu|lidar_to_imu|imu_to_lidar|il_|T_il|R_il|rot|trans" /opt/runtime/config/nx_zg.yaml'
+ssh robot@192.168.168.100 'grep -niA3 -iE "extrinsic|T_imu|R_imu|lidar_to_imu|imu_to_lidar|il_|T_il|R_il|rot|trans" /opt/runtime/config/nx_zg.yaml'
 # 找 IMU<->LiDAR 的 3x3 R 和 3x1 T，填进 rsairy.yaml 的 extrinsic_R / extrinsic_T，extrinsic_est_en:false
 ```
 备选：跑 **LI-Init**（hku-mars/LiDAR_IMU_Init）自标定，需一段激励充分的运动录包（各轴都转一转）。
