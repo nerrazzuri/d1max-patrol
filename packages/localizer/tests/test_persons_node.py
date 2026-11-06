@@ -8,7 +8,15 @@ import math
 
 import numpy as np
 import pytest
-from nexwar_localizer.persons import Box, PersonNode, Settings, bearing_deg, range_m, yolo_people
+from nexwar_localizer.persons import (
+    Box,
+    PersonNode,
+    Settings,
+    bearing_deg,
+    range_m,
+    yolo_people,
+    yolox_people,
+)
 
 from nexwar_contract.persbridge import Persons, parse
 
@@ -80,6 +88,29 @@ def test_YOLO输出_只要人_分数过线_letterbox换回原图_NMS去重():
     assert yolo_people(cand, score=0.95) == []
     with pytest.raises(ValueError):
         yolo_people(np.zeros((1, 3, 2)))
+
+
+def test_用户1106_YOLOX输出_格子解码_有物体乘人的分数_换回原图():
+    """用户 11-06:YOLOv8n 是 AGPL,换 Apache-2.0 的 YOLOX。官方 ONNX 输出没解码:(1, 格子数, 5+类数),
+    每格 (dx, dy, log w, log h, 有物体, 各类),步长 8/16/32。"""
+    import math
+    size = 64                                           # 8×8 + 4×4 + 2×2 = 84 格
+    a = np.zeros((84, 7))
+    i = 2 * 8 + 3                                       # 步长 8 那层的 (x=3, y=2)
+    a[i, :4] = (0.5, 0.5, math.log(2), math.log(4))     # 中心 (28, 20),宽 16 高 32
+    a[i, 4:7] = (0.9, 0.9, 0.1)
+    a[i + 1, :4] = (0.5, 0.5, math.log(2), math.log(4))
+    a[i + 1, 4:7] = (0.9, 0.1, 0.95)                    # 别的类:不要
+    a[64, 4:7] = (0.5, 0.5, 0.0)                        # 0.25 不过线
+    boxes = yolox_people(a[None], size=size, score=0.5, scale=0.5, pad=(0.0, 4.0))
+    assert len(boxes) == 1
+    b = boxes[0]
+    assert (b.x1, b.y1, b.x2, b.y2) == pytest.approx((40.0, 0.0, 72.0, 64.0))
+    assert b.score == pytest.approx(0.81)
+    with pytest.raises(ValueError):
+        yolox_people(np.zeros((1, 84, 5)), size=size)
+    with pytest.raises(ValueError):
+        yolox_people(np.zeros((1, 80, 7)), size=size), "格子数跟输入尺寸对不上"
 
 
 class 假检测器:
@@ -204,7 +235,13 @@ class _假会话:
         return [p[0] if isinstance(p, tuple) else p for p in self.providers_in]
 
     def get_inputs(self):
-        return [type("I", (), {"name": "images"})()]
+        return [type("I", (), {"name": "images", "shape": self.in_shape})()]
+
+    def get_outputs(self):
+        return [type("O", (), {"name": "output", "shape": self.out_shape})()]
+
+    in_shape: list = [1, 3, 640, 640]
+    out_shape: list = [1, 84, 8400]
 
 
 def _假推理库(monkeypatch, 有的):
@@ -264,6 +301,41 @@ def test_推理后端_只有CPU就只给CPU_线程数照给的(monkeypatch, tmp_
     assert d.sess.providers_in == ["CPUExecutionProvider"] and d.backend == "CPUExecutionProvider"
     assert d.sess.opts.intra_op_num_threads == 3
     assert not (tmp_path / "trt").exists(), "没有 TensorRT 就不建缓存目录"
+
+
+def test_用户1106_按模型输出认YOLOX还是YOLOv8_输入尺寸按模型(monkeypatch, tmp_path):
+    """换模型不用改参数:输出 (1, N, 85) 是 YOLOX(BGR、0–255),(1, 84, N) 是老的 YOLOv8(RGB、0–1);
+    输入边长按模型的(YOLOX-tiny 是 416)。"""
+    from nexwar_localizer.persons import OnnxDetector
+    _假推理库(monkeypatch, ["CPUExecutionProvider"])
+    模型 = tmp_path / "person.onnx"
+    模型.write_bytes(b"x")
+    monkeypatch.setattr(_假会话, "in_shape", [1, 3, 416, 416])
+    monkeypatch.setattr(_假会话, "out_shape", [1, 3549, 85])
+    d = OnnxDetector(模型)
+    assert (d.kind, d.size) == ("yolox", 416)
+    monkeypatch.setattr(_假会话, "in_shape", [1, 3, 640, 640])
+    monkeypatch.setattr(_假会话, "out_shape", [1, 84, 8400])
+    d = OnnxDetector(模型)
+    assert (d.kind, d.size) == ("yolov8", 640)
+    monkeypatch.setattr(_假会话, "in_shape", ["batch", 3, "h", "w"])
+    monkeypatch.setattr(_假会话, "out_shape", ["batch", "n", 85])
+    d = OnnxDetector(模型)
+    assert (d.kind, d.size) == ("yolox", 640), "动态尺寸:用缺省 640"
+
+
+def test_用户1106_YOLOX分数线缺省0_7_YOLOv8还是0_5_给了就用给的(monkeypatch, tmp_path):
+    """现场 1889 张人员截图(C40221)上比过:YOLOX 把黑色办公椅、人形机器人认成人的分数在 0.5–0.67,
+    0.7 以上全是真人;它的分数(有物体 × 人)比 YOLOv8 的低一截,不能沿用 0.5。"""
+    from nexwar_localizer.persons import OnnxDetector
+    _假推理库(monkeypatch, ["CPUExecutionProvider"])
+    模型 = tmp_path / "person.onnx"
+    模型.write_bytes(b"x")
+    monkeypatch.setattr(_假会话, "out_shape", [1, 8400, 85])
+    assert OnnxDetector(模型).score == 0.7
+    assert OnnxDetector(模型, score=0.6).score == 0.6
+    monkeypatch.setattr(_假会话, "out_shape", [1, 84, 8400])
+    assert OnnxDetector(模型).score == 0.5
 
 
 def test_测距只用框中间_框边上更近的遮挡物不算():
@@ -579,3 +651,14 @@ def test_外审r1_2_代理说可以拍才拍_断了就不拍():
     assert said == [True]
     link.close()
     assert said == [True, False], "断了:回到不拍"
+
+
+def test_用户1106_命令行能调分数线_出了0到1报错(capsys):
+    """现场误报多或漏人时按真机验证 3m.3b 用 ``--score`` 调;不给就按模型的缺省。"""
+    from nexwar_localizer.persons import main
+    with pytest.raises(SystemExit):
+        main(["--score", "0.6", "--connect", "h:1"])
+    assert "--connect 要配 --key" in capsys.readouterr().err, "0.6 收下了,往下走到下一项检查"
+    with pytest.raises(SystemExit):
+        main(["--score", "1.5"])
+    assert "分数线" in capsys.readouterr().err

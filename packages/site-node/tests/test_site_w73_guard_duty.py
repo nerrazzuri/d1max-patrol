@@ -244,6 +244,26 @@ async def test_被事件抢走_回来接着跑最久没看的_这一圈看过的
     assert _names(_patrols(t)[2]) == ["A", "B", "C", "D"], "补完了照常一整圈"
 
 
+async def test_用户1106_按点接着跑_看了A还没到B被打断_回来从B接着_不跳过整个防区(站):
+    """用户 11-06 定:值守被打断后按点接着跑 —— 这一圈到过的点不重复,没到的点照样去。原来按防区:
+    东区的 A 看过、B 还没到就被抢走,回来连 B 一起跳过。"""
+    t = 站
+    _方案(t)
+    for _ in range(200):
+        await _跑(t, 0.5)
+        if [p["point"] for p in _log(t, "point")] == ["A"] and 2.3 < t.dog.x < 3.5:
+            break
+    assert [p["point"] for p in _log(t, "point")] == ["A"]
+    await t.send(t.site.goto("A", target(3.0), 0.8, issued_by="incident", priority=80,
+                             task_id="incident-x"))
+    await _跑(t, 15)
+    assert _log(t, "interrupted")
+    ps = _patrols(t)
+    assert _names(ps[1]) == ["B", "C", "D"], "到过 A:从 B 接着,B 不跳过"
+    await _跑(t, 30)
+    assert _names(_patrols(t)[2]) == ["A", "B", "C", "D"], "补完了照常一整圈"
+
+
 async def test_被人中止_歇10分钟(站):
     t = 站
     _方案(t)
