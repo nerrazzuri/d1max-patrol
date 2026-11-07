@@ -9,6 +9,9 @@ Nav2 规划出路线(``plan_result``,带朝向、不抽稀)之后、出发之前
 3. 最窄处余量 < :data:`~nexwar_contract.footprint.ROUTE_MARGIN` 就拒绝出发:最窄处在终点附近报
    ``goal_too_close_to_wall``,别处报 ``route_too_narrow``,原因里写在哪、剩多少、要多少。
 
+每个位姿允许横向挪 ±:data:`SHIFT_M` 取最好的位置:Smac 的线常常不在通道正中,控制器也不死贴线走
+(1.0 m 走廊居中每边剩 0.21 m,只比要求多 1 cm,不挪的话偏 1 cm 就误拒)。
+
 起步那一小段(:data:`SKIP_START_M`)不查:机器人本来就站在那儿(停在墙边、桩上),不该因此走不了。
 只看地图墙;人、车、临时障碍归守卫管。
 """
@@ -35,6 +38,9 @@ SKIP_START_M = 0.5
 GOAL_ZONE_M = 0.3
 #: 余量算到这么大就够了(再远的墙不看)。
 CAP_M = 0.5
+#: 每个位姿横向最多挪多少(米)找最好的位置;按 :data:`SHIFT_STEP_M` 一档档试。
+SHIFT_M = 0.15
+SHIFT_STEP_M = 0.025
 
 
 @dataclass(frozen=True, slots=True)
@@ -71,10 +77,13 @@ def densify(poses: Sequence[Sequence[float]],
 
 
 def pose_margins(poses: Sequence[tuple[float, float, float]], walls: Any, res: float,
-                 origin: tuple[float, float]) -> np.ndarray:
-    """每个位姿:车身(基础余量那一层)四边一起往外扩多少米碰到墙(墙格按方格算,偏保守)。"""
+                 origin: tuple[float, float], *, shift: float = 0.0) -> np.ndarray:
+    """每个位姿:车身(基础余量那一层)四边一起往外扩多少米碰到墙(墙格按方格算)。``shift`` > 0 时
+    车身可以沿自己的左右方向挪 ±``shift``,取余量最大的那个位置。"""
     h, w = walls.shape
-    reach = math.hypot(BASE_HALF_LEN, BASE_HALF_WID) + CAP_M + res
+    reach = math.hypot(BASE_HALF_LEN, BASE_HALF_WID) + CAP_M + res + shift
+    n_sh = int(round(shift / SHIFT_STEP_M)) if shift > 0 else 0
+    shifts = np.arange(-n_sh, n_sh + 1) * SHIFT_STEP_M
     span = int(math.ceil(reach / res))
     out = np.full(len(poses), CAP_M)
     ox, oy = origin
@@ -94,9 +103,13 @@ def pose_margins(poses: Sequence[tuple[float, float, float]], walls: Any, res: f
         cx = ox + (kk + ks + 0.5) * res - x
         cy = oy + (rr + rs + 0.5) * res - y
         c, s = math.cos(yaw), math.sin(yaw)
-        lx, ly = np.abs(c * cx + s * cy), np.abs(-s * cx + c * cy)
-        need = np.maximum(lx - BASE_HALF_LEN, ly - BASE_HALF_WID) - res / 2
-        out[i] = min(CAP_M, float(need.min()))
+        lx = np.abs(c * cx + s * cy)
+        ly0 = -s * cx + c * cy                              # 左为正
+        best = -math.inf
+        for d in shifts:
+            need = np.maximum(lx - BASE_HALF_LEN, np.abs(ly0 - d) - BASE_HALF_WID) - res / 2
+            best = max(best, float(need.min()))
+        out[i] = min(CAP_M, best)
     return out
 
 
@@ -111,7 +124,7 @@ def check_route(poses: Sequence[Sequence[float]], walls: Any, res: float,
     keep = along >= min(SKIP_START_M, along[-1])
     keep[-1] = True                                        # 终点总要查
     idx = np.flatnonzero(keep)
-    m = pose_margins([dense[i] for i in idx], walls, res, origin)
+    m = pose_margins([dense[i] for i in idx], walls, res, origin, shift=SHIFT_M)
     j = int(np.argmin(m))
     worst, at = float(m[j]), dense[int(idx[j])]
     if worst >= need:

@@ -57,6 +57,19 @@ def test_一米二直通道放行():
     assert r.ok and r.code == "" and r.margin >= ROUTE_MARGIN
 
 
+def test_一米通道_路线偏离中心8厘米_能横向挪回去_放行():
+    """1.0 m 走廊居中每边剩 0.21 m,只比要求多 1 cm;Smac 的线常常不在正中,控制器也不死贴线走。"""
+    walls, res, org = _走廊(1.0)
+    r = check_route(_直线(1.0, 8.0, y=2.08), walls, res, org)
+    assert r.ok, r.why
+
+
+def test_九十五厘米通道_居中也不够_拒绝():
+    walls, res, org = _走廊(0.95)
+    r = check_route(_直线(1.0, 8.0), walls, res, org)
+    assert not r.ok and r.code == "route_too_narrow"
+
+
 def test_九十厘米通道拒绝_报最窄处和要多宽():
     walls, res, org = _走廊(0.9)
     r = check_route(_直线(1.0, 8.0), walls, res, org)
