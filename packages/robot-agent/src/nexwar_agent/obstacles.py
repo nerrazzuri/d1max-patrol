@@ -215,10 +215,10 @@ class ObstacleView:
             return math.inf
         return float((np.broadcast_to(x, band.shape)[band] - half_len).min())
 
-    def lookup(self, pts: list[tuple[float, float]], pose_now: tuple[float, float, float]
-               ) -> tuple[list[int], list[int]]:
+    def lookup(self, pts: list[tuple[float, float]], pose_now: tuple[float, float, float],
+               *, max_age: float | None = None) -> tuple[list[int], list[int]]:
         """此刻狗身系的点 → (挡的点的下标, 未知的点的下标)。numpy 一批算(内审应修 7:逐点逐帧
-        在狗上一拍要几十毫秒,事件循环上)。"""
+        在狗上一拍要几十毫秒,事件循环上)。``max_age``:只认这么多秒以内的帧(遮挡限速用)。"""
         if not pts:
             return [], []
         P = np.asarray(pts, dtype=float)
@@ -226,7 +226,10 @@ class ObstacleView:
         wx = pose_now[0] + c0 * P[:, 0] - s0 * P[:, 1]
         wy = pose_now[1] + s0 * P[:, 0] + c0 * P[:, 1]
         res = np.full(len(P), -1, dtype=np.int8)          # -1 没看见过、0 空、1 挡
+        oldest = -math.inf if max_age is None else self.monotonic() - max_age
         for f in list(self.frames):
+            if f.at < oldest:
+                break
             todo = res < 0
             if not todo.any():
                 break

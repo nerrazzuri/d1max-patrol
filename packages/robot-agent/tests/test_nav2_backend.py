@@ -1444,3 +1444,83 @@ async def test_V1_看不见的只降速时_转向同比例压(tmp_path):
         await t.一拍()
     assert t.r.speed[0] == pytest.approx(UNKNOWN_SLOW_MPS, abs=0.02)
     assert t.r.speed[1] == pytest.approx(0.4 * UNKNOWN_SLOW_MPS / 0.6, abs=0.02)
+
+
+# ---------------------------------------- 导航 V1 第 1 节:遮挡限速(看不见的区域主动限速)
+
+
+async def _遮挡(t, n=25):
+    # 车后面从雷达看过去是看不见的;等 2.5 s,打开阴影之前那几帧(全看得见)过了记忆
+    t.per.shadow = True
+    for _ in range(n):
+        await t.一拍()
+    return t.nav._occ_cap(await t.nav._here(), 1)
+
+
+async def test_V1_遮挡限速_前方路边停着车_车后面的阴影可能冒出人_限速(tmp_path):
+    """仿真 ab_parking_delay300(D 组 s8):人从两车之间冲出,0.42 m/s 撞上。车后面那片看不见的、
+    跟机身走廊之间没有挡:按「反应 + 刹车」限速。"""
+    from nexwar_agent.bridges.nav2_nav import V_FAST
+    t = _台(tmp_path, 假转接())
+    await t.start(1.5, 4.0)
+    t.world.dyn["car"] = (2.6, 4.45, 3.2, 5.4)              # 机头前 0.6 m 起、走廊左边 0.1 m 外
+    v = await _遮挡(t)
+    # 人最早从车的远端(机头前约 1.2 m)冒出来:反应 0.5 s + 0.5 m/s² 刹车,停在它前面 0.1 m → 约 0.84
+    assert 0.75 < v < 0.9 < V_FAST, v
+    t.world.dyn["car"] = (2.1, 4.45, 2.5, 5.4)              # 车挨着机头:冒出点 0.5 m 内
+    assert await _遮挡(t) == pytest.approx(0.2 + 0.31, abs=0.12)
+
+
+async def test_V1_遮挡限速_空地不限(tmp_path):
+    from nexwar_agent.bridges.nav2_nav import V_FAST
+    t = _台(tmp_path, 假转接())
+    await t.start(1.5, 4.0)
+    assert await _遮挡(t) == pytest.approx(V_FAST)
+
+
+async def test_V1_遮挡限速_走廊两边是地图墙_墙外的阴影不算(tmp_path):
+    from nexwar_agent.bridges.nav2_nav import V_FAST
+    t = _台(tmp_path, 假转接(), walls=[(0.1, 3.2, 11.9, 3.3), (0.1, 4.7, 11.9, 4.8)])
+    await t.start(1.5, 4.0)
+    assert await _遮挡(t) == pytest.approx(V_FAST)
+
+
+async def test_V1_遮挡限速_E1按距离分档_关掉不限(tmp_path, monkeypatch):
+    from nexwar_agent.bridges import nav2_nav
+    t = _台(tmp_path, 假转接())
+    await t.start(1.5, 4.0)
+    t.world.dyn["car"] = (2.6, 4.45, 3.2, 5.4)
+    monkeypatch.setattr(nav2_nav, "OCC_ALGO", "E1")
+    assert await _遮挡(t) == pytest.approx(0.4)             # 阴影离机身 1–2 m
+    monkeypatch.setattr(nav2_nav, "OCC_ALGO", "")
+    assert t.nav._occ_cap(await t.nav._here(), 1) == pytest.approx(nav2_nav.V_FAST)
+
+
+async def test_V1_遮挡限速_算进看得清就快_也送给Nav2(tmp_path):
+    link = 假转接()
+    t = _台(tmp_path, link)
+    await t.start(1.5, 4.0)
+    t.world.dyn["car"] = (2.6, 4.45, 3.2, 5.4)
+    await t.nav.goto(Pose.from_xy_yaw(9.0, 4.0))
+    for _ in range(10):
+        link.now += 0.1
+        link.cmd = (link.now, 1, 0.9, 0.0, 0.0)
+        await t.一拍()
+    occ = t.nav._occ_cap(await t.nav._here(), 1)
+    assert t.nav._vis <= occ + 1e-6, (t.nav._vis, occ)
+
+
+async def test_V1_遮挡限速_锥形视野_机头两侧刚刚看见过的不算_不一直压蠕行(tmp_path):
+    """C40221 实测视野是锥形(机头两侧 1 m 内此刻看不见):往前走时那片刚刚看见过,不当阴影。"""
+    from nexwar_agent.bridges.nav2_nav import V_FAST
+    link = 假转接()
+    t = _台(tmp_path, link, cone=True)
+    await t.start(1.5, 4.0)
+    first = t.nav._occ_cap(await t.nav._here(), 1)
+    await t.nav.goto(Pose.from_xy_yaw(9.0, 4.0))
+    for _ in range(40):                                     # 往前走 2 m 左右
+        link.now += 0.1
+        link.cmd = (link.now, 1, 0.5, 0.0, 0.0)
+        await t.一拍()
+    later = t.nav._occ_cap(await t.nav._here(), 1)
+    assert later > 0.8 * V_FAST, (first, later)
