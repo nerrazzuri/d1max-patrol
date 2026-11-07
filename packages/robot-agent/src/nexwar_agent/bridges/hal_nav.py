@@ -26,6 +26,7 @@ from typing import Any
 
 from nexwar_agent.localization import OdomAnchor
 from nexwar_contract.hal import RobotHAL, VelocityCommand
+from nexwar_contract.navcodes import FAIL_CODES
 from nexwar_patrol.backends.base import (
     LocStatusEvent,
     NavBackend,
@@ -83,6 +84,8 @@ class HalNavBackend(NavBackend):
         self._loc = LocStatus.CONTINUOUS_LOC
         #: 这一段为什么 Failed(W34:任务失败原因写清楚 —— 急停、看不见、定位不行……);新的一段清空。
         self.fail_reason = ""
+        #: 导航 V1 第 5 节:同一次失败的原因码(:data:`nexwar_contract.navcodes.FAIL_CODES` 里的一个)
+        self.fail_code = ""
         #: W70:这次失败再试也一样(目标点被占、规划不出路线而狗没动),引擎不按点位重试再来
         self.fail_final = False
         #: 到了点、正在原地转到目标朝向(W33)。新的一段清空。
@@ -347,10 +350,11 @@ class HalNavBackend(NavBackend):
         if not d or d != self._dir:
             # 不许自己走了(头尾不知道、狗尾为前但后面看不清),或者半路调了头(行进方向变了):停
             log.error("头尾方向是 %s(%s):停", self.head, self.head_block() or "半路调了头")
-            await self._fail(f"头尾方向是 {self.head}({self.head_block() or '半路调了头'})")
+            await self._fail(f"头尾方向是 {self.head}({self.head_block() or '半路调了头'})",
+                             code="robot_not_ready")
             return
         if loc is LocStatus.LOC_LOST:
-            await self._fail(self._loc_why())
+            await self._fail(self._loc_why(), code="localization_unreliable")
             return
         if self._target is None:
             # 停车正在路上(``_enter_terminal`` 先清目标、再等 HAL 回执;真 HAL 最长等 5 s):
@@ -360,7 +364,7 @@ class HalNavBackend(NavBackend):
             return
         here = self.anchor.estimate((odom.x, odom.y, odom.yaw))
         if here is None:
-            await self._fail(self._loc_why())
+            await self._fail(self._loc_why(), code="localization_unreliable")
             return
         await self._drive(here, dt_s)
 
@@ -397,13 +401,18 @@ class HalNavBackend(NavBackend):
         if got.rejected:
             log.warning("HAL 拒了速度命令(%s),导航按 Failed 收尾", got.reason)
             await self._fail(_REJECT_TEXT.get(got.reason or "",
-                                              f"机器人不收速度命令({got.reason})"))
+                                              f"机器人不收速度命令({got.reason})"),
+                             code="robot_not_ready")
 
     # ------------------------------------------------------------ 内部
 
-    async def _fail(self, why: str) -> None:
-        """这一段 Failed,原因记下来给引擎写进任务失败原因(W34)。"""
+    async def _fail(self, why: str, *, code: str) -> None:
+        """这一段 Failed,原因记下来给引擎写进任务失败原因(W34)。
+
+        ``code``:原因码(导航 V1 第 5 节)。"""
+        assert code in FAIL_CODES, code
         self.fail_reason = why
+        self.fail_code = code
         await self._enter_terminal(NavStatus.FAILED)
 
     def _loc_why(self) -> str:
@@ -416,6 +425,7 @@ class HalNavBackend(NavBackend):
         if status is NavStatus.INITIALIZING:
             self._dir = 0                                # 新的一趟:起跑时再定行进方向
             self.fail_reason = ""
+            self.fail_code = ""
             self.fail_final = False
             self._yawing = False
         if status is not prev:

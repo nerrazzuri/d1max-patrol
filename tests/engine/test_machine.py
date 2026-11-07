@@ -236,6 +236,28 @@ async def test_W70_导航说再试也一样_不按重试次数再来(make_engine
     assert "目标点被占" in engine.snapshot.results[0].note
 
 
+async def test_V1_原因码_导航后端给的码写进点位结果和失败事件(make_engine, nav):
+    """导航 V1 第 5 节:点位结果带原因码,站点、手机按码显示「怎么回事 + 该做什么」。"""
+    nav.on_goto = [NavStatusEvent(NavStatus.FAILED)]
+    nav.fail_reason = "目标点被占"
+    nav.fail_code = "goal_occupied"
+    engine = make_engine()
+    await run_to_end(engine, make_mission(policy=policy(on_waypoint_failed="skip")))
+    assert engine.snapshot.results, (engine.snapshot.state, engine.snapshot.reason)
+    r = engine.snapshot.results[0]
+    assert r.code == "goal_occupied" and r.to_wire()["code"] == "goal_occupied"
+    failed = [e for e in read_events(engine.archive.path) if e["kind"] == "waypoint_failed"]
+    assert failed and failed[0]["code"] == "goal_occupied", failed
+
+
+async def test_V1_原因码_后端没给码或给了不认识的_写空(make_engine, nav):
+    nav.on_goto = [NavStatusEvent(NavStatus.FAILED)]
+    nav.fail_code = "made_up"
+    engine = make_engine()
+    await run_to_end(engine, make_mission(policy=policy(on_waypoint_failed="skip")))
+    assert engine.snapshot.results[0].code == ""
+
+
 async def test_不重试的策略只下发一次(make_engine, nav):
     nav.on_goto = [NavStatusEvent(NavStatus.FAILED)]
     engine = make_engine()

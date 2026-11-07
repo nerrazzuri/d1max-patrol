@@ -310,6 +310,7 @@ async def test_通道整个堵死_等满20秒放弃_中间报一次被挡(tmp_pa
     # W34:任务失败原因写清楚是被挡(几处挡、几处看不见),不是笼统的「导航回了 Failed」
     assert t.nav.fail_reason.startswith("被挡 ") and "扫过区有挡" in t.nav.fail_reason, \
         t.nav.fail_reason
+    assert t.nav.fail_code == "dynamic_obstacle_blocked"
 
 
 async def test_挡的东西挪走了_接着走原来的路(tmp_path):
@@ -1146,6 +1147,7 @@ async def test_工单28_发了速度命令狗不动_按被挡计时上报_到时
     await t.跑(40.0)
     assert NavStatus.FAILED in t.status, (t.status, t.nav.fail_reason)
     assert "未动" in t.nav.fail_reason, t.nav.fail_reason
+    assert t.nav.fail_code == "controller_stalled"
     assert [k for k, _ in t.events if k == "nav_blocked"], t.events
 
 
@@ -1387,6 +1389,7 @@ async def test_工单24_终点被箱子盖住_马上告诉值班员_放弃原因
     assert told - started <= 30, f"被挡后 {(told - started) / 10:.1f} s 才说终点被盖住"
     assert NavStatus.FAILED in t.status and "终点被障碍盖住" in (t.nav.fail_reason or ""), \
         t.nav.fail_reason
+    assert t.nav.fail_code == "goal_occupied"
 
 
 def test_工单24_被挡的原因写最近一处在机身哪儿_现场分得清是箱子还是噪点():

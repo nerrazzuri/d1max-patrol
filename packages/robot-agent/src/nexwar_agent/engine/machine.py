@@ -55,6 +55,7 @@ from nexwar_agent.engine.safety import (
     battery_ruling,
     rule,
 )
+from nexwar_contract.navcodes import fail_code
 from nexwar_patrol.backends.base import (
     BatteryEvent,
     DeviceBackend,
@@ -202,11 +203,13 @@ class WaypointResult:
     elapsed_s: float
     photos: tuple[str, ...]
     note: str = ""
+    #: 导航 V1 第 5 节:失败原因码(``nexwar_contract.navcodes``),没有 / 不是导航的原因为空
+    code: str = ""
 
     def to_wire(self) -> dict[str, Any]:
         return {"name": self.name, "ok": self.ok, "arrived_ms": self.arrived_ms,
                 "elapsed_s": round(self.elapsed_s, 2), "photos": list(self.photos),
-                "note": self.note}
+                "note": self.note, "code": self.code}
 
 
 @dataclass(frozen=True, slots=True)
@@ -334,9 +337,11 @@ class _ReturnHome(Exception):
 class _FailWaypoint(Exception):
     """当前这个点没成。按 ``on_waypoint_failed`` 处置。"""
 
-    def __init__(self, reason: str, *, retry: bool = True) -> None:
+    def __init__(self, reason: str, *, retry: bool = True, code: str = "") -> None:
         super().__init__(reason)
         self.reason = reason
+        #: 导航 V1 第 5 节:导航后端给的原因码
+        self.code = code
         #: W70:导航后端判定再试也一样(目标点被占、规划不出路线而狗没动):不按 waypoint_retry 再来
         self.retry = retry
 
@@ -1172,7 +1177,7 @@ class MissionEngine(EventEmitter[RunSnapshot]):
         attempts = 1 + (policy.waypoint_retry
                         if policy.on_waypoint_failed == "retry_then_skip" else 0)
         started = self._clock()
-        note = ""
+        note, code = "", ""
         tried = 0
         while tried < attempts:
             live.photos = []
@@ -1210,7 +1215,7 @@ class MissionEngine(EventEmitter[RunSnapshot]):
             except _RetryWaypoint:
                 continue                     # 暂停后继续,不算一次重试
             except _FailWaypoint as exc:
-                note = exc.reason
+                note, code = exc.reason, exc.code
                 tried = tried + 1 if exc.retry else attempts
                 # 狗停在哪记进来路(W00c6b 内审):失败了的点没到过,不在回路里;接着往下一个点走的那段
                 # 是从这儿出发的。
@@ -1218,10 +1223,10 @@ class MissionEngine(EventEmitter[RunSnapshot]):
                 if where is not None:
                     live.trail.append((None, where))
                 self._note("waypoint_failed", waypoint=wp.name,
-                           attempt=tried, reason=note)
+                           attempt=tried, reason=note, code=code)
         if policy.on_waypoint_failed == "abort":
             raise _AbortRun(f"点位 {wp.name} 失败: {note}")
-        return WaypointResult(wp.name, False, 0, self._clock() - started, (), note)
+        return WaypointResult(wp.name, False, 0, self._clock() - started, (), note, code)
 
     async def _await_nav_standby(self, deadline: float) -> None:
         """等导航状态机回落 StandBy。等的期间照常处理事件。
@@ -1271,7 +1276,8 @@ class MissionEngine(EventEmitter[RunSnapshot]):
                 why = getattr(self._nav, "fail_reason", "")
                 raise _FailWaypoint(f"无法到达下一个点:{why}" if why
                                     else f"无法到达下一个点(导航回了 {item.status.value})",
-                                    retry=not getattr(self._nav, "fail_final", False))
+                                    retry=not getattr(self._nav, "fail_final", False),
+                                    code=fail_code(getattr(self._nav, "fail_code", "")) or "")
 
     async def _do_actions(self, wp: MissionWaypoint) -> None:
         for action in wp.actions:

@@ -117,6 +117,9 @@ async def test_到不了的点被跳过_完成_带跳过几个点并列出点名
     assert t.detail["skipped"] == 1 and t.detail["skipped_names"] == ["p1"]
     assert "p1" in t.detail["reason"] and "跳过 1 个点" in t.detail["reason"]
     assert [g["ok"] for g in _点事件(book)] == [True, False, True]
+    # 导航 V1 第 5 节:没到的点带原因码(HAL 拒速度 = 机器人不接受命令),到了的不带
+    assert [g.get("code") for g in _点事件(book)] == [None, "robot_not_ready", None]
+    assert t.detail["code"] == "robot_not_ready"
     import json
     [m] = list((tmp_path / "runs").rglob("manifest.json"))
     assert json.loads(m.read_text())["summary"]["result"] == "partial"
@@ -136,6 +139,7 @@ async def test_W71_一个点都没到_还是failed(台子, monkeypatch):
     await _跑(c, r, parts, t, 2000)
     assert t.state is TaskState.FAILED, (t.state, t.detail)
     assert "2 个航点未到达" in t.detail["reason"]
+    assert t.detail["code"] == "robot_not_ready"
 
 
 async def test_sim相机_带拍照动作的任务走得完_照片进归档(tmp_path):
