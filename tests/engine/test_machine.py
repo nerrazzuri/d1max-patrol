@@ -250,6 +250,23 @@ async def test_V1_原因码_导航后端给的码写进点位结果和失败事�
     assert failed and failed[0]["code"] == "goal_occupied", failed
 
 
+async def test_V1_路线检查拒了_点位带原因码_不按重试再来(make_engine, nav):
+    """导航 V1 第 2 节:出发前路线太窄,后端当场拒(``NavRequestError`` 带 code、final)。"""
+    from nexwar_patrol.backends.base import NavRequestError
+
+    async def 拒(pose):
+        nav.goto_calls.append(pose)
+        raise NavRequestError("goto", "路线在 (2.00, 4.00) 处离墙只剩 0.11 m",
+                              code="route_too_narrow", final=True)
+    nav.goto = 拒
+    engine = make_engine()
+    await run_to_end(engine, make_mission(policy=policy(on_waypoint_failed="retry_then_skip",
+                                                        waypoint_retry=2)))
+    assert len(nav.goto_calls) == 2, "两个点各一次,不重试"
+    r = engine.snapshot.results[0]
+    assert r.code == "route_too_narrow" and "离墙只剩" in r.note
+
+
 async def test_V1_原因码_后端没给码或给了不认识的_写空(make_engine, nav):
     nav.on_goto = [NavStatusEvent(NavStatus.FAILED)]
     nav.fail_code = "made_up"

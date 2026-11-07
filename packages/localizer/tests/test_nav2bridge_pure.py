@@ -920,3 +920,34 @@ def test_现场1105_5_启动文件_转接节点用约定退出码退出就整个
               / "nexwar_nav2.launch.py").read_text(encoding="utf-8")
     assert "OnProcessExit" in launch and "Shutdown" in launch
     assert f"== {FULL_RESTART_RC}" in launch
+
+
+# ------------------------------------------------ 导航 V1 第 2 节:plan → plan_result(协议 5)
+
+
+def test_V1_plan_result_原样带朝向_不抽稀():
+    from nexwar_localizer.nav2bridge import plan_reply
+
+    from nexwar_contract.navbridge import check
+    # 倒车段:沿 -x 走、机头朝 +x(朝向 0),切线方向 = π —— 朝向要照抄,不能拿切线算
+    raw = [(1.0 - i * 0.025, 2.0, 0.0, 1.0) for i in range(41)]
+    m = plan_reply(5, raw)
+    check(m)
+    assert m["ok"] and m["req_id"] == 5 and len(m["poses"]) == 41
+    assert m["poses"][1] == [0.975, 2.0, 0.0]
+    q = (0.0, 0.0, math.sin(math.pi / 4), math.cos(math.pi / 4))      # 朝向 90°
+    assert plan_reply(1, [(0.0, 0.0, q[2], q[3])])["poses"][0][2] == pytest.approx(1.5708, abs=1e-3)
+
+
+def test_V1_plan_result_太长回too_long_不截断():
+    from nexwar_localizer.nav2bridge import plan_reply
+
+    from nexwar_contract.navbridge import MAX_PLAN_POSES
+    m = plan_reply(2, [(i * 0.01, 0.0, 0.0, 1.0) for i in range(MAX_PLAN_POSES + 1)])
+    assert m == {"type": "plan_result", "req_id": 2, "ok": False, "poses": [], "reason": "too_long"}
+
+
+def test_V1_plan_result_空路线算失败():
+    from nexwar_localizer.nav2bridge import plan_reply
+    m = plan_reply(3, [])
+    assert not m["ok"] and m["reason"] == "no_path" and m["poses"] == []

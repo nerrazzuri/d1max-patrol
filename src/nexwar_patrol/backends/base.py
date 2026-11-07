@@ -44,8 +44,12 @@ class NavTimeoutError(NavBackendError):
 class NavRequestError(NavBackendError):
     """设备明确回了 error。"""
 
-    def __init__(self, operation: str, message: str) -> None:
+    def __init__(self, operation: str, message: str, *, code: str = "",
+                 final: bool = False) -> None:
         super().__init__(f"{operation} 被设备拒绝: {message}")
+        #: 导航 V1 第 5 节:拒绝的原因码(``nexwar_contract.navcodes``);``final`` = 再试也一样
+        self.code = code
+        self.final = final
         #: 被拒绝的操作名。厂商后端把自己的 req_func 映射进来,
         #: Nav2 后端映射自己的 action 名 —— 这一层不认识 req_func 这个词。
         self.operation = operation
