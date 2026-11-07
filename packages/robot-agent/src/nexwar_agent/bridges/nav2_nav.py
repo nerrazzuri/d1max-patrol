@@ -24,6 +24,7 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import logging
 import math
 import time
@@ -65,9 +66,44 @@ VEL_ALPHA = 0.5
 #: 但快了不安全:2026-10-29 仿真里 1.0 m/s 时人从侧面横穿,5 次撞 5 次。降到这个速度,人一进前方
 #: 视野守卫就看得见、停得住。
 UNKNOWN_SLOW_MPS = 0.3
+# ---- 导航 V1 第 1 节:D 守卫(docs/导航V1-设计.md;仿真 runs/nav-sweep-ab-1107 的 D 组)
+#: 挡住的全是地图上的墙(墙不会动)时 SLOW:多留的跟速度挂钩 —— 蠕行这么快时只多留 SOFT_EXTRA_MIN,
+#: 到 SOFT_FULL_MPS 以上回到守卫的全余量。蠕行 0.2:真机前进低于 0.13 m/s 只踏步不走(10-29),
+#: 0.15 离死区太近。
+SOFT_CREEP_MPS = 0.2
+SOFT_FULL_MPS = 0.6
+SOFT_EXTRA_MIN = 0.05
+#: 原地转同理(弧度/秒、弧度)。
+SOFT_CREEP_RPS = 0.15
+SOFT_FULL_RPS = 0.6
+SOFT_EXTRA_RAD_MIN = 0.05
+#: 原速少留余量还过不去,前进和转向按同一比例依次压到这些速度再查(走的还是 Nav2 那条弯)。
+SOFT_STEPS = (0.3, SOFT_CREEP_MPS)
 # ---- 看得清就快(决策 76,用户 2026-10-29:报警要 90 s 内到位;两侧盲区让 1.0 m/s 一律跑不安全)
 #: 看得清、附近没有地图之外的东西时最快多快(米/秒;还受任务、站点、全狗限速管)。
 V_FAST = 1.0
+#: 导航 V1 第 1 节:遮挡限速(三类里的「看不见的区域主动限速」)。机身走廊旁边被挡住的阴影里可能冒出
+#: 人(停车场两车之间、拐角):按算法限速。"E1" 按冒出点离机身多远分档;"E2" 按「反应 + 刹车」在冒出点
+#: 之前停得住;"" 关掉。仿真 runs/nav-sweep-phys-1107(DE1 / DE2 组)比完定。
+OCC_ALGO = "E2"
+#: E1:看走廊两边横向这么远(米)以内的阴影;离机身 < 1 m 限 0.2、< 2 m 限 0.4。
+OCC_E1_SIDE_M = 1.5
+OCC_E1_TIERS = ((1.0, 0.2), (2.0, 0.4))
+#: E2:看横向这么远以内的阴影;人冒出来到守卫叫停按 OCC_REACT_S 算,停在冒出点前 OCC_E2_MARGIN_M。
+#: 2.0 m(仿真 DE3):1.0 m 时 ab_parking s33 人从横向 1.46 m 外的车后冒出没限速、撞上;2.0 m 时
+#: 人/车 200 趟 0 碰撞,「必须通过」205/270(D 不限 207)。
+OCC_E2_SIDE_M = 2.0
+OCC_REACT_S = 0.5
+OCC_E2_MARGIN_M = 0.1
+#: 机身自己的盲带(前雷达贴脸看不见的那一截)不算阴影:机头前这么远(米)以外才算。
+OCC_SELF_BLIND_M = 0.05
+#: 最近这么多秒(秒)里看见过的格子不算阴影(再久人就可能走进去了)。
+OCC_MEMORY_S = 2.0
+#: 雷达视野(C40221 实测 obs-3f4,``runs/field-c40221/static-tests/``):机头 / 机尾外 ±OCC_FOV_HALF_M,
+#: 每往外 1 m 加宽 OCC_FOV_SLOPE。**阴影只算视野里被挡住的**;视野外的(机身两侧的盲区)永远看不见,
+#: 归守卫按「看不见当挡」管 —— 当成阴影的话真机永远压在蠕行,越慢越看不见、出不来。
+OCC_FOV_HALF_M = 0.6
+OCC_FOV_SLOPE = 0.9
 #: 感知不新鲜、没配避障时最快多快。
 V_BASE = 0.6
 #: 看到地图之外的东西(人、箱子)时最慢降到多少。
@@ -149,6 +185,16 @@ EDGE_TRIES = 2
 TURN_ONLY_MAX_RPS = 0.6
 #: 前进速度不到这个(米/秒)就当「原地转」,按地图上的墙核一道(:meth:`Nav2NavBackend._turn_hits_map`)。
 TURN_VX = 0.05
+
+
+def soft_guard(full: Any, vx: float, wz: float) -> Any:
+    """导航 V1 的软余量:``full`` 守卫照抄,只把往前多留的(``extra``)、原地转多留的(``extra_rad``)
+    按这一拍的速度在 [最小, 全余量] 之间线性取。只用在挡的全是地图墙的时候。"""
+    fv = min(1.0, max(0.0, (abs(vx) - SOFT_CREEP_MPS) / (SOFT_FULL_MPS - SOFT_CREEP_MPS)))
+    fw = min(1.0, max(0.0, (abs(wz) - SOFT_CREEP_RPS) / (SOFT_FULL_RPS - SOFT_CREEP_RPS)))
+    return dataclasses.replace(
+        full, extra=SOFT_EXTRA_MIN + (full.extra - SOFT_EXTRA_MIN) * fv,
+        extra_rad=SOFT_EXTRA_RAD_MIN + (full.extra_rad - SOFT_EXTRA_RAD_MIN) * fw)
 
 
 def _overlap(a: tuple[tuple[float, float], ...], b: tuple[tuple[float, float], ...]) -> bool:
@@ -591,7 +637,7 @@ class Nav2NavBackend(PlannedNavBackend):
             if verdict == "near":
                 await self._send(0.0, 0.0, dt_s)
                 return
-        self._vis = self._vis_cap(here, sign)
+        self._vis = min(self._vis_cap(here, sign), self._occ_cap(here, sign))
         self._slow = self._slow_cap(here, sign)
         cap = min(self._vlim(), self._zone_cap_to(here, sign), self._vis, self._slow)
         # 工单 11-02-9:压前进、压转向都按同一个比例,走的还是 Nav2 算的那条弯(只压前进弯就变急,
@@ -618,8 +664,15 @@ class Nav2NavBackend(PlannedNavBackend):
             v = self._guard_check(vx, wz)
             if not v.ok and not v.hits and "障碍数据" not in v.reason \
                     and abs(vx) > UNKNOWN_SLOW_MPS:
-                vx = math.copysign(UNKNOWN_SLOW_MPS, vx)      # 只有看不见的:快了就慢下来再查一遍
+                # 只有看不见的:快了就慢下来再查一遍;转向同比例压(导航 V1:走的还是 Nav2 那条弯)
+                wz *= UNKNOWN_SLOW_MPS / abs(vx)
+                vx = math.copysign(UNKNOWN_SLOW_MPS, vx)
                 v = self._guard_check(vx, wz)
+            if not v.ok and v.hits and self._hits_all_static(v.hits, here):
+                soft = self._soft_pass(vx, wz, here)
+                if soft is not None:
+                    vx, wz = soft
+                    v = v.__class__(True)
             if not v.ok and (v.hits or "障碍数据" in v.reason):
                 self._guarded(v, here)
                 await self._send(0.0, 0.0, dt_s)
@@ -998,6 +1051,117 @@ class Nav2NavBackend(PlannedNavBackend):
                 d = float(dist[dyn].min())
                 v_dyn = next((v for near, v in VIS_TIERS if d < near), V_FAST)
         return max(min(V_FAST, v_clear, v_dyn), VIS_SLOW_MPS)
+
+    def _occ_cap(self, here: Any, travel: int) -> float:
+        """导航 V1 第 1 节遮挡限速:此刻许跑多快(米/秒;不限是 :data:`V_FAST`)。
+
+        「可能冒出东西的格子」= 在雷达视野锥里(:data:`OCC_FOV_HALF_M`)却看不见的(被挡住的阴影;最近
+        :data:`OCC_MEMORY_S` 秒里看见过的不算)、不在地图墙里、跟机身走廊之间横向没有挡(看得见的挡或
+        地图墙都算挡)、在机头前(机身盲带之外)。离走廊边横向 :data:`OCC_E2_SIDE_M`(E1 用
+        :data:`OCC_E1_SIDE_M`)以内的才管。感知不新鲜、没配避障:不限
+        (``_vis_cap`` 那边已经按 V_BASE)。
+        """
+        algo = OCC_ALGO
+        view, g = self.obstacles, self.guard
+        if not algo or view is None or g is None or not getattr(view, "frames", None):
+            return V_FAST
+        from nexwar_agent.obstacles import FRESH_S
+        if view.age() > FRESH_S:
+            return V_FAST
+        f = view.frames[0]
+        n, res = f.size, f.res
+        cc = (np.arange(n) - n / 2 + 0.5) * res
+        occ = f.occ.reshape(n, n).astype(bool)
+        known = f.known.reshape(n, n).astype(bool)
+        XX, YY = np.meshgrid(cc, cc, indexing="ij")         # 行 = 朝前,列 = 朝左(拍下时机身系)
+        wall = self._map_wall_grid(XX, YY, f.pose, here)
+        shield = occ | wall
+        margin = getattr(g, "margin", 0.05)
+        hl = getattr(g, "body_len", 0.93) / 2 + margin
+        hw = getattr(g, "body_wid", 0.48) / 2 + margin
+        X = XX * (1.0 if travel >= 0 else -1.0)
+        gap = np.abs(YY) - hw
+        jl = int(np.searchsorted(cc, hw))                   # 左边第一列在走廊外
+        jr = int(np.searchsorted(cc, -hw)) - 1              # 右边第一列在走廊外
+        sh = np.zeros((n, n), dtype=bool)                   # 这一格到走廊边之间(含)有挡
+        sh[:, jl:] = np.logical_or.accumulate(shield[:, jl:], axis=1)
+        if jr >= 0:
+            sh[:, :jr + 1] = np.logical_or.accumulate(shield[:, :jr + 1][:, ::-1], axis=1)[:, ::-1]
+        fov = np.abs(YY) <= OCC_FOV_HALF_M + OCC_FOV_SLOPE * np.maximum(X - (hl - margin), 0.0)
+        em = (~known) & fov & (~sh) & (gap > 0) & (X > hl + OCC_SELF_BLIND_M)
+        if em.any() and hasattr(view, "lookup"):
+            # 刚刚看见过的不算(机身系 → 拍下这一帧时的里程位姿;lookup 按里程换到各帧)
+            ii, jj = np.nonzero(em)
+            pts = list(zip(XX[ii, jj].tolist(), YY[ii, jj].tolist(), strict=True))
+            _, unknown = view.lookup(pts, f.pose, max_age=OCC_MEMORY_S)
+            em = np.zeros_like(em)
+            if unknown:
+                u = np.asarray(unknown)
+                em[ii[u], jj[u]] = True
+        if not em.any():
+            return V_FAST
+        x, gp = np.maximum(X[em] - hl, 0.0), gap[em]
+        if algo == "E1":
+            sel = gp <= OCC_E1_SIDE_M
+            if not sel.any():
+                return V_FAST
+            d = float(np.hypot(x[sel], gp[sel]).min())
+            return next((v for near, v in OCC_E1_TIERS if d < near), V_FAST)
+        sel = gp <= OCC_E2_SIDE_M
+        if not sel.any():
+            return V_FAST
+        room = float(x[sel].min()) - OCC_E2_MARGIN_M
+        a, t = float(getattr(g, "decel", 0.5)), OCC_REACT_S
+        v = a * (-t + math.sqrt(t * t + 2.0 * room / a)) if room > 0 else 0.0
+        return min(V_FAST, max(v, SOFT_CREEP_MPS))
+
+    def _map_wall_grid(self, XX: Any, YY: Any, frame_pose: tuple[float, float, float],
+                       here: Any) -> Any:
+        """拍下时机身系的格子 → 落在地图墙上的(布尔,同形状);出了地图当墙,没图全 False。"""
+        if self._base is None:
+            return np.zeros(XX.shape, dtype=bool)
+        blocked, res, (ox, oy) = self._base
+        fx, fy, fyaw = frame_pose
+        c, s = math.cos(fyaw), math.sin(fyaw)
+        odx, ody = fx + c * XX - s * YY, fy + s * XX + c * YY      # 里程系
+        mo = _compose_map_odom(here, self._odom_pose)
+        c2, s2 = math.cos(mo[2]), math.sin(mo[2])
+        mx, my = mo[0] + c2 * odx - s2 * ody, mo[1] + s2 * odx + c2 * ody
+        h, w = blocked.shape
+        r = np.floor((my - oy) / res).astype(int)
+        k = np.floor((mx - ox) / res).astype(int)
+        inb = (r >= 0) & (r < h) & (k >= 0) & (k < w)
+        out = np.ones(XX.shape, dtype=bool)
+        out[inb] = blocked[r[inb], k[inb]]
+        return out
+
+    def _hits_all_static(self, hits: Any, here: Any) -> bool:
+        """守卫挡住的点(此刻机身系)全在地图墙边上(:data:`STATIC_NEAR_M` 以内)?没图 = 否。"""
+        if self._base is None or not hits:
+            return False
+        P = np.asarray(hits, dtype=float)
+        return bool(self._near_static(P[:, 0], P[:, 1], self._odom_pose, here).all())
+
+    def _soft_pass(self, vx: float, wz: float, here: Any) -> tuple[float, float] | None:
+        """导航 V1 第 1 节 SLOW:挡的全是地图墙 —— 先按原速、软余量查;不行前进和转向同比例压到
+        :data:`SOFT_STEPS` 各查一遍。过得去返回那一档的速度,都不行返回 None(照旧停)。"""
+        lead = abs(vx) if abs(vx) > 1e-6 else abs(wz)
+        if lead < 1e-6:
+            return None
+        for i, target in enumerate((lead,) + SOFT_STEPS):
+            if i > 0 and lead <= target + 1e-9:
+                continue
+            k = target / lead
+            v2x, v2z = self._deband(vx * k, wz * k,
+                                    rev_max=MPPI_REVERSE_RATIO * self._nav2_speed)
+            if abs(v2x) < 1e-6 and abs(v2z) < 1e-6:
+                continue
+            if self._turn_hits_map(v2x, v2z, here):
+                continue
+            v2 = self._guard_check(v2x, v2z, soft_guard(self.guard, v2x, v2z))
+            if v2.ok or (not v2.hits and "障碍数据" not in v2.reason):
+                return v2x, v2z
+        return None
 
     def _near_static(self, xs: Any, ys: Any, frame_pose: tuple[float, float, float],
                      here: Any) -> Any:

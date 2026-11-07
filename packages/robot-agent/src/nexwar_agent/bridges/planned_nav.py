@@ -1047,9 +1047,10 @@ class PlannedNavBackend(HalNavBackend):
         if self.obstacles is not None:
             self.obstacles.note_odom(odom.x, odom.y, odom.yaw)
 
-    def _guard_check(self, vx: float, wz: float) -> Any:
-        return self.guard.check(vx, wz, self._v_meas, self.obstacles, self._odom_pose,
-                                w_now=(self._last_wz, self._w_meas))
+    def _guard_check(self, vx: float, wz: float, g: Any = None) -> Any:
+        """按守卫 ``g`` 查这条速度(不给就用 :attr:`guard`;导航 V1 的软余量传一份改了多留的)。"""
+        return (g or self.guard).check(vx, wz, self._v_meas, self.obstacles, self._odom_pose,
+                                       w_now=(self._last_wz, self._w_meas))
 
     def _secs(self) -> float:
         """被挡计时、临时障碍的过期用单调钟(内审小:墙钟一对时就跳);没配避障就按后端的钟。"""

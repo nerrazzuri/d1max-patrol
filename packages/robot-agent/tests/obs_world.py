@@ -66,10 +66,29 @@ class 假感知:
         self.rear_cal = rear if rear_cal is None else rear_cal
         self.seq = 0
         self.check = "ok"
+        #: 导航 V1 遮挡限速:挡住的东西后面(从雷达看过去)算看不见,不开就是老的「视野里全看得见」。
+        self.shadow = False
         n = size
         idx = np.arange(n)
         self.cx = (idx - n / 2 + 0.5) * res                        # 行 → x
         self.cy = (idx - n / 2 + 0.5) * res                        # 列 → y
+
+    def _cast(self, X, Y, known, occ):
+        """前、后雷达各在机身前、后沿中点:同一方向(0.5° 一档)上比最近的挡远的格子 → 看不见。"""
+        known = known.copy()
+        for side in (1.0, -1.0):
+            half = (X * side) > BODY_HL
+            if not half.any():
+                continue
+            dx, dy = X * side - BODY_HL, Y * side
+            rng = np.hypot(dx, dy)
+            ang = np.round(np.degrees(np.arctan2(dy, dx)) / 0.5).astype(int)
+            near: dict[int, float] = {}
+            for a_, r_ in zip(ang[half & occ], rng[half & occ], strict=True):
+                near[a_] = min(near.get(a_, math.inf), r_)
+            for a_, r_ in near.items():
+                known &= ~(half & (ang == a_) & (rng > r_ + self.res))
+        return known, occ & known
 
     def grid(self, x, y, yaw, stamp_ns=0):
         n = self.size
@@ -95,6 +114,8 @@ class 假感知:
                 hit[inb] = a[r[inb], k[inb]]
                 occ |= hit
         occ &= known
+        if self.shadow:
+            known, occ = self._cast(X, Y, known, occ)
         self.seq += 1
         return Grid(seq=self.seq, stamp_ns=stamp_ns, res=self.res, size=n,
                     occ=pack_bits(occ.ravel().tolist(), n),
