@@ -1336,3 +1336,107 @@ async def test_W74_自己的规划_走着换目标_从这儿重新规划过去(t
     await t.跑(40.0)
     assert NavStatus.SUCCEED in t.status and not t.crashed
     assert math.dist((t.r.x, t.r.y), (4.0, 6.0)) < 0.4, "到的是新目标"
+
+
+# ------------------------------------------------------------ 导航 V1 第 1 节:D 守卫(SAFE / SLOW / STOP)
+
+
+def _按余量答(full_hits, soft_ok_at):
+    """假守卫:按全余量查 → 给 full_hits;按软余量(多留的比全余量少)查、速度不超过 soft_ok_at → 放行。"""
+    from nexwar_agent.obstacles import Verdict
+    calls = []
+
+    def guard(vx, wz, g=None):
+        soft = g is not None and g.extra < 0.3 - 1e-9
+        calls.append((round(vx, 3), round(wz, 3), "soft" if soft else "full"))
+        if soft and abs(vx) <= soft_ok_at + 1e-9:
+            return Verdict(True)
+        return Verdict(False, "扫过区有挡", hits=full_hits)
+    return guard, calls
+
+
+async def test_V1_D守卫_挡的全是地图墙_降速少留余量走过去_不硬停(tmp_path):
+    """导航 V1 设计第 1 节(仿真 runs/nav-sweep-ab-1107 的 D 组):全余量查到的挡全在地图墙边上(墙不会动)
+    → SLOW:余量跟速度挂钩、前进和转向同比例压到 0.3 再查,过得去就按 0.3 走,不停、不报被挡。"""
+    link = 假转接()
+    walls = [(0.1, 4.6, 11.9, 4.7)]                          # 机身左边 0.6 m 有一道地图墙
+    t = _台(tmp_path, link, walls=walls)
+    await t.start(1.5, 4.0)
+    await t.nav.goto(Pose.from_xy_yaw(9.0, 4.0))
+    guard, calls = _按余量答(full_hits=((1.0, 0.62),), soft_ok_at=0.3)   # 挡在墙上
+    t.nav._guard_check = guard
+    for _ in range(12):                                     # 再久机身转偏了,假挡点就离开墙了
+        link.now += 0.1
+        link.cmd = (link.now, 1, 0.6, 0.0, 0.3)
+        await t.一拍()
+    assert ("soft" in {c[2] for c in calls}), calls[-4:]
+    assert 0.2 < t.r.speed[0] <= 0.3 + 1e-6, t.r.speed
+    assert t.r.speed[1] == pytest.approx(0.3 * 0.3 / 0.6, abs=0.02), "转向同比例压,走的还是那条弯"
+    assert "nav_blocked" not in [k for k, _ in t.events]
+
+
+async def test_V1_D守卫_挡里有地图之外的东西_按全余量停(tmp_path):
+    link = 假转接()
+    t = _台(tmp_path, link, walls=[(0.1, 4.6, 11.9, 4.7)])
+    await t.start(1.5, 4.0)
+    await t.nav.goto(Pose.from_xy_yaw(9.0, 4.0))
+    guard, calls = _按余量答(full_hits=((1.0, 0.62), (1.0, 0.0)), soft_ok_at=0.6)  # 一个在墙上、一个在路中间
+    t.nav._guard_check = guard
+    for _ in range(10):
+        link.now += 0.1
+        link.cmd = (link.now, 1, 0.6, 0.0, 0.0)
+        await t.一拍()
+    assert abs(t.r.speed[0]) < 0.05, "人、箱子:停"
+    assert "soft" not in {c[2] for c in calls}, "有地图之外的挡就不试软余量"
+
+
+async def test_V1_D守卫_降到蠕行还过不去就停(tmp_path):
+    link = 假转接()
+    t = _台(tmp_path, link, walls=[(0.1, 4.6, 11.9, 4.7)])
+    await t.start(1.5, 4.0)
+    await t.nav.goto(Pose.from_xy_yaw(9.0, 4.0))
+    guard, calls = _按余量答(full_hits=((1.0, 0.62),), soft_ok_at=0.1)   # 0.2 也过不去
+    t.nav._guard_check = guard
+    for _ in range(10):
+        link.now += 0.1
+        link.cmd = (link.now, 1, 0.6, 0.0, 0.0)
+        await t.一拍()
+    assert abs(t.r.speed[0]) < 0.05
+    tried = {c[0] for c in calls if c[2] == "soft"}
+    assert {0.3, 0.2} <= tried, ("一档档压到蠕行都试过", tried)
+
+
+def test_V1_D守卫_软余量跟速度挂钩():
+    """蠕行 0.2 m/s 多留 0.05 m、0.6 m/s 以上多留到全余量 0.3 m;原地转 0.15 rad/s 多留 0.05 rad、0.6 以上 0.2。"""
+    from nexwar_agent.bridges.nav2_nav import soft_guard
+    from nexwar_agent.obstacles import ObstacleGuard
+    full = ObstacleGuard()
+    assert soft_guard(full, 0.2, 0.0).extra == pytest.approx(0.05)
+    assert soft_guard(full, 0.4, 0.0).extra == pytest.approx(0.175)
+    assert soft_guard(full, 0.9, 0.0).extra == pytest.approx(full.extra)
+    assert soft_guard(full, 0.0, 0.15).extra_rad == pytest.approx(0.05)
+    assert soft_guard(full, 0.0, 1.0).extra_rad == pytest.approx(full.extra_rad)
+    g = soft_guard(full, 0.2, 0.0)
+    assert (g.body_len, g.body_wid, g.margin, g.latency, g.decel) == \
+        (full.body_len, full.body_wid, full.margin, full.latency, full.decel), "只改多留的,别的照旧"
+
+
+async def test_V1_看不见的只降速时_转向同比例压(tmp_path):
+    from nexwar_agent.bridges.nav2_nav import UNKNOWN_SLOW_MPS
+    from nexwar_agent.obstacles import Verdict
+    link = 假转接()
+    t = _台(tmp_path, link)
+    await t.start(1.5, 4.0)
+    await t.nav.goto(Pose.from_xy_yaw(9.0, 4.0))
+
+    def guard(vx, wz, g=None):
+        if abs(vx) > UNKNOWN_SLOW_MPS + 1e-9:
+            return Verdict(False, "看不见 3 处", hits=(), unknown=3)
+        return Verdict(True)
+    t.nav._guard_check = guard
+    for _ in range(15):
+        link.now += 0.1
+        link.cmd = (link.now, 1, 0.6, 0.0, 0.4)
+        await t.一拍()
+    assert t.r.speed[0] == pytest.approx(UNKNOWN_SLOW_MPS, abs=0.02)
+    assert t.r.speed[1] == pytest.approx(0.4 * UNKNOWN_SLOW_MPS / 0.6, abs=0.02)

@@ -24,6 +24,7 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import logging
 import math
 import time
@@ -65,6 +66,18 @@ VEL_ALPHA = 0.5
 #: 但快了不安全:2026-10-29 仿真里 1.0 m/s 时人从侧面横穿,5 次撞 5 次。降到这个速度,人一进前方
 #: 视野守卫就看得见、停得住。
 UNKNOWN_SLOW_MPS = 0.3
+# ---- 导航 V1 第 1 节:D 守卫(docs/导航V1-设计.md;仿真 runs/nav-sweep-ab-1107 的 D 组)
+#: 挡住的全是地图上的墙(墙不会动)时 SLOW:多留的跟速度挂钩 —— 蠕行这么快时只多留 SOFT_EXTRA_MIN,
+#: 到 SOFT_FULL_MPS 以上回到守卫的全余量。蠕行 0.2:真机前进低于 0.13 m/s 只踏步不走(10-29),0.15 离死区太近。
+SOFT_CREEP_MPS = 0.2
+SOFT_FULL_MPS = 0.6
+SOFT_EXTRA_MIN = 0.05
+#: 原地转同理(弧度/秒、弧度)。
+SOFT_CREEP_RPS = 0.15
+SOFT_FULL_RPS = 0.6
+SOFT_EXTRA_RAD_MIN = 0.05
+#: 原速少留余量还过不去,前进和转向按同一比例依次压到这些速度再查(走的还是 Nav2 那条弯)。
+SOFT_STEPS = (0.3, SOFT_CREEP_MPS)
 # ---- 看得清就快(决策 76,用户 2026-10-29:报警要 90 s 内到位;两侧盲区让 1.0 m/s 一律跑不安全)
 #: 看得清、附近没有地图之外的东西时最快多快(米/秒;还受任务、站点、全狗限速管)。
 V_FAST = 1.0
@@ -149,6 +162,16 @@ EDGE_TRIES = 2
 TURN_ONLY_MAX_RPS = 0.6
 #: 前进速度不到这个(米/秒)就当「原地转」,按地图上的墙核一道(:meth:`Nav2NavBackend._turn_hits_map`)。
 TURN_VX = 0.05
+
+
+def soft_guard(full: Any, vx: float, wz: float) -> Any:
+    """导航 V1 的软余量:``full`` 守卫照抄,只把往前多留的(``extra``)、原地转多留的(``extra_rad``)
+    按这一拍的速度在 [最小, 全余量] 之间线性取。只用在挡的全是地图墙的时候。"""
+    fv = min(1.0, max(0.0, (abs(vx) - SOFT_CREEP_MPS) / (SOFT_FULL_MPS - SOFT_CREEP_MPS)))
+    fw = min(1.0, max(0.0, (abs(wz) - SOFT_CREEP_RPS) / (SOFT_FULL_RPS - SOFT_CREEP_RPS)))
+    return dataclasses.replace(
+        full, extra=SOFT_EXTRA_MIN + (full.extra - SOFT_EXTRA_MIN) * fv,
+        extra_rad=SOFT_EXTRA_RAD_MIN + (full.extra_rad - SOFT_EXTRA_RAD_MIN) * fw)
 
 
 def _overlap(a: tuple[tuple[float, float], ...], b: tuple[tuple[float, float], ...]) -> bool:
@@ -618,8 +641,15 @@ class Nav2NavBackend(PlannedNavBackend):
             v = self._guard_check(vx, wz)
             if not v.ok and not v.hits and "障碍数据" not in v.reason \
                     and abs(vx) > UNKNOWN_SLOW_MPS:
-                vx = math.copysign(UNKNOWN_SLOW_MPS, vx)      # 只有看不见的:快了就慢下来再查一遍
+                # 只有看不见的:快了就慢下来再查一遍;转向同比例压(导航 V1:走的还是 Nav2 那条弯)
+                wz *= UNKNOWN_SLOW_MPS / abs(vx)
+                vx = math.copysign(UNKNOWN_SLOW_MPS, vx)
                 v = self._guard_check(vx, wz)
+            if not v.ok and v.hits and self._hits_all_static(v.hits, here):
+                soft = self._soft_pass(vx, wz, here)
+                if soft is not None:
+                    vx, wz = soft
+                    v = v.__class__(True)
             if not v.ok and (v.hits or "障碍数据" in v.reason):
                 self._guarded(v, here)
                 await self._send(0.0, 0.0, dt_s)
@@ -998,6 +1028,34 @@ class Nav2NavBackend(PlannedNavBackend):
                 d = float(dist[dyn].min())
                 v_dyn = next((v for near, v in VIS_TIERS if d < near), V_FAST)
         return max(min(V_FAST, v_clear, v_dyn), VIS_SLOW_MPS)
+
+    def _hits_all_static(self, hits: Any, here: Any) -> bool:
+        """守卫挡住的点(此刻机身系)全在地图墙边上(:data:`STATIC_NEAR_M` 以内)?没图 = 否。"""
+        if self._base is None or not hits:
+            return False
+        P = np.asarray(hits, dtype=float)
+        return bool(self._near_static(P[:, 0], P[:, 1], self._odom_pose, here).all())
+
+    def _soft_pass(self, vx: float, wz: float, here: Any) -> tuple[float, float] | None:
+        """导航 V1 第 1 节 SLOW:挡的全是地图墙 —— 先按原速、软余量查;不行前进和转向同比例压到
+        :data:`SOFT_STEPS` 各查一遍。过得去返回那一档的速度,都不行返回 None(照旧停)。"""
+        lead = abs(vx) if abs(vx) > 1e-6 else abs(wz)
+        if lead < 1e-6:
+            return None
+        for i, target in enumerate((lead,) + SOFT_STEPS):
+            if i > 0 and lead <= target + 1e-9:
+                continue
+            k = target / lead
+            v2x, v2z = self._deband(vx * k, wz * k,
+                                    rev_max=MPPI_REVERSE_RATIO * self._nav2_speed)
+            if abs(v2x) < 1e-6 and abs(v2z) < 1e-6:
+                continue
+            if self._turn_hits_map(v2x, v2z, here):
+                continue
+            v2 = self._guard_check(v2x, v2z, soft_guard(self.guard, v2x, v2z))
+            if v2.ok or (not v2.hits and "障碍数据" not in v2.reason):
+                return v2x, v2z
+        return None
 
     def _near_static(self, xs: Any, ys: Any, frame_pose: tuple[float, float, float],
                      here: Any) -> Any:
