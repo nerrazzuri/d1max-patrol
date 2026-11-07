@@ -68,7 +68,8 @@ VEL_ALPHA = 0.5
 UNKNOWN_SLOW_MPS = 0.3
 # ---- 导航 V1 第 1 节:D 守卫(docs/导航V1-设计.md;仿真 runs/nav-sweep-ab-1107 的 D 组)
 #: 挡住的全是地图上的墙(墙不会动)时 SLOW:多留的跟速度挂钩 —— 蠕行这么快时只多留 SOFT_EXTRA_MIN,
-#: 到 SOFT_FULL_MPS 以上回到守卫的全余量。蠕行 0.2:真机前进低于 0.13 m/s 只踏步不走(10-29),0.15 离死区太近。
+#: 到 SOFT_FULL_MPS 以上回到守卫的全余量。蠕行 0.2:真机前进低于 0.13 m/s 只踏步不走(10-29),
+#: 0.15 离死区太近。
 SOFT_CREEP_MPS = 0.2
 SOFT_FULL_MPS = 0.6
 SOFT_EXTRA_MIN = 0.05
