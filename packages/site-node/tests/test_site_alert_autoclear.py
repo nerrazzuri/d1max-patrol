@@ -150,6 +150,39 @@ def test_点位未到_只记录不推送_同一个点连着3趟没到才报P1(�
     assert "连续 3 趟" in a.title and "gate" in a.title and _pushed(db) == [a.key]
 
 
+def test_V1_点位未到带原因码_报警写怎么回事和该做什么(台):
+    """导航 V1 第 5 节:代理给了原因码,报警按码写说明和处理建议
+    (代替笼统的「到场看看,或者改路线」)。"""
+    c, db, desk, src, stale = 台
+    for i in range(WAYPOINT_MISS_RUNS):
+        src.on_event("A", _ev("patrol_waypoint", task_id=f"t{i}", name="gate", ok=False,
+                              note="目标点被占(那里有东西)", code="goal_occupied"))
+        c.ms += 1000
+    [a] = [x for x in _all(desk) if x.resolved_ms is None]
+    assert "目标点被东西占住" in a.detail and "把东西挪开后再派一次" in a.detail, a.detail
+    assert "目标点被占(那里有东西)" in a.detail and "到场看看" not in a.detail
+    assert a.context.get("code") == "goal_occupied", a.context
+
+
+def test_V1_整趟失败带原因码_报警附上该做什么(台):
+    c, db, desk, src, stale = 台
+    src.on_event("A", _ev("task_failed", task_id="t1",
+                          reason="2 个航点未到达(p1, p2):定位不可信",
+                          code="localization_unreliable"))
+    [a] = [x for x in _all(desk) if x.resolved_ms is None]
+    assert a.kind == "run_abort" and "定位不可信" in a.detail and "重新定位" in a.detail, a.detail
+    assert a.context.get("code") == "localization_unreliable"
+
+
+def test_V1_点位未到_码不认识就照旧(台):
+    c, db, desk, src, stale = 台
+    for i in range(WAYPOINT_MISS_RUNS):
+        src.on_event("A", _ev("patrol_waypoint", task_id=f"t{i}", name="gate", ok=False,
+                              note="被挡", code="made_up"))
+    [a] = [x for x in _all(desk) if x.resolved_ms is None]
+    assert "到场看看" in a.detail and "code" not in a.context
+
+
 def test_点位未到_中间到过一次就从头数_同一趟重复报只算一趟(台):
     c, db, desk, src, stale = 台
     src.on_event("A", _ev("patrol_waypoint", task_id="t1", name="gate", ok=False))

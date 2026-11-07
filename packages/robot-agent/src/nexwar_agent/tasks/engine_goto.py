@@ -181,10 +181,11 @@ class EngineMissionTask(Task):
                 # 带上跳过了几个点、哪几个(站点、手机显示「完成(跳过 N 点)」)
                 self.state = TaskState.DONE
                 self.detail = {**(extra or {}), "reason": self._skipped_reason(bad),
-                               "skipped": len(bad), "skipped_names": [r.name for r in bad]}
+                               "skipped": len(bad), "skipped_names": [r.name for r in bad],
+                               **_code(bad)}
             elif bad:
                 self.state = TaskState.FAILED
-                self.detail = {"reason": self._failed_reason(bad)}
+                self.detail = {"reason": self._failed_reason(bad), **_code(bad)}
             else:
                 self.state = TaskState.DONE
                 self.detail = dict(extra or {})
@@ -282,3 +283,9 @@ class EngineGotoTask(EngineMissionTask):
             self._events.emit("task_progress", {"task_id": self.task_id,
                                                  "distance_m": round(dist, 3)})
         return {"distance_m": round(dist, 3)}
+
+
+def _code(bad) -> dict:
+    """导航 V1 第 5 节:任务结束原因带第一个没到的点的原因码(``reason`` 也是从它写的)。"""
+    code = getattr(bad[0], "code", "")
+    return {"code": code} if code else {}

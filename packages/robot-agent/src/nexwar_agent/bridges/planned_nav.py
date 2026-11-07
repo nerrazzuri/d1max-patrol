@@ -491,7 +491,8 @@ class PlannedNavBackend(HalNavBackend):
 
     async def _inside_nogo(self, z: Zone, here: Any) -> None:
         self._report_nogo(z, here)
-        await self._fail(f"机器人进了禁行区 {z.label or z.id}:停,不自己往外走")
+        await self._fail(f"机器人进了禁行区 {z.label or z.id}:停,不自己往外走",
+                         code="robot_trapped")
 
     async def _near_nogo(self, z: Zone, here: Any, dt_s: float) -> None:
         """S7:再走就离(当禁行的)区域太近了 —— 刹车,从这儿按此刻的 σ 重规划(路先离开它);重规划
@@ -881,7 +882,7 @@ class PlannedNavBackend(HalNavBackend):
                     await self._send(0.0, 0.0, dt_s)
                     return
                 log.warning("重规划没成:%s", out[1])
-                await self._fail(f"重规划失败:{out[1]}")
+                await self._fail(f"重规划失败:{out[1]}", code="goal_unreachable")
                 return
             if out[2] != self._epoch:
                 # 重规划完到这一拍之间区域又换了(内审应修 9):旧区域上的路不装,再来一次
@@ -898,7 +899,7 @@ class PlannedNavBackend(HalNavBackend):
             await self._send(0.0, 0.0, dt_s)            # 原地等新路径(提前绕的照样沿旧路走)
             return
         if self._path is None or self._cm is None:
-            await self._fail("没有路径")
+            await self._fail("没有路径", code="goal_unreachable")
             return
         dgoal = math.hypot(target.position.x - here.x, target.position.y - here.y)
         if self._aligning and dgoal > ARRIVE_TOL_M + REALIGN_M and self._creep_from is None:
@@ -1093,7 +1094,7 @@ class PlannedNavBackend(HalNavBackend):
             log.error("%s:停", why)
             self.emit(AlgErrorEvent((AlgErrorItem(ALG_LIDAR_DISCONNECTED, why, 2),),
                                     self._now()))
-            await self._fail(why)
+            await self._fail(why, code="sensor_lost")
             return
         v = self._guard_check(vx, wz)
         if not v.ok and abs(vx) > 1e-6 and abs(wz) > 1e-6 and self._creep_from is None:
@@ -1105,7 +1106,8 @@ class PlannedNavBackend(HalNavBackend):
         if v.ok and self._stalled():
             from nexwar_agent.obstacles import Verdict
             await self._blocked(Verdict(False, f"发了运动命令、机器人 {STALL_S:.0f} 秒未动"
-                                        "(运控或第二层许可门未执行)"), here, dt_s, vx, wz)
+                                        "(运控或第二层许可门未执行)"), here, dt_s, vx, wz,
+                                stall=True)
             return
         if v.ok:
             if (self._unblock_owed and self._blocked_since is None and abs(vx) > 1e-6
@@ -1187,7 +1189,7 @@ class PlannedNavBackend(HalNavBackend):
         return True
 
     async def _blocked(self, v: Any, here: Any, dt_s: float, vx: float = 0.0,
-                       wz: float = 0.0) -> None:
+                       wz: float = 0.0, *, stall: bool = False) -> None:
         now = self._secs()
         if self._blocked_since is None:
             self._blocked_since = now
@@ -1201,7 +1203,9 @@ class PlannedNavBackend(HalNavBackend):
         await self._send(0.0, 0.0, dt_s)                 # 原地等(零速保住步态)
         if waited >= BLOCK_GIVEUP_S:
             log.warning("被挡 %.0f s 还没走成:放弃这一段(%s)", waited, reason)
-            await self._fail(f"被挡 {waited:.0f} 秒还未完成({reason})")
+            code = ("goal_occupied" if self._goal_covered else "controller_stalled" if stall
+                    else "dynamic_obstacle_blocked")
+            await self._fail(f"被挡 {waited:.0f} 秒还未完成({reason})", code=code)
             return
         if (waited >= BLOCK_REPORT_S or self._goal_covered) and not self._blocked_told:
             self._blocked_told = True

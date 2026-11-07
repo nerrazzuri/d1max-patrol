@@ -584,7 +584,7 @@ class Nav2NavBackend(PlannedNavBackend):
         why = self.nav2_ready()
         if why:
             log.warning("走着走着 Nav2 不能用了:%s(这一趟判失败)", why)
-            await self._fail(why)
+            await self._fail(why, code="nav_unavailable")
             return
         tgt = self._target
         if tgt is not None and math.dist((here.x, here.y), (tgt.position.x, tgt.position.y)) \
@@ -898,11 +898,13 @@ class Nav2NavBackend(PlannedNavBackend):
                    "再试一次还不行就清开后再派)")
         else:
             log.warning("Nav2 回了失败,这一趟判失败:%s", raw)   # 11-04:以前这一支不留日志
-            await self._fail(raw[:200])
+            await self._fail(raw[:200], code="nav2_plan_failed")
             return
         log.warning("%s(%s)", why, raw)
         self.fail_final = occupied                        # 先标上:引擎收到 Failed 时就读它
-        await self._fail(f"{why}({raw})"[:200])
+        code = ("robot_trapped" if trapped or cause else "goal_occupied" if occupied
+                else "goal_unreachable")
+        await self._fail(f"{why}({raw})"[:200], code=code)
 
     def _trapped(self, here: Any) -> bool:
         """机身外面 0.15–0.35 m 那一圈,前、后都有挡(障碍记忆,看得见才算):前进后退都不行。

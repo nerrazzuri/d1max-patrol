@@ -2,7 +2,8 @@
 契约的 ``parse_mission`` 读出来,在 MissionEngine 上跑。
 
 契约上看到的:``task_progress`` 不发距离(多个航点,距离没有意义),改为每个航点一条
-``patrol_waypoint``(``index``、``total``(W69:共几个点)、``name``、``ok``、``note``);
+``patrol_waypoint``(``index``、``total``(W69:共几个点)、``name``、``ok``、``note``,没到的带原因码
+``code``,导航 V1 第 5 节);
 终态同 goto —— 全部航点到了
 ``done``;有被跳过的、但到了至少一个也是 ``done``,带 ``skipped``(几个)、``skipped_names``,
 理由写「跳过 N 个点(…)」(W71);一个都没到 ``failed``(理由列出没到的航点),
@@ -32,9 +33,11 @@ class PatrolTask(EngineMissionTask):
     def _report_waypoints(self, results) -> None:
         for i in range(self._reported_results, len(results)):
             r = results[i]
-            self._events.emit("patrol_waypoint", {"task_id": self.task_id, "index": i,
-                                                  "total": len(self.mission.waypoints),
-                                                  "name": r.name, "ok": r.ok, "note": r.note})
+            ev = {"task_id": self.task_id, "index": i, "total": len(self.mission.waypoints),
+                  "name": r.name, "ok": r.ok, "note": r.note}
+            if r.code:                                   # 导航 V1 第 5 节:没到的点带原因码
+                ev["code"] = r.code
+            self._events.emit("patrol_waypoint", ev)
         self._reported_results = len(results)
 
     def _partial_ok(self, results, bad) -> bool:

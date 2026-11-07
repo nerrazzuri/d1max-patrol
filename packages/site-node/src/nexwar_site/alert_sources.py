@@ -31,6 +31,7 @@ from nexwar_contract.messages import (
     Telemetry,
     parse_fault_event_data,
 )
+from nexwar_contract.navcodes import FAIL_CODES, fail_code
 from nexwar_contract.storage import WARN_RATIO
 from nexwar_site.alert_store import AlertDesk
 from nexwar_site.clockskew import ALARM_S as SKEW_ALARM_S
@@ -477,17 +478,23 @@ class SiteAlertSources:
         站点重启从头数。"""
         name = str(d.get("name", "?"))
         note = str(d.get("note", ""))
+        # 导航 V1 第 5 节:代理给了认得的原因码 → 先写「怎么回事」,建议按码写
+        code = fail_code(d.get("code"))
+        info = FAIL_CODES[code] if code else None
+        head = f"{info.zh}:{note}" if info and note else info.zh if info else note
+        ctx = {"code": code} if code else None
         runs = self._m(rid).wp_miss.setdefault(name, set())
         runs.add(str(d.get("task_id") or f"?{self._now()}"))
         if len(runs) >= WAYPOINT_MISS_RUNS:
+            act = info.action_zh if info else "到场看看,或者改路线"
             self.desk.raise_alert(kind="stuck", robot=rid,
                                   title=f"点位 {name} 连续 {len(runs)} 趟未到达:路可能被堵住了",
-                                  detail=(note + ";" if note else "")
-                                         + "到场看看,或者改路线;到达一次后自动解除")
+                                  detail=(head + ";" if head else "") + act + ";到达一次后自动解除",
+                                  context=ctx)
         else:
             self.desk.raise_alert(kind="stuck", robot=rid, title=f"点位 {name} 未到达,已跳过",
-                                  detail=(note + ";" if note else "") + "巡逻继续,只做记录",
-                                  record="site:skipped")
+                                  detail=(head + ";" if head else "") + "巡逻继续,只做记录",
+                                  context=ctx, record="site:skipped")
 
     def _waypoint_reached(self, rid: str, name: str) -> None:
         m = self._m(rid)
@@ -514,9 +521,14 @@ class SiteAlertSources:
                                       else "电量不足,整趟中止", detail=reason)
             else:
                 # 人点的中止是 task_aborted,不报;失败(引擎自己收的尾)一律报,认不出原因也报。
+                # 导航 V1 第 5 节:带了认得的原因码,附上处理建议
+                code = fail_code(d.get("code"))
+                if code:
+                    reason = f"{reason};{FAIL_CODES[code].action_zh}" if reason \
+                        else f"{FAIL_CODES[code].zh};{FAIL_CODES[code].action_zh}"
                 self.desk.raise_alert(kind="run_abort", robot=rid,
                                       title="回待命点失败,停在半路" if back else "整趟中止了",
-                                      detail=reason)
+                                      detail=reason, context={"code": code} if code else None)
         elif e.kind in ("release_install_failed", "release_activate_failed",
                         "release_rollback_failed"):
             what = {"release_install_failed": "装版本", "release_activate_failed": "切版本",

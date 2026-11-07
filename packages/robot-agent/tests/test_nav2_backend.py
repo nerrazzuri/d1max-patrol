@@ -229,6 +229,7 @@ async def test_Nav2放弃_FAILED写清楚_取消时告诉它(tmp_path):
                              "reason": "规划不出"})
     await t.跑(1.0)
     assert NavStatus.FAILED in t.status and "规划不出" in t.nav.fail_reason
+    assert t.nav.fail_code == "goal_unreachable"
     await t.跑(1.0)
     await t.nav.goto(Pose.from_xy_yaw(6.0, 4.0))
     await t.跑(0.5)
@@ -279,6 +280,7 @@ async def test_转接节点断了_走着的这一段FAILED(tmp_path):
     link.connected = False
     await t.跑(1.0)
     assert NavStatus.FAILED in t.status and "未连接" in t.nav.fail_reason
+    assert t.nav.fail_code == "nav_unavailable"
 
 
 async def test_目标号跨后端不重复_旧目标的晚到回执不认(tmp_path):
@@ -977,6 +979,7 @@ async def test_W70_Nav2失败而狗没挪窝_说规划不出_照旧再试一次(
                              "reason": "no valid path"})
     await t.跑(1.0)
     assert NavStatus.FAILED in t.status and "规划不出到目标的路线" in t.nav.fail_reason
+    assert t.nav.fail_code == "goal_unreachable"
     assert not t.nav.fail_final
 
 
@@ -1011,6 +1014,7 @@ async def test_W70_目标点上有箱子_Nav2失败_说目标点被占_不再重
                              "reason": "no valid path"})
     await t.跑(1.0)
     assert NavStatus.FAILED in t.status and "目标点被占" in t.nav.fail_reason
+    assert t.nav.fail_code == "goal_occupied"
     assert t.nav.fail_final
 
 
@@ -1147,6 +1151,7 @@ async def test_W71_机器人自己四周都被判成挡_Nav2失败_说机器人�
     await t.跑(1.0)
     assert NavStatus.FAILED in t.status and "被困" in t.nav.fail_reason, t.nav.fail_reason
     assert "目标点被占" not in t.nav.fail_reason and not t.nav.fail_final
+    assert t.nav.fail_code == "robot_trapped"
 
 
 async def test_W71_目标点贴着地图墙_交给Nav2之前挪到最近能站的点(tmp_path):
