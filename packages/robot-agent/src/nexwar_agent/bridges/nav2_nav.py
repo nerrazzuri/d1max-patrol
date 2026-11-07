@@ -33,6 +33,7 @@ from typing import Any
 
 import numpy as np
 
+from nexwar_agent import route_check
 from nexwar_agent.bridges.hal_nav import HalNavBackend
 from nexwar_agent.bridges.planned_nav import PlannedNavBackend, _heading
 from nexwar_contract.navbridge import MAX_VIA
@@ -130,6 +131,9 @@ TURN_ONLY_M = 0.2
 #: Nav2 一会儿就好的「未就绪」(刚中止完、在取消上一个目标;动作状态在同步):等这么久(秒)再决定退不
 #: 退回自己的规划导航(W70,2026-11-03 C40221:中止后马上回原点,退回去倒退 1.3 m、停 20 s)。
 NAV2_SETTLE_S = 10.0
+#: 导航 V1 第 2 节:出发前等转接节点回路线最多多久(秒;Smac 规划一般 < 1 s);等不到就不查了。
+PLAN_WAIT_S = 3.0
+PLAN_POLL_S = 0.02
 NAV2_SETTLE_POLL_S = 0.2
 #: 「代理未在送时钟」(2026-11-03 11:58:01:处理中止那一拍卡了 2 s 多):等的时候自己先送上时钟。
 NAV2_TRANSIENT = ("取消上一次", "动作状态同步", "未在送时钟")
@@ -369,6 +373,20 @@ class Nav2NavBackend(PlannedNavBackend):
         # W48:有路网就先在路网上找路,途经点交给 Nav2(NavigateThroughPoses,只是路过)
         via = route(self.route_net, (here.x, here.y), goal_xy) \
             if self.route_net is not None and here is not None else []
+        if not via and here is not None:
+            # 导航 V1 第 2 节:出发前查路线几何;拒了不交给 Nav2,原因码给引擎、不重试
+            self._planning = True                          # 等的时候不许再派一个
+            try:
+                got = await self._route_check(here, pose, op)
+            finally:
+                self._planning = False
+            if got is not None and not got.ok:
+                log.warning("%s:路线检查不过:%s", op, got.why)
+                if self.on_event is not None:
+                    self.on_event("route_rejected", {"code": got.code, "reason": got.why[:200],
+                                                     "x": round(got.at[0], 2) if got.at else None,
+                                                     "y": round(got.at[1], 2) if got.at else None})
+                raise NavRequestError(op, got.why, code=got.code, final=True)
         self._goal_id += 1
         self._nav2_goal = self._goal_id
         self._goal_from = (here.x, here.y) if here is not None else None
@@ -398,6 +416,48 @@ class Nav2NavBackend(PlannedNavBackend):
         log.info("%s:交给 Nav2(目标 %d)→ (%.2f, %.2f)", op, self._goal_id, pose.position.x,
                  pose.position.y)
         await HalNavBackend.goto(self, pose)
+
+    async def _route_check(self, here: Any, pose: Pose, op: str) -> Any:
+        """导航 V1 第 2 节 Route Validator V1.0:向转接节点要一条路线(``plan``),沿路线查有效车身离
+        地图墙的余量(:mod:`nexwar_agent.route_check`)。查不成(转接节点不支持、不回、规划器忙或说没路、
+        没地图)回 None —— 不挡路,Nav2 自己还有守卫和恢复;没路的由 Nav2 报 ``goal_unreachable``。"""
+        results = getattr(self.link, "plan_results", None)
+        if results is None or self._map_dir is None:
+            return None
+        self._plan_req = getattr(self, "_plan_req", 0) + 1
+        rid = self._plan_req
+        results.pop(rid, None)
+        self.link.send({"type": "plan", "req_id": rid,
+                        "start": [round(here.x, 3), round(here.y, 3), round(here.yaw, 4)],
+                        "goal": [pose.position.x, pose.position.y, pose.yaw]})
+        deadline = time.monotonic() + PLAN_WAIT_S
+        while rid not in results and time.monotonic() < deadline:
+            await asyncio.sleep(PLAN_POLL_S)
+        m = results.pop(rid, None)
+        if m is None:
+            log.warning("%s:路线检查 %g 秒没等到规划结果,不查了", op, PLAN_WAIT_S)
+            return None
+        if not m["ok"]:
+            log.info("%s:路线检查拿不到路线(%s),交给 Nav2", op, m.get("reason", ""))
+            return None
+        try:
+            walls = await self._route_walls()
+            return await asyncio.to_thread(route_check.check_route, m["poses"], *walls)
+        except Exception:                                 # 查不了不挡路
+            log.exception("%s:路线检查出错,不查了", op)
+            return None
+
+    async def _route_walls(self) -> tuple[Any, float, tuple[float, float]]:
+        """地图墙(原分辨率,不降采样:余量只差 0.2 m,粗格子会错一格);按地图目录缓存。"""
+        d = self._map_dir
+        cached = getattr(self, "_walls_cache", None)
+        if cached is not None and cached[0] == d:
+            return cached[1]
+        from nexwar_contract.planning.costmap import load_floor
+        free, res, origin = await asyncio.to_thread(load_floor, Path(d))
+        walls = (~np.asarray(free, dtype=bool), float(res), (float(origin[0]), float(origin[1])))
+        self._walls_cache = (d, walls)
+        return walls
 
     async def _snap_for_nav2(self, here: Any, pose: Pose, op: str) -> Pose:
         """W71(11-03 商场):终点只是落在地图墙的膨胀圈里 → 挪到最近能站的点再交给 Nav2(跟自己的规划、

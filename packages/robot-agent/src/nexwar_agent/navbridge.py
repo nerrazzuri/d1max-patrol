@@ -60,6 +60,8 @@ class NavBridgeServer:
         self.goal_states: deque[dict[str, Any]] = deque(maxlen=64)
         #: Nav2 最近一次规划出的路径:``(目标号, ((x, y), …))``。
         self.plan: tuple[int, tuple[tuple[float, float], ...]] | None = None
+        #: 导航 V1 第 2 节:``plan_result`` 按 ``req_id`` 收着(Route Validator 取走;只留最近几个)。
+        self.plan_results: dict[int, dict[str, Any]] = {}
 
     # ------------------------------------------------------------ 起停
 
@@ -164,6 +166,10 @@ class NavBridgeServer:
                 self.plan_rx[m["goal_id"]] = self._rx
                 while len(self.plan_rx) > 16:
                     self.plan_rx.pop(next(iter(self.plan_rx)))
+        elif t == "plan_result":
+            self.plan_results[m["req_id"]] = m
+            while len(self.plan_results) > 8:
+                self.plan_results.pop(next(iter(self.plan_results)))
         elif t == "error":
             log.warning("Nav2 转接节点报错:%s", m["reason"])
 

@@ -797,7 +797,7 @@ def test_复查三_转接服务端_报文按到达编号_记下每个目标第�
 
 def test_W48_协议4_目标可以带途经点():
     from nexwar_contract.navbridge import MAX_VIA, PROTO
-    assert PROTO == 4 and MAX_VIA >= 500, "路网最多 500 个点,途经点要装得下"
+    assert PROTO >= 4 and MAX_VIA >= 500, "路网最多 500 个点,途经点要装得下"
 
 
 async def test_W48_有路网_交给Nav2的目标带上路网上的途经点_没路网不带(tmp_path):
@@ -1543,3 +1543,82 @@ async def test_V1_遮挡限速_车停在侧面1米外_车后的阴影也要限�
     assert v < nav2_nav.V_FAST - 0.01, v
     monkeypatch.setattr(nav2_nav, "OCC_E2_SIDE_M", 1.0)     # 老的 1.0 m:看不到,不限
     assert t.nav._occ_cap(await t.nav._here(), 1) == pytest.approx(nav2_nav.V_FAST)
+
+
+# ---------------------------------------- 导航 V1 第 2 节:Route Validator V1.0(出发前查路线)
+
+
+class 会规划的转接(假转接):
+    """收到 ``plan`` 当场回 ``plan_result``:直线连到目标(朝向照目标),或者按 ``answer`` 回。"""
+
+    def __init__(self, answer=None):
+        super().__init__()
+        self.plan_results: dict = {}
+        self.answer = answer
+
+    def send(self, m):
+        if m["type"] == "plan":
+            if self.answer == "silent":
+                self.sent.append(m)
+                return True
+            gx, gy, gyaw = m["goal"]
+            sx, sy, _ = m.get("start") or [self.here[0], self.here[1], 0.0]
+            n = max(1, int(math.dist((sx, sy), (gx, gy)) / 0.025))
+            poses = [[sx + (gx - sx) * i / n, sy + (gy - sy) * i / n, gyaw] for i in range(n + 1)]
+            res = {"type": "plan_result", "req_id": m["req_id"], "ok": True, "poses": poses}
+            if self.answer is not None:
+                res = {"type": "plan_result", "req_id": m["req_id"], **self.answer}
+            self.plan_results[m["req_id"]] = res
+        return super().send(m)
+
+
+def _窄走廊(width):
+    """y = 4 为中心、x 0.5–11.5 的走廊,宽 ``width``(墙在地图里)。"""
+    h = width / 2
+    return [(0.1, 0.1, 11.9, 4.0 - h), (0.1, 4.0 + h, 11.9, 7.9)]
+
+
+async def test_V1_路线检查_走廊太窄_出发前拒绝_报最窄处_不发目标(tmp_path):
+    from nexwar_patrol.backends.base import NavRequestError
+    link = 会规划的转接()
+    t = _台(tmp_path, link, walls=_窄走廊(0.85))
+    await t.start(1.5, 4.0)
+    link.here = (1.5, 4.0)
+    with pytest.raises(NavRequestError) as e:
+        await t.nav.goto(Pose.from_xy_yaw(9.0, 4.0))
+    assert e.value.code == "route_too_narrow" and e.value.final, e.value
+    assert "离墙只剩" in str(e.value) and "0.98" in str(e.value)
+    assert link.kinds("plan") and not link.kinds("goal"), "拒了就不交给 Nav2"
+    assert t.nav._status is NavStatus.STANDBY and not t.nav._planning
+
+
+async def test_V1_路线检查_走廊够宽_查过再交给Nav2(tmp_path):
+    link = 会规划的转接()
+    t = _台(tmp_path, link, walls=_窄走廊(1.4))
+    await t.start(1.5, 4.0)
+    link.here = (1.5, 4.0)
+    await t.nav.goto(Pose.from_xy_yaw(9.0, 4.0))
+    [p] = link.kinds("plan")
+    assert p["goal"][:2] == pytest.approx([9.0, 4.0]) and link.kinds("goal")
+    assert p["start"][:2] == pytest.approx([1.5, 4.0], abs=0.05)
+
+
+async def test_V1_路线检查_转接节点不回_等一会儿照常交给Nav2(tmp_path, monkeypatch):
+    from nexwar_agent.bridges import nav2_nav
+    monkeypatch.setattr(nav2_nav, "PLAN_WAIT_S", 0.3)
+    link = 会规划的转接(answer="silent")
+    t = _台(tmp_path, link, walls=_窄走廊(0.85))
+    await t.start(1.5, 4.0)
+    link.here = (1.5, 4.0)
+    await t.nav.goto(Pose.from_xy_yaw(9.0, 4.0))
+    assert link.kinds("goal"), "检查做不成不挡路(Nav2 自己还有守卫、恢复)"
+
+
+async def test_V1_路线检查_规划器说没路_照常交给Nav2_由它报失败(tmp_path):
+    link = 会规划的转接(answer={"ok": False, "poses": [], "reason": "no_path"})
+    t = _台(tmp_path, link, walls=_窄走廊(1.4))
+    await t.start(1.5, 4.0)
+    link.here = (1.5, 4.0)
+    await t.nav.goto(Pose.from_xy_yaw(9.0, 4.0))
+    assert link.kinds("goal")
+

@@ -1204,7 +1204,8 @@ class MissionEngine(EventEmitter[RunSnapshot]):
                 except NavRequestError as exc:
                     # 规划后端当场拒(没路、终点在禁行区里,W10):这个点失败、按点位失败策略走;
                     # 以前落到兜底,整趟按「引擎内部异常」中止。
-                    raise _FailWaypoint(f"导航拒了: {exc}") from None
+                    raise _FailWaypoint(f"导航拒了: {exc}", retry=not getattr(exc, "final", False),
+                                        code=fail_code(getattr(exc, "code", "")) or "") from None
                 self._note("nav", waypoint=wp.name, attempt=tried + 1)
                 await self._wait_nav_terminal(
                     attempt_started + policy.waypoint_timeout_s)

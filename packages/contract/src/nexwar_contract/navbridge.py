@@ -25,6 +25,9 @@ Nav2 一律 ``use_sim_time``,转接节点按代理送来的时刻发 ``/clock``�
 - ``goal {goal_id, x, y, yaw, via?}`` / ``cancel {goal_id}``。``via`` = 路网上的途经点
   ``[[x, y], …]``(协议 4,W48):有就走 ``NavigateThroughPoses``(途经点只是路过),没有走
   ``NavigateToPose``。
+- ``plan {req_id, goal, start?}``(协议 5,导航 V1 第 2 节):只要一条路线、不走。``goal`` /
+  ``start`` = ``[x, y, yaw]``(地图系);没给 ``start`` 用此刻位姿。``req_id`` 自己一套号,跟
+  ``goal_id`` 无关;Route Validator 出发前拿它查路线几何。
 - ``hb {seq}``
 
 转接节点 → 代理:
@@ -38,6 +41,9 @@ Nav2 一律 ``use_sim_time``,转接节点按代理送来的时刻发 ``/clock``�
   ``accepted`` / ``succeeded`` / ``aborted`` / ``canceled`` / ``rejected``。
 - ``path {goal_id, pts}``:Nav2 这一次规划出的路径(地图系,抽稀到最多 :data:`MAX_PATH_PTS` 个点),
   每次重规划发一次;站点地图上画。
+- ``plan_result {req_id, ok, poses, reason?}``:``poses`` = 规划器原样给的 ``[[x, y, yaw], …]``
+  (地图系;**不抽稀**、朝向照抄 —— 倒车段切线跟机头朝向反着),最多 :data:`MAX_PLAN_POSES` 个;
+  超了回 ``ok=false, reason="too_long"``,不截断。失败 ``poses`` 为空。
 - ``hb {seq}``
 """
 
@@ -50,8 +56,9 @@ from typing import Any
 from nexwar_contract.errors import ContractError
 
 #: 2(W47 外审 R7):``cmd`` 带 ``goal_id``;3(复查第三轮 P4):``cmd`` 带 ``src``;
-#: 4(W48):``goal`` 可带 ``via``。两头同一个发布包里,对不上握手就拒(代理退回自己的规划)。
-PROTO = 4
+#: 4(W48):``goal`` 可带 ``via``;5(导航 V1 第 2 节):``plan`` / ``plan_result``。
+#: 两头同一个发布包里,对不上握手就拒(代理退回自己的规划)。
+PROTO = 5
 #: ``cmd.src``:控制器 / 脱困动作。
 CMD_SRCS = ("ctl", "beh")
 #: 途经点最多几个(路网最多 500 个点)。
@@ -73,12 +80,17 @@ FIELDS: dict[str, tuple[set[str], set[str]]] = {
     "goal_state": ({"goal_id", "state"}, {"reason"}),
     "path": ({"goal_id", "pts"}, set()),
     "error": ({"reason"}, set()),
+    "plan": ({"req_id", "goal"}, {"start"}),
+    "plan_result": ({"req_id", "ok", "poses"}, {"reason"}),
 }
 #: 只许代理发的、只许转接节点发的。
-FROM_AGENT = frozenset({"hello", "map", "tick", "grid", "goal", "cancel", "hb", "error"})
-FROM_BRIDGE = frozenset({"hello", "ready", "cmd", "goal_state", "path", "hb", "error"})
+FROM_AGENT = frozenset({"hello", "map", "tick", "grid", "goal", "cancel", "hb", "error", "plan"})
+FROM_BRIDGE = frozenset({"hello", "ready", "cmd", "goal_state", "path", "hb", "error",
+                         "plan_result"})
 #: Nav2 规划出的路径最多带这么多点(转接节点抽稀;站点地图上画)。
 MAX_PATH_PTS = 256
+#: ``plan_result`` 最多几个位姿(Smac 2.5 cm 一个点,5000 个 ≈ 125 m;一行约 110 KB,在 MAX_LINE 里)。
+MAX_PLAN_POSES = 5000
 
 
 def _num(v: Any, what: str) -> float:
@@ -179,6 +191,20 @@ def check(msg: dict[str, Any]) -> dict[str, Any]:
                 raise ContractError("Nav2 转接:path 的点要是 [x, y]")
             _num(q[0], "path.x")
             _num(q[1], "path.y")
+    elif t == "plan":
+        _int(msg["req_id"], "req_id", lo=1)
+        _triple(msg["goal"], "plan.goal")
+        if "start" in msg:
+            _triple(msg["start"], "plan.start")
+    elif t == "plan_result":
+        _int(msg["req_id"], "req_id", lo=1)
+        if not isinstance(msg["ok"], bool):
+            raise ContractError("Nav2 转接:plan_result.ok 要是 true/false")
+        poses = msg["poses"]
+        if not isinstance(poses, list) or len(poses) > MAX_PLAN_POSES:
+            raise ContractError(f"Nav2 转接:plan_result.poses 要是最多 {MAX_PLAN_POSES} 个位姿")
+        for q in poses:
+            _triple(q, "plan_result.poses[]")
     elif t == "hb":
         _int(msg["seq"], "seq")
     elif t == "ready":

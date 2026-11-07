@@ -139,6 +139,29 @@ def decimate(pts: list[tuple[float, float]], step: float = 0.2,
     return [[round(float(x), 3), round(float(y), 3)] for x, y in out]
 
 
+def plan_reply(req_id: int, raw: list[tuple[float, float, float, float]],
+               reason: str = "no_path") -> dict[str, Any]:
+    """导航 V1 第 2 节:规划器给的路线 ``[(x, y, qz, qw), …]`` → ``plan_result``。
+
+    朝向照抄四元数(倒车段切线跟机头朝向反着,不能拿相邻点算);不抽稀;超过
+    :data:`~nexwar_contract.navbridge.MAX_PLAN_POSES` 回 ``too_long``,不截断。"""
+    from nexwar_contract.navbridge import MAX_PLAN_POSES
+    if not raw:
+        return {"type": "plan_result", "req_id": req_id, "ok": False, "poses": [],
+                "reason": reason}
+    if len(raw) > MAX_PLAN_POSES:
+        return {"type": "plan_result", "req_id": req_id, "ok": False, "poses": [],
+                "reason": "too_long"}
+    poses = [[round(float(x), 3), round(float(y), 3), round(2.0 * math.atan2(qz, qw), 4)]
+             for x, y, qz, qw in raw]
+    for q in poses:                                       # 朝向归到 (-π, π]
+        if q[2] > math.pi:
+            q[2] = round(q[2] - 2 * math.pi, 4)
+        elif q[2] <= -math.pi:
+            q[2] = round(q[2] + 2 * math.pi, 4)
+    return {"type": "plan_result", "req_id": req_id, "ok": True, "poses": poses}
+
+
 def occupancy(map_dir: Path, nogo: list[list[list[float]]], clear: Any = ()
               ) -> tuple[np.ndarray, float, tuple[float, float]]:
     """地图目录 → (占用 int8 栅格,行从下往上:0 空、100 挡;分辨率;原点)。禁行区烧成挡。
@@ -182,7 +205,7 @@ class Nav2Bridge:
     def __init__(self, sock: Path, *, name: str = "nexwar_nav2bridge") -> None:
         import rclpy
         from geometry_msgs.msg import TransformStamped, Twist
-        from nav2_msgs.action import NavigateThroughPoses, NavigateToPose
+        from nav2_msgs.action import ComputePathToPose, NavigateThroughPoses, NavigateToPose
         from nav2_msgs.msg import SpeedLimit
         from nav2_msgs.srv import ClearEntireCostmap
         from nav_msgs.msg import OccupancyGrid, Odometry
@@ -198,7 +221,8 @@ class Nav2Bridge:
         self._m = {"TransformStamped": TransformStamped, "OccupancyGrid": OccupancyGrid,
                    "Odometry": Odometry, "Clock": Clock, "NavigateToPose": NavigateToPose,
                    "NavigateThroughPoses": NavigateThroughPoses,
-                   "ClearEntireCostmap": ClearEntireCostmap}
+                   "ClearEntireCostmap": ClearEntireCostmap,
+                   "ComputePathToPose": ComputePathToPose}
         rclpy.init()
         self.node = rclpy.create_node("nexwar_nav2bridge")
         latched = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL,
@@ -218,6 +242,8 @@ class Nav2Bridge:
         self.nav = ActionClient(self.node, NavigateToPose, "navigate_to_pose")
         #: W48:带路网途经点的目标走这个(行为树 navigate_through_poses_d1max.xml)
         self.thru = ActionClient(self.node, NavigateThroughPoses, "navigate_through_poses")
+        #: 导航 V1 第 2 节:Route Validator 出发前要一条路线(只规划、不走)
+        self.planner = ActionClient(self.node, ComputePathToPose, "compute_path_to_pose")
         self.clear = [self.node.create_client(ClearEntireCostmap, s) for s in (
             "/local_costmap/clear_entirely_local_costmap",
             "/global_costmap/clear_entirely_global_costmap")]
@@ -689,6 +715,48 @@ class Nav2Bridge:
                               "reason": why})
         self._dispatch_soon()
 
+    def on_plan_req(self, m: dict[str, Any]) -> None:
+        """导航 V1 第 2 节:``plan`` → ``ComputePathToPose`` → ``plan_result``(规划器原样的位姿)。
+
+        正在走目标时不规划(规划器一次只做一件事,插一个会打断行为树的重规划;它发的 /plan 也会
+        被当成正在走的那条):回 ``busy``。代理只在出发前问。"""
+        rid = m["req_id"]
+        if self._busy():
+            self.send(plan_reply(rid, [], "busy"))
+            return
+        if not self.planner.server_is_ready():
+            self.send(plan_reply(rid, [], "planner_not_ready"))
+            return
+        goal = self._m["ComputePathToPose"].Goal()
+        goal.goal = self._pose(*[float(v) for v in m["goal"]])
+        if "start" in m:
+            goal.start = self._pose(*[float(v) for v in m["start"]])
+            goal.use_start = True
+        fut = self.planner.send_goal_async(goal)
+        fut.add_done_callback(lambda f: self._plan_accepted(rid, f))
+
+    def _plan_accepted(self, rid: int, fut: Any) -> None:
+        try:
+            h = fut.result()
+        except Exception as exc:                        # noqa: BLE001 - 回给代理
+            self.send_threadsafe(plan_reply(rid, [], f"planner_error:{exc}"[:200]))
+            return
+        if h is None or not h.accepted:
+            self.send_threadsafe(plan_reply(rid, [], "planner_rejected"))
+            return
+        h.get_result_async().add_done_callback(lambda f: self._plan_done(rid, f))
+
+    def _plan_done(self, rid: int, fut: Any) -> None:
+        try:
+            res = fut.result()
+            poses = res.result.path.poses
+        except Exception as exc:                        # noqa: BLE001 - 回给代理
+            self.send_threadsafe(plan_reply(rid, [], f"planner_error:{exc}"[:200]))
+            return
+        raw = [(p.pose.position.x, p.pose.position.y, p.pose.orientation.z, p.pose.orientation.w)
+               for p in poses]
+        self.send_threadsafe(plan_reply(rid, raw))
+
     def on_cancel(self, m: dict[str, Any]) -> None:
         gid = m["goal_id"]
         with self._goal_lock:
@@ -852,7 +920,7 @@ class Nav2Bridge:
         from nexwar_contract.navbridge import FROM_AGENT, MAX_LINE, parse
         self.loop = asyncio.get_running_loop()
         handlers = {"tick": self.on_tick, "grid": self.on_grid, "map": self.on_map,
-                    "goal": self.on_goal, "cancel": self.on_cancel}
+                    "goal": self.on_goal, "cancel": self.on_cancel, "plan": self.on_plan_req}
         while True:
             try:
                 reader, self.writer = await asyncio.open_unix_connection(str(self.sock),
