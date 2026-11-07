@@ -1524,3 +1524,17 @@ async def test_V1_遮挡限速_锥形视野_机头两侧刚刚看见过的不算
         await t.一拍()
     later = t.nav._occ_cap(await t.nav._here(), 1)
     assert later > 0.8 * V_FAST, (first, later)
+
+
+async def test_V1_遮挡限速_车停在侧面1米外_车后的阴影也要限速(tmp_path, monkeypatch):
+    """仿真 DE2 ab_parking_delay300 s33:人从横向 1.46 m 外的车后冒出,E2 只看 1.0 m 以内,
+    遮挡限速一次没起作用,撞上。看到 2.0 m 以后(DE3)200 趟 0 碰撞。
+    车摆在机头前 1.1–1.5 m、走廊边外 1.0–1.3 m:车后的阴影在视野锥里、离走廊边 1.0 m 以外。"""
+    from nexwar_agent.bridges import nav2_nav
+    t = _台(tmp_path, 假转接())
+    await t.start(1.5, 4.0)
+    t.world.dyn["car"] = (3.1, 5.29, 3.5, 5.6)
+    v = await _遮挡(t)
+    assert v < nav2_nav.V_FAST - 0.01, v
+    monkeypatch.setattr(nav2_nav, "OCC_E2_SIDE_M", 1.0)     # 老的 1.0 m:看不到,不限
+    assert t.nav._occ_cap(await t.nav._here(), 1) == pytest.approx(nav2_nav.V_FAST)
